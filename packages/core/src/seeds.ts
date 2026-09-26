@@ -66,9 +66,13 @@ const rootWorkspacePkg = (name: string) =>
       private: true,
       workspaces: ["contracts", "workflows", "apps/*"],
       scripts: { check: "bun scripts/check.ts" },
-      // Dev-only tooling for the seeded check script; stripped from every
-      // sandbox install.
-      devDependencies: { "@catamorphic/parser": PARSER_PACKAGE_VERSION },
+      // Dev-only tooling: the parser for the seeded check script (stripped
+      // from every sandbox install), and the workflow package so project
+      // trigger kinds in `triggers/` type-check (ADR 0171).
+      devDependencies: {
+        "@catamorphic/parser": PARSER_PACKAGE_VERSION,
+        "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
+      },
     },
     null,
     2,
@@ -365,7 +369,7 @@ description: What a Catamorphic project can hold, including documents, code, aut
 
 A Catamorphic project is a folder that can hold any kind of work — documents, notes, data, plans, code, automations (workflows), and user-facing apps, in any mix. Never assume the project is about code or automations: read what is actually there first.
 
-All project capabilities live under \`.work/\`: its own Bun workspace, apps, workflows, contracts, scripts, agents, roles, skills, and shared settings. Leave existing project files and manifests unchanged. Opening a project or having an ordinary conversation does not create this workspace.
+All project capabilities live under \`.work/\`: its own Bun workspace, apps, workflows, trigger kinds (\`triggers/\`), contracts, scripts, agents, roles, skills, and shared settings. Leave existing project files and manifests unchanged. Opening a project or having an ordinary conversation does not create this workspace.
 
 ## Persistent project data
 

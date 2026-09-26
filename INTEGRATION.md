@@ -173,6 +173,16 @@ inline until the workflow's first durable wait, then detaches with an honest
 workspace (`syncTypes`). A trigger firing starts ordinary Runs — no new run
 family. See `docs/decisions/0039-custom-trigger-kinds.md`.
 
+Projects compose their own kinds from the host's (ADR 0171): an export of
+`defineTrigger({ name, from: trigger("webhook", { ... }), where })` in
+`.work/triggers/` is a kind workflows bind by name. Every binding may carry
+`where`, a declarative filter over the payload (value, list of values, or
+`{ exists }`) that core evaluates before a run starts, on every fire path and
+without running project code. At scan a project-kind binding resolves to the
+host kind it builds on, with all filters along the chain; `list` reports
+`kind` (the host kind), `where`, and `projectKind`. Codegen adds project kinds
+to `work-triggers.d.ts`, so `syncTypes` needs nothing from the host.
+
 Project Events (webhooks, chat events, GitHub) reach workflows through the
 event dispatcher. Start it once per server, whether or not coding agents are
 configured, and stop it on shutdown:
@@ -188,10 +198,18 @@ Webhooks are a built-in trigger kind: register `webhook` from
 public URL of the mounted API, including its prefix) to `catamorphicPlugin` or
 `createApp` so the webhook URLs people copy point at the reachable host.
 `POST <api>/hooks/:projectId/:name/:token` is public; the token and the
-optional HMAC check are its credential. Holders of `webhooks:read` list URLs with
-`GET <api>/projects/:projectId/webhooks`, and holders of `webhooks:write`
-rotate one with `POST <api>/projects/:projectId/webhooks/:name/rotate`. See
-ADR 0156.
+binding's declared `verify` are its credential: `hmac` (algorithm, header,
+prefix, encoding, a signed-content template over `{body}`, `{timestamp}` and
+`{header:<name>}`, a replay window, base64 keys) or `token` (a shared secret in
+a header or query parameter), each naming a project secret. Declared `respond`
+rules answer handshakes (Slack `url_verification`, GET `hub.challenge`) with
+200 and the echoed value, which is why the same path also accepts `GET`;
+anything else is stored and answered 202. Bodies are capped at 1 MiB unless a
+binding sets `maxBodyBytes`, up to the host maximum
+`createCatamorphic({ webhooks: { maxBodyBytes } })`. Holders of
+`webhooks:read` list URLs with `GET <api>/projects/:projectId/webhooks`, and
+holders of `webhooks:write` rotate one with
+`POST <api>/projects/:projectId/webhooks/:name/rotate`. See ADRs 0156 and 0171.
 
 Enablements belong to a member or to the project (`owner: { type: "project"
 }`). A project enablement runs as the project principal with shared

@@ -216,7 +216,8 @@ workflow is an exported `defineWorkflow` value, every run executes a
 deployed commit. Boundaries (atomic retry scopes), batch scopes, pauses
 and signals, correlation keys, shared rate budgets, retention, and
 triggers, including host-defined trigger kinds with typed payloads and
-sync-until-first-wait firing. Full authoring model below.
+sync-until-first-wait firing, project-defined kinds, and declarative `where`
+filters. Full authoring model below.
 
 Role access is separate from unattended consent. Each member previews and
 enables an exact deployed workflow with its trigger, Environment, agent, and
@@ -529,10 +530,16 @@ Workflows subscribe to trigger kinds in code (`triggers:
 `defineTriggerKind` (typed payloads and configs via zod, generated
 `work-triggers.d.ts` per project) and fire them sync or async; a kind
 whose payload varies per workflow uses typed holes, and kinds declared via
-`mcpToolKinds` are served as MCP tools from `POST /projects/:id/mcp`. See
+`mcpToolKinds` are served as MCP tools from `POST /projects/:id/mcp`.
+Projects define their own kinds on top of the host's in `.work/triggers/`
+(`defineTrigger({ name, from: trigger("webhook", { ... }), where })`), and
+every binding may add a `where` filter the host checks before a run starts,
+so a GitHub or Slack integration is project code on the webhook kind, whose
+verification schemes and handshakes are declared in its config. See
 [`INTEGRATION.md`](INTEGRATION.md) and ADRs
 [0039](docs/decisions/0039-custom-trigger-kinds.md) /
-[0042](docs/decisions/0042-parameterized-trigger-kinds-and-workflow-tools-mcp.md).
+[0042](docs/decisions/0042-parameterized-trigger-kinds-and-workflow-tools-mcp.md) /
+[0171](docs/decisions/0171-project-trigger-kinds-and-declarative-webhook-ingress.md).
 
 ### Long-lived journeys: correlation keys, signals, shared rate budgets
 

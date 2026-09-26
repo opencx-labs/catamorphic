@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createDatabase, migrateToLatest } from "@catamorphic/db";
+import { createDatabase, type Json, migrateToLatest } from "@catamorphic/db";
 import { FsBackend, FsRemoteBackend, ProjectManager } from "@catamorphic/git";
 import type {
   DeploymentRuntimeProvider,
@@ -12,6 +12,7 @@ import type {
 } from "@catamorphic/sandbox";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { z } from "zod";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
@@ -22,6 +23,7 @@ import {
   TriggerNotEnabledError,
   TriggerPayloadInvalidError,
 } from "../services/triggers-service.js";
+import { webhookConfig } from "../webhook-ingress.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
@@ -695,5 +697,318 @@ export const inert = defineWorkflow(({ defineBoundary }) => ({
         enablementId: expired.id,
       }),
     ).toMatchObject({ status: "suspended", suspensionReason: "expired" });
+  });
+});
+
+/** The host webhook kind, hand-rolled from core's config schema (ADR 0171). */
+const webhookKind: TriggerKindRuntime = {
+  name: "webhook",
+  modes: ["async"],
+  payloadJsonSchema: { type: "object" },
+  configJsonSchema: z.toJSONSchema(webhookConfig, { io: "input" }) as Json,
+  validatePayload: () => ({ ok: true }),
+  validateConfig: (value) => {
+    const parsed = webhookConfig.safeParse(value);
+    return parsed.success
+      ? { ok: true }
+      : {
+          ok: false,
+          errors: parsed.error.issues.map((issue) => issue.message),
+        };
+  },
+  matches: ({ config, payload }) =>
+    webhookConfig.safeParse(config).data?.name ===
+    z.object({ payload: z.object({ name: z.string() }) }).safeParse(payload)
+      .data?.payload.name,
+  correlationKey: (payload) =>
+    z.object({ id: z.string() }).safeParse(payload).data?.id,
+};
+
+const GITHUB_TRIGGERS = `
+import { defineTrigger, trigger } from "@catamorphic/workflow";
+
+export const delivery = defineTrigger({
+  name: "gh.delivery",
+  from: trigger("webhook", { name: "github" }),
+});
+
+export const pullRequest = defineTrigger({
+  name: "gh.pull_request",
+  from: trigger("gh.delivery"),
+  where: { payload: { headers: { "x-github-event": "pull_request" } } },
+});
+
+export const issueComment = defineTrigger({
+  name: "gh.issue_comment",
+  from: trigger("gh.delivery"),
+  where: { payload: { headers: { "x-github-event": "issue_comment" } } },
+});
+`;
+
+const GITHUB_WORKFLOWS = `
+export const onMerged = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [
+    trigger("gh.pull_request", {
+      where: { payload: { body: { action: "closed", pull_request: { merged: true } } } },
+    }),
+  ],
+  steps: [defineBoundary({ run: async ({ input }: BoundaryContext<{ id: string }>) => ({ id: input.id }) })],
+}));
+
+export const onPullRequest = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("gh.pull_request")],
+  steps: [defineBoundary({ run: async ({ input }: BoundaryContext<{ id: string }>) => ({ id: input.id }) })],
+}));
+
+export const onActivity = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("gh.pull_request"), trigger("gh.issue_comment")],
+  steps: [defineBoundary({ run: async ({ input }: BoundaryContext<{ id: string }>) => ({ id: input.id }) })],
+}));
+`;
+
+describeIf("Project trigger kinds end to end", () => {
+  let tmpDir: string;
+  let core: CatamorphicCore;
+  let db: ReturnType<typeof createDatabase>;
+  let projectId: string;
+  const projectSchema = `catamorphic_ptk_${crypto.randomUUID().replaceAll("-", "")}`;
+
+  beforeAll(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-ptk-"));
+    const projectManager = new ProjectManager(
+      new FsBackend(path.join(tmpDir, "dev")),
+      new FsRemoteBackend(path.join(tmpDir, "origin")),
+    );
+    db = createDatabase({
+      connectionString,
+      schema: projectSchema,
+      poolSize: 8,
+    });
+    await migrateToLatest({ db, schema: projectSchema });
+    const sandboxProvider = new FakeSandboxProvider();
+    core = new CatamorphicCore({
+      db,
+      projectManager,
+      sandboxProvider,
+      environmentProvider: testEnvironmentProvider(sandboxProvider),
+      triggerKinds: [ticketCreated, webhookKind],
+    });
+    const project = await core.projects.create(identity, {
+      name: "project-trigger-kinds",
+    });
+    projectId = project.id;
+    await core.projects.writeFile(
+      identity,
+      projectId,
+      ".work/triggers/github.ts",
+      {
+        content: GITHUB_TRIGGERS,
+        commitMessage: "Add GitHub trigger kinds",
+      },
+    );
+    await core.projects.writeFile(
+      identity,
+      projectId,
+      ".work/workflows/src/github.ts",
+      { content: GITHUB_WORKFLOWS, commitMessage: "Add GitHub workflows" },
+    );
+    const deployed = await core.deployment.deploy(
+      identity.tenantId,
+      projectId,
+      identity.externalUserId,
+      { message: "deploy GitHub workflows" },
+    );
+    expect(deployed.status).toBe("deployed");
+    for (const workflowName of ["onMerged", "onPullRequest", "onActivity"]) {
+      const preview = await core.workflowEnablements.preview({
+        identity,
+        projectId,
+        workflowName,
+      });
+      await core.workflowEnablements.create({
+        identity,
+        projectId,
+        workflowName,
+        consentDigest: preview.consentDigest,
+      });
+    }
+  }, 120_000);
+
+  afterAll(async () => {
+    await core.runs.stopWorkers();
+    await sql
+      .raw(`DROP SCHEMA IF EXISTS "${projectSchema}" CASCADE`)
+      .execute(db);
+    await db.destroy();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("stores bindings resolved to the host kind with every filter", async () => {
+    const bindings = await core.triggers.list({ identity, projectId });
+    expect(
+      bindings
+        .map(({ workflowName, kind, projectKind, config, where }) => ({
+          workflowName,
+          kind,
+          projectKind,
+          config,
+          where,
+        }))
+        .sort((a, b) =>
+          `${a.workflowName}${a.projectKind}`.localeCompare(
+            `${b.workflowName}${b.projectKind}`,
+          ),
+        ),
+    ).toEqual([
+      {
+        workflowName: "onActivity",
+        kind: "webhook",
+        projectKind: "gh.issue_comment",
+        config: { name: "github" },
+        where: [
+          { payload: { headers: { "x-github-event": "issue_comment" } } },
+        ],
+      },
+      {
+        workflowName: "onActivity",
+        kind: "webhook",
+        projectKind: "gh.pull_request",
+        config: { name: "github" },
+        where: [{ payload: { headers: { "x-github-event": "pull_request" } } }],
+      },
+      {
+        workflowName: "onMerged",
+        kind: "webhook",
+        projectKind: "gh.pull_request",
+        config: { name: "github" },
+        where: [
+          {
+            payload: {
+              body: { action: "closed", pull_request: { merged: true } },
+            },
+          },
+          { payload: { headers: { "x-github-event": "pull_request" } } },
+        ],
+      },
+      {
+        workflowName: "onPullRequest",
+        kind: "webhook",
+        projectKind: "gh.pull_request",
+        config: { name: "github" },
+        where: [{ payload: { headers: { "x-github-event": "pull_request" } } }],
+      },
+    ]);
+  });
+
+  it("starts only the workflows whose filters match each delivery", async () => {
+    const [endpoint] = await core.webhooks.list({ identity, projectId });
+    const token = endpoint?.path.split("/").at(-1) ?? "";
+    const deliver = async (input: {
+      id: string;
+      event: string;
+      body: object;
+    }) => {
+      const receipt = await core.webhooks.receive({
+        projectId,
+        name: "github",
+        token,
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-GitHub-Event": input.event,
+          "X-GitHub-Delivery": input.id,
+        },
+        query: {},
+        body: Buffer.from(JSON.stringify(input.body)),
+      });
+      expect(receipt.type).toBe("event");
+      await core.dispatchEvents();
+    };
+    const runs = async () =>
+      (
+        await db
+          .selectFrom("workflow_runs")
+          .select("workflow_name")
+          .where("project_id", "=", projectId)
+          .execute()
+      )
+        .map((run) => run.workflow_name)
+        .sort();
+
+    await deliver({
+      id: "d-1",
+      event: "pull_request",
+      body: { action: "closed", number: 1, pull_request: { merged: false } },
+    });
+    expect(await runs()).toEqual(["onActivity", "onPullRequest"]);
+
+    await deliver({
+      id: "d-2",
+      event: "pull_request",
+      body: { action: "closed", number: 2, pull_request: { merged: true } },
+    });
+    expect(await runs()).toEqual([
+      "onActivity",
+      "onActivity",
+      "onMerged",
+      "onPullRequest",
+      "onPullRequest",
+    ]);
+
+    // One comment: only the workflow that binds comments, exactly once.
+    await deliver({
+      id: "d-3",
+      event: "issue_comment",
+      body: { action: "created", issue: { number: 2 } },
+    });
+    expect(await runs()).toEqual([
+      "onActivity",
+      "onActivity",
+      "onActivity",
+      "onMerged",
+      "onPullRequest",
+      "onPullRequest",
+    ]);
+  }, 60_000);
+
+  it("fails the scan when a project kind shadows a host kind or loops", async () => {
+    const project = await core.projects.create(identity, {
+      name: "bad-project-kinds",
+    });
+    await core.projects.writeFile(
+      identity,
+      project.id,
+      ".work/triggers/bad.ts",
+      {
+        content: `
+import { defineTrigger, trigger } from "@catamorphic/workflow";
+export const shadow = defineTrigger({ name: "ticket.created", from: trigger("webhook", { name: "x" }) });
+`,
+        commitMessage: "shadowing kind",
+      },
+    );
+    await core.projects.writeFile(
+      identity,
+      project.id,
+      ".work/workflows/src/any.ts",
+      {
+        content: `
+export const any = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("webhook", { name: "x" })],
+  steps: [defineBoundary({ run: async ({ input }: BoundaryContext<{ id: string }>) => input })],
+}));
+`,
+        commitMessage: "workflow",
+      },
+    );
+    await core.deployment.deploy(
+      identity.tenantId,
+      project.id,
+      identity.externalUserId,
+      { message: "deploy" },
+    );
+    await expect(
+      core.triggers.list({ identity, projectId: project.id }),
+    ).rejects.toThrow("is already a host kind");
   });
 });

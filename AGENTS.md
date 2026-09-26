@@ -56,7 +56,7 @@ Concrete implications for any change you make:
 ### Contained project capabilities (ADR 0142)
 
 User-project capabilities live in `.work/`: its independent Bun workspace,
-workflows, apps, contracts, scripts, agents, roles, skills, and shared config.
+workflows, trigger kinds, apps, contracts, scripts, agents, roles, skills, and shared config.
 Run capability checks with `bun run --cwd .work check`. Opening an existing
 folder is inert, including plain folders without Git; initialize Git only for an
 operation that needs it (ADR 0141). Preserve root manifests and owner instructions.

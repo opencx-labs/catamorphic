@@ -1,6 +1,8 @@
 # 0039 — Custom trigger kinds
 
 > Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`.
+>
+> Projects may define their own kinds on top of host kinds, and every binding may filter with `where` ([ADR 0171](0171-project-trigger-kinds-and-declarative-webhook-ingress.md)).
 
 ## Status
 
