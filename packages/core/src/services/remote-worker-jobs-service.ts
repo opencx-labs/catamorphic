@@ -39,10 +39,13 @@ export class RemoteWorkerJobsService {
      */
     leaseToken: string | (() => string | undefined);
     workspaceRoot: string;
+    /** The worker's provider runs background processes (ADR 0174). */
+    processes: boolean;
     timeoutMs?: number;
   }): SandboxProvider {
     return forwardingSandboxProvider({
       workspaceRoot: args.workspaceRoot,
+      processes: args.processes,
       call: (operation) =>
         withSpan(
           {

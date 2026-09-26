@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type {
-  AgentEvent,
-  CodingAgentProvider,
-  ProviderSession,
-  StartSessionOpts,
+import {
+  type AgentEvent,
+  type CodingAgentProvider,
+  followProcess,
+  type ProviderSession,
+  type StartSessionOpts,
 } from "@catamorphic/sandbox";
 
 /**
@@ -40,6 +41,56 @@ export class FakeEchoAgent implements CodingAgentProvider {
         { cwd: session.workingDirectory },
       );
       yield { type: "text", content: result.result.trim() };
+    } else if (message.startsWith("background-")) {
+      // Background processes through the allocated provider (ADR 0174):
+      // "background-start", "background-list", "background-stop <id>".
+      const opts = this.sessions.get(session.providerSessionId ?? "");
+      const processes = opts?.sandboxProvider?.processes;
+      if (!processes) throw new Error("Background processes unavailable");
+      const sandboxId = session.sandboxId;
+      if (message === "background-start") {
+        const started = await processes.startProcess({
+          sandboxId,
+          command: 'echo "ready $$"; exec sleep 600',
+          cwd: session.workingDirectory,
+          name: "Fake server",
+        });
+        const ready = await followProcess({
+          processes,
+          sandboxId,
+          processId: started.processId,
+          cursor: 0,
+          until: /^ready \d+$/,
+          timeoutMs: 20_000,
+        });
+        yield {
+          type: "text",
+          content: `${started.processId} ${ready.matched?.slice("ready ".length) ?? ""}`,
+        };
+      } else if (message === "background-list") {
+        const listed = await processes.listProcesses({ sandboxId });
+        yield {
+          type: "text",
+          content: JSON.stringify(
+            listed.map(({ processId, status }) => ({ processId, status })),
+          ),
+        };
+      } else {
+        const processId = message.slice("background-stop ".length);
+        await processes.signalProcess({
+          sandboxId,
+          processId,
+          signal: "SIGTERM",
+        });
+        const ended = await followProcess({
+          processes,
+          sandboxId,
+          processId,
+          cursor: 0,
+          timeoutMs: 20_000,
+        });
+        yield { type: "text", content: `${ended.status} ${ended.signal}` };
+      }
     } else {
       yield { type: "text", content: `Echo: ${message}` };
     }

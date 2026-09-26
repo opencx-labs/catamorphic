@@ -44,6 +44,12 @@ export interface StartSessionOpts {
   sandboxId: string;
   workingDirectory: string;
   /**
+   * The Environment's budget for one foreground command, in seconds (ADR
+   * 0174). Harnesses that run commands through the sandbox bound their
+   * shell by it; absent means the harness default.
+   */
+  commandTimeoutSeconds?: number;
+  /**
    * The host-side chat session id this provider session anchors (not the
    * provider's own id). Lets host-supplied tools attribute the surfaces
    * they create — e.g. a browser tab opened by an agent attaches to the

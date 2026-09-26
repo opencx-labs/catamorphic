@@ -104,6 +104,7 @@ export function allocationSandboxProvider(args: {
     return action();
   };
   const runtime = provider.deploymentRuntime;
+  const processes = provider.processes;
   return {
     workspaceRoot: provider.workspaceRoot,
     resourceLimits: provider.resourceLimits,
@@ -118,11 +119,11 @@ export function allocationSandboxProvider(args: {
       guard(id, () =>
         provider.executeCommand(id, command, {
           ...opts,
-          ...(limits?.timeoutSeconds
+          ...(limits?.commandTimeoutSeconds
             ? {
                 timeout: Math.min(
-                  opts?.timeout ?? limits.timeoutSeconds,
-                  limits.timeoutSeconds,
+                  opts?.timeout ?? limits.commandTimeoutSeconds,
+                  limits.commandTimeoutSeconds,
                 ),
               }
             : {}),
@@ -136,6 +137,22 @@ export function allocationSandboxProvider(args: {
       guard(id, () => provider.gitClone(id, url, path, opts)),
     gitCheckout: (id, path, ref) =>
       guard(id, () => provider.gitCheckout(id, path, ref)),
+    // Background processes live in the Allocation's sandbox and end with
+    // it; each operation proves the Allocation still owns that sandbox.
+    ...(processes
+      ? {
+          processes: {
+            startProcess: (opts) =>
+              guard(opts.sandboxId, () => processes.startProcess(opts)),
+            readProcessOutput: (opts) =>
+              guard(opts.sandboxId, () => processes.readProcessOutput(opts)),
+            signalProcess: (opts) =>
+              guard(opts.sandboxId, () => processes.signalProcess(opts)),
+            listProcesses: (opts) =>
+              guard(opts.sandboxId, () => processes.listProcesses(opts)),
+          },
+        }
+      : {}),
     ...(runtime
       ? {
           deploymentRuntime: {

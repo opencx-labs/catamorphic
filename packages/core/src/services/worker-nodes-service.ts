@@ -33,7 +33,7 @@ const descriptorSchema = z.object({
     memoryMb: z.number().optional(),
     storageMb: z.number().optional(),
     gpu: z.boolean().optional(),
-    timeoutSeconds: z.number().optional(),
+    commandTimeoutSeconds: z.number().optional(),
     maxConcurrency: z.number().optional(),
   }),
   labels: z.record(z.string(), z.string()).optional(),

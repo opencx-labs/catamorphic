@@ -5,10 +5,14 @@ import type {
   ExecResult,
   GitCloneOpts,
   SandboxHandle,
+  SandboxProcessProvider,
   SandboxProvider,
   SandboxStatus,
 } from "@catamorphic/sandbox";
-import { assertSandboxResources } from "@catamorphic/sandbox";
+import {
+  assertSandboxResources,
+  shellSandboxProcesses,
+} from "@catamorphic/sandbox";
 import {
   APP_DATA_ENV,
   APP_DATA_MOUNT,
@@ -80,6 +84,15 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
   readonly workspaceRoot = "/workspace";
   readonly resourceLimits = ["cpuMillis", "memoryMb"] as const;
   readonly deploymentRuntime: DeploymentRuntimeProvider;
+  /**
+   * Background processes (ADR 0174) run inside the VM in their own session;
+   * their output and state live in the VM, so they end when it does.
+   */
+  readonly processes: SandboxProcessProvider = shellSandboxProcesses({
+    executeCommand: (sandboxId, command, opts) =>
+      this.executeCommand(sandboxId, command, opts),
+    workspaceRoot: this.workspaceRoot,
+  });
   private readonly config: Required<
     Omit<MicrosandboxProviderConfig, "projectDataDirectory" | "networkProfiles">
   > &

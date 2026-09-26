@@ -1,3 +1,4 @@
+import type { SandboxProcessProvider } from "./processes.js";
 import type {
   RuntimeArtifactIdentity,
   RuntimeBatchStepSuspension,
@@ -120,6 +121,14 @@ export interface SandboxProvider {
    * it and continue using command-based execution.
    */
   readonly deploymentRuntime?: DeploymentRuntimeProvider;
+
+  /**
+   * Background processes (ADR 0174): start a command, follow its output by
+   * byte cursor, signal it. Processes belong to their sandbox and die with
+   * it. A provider without it cannot run background commands; callers say
+   * so instead of emulating them.
+   */
+  readonly processes?: SandboxProcessProvider;
 }
 
 export type DeploymentRuntimeStatus =
