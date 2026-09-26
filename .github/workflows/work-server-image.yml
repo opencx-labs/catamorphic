@@ -106,10 +106,15 @@ jobs:
             if curl -fsS http://127.0.0.1:4700/healthz >/dev/null 2>&1; then break; fi
             sleep 2
           done
-          curl -fsS http://127.0.0.1:4700/healthz | tee /dev/stderr | grep -q '"ok":true'
+          # Capture before matching: under pipefail, `grep -q` exiting early
+          # fails the writer with SIGPIPE (exit 141).
+          health="$(curl -fsS http://127.0.0.1:4700/healthz)"
+          echo "$health"
+          grep -q '"ok":true' <<<"$health"
           curl -fsS http://127.0.0.1:4700/.well-known/oauth-authorization-server >/dev/null
           test "$(docker exec work-server-smoke id -u)" != "0"
-          docker logs work-server-smoke 2>&1 | grep -q "Work server is up."
+          logs="$(docker logs work-server-smoke 2>&1)"
+          grep -q "Work server is up." <<<"$logs"
 
       - name: Show server logs
         if: failure()
