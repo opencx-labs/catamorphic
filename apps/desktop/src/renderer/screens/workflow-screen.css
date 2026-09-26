@@ -66,9 +66,9 @@
   cursor: default;
 }
 .workflow-workbench
-  :is(button, summary, input, select, textarea):focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+  :is(button, summary, input, select, textarea):not(.field):focus-visible {
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: var(--focus-ring-offset);
 }
 .workflow-stage {
   position: relative;

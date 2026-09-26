@@ -8,6 +8,7 @@ import { createRoot } from "react-dom/client";
 import { CatamorphicAppProvider } from "./components/catamorphic/catamorphic-provider.js";
 import { DockHost } from "./components/dock-host.js";
 import { desktopApi, type ServerInfo } from "./lib/desktop-api.js";
+import { installFocusModality } from "./lib/focus-modality.js";
 import { KeybindingsProvider } from "./lib/keybindings.js";
 import { TerminalAppearanceProvider } from "./lib/terminal-appearance.js";
 import { ThemeProvider } from "./lib/theme.js";
@@ -32,6 +33,7 @@ const detachedWindow =
 document.documentElement.dataset.surface = detachedWindow
   ? "dock"
   : "workspace";
+installFocusModality();
 
 function Root() {
   const [server, setServer] = useState<ServerInfo | null>(null);

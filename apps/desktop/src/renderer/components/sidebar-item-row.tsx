@@ -335,11 +335,19 @@ export function SidebarItemRow<
       clearTimeout(previewTimerRef.current);
       setPreviewOpen(false);
     };
+    // A drag carries the row away from its hint; the card would otherwise
+    // float over the drop targets until the drag ends.
+    const dismissForDrag = () => {
+      clearTimeout(previewTimerRef.current);
+      setPreviewOpen(false);
+    };
     window.addEventListener("keydown", dismiss);
+    window.addEventListener("dragstart", dismissForDrag, true);
     // Scrolling invalidates the fixed anchor coordinates.
     window.addEventListener("scroll", dismiss, true);
     return () => {
       window.removeEventListener("keydown", dismiss);
+      window.removeEventListener("dragstart", dismissForDrag, true);
       window.removeEventListener("scroll", dismiss, true);
     };
   }, [previewOpen]);
@@ -379,7 +387,10 @@ export function SidebarItemRow<
       }}
       onFocusCapture={() => {
         rowFocusedRef.current = true;
-        armPreview();
+        // Keyboard focus previews the row. Focus a click or a dismissed menu
+        // hands back does not: the pointer's own hover already does that.
+        if (document.documentElement.dataset.focusModality !== "pointer")
+          armPreview();
       }}
       onBlurCapture={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) {

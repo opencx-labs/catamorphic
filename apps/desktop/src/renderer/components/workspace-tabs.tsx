@@ -254,6 +254,78 @@ function SidebarWorkspaceTabs({
         selectedId={activeKey}
         rowHeight={32}
         label="Workspace tabs"
+        dragAndDrop={
+          onReorder
+            ? {
+                drag: (tab) => ({
+                  data: {
+                    "text/plain": tab.id,
+                    [TAB_DRAG_TYPE]: JSON.stringify({
+                      key: tab.id,
+                      kind: tab.kind,
+                      title: tab.label ?? tab.name,
+                      detail: tab.detail,
+                      bookmarkUrl: tab.bookmarkUrl,
+                    } satisfies TabDragPayload),
+                  },
+                  effectAllowed: "copyMove",
+                }),
+                // Tabs reorder among themselves; other sections pin or
+                // bookmark them through the same payload.
+                // A chat's members always follow it, so no slot between an
+                // open chat and its first member exists for another tab.
+                accept: (types, target) => {
+                  const item = target.item;
+                  if (
+                    dragged === undefined ||
+                    !types.includes(TAB_DRAG_TYPE) ||
+                    item === null ||
+                    item.id === dragged ||
+                    target.position === "inside"
+                  )
+                    return false;
+                  const draggedParent = items.find(
+                    (tab) => tab.id === dragged,
+                  )?.parentId;
+                  if (
+                    target.position === "after" &&
+                    item.hasChildren &&
+                    !item.collapsed &&
+                    draggedParent !== item.id
+                  )
+                    return false;
+                  const firstMember =
+                    item.parentId &&
+                    items.find((tab) => tab.parentId === item.parentId)?.id ===
+                      item.id;
+                  return !(
+                    target.position === "before" &&
+                    firstMember &&
+                    draggedParent !== item.parentId
+                  );
+                },
+                onDrop: (_transfer, target) => {
+                  if (!dragged || !target.item) return;
+                  const order = items.map((item) => item.id);
+                  const beforeKey =
+                    target.position === "before"
+                      ? target.item.id
+                      : (order
+                          .slice(order.indexOf(target.item.id) + 1)
+                          .find((id) => id !== dragged) ?? null);
+                  onReorder(dragged, beforeKey);
+                },
+                onDragStart: (tab) => {
+                  setDragged(tab.id);
+                  onDragStateChange?.(tab.id);
+                },
+                onDragEnd: () => {
+                  setDragged(undefined);
+                  onDragStateChange?.(null);
+                },
+              }
+            : undefined
+        }
         renderItem={(tab, tree) => {
           const Icon = TAB_ICONS[tab.kind];
           const group = groups.find((group) => group.parentKey === tab.id);
@@ -263,43 +335,9 @@ function SidebarWorkspaceTabs({
             tree.toggle();
           };
           return (
-            // biome-ignore lint/a11y/noStaticElementInteractions: drag target; row controls are keyboard reachable.
             <div
               data-point-key={tab.id}
               data-palette-target={highlightKey === tab.id || undefined}
-              className="animate-sidebar-tab-in"
-              draggable={Boolean(onReorder)}
-              onDragStart={(event) => {
-                setDragged(tab.id);
-                onDragStateChange?.(tab.id);
-                event.dataTransfer.setData("text/plain", tab.id);
-                event.dataTransfer.setData(
-                  TAB_DRAG_TYPE,
-                  JSON.stringify({
-                    key: tab.id,
-                    kind: tab.kind,
-                    title: tab.label ?? tab.name,
-                    detail: tab.detail,
-                    bookmarkUrl: tab.bookmarkUrl,
-                  } satisfies TabDragPayload),
-                );
-                event.dataTransfer.effectAllowed = "copyMove";
-              }}
-              onDragOver={(event) => {
-                if (dragged && dragged !== tab.id) event.preventDefault();
-              }}
-              onDrop={(event) => {
-                if (dragged && dragged !== tab.id) {
-                  event.preventDefault();
-                  onReorder?.(dragged, tab.id);
-                }
-                setDragged(undefined);
-                onDragStateChange?.(null);
-              }}
-              onDragEnd={() => {
-                setDragged(undefined);
-                onDragStateChange?.(null);
-              }}
             >
               <SidebarItemRow
                 itemId={tab.id}

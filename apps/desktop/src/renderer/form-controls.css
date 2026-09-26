@@ -108,6 +108,12 @@ select option:disabled {
   opacity: 0.5;
 }
 
+/* One checkbox (DESIGN.md "Dropdowns and checkboxes"): a 16px square with a
+   neutral edge when off (never white; strong enough for 3:1 against the
+   surface) and a solid accent with no edge when on. The mark is
+   a 10px mask centred on whole pixels (3px each side) and draws itself left
+   to right, so it never moves inside the box; pressing the box sinks it
+   slightly. */
 input[type="checkbox"] {
   appearance: none;
   display: inline-grid;
@@ -116,45 +122,66 @@ input[type="checkbox"] {
   height: 16px;
   flex-shrink: 0;
   margin: 0;
-  border: 1px solid var(--color-border-strong);
-  border-radius: 4px;
-  background: var(--color-bg-inset);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-fg) 8%, transparent);
+  box-shadow: inset 0 0 0 1.5px
+    light-dark(
+      color-mix(in srgb, var(--color-fg) 50%, transparent),
+      color-mix(in srgb, var(--color-fg) 40%, transparent)
+    );
   vertical-align: middle;
   cursor: pointer;
   transition:
     background-color 150ms var(--ease-standard),
-    border-color 150ms var(--ease-standard);
+    box-shadow 150ms var(--ease-standard),
+    scale 100ms var(--ease-standard);
 }
 
-input[type="checkbox"]:hover:not(:disabled) {
-  border-color: var(--color-fg-muted);
+input[type="checkbox"]:hover:not(:disabled, :checked, :indeterminate) {
+  background: color-mix(in srgb, var(--color-fg) 14%, transparent);
+  box-shadow: inset 0 0 0 1.5px
+    light-dark(
+      color-mix(in srgb, var(--color-fg) 58%, transparent),
+      color-mix(in srgb, var(--color-fg) 48%, transparent)
+    );
+}
+
+input[type="checkbox"]:active:not(:disabled) {
+  scale: 0.88;
 }
 
 input[type="checkbox"]:is(:checked, :indeterminate) {
   background: var(--color-accent);
-  border-color: var(--color-accent);
+  box-shadow: inset 0 0 0 1.5px transparent;
 }
 
 input[type="checkbox"]::before {
   content: "";
-  width: 9px;
-  height: 9px;
+  width: 10px;
+  height: 10px;
   background: var(--color-accent-fg);
-  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+  mask:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.75 5.25 4 7.5l4.25-5'/%3E%3C/svg%3E")
+    center / 10px 10px no-repeat;
+  clip-path: inset(0 100% 0 0);
   opacity: 0;
-  scale: 0.6;
+  /* Unchecking fades the mark, then resets the wipe out of sight. */
   transition:
-    opacity 150ms var(--ease-standard),
-    scale 150ms var(--ease-standard);
+    opacity 100ms var(--ease-standard),
+    clip-path 0ms linear 100ms;
 }
 
 input[type="checkbox"]:indeterminate::before {
-  clip-path: inset(40% 0 round 1px);
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round'%3E%3Cpath d='M2 5h6'/%3E%3C/svg%3E");
 }
 
 input[type="checkbox"]:is(:checked, :indeterminate)::before {
+  clip-path: inset(0 0 0 0);
   opacity: 1;
-  scale: 1;
+  transition:
+    opacity 100ms var(--ease-standard),
+    clip-path 150ms var(--ease-standard);
 }
 
 input[type="checkbox"]:disabled {

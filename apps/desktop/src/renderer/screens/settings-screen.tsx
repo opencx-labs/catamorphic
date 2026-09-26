@@ -1086,7 +1086,6 @@ function LayoutSection({
                     type="checkbox"
                     disabled={saving}
                     checked={value === true}
-                    className="size-4 accent-(--color-accent)"
                     onChange={(event) =>
                       void save({ [key]: event.target.checked })
                     }
@@ -1604,7 +1603,7 @@ function ThemeSection({
                   overrides: {},
                 })
               }
-              className={`flex min-w-0 cursor-pointer flex-col gap-2 rounded-lg border p-2.5 text-left transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+              className={`flex min-w-0 cursor-pointer flex-col gap-2 rounded-lg border p-2.5 text-left transition-colors duration-150 ${
                 active
                   ? "border-accent bg-accent/10"
                   : "border-border bg-bg-raised/40 hover:border-border-strong"

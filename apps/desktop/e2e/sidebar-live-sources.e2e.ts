@@ -12,8 +12,11 @@ let version = 1;
 let delay = 700;
 let requests = 0;
 async function click(selector: string) {
-  const point = await app.eval<{ x: number; y: number }>(
-    `(()=>{const r=document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect();if(!r)throw Error('Missing control');return {x:r.x+r.width/2,y:r.y+r.height/2}})()`,
+  // A control that just appeared may still be opening (sidebar content grows
+  // into place): click once the point lands on it, as a person would.
+  const point = await app.waitFor<{ x: number; y: number }>(
+    `(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)return false;const r=el.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;return el.contains(document.elementFromPoint(x,y))?{x,y}:false})()`,
+    { label: `${selector} reachable` },
   );
   await app.cdp("Input.dispatchMouseEvent", {
     type: "mousePressed",

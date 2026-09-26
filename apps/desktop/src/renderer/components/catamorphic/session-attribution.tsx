@@ -54,7 +54,7 @@ export function SessionAttribution({
   const link = (url: string, label: string) => (
     <a
       href={url}
-      className="rounded underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+      className="rounded underline-offset-2 hover:underline"
       onClick={(event) => {
         if (onOpen) {
           event.preventDefault();

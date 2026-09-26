@@ -443,7 +443,7 @@ function PermissionPrompt({
         </span>
         <p className="min-w-0 flex-1 pt-1 text-[13px] leading-5 text-fg">
           <span className="font-medium">{host}</span> wants to{" "}
-          {describeRequest(kinds)}
+          {describeRequest(kinds, { externalApp: request.externalApp })}
         </p>
       </div>
       {systemDenied.length > 0 && (

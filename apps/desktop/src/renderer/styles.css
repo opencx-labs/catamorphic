@@ -80,6 +80,16 @@
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 }
 
+/* Every element rests with the accent as its outline color, so a focus ring
+   never fades in from the text color (see "Focus rings" below). */
+@layer base {
+  *,
+  ::before,
+  ::after {
+    outline-color: var(--color-accent);
+  }
+}
+
 /* A lurking chat (floating, working behind the tab the user focused) is a
    peek, not a workspace: no scrollbars and no message navigation. */
 [data-lurking] * {
@@ -190,12 +200,34 @@ kbd {
   font-family: var(--font-mono);
 }
 
-/* Keyboard focus ring on the accent token (Chromium's outline:auto default
-   is an amber that clashes with the palette). Excluded: .field elements and
-   text controls inside one — the field carries its own border+glow focus
-   treatment (via :focus-within for wrappers like the chat composer), and
-   this rule would stack a second ring inside it. Buttons inside a field
-   (e.g. the composer's send button) keep the ring. */
+/* Focus rings (DESIGN.md "Focus rings"). There is one ring: 2px of the
+   accent, outside a standalone control (--focus-ring-offset) and inside a
+   row, tile or anything stacked or clipped (--focus-ring-inset, which covers
+   a 1px border instead of doubling it). Every rule draws it as
+   `outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent)`.
+
+   Rings follow keyboard navigation. Chromium turns :focus-visible on after
+   any key, so Escape after a right-click lit the row focus returned to.
+   lib/focus-modality.ts marks the root while the pointer leads, and the
+   ring style resolves to none until Tab or an arrow key takes over.
+
+   A ring appears at once. Every element rests with the accent as its
+   outline color, so a transition that includes outline-color (Tailwind's
+   transition-colors does) has nothing to fade from. */
+:root {
+  --focus-ring-width: 2px;
+  --focus-ring-style: solid;
+  --focus-ring-offset: 1px;
+  --focus-ring-inset: -1px;
+}
+:root[data-focus-modality="pointer"] {
+  --focus-ring-style: none;
+}
+
+/* Text fields are excluded: a .field carries its own border and glow
+   (via :focus-within for wrappers like the chat composer), and this rule
+   would stack a second ring inside it. Buttons inside a field (the
+   composer's send button) keep the ring. */
 :focus-visible:not(
   .field,
   .field textarea,
@@ -204,8 +236,15 @@ kbd {
   .field [contenteditable],
   [role="dialog"]
 ) {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* The inset placement, for controls whose ring a neighbour or a scrolling
+   ancestor would otherwise cover. The doubled class matches the global
+   rule's (0,3,0), which its :not() list carries, and wins by order. */
+.focus-ring-inset.focus-ring-inset:focus-visible {
+  outline-offset: var(--focus-ring-inset);
 }
 
 /* Modal panels receive programmatic focus for containment and restoration.
@@ -958,15 +997,15 @@ kbd {
    neighbours and the panel's edges never cut it. */
 [data-sidebar-section] button:focus-visible:not([hidden]),
 [data-sidebar-section] a:focus-visible:not([hidden]) {
-  outline-offset: -2px;
+  outline-offset: var(--focus-ring-inset);
 }
 
 /* A sidebar row or tile is one rounded box. When keyboard focus lands on
    the control inside it, the ring is drawn on that box with its radius and
    over its border; the inner control never draws its own square ring. */
 [data-sidebar-item-id]:has(:focus-visible) {
-  outline: 2px solid var(--color-accent);
-  outline-offset: -1px;
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: var(--focus-ring-inset);
 }
 /* Outranks the global ring rule's :not() specificity. */
 [data-sidebar-item-id] :focus-visible:not([hidden]) {
@@ -977,8 +1016,8 @@ kbd {
    rows are absolutely stacked, so an outside ring was covered top and
    bottom by the neighbours and clipped left and right by the tree. */
 [role="tree"] [role="treeitem"]:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: -2px;
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: var(--focus-ring-inset);
   border-radius: var(--radius-md);
   z-index: 1;
 }
@@ -991,21 +1030,29 @@ kbd {
 [role="tree"] [role="treeitem"] {
   transition: top 200ms var(--ease-standard);
 }
-[role="tree"][data-dragging] [role="treeitem"] {
-  transition: none;
-}
-/* Drop cues ease in and out alike. */
+/* Drop cues ease in and out alike. The row being dragged (and the one just
+   dropped, until the reorder lands) dims so the insertion line reads as
+   where it is going. */
 [role="tree"] [role="treeitem"] > *,
 [data-drop-zone] > li {
-  transition-property: box-shadow, background-color, color;
+  transition-property: box-shadow, background-color, color, opacity;
   transition-duration: 150ms;
   transition-timing-function: var(--ease-standard);
+}
+[role="tree"] [data-tree-dragging] > * {
+  opacity: 0.4;
+}
+/* A dropped row fades into its new slot while its neighbours slide. */
+[role="tree"] [data-tree-settling] > * {
+  opacity: 0;
+  transition: none;
 }
 @media (prefers-reduced-motion: reduce) {
   [role="tree"],
   [role="tree"] [role="treeitem"],
   [role="tree"] [role="treeitem"] > *,
-  [data-drop-zone] > li {
+  [data-drop-zone] > li,
+  [data-tree-drop-line] {
     transition: none;
   }
 }
@@ -1019,6 +1066,8 @@ kbd {
   border-radius: 1px;
   z-index: 1;
   animation: fade-in 120ms var(--ease-standard);
+  /* Moving between slots glides instead of blinking from row to row. */
+  transition: top 100ms var(--ease-standard);
 }
 [data-tree-drop-line]::before {
   content: "";
@@ -1385,10 +1434,10 @@ kbd {
 .sidebar-tab:active {
   transform: scale(0.92);
 }
-.sidebar-tab:focus-visible,
-.sidebar-resizer:focus-visible {
-  outline: 1px solid var(--color-accent);
-  outline-offset: -2px;
+.sidebar-tab.sidebar-tab:focus-visible,
+.sidebar-resizer.sidebar-resizer:focus-visible {
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: var(--focus-ring-inset);
   border-radius: 4px;
 }
 .sidebar-tab-panel {
@@ -1564,8 +1613,8 @@ kbd {
   background: var(--color-bg-overlay);
 }
 .cat-markdown summary:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: var(--focus-ring-offset);
 }
 .cat-markdown summary > :is(h1, h2, h3, h4, h5, h6, p) {
   display: inline;

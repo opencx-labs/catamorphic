@@ -31,6 +31,7 @@ import {
   desktopApi,
 } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
+import { useSteadyWidthDuringLayoutTransitions } from "../lib/layout-transition.js";
 
 /**
  * A browser page inside a workspace tab: address bar (with Chrome-style
@@ -264,6 +265,7 @@ export function BrowserScreen({
   );
   const [passwordEditorOpen, setPasswordEditorOpen] = useState(false);
   const pageAreaRef = useRef<HTMLDivElement | null>(null);
+  useSteadyWidthDuringLayoutTransitions(webviewRef, pageAreaRef);
   // Bookmarks for this project+profile, so the star reflects real state
   // (Chrome: filled = saved, click again removes) instead of firing a
   // one-way "add" that silently duplicates on every press.

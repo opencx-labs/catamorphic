@@ -498,7 +498,7 @@ function InspectorRow({
             aria-label={`Change ${label.toLowerCase()}`}
             onClick={onEdit}
             disabled={Boolean(disabledReason)}
-            className="group -mx-1.5 flex w-[calc(100%+0.75rem)] min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-0.5 text-left transition-colors duration-150 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-bg-raised focus-visible:outline-2 focus-visible:outline-accent"
+            className="group -mx-1.5 flex w-[calc(100%+0.75rem)] min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-0.5 text-left transition-colors duration-150 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-bg-raised focus-ring-inset"
           >
             <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
               <span className="min-w-0 truncate">{value}</span>

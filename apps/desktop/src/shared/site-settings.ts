@@ -253,8 +253,17 @@ export function decideSitePermission(
 }
 
 /** "use your microphone and camera" */
-export function describeRequest(kinds: readonly SitePermissionKind[]): string {
-  const parts = kinds.map((kind) => SITE_PERMISSIONS[kind].ask);
+export function describeRequest(
+  kinds: readonly SitePermissionKind[],
+  context: { externalApp?: SitePermissionRequest["externalApp"] } = {},
+): string {
+  // Opening another app names it: "open Slack", or its scheme's links.
+  const app = context.externalApp;
+  const parts = kinds.map((kind) =>
+    kind === "externalApps" && app
+      ? `open ${app.name ?? `${app.scheme}: links`}`
+      : SITE_PERMISSIONS[kind].ask,
+  );
   if (parts.length <= 1) return parts[0] ?? "";
   // Camera + microphone share a verb: "use your microphone and camera".
   if (
@@ -291,6 +300,8 @@ export interface SitePermissionRequest {
   guestId: number;
   origin: string;
   kinds: SitePermissionKind[];
+  /** For a request to open another app: which one, named for the prompt. */
+  externalApp?: { scheme: string; name?: string };
 }
 
 export const sitePermissionAnswerSchema = z.object({

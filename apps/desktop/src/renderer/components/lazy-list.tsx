@@ -115,7 +115,7 @@ export function LazyList<T>({
         setScrollTop(event.currentTarget.scrollTop);
         setFocusIndex(next);
       }}
-      className={`overflow-auto overscroll-contain focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${className}`}
+      className={`overflow-auto overscroll-contain focus-ring-inset ${className}`}
       data-lazy-list
       style={{ maxHeight, height }}
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}

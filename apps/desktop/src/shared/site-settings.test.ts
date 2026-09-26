@@ -101,6 +101,14 @@ describe("site permission vocabulary", () => {
     expect(describeRequest(["location", "notifications"])).toBe(
       "know your location and send you notifications",
     );
+    expect(
+      describeRequest(["externalApps"], {
+        externalApp: { scheme: "slack", name: "Slack" },
+      }),
+    ).toBe("open Slack");
+    expect(
+      describeRequest(["externalApps"], { externalApp: { scheme: "zoommtg" } }),
+    ).toBe("open zoommtg: links");
   });
 
   it("names sites by origin and host", () => {

@@ -7,6 +7,8 @@ import type {
 import { useCatamorphic } from "@catamorphic/react";
 import { AppMount } from "@catamorphic/ui";
 import { useQuery } from "@tanstack/react-query";
+import { useRef } from "react";
+import { useSteadyWidthDuringLayoutTransitions } from "../lib/layout-transition.js";
 import { appHostTheme, useTheme } from "../lib/theme.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
 
@@ -63,6 +65,10 @@ export function AppScreen({
   collections?: AppCollections;
   onContentState?: (state: AppContentState) => void;
 }) {
+  // The app's frame resizes once per layout transition, not per frame.
+  const appBoxRef = useRef<HTMLDivElement>(null);
+  const appContentRef = useRef<HTMLDivElement>(null);
+  useSteadyWidthDuringLayoutTransitions(appContentRef, appBoxRef);
   const theme = useTheme();
   const apps = useApps(projectId);
   const app = apps.data?.find((entry) => entry.name === appName);
@@ -102,43 +108,48 @@ export function AppScreen({
     );
   }
   return (
-    <div className={compact ? "min-w-0" : "flex min-h-0 flex-1 flex-col bg-bg"}>
-      <AppMount
-        key={`${projectId}:${appName}`}
-        projectId={projectId}
-        appName={appName}
-        display={{ mode: compact ? "compact" : "full", visible, surface }}
-        collections={collections}
-        onContentState={onContentState}
-        viewportHeight={compact ? height : "fill"}
-        refreshIntervalMs={3000}
-        context={{
-          tenantId: DESKTOP_TENANT_ID,
-          user: { id: DESKTOP_USER_ID },
-        }}
-        // Apps live inside the shell: hand them the full theme — the
-        // profile's resolved colors plus the desktop's feel tokens — so
-        // shared-vocabulary styling matches it exactly, and keep them
-        // current across theme switches.
-        theme={theme ? appHostTheme(theme) : undefined}
-        className={
-          compact
-            ? "block w-full bg-bg-raised"
-            : "block min-h-0 flex-1 w-full bg-bg"
-        }
-        // The desktop is the owner's surface: show the newest ready build
-        // (the version being developed), not just the published one.
-        channel="dev"
-        renderState={(state) => (
-          <div className="grid h-60 place-items-center text-sm text-fg-muted">
-            {state === "loading" || (state === "not_found" && apps.isPending)
-              ? "Loading app…"
-              : state === "not_published" || sourceExists
-                ? "This app has no successful build yet. Ask the assistant to build it."
-                : "App not found."}
-          </div>
-        )}
-      />
+    <div
+      ref={appBoxRef}
+      className={compact ? "min-w-0" : "flex min-h-0 flex-1 flex-col bg-bg"}
+    >
+      <div ref={appContentRef} className="flex min-h-0 w-full flex-1 flex-col">
+        <AppMount
+          key={`${projectId}:${appName}`}
+          projectId={projectId}
+          appName={appName}
+          display={{ mode: compact ? "compact" : "full", visible, surface }}
+          collections={collections}
+          onContentState={onContentState}
+          viewportHeight={compact ? height : "fill"}
+          refreshIntervalMs={3000}
+          context={{
+            tenantId: DESKTOP_TENANT_ID,
+            user: { id: DESKTOP_USER_ID },
+          }}
+          // Apps live inside the shell: hand them the full theme — the
+          // profile's resolved colors plus the desktop's feel tokens — so
+          // shared-vocabulary styling matches it exactly, and keep them
+          // current across theme switches.
+          theme={theme ? appHostTheme(theme) : undefined}
+          className={
+            compact
+              ? "block w-full bg-bg-raised"
+              : "block min-h-0 flex-1 w-full bg-bg"
+          }
+          // The desktop is the owner's surface: show the newest ready build
+          // (the version being developed), not just the published one.
+          channel="dev"
+          renderState={(state) => (
+            <div className="grid h-60 place-items-center text-sm text-fg-muted">
+              {state === "loading" || (state === "not_found" && apps.isPending)
+                ? "Loading app…"
+                : state === "not_published" || sourceExists
+                  ? "This app has no successful build yet. Ask the assistant to build it."
+                  : "App not found."}
+            </div>
+          )}
+        />
+      </div>
     </div>
   );
 }

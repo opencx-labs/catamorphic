@@ -27,15 +27,20 @@
  */
 export const APP_KIT_CSS = `
 /* ---------------------------------------------------------------- focus */
-.cat-btn:focus-visible,.cat-tab:focus-visible,.cat-switch:focus-visible,
-.cat-checkbox:focus-visible,.cat-cal-day:focus-visible,.cat-cal-nav:focus-visible,
-.cat-table-sort:focus-visible,.cat-datepicker-trigger:focus-visible,
-.cat-datepicker-clear:focus-visible,.cat-bar-row--button:focus-visible{
-  outline:2px solid var(--color-accent);outline-offset:1px;
+/* One ring, the host's (ADR 0168): 2px of accent from the ring tokens in the
+   base sheet, outside a control and inside a row. It follows the keyboard:
+   the guest runtime marks the root while the pointer leads and the style
+   resolves to none. :where() keeps it overridable by any app rule; kit text
+   fields keep their own border-and-glow focus. */
+:where(:focus-visible){
+  outline:var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset:var(--focus-ring-offset);
 }
+:where([role="dialog"],.cat-tabpanel):focus-visible{outline:none}
 /* Rows stack: their ring sits inside the row and above its neighbours. */
 [role="tree"] [role="treeitem"]:focus-visible,.cat-collection-item:has(:focus-visible){
-  outline:2px solid var(--color-accent);outline-offset:-2px;border-radius:var(--radius-md);z-index:1;
+  outline:var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset:var(--focus-ring-inset);border-radius:var(--radius-md);z-index:1;
 }
 .cat-collection-item :focus-visible{outline:none}
 
@@ -147,22 +152,71 @@ export const APP_KIT_CSS = `
   border-bottom:1.5px solid var(--color-fg-muted);rotate:45deg;
   pointer-events:none;
 }
+/* Where the engine supports it (Chromium 135+), the picker is the host's own
+   menu, not the operating system's: overlay surface, hairline border, 10px
+   radius, 6px rows and an accent checkmark, opening and closing on the fast
+   motion. Elsewhere it stays the native menu. */
+@supports (appearance:base-select){
+  .cat-select select,.cat-select select::picker(select){appearance:base-select}
+  .cat-select select{display:flex;align-items:center}
+  .cat-select::after{display:none}
+  .cat-select select::picker-icon{
+    content:"";width:6px;height:6px;border:solid var(--color-fg-muted);
+    border-width:0 1.5px 1.5px 0;rotate:45deg;margin:-3px 2px 0 auto;
+    transition:rotate var(--cat-motion-fast) var(--ease-standard);
+  }
+  .cat-select select:open::picker-icon{rotate:225deg;margin-top:3px}
+  .cat-select select::picker(select){
+    min-width:anchor-size(width);max-height:min(360px,60dvh);margin-block:4px;padding:4px;
+    border:1px solid var(--color-border);border-radius:var(--radius-lg);
+    background:var(--color-bg-overlay);color:var(--color-fg);
+    font:var(--cat-font-size) var(--font-sans);box-shadow:0 12px 32px #0003;
+    overflow:auto;overscroll-behavior:contain;opacity:0;translate:0 -4px;
+    transition:opacity var(--cat-motion-fast) var(--ease-standard),
+      translate var(--cat-motion-fast) var(--ease-standard),
+      display var(--cat-motion-fast) allow-discrete,overlay var(--cat-motion-fast) allow-discrete;
+  }
+  .cat-select select:open::picker(select){opacity:1;translate:0 0}
+  @starting-style{.cat-select select:open::picker(select){opacity:0;translate:0 -4px}}
+  .cat-select option{
+    min-height:32px;gap:12px;padding:6px 8px;border-radius:var(--radius-md);
+    color:var(--color-fg-muted);background:transparent;cursor:pointer;
+    transition:color 100ms var(--ease-standard),background-color 100ms var(--ease-standard);
+  }
+  .cat-select option:is(:hover,:focus-visible){outline:none;color:var(--color-fg);background:var(--color-bg-raised)}
+  .cat-select option:checked{color:var(--color-fg);font-weight:500}
+  .cat-select option::checkmark{order:1;margin-inline-start:auto;color:var(--color-accent)}
+}
 
 /* ---------------------------------------------------- checkbox & switch */
 .cat-checkbox{
-  appearance:none;flex:none;width:14px;height:14px;margin:0;cursor:pointer;
-  border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);
-  background:var(--color-bg-inset);position:relative;vertical-align:-2px;
+  appearance:none;display:inline-grid;place-content:center;flex:none;width:16px;height:16px;margin:0;
+  cursor:pointer;border:0;border-radius:var(--radius-sm);vertical-align:middle;
+  background:color-mix(in srgb,var(--color-fg) 8%,transparent);
+  box-shadow:inset 0 0 0 1.5px light-dark(color-mix(in srgb,var(--color-fg) 50%,transparent),color-mix(in srgb,var(--color-fg) 40%,transparent));
   transition:background-color var(--cat-motion-fast) var(--ease-standard),
-    border-color var(--cat-motion-fast) var(--ease-standard);
+    box-shadow var(--cat-motion-fast) var(--ease-standard),scale 100ms var(--ease-standard);
 }
-.cat-checkbox:checked{background:var(--color-accent);border-color:var(--color-accent)}
-.cat-checkbox:checked::after{
-  content:"";position:absolute;left:4px;top:1px;width:3px;height:7px;
-  border-right:1.5px solid var(--color-accent-fg);
-  border-bottom:1.5px solid var(--color-accent-fg);rotate:45deg;
+.cat-checkbox:hover:not(:disabled,:checked,:indeterminate){
+  background:color-mix(in srgb,var(--color-fg) 14%,transparent);
+  box-shadow:inset 0 0 0 1.5px light-dark(color-mix(in srgb,var(--color-fg) 58%,transparent),color-mix(in srgb,var(--color-fg) 48%,transparent));
 }
-.cat-checkbox:disabled{opacity:.55;cursor:default}
+.cat-checkbox:active:not(:disabled){scale:.88}
+.cat-checkbox:is(:checked,:indeterminate){background:var(--color-accent);box-shadow:inset 0 0 0 1.5px transparent}
+.cat-checkbox::before{
+  content:"";width:10px;height:10px;background:var(--color-accent-fg);
+  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.75 5.25 4 7.5l4.25-5'/%3E%3C/svg%3E") center/10px 10px no-repeat;
+  clip-path:inset(0 100% 0 0);opacity:0;
+  transition:opacity 100ms var(--ease-standard),clip-path 0ms linear 100ms;
+}
+.cat-checkbox:indeterminate::before{
+  mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round'%3E%3Cpath d='M2 5h6'/%3E%3C/svg%3E");
+}
+.cat-checkbox:is(:checked,:indeterminate)::before{
+  clip-path:inset(0 0 0 0);opacity:1;
+  transition:opacity 100ms var(--ease-standard),clip-path var(--cat-motion-fast) var(--ease-standard);
+}
+.cat-checkbox:disabled{opacity:.5;cursor:default}
 .cat-switch{
   appearance:none;position:relative;flex:none;width:28px;height:16px;
   padding:0;border-radius:999px;cursor:pointer;
@@ -272,7 +326,6 @@ export const APP_KIT_CSS = `
   background:var(--color-accent);
 }
 .cat-tabpanel{padding-top:12px}
-.cat-tabpanel:focus-visible{outline:none}
 
 /* ---------------------------------------------------------------- badge */
 .cat-badge{
@@ -633,7 +686,7 @@ export const APP_KIT_CSS = `
   }
   .cat-skeleton::after{animation:none}
   .cat-btn,.cat-tab,.cat-input,.cat-textarea,.cat-select select,
-  .cat-checkbox,.cat-switch,.cat-switch::after,.cat-cal-day,.cat-cal-nav,
+  .cat-checkbox,.cat-checkbox::before,.cat-select select::picker(select),.cat-select select::picker-icon,.cat-select option,.cat-switch,.cat-switch::after,.cat-cal-day,.cat-cal-nav,
   .cat-table tbody tr,.cat-table-sort .cat-table-arrow,.cat-scrollhint-fade,
   .cat-datepicker-clear{transition-duration:1ms}
 }
@@ -651,9 +704,9 @@ export const APP_KIT_CSS = `
 .cat-collection-menu small{display:block;color:var(--color-fg-muted)}
 
 /* ----------------------------------------------------------- collapsible */
-.cat-collapsible{display:grid;grid-template-rows:1fr;opacity:1;transition:grid-template-rows var(--cat-motion-base) var(--ease-standard),opacity var(--cat-motion-base) var(--ease-standard)}
-.cat-collapsible[data-state="closed"]{grid-template-rows:0fr;opacity:0}
-.cat-collapsible-inner{min-height:0;overflow:hidden}
+/* Collapsible measures its content and tweens height itself (ui/collapsible):
+   its geometry and timing are inline so the shell, which loads no kit CSS,
+   shares the same primitive. */
 
 /* ------------------------------------------------------- tree drag/drop */
 /* One drop presentation for every tree: an accent insertion line between
@@ -661,11 +714,12 @@ export const APP_KIT_CSS = `
    Rows slide and the tree resizes on expand/collapse with the base curve. */
 [role="tree"]{transition:height var(--cat-motion-base) var(--ease-standard)}
 [role="tree"] [role="treeitem"]{transition:top var(--cat-motion-base) var(--ease-standard)}
-[role="tree"][data-dragging] [role="treeitem"]{transition:none}
-[data-tree-drop-line]{height:2px;background:var(--color-accent);border-radius:1px;z-index:1;animation:cat-fade-in var(--cat-motion-fast) var(--ease-standard)}
+[role="tree"] [data-tree-dragging]>*{opacity:.4}
+[role="tree"] [data-tree-settling]>*{opacity:0;transition:none}
+[data-tree-drop-line]{height:2px;background:var(--color-accent);border-radius:1px;z-index:1;animation:cat-fade-in var(--cat-motion-fast) var(--ease-standard);transition:top 100ms var(--ease-standard)}
 [data-tree-drop-line]::before{content:"";position:absolute;left:4px;top:-3px;width:8px;height:8px;border-radius:50%;background:var(--color-accent)}
 [role="treeitem"][data-drop="inside"]>*,[role="tree"][data-drop-root="inside"]{border-radius:var(--radius-md);box-shadow:inset 0 0 0 1px var(--color-accent);background:color-mix(in srgb,var(--color-accent) 10%,transparent)}
-[role="tree"] [role="treeitem"]>*{transition-property:box-shadow,background-color,color;transition-duration:var(--cat-motion-fast);transition-timing-function:var(--ease-standard)}
+[role="tree"] [role="treeitem"]>*{transition-property:box-shadow,background-color,color,opacity;transition-duration:var(--cat-motion-fast);transition-timing-function:var(--ease-standard)}
 
 /* ------------------------------------------------------ popover growth */
 .cat-popover[data-settled]{transition:height var(--cat-motion-base) var(--ease-standard),top var(--cat-motion-base) var(--ease-standard)}

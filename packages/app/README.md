@@ -2,6 +2,15 @@
 
 Guest runtime and host-themed UI components for sandboxed Catamorphic apps.
 
+## Feel shared with the host
+
+Every guest document gets the host's focus behavior: one 2px accent ring from
+the `--focus-ring-*` tokens, drawn only while the keyboard leads (the inline
+runtime marks `data-focus-modality` on the root). The kit's checkbox and
+select match the Work shell, and `Collapsible` is the same measured-height
+primitive the shell uses, so apps agents build look and move like the rest of
+the app by default (ADR 0168).
+
 ## Review components
 
 Install the `code-review` source pack from the component registry and import the

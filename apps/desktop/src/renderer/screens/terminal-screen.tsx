@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { KEYBINDING_ACTIONS } from "../../shared/actions.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { matchesBinding, useKeybindings } from "../lib/keybindings.js";
+import { useSteadyWidthDuringLayoutTransitions } from "../lib/layout-transition.js";
 import { sanitizeScrollback } from "../lib/scrollback.js";
 import { useTerminalAppearance } from "../lib/terminal-appearance.js";
 
@@ -69,6 +70,9 @@ export function TerminalScreen({
   onSession,
 }: TerminalScreenProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  // A refit per frame of a sidebar transition took frames to 50-65 ms.
+  useSteadyWidthDuringLayoutTransitions(containerRef, wrapperRef);
   const termRef = useRef<Terminal | null>(null);
   const { appearance, ready: appearanceReady } = useTerminalAppearance();
   const [ready, setReady] = useState(appearanceReady);
@@ -583,6 +587,7 @@ export function TerminalScreen({
 
   return (
     <div
+      ref={wrapperRef}
       className="min-h-0 flex-1 overflow-hidden px-2 pt-2"
       data-terminal-appearance={appliedAppearance.name}
       data-terminal-font-size={appliedAppearance.fontSize}

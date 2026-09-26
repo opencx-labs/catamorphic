@@ -8,7 +8,7 @@ html:has(.cat-review),body:has(.cat-review),#root:has(>.cat-review){height:100%}
 .cat-review-nav button{appearance:none;background:transparent;border:0;color:var(--color-fg-muted);border-radius:var(--radius-md,6px);padding:var(--review-space) calc(var(--review-space)*3);min-height:var(--cat-row-h,28px);font:inherit;cursor:pointer}
 .cat-review-nav button[aria-current=page]{background:var(--color-bg-overlay);color:var(--color-fg)}
 .cat-review-nav button:hover{color:var(--color-fg)}
-.cat-review-nav button:focus-visible,.cat-review-control:focus-visible,.cat-review-search:focus-visible{outline:2px solid var(--color-accent);outline-offset:2px}
+.cat-review-nav button:focus-visible,.cat-review-control:focus-visible,.cat-review-search:focus-visible{outline:var(--focus-ring-width,2px) var(--focus-ring-style,solid) var(--color-accent);outline-offset:var(--focus-ring-offset,1px)}
 .cat-review-body{min-height:0;min-width:0;flex:1;overflow:auto;padding:calc(var(--review-space)*5) calc(var(--review-space)*6)}
 .cat-review-body[data-view=diff]{display:flex;flex-direction:column;padding:0;overflow:hidden}
 .cat-review-prose{max-width:72ch;margin-inline:auto}.cat-review-prose h2{font-size:var(--review-font-heading);font-weight:600;margin:calc(var(--review-space)*6) 0 calc(var(--review-space)*2)}

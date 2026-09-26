@@ -106,7 +106,7 @@ export function SlashMenu({
           <span className="min-w-0 flex-1">{error}</span>
           <button
             type="button"
-            className="shrink-0 rounded px-2 py-1 text-fg hover:bg-bg-overlay focus-visible:outline focus-visible:outline-accent"
+            className="shrink-0 rounded px-2 py-1 text-fg hover:bg-bg-overlay focus-ring-inset"
             onClick={onRetry}
             onKeyDown={(event) => {
               if (event.key === "Escape") {
