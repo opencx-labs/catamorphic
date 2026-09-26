@@ -87,6 +87,13 @@ app name token is matched without spaces, as Chromium writes it.
 ## Consequences
 
 - Sites that used to get notifications silently now ask once, as in Chrome.
+- (2026-09-26) A request to open another app names it ("wants to open
+  Slack", from the scheme's registered app) and is withdrawn when its tab
+  navigates, so a late answer never launches an app for a page that moved
+  on. A prompt for a window in the background reveals its tab and asks for
+  attention (a critical Dock bounce, a flashing frame elsewhere) until it
+  settles. The app's own windows use the default session, which refuses to
+  open other apps.
 - The dialog owns the whole surface: a request never shows a bare prompt.
 - No per-site storage size (Electron has no per-origin quota API); HTTP
   cache is not cleared per site.

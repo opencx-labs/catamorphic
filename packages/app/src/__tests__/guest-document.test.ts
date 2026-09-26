@@ -2,6 +2,26 @@ import { describe, expect, it } from "vitest";
 import { buildAppGuestDocument } from "../guest-document.js";
 
 describe("buildAppGuestDocument", () => {
+  it("gives every guest the host's keyboard-led focus ring", () => {
+    // Themed or not, kit or not (MCP and share hosts mount unthemed).
+    for (const kit of [true, false]) {
+      const doc = buildAppGuestDocument({ code: "", css: "", kit });
+      expect(doc).toContain("--focus-ring-width:2px");
+      expect(doc).toContain(
+        '[data-focus-modality="pointer"]{--focus-ring-style:none}',
+      );
+      expect(doc).toContain("outline-color:var(--color-accent");
+      // The runtime marks the root: navigation keys on, a pointer press off.
+      expect(doc).toContain("dataset.focusModality");
+      expect(doc).toContain("'pointerdown'");
+    }
+    const kit = buildAppGuestDocument({ code: "", css: "" });
+    expect(kit).toContain(
+      "outline:var(--focus-ring-width) var(--focus-ring-style) var(--color-accent)",
+    );
+    expect(kit).not.toMatch(/outline:\s*\d+px\s+solid/);
+  });
+
   it("seeds the document with the host theme and base layer", () => {
     const doc = buildAppGuestDocument({
       code: "/* bundle */",

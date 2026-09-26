@@ -104,6 +104,53 @@ import {
  *  - unpacked Chrome extensions loaded per profile.
  */
 
+/**
+ * The app a link would open, named for the prompt ("wants to open Slack").
+ * Only the scheme and the registered app's name leave this function; the
+ * link itself can carry tokens.
+ */
+function externalAppFor(
+  externalUrl: string,
+): { scheme: string; name?: string } | undefined {
+  let scheme: string;
+  try {
+    scheme = new URL(externalUrl).protocol.replace(/:$/, "");
+  } catch {
+    return undefined;
+  }
+  let name: string | undefined;
+  try {
+    name = app.getApplicationNameForProtocol(externalUrl) || undefined;
+  } catch {
+    name = undefined;
+  }
+  // macOS reports the bundle's display name with its extension.
+  return { scheme, ...(name ? { name: name.replace(/\.app$/i, "") } : {}) };
+}
+
+/**
+ * A prompt asked of a window in the background waits unseen. Bring the
+ * requesting tab forward in its window and ask for the person's attention
+ * (a critical Dock bounce on macOS, a flashing frame elsewhere) until the
+ * prompt settles. Returns the undo.
+ */
+function requestAttention(
+  host: WebContents,
+  guestId: number,
+): (() => void) | undefined {
+  host.send("catamorphic:browser-reveal-guest", { guestId });
+  const window = BrowserWindow.fromWebContents(host);
+  if (!window || window.isDestroyed() || window.isFocused()) return undefined;
+  if (process.platform === "darwin" && app.dock) {
+    const bounce = app.dock.bounce("critical");
+    return () => app.dock?.cancelBounce(bounce);
+  }
+  window.flashFrame(true);
+  return () => {
+    if (!window.isDestroyed()) window.flashFrame(false);
+  };
+}
+
 // Partition → in-flight/settled prepare. A Promise map (not a Set of
 // done flags): concurrent callers share one prepare and actually await
 // it, and a failed prepare is retried on the next call instead of being
@@ -124,6 +171,7 @@ interface SitePermissionPolicy {
       requestingUrl?: string;
       securityOrigin?: string;
       mediaTypes?: string[];
+      externalURL?: string;
     },
   ) => Promise<boolean>;
   check: (
@@ -300,6 +348,13 @@ export function registerBrowserSupport(
   const history = new HistoryStore(profilesDir);
   const vault = new PasswordVault(profilesDir);
   const siteSettings = new SiteSettingsStore(profilesDir);
+  // The app's own windows use the default session, which Electron grants
+  // every permission without a handler. None of them opens other apps
+  // through navigation (links go through shell.openExternal on purpose).
+  session.defaultSession.setPermissionRequestHandler(
+    (_contents, permission, callback) =>
+      callback(permission !== "openExternal"),
+  );
   const permissionBroker = new SitePermissionBroker();
   const screenShareBroker = new PromptBroker<
     ScreenShareRequest,
@@ -950,6 +1005,15 @@ export function registerBrowserSupport(
         Menu.buildFromTemplate(template).popup();
       });
     });
+    // A request to open another app belongs to the page that made it: once
+    // the tab moves on, answering must not launch anything.
+    contents.on("did-start-navigation", (details) => {
+      if (!details.isMainFrame || details.isSameDocument) return;
+      const ids = permissionBroker.withdrawExternalApps(contents.id);
+      const host = contents.hostWebContents;
+      if (ids.length > 0 && host && !host.isDestroyed())
+        host.send("catamorphic:site-permission-withdrawn", { ids });
+    });
     // A prompt for a guest that closed would ask about nothing; the
     // window it was sent to takes it back.
     const hostForWithdrawal = contents.hostWebContents;
@@ -1086,8 +1150,20 @@ export function registerBrowserSupport(
       const host = guest.hostWebContents;
       if (!host || host.isDestroyed()) return false;
       const answer = await permissionBroker.askPermission(
-        { profileId, origin, guestId: guest.id, kinds: decision.kinds },
-        (request) => host.send("catamorphic:site-permission-request", request),
+        {
+          profileId,
+          origin,
+          guestId: guest.id,
+          kinds: decision.kinds,
+          externalApp:
+            permission === "openExternal" && details.externalURL
+              ? externalAppFor(details.externalURL)
+              : undefined,
+        },
+        (request) => {
+          host.send("catamorphic:site-permission-request", request);
+          return requestAttention(host, guest.id);
+        },
       );
       if (!answer) return false;
       if (answer.remember) {

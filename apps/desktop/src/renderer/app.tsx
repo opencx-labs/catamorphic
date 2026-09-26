@@ -5713,6 +5713,7 @@ export function App({
           frame) rather than push the document taller than the window. */}
       <main
         data-workspace-content
+        data-layout-transition
         data-tab-layout={tabsInSidebar ? "sidebar" : "top"}
         data-header-placement={headerInSidebar ? "sidebar" : "top"}
         data-content-frame={prefs?.contentFrame ? "on" : "off"}
@@ -5791,6 +5792,7 @@ export function App({
         {projectId ? (
           <div
             data-workspace-chat-region
+            data-layout-transition
             className={`workspace-content relative flex min-h-0 flex-1 flex-col bg-bg ${tabsInSidebar ? "overflow-hidden" : ""}`}
           >
             {/* Every tab pane lives in this wrapper so keyboard cycling

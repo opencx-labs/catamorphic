@@ -183,6 +183,7 @@ export function TabbedSidebar({
           );
       }}
       data-sidebar={side}
+      data-layout-transition
       data-tab-motion={tabMotion}
       data-resizing={resizing || undefined}
       data-sidebar-revealed={revealed}

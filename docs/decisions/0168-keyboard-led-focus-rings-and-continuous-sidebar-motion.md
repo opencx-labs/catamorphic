@@ -56,6 +56,16 @@ model instead of their own. Rejected: optimistic local reordering inside
 `Tree` (hosts differ in move semantics, and a correction jump is worse than
 a short dim).
 
+**Apps built by agents share both.** The guest base sheet carries the ring
+tokens, the accent resting outline color and the pointer-led rule; the inline
+guest runtime tracks keyboard versus pointer like the shell; the kit draws
+its rings from the tokens (a zero-specificity `:where(:focus-visible)` rule
+covers controls an app writes itself), its checkbox is the shell's, and its
+select uses the shell's `base-select` picker where the engine supports it.
+`Collapsible` is one measured-height primitive in `@catamorphic/app/ui`,
+which the shell re-exports, and `Tree` takes its timing from
+`--cat-motion-base`. The `designing-apps` doctrine says so.
+
 ## Consequences
 
 - Keyboard users see the same ring everywhere, the moment it appears. Pointer

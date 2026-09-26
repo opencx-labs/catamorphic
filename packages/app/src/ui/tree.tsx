@@ -285,7 +285,9 @@ export function Tree<T extends TreeItem>({
       typeof matchMedia === "function" &&
       matchMedia("(prefers-reduced-motion: reduce)").matches
         ? undefined
-        : "200ms cubic-bezier(0.2, 0, 0, 1)",
+        : // The host's structural motion token; the shell, which loads
+          // no kit sheet, falls back to its own 200ms.
+          "var(--cat-motion-base, 200ms) var(--ease-standard, cubic-bezier(0.2, 0, 0, 1))",
     [],
   );
   const reveal = useCallback(

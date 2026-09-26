@@ -896,8 +896,8 @@ next to the host's own.
 | \`Button\` | \`variant\` primary/ghost/danger/subtle, \`size\` sm/md, \`loading\`, \`loadingLabel\` | Actions. \`loading\` shows a spinner and disables WITHOUT changing width — use it for every workflow call a button starts. |
 | \`Field\` | \`label\`, \`hint\`, \`error\` | Wrap one control; ids and aria wiring are automatic. \`error\` replaces the hint and turns the control invalid. |
 | \`Input\` / \`Textarea\` | \`invalid\` + native props | Text entry on the inset surface. |
-| \`Select\` | \`invalid\` + native props; \`<option>\` children | Styled native select — free keyboard/screen-reader behavior. |
-| \`Checkbox\` | native props | Styled native checkbox. |
+| \`Select\` | \`invalid\` + native props; \`<option>\` children | Native select with the host's own picker menu (overlay surface, accent checkmark) — free keyboard/screen-reader behavior. |
+| \`Checkbox\` | native props (\`indeterminate\` via the DOM property) | The host's checkbox: neutral edge when off, solid accent with a drawn check when on, a small press. Never style checkboxes yourself. |
 | \`Switch\` | \`checked\`, \`onCheckedChange\` | On/off toggle (\`role=switch\`). |
 | \`Card\` | \`title\`, \`description\`, \`footer\` | THE surface unit — compose screens from Cards on the app background. |
 | \`Tabs\`+\`TabList\`+\`Tab\`+\`TabPanel\` | \`value\`, \`onValueChange\`; \`value\` per tab/panel | Underline tabs with roving keyboard focus. |
@@ -912,8 +912,8 @@ next to the host's own.
 | \`Dialog\` | \`open\`, \`onClose\`, \`title\`, \`description\`, \`footer\`, \`closeOnOverlayClick\` | Modal with focus trap/restore, Esc, and the host's enter/exit motion. |
 | \`Tooltip\` | \`label\`, \`delay\` | Hover/focus hint (~500ms delay — never instant). Portaled; hides on any pointer movement away. Never use the native \`title\` attribute. |
 | \`Popover\` | \`anchorRef\`, \`open\`, \`onClose\`, \`align\` | Anchored panel: portaled, flips to fit, closes on outside pointerdown and Esc, grows smoothly when its content loads late. Never hand-roll a floating panel. |
-| \`Collapsible\` | \`open\` | Structural show/hide that slides neighbours (grid rows 0fr↔1fr); closed content stays mounted but inert. Never animate \`height\` by hand. |
-| \`Tree\` / \`CollectionTree\` | \`items\`/\`collection\`, \`renderItem\`, \`height\`, \`rowHeight\`, \`selectedId\`, \`dragAndDrop\` | Virtualized tree with keyboard navigation, lazy children and the one drag-and-drop model (see below). \`CollectionItemView\` is the standard row. |
+| \`Collapsible\` | \`open\` | Structural show/hide that also tweens when its content changes (loading rows becoming rows, an empty sentence becoming a list), so neighbours slide instead of jumping; closed content stays mounted but inert. Wrap any region that appears, disappears or changes height in it. Never animate \`height\` by hand. |
+| \`Tree\` / \`CollectionTree\` | \`items\`/\`collection\`, \`renderItem\`, \`height\`, \`rowHeight\`, \`selectedId\`, \`dragAndDrop\` | Virtualized tree with keyboard navigation, lazy children, rows that enter and leave in one motion, and the one drag-and-drop model (see below). \`CollectionItemView\` is the standard row. |
 | \`DataTable\` | \`columns\` (\`key\`/\`header\`/\`align\`/\`width\`/\`sortable\`/\`render\`), \`rows\`, \`rowKey\`, \`loading\`, \`empty\`, \`truncated\`, \`maxHeight\` | The table: sticky header, client-side sorting, host-density rows, skeleton/empty/truncated states built in. Plain \`Table\`/\`TableRow\`/… also exported for hand-rolled cases. |
 | \`DatePicker\` / \`DateRangePicker\` | \`value\` (ISO \`YYYY-MM-DD\` / \`{from,to}\`), \`onChange\`, \`placeholder\` | Date entry — popover calendar, keyboard-navigable, date-only local strings (JSON-safe). |
 | \`Calendar\` | \`mode\`, \`value\`, \`onSelect\` | The bare month grid when you need it inline. |
@@ -968,7 +968,8 @@ function Orders() {
   Fonts \`--font-sans\`/\`--font-mono\`; radii \`--radius-sm/md/lg\`; the
   one easing \`--ease-standard\`; type size \`--cat-font-size\` (small
   labels \`--cat-font-size-sm\`); row density \`--cat-row-h\`; motion
-  durations \`--cat-motion-fast/base/slow\`. All are set by the host —
+  durations \`--cat-motion-fast/base/slow\`; focus rings
+  \`--focus-ring-width/style/offset/inset\`. All are set by the host —
   never hardcode a value one of them covers.
 - Secondary text is \`--color-fg-muted\`, hints \`--color-fg-faint\`.
 - **One primary action per view** (\`Button variant="primary"\`);
@@ -989,8 +990,12 @@ their own structure:
   the height collapse so neighbors slide into place). The exit classes hold
   their final frame (\`forwards\`) — remove the element on \`animationend\`,
   never before.
+- Anything that appears, disappears or changes height in place goes
+  through \`Collapsible\`; never mount or unmount a region instantly.
 - Hover feedback is a color transition on
-  \`var(--cat-motion-fast) var(--ease-standard)\`.
+  \`var(--cat-motion-fast) var(--ease-standard)\`. List the properties
+  (\`background-color, color\`); never \`transition: all\`, which also
+  animates layout and focus rings.
 
 Everything rides the host's tokens — \`--cat-motion-fast/base/slow\` and
 the one easing \`--ease-standard\`; never hardcode a duration or curve.
@@ -1006,6 +1011,13 @@ nothing animates on load.
   bordered cards, square rings inside rounded controls, and a ring beside a
   border are defects. The kit already does this for every component; keep
   custom surfaces to one bordered box.
+- **Focus rings are the host's.** The kit draws one ring everywhere: 2px of
+  accent, outside a control and inside a row, and only while the keyboard
+  leads (Tab and arrows show it; a click hides it, so Escape or Enter after
+  a click lights nothing). A control of your own gets it for free. Never
+  write \`outline: 2px solid …\`, \`outline: none\` on a focusable element,
+  or a \`:focus\` ring of your own; for a row or anything clipped use
+  \`outline-offset: var(--focus-ring-inset)\`.
 - Rows inside a \`Card\` are plain hover rows, not more cards; pickers are
   the only bordered children.
 - Check every new surface with keyboard focus (Tab through it) before
@@ -1056,7 +1068,8 @@ nothing animates on load.
   accept, onDrop }\`: the tree owns pointer math, the accent insertion line
   between rows and the accent outline on the row (or tree) that becomes the
   parent. Rows with children are the only "inside" targets; everything else
-  lands before or after a sibling.
+  lands before or after a sibling. The dragged row dims, and a dropped row
+  fades into its new slot while its neighbours slide.
 - Declare what a row offers when dragged and what a target accepts; never
   write drop-zone markup, payload formats or highlight classes of your own.
   Keep a drop cue visible while dragging so the user knows where release

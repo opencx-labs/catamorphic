@@ -485,6 +485,21 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-09-26: Opening other apps asks where you can see it; layout motion stays smooth over pages
+
+A page that wants to open another app now names it ("github.com wants to
+open Slack"). If Work is in the background, the requesting tab comes forward
+and the Dock icon bounces until the question is answered, and the question
+is withdrawn when the tab moves to another page: a late answer never
+launches an app for a page that is gone (ADR 0150).
+
+Opening the sidebar over a web page stuttered because the page, rendered in
+its own process, resized on every frame. Heavy content (pages, terminals,
+the code editor, app frames) now holds one width through a layout transition
+and resizes once ([performance](docs/performance.md)). Apps agents build get
+the same focus rings, checkboxes, select menu and collapsible motion as the
+shell (ADR 0168).
+
 ### 2026-09-26: One focus ring, simple checkboxes, a sidebar that moves
 
 Right-clicking a sidebar row and pressing Escape lit the row with a white
