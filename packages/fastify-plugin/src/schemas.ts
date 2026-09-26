@@ -159,12 +159,15 @@ export const TriggerKindDisplaySchema = z.object({
 export const NodeTriggerBindingSchema = z.object({
   kind: z.string(),
   config: JsonOutSchema,
+  where: JsonOutSchema.optional(),
   display: TriggerKindDisplaySchema.optional(),
 });
 
+/** A binding as written: a host kind or a project trigger kind (ADR 0171). */
 export const WorkflowTriggerBindingSchema = z.object({
   kind: z.string(),
   config: JsonOutSchema,
+  where: JsonOutSchema.optional(),
   sourceRange: SourceRangeSchema,
 });
 
@@ -180,8 +183,13 @@ export const TriggerKindInfoSchema = z.object({
 
 export const TriggerBindingInfoSchema = z.object({
   workflowName: z.string(),
+  /** The host kind that fires the binding. */
   kind: z.string(),
   config: JsonOutSchema,
+  /** Filters the payload must satisfy, all of them (ADR 0171). */
+  where: z.array(JsonOutSchema),
+  /** The project trigger kind the workflow bound. */
+  projectKind: z.string().optional(),
   canSuspend: z.boolean(),
   inputParameters: z.array(ParameterInfoSchema),
   inputSchema: JsonOutSchema,
@@ -207,6 +215,7 @@ export const WorkflowEnablementTriggerSchema = z.object({
   definitionId: z.string().uuid(),
   kind: z.string(),
   config: JsonOutSchema,
+  projectKind: z.string().optional(),
   status: z.enum(["active", "paused"]),
 });
 
@@ -229,7 +238,13 @@ export const WorkflowEnablementPreviewSchema =
   WorkflowEnablementTargetSchema.extend({
     deploymentArtifactDigest: z.string(),
     triggerCount: z.number().int().nonnegative(),
-    triggers: z.array(z.object({ kind: z.string(), config: JsonOutSchema })),
+    triggers: z.array(
+      z.object({
+        kind: z.string(),
+        config: JsonOutSchema,
+        projectKind: z.string().optional(),
+      }),
+    ),
     connectionLabels: z.record(z.string(), z.string()),
   });
 

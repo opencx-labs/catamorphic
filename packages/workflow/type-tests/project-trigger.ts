@@ -1,0 +1,172 @@
+import {
+  type BoundaryContext,
+  defineTrigger,
+  defineWorkflow,
+  type Narrow,
+  type PayloadOf,
+  type TriggerPayload,
+  trigger,
+} from "../src/index.js";
+
+// Mirrors the generated work-triggers.d.ts: the host's webhook kind, and
+// the project's own kinds typed from their trigger modules (ADR 0171).
+declare module "../src/index.js" {
+  interface TriggerKinds {
+    webhook: {
+      payload: {
+        id: string;
+        kind: "webhook";
+        payload: {
+          name: string;
+          headers: { [key: string]: string };
+          contentType: string | null;
+          body:
+            | null
+            | boolean
+            | number
+            | string
+            | { [key: string]: unknown }
+            | unknown[];
+        };
+      };
+      config: {
+        name: string;
+        verify?: { scheme: "hmac"; secret: string; header: string };
+      };
+    };
+    "gh.pull_request": {
+      payload: PayloadOf<typeof pullRequest>;
+      config: Record<string, never>;
+    };
+    "gh.merged": {
+      payload: PayloadOf<typeof merged>;
+      config: Record<string, never>;
+    };
+    "gh.any": {
+      payload: PayloadOf<typeof anyDelivery>;
+      config: Record<string, never>;
+    };
+  }
+}
+
+interface PullRequestBody {
+  action: "opened" | "synchronize" | "closed";
+  number: number;
+  pull_request: { merged: boolean; title: string };
+}
+
+type PullRequestDelivery = Narrow<
+  TriggerPayload<"webhook">,
+  { payload: { body: PullRequestBody } }
+>;
+
+// @ts-expect-error Narrowing keeps the envelope and types the body.
+const notABody: PullRequestDelivery["payload"]["body"] = "text";
+void notABody;
+const envelopeName: string = ({} as PullRequestDelivery).payload.name;
+void envelopeName;
+
+const untyped = defineTrigger({
+  name: "gh.untyped",
+  from: trigger("webhook", { name: "github" }),
+  // @ts-expect-error Without a type argument, `where` follows `from`'s payload.
+  where: { payload: { hedrs: { "x-github-event": "push" } } },
+});
+void untyped;
+
+// An explicit payload type narrows what the underlying kind delivers; the
+// kind's `where` is typed against it.
+const pullRequest = defineTrigger<PullRequestDelivery>({
+  name: "gh.pull_request",
+  description: "A pull request changed",
+  from: trigger("webhook", {
+    name: "github",
+    verify: { scheme: "hmac", secret: "GITHUB_SECRET", header: "x-sig" },
+  }),
+  where: { payload: { headers: { "x-github-event": "pull_request" } } },
+});
+
+// Without a type argument the kind delivers what `from` delivers, and a
+// project kind may build on another project kind.
+const merged = defineTrigger({
+  name: "gh.merged",
+  from: trigger("gh.pull_request", {
+    where: { payload: { body: { action: "closed" } } },
+  }),
+  where: { payload: { body: { pull_request: { merged: true } } } },
+});
+
+const anyDelivery = defineTrigger({
+  name: "gh.any",
+  from: trigger("webhook", { name: "github" }),
+});
+
+const mergedPayload: PayloadOf<typeof merged> = {} as PullRequestDelivery;
+void mergedPayload;
+const anyPayload: TriggerPayload<"webhook"> = {} as PayloadOf<
+  typeof anyDelivery
+>;
+void anyPayload;
+
+// Workflows bind project kinds by name and add their own `where`: one
+// value, a list of values, or `{ exists }`.
+defineWorkflow(({ defineBoundary }) => ({
+  triggers: [
+    trigger("gh.pull_request", {
+      where: {
+        payload: {
+          body: {
+            action: ["opened", "synchronize"],
+            pull_request: { title: { exists: true } },
+          },
+        },
+      },
+    }),
+    trigger("gh.merged"),
+  ],
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<PullRequestDelivery>) => ({
+        number: input.payload.body.number,
+      }),
+    }),
+  ],
+}));
+
+// Host kinds accept `where` beside their own config.
+const filteredWebhook = trigger("webhook", {
+  name: "github",
+  where: { payload: { contentType: ["application/json", null] } },
+});
+void filteredWebhook;
+
+const wrongValue = trigger("gh.pull_request", {
+  // @ts-expect-error A where leaf must hold a value of the payload's type.
+  where: { payload: { body: { action: "reopened" } } },
+});
+void wrongValue;
+
+const wrongKey = trigger("gh.pull_request", {
+  // @ts-expect-error A where names only positions the payload has.
+  where: { payload: { bdy: { action: "opened" } } },
+});
+void wrongKey;
+
+const unknownProjectKind = defineTrigger({
+  name: "gh.nope",
+  // @ts-expect-error A project kind builds on a kind that exists.
+  from: trigger("gh.unknown"),
+});
+void unknownProjectKind;
+
+// @ts-expect-error The payload must satisfy the first step's input.
+defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("gh.pull_request")],
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ ticketId: string }>) => ({
+        ok: input.ticketId,
+      }),
+    }),
+  ],
+}));

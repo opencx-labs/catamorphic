@@ -47,7 +47,15 @@ function notPublished(error: unknown): boolean {
 }
 
 /** A trigger as a person reads it: "Webhook github", "Schedule 0 9 * * *". */
-function describeTrigger(trigger: { kind: string; config: unknown }): string {
+function describeTrigger(trigger: {
+  kind: string;
+  config: unknown;
+  projectKind?: string;
+}): string {
+  // A project trigger kind (ADR 0171) names itself; the host kind it
+  // builds on says where its events come from.
+  if (trigger.projectKind)
+    return `${trigger.projectKind} (${describeTrigger({ kind: trigger.kind, config: trigger.config })})`;
   const config: Record<string, unknown> =
     trigger.config && typeof trigger.config === "object"
       ? { ...trigger.config }

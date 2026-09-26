@@ -34,10 +34,16 @@ export {
   parseWorkflow,
   parseWorkflowFromProject,
 } from "./parser.js";
+export { resolveTriggerBinding } from "./project-triggers.js";
 export {
   jsonSchemaFromType,
   WORKFLOW_STUB_DTS,
 } from "./schema-extract.js";
+export {
+  matchesAllWhere,
+  matchesWhere,
+  whereErrors,
+} from "./trigger-where.js";
 export { typeFromJsonSchema } from "./type-render.js";
 export type {
   AppApiEntry,
@@ -54,6 +60,8 @@ export type {
   PhysicalBatchStepDescriptor,
   PhysicalBatchStepPolicyDescriptor,
   ProjectParseResult,
+  ProjectTriggerKind,
+  ResolvedTriggerBinding,
   SourceRange,
   StepArgument,
   StepArgumentSource,

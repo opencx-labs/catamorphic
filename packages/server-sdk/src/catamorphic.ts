@@ -198,6 +198,12 @@ export interface CatamorphicHostConfig {
    */
   mcpToolKinds?: readonly McpToolKindSpec[];
   /**
+   * Project webhook intake: `maxBodyBytes` is the largest body any endpoint
+   * may accept (default 1 MiB, at most 64 MiB). A binding's
+   * `trigger("webhook", { maxBodyBytes })` may ask for up to it.
+   */
+  webhooks?: { maxBodyBytes?: number };
+  /**
    * Fires after a coding-agent chat turn settles — a natural place to fire
    * a chat trigger kind. Exceptions are swallowed and never delay the turn.
    */
@@ -377,6 +383,7 @@ export class Catamorphic {
       triggerKinds: contributions.triggerKinds,
       projectEventSources: config.projectEventSources,
       mcpToolKinds: contributions.mcpToolKinds,
+      ...(config.webhooks ? { webhooks: config.webhooks } : {}),
       onAgentTurnSettled: config.onAgentTurnSettled,
       pushNotifications: config.pushNotifications,
       capabilityProviders: contributions.capabilityProviders,

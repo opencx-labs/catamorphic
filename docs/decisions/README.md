@@ -51,10 +51,10 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0036](0036-app-authorization-and-audience.md) | App authorization: contract surface, frozen sets, audience identities | Accepted (audience headers superseded by 0053); paths superseded by 0142 |
 | [0037](0037-app-guest-runtime-and-mount.md) | App guest runtime (`@catamorphic/app`) and host mount | Accepted (mount headers + polling superseded by 0053); paths superseded by 0142 |
 | [0038](0038-coding-agent-registry-and-host-execution.md) | Coding-agent registry: per-session agents, host execution, effort | Accepted (runtime contract refined by 0067; topology model superseded by 0067) |
-| [0039](0039-custom-trigger-kinds.md) | Custom trigger kinds: host-defined events, typed bindings, sync firing | Accepted; paths superseded by 0142 |
+| [0039](0039-custom-trigger-kinds.md) | Custom trigger kinds: host-defined events, typed bindings, sync firing | Accepted; paths superseded by 0142; project kinds and filters by 0171 |
 | [0040](0040-one-workflow-model.md) | One workflow model: every workflow is `defineWorkflow`, every run a deployed commit | Accepted |
 | [0041](0041-generated-projections.md) | Generated projections: schemas and types derived from code | Accepted; paths superseded by 0142 |
-| [0042](0042-parameterized-trigger-kinds-and-workflow-tools-mcp.md) | Parameterized trigger kinds (holes) and workflow tools over MCP | Accepted |
+| [0042](0042-parameterized-trigger-kinds-and-workflow-tools-mcp.md) | Parameterized trigger kinds (holes) and workflow tools over MCP | Accepted (refined by 0171) |
 | [0043](0043-general-purpose-projects.md) | Projects are general-purpose; the workflow workspace is scaffolded on demand | Accepted; paths superseded by 0142 |
 | [0044](0044-checkpoint-commits-and-remote-sync.md) | Checkpoint commits, remote sync, and the code-host seam | Accepted (push policy refined by 0170) |
 | [0045](0045-desktop-as-dev-shell.md) | The desktop is a dev shell: harness fidelity, worktrees, diffs, PRs | Accepted |
@@ -171,6 +171,8 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0154](0154-profile-history.md) | History belongs to the profile: loose files, the project as an attribute, a project scope on the page | Accepted |
 | [0155](0155-shells-background-commands-and-live-status.md) | Native shells, host background commands, and the agent's live status | Accepted (refined by 0174) |
 | [0156](0156-project-automations-webhooks-and-command-watches.md) | Project automations, one deliver, webhooks, and command watches | Accepted |
+| [0155](0155-shells-background-commands-and-live-status.md) | Native shells, host background commands, and the agent's live status | Accepted |
+| [0156](0156-project-automations-webhooks-and-command-watches.md) | Project automations, one deliver, webhooks, and command watches | Accepted (webhook ingress refined by 0171) |
 | [0157](0157-workflow-status-chrome.md) | Workflow tabs: status chrome and a panel that follows its subject | Accepted |
 | [0158](0158-project-permissions.md) | Project permissions: read, write, publish, and what workflows declare | Accepted |
 | [0159](0159-work-server-identity-and-image.md) | The Work server: product identity and a published image | Accepted |
@@ -184,5 +186,6 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0167](0167-machine-pools-access-and-owner-placement.md) | Machine pools, node access, and placement by owner | Accepted |
 | [0169](0169-work-project-workspace.md) | The project workspace is `.work/`, and what lands in repositories is named Work | Accepted |
 | [0170](0170-attached-repositories-receive-pull-requests.md) | Attached repositories receive pull requests, never pushes | Accepted |
+| [0171](0171-project-trigger-kinds-and-declarative-webhook-ingress.md) | Project-defined trigger kinds and declarative webhook ingress | Accepted |
 | [0174](0174-background-processes-as-a-sandbox-capability.md) | Background processes are a sandbox capability | Accepted |
 | [0175](0175-grants-reach-sandboxes.md) | Grants reach sandboxes; credentials never do | Accepted |

@@ -528,6 +528,7 @@
                                   "type": "string"
                                 },
                                 "config": {},
+                                "where": {},
                                 "sourceRange": {
                                   "type": "object",
                                   "properties": {
@@ -4684,6 +4685,7 @@
                               "type": "string"
                             },
                             "config": {},
+                            "where": {},
                             "sourceRange": {
                               "type": "object",
                               "properties": {
@@ -4902,6 +4904,7 @@
                             "type": "string"
                           },
                           "config": {},
+                          "where": {},
                           "sourceRange": {
                             "type": "object",
                             "properties": {
@@ -5157,6 +5160,7 @@
                                   "type": "string"
                                 },
                                 "config": {},
+                                "where": {},
                                 "display": {
                                   "type": "object",
                                   "properties": {
@@ -7731,6 +7735,9 @@
                                   "type": "string"
                                 },
                                 "config": {},
+                                "projectKind": {
+                                  "type": "string"
+                                },
                                 "status": {
                                   "type": "string",
                                   "enum": ["active", "paused"]
@@ -8061,6 +8068,9 @@
                             "type": "string"
                           },
                           "config": {},
+                          "projectKind": {
+                            "type": "string"
+                          },
                           "status": {
                             "type": "string",
                             "enum": ["active", "paused"]
@@ -8449,7 +8459,10 @@
                           "kind": {
                             "type": "string"
                           },
-                          "config": {}
+                          "config": {},
+                          "projectKind": {
+                            "type": "string"
+                          }
                         },
                         "required": ["kind", "config"],
                         "additionalProperties": false
@@ -8805,6 +8818,9 @@
                             "type": "string"
                           },
                           "config": {},
+                          "projectKind": {
+                            "type": "string"
+                          },
                           "status": {
                             "type": "string",
                             "enum": ["active", "paused"]
@@ -9094,6 +9110,9 @@
                             "type": "string"
                           },
                           "config": {},
+                          "projectKind": {
+                            "type": "string"
+                          },
                           "status": {
                             "type": "string",
                             "enum": ["active", "paused"]
@@ -9418,6 +9437,9 @@
                             "type": "string"
                           },
                           "config": {},
+                          "projectKind": {
+                            "type": "string"
+                          },
                           "status": {
                             "type": "string",
                             "enum": ["active", "paused"]
@@ -9760,6 +9782,9 @@
                             "type": "string"
                           },
                           "config": {},
+                          "projectKind": {
+                            "type": "string"
+                          },
                           "status": {
                             "type": "string",
                             "enum": ["active", "paused"]
@@ -10050,6 +10075,13 @@
                         "type": "string"
                       },
                       "config": {},
+                      "where": {
+                        "type": "array",
+                        "items": {}
+                      },
+                      "projectKind": {
+                        "type": "string"
+                      },
                       "canSuspend": {
                         "type": "boolean"
                       },
@@ -10089,6 +10121,7 @@
                       "workflowName",
                       "kind",
                       "config",
+                      "where",
                       "canSuspend",
                       "inputParameters",
                       "inputSchema",
@@ -33981,6 +34014,7 @@
                             "type": "string"
                           },
                           "config": {},
+                          "where": {},
                           "sourceRange": {
                             "type": "object",
                             "properties": {
@@ -34236,6 +34270,7 @@
                                   "type": "string"
                                 },
                                 "config": {},
+                                "where": {},
                                 "display": {
                                   "type": "object",
                                   "properties": {
@@ -34358,6 +34393,16 @@
           }
         ],
         "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "202": {
             "description": "Default Response",
             "content": {
@@ -34396,6 +34441,191 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 63
+            },
+            "in": "path",
+            "name": "name",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "in": "path",
+            "name": "token",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "duplicate": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["id", "duplicate"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "413": {
             "description": "Default Response",
             "content": {
               "application/json": {

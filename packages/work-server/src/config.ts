@@ -69,6 +69,11 @@ export interface WorkServerConfig {
   operatorSecret?: string;
   /** Built PWA served at the root. */
   pwaDist?: string;
+  /**
+   * Largest webhook body any endpoint may accept, from
+   * `WORK_WEBHOOK_MAX_BYTES` (default 1 MiB, at most 64 MiB).
+   */
+  webhookMaxBodyBytes?: number;
 }
 
 export function workServerConfigFromEnv(
@@ -136,7 +141,19 @@ export function workServerConfigFromEnv(
       ? { operatorSecret: env.WORK_OPERATOR_SECRET }
       : {}),
     ...(env.WORK_PWA_DIST ? { pwaDist: env.WORK_PWA_DIST } : {}),
+    ...(env.WORK_WEBHOOK_MAX_BYTES
+      ? { webhookMaxBodyBytes: webhookMaxBytes(env.WORK_WEBHOOK_MAX_BYTES) }
+      : {}),
   };
+}
+
+function webhookMaxBytes(value: string): number {
+  const bytes = Number(value);
+  if (!Number.isSafeInteger(bytes) || bytes <= 0 || bytes > 64 * 1024 * 1024)
+    throw new Error(
+      "WORK_WEBHOOK_MAX_BYTES must be a whole number of bytes up to 67108864 (64 MiB)",
+    );
+  return bytes;
 }
 
 function agentSettingsFromEnv(

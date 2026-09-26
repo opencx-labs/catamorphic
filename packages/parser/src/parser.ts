@@ -2,6 +2,7 @@ import {
   isProjectPathWithin,
   PROJECT_APPS_DIR,
   PROJECT_CONTRACTS_DIR,
+  PROJECT_TRIGGERS_DIR,
   PROJECT_WORKFLOWS_DIR,
 } from "@catamorphic/workflow/project-layout";
 import {
@@ -25,12 +26,14 @@ import {
   type WhileStatement,
 } from "ts-morph";
 import { extractJsDocMetadata, extractParameterInfo } from "./jsdoc.js";
+import { resolveTriggerBinding } from "./project-triggers.js";
 import {
   jsonSchemaFromBoundaryReturn,
   jsonSchemaFromType,
   WORKFLOW_STUB_DTS,
 } from "./schema-extract.js";
 import { transitionCallName } from "./transition-calls.js";
+import { whereErrors } from "./trigger-where.js";
 import type {
   AppApiEntry,
   AppApiSurface,
@@ -44,6 +47,7 @@ import type {
   ParseError,
   PhysicalBatchStepPolicyDescriptor,
   ProjectParseResult,
+  ProjectTriggerKind,
   SourceRange,
   StepArgument,
   StepArgumentSource,
@@ -1737,56 +1741,246 @@ function parseTriggerBindings(opts: {
   }
   const bindings: WorkflowTriggerBinding[] = [];
   for (const [index, element] of initializer.getElements().entries()) {
-    const call = unwrapExpression(element);
-    if (!Node.isCallExpression(call) || getCallName(call) !== "trigger") {
-      throw new Error(
-        `Workflow '${opts.workflowName}' trigger ${index + 1} must be a direct trigger(...) call`,
-      );
-    }
-    const kindArgument = call.getArguments()[0]
-      ? unwrapExpression(call.getArguments()[0]!)
-      : undefined;
-    if (
-      !kindArgument ||
-      (!Node.isStringLiteral(kindArgument) &&
-        !Node.isNoSubstitutionTemplateLiteral(kindArgument))
-    ) {
-      throw new Error(
-        `Workflow '${opts.workflowName}' trigger ${index + 1} must name its kind as a string literal`,
-      );
-    }
-    const kind = kindArgument.getLiteralValue();
-    const configArgument = call.getArguments()[1];
-    let config: JsonConstant = {};
-    if (configArgument) {
-      const result = evaluateConstantExpression(
-        configArgument,
-        `trigger('${kind}') config`,
-      );
-      if (!result.ok) {
-        throw new Error(
-          `Workflow '${opts.workflowName}' trigger ${index + 1}: ${result.reason}. Trigger config is introspected by the host, so it must be written as a constant.`,
-        );
-      }
-      config = result.value;
-    }
-    // `trigger` is a package import, not a builder argument: a local or
-    // destructured binding parses here and is undefined when the run starts.
-    const callee = call.getExpression();
-    const declarations = Node.isIdentifier(callee)
-      ? (callee.getSymbol()?.getDeclarations() ?? [])
-      : [];
-    if (
-      declarations.length > 0 &&
-      !declarations.some((declaration) => Node.isImportSpecifier(declaration))
-    ) {
-      throw new Error(
-        `Workflow '${opts.workflowName}' uses a trigger(...) that is not imported: add \`import { trigger } from "@catamorphic/workflow"\``,
-      );
-    }
-    bindings.push({ kind, config, sourceRange: getSourceRange(call) });
+    bindings.push(
+      parseTriggerCall({
+        node: element,
+        label: `Workflow '${opts.workflowName}' trigger ${index + 1}`,
+        importHint: `Workflow '${opts.workflowName}' uses a trigger(...) that is not imported`,
+      }),
+    );
   }
   return bindings;
+}
+
+/**
+ * Reads one `trigger("kind", config)` call: a string-literal kind and a
+ * constant config whose reserved `where` key is split off and checked
+ * (ADR 0171), so kinds validate only their own config.
+ */
+function parseTriggerCall(opts: {
+  node: Node;
+  label: string;
+  importHint: string;
+}): WorkflowTriggerBinding {
+  const call = unwrapExpression(opts.node);
+  if (!Node.isCallExpression(call) || getCallName(call) !== "trigger") {
+    throw new Error(`${opts.label} must be a direct trigger(...) call`);
+  }
+  const kindArgument = call.getArguments()[0]
+    ? unwrapExpression(call.getArguments()[0]!)
+    : undefined;
+  if (
+    !kindArgument ||
+    (!Node.isStringLiteral(kindArgument) &&
+      !Node.isNoSubstitutionTemplateLiteral(kindArgument))
+  ) {
+    throw new Error(`${opts.label} must name its kind as a string literal`);
+  }
+  const kind = kindArgument.getLiteralValue();
+  const configArgument = call.getArguments()[1];
+  let config: JsonConstant = {};
+  if (configArgument) {
+    const result = evaluateConstantExpression(
+      configArgument,
+      `trigger('${kind}') config`,
+    );
+    if (!result.ok) {
+      throw new Error(
+        `${opts.label}: ${result.reason}. Trigger config is introspected by the host, so it must be written as a constant.`,
+      );
+    }
+    config = result.value;
+  }
+  // `trigger` is a package import, not a builder argument: a local or
+  // destructured binding parses here and is undefined when the run starts.
+  const callee = call.getExpression();
+  const declarations = Node.isIdentifier(callee)
+    ? (callee.getSymbol()?.getDeclarations() ?? [])
+    : [];
+  if (
+    declarations.length > 0 &&
+    !declarations.some((declaration) => Node.isImportSpecifier(declaration))
+  ) {
+    throw new Error(
+      `${opts.importHint}: add \`import { trigger } from "@catamorphic/workflow"\``,
+    );
+  }
+  if (
+    typeof config === "object" &&
+    config !== null &&
+    !Array.isArray(config) &&
+    "where" in config
+  ) {
+    const { where, ...own } = config;
+    const errors = whereErrors(where, `trigger('${kind}') where`);
+    if (errors.length > 0) {
+      throw new Error(`${opts.label}: ${errors.join("; ")}`);
+    }
+    return { kind, config: own, where, sourceRange: getSourceRange(call) };
+  }
+  return { kind, config, sourceRange: getSourceRange(call) };
+}
+
+/** Kind names hosts accept; project kinds follow the same rule. */
+const TRIGGER_KIND_NAME = /^[a-z0-9][a-z0-9._-]{0,199}$/i;
+
+/**
+ * Project trigger kinds (ADR 0171): every `defineTrigger({...})` exported
+ * from `.work/triggers/`. Read statically like workflow bindings: the name
+ * and description are string literals, `from` is a direct `trigger(...)`
+ * call, and `where` is a constant filter.
+ */
+function findProjectTriggerKinds(
+  sourceFiles: readonly SourceFile[],
+  errors: ParseError[],
+): ProjectTriggerKind[] {
+  const byName = new Map<string, ProjectTriggerKind>();
+  for (const sf of sourceFiles) {
+    const filePath = normalizePath(sf.getFilePath());
+    for (const call of sf.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+      const callee = call.getExpression();
+      if (!Node.isIdentifier(callee) || callee.getText() !== "defineTrigger")
+        continue;
+      const declarations = callee.getSymbol()?.getDeclarations() ?? [];
+      // A project's own helper that happens to share the name is not ours.
+      if (
+        declarations.length > 0 &&
+        !declarations.some((declaration) => Node.isImportSpecifier(declaration))
+      )
+        continue;
+      try {
+        const kind = parseProjectTriggerKind({ call, filePath });
+        const existing = byName.get(kind.name);
+        if (existing) {
+          errors.push({
+            file: filePath,
+            message: `Trigger kind '${kind.name}' is defined twice (also in ${existing.filePath})`,
+          });
+          continue;
+        }
+        byName.set(kind.name, kind);
+      } catch (error) {
+        errors.push({
+          file: filePath,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+  const kinds = [...byName.values()].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+  for (const kind of kinds) {
+    const resolved = resolveTriggerBinding({
+      binding: { kind: kind.name, config: {} },
+      projectKinds: kinds,
+    });
+    if (!resolved.ok)
+      errors.push({ file: kind.filePath, message: resolved.error });
+  }
+  return kinds;
+}
+
+function parseProjectTriggerKind(opts: {
+  call: CallExpression;
+  filePath: string;
+}): ProjectTriggerKind {
+  const { call, filePath } = opts;
+  if (!isProjectPathWithin(filePath, PROJECT_TRIGGERS_DIR)) {
+    throw new Error(
+      `Define trigger kinds in ${PROJECT_TRIGGERS_DIR}/, not ${filePath}`,
+    );
+  }
+  const declaration = call.getParentIfKind(SyntaxKind.VariableDeclaration);
+  const statement = declaration?.getVariableStatement();
+  const exportName = declaration?.getName();
+  if (!declaration || !statement?.isExported() || !exportName) {
+    throw new Error(
+      "A trigger kind must be exported as `export const name = defineTrigger({ ... })`",
+    );
+  }
+  const [argument] = call.getArguments();
+  const literal = argument ? unwrapExpression(argument) : undefined;
+  if (!literal || !Node.isObjectLiteralExpression(literal)) {
+    throw new Error(
+      `Trigger kind '${exportName}' must pass an inline object to defineTrigger`,
+    );
+  }
+  let name: string | undefined;
+  let description: string | undefined;
+  let from: WorkflowTriggerBinding | undefined;
+  let where: JsonConstant | undefined;
+  for (const property of literal.getProperties()) {
+    const key = Node.isPropertyAssignment(property)
+      ? readPropertyName(property.getNameNode())
+      : undefined;
+    const initializer = Node.isPropertyAssignment(property)
+      ? property.getInitializer()
+      : undefined;
+    if (!key || !initializer) {
+      throw new Error(
+        `Trigger kind '${exportName}' must use plain 'key: value' properties`,
+      );
+    }
+    const value = unwrapExpression(initializer);
+    if (key === "name" || key === "description") {
+      if (
+        !Node.isStringLiteral(value) &&
+        !Node.isNoSubstitutionTemplateLiteral(value)
+      ) {
+        throw new Error(
+          `Trigger kind '${exportName}' must write its ${key} as a string literal`,
+        );
+      }
+      if (key === "name") name = value.getLiteralValue();
+      else description = value.getLiteralValue();
+    } else if (key === "from") {
+      from = parseTriggerCall({
+        node: value,
+        label: `Trigger kind '${exportName}' from`,
+        importHint: `Trigger kind '${exportName}' uses a trigger(...) that is not imported`,
+      });
+    } else if (key === "where") {
+      const result = evaluateConstantExpression(value, "where");
+      if (!result.ok) {
+        throw new Error(
+          `Trigger kind '${exportName}': ${result.reason}. Filters are read by the host, so they must be written as constants.`,
+        );
+      }
+      const errors = whereErrors(result.value);
+      if (errors.length > 0) {
+        throw new Error(`Trigger kind '${exportName}': ${errors.join("; ")}`);
+      }
+      where = result.value;
+    } else {
+      throw new Error(
+        `Trigger kind '${exportName}' has an unknown property '${key}' (use name, description, from and where)`,
+      );
+    }
+  }
+  if (!name || !TRIGGER_KIND_NAME.test(name)) {
+    throw new Error(
+      `Trigger kind '${exportName}' needs a name of 1-200 letters, digits, '.', '_' or '-'`,
+    );
+  }
+  if (!from) {
+    throw new Error(
+      `Trigger kind '${name}' needs from: trigger("kind", config), the kind it builds on`,
+    );
+  }
+  return {
+    name,
+    ...(description !== undefined ? { description } : {}),
+    exportName,
+    filePath,
+    from: {
+      kind: from.kind,
+      config: from.config,
+      ...(from.where !== undefined ? { where: from.where } : {}),
+    },
+    ...(where !== undefined ? { where } : {}),
+    sourceRange: getSourceRange(call),
+  };
 }
 
 function parseDurableDefinition(
@@ -2861,6 +3055,7 @@ export function parseProject(
   }
 
   const secrets = findDeclaredSecrets(sourceFiles, errors);
+  const triggerKinds = findProjectTriggerKinds(sourceFiles, errors);
   const appApi = resolveAppApi({
     sourceFiles,
     workflows: discovered,
@@ -2881,7 +3076,7 @@ export function parseProject(
     }
   }
 
-  return { workflows: discovered, secrets, appApi, errors };
+  return { workflows: discovered, secrets, appApi, triggerKinds, errors };
 }
 
 /**

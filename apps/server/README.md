@@ -127,7 +127,11 @@ Project enablements use only project and tenant service connections.
 Workflows can start from webhooks: `trigger("webhook", { name })` gives each
 name a public URL under `WORK_PUBLIC_URL` (`/api/hooks/...`), shown to
 holders of `webhooks:read` in the workflow's **Automatic** view, with a replace
-control for holders of `webhooks:write`.
+control for holders of `webhooks:write`. The binding declares how senders are
+checked (`verify`: a signature scheme or shared token) and which handshakes are
+answered (`respond`); projects usually declare an integration's webhook once as
+a trigger kind in `.work/triggers/` (ADR 0171). Bodies are capped at 1 MiB per
+endpoint unless a binding asks for more, up to `WORK_WEBHOOK_MAX_BYTES`.
 
 ## Sharing with customers
 

@@ -623,11 +623,13 @@ export {
 } from "./services/user-notifications-service.js";
 export { type Watcher, WatchersService } from "./services/watchers-service.js";
 export {
-  WEBHOOK_MAX_BYTES,
   type WebhookEndpoint,
+  WebhookMethodNotAllowedError,
   WebhookNotFoundError,
+  type WebhookReceipt,
   WebhookRejectedError,
   WebhooksService,
+  WebhookTooLargeError,
 } from "./services/webhooks-service.js";
 export type { WorkerCapacity } from "./services/worker-capacity.js";
 export {
@@ -663,3 +665,21 @@ export {
   type WorkflowSummary,
   WorkflowsService,
 } from "./services/workflows-service.js";
+export {
+  checkWebhookToken,
+  matchWebhookHandshake,
+  verifyWebhookRequest,
+  WEBHOOK_DEFAULT_MAX_BYTES,
+  WEBHOOK_MAX_BYTES_LIMIT,
+  WEBHOOK_NAME_PATTERN,
+  type WebhookCheck,
+  type WebhookConfig,
+  type WebhookHandshake,
+  type WebhookRequest,
+  type WebhookVerify,
+  webhookConfig,
+  webhookHandshake,
+  webhookHmacVerify,
+  webhookSettingsKey,
+  webhookTokenVerify,
+} from "./webhook-ingress.js";

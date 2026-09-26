@@ -38,6 +38,7 @@ Environment variables parsed by `workServerConfigFromEnv` in
 | `WORK_GATEWAY_CONFIG` | Connections (MCP, HTTP APIs, databases) and the guards that review them; see [secrets and the gateway](secrets-and-gateway.md). |
 | `WORK_SANDBOX` and budget variables | `local-process` (default) or `microsandbox`; see the machines reference. |
 | `WORK_MACHINE_NAME`, `WORK_MACHINE_LABELS` | This machine's name and labels (`pool=agents,class=large`) that Environment pools select; see the machines reference. |
+| `WORK_WEBHOOK_MAX_BYTES` | Largest webhook body any endpoint may accept (default 1 MiB, at most 64 MiB); a binding opts in with `maxBodyBytes`. |
 | `WORK_CONTROL_PLANE_WORKLOADS` | What the server runs itself: `agent,workflow` (default), `workflow`, or empty. Agents then run on enrolled workers. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Telemetry export (`OBSERVABILITY.md`). |
 
@@ -147,8 +148,11 @@ reach; webhook URLs are `/api/hooks/<projectId>/<name>/<token>` under it.
 Someone with `automations:write` plus every permission the workflow declares
 enables it for the project; holders of `webhooks:read` copy its URL from the
 workflow's **Automatic** view, and `webhooks:write` rotates it. Signed senders
-use a project secret named in the trigger's `verify`. Requests are answered
-202 once stored; failures show in the workflow's runs.
+use a project secret named in the trigger's `verify`; declared handshakes
+(Slack URL verification, GET subscription challenges) are answered at once.
+Other requests are answered 202 once stored; failures show in the workflow's
+runs. Bodies over 1 MiB need a binding's `maxBodyBytes` and, beyond the
+server's default, `WORK_WEBHOOK_MAX_BYTES` (ADR 0171).
 
 ## Boundaries
 

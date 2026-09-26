@@ -871,6 +871,7 @@ export interface Tenants {
 }
 
 export interface TriggerDefinitions {
+  binding_index: Generated<number>;
   can_suspend: boolean;
   commit_sha: string;
   config: Json;
@@ -881,7 +882,9 @@ export interface TriggerDefinitions {
   input_schema: Generated<Json>;
   output_schema: Generated<Json>;
   project_id: string;
+  project_kind: string | null;
   trigger_kind: string;
+  where_filters: Generated<Json>;
   workflow_name: string;
 }
 

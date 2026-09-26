@@ -5,9 +5,12 @@ import {
   appApiTypesPath,
   appWorkspaceNames,
   holeSchemaErrors,
+  matchesAllWhere,
   type ParameterInfo,
+  type ProjectTriggerKind,
   parseProject,
   renderAppApiTypesModule,
+  resolveTriggerBinding,
 } from "@catamorphic/parser";
 import {
   PROJECT_CHECK_SCRIPT_PATH,
@@ -21,6 +24,7 @@ import {
   SYSTEM_AUTHOR,
 } from "../identity.js";
 import { PROJECT_CHECK_SCRIPT } from "../seeds.js";
+import { webhookConfig, webhookSettingsKey } from "../webhook-ingress.js";
 import { assertProjectPermission, resolveScope } from "./artifact-scope.js";
 import { requireTenantProject } from "./projects-service.js";
 import type {
@@ -52,8 +56,18 @@ const tracer = getTracer("@catamorphic/core");
 /** A workflow's subscription to a kind, as hosts introspect it. */
 export interface TriggerBindingInfo {
   workflowName: string;
+  /** The host kind that fires the binding. */
   kind: string;
+  /** That kind's config, without `where`. */
   config: Json;
+  /**
+   * Filters the payload must satisfy, all of them (ADR 0171): the
+   * binding's own `where` and those of every project kind it resolves
+   * through. Evaluated before a run starts.
+   */
+  where: Json[];
+  /** The project trigger kind the workflow bound, for display. */
+  projectKind?: string;
   /**
    * Whether any execution path can leave the run waiting on the clock or the
    * queue. `false` guarantees a sync firing returns a settled outcome.
@@ -175,6 +189,8 @@ interface FireArgs {
   mode?: TriggerMode;
   workflows?: readonly string[];
   enablementIds?: readonly string[];
+  /** Narrows to exact activations: a durable delivery names the one it serves. */
+  activationIds?: readonly string[];
   correlationKey?: string;
   onConflict?: EnrollmentConflictPolicy;
   budgetMs?: number;
@@ -227,9 +243,19 @@ export class TriggersService {
     return kind ? triggerKindInfo(kind) : null;
   }
 
-  /** Renders the generated `work-triggers.d.ts` content. */
-  typesModuleContent(): string {
-    return renderTriggerTypesModule([...this.registry.values()]);
+  /**
+   * Renders the generated `work-triggers.d.ts` content: the host's kinds
+   * and the project's own (ADR 0171), typed from their trigger modules.
+   */
+  typesModuleContent(
+    input: { projectKinds?: readonly ProjectTriggerKind[] } = {},
+  ): string {
+    return renderTriggerTypesModule({
+      kinds: [...this.registry.values()],
+      projectKinds: (input.projectKinds ?? []).filter(
+        (kind) => !this.registry.has(kind.name),
+      ),
+    });
   }
 
   /**
@@ -260,11 +286,13 @@ export class TriggersService {
         return { paths: [], updated: false };
       }
       const changes = new Map<string, string>();
-      const triggerContent = this.typesModuleContent();
+      const parsed = parseProject(files);
+      const triggerContent = this.typesModuleContent({
+        projectKinds: parsed.triggerKinds,
+      });
       if (files[TRIGGER_TYPES_SOURCE_PATH] !== triggerContent) {
         changes.set(TRIGGER_TYPES_SOURCE_PATH, triggerContent);
       }
-      const parsed = parseProject(files);
       if (parsed.appApi && parsed.errors.length === 0) {
         const content = renderAppApiTypesModule(parsed.appApi.entries);
         for (const appName of appWorkspaceNames(files)) {
@@ -370,13 +398,7 @@ export class TriggersService {
     return rows.map((row) => ({
       id: row.id,
       commitSha: row.commit_sha,
-      workflowName: row.workflow_name,
-      kind: row.trigger_kind,
-      config: row.config,
-      canSuspend: row.can_suspend,
-      inputParameters: row.input_parameters as unknown as ParameterInfo[],
-      inputSchema: row.input_schema,
-      outputSchema: row.output_schema,
+      ...bindingFromRow(row),
     }));
   }
 
@@ -407,6 +429,8 @@ export class TriggersService {
         "definition.workflow_name",
         "definition.trigger_kind",
         "definition.config",
+        "definition.where_filters",
+        "definition.project_kind",
         "definition.can_suspend",
         "definition.input_parameters",
         "definition.input_schema",
@@ -431,13 +455,7 @@ export class TriggersService {
       id: row.id,
       commitSha: row.commit_sha,
       environment: row.environment_name,
-      workflowName: row.workflow_name,
-      kind: row.trigger_kind,
-      config: row.config,
-      canSuspend: row.can_suspend,
-      inputParameters: row.input_parameters as unknown as ParameterInfo[],
-      inputSchema: row.input_schema,
-      outputSchema: row.output_schema,
+      ...bindingFromRow(row),
     }));
   }
 
@@ -525,6 +543,7 @@ export class TriggersService {
         let targets: Array<{
           binding: TriggerBindingInfo;
           enablementId?: string;
+          activationId?: string;
         }>;
         if (args.interactive) {
           targets = productionDefinitions.map((binding) => ({ binding }));
@@ -542,12 +561,15 @@ export class TriggersService {
               "activation.trigger_definition_id",
             )
             .select([
+              "activation.id as activation_id",
               "activation.enablement_id",
               "definition.id",
               "definition.commit_sha",
               "definition.workflow_name",
               "definition.trigger_kind",
               "definition.config",
+              "definition.where_filters",
+              "definition.project_kind",
               "definition.can_suspend",
               "definition.input_parameters",
               "definition.input_schema",
@@ -560,16 +582,8 @@ export class TriggersService {
             .execute();
           targets = activations.map((activation) => ({
             enablementId: activation.enablement_id,
-            binding: {
-              workflowName: activation.workflow_name,
-              kind: activation.trigger_kind,
-              config: activation.config,
-              canSuspend: activation.can_suspend,
-              inputParameters:
-                activation.input_parameters as unknown as ParameterInfo[],
-              inputSchema: activation.input_schema,
-              outputSchema: activation.output_schema,
-            },
+            activationId: activation.activation_id,
+            binding: bindingFromRow(activation),
           }));
           if (productionDefinitions.length > 0 && targets.length === 0) {
             throw new TriggerNotEnabledError(kind.name);
@@ -579,6 +593,13 @@ export class TriggersService {
           const enabled = new Set(args.enablementIds);
           targets = targets.filter(
             (target) => target.enablementId && enabled.has(target.enablementId),
+          );
+        }
+        if (args.activationIds) {
+          const activations = new Set(args.activationIds);
+          targets = targets.filter(
+            (target) =>
+              target.activationId && activations.has(target.activationId),
           );
         }
         if (args.workflows) {
@@ -595,6 +616,11 @@ export class TriggersService {
             }),
           );
         }
+        // Declarative filters run here, on the control plane, for every
+        // kind and every fire path (ADR 0171).
+        targets = targets.filter(({ binding }) =>
+          matchesAllWhere(binding.where, args.payload),
+        );
         span.setAttribute("catamorphic.trigger.target_count", targets.length);
 
         const budgetMs = Math.min(
@@ -852,17 +878,9 @@ export class TriggersService {
       .where("project_id", "=", args.projectId)
       .where("commit_sha", "=", args.commitSha)
       .orderBy("workflow_name", "asc")
+      .orderBy("binding_index", "asc")
       .execute();
-    return rows.map((row) => ({
-      workflowName: row.workflow_name,
-      kind: row.trigger_kind,
-      config: (row.config ?? {}) as Json,
-      canSuspend: row.can_suspend,
-      inputParameters: (row.input_parameters ??
-        []) as unknown as ParameterInfo[],
-      inputSchema: (row.input_schema ?? {}) as Json,
-      outputSchema: (row.output_schema ?? {}) as Json,
-    }));
+    return rows.map(bindingFromRow);
   }
 
   private async scanAndRecord(args: {
@@ -881,22 +899,39 @@ export class TriggersService {
         error.file ? `${error.file}: ${error.message}` : error.message,
       );
     }
+    errors.push(...this.projectKindErrors(parsed.triggerKinds));
     const bindings: Array<
-      TriggerBindingInfo & { connectionRequirements: Json }
+      TriggerBindingInfo & {
+        connectionRequirements: Json;
+        bindingIndex: number;
+      }
     > = [];
     for (const workflow of parsed.workflows) {
-      for (const binding of workflow.graph.triggers) {
+      for (const [bindingIndex, written] of workflow.graph.triggers.entries()) {
+        // Project kinds (ADR 0171) resolve to the host kind they build on,
+        // carrying every filter along the chain.
+        const resolved = resolveTriggerBinding({
+          binding: written,
+          projectKinds: parsed.triggerKinds,
+        });
+        if (!resolved.ok) {
+          errors.push(
+            `Workflow '${workflow.functionName}' trigger '${written.kind}': ${resolved.error}`,
+          );
+          continue;
+        }
+        const binding = resolved.binding;
         const kind = this.registry.get(binding.kind);
         if (!kind) {
           errors.push(
-            `Workflow '${workflow.functionName}' binds unknown trigger kind '${binding.kind}' (registered: ${[...this.registry.keys()].join(", ") || "none"})`,
+            `Workflow '${workflow.functionName}' binds unknown trigger kind '${written.kind}' (registered: ${[...this.registry.keys()].join(", ") || "none"}; project: ${parsed.triggerKinds.map((projectKind) => projectKind.name).join(", ") || "none"})`,
           );
           continue;
         }
         const configCheck = kind.validateConfig(binding.config as Json);
         if (!configCheck.ok) {
           errors.push(
-            `Workflow '${workflow.functionName}' trigger '${binding.kind}' config: ${configCheck.errors.join("; ")}`,
+            `Workflow '${workflow.functionName}' trigger '${written.kind}' config: ${configCheck.errors.join("; ")}`,
           );
           continue;
         }
@@ -922,6 +957,8 @@ export class TriggersService {
           workflowName: workflow.functionName,
           kind: binding.kind,
           config: binding.config as Json,
+          where: binding.where as Json[],
+          ...(binding.projectKind ? { projectKind: binding.projectKind } : {}),
           canSuspend: workflow.graph.canSuspend,
           inputParameters: workflow.graph.input.parameters,
           inputSchema: (workflow.graph.inputSchema ?? {}) as Json,
@@ -929,37 +966,29 @@ export class TriggersService {
           connectionRequirements: JSON.parse(
             JSON.stringify(workflow.graph.connections),
           ) as Json,
+          bindingIndex,
         });
       }
     }
-    // One webhook name is one URL with one signature check: workflows that
-    // share a name must agree on it, or the sender could not satisfy both.
-    const webhookChecks = new Map<
+    // One webhook name is one URL that verifies and answers senders one
+    // way: every binding of a name, however it got there (directly or
+    // through project kinds), must declare the same settings.
+    const webhookSettings = new Map<
       string,
-      { workflow: string; verify: string }
+      { workflow: string; settings: string }
     >();
     for (const binding of bindings) {
       if (binding.kind !== "webhook") continue;
-      const config = binding.config;
-      if (
-        !config ||
-        typeof config !== "object" ||
-        !("name" in config) ||
-        typeof config.name !== "string"
-      )
-        continue;
-      const verify = JSON.stringify(
-        "verify" in config ? (config.verify ?? null) : null,
-      );
-      const first = webhookChecks.get(config.name);
+      const parsedConfig = webhookConfig.safeParse(binding.config);
+      if (!parsedConfig.success) continue;
+      const name = parsedConfig.data.name;
+      const settings = webhookSettingsKey(parsedConfig.data);
+      const first = webhookSettings.get(name);
       if (!first) {
-        webhookChecks.set(config.name, {
-          workflow: binding.workflowName,
-          verify,
-        });
-      } else if (first.verify !== verify) {
+        webhookSettings.set(name, { workflow: binding.workflowName, settings });
+      } else if (first.settings !== settings) {
         errors.push(
-          `Workflows '${first.workflow}' and '${binding.workflowName}' bind webhook '${config.name}' with different verify settings`,
+          `Workflows '${first.workflow}' and '${binding.workflowName}' bind webhook '${name}' with different settings (verify, respond, maxBodyBytes); declare the webhook once in a project trigger kind`,
         );
       }
     }
@@ -1017,6 +1046,9 @@ export class TriggersService {
               // Stringified so array-valued JSON is not mistaken for a
               // Postgres array literal by the driver.
               config: JSON.stringify(binding.config),
+              where_filters: JSON.stringify(binding.where),
+              project_kind: binding.projectKind ?? null,
+              binding_index: binding.bindingIndex,
               can_suspend: binding.canSuspend,
               input_parameters: JSON.stringify(binding.inputParameters),
               input_schema: JSON.stringify(binding.inputSchema),
@@ -1031,14 +1063,76 @@ export class TriggersService {
               .columns([
                 "project_id",
                 "commit_sha",
-                "trigger_kind",
                 "workflow_name",
+                "binding_index",
               ])
               .doNothing(),
           )
           .execute();
       }
     });
-    return bindings;
+    return bindings.map(
+      ({ connectionRequirements: _, bindingIndex: __, ...binding }) => binding,
+    );
   }
+
+  /**
+   * Project kinds that could never fire on this host (ADR 0171): a name a
+   * host kind already has, or a chain whose root kind is not registered or
+   * rejects the config. Checked whether or not a workflow binds them.
+   */
+  private projectKindErrors(kinds: readonly ProjectTriggerKind[]): string[] {
+    const errors: string[] = [];
+    for (const kind of kinds) {
+      if (this.registry.has(kind.name)) {
+        errors.push(
+          `Trigger kind '${kind.name}' (${kind.filePath}) is already a host kind; give the project's kind another name`,
+        );
+        continue;
+      }
+      const resolved = resolveTriggerBinding({
+        binding: { kind: kind.name, config: {} },
+        projectKinds: kinds,
+      });
+      if (!resolved.ok) continue; // a cycle, reported by the parse
+      const root = this.registry.get(resolved.binding.kind);
+      if (!root) {
+        errors.push(
+          `Trigger kind '${kind.name}' builds on unknown trigger kind '${resolved.binding.kind}'`,
+        );
+        continue;
+      }
+      const check = root.validateConfig(resolved.binding.config as Json);
+      if (!check.ok)
+        errors.push(
+          `Trigger kind '${kind.name}' from '${root.name}' config: ${check.errors.join("; ")}`,
+        );
+    }
+    return errors;
+  }
+}
+
+/** A stored definition as hosts introspect it. */
+function bindingFromRow(row: {
+  workflow_name: string;
+  trigger_kind: string;
+  config: Json;
+  where_filters: Json;
+  project_kind: string | null;
+  can_suspend: boolean;
+  input_parameters: Json;
+  input_schema: Json;
+  output_schema: Json;
+}): TriggerBindingInfo {
+  return {
+    workflowName: row.workflow_name,
+    kind: row.trigger_kind,
+    config: row.config ?? {},
+    where: Array.isArray(row.where_filters) ? row.where_filters : [],
+    ...(row.project_kind ? { projectKind: row.project_kind } : {}),
+    canSuspend: row.can_suspend,
+    inputParameters: (row.input_parameters ?? []) as unknown as ParameterInfo[],
+    inputSchema: row.input_schema ?? {},
+    outputSchema: row.output_schema ?? {},
+  };
 }

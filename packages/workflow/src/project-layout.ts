@@ -68,6 +68,9 @@ export function appWorkspaceName(filePath: string): string | undefined {
   return name && !name.includes("/") ? name : undefined;
 }
 
+/** Project trigger kinds (ADR 0171): `.work/triggers/<name>.ts`. */
+export const PROJECT_TRIGGERS_DIR = projectPath("triggers");
+
 export const PROJECT_SCRIPTS_DIR = projectPath("scripts");
 export const PROJECT_CHECK_SCRIPT_PATH = `${PROJECT_SCRIPTS_DIR}/check.ts`;
 

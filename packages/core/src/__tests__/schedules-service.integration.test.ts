@@ -30,6 +30,7 @@ const binding: StoredTriggerActivation = {
   workflowName: "dailyBrief",
   kind: "schedule",
   config: { cron: "* * * * *", timezone: "UTC" },
+  where: [],
   canSuspend: false,
   inputParameters: [],
   inputSchema: {},

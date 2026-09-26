@@ -147,7 +147,12 @@ export {
   TriggerModeNotAllowedError,
   TriggerPayloadInvalidError,
   UnfulfilledCapabilityError,
+  WEBHOOK_NAME_PATTERN,
+  type WebhookConfig,
+  type WebhookHandshake,
+  type WebhookVerify,
   WorkerNodesService,
+  webhookConfig,
 } from "@catamorphic/core";
 export type { DB } from "@catamorphic/db";
 export { createDatabase, migrateToLatest } from "@catamorphic/db";
@@ -228,9 +233,4 @@ export type {
 export { ScopedClient, TenantScopedClient } from "./scoped-client.js";
 export { SESSION_TRIGGER_KINDS } from "./session-trigger-kinds.js";
 export { defineStaticEnvironments } from "./static-environments.js";
-export {
-  WEBHOOK_NAME_PATTERN,
-  type WebhookVerifyConfig,
-  webhook,
-  webhookVerifyConfig,
-} from "./webhook-trigger-kind.js";
+export { webhook } from "./webhook-trigger-kind.js";

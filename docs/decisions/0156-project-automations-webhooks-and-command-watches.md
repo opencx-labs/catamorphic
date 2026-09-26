@@ -4,6 +4,8 @@
 - **Date:** 2026-09-23
 - **Supersedes:** 0087 (member-only wake)
 - **Refines:** 0068, 0074, 0138, 0148, 0155
+- **Refined by:** 0171 (webhook verification schemes, handshakes, body limits,
+  and `where` filters)
 
 ## Context
 
