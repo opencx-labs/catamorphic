@@ -64,7 +64,10 @@ const r = await fetch("http://127.0.0.1:4701/_work/operator/projects", {
 console.log(r.status, await r.text());'
 ```
 
-The response carries the project id. Then the first person, the owner, bound
+The response carries the project id. To start from an existing GitHub
+repository instead, add `githubRepository`; Work then proposes the roles as a
+pull request rather than writing to the repository
+([Work server](stock-server.md#github-backed-projects)). Then the first person, the owner, bound
 to `admin` (local username and password; offer a configured OAuth provider
 first when one exists):
 
