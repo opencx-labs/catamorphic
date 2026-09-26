@@ -484,6 +484,9 @@ async function createWorkServerInner(
     // Workflows bound to `ai.tool-call` are tools on the project MCP, for
     // project agents and members' own MCP clients alike.
     mcpToolKinds: [aiToolKind],
+    ...(config.webhookMaxBodyBytes
+      ? { webhooks: { maxBodyBytes: config.webhookMaxBodyBytes } }
+      : {}),
     projectSeeds: (defaults) => {
       const seeds = {
         ...defaults,

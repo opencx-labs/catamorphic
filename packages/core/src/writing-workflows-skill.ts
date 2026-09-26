@@ -82,8 +82,10 @@ Labels describe real behavior: a formatting example must not claim to send mail.
 Declare \`triggers: [trigger("literal-kind", { constant: "config" })]\` alongside
 \`steps\`, with \`trigger\` imported from \`@catamorphic/workflow\` (it is not a
 builder argument). Kind names and config/payload shapes come from the host-generated
-\`.work/workflows/src/work-triggers.d.ts\`. Config is inline constant data, not an
-expression evaluated at runtime. Conditions belong in ordinary workflow code.
+\`.work/workflows/src/work-triggers.d.ts\`: the host's kinds and the project's own
+(see Project trigger kinds). Config is inline constant data, not an expression
+evaluated at runtime. Which events start a run belongs in \`where\`; what a run
+does with one belongs in ordinary workflow code.
 
 The trigger payload is the first scope's input. Multiple triggers require an
 input accepting every payload. A generated \`Hole<"Name">\` asks this workflow's
@@ -92,15 +94,40 @@ concrete input type to define that part of the schema; do not use \`any\` or
 If every kind is rejected as \`never\`, refresh types through the host rather than
 fabricating a registry or editing generated declarations.
 
+Every binding may add \`where\`, a filter the host checks before a run starts:
+\`trigger("schedule", { cron: "0 8 * * 1-5", timezone: "UTC", where: { ... } })\`.
+It mirrors the payload; a leaf is a value (equal), a list of values (one of),
+or \`{ exists: true | false }\`. Header names match in any case. Filter in
+\`where\` rather than in code, so unrelated events never start runs.
+
 Webhooks use \`trigger("webhook", { name: "github" })\`: a lowercase name that
 becomes the project's URL segment. The server stores each request durably and
 answers 202 before the workflow runs, so a redelivery (same delivery id header) runs
-once. The payload's \`payload\` holds \`{ name, headers, contentType, body }\`,
-with JSON and form bodies parsed. Add \`verify: { secret: "GITHUB_WEBHOOK_SECRET",
-header: "x-hub-signature-256", prefix: "sha256=" }\` for senders that sign with
-HMAC-SHA256; the secret is a project secret, and unsigned requests are rejected.
-Every workflow on one webhook name must declare the same verify. People who manage
-the project copy the URL from the workflow's **Automatic** view after enabling it.
+once. The payload's \`payload\` holds \`{ name, headers, query, contentType, body }\`,
+with JSON and form bodies parsed. The config declares how the endpoint checks
+senders, always with a project secret's name:
+
+- \`verify: { scheme: "hmac", secret, header, prefix?, encoding?: "hex" | "base64",
+  algorithm?: "sha1" | "sha256" | "sha512", content?, timestamp?, pattern?,
+  secretEncoding?, secretPrefix? }\` signs \`content\` (default \`"{body}"\`; also
+  \`{timestamp}\` and \`{header:<name>}\`). \`timestamp: { header, pattern?,
+  toleranceSeconds? }\` rejects replays (default 300 seconds). \`pattern\` is a
+  regex whose capture group finds each signature in a composite header
+  (Stripe \`"v1=([0-9a-f]+)"\`, Standard Webhooks \`"v1,([A-Za-z0-9+/=]+)"\`).
+  Standard Webhooks keys use \`secretEncoding: "base64", secretPrefix: "whsec_"\`.
+- \`verify: { scheme: "token", secret, header | query, prefix? }\` compares a
+  shared token (GitLab's \`x-gitlab-token\`); the token is never stored.
+- \`respond: [{ when, echo, token? }]\` answers a handshake with 200 and the
+  echoed value instead of starting runs: \`{ when: { body: { type:
+  "url_verification" } }, echo: "body.challenge" }\` for Slack, or for GET
+  subscriptions \`{ when: { method: "GET", query: { "hub.mode": "subscribe" } },
+  echo: "query.hub.challenge", token: { secret, query: "hub.verify_token" } }\`.
+  A rule without \`token\` answers only requests that pass \`verify\`.
+- \`maxBodyBytes\` raises the 1 MiB body limit up to the server's maximum.
+
+Every binding of one webhook name must declare identical settings, so declare
+an integration's webhook once, in a project trigger kind. People who manage the
+project copy the URL from the workflow's **Automatic** view after enabling it.
 Webhooks reach servers that are online, so enable them on a brain server.
 
 Schedules use either \`{ at: "an absolute ISO timestamp with offset" }\` or
@@ -130,6 +157,136 @@ to list them. Turning the workflow on shows the list, and only someone who
 holds every permission can turn it on. A member's automation keeps them only
 while that member does; a project automation keeps what was consented to.
 Declare the fewest that work; see \`workflow-lifecycle\`.
+
+## Project trigger kinds
+
+A project names the events it cares about in \`.work/triggers/<name>.ts\`: each
+export is \`defineTrigger({ name, description?, from: trigger(...), where? })\`,
+another kind narrowed by a filter. Workflows bind it by name like a host kind,
+with their own \`where\` on top; every filter along the chain must match. Write
+\`name\` and \`from\` literally (no variables) and pick names the host does not
+already register. A type argument states the payload the filtered events carry;
+\`Narrow<Base, Patch>\` types part of it, such as a webhook's body. The host
+regenerates \`work-triggers.d.ts\` with these kinds; \`bun run --cwd .work check\`
+checks them. \`.work/package.json\` needs \`@catamorphic/workflow\` in
+\`devDependencies\` so these files type-check.
+
+A GitHub library, for a repository webhook sending JSON to the project's
+\`github\` URL with the secret stored as \`GITHUB_WEBHOOK_SECRET\`:
+
+\`\`\`typescript
+// .work/triggers/github.ts
+import { defineTrigger, type Narrow, type TriggerPayload, trigger } from "@catamorphic/workflow";
+
+type Delivery<Body> = Narrow<TriggerPayload<"webhook">, { payload: { body: Body } }>;
+
+export interface PullRequestEvent {
+  action: string;
+  number: number;
+  pull_request: { title: string; html_url: string; merged: boolean; draft: boolean };
+  repository: { full_name: string };
+}
+
+export interface IssueCommentEvent {
+  action: string;
+  issue: { number: number; title: string; html_url: string; pull_request?: { url: string } };
+  comment: { body: string; html_url: string; user: { login: string } };
+}
+
+/** Every signed delivery from the repository's webhook. */
+export const delivery = defineTrigger({
+  name: "gh.delivery",
+  description: "Any delivery from the GitHub webhook",
+  from: trigger("webhook", {
+    name: "github",
+    verify: { scheme: "hmac", secret: "GITHUB_WEBHOOK_SECRET", header: "x-hub-signature-256", prefix: "sha256=" },
+  }),
+});
+
+export const pullRequest = defineTrigger<Delivery<PullRequestEvent>>({
+  name: "gh.pull_request",
+  description: "A pull request was opened, updated, or closed",
+  from: trigger("gh.delivery"),
+  where: { payload: { headers: { "x-github-event": "pull_request" } } },
+});
+
+export const issueComment = defineTrigger<Delivery<IssueCommentEvent>>({
+  name: "gh.issue_comment",
+  description: "Someone commented on an issue or pull request",
+  from: trigger("gh.delivery"),
+  where: { payload: { headers: { "x-github-event": "issue_comment" }, body: { action: "created" } } },
+});
+\`\`\`
+
+A Slack library for an Events API app whose Request URL is the project's
+\`slack\` URL, signing secret stored as \`SLACK_SIGNING_SECRET\`. The \`respond\`
+rule answers Slack's URL verification when the URL is saved:
+
+\`\`\`typescript
+// .work/triggers/slack.ts
+import { defineTrigger, type Narrow, type TriggerPayload, trigger } from "@catamorphic/workflow";
+
+export interface SlackEventCallback {
+  type: "event_callback";
+  team_id: string;
+  event_id: string;
+  event: { type: string; user?: string; text?: string; channel?: string; ts?: string; thread_ts?: string };
+}
+
+export const slackEvent = defineTrigger<
+  Narrow<TriggerPayload<"webhook">, { payload: { body: SlackEventCallback } }>
+>({
+  name: "slack.event",
+  description: "An event from the Slack app",
+  from: trigger("webhook", {
+    name: "slack",
+    verify: {
+      scheme: "hmac",
+      secret: "SLACK_SIGNING_SECRET",
+      header: "x-slack-signature",
+      prefix: "v0=",
+      content: "v0:{timestamp}:{body}",
+      timestamp: { header: "x-slack-request-timestamp", toleranceSeconds: 300 },
+    },
+    respond: [{ when: { body: { type: "url_verification" } }, echo: "body.challenge" }],
+  }),
+  where: { payload: { body: { type: "event_callback" } } },
+});
+\`\`\`
+
+A workflow that runs only for merged pull requests:
+
+\`\`\`typescript
+import { type BoundaryContext, defineWorkflow, type TriggerPayload, trigger } from "@catamorphic/workflow";
+
+/**
+ * @displayname Summarize a merged pull request
+ * @param title - @displayname Title | @description The pull request's title
+ * @param url - @displayname Link | @description Where the pull request lives
+ */
+async function summarizeMerge({ title, url }: { title: string; url: string }) {
+  "use step";
+  return \`Merged: \${title} (\${url})\`;
+}
+
+/** @displayname Note merged pull requests */
+export const noteMergedPullRequests = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [
+    trigger("gh.pull_request", {
+      where: { payload: { body: { action: "closed", pull_request: { merged: true } } } },
+    }),
+  ],
+  steps: [
+    /** @displayname Summarize */
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<TriggerPayload<"gh.pull_request">>) => {
+        const pull = input.payload.body.pull_request;
+        return { summary: await summarizeMerge({ title: pull.title, url: pull.html_url }) };
+      },
+    }),
+  ],
+}));
+\`\`\`
 
 ## App contracts and secrets
 

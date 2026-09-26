@@ -200,13 +200,19 @@ export class WorkflowEnablementsService {
       remoteBranch: preview.remoteBranch,
       environment: preview.environment,
     });
-    const triggers = await this.db
-      .selectFrom("trigger_definitions")
-      .select(["trigger_kind as kind", "config"])
-      .where("project_id", "=", input.projectId)
-      .where("commit_sha", "=", preview.commitSha)
-      .where("workflow_name", "=", input.workflowName)
-      .execute();
+    const triggers = (
+      await this.db
+        .selectFrom("trigger_definitions")
+        .select(["trigger_kind as kind", "config", "project_kind"])
+        .where("project_id", "=", input.projectId)
+        .where("commit_sha", "=", preview.commitSha)
+        .where("workflow_name", "=", input.workflowName)
+        .orderBy("binding_index")
+        .execute()
+    ).map(({ project_kind, ...trigger }) => ({
+      ...trigger,
+      ...(project_kind ? { projectKind: project_kind } : {}),
+    }));
     const labels = connections.length
       ? await this.db
           .selectFrom("connections")
@@ -845,9 +851,10 @@ export class WorkflowEnablementsService {
           "activation.status",
           "definition.trigger_kind",
           "definition.config",
+          "definition.project_kind",
         ])
         .where("activation.enablement_id", "=", row.id)
-        .orderBy("definition.trigger_kind")
+        .orderBy("definition.binding_index")
         .execute(),
     ]);
     return {
@@ -875,6 +882,9 @@ export class WorkflowEnablementsService {
           definitionId: trigger.trigger_definition_id,
           kind: trigger.trigger_kind,
           config: trigger.config,
+          ...(trigger.project_kind
+            ? { projectKind: trigger.project_kind }
+            : {}),
           status: trigger.status as "active" | "paused",
         }),
       ),

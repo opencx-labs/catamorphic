@@ -30,7 +30,7 @@ export function InputNode({ data }: NodeProps) {
           <div className="catamorphic-node-triggers">
             {bindings.map((binding) => (
               <span
-                key={`${binding.kind}:${JSON.stringify(binding.config)}`}
+                key={`${binding.kind}:${JSON.stringify(binding.config)}:${JSON.stringify(binding.where ?? null)}`}
                 className="catamorphic-trigger-badge"
                 style={
                   binding.display?.color

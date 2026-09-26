@@ -4,13 +4,24 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely } from "kysely";
 import { sql } from "kysely";
 import { hasProjectPermission, type Identity } from "../identity.js";
+import {
+  checkWebhookToken,
+  matchWebhookHandshake,
+  sameSecret,
+  verifyWebhookRequest,
+  WEBHOOK_DEFAULT_MAX_BYTES,
+  WEBHOOK_MAX_BYTES_LIMIT,
+  type WebhookCheck,
+  type WebhookConfig,
+  type WebhookHandshake,
+  type WebhookRequest,
+  webhookConfig,
+  webhookSettingsKey,
+} from "../webhook-ingress.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ProjectEventsService } from "./project-events-service.js";
 
 const tracer = getTracer("@catamorphic/core");
-
-/** Largest request body a webhook accepts. */
-export const WEBHOOK_MAX_BYTES = 1024 * 1024;
 
 /** Headers senders use for a delivery's id: a redelivery is stored once. */
 const DELIVERY_ID_HEADERS = [
@@ -18,6 +29,7 @@ const DELIVERY_ID_HEADERS = [
   "x-github-delivery",
   "x-shopify-webhook-id",
   "x-gitlab-event-uuid",
+  "linear-delivery",
   "idempotency-key",
   "x-request-id",
 ];
@@ -29,13 +41,6 @@ const DROPPED_HEADERS = new Set([
   "cookie",
   "set-cookie",
 ]);
-
-interface VerifyConfig {
-  secret: string;
-  header: string;
-  prefix?: string;
-  encoding?: "hex" | "base64";
-}
 
 export class WebhookNotFoundError extends Error {
   constructor() {
@@ -51,6 +56,26 @@ export class WebhookRejectedError extends Error {
   }
 }
 
+export class WebhookTooLargeError extends Error {
+  constructor(readonly limit: number) {
+    super(`Webhook bodies are limited to ${limit} bytes`);
+    this.name = "WebhookTooLargeError";
+  }
+}
+
+export class WebhookMethodNotAllowedError extends Error {
+  constructor() {
+    super("This webhook accepts POST requests and declared handshakes");
+    this.name = "WebhookMethodNotAllowedError";
+  }
+}
+
+/** What a request to a webhook URL became. */
+export type WebhookReceipt =
+  | { type: "event"; eventId: string; duplicate: boolean }
+  /** A declared handshake: answer 200 with `answer`, store nothing. */
+  | { type: "handshake"; answer: string };
+
 export interface WebhookEndpoint {
   name: string;
   /** Path under the API base, e.g. `/hooks/<project>/<name>/<token>`. */
@@ -59,18 +84,22 @@ export interface WebhookEndpoint {
   workflows: string[];
   /** Whether an active enablement receives requests; otherwise they 404. */
   listening: boolean;
-  /** Whether the listening workflows check a signature. */
+  /** Whether the listening workflows check a signature or token. */
   verified: boolean;
 }
 
 /**
- * Webhooks for project workflows (ADR 0156). Each name a workflow binds
- * with `trigger("webhook", { name })` gets one public URL carrying an
- * unguessable token. A request is checked (token, then the declared HMAC),
- * stored as a durable Project Event, and acknowledged; the event dispatcher
- * then runs every active workflow bound to the name.
+ * Webhooks for project workflows (ADRs 0156, 0171). Each name a workflow
+ * binds with `trigger("webhook", { name })` gets one public URL carrying an
+ * unguessable token. A request is checked (token, size, then the declared
+ * verification), answered synchronously when it is a declared handshake,
+ * and otherwise stored as a durable Project Event and acknowledged; the
+ * event dispatcher then runs every active workflow whose binding matches.
  */
 export class WebhooksService {
+  /** The host's body cap; endpoints may declare less, never more. */
+  readonly maxBodyBytes: number;
+
   constructor(
     private readonly db: Kysely<DB>,
     private readonly deps: {
@@ -80,26 +109,37 @@ export class WebhooksService {
         projectId: string;
         name: string;
       }): Promise<string | undefined>;
+      /** Largest body any endpoint may accept. Defaults to 1 MiB. */
+      maxBodyBytes?: number;
+      now?: () => Date;
     },
-  ) {}
+  ) {
+    this.maxBodyBytes = Math.min(
+      deps.maxBodyBytes ?? WEBHOOK_DEFAULT_MAX_BYTES,
+      WEBHOOK_MAX_BYTES_LIMIT,
+    );
+  }
 
-  async ingest(input: {
+  async receive(input: {
     projectId: string;
     name: string;
     token: string;
+    method: string;
     headers: Record<string, string | string[] | undefined>;
+    query: Record<string, string>;
     body: Buffer;
-  }): Promise<{ eventId: string; duplicate: boolean }> {
+  }): Promise<WebhookReceipt> {
     return withSpan(
       {
         tracer,
-        name: "webhook.ingest",
+        name: "webhook.receive",
         attributes: {
           "catamorphic.project.id": input.projectId,
           "catamorphic.webhook.name": input.name,
+          "http.request.method": input.method,
         },
       },
-      async () => {
+      async (span) => {
         const endpoint = await this.db
           .selectFrom("webhook_endpoints")
           .select("token")
@@ -109,18 +149,47 @@ export class WebhooksService {
         if (!endpoint || !sameSecret(endpoint.token, input.token)) {
           throw new WebhookNotFoundError();
         }
-        const verify = await this.activeVerification(
-          input.projectId,
-          input.name,
+        const config = await this.activeConfig(input.projectId, input.name);
+        const limit = Math.min(
+          config.maxBodyBytes ?? WEBHOOK_DEFAULT_MAX_BYTES,
+          this.maxBodyBytes,
         );
-        const headers = normalizeHeaders(input.headers);
-        if (verify) {
-          await this.checkSignature(input.projectId, verify, headers, input);
+        if (input.body.byteLength > limit)
+          throw new WebhookTooLargeError(limit);
+        const request: WebhookRequest = {
+          method: input.method.toUpperCase(),
+          headers: normalizeHeaders(input.headers),
+          query: input.query,
+          body: input.body,
+        };
+        const contentType = request.headers["content-type"] ?? null;
+        const body = parseBody(input.body, contentType);
+        const handshake = matchWebhookHandshake({
+          rules: config.respond ?? [],
+          request,
+          body,
+        });
+        if (handshake) {
+          await this.check({
+            projectId: input.projectId,
+            config,
+            request,
+            token: handshake.rule.token,
+          });
+          span.setAttribute("catamorphic.webhook.handshake", true);
+          return { type: "handshake", answer: handshake.answer };
         }
-        const contentType = headers["content-type"] ?? null;
+        if (request.method !== "POST") throw new WebhookMethodNotAllowedError();
+        await this.check({ projectId: input.projectId, config, request });
         const deliveryId = DELIVERY_ID_HEADERS.map(
-          (name) => headers[name],
+          (name) => request.headers[name],
         ).find((value) => value && value.length <= 200);
+        // A shared-secret token is a credential: it never reaches a run.
+        const verify = config.verify;
+        const tokenHeader =
+          verify?.scheme === "token" ? verify.header?.toLowerCase() : undefined;
+        const tokenQuery =
+          verify?.scheme === "token" ? verify.query : undefined;
         const { event, created } = await this.deps.events.append({
           projectId: input.projectId,
           source: "webhook",
@@ -130,15 +199,20 @@ export class WebhooksService {
           payload: {
             name: input.name,
             headers: Object.fromEntries(
-              Object.entries(headers).filter(
-                ([name]) => !DROPPED_HEADERS.has(name),
+              Object.entries(request.headers).filter(
+                ([name]) => !DROPPED_HEADERS.has(name) && name !== tokenHeader,
+              ),
+            ),
+            query: Object.fromEntries(
+              Object.entries(request.query).filter(
+                ([name]) => name !== tokenQuery,
               ),
             ),
             contentType,
-            body: parseBody(input.body, contentType),
+            body,
           } satisfies JsonObject,
         });
-        return { eventId: event.id, duplicate: !created };
+        return { type: "event", eventId: event.id, duplicate: !created };
       },
     );
   }
@@ -200,7 +274,7 @@ export class WebhooksService {
         entry.workflows.push(binding.workflowName);
       if (binding.active) {
         entry.listening = true;
-        entry.verified ||= Boolean(verifyOf(binding.config));
+        entry.verified ||= Boolean(parseConfig(binding.config)?.verify);
       }
       byName.set(binding.name, entry);
     }
@@ -258,13 +332,13 @@ export class WebhooksService {
   }
 
   /**
-   * The signature check every active binding of the name declares. No
-   * binding means nobody listens; bindings that disagree fail closed.
+   * The settings every active binding of the name declares. No binding
+   * means nobody listens; bindings that disagree fail closed.
    */
-  private async activeVerification(
+  private async activeConfig(
     projectId: string,
     name: string,
-  ): Promise<VerifyConfig | undefined> {
+  ): Promise<WebhookConfig> {
     const rows = await this.db
       .selectFrom("trigger_definitions as definition")
       .innerJoin(
@@ -285,64 +359,58 @@ export class WebhooksService {
       .where("enablement.status", "=", "active")
       .execute();
     if (rows.length === 0) throw new WebhookNotFoundError();
-    const checks = new Set(
-      rows.map((row) => JSON.stringify(verifyOf(row.config) ?? null)),
-    );
-    if (checks.size > 1)
+    const configs = rows.map((row) => parseConfig(row.config));
+    const [first] = configs;
+    if (!first || configs.some((config) => !config))
+      throw new WebhookRejectedError("This webhook's settings are invalid");
+    const key = webhookSettingsKey(first);
+    if (configs.some((config) => config && webhookSettingsKey(config) !== key))
       throw new WebhookRejectedError(
-        "Workflows on this webhook declare different signature checks",
+        "Workflows on this webhook declare different settings",
       );
-    return verifyOf(rows[0]?.config ?? null);
+    return first;
   }
 
-  private async checkSignature(
-    projectId: string,
-    verify: VerifyConfig,
-    headers: Record<string, string>,
-    input: { body: Buffer },
-  ): Promise<void> {
-    const key = await this.deps.secretValue({
-      projectId,
-      name: verify.secret,
+  /**
+   * Runs a handshake's own token check, or else the endpoint's declared
+   * verification; an endpoint without one only has its URL token.
+   */
+  private async check(input: {
+    projectId: string;
+    config: WebhookConfig;
+    request: WebhookRequest;
+    /** A handshake rule's own token check, replacing `verify`. */
+    token?: WebhookHandshake["token"];
+  }): Promise<void> {
+    const { token, request } = input;
+    const verify = input.config.verify;
+    const secretName = token ? token.secret : verify?.secret;
+    if (!secretName) return;
+    const secret = await this.deps.secretValue({
+      projectId: input.projectId,
+      name: secretName,
     });
-    if (!key)
+    if (!secret)
       throw new WebhookRejectedError(
-        `The signing secret ${verify.secret} is not set`,
+        `The webhook secret ${secretName} is not set`,
       );
-    const received = headers[verify.header.toLowerCase()];
-    const prefix = verify.prefix ?? "";
-    if (!received?.startsWith(prefix))
-      throw new WebhookRejectedError("Missing or malformed signature");
-    const expected = crypto
-      .createHmac("sha256", key)
-      .update(input.body)
-      .digest(verify.encoding ?? "hex");
-    if (!sameSecret(expected, received.slice(prefix.length)))
-      throw new WebhookRejectedError("Signature does not match");
+    const result: WebhookCheck = token
+      ? checkWebhookToken({ check: token, request, secret })
+      : verify
+        ? verifyWebhookRequest({
+            verify,
+            request,
+            secret,
+            now: this.deps.now?.() ?? new Date(),
+          })
+        : { ok: true };
+    if (!result.ok) throw new WebhookRejectedError(result.reason);
   }
 }
 
-function verifyOf(config: Json): VerifyConfig | undefined {
-  if (!isJsonObject(config)) return undefined;
-  const verify = config.verify;
-  if (
-    !isJsonObject(verify) ||
-    typeof verify.secret !== "string" ||
-    typeof verify.header !== "string"
-  )
-    return undefined;
-  return {
-    secret: verify.secret,
-    header: verify.header,
-    ...(typeof verify.prefix === "string" ? { prefix: verify.prefix } : {}),
-    ...(verify.encoding === "base64" || verify.encoding === "hex"
-      ? { encoding: verify.encoding }
-      : {}),
-  };
-}
-
-function isJsonObject(value: Json | undefined): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function parseConfig(config: Json): WebhookConfig | undefined {
+  const parsed = webhookConfig.safeParse(config);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function normalizeHeaders(
@@ -372,12 +440,6 @@ function parseBody(body: Buffer, contentType: string | null): Json {
     return Object.fromEntries(new URLSearchParams(text));
   }
   return text;
-}
-
-function sameSecret(expected: string, received: string): boolean {
-  const a = Buffer.from(expected);
-  const b = Buffer.from(received);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 function newToken(): string {

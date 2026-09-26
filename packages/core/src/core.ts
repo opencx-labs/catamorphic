@@ -269,6 +269,12 @@ export interface CatamorphicCoreConfig {
    */
   mcpToolKinds?: readonly McpToolKindSpec[];
   /**
+   * Project webhook intake (ADRs 0156, 0171). `maxBodyBytes` is the largest
+   * body any endpoint may accept (default 1 MiB, at most 64 MiB); a
+   * workflow's `trigger("webhook", { maxBodyBytes })` may ask for up to it.
+   */
+  webhooks?: { maxBodyBytes?: number };
+  /**
    * Fires after a coding-agent chat turn settles (completed, failed, or
    * awaiting input). Host-owned; a natural place to fire a chat trigger
    * kind. Exceptions are swallowed and never delay the turn.
@@ -627,6 +633,9 @@ export class CatamorphicCore {
     this.projectEvents = new ProjectEventsService(this.db);
     this.webhooks = new WebhooksService(this.db, {
       events: this.projectEvents,
+      ...(config.webhooks?.maxBodyBytes !== undefined
+        ? { maxBodyBytes: config.webhooks.maxBodyBytes }
+        : {}),
       secretValue: async ({ projectId, name }) => {
         const project = await this.db
           .selectFrom("projects")

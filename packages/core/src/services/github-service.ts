@@ -1,4 +1,4 @@
-import type { DB, JsonObject } from "@catamorphic/db";
+import type { DB } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import { fetchRemote, pushToRemote } from "@catamorphic/git";
 import type {
@@ -327,40 +327,6 @@ export class GithubService {
       nextCursor: observed[0]?.id ?? input.afterExternalId ?? null,
       appended,
     };
-  }
-
-  /**
-   * Append a GitHub webhook after the embedding host verifies its signature
-   * and resolves the repository to a tenant/project. Transport and secret
-   * custody stay host-owned; webhook and polling payloads share one log.
-   */
-  async ingestWebhook(
-    identity: Identity,
-    projectId: string,
-    input: {
-      deliveryId: string;
-      eventName: string;
-      payload: JsonObject;
-      occurredAt?: string;
-    },
-  ) {
-    if (!this.projectEvents)
-      throw new Error("Project events are not configured");
-    const project = await this.db
-      .selectFrom("projects")
-      .select("id")
-      .where("id", "=", projectId)
-      .where("tenant_id", "=", identity.tenantId)
-      .executeTakeFirst();
-    if (!project) throw new ProjectNotLinkedToGithubError(projectId);
-    return this.projectEvents.append({
-      projectId,
-      source: "github",
-      kind: githubEventKind(input.eventName),
-      externalId: input.deliveryId,
-      occurredAt: input.occurredAt ?? new Date().toISOString(),
-      payload: input.payload,
-    });
   }
 
   /**

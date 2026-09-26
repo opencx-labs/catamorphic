@@ -236,6 +236,7 @@ export interface paths {
                                 triggers: {
                                     kind: string;
                                     config: unknown;
+                                    where?: unknown;
                                     sourceRange: {
                                         start: number;
                                         end: number;
@@ -2734,6 +2735,7 @@ export interface paths {
                             triggers: {
                                 kind: string;
                                 config: unknown;
+                                where?: unknown;
                                 sourceRange: {
                                     start: number;
                                     end: number;
@@ -2836,6 +2838,7 @@ export interface paths {
                             triggers: {
                                 kind: string;
                                 config: unknown;
+                                where?: unknown;
                                 sourceRange: {
                                     start: number;
                                     end: number;
@@ -2906,6 +2909,7 @@ export interface paths {
                                 triggerBindings?: {
                                     kind: string;
                                     config: unknown;
+                                    where?: unknown;
                                     display?: {
                                         label?: string;
                                         icon?: string;
@@ -3884,6 +3888,7 @@ export interface paths {
                                     definitionId: string;
                                     kind: string;
                                     config: unknown;
+                                    projectKind?: string;
                                     /** @enum {string} */
                                     status: "active" | "paused";
                                 }[];
@@ -3994,6 +3999,7 @@ export interface paths {
                                 definitionId: string;
                                 kind: string;
                                 config: unknown;
+                                projectKind?: string;
                                 /** @enum {string} */
                                 status: "active" | "paused";
                             }[];
@@ -4148,6 +4154,7 @@ export interface paths {
                             triggers: {
                                 kind: string;
                                 config: unknown;
+                                projectKind?: string;
                             }[];
                             connectionLabels: {
                                 [key: string]: string;
@@ -4292,6 +4299,7 @@ export interface paths {
                                 definitionId: string;
                                 kind: string;
                                 config: unknown;
+                                projectKind?: string;
                                 /** @enum {string} */
                                 status: "active" | "paused";
                             }[];
@@ -4409,6 +4417,7 @@ export interface paths {
                                 definitionId: string;
                                 kind: string;
                                 config: unknown;
+                                projectKind?: string;
                                 /** @enum {string} */
                                 status: "active" | "paused";
                             }[];
@@ -4539,6 +4548,7 @@ export interface paths {
                                 definitionId: string;
                                 kind: string;
                                 config: unknown;
+                                projectKind?: string;
                                 /** @enum {string} */
                                 status: "active" | "paused";
                             }[];
@@ -4675,6 +4685,7 @@ export interface paths {
                                 definitionId: string;
                                 kind: string;
                                 config: unknown;
+                                projectKind?: string;
                                 /** @enum {string} */
                                 status: "active" | "paused";
                             }[];
@@ -4837,6 +4848,8 @@ export interface paths {
                             workflowName: string;
                             kind: string;
                             config: unknown;
+                            where: unknown[];
+                            projectKind?: string;
                             canSuspend: boolean;
                             inputParameters: {
                                 name: string;
@@ -16064,6 +16077,7 @@ export interface paths {
                             triggers: {
                                 kind: string;
                                 config: unknown;
+                                where?: unknown;
                                 sourceRange: {
                                     start: number;
                                     end: number;
@@ -16134,6 +16148,7 @@ export interface paths {
                                 triggerBindings?: {
                                     kind: string;
                                     config: unknown;
+                                    where?: unknown;
                                     display?: {
                                         label?: string;
                                         icon?: string;
@@ -16168,9 +16183,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
-        post: {
+        get: {
             parameters: {
                 query?: never;
                 header?: never;
@@ -16183,6 +16196,15 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": string;
+                    };
+                };
                 /** @description Default Response */
                 202: {
                     headers: {
@@ -16208,6 +16230,120 @@ export interface paths {
                 };
                 /** @description Default Response */
                 404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                405: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    name: string;
+                    token: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": string;
+                    };
+                };
+                /** @description Default Response */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            duplicate: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                405: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                413: {
                     headers: {
                         [name: string]: unknown;
                     };

@@ -187,48 +187,61 @@ export const remindUser = defineWorkflow(({ defineBoundary }) => ({
 ### A chat per pull request
 
 A project automation that reviews each pull request in its own chat, shared with
-everyone in the project. Enable it for the project; the key reuses the chat when
-the same pull request changes again. GitHub events arrive as untyped JSON, so
-read the fields you need and skip events without them.
+everyone in the project. It binds \`gh.pull_request\` from the GitHub trigger
+library in \`writing-workflows\` (\`.work/triggers/github.ts\`), and its \`where\`
+lets only opened and updated, non-draft pull requests start a run. Enable it for
+the project; the key reuses the chat when the same pull request changes again.
 
 \`\`\`typescript
-import { type BoundaryContext, defineWorkflow, trigger } from "@catamorphic/workflow";
-type PullRequest = { number: number; title: string; url: string };
-
-/**
- * @displayname Read the pull request
- * @param payload - @displayname Event | @description The event GitHub sent
- */
-async function readPullRequest({ payload }: { payload: unknown }): Promise<PullRequest | null> {
-  "use step";
-  if (!payload || typeof payload !== "object" || !("number" in payload) || !("pull_request" in payload)) return null;
-  const pull = payload.pull_request;
-  if (typeof payload.number !== "number" || !pull || typeof pull !== "object") return null;
-  const title = "title" in pull && typeof pull.title === "string" ? pull.title : "Pull request " + payload.number;
-  const url = "html_url" in pull && typeof pull.html_url === "string" ? pull.html_url : "";
-  return { number: payload.number, title, url };
-}
+import { type BoundaryContext, defineWorkflow, type TriggerPayload, trigger } from "@catamorphic/workflow";
 
 /** @displayname Review pull requests */
 export const reviewPullRequests = defineWorkflow(({ defineBoundary }) => ({
-  triggers: [trigger("github.pull_request")],
-  steps: [
-    /** @displayname Read the pull request */
-    defineBoundary({
-      run: async ({ input }: BoundaryContext<{ payload: unknown }>) => ({
-        pull: await readPullRequest({ payload: input.payload }),
-      }),
+  triggers: [
+    trigger("gh.pull_request", {
+      where: { payload: { body: { action: ["opened", "synchronize", "reopened"], pull_request: { draft: false } } } },
     }),
+  ],
+  steps: [
     /** @displayname Ask for a review */
     defineBoundary({
-      run: ({ input, host }: BoundaryContext<{ pull: PullRequest | null }>) => {
-        const pull = input.pull;
-        if (!pull) return { skipped: true };
+      run: ({ input, host }: BoundaryContext<TriggerPayload<"gh.pull_request">>) => {
+        const event = input.payload.body;
         return host["catamorphic.sessions"].deliver({
-          key: "pr-" + pull.number,
-          title: "Review: " + pull.title,
-          content: "Review the changes in " + pull.url + " and summarize risks.",
-          notification: { title: "Review ready", body: pull.title },
+          key: "pr-" + event.repository.full_name + "-" + event.number,
+          title: "Review: " + event.pull_request.title,
+          content: "Review the changes in " + event.pull_request.html_url + " and summarize risks.",
+          notification: { title: "Review ready", body: event.pull_request.title },
+        });
+      },
+    }),
+  ],
+}));
+\`\`\`
+
+### A chat per Slack thread
+
+Mentions of the Slack app become one project chat per thread, with the
+\`slack.event\` kind from \`writing-workflows\`. Slack may redeliver an event it
+thinks was lost; the delivery key keeps each event to one message.
+
+\`\`\`typescript
+import { type BoundaryContext, defineWorkflow, type TriggerPayload, trigger } from "@catamorphic/workflow";
+
+/** @displayname Answer Slack mentions */
+export const answerSlackMentions = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("slack.event", { where: { payload: { body: { event: { type: "app_mention" } } } } })],
+  steps: [
+    /** @displayname Hand the mention to the agent */
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<TriggerPayload<"slack.event">>) => {
+        const body = input.payload.body;
+        const thread = body.event.thread_ts ?? body.event.ts ?? body.event_id;
+        return host["catamorphic.sessions"].deliver({
+          key: "slack-" + (body.event.channel ?? "") + "-" + thread,
+          title: "Slack: " + (body.event.text ?? "mention").slice(0, 60),
+          content: "Someone mentioned you in Slack: " + (body.event.text ?? ""),
+          idempotencyKey: body.event_id,
         });
       },
     }),

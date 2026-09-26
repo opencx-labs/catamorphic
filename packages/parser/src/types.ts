@@ -154,6 +154,7 @@ export interface WorkflowNode {
     kind: string;
     /** Always a JsonConstant; see {@link WorkflowTriggerBinding.config}. */
     config: unknown;
+    where?: unknown;
     display?: TriggerKindDisplay;
   }>;
   parameters?: ParameterInfo[];
@@ -284,9 +285,43 @@ export type JsonConstant =
  * `unknown` so the OpenAPI-derived response types stay assignable.
  */
 export interface WorkflowTriggerBinding {
+  /** The kind as written: a host kind or a project trigger kind. */
+  kind: string;
+  /** The config as written, without `where`. */
+  config: unknown;
+  /** The binding's own filter (ADR 0171), when it declares one. */
+  where?: unknown;
+  sourceRange: SourceRange;
+}
+
+/**
+ * A trigger kind the project defines (ADR 0171): an exported
+ * `defineTrigger({ name, from: trigger(...), where })` in `.work/triggers/`.
+ * Read statically, like workflow bindings; nothing about it runs.
+ */
+export interface ProjectTriggerKind {
+  name: string;
+  description?: string;
+  /** The exported constant holding the kind, for generated types. */
+  exportName: string;
+  filePath: string;
+  /** The kind it builds on, as written in `from: trigger(...)`. */
+  from: { kind: string; config: unknown; where?: unknown };
+  where?: unknown;
+  sourceRange: SourceRange;
+}
+
+/**
+ * A binding as the host stores it: the host kind at the root of any chain
+ * of project kinds, that kind's config, and every filter along the way,
+ * all of which must match.
+ */
+export interface ResolvedTriggerBinding {
   kind: string;
   config: unknown;
-  sourceRange: SourceRange;
+  where: unknown[];
+  /** The project kind the workflow bound, kept for display. */
+  projectKind?: string;
 }
 
 export interface WorkflowGraph {
@@ -354,6 +389,8 @@ export interface ProjectParseResult {
    * apps are authorized against.
    */
   appApi: AppApiSurface | null;
+  /** Project trigger kinds from `.work/triggers/`, sorted by name. */
+  triggerKinds: ProjectTriggerKind[];
   errors: ParseError[];
 }
 

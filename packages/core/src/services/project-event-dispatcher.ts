@@ -204,6 +204,7 @@ export class ProjectEventDispatcher {
                         payload: row.payload,
                       },
                       enablementIds: [row.enablement_id],
+                      activationIds: [row.activation_id],
                       workflows: [row.workflow_name],
                       mode: "async",
                       correlationKey,

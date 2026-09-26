@@ -6,6 +6,7 @@ import {
 import { holeSchemaErrors } from "./holes.js";
 import { validateAgainstSchema } from "./json-schema-validate.js";
 import { parseProject } from "./parser.js";
+import { resolveTriggerBinding } from "./project-triggers.js";
 
 /**
  * Host-independent project validation, the engine behind each project's
@@ -14,6 +15,8 @@ import { parseProject } from "./parser.js";
  *
  * - parse errors, including non-constant trigger configs and app-api
  *   contract problems;
+ * - project trigger kinds (ADR 0171) resolved through their chains, and
+ *   cycles reported;
  * - trigger bindings validated against the host's kind catalog, when the
  *   caller fetched one (`GET /trigger-kinds` on any Catamorphic host);
  * - generated-file drift: the committed `work-app-api.d.ts` files
@@ -57,42 +60,97 @@ export function checkProject(
     findings.push({ level: "error", message: error.message, file: error.file });
   }
 
-  if (options?.triggerKinds) {
-    const kinds = new Map(
-      options.triggerKinds.map((kind) => [kind.name, kind]),
-    );
-    for (const workflow of parsed.workflows) {
-      for (const binding of workflow.graph.triggers) {
-        const kind = kinds.get(binding.kind);
-        if (!kind) {
-          findings.push({
-            level: "error",
-            file: workflow.filePath,
-            message: `Workflow '${workflow.functionName}' binds unknown trigger kind '${binding.kind}' (host kinds: ${[...kinds.keys()].join(", ") || "none"})`,
-          });
-          continue;
-        }
-        const errors = validateAgainstSchema(
-          binding.config,
-          kind.configJsonSchema ?? {},
-          "config",
-        );
-        // Holes in the kind's payload template must freeze to concrete
-        // schemas derived from this workflow's input — the same fail-closed
-        // rule the host applies at scan time.
-        for (const holeError of holeSchemaErrors({
-          payloadSchema: kind.payloadJsonSchema ?? {},
-          inputSchema: workflow.graph.inputSchema ?? {},
-        })) {
-          errors.push(holeError);
-        }
-        for (const error of errors) {
-          findings.push({
-            level: "error",
-            file: workflow.filePath,
-            message: `Workflow '${workflow.functionName}' trigger '${binding.kind}': ${error}`,
-          });
-        }
+  const hostKinds = options?.triggerKinds
+    ? new Map(options.triggerKinds.map((kind) => [kind.name, kind]))
+    : undefined;
+  const hostKindList = () =>
+    [...(hostKinds?.keys() ?? [])].join(", ") || "none";
+  // Project trigger kinds (ADR 0171) resolve to the host kind they build on;
+  // with the host's catalog, that root must exist and accept the config.
+  for (const kind of parsed.triggerKinds) {
+    if (!hostKinds) continue;
+    if (hostKinds.has(kind.name)) {
+      findings.push({
+        level: "error",
+        file: kind.filePath,
+        message: `Trigger kind '${kind.name}' is already a host kind; give the project's kind another name`,
+      });
+      continue;
+    }
+    const resolved = resolveTriggerBinding({
+      binding: { kind: kind.name, config: {} },
+      projectKinds: parsed.triggerKinds,
+    });
+    if (!resolved.ok) continue; // reported by the parse
+    const root = hostKinds.get(resolved.binding.kind);
+    if (!root) {
+      findings.push({
+        level: "error",
+        file: kind.filePath,
+        message: `Trigger kind '${kind.name}' builds on unknown trigger kind '${resolved.binding.kind}' (host kinds: ${hostKindList()})`,
+      });
+      continue;
+    }
+    for (const error of validateAgainstSchema(
+      resolved.binding.config,
+      root.configJsonSchema ?? {},
+      "config",
+    )) {
+      findings.push({
+        level: "error",
+        file: kind.filePath,
+        message: `Trigger kind '${kind.name}' from '${root.name}': ${error}`,
+      });
+    }
+  }
+
+  for (const workflow of parsed.workflows) {
+    for (const binding of workflow.graph.triggers) {
+      const resolved = resolveTriggerBinding({
+        binding,
+        projectKinds: parsed.triggerKinds,
+      });
+      if (!resolved.ok) {
+        findings.push({
+          level: "error",
+          file: workflow.filePath,
+          message: `Workflow '${workflow.functionName}' trigger '${binding.kind}': ${resolved.error}`,
+        });
+        continue;
+      }
+      if (!hostKinds) continue;
+      const kind = hostKinds.get(resolved.binding.kind);
+      if (!kind) {
+        findings.push({
+          level: "error",
+          file: workflow.filePath,
+          message: `Workflow '${workflow.functionName}' binds unknown trigger kind '${binding.kind}' (host kinds: ${hostKindList()}; project kinds: ${parsed.triggerKinds.map((projectKind) => projectKind.name).join(", ") || "none"})`,
+        });
+        continue;
+      }
+      // A project kind's config is its own, checked with the kind above.
+      const errors = resolved.binding.projectKind
+        ? []
+        : validateAgainstSchema(
+            resolved.binding.config,
+            kind.configJsonSchema ?? {},
+            "config",
+          );
+      // Holes in the kind's payload template must freeze to concrete
+      // schemas derived from this workflow's input — the same fail-closed
+      // rule the host applies at scan time.
+      for (const holeError of holeSchemaErrors({
+        payloadSchema: kind.payloadJsonSchema ?? {},
+        inputSchema: workflow.graph.inputSchema ?? {},
+      })) {
+        errors.push(holeError);
+      }
+      for (const error of errors) {
+        findings.push({
+          level: "error",
+          file: workflow.filePath,
+          message: `Workflow '${workflow.functionName}' trigger '${binding.kind}': ${error}`,
+        });
       }
     }
   }
