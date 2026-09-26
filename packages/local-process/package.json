@@ -20,7 +20,8 @@
   },
   "dependencies": {
     "@catamorphic/runtime": "workspace:*",
-    "@catamorphic/sandbox": "workspace:*"
+    "@catamorphic/sandbox": "workspace:*",
+    "@catamorphic/workflow": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.1.1"

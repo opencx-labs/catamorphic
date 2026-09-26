@@ -81,8 +81,7 @@ describe("project manifest startingActions", () => {
   });
 });
 
-const manifestPath = (root: string) =>
-  path.join(root, ".catamorphic", "project.json");
+const manifestPath = (root: string) => path.join(root, ".work", "project.json");
 
 describe("project manifest defaultAgent", () => {
   it("reads nothing from a project without a manifest", () => {

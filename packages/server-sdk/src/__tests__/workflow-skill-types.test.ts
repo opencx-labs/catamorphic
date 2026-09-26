@@ -20,7 +20,7 @@ it("shipped workflow recipes typecheck against the public API and real host trig
   try {
     const skills = [
       ...["writing-workflows", "durable-workflows", "batch-workflows"].map(
-        (name) => SEED_SKILLS[`.catamorphic/skills/${name}/SKILL.md`],
+        (name) => SEED_SKILLS[`.work/skills/${name}/SKILL.md`],
       ),
       HOST_SKILLS["session-workflows/SKILL.md"],
     ];
@@ -36,7 +36,7 @@ it("shipped workflow recipes typecheck against the public API and real host trig
     }
     expect(index).toBe(7);
     await fs.writeFile(
-      path.join(directory, "catamorphic-triggers.d.ts"),
+      path.join(directory, "work-triggers.d.ts"),
       renderTriggerTypesModule([
         schedule,
         webhook,

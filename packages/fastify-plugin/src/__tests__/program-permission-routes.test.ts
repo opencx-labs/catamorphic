@@ -137,7 +137,7 @@ describe("program permissions on project routes (ADR 0158)", () => {
     const guard = core.deployment.deploy.mock.calls[0]?.[3].guardPublishedPaths;
     expect(guard).toBeDefined();
     expect(() => guard?.(["docs/a.md"])).not.toThrow();
-    expect(() => guard?.([".catamorphic/roles/admin.json"])).toThrow();
+    expect(() => guard?.([".work/roles/admin.json"])).toThrow();
   });
 
   it("answers 409 when publishing is blocked by unrecorded changes", async () => {

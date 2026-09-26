@@ -290,7 +290,7 @@ export type ArtifactRef =
 export const EVERY_ARTIFACT = "*";
 
 /**
- * A committed project agent (ADR 0050, `.catamorphic/agents/<slug>.json`) a scoped
+ * A committed project agent (ADR 0050, `.work/agents/<slug>.json`) a scoped
  * identity may open sessions on. `toolPolicies` is the caller's own
  * narrowing of that agent's tools (ADR 0055): per server key (a connector's
  * `serverKeyOf(name)`, or `catamorphic` for the project's workflow tools),
@@ -300,7 +300,7 @@ export interface AgentRef {
   kind: "agent";
   projectId: string;
   /**
-   * The agent's slug (`.catamorphic/agents/<slug>.json`), or `*` for every
+   * The agent's slug (`.work/agents/<slug>.json`), or `*` for every
    * agent the project offers, the host's own included.
    */
   name: string;
@@ -317,7 +317,7 @@ export interface AgentRefToolPolicy {
 export interface AppRef {
   kind: "app";
   projectId: string;
-  /** The app's name (its `.catamorphic/apps/<name>` workspace), or `*`. */
+  /** The app's name (its `.work/apps/<name>` workspace), or `*`. */
   name: string;
   /**
    * Which build the ref resolves to — a resolution hint, not part of the
@@ -568,8 +568,8 @@ export type ExternalUserId = string;
  * commits). Never reflects a real human actor.
  */
 export const SYSTEM_AUTHOR = {
-  name: "Catamorphic",
-  email: "system@catamorphic.dev",
+  name: "Work",
+  email: "system@work.software",
 };
 
 /**
@@ -583,6 +583,6 @@ export function authorFor(externalUserId: string): {
 } {
   return {
     name: externalUserId,
-    email: `${externalUserId}@users.catamorphic.dev`,
+    email: `${externalUserId}@users.work.software`,
   };
 }

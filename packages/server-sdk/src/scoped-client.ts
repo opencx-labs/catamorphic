@@ -210,7 +210,7 @@ export interface TriggersResource {
     budgetMs?: number;
   }): Promise<TriggerFireResult>;
   /**
-   * Writes the generated `catamorphic-triggers.d.ts` into the project's dev
+   * Writes the generated `work-triggers.d.ts` into the project's dev
    * tree when drifted from the registered kinds.
    */
   syncTypes(args: {

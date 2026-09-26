@@ -49,9 +49,9 @@ function makeLayers(files: {
     );
   }
   if (files.project !== undefined) {
-    fs.mkdirSync(path.join(projectRoot, ".catamorphic"), { recursive: true });
+    fs.mkdirSync(path.join(projectRoot, ".work"), { recursive: true });
     fs.writeFileSync(
-      path.join(projectRoot, ".catamorphic", "sidebar.js"),
+      path.join(projectRoot, ".work", "sidebar.js"),
       files.project,
     );
   }
@@ -86,7 +86,7 @@ describe("resolveSidebarConfig", () => {
     expect(resolved.config.left[0]!.sections[0]?.title).toBe("Profile");
   });
 
-  it("prefers the project's shared .catamorphic/sidebar.js over the profile", () => {
+  it("prefers the project's shared .work/sidebar.js over the profile", () => {
     const { profileDir, projectRoot, projectId } = makeLayers({
       project: CUSTOM("Project"),
       profile: CUSTOM("Profile"),
@@ -350,7 +350,7 @@ describe("watchSidebarLayerFile", () => {
 
   it("fires when the directory is created after the watch starts", async () => {
     const root = makeDir();
-    const file = path.join(root, ".catamorphic", "sidebar.js");
+    const file = path.join(root, ".work", "sidebar.js");
     const fired = changed(file);
     await new Promise((resolve) => setTimeout(resolve, 50));
     fs.mkdirSync(path.dirname(file));

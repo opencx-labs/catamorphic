@@ -26,6 +26,7 @@ function fixture() {
     agentHomesDir: `${root}/agents`,
     harnessComponentsDir: `${root}/harness`,
     hostSkillsDir: `${root}/skills`,
+    attachmentsDir: `${root}/attachments`,
   };
   const profiles = new ProfilesStore(paths.profilesFile);
   const one = profiles.create("One"),
@@ -50,7 +51,7 @@ it("identifies the owning profile and primary project paths, with live file erro
   const context = desktopSettingsContext(input);
   expect(context.files?.preferences).toEqual({
     profile: `${root}/profiles/${one.id}/prefs.json`,
-    project: `${project.rootPath}/.catamorphic/settings.json`,
+    project: `${project.rootPath}/.work/settings.json`,
     personal: `${root}/profiles/${one.id}/settings-projects/${project.id}.json`,
   });
   expect(context.files?.theme).toEqual({

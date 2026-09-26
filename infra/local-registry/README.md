@@ -21,7 +21,7 @@ those are on npm, local testing needs a local registry.
   admits where a node process is silently dropped. A project whose lockfile
   pins `http://localhost:4873/...` tarballs cannot build in a sandbox; point the
   `@catamorphic` scope at the host's LAN address in that project's
-  `.catamorphic/bunfig.toml` (or in `~/.bunfig.toml`) before the agent installs.
+  `.work/bunfig.toml` (or in `~/.bunfig.toml`) before the agent installs.
 - `bun run dev:desktop` also passes the microsandbox SDK's bundled `msb` as
   `MSB_PATH`, so sandboxes never run a differently versioned `msb` from PATH
   (the two share one database and the older binary refuses a newer schema).

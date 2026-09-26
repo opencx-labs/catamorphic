@@ -17,6 +17,7 @@ import {
   assertSandboxResources,
   StdioDeploymentRuntimeProvider,
 } from "@catamorphic/sandbox";
+import { APP_DATA_ENV } from "@catamorphic/workflow/project-layout";
 
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
@@ -110,7 +111,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     this.sandboxes.set(id, {
       envVars: {
         ...opts.envVars,
-        ...(dataDirectory ? { CATAMORPHIC_APP_DATA_DIR: dataDirectory } : {}),
+        ...(dataDirectory ? { [APP_DATA_ENV]: dataDirectory } : {}),
       },
     });
     return { id, providerId: id, sandboxType: "execution", status: "started" };

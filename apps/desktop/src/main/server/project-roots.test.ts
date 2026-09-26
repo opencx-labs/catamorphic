@@ -83,10 +83,10 @@ it("relocates only projects inside the copied development profile", async () => 
     const reopened = new ProjectRootsStore(database);
     await reopened.init({
       from: "/tmp/old/desktop",
-      to: "/Users/test/.catamorphic/dev/desktop",
+      to: "/Users/test/.work/dev/desktop",
     });
     expect(reopened.getSync(internal)).toBe(
-      "/Users/test/.catamorphic/dev/desktop/Work/project",
+      "/Users/test/.work/dev/desktop/Work/project",
     );
     expect(reopened.getSync(external)).toBe("/Users/test/my-project");
     expect(reopened.getSync(neighbor)).toBe("/tmp/old/desktop-other/project");

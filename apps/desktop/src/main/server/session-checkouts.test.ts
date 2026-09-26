@@ -72,7 +72,7 @@ describe("SessionCheckouts", () => {
         kind === "primary"
           ? rootPath
           : (await checkouts.createManaged({ projectId, sessionId })).path;
-      const personal = ".catamorphic/personal/profile-one/workflows/check.ts";
+      const personal = ".work/personal/profile-one/workflows/check.ts";
       await fs.mkdir(path.dirname(path.join(workingDirectory, personal)), {
         recursive: true,
       });
@@ -111,7 +111,7 @@ describe("SessionCheckouts", () => {
 
     const created = await checkouts.createManaged({ projectId, sessionId });
     expect(created.kind).toBe("managed");
-    expect(created.branch).toMatch(/^catamorphic\/22222222/);
+    expect(created.branch).toMatch(/^work\/22222222/);
     expect(await checkouts.resolve({ projectId, sessionId })).toBe(
       created.path,
     );
@@ -145,8 +145,8 @@ describe("SessionCheckouts", () => {
       sessionId: secondSessionId,
     });
 
-    expect(first.branch).toBe("catamorphic/22222222");
-    expect(second.branch).toBe("catamorphic/22222222-1");
+    expect(first.branch).toBe("work/22222222");
+    expect(second.branch).toBe("work/22222222-1");
   });
 
   it("returns one managed checkout for parallel creation in the same session", async () => {
@@ -182,11 +182,7 @@ describe("SessionCheckouts", () => {
 
     await expect(fs.access(managedPath)).rejects.toThrow();
     await expect(
-      git(rootPath, [
-        "show-ref",
-        "--verify",
-        "refs/heads/catamorphic/22222222",
-      ]),
+      git(rootPath, ["show-ref", "--verify", "refs/heads/work/22222222"]),
     ).rejects.toThrow();
     expect(await checkouts.describe({ projectId, sessionId })).toMatchObject({
       kind: "primary",
@@ -394,7 +390,7 @@ describe("SessionCheckouts", () => {
       message: "Prepare review",
     });
 
-    expect(prepared.branch).toBe("catamorphic/22222222-review");
+    expect(prepared.branch).toBe("work/22222222-review");
     expect((await git(external, ["status", "--porcelain"])).trim()).toBe("");
     expect((await git(external, ["branch", "--show-current"])).trim()).toBe(
       prepared.branch,

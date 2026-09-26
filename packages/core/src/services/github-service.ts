@@ -17,6 +17,7 @@ import {
   refreshAccessToken,
   repoFullNameFromUrl,
 } from "@catamorphic/github";
+import { publishedRef } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
 import { assertProjectPermission } from "./artifact-scope.js";
@@ -434,7 +435,7 @@ export class GithubService {
           projectId,
           remoteBranch: "main",
         });
-        if (fetched.sha) ref = "refs/catamorphic/published/main";
+        if (fetched.sha) ref = publishedRef();
       }
       await pushToRemote({
         repoPath: dev.repoPath,

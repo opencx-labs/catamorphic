@@ -1,6 +1,10 @@
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  PROJECT_WORKSPACE_ROOT,
+  publishedRef,
+} from "@catamorphic/workflow/project-layout";
 import ignore, { type Ignore } from "ignore";
 import git from "isomorphic-git";
 import http from "isomorphic-git/http/node";
@@ -22,11 +26,11 @@ const STAGING_BATCH_SIZE = 128;
 
 /**
  * Dot-directories that are project content despite the hidden-file skip
- * below. `.catamorphic/` holds authored capabilities and shared config;
+ * below. `.work/` holds authored capabilities and shared config;
  * `.agents/` may contain the owner's harness instructions. Git ignore rules
  * distinguish local data and build outputs from versioned content.
  */
-const ALLOWED_DOT_DIRS = new Set([".agents", ".catamorphic"]);
+const ALLOWED_DOT_DIRS = new Set([".agents", PROJECT_WORKSPACE_ROOT]);
 
 /**
  * Dot-FILES that are project content: the seeded ignore rules must be
@@ -540,7 +544,7 @@ export class ProjectRepoImpl implements ProjectRepo {
       .map(([filepath]) => filepath);
 
     const baseCommit = await this.resolveRef("HEAD").catch(() => null);
-    const remoteRef = `refs/catamorphic/published/main`;
+    const remoteRef = publishedRef();
     const remoteHead = await git
       .resolveRef({ fs: nodeFs, dir: this.repoPath, ref: remoteRef })
       .catch(() => null);

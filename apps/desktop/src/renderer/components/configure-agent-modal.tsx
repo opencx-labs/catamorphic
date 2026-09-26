@@ -268,7 +268,7 @@ function DefaultRows({
           row(
             "Project default (everyone)",
             isProjectDefault
-              ? "Committed in .catamorphic/project.json — click to clear it."
+              ? "Committed in .work/project.json — click to clear it."
               : "Commit as the project's default for every collaborator.",
             isProjectDefault,
             () =>
@@ -559,7 +559,7 @@ function ProfileAgentBody({
                 <span className="text-fg-faint">
                   The agent's own main prompt. It leads every session — the
                   app's playbooks follow it — like a project agent's
-                  .catamorphic/agents/&lt;slug&gt;.md persona.
+                  .work/agents/&lt;slug&gt;.md persona.
                 </span>
               </label>
 
@@ -866,7 +866,7 @@ function ProfileAgentBody({
 /**
  * A committed project agent is code: the modal shows what the definition
  * says, its consent state, and the default-agent actions — editing means
- * editing `.catamorphic/agents/<slug>.json` (and the `<slug>.md` persona) in the repo.
+ * editing `.work/agents/<slug>.json` (and the `<slug>.md` persona) in the repo.
  */
 function ProjectAgentBody({
   agent,
@@ -991,12 +991,11 @@ function ProjectAgentBody({
       />
 
       <p className="text-[11px] text-fg-faint">
-        This agent is defined by{" "}
-        <code>.catamorphic/agents/{agent.slug}.json</code>
+        This agent is defined by <code>.work/agents/{agent.slug}.json</code>
         {agent.promptPreview ? (
           <>
             {" "}
-            and <code>.catamorphic/agents/{agent.slug}.md</code>
+            and <code>.work/agents/{agent.slug}.md</code>
           </>
         ) : null}{" "}
         in the project — edit those files (or ask a chat to) to change it.

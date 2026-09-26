@@ -20,7 +20,7 @@ description: Edit Work desktop configuration files to customize theme, fonts, sh
 Call the desktop_settings tool (discover it if it is not loaded) for this
 project's owning profile, exact host file paths, access mode and current
 validation errors. Use those paths, not the foreground profile, a guessed home
-directory, a sandbox path, or a session worktree's .catamorphic folder. Read the relevant files first;
+directory, a sandbox path, or a session worktree's .work folder. Read the relevant files first;
 a missing file is an empty object inheriting defaults. Read this skill for the file
 schema. Edit with ordinary file or shell facilities, preserving unrelated keys.
 Prefer writing a complete JSON object to a temporary sibling and renaming it over
@@ -41,7 +41,7 @@ copy today's default. Deleting a file resets that whole layer.
 
 Use profile for app-wide requests, personal for 'just this project for me', and
 project for an explicitly shared team default. The shared settings file lives in
-the primary project folder's .catamorphic/settings.json and may enter git. Personal
+the primary project folder's .work/settings.json and may enter git. Personal
 overrides live outside the repository. Higher layers can mask profile edits; read
 all relevant layers before claiming the effective value changed. Runtime keys in
 prefs.json (sidebar pose, last project, window/session state) are not preferences;

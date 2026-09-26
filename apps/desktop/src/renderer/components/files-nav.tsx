@@ -1,3 +1,8 @@
+import {
+  PROJECT_APP_DATA_DIR,
+  PROJECT_PERSONAL_DIR,
+  PROJECT_STORE_DIR,
+} from "@catamorphic/workflow/project-layout";
 import { useEffect, useMemo } from "react";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { desktopApi } from "../lib/desktop-api.js";
@@ -53,9 +58,7 @@ export function FilesNav({
           name: node.name,
           path: node.path,
           hasChildren: Boolean(node.children),
-          collapsed: !(
-            contentOnly && ".catamorphic/app-data/store".startsWith(node.path)
-          ),
+          collapsed: !(contentOnly && PROJECT_STORE_DIR.startsWith(node.path)),
         });
         if (node.children) visit(node.children, node.path);
       }
@@ -117,6 +120,9 @@ export function FilesNav({
   );
 }
 
+/** The desktop's local remote-link locator; local state, never listed. */
+const REMOTE_LOCATOR_PATH = `${PROJECT_APP_DATA_DIR}/remote.json`;
+
 export function isVisibleProjectFile(
   path: string,
   contentOnly = false,
@@ -124,11 +130,11 @@ export function isVisibleProjectFile(
   return (
     !path.startsWith(".git/") &&
     !path.startsWith("node_modules/") &&
-    path !== ".catamorphic/app-data/remote.json" &&
+    path !== REMOTE_LOCATOR_PATH &&
     (!contentOnly ||
       !path.startsWith(".") ||
-      path.startsWith(".catamorphic/personal/") ||
-      path.startsWith(".catamorphic/app-data/store/"))
+      path.startsWith(`${PROJECT_PERSONAL_DIR}/`) ||
+      path.startsWith(`${PROJECT_STORE_DIR}/`))
   );
 }
 

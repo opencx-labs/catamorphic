@@ -54,7 +54,7 @@ describe("LocalProcessSandboxProvider", () => {
     });
     const written = await isolated.executeCommand(
       first.id,
-      'printf saved > "$CATAMORPHIC_APP_DATA_DIR/items.txt"',
+      'printf saved > "$WORK_APP_DATA_DIR/items.txt"',
     );
     expect(written.exitCode).toBe(0);
     await isolated.destroySandbox(first.id);
@@ -65,7 +65,7 @@ describe("LocalProcessSandboxProvider", () => {
       (
         await isolated.executeCommand(
           next.id,
-          'cat "$CATAMORPHIC_APP_DATA_DIR/items.txt"',
+          'cat "$WORK_APP_DATA_DIR/items.txt"',
         )
       ).result,
     ).toBe("saved");
@@ -77,7 +77,7 @@ describe("LocalProcessSandboxProvider", () => {
       (
         await isolated.executeCommand(
           build.id,
-          'printf "%s" "$CATAMORPHIC_APP_DATA_DIR"',
+          'printf "%s" "$WORK_APP_DATA_DIR"',
         )
       ).result,
     ).toBe("");

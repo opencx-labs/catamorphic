@@ -1,14 +1,22 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, realpath, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-/** Clipboard-only files need a durable path even when the model takes no media. */
+/**
+ * Clipboard-only files need a durable path even when the model takes no
+ * media. They live in host storage (`<attachmentsDir>/<projectId>/`), never
+ * in the project folder: a paste is not a project change, so it must not
+ * appear in Git status, turn checkpoints, or remote sync. Agents receive the
+ * absolute path, as they do for files attached from disk.
+ */
 export async function saveComposerFile({
-  rootPath,
+  attachmentsDir,
+  projectId,
   name,
   bytes,
 }: {
-  rootPath: string;
+  attachmentsDir: string;
+  projectId: string;
   name: string;
   bytes: Uint8Array;
 }): Promise<{ path: string; name: string }> {
@@ -17,13 +25,8 @@ export async function saveComposerFile({
       "Clipboard files must be smaller than 128 MB. Save the file and attach it from disk instead.",
     );
   }
-  const root = await realpath(rootPath);
-  const directory = path.join(root, ".catamorphic", "attachments");
-  await mkdir(directory, { recursive: true });
-  const relative = path.relative(root, await realpath(directory));
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error("The attachment directory must be inside the project.");
-  }
+  const directory = projectAttachmentsDirectory({ attachmentsDir, projectId });
+  await mkdir(directory, { recursive: true, mode: 0o700 });
   const safeName =
     (typeof name === "string" ? name : "")
       .replace(/[^\p{L}\p{N}._ -]/gu, "_")
@@ -31,4 +34,30 @@ export async function saveComposerFile({
   const destination = path.join(directory, `${randomUUID()}-${safeName}`);
   await writeFile(destination, bytes, { flag: "wx", mode: 0o600 });
   return { path: destination, name: safeName };
+}
+
+/** Drops a removed project's pasted files. */
+export async function removeComposerFiles({
+  attachmentsDir,
+  projectId,
+}: {
+  attachmentsDir: string;
+  projectId: string;
+}): Promise<void> {
+  await rm(projectAttachmentsDirectory({ attachmentsDir, projectId }), {
+    recursive: true,
+    force: true,
+  });
+}
+
+function projectAttachmentsDirectory({
+  attachmentsDir,
+  projectId,
+}: {
+  attachmentsDir: string;
+  projectId: string;
+}): string {
+  if (typeof projectId !== "string" || !/^[A-Za-z0-9_-]+$/.test(projectId))
+    throw new Error("Invalid project");
+  return path.join(attachmentsDir, projectId);
 }

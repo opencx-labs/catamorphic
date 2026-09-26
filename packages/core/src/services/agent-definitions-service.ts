@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
 import type { EnvironmentRequirements } from "@catamorphic/sandbox";
+import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import { z } from "zod";
 import { hasProjectPermission, type Identity } from "../identity.js";
@@ -13,16 +14,15 @@ import {
 import { readProgramFiles, withProgram } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
 
-/**
- * Directory (relative to the project root) where committed project agent
- * definitions live:
+/*
+ * Committed project agent definitions live in `PROJECT_AGENTS_DIR`:
  *
  * ```
- * .catamorphic/agents/<slug>.json   # the definition (schema below)
- * .catamorphic/agents/<slug>.md     # optional persona / system-prompt file, same slug
+ * .work/agents/<slug>.json   # the definition (schema below)
+ * .work/agents/<slug>.md     # optional persona / system-prompt file, same slug
  * ```
  *
- * Inside the Catamorphic workspace, project agents are
+ * Inside the project workspace, project agents are
  * work products the team authors and reviews, and in the lazy spirit of
  * ADR 0043 the directory exists only once someone creates an agent — a
  * project without agents carries nothing.
@@ -31,7 +31,6 @@ import { requireTenantProject } from "./projects-service.js";
  * one against a user's personal credentials without that user's explicit,
  * definition-hash-bound consent (see {@link definitionHash} and ADR 0050).
  */
-export const AGENT_DEFINITIONS_DIR = ".catamorphic/agents";
 
 /**
  * Registry id of a project agent. Core's registry contract is id-only
@@ -51,7 +50,7 @@ export function projectAgentId(projectId: string, slug: string): string {
 
 /**
  * Same slug alphabet the definitions service accepts. Doubles as
- * path-traversal protection: the slug becomes a filename under `.catamorphic/agents/`,
+ * path-traversal protection: the slug becomes a filename under `.work/agents/`,
  * and this pattern admits no separators and no leading dot.
  */
 const SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -242,7 +241,7 @@ export const AgentDelegationPolicySchema = z
 export type AgentDelegationPolicy = z.infer<typeof AgentDelegationPolicySchema>;
 
 /**
- * The committed `.catamorphic/agents/<slug>.json` schema, version 1. Unknown top-level
+ * The committed `.work/agents/<slug>.json` schema, version 1. Unknown top-level
  * keys are stripped (forward compatibility inside a version); a bumped
  * `version` is reported as an invalid entry with a clear error rather
  * than half-parsed.
@@ -359,7 +358,7 @@ export interface ProjectAgentEntry {
   slug: string;
   /** Present when the file parsed and validated. */
   definition?: AgentDefinition;
-  /** Content of the sibling `.catamorphic/agents/<slug>.md` persona file, if present. */
+  /** Content of the sibling `.work/agents/<slug>.md` persona file, if present. */
   promptFile?: string;
   /** Present instead of `definition` when the file could not be used. */
   invalid?: { error: string };
@@ -441,7 +440,7 @@ export function definitionHash(
 }
 
 /**
- * Read-only view over a project's committed `.catamorphic/agents/` directory. Writes go
+ * Read-only view over a project's committed `.work/agents/` directory. Writes go
  * through the normal project file APIs (definitions are just files in the
  * repo). Mirrors {@link SkillsService}: reads the caller's dev working copy
  * so uncommitted edits are visible, and NEVER throws on a bad file — each
@@ -462,9 +461,9 @@ export class AgentDefinitionsService {
     await this.requireProject(identity, projectId);
     return this.withDev(identity, projectId, async (repo) => {
       const files = await repo.listFiles({
-        prefix: `${AGENT_DEFINITIONS_DIR}/`,
+        prefix: `${PROJECT_AGENTS_DIR}/`,
       });
-      const prefix = `${AGENT_DEFINITIONS_DIR}/`;
+      const prefix = `${PROJECT_AGENTS_DIR}/`;
       const definitionFiles = files.filter(
         (file) =>
           file.startsWith(prefix) &&
@@ -541,12 +540,17 @@ export class AgentDefinitionsService {
         const files = await readProgramFiles(
           repo,
           ref,
-          `${AGENT_DEFINITIONS_DIR}/`,
+          `${PROJECT_AGENTS_DIR}/`,
         );
         return Object.entries(files)
-          .filter(([path]) => /^\.catamorphic\/agents\/[^/]+\.json$/.test(path))
+          .filter(
+            ([path]) =>
+              path.startsWith(`${PROJECT_AGENTS_DIR}/`) &&
+              path.endsWith(".json") &&
+              !path.slice(PROJECT_AGENTS_DIR.length + 1).includes("/"),
+          )
           .map(([path, content]) => {
-            const slug = path.slice(AGENT_DEFINITIONS_DIR.length + 1, -5);
+            const slug = path.slice(PROJECT_AGENTS_DIR.length + 1, -5);
             if (!SLUG_PATTERN.test(slug))
               return { slug, invalid: { error: "Invalid agent file name" } };
             try {
@@ -559,7 +563,7 @@ export class AgentDefinitionsService {
                 : {
                     slug,
                     definition: result.definition,
-                    promptFile: files[`.catamorphic/agents/${slug}.md`],
+                    promptFile: files[`${PROJECT_AGENTS_DIR}/${slug}.md`],
                   };
             } catch {
               return {

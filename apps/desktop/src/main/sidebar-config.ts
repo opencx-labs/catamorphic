@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
+import { PROJECT_SIDEBAR_PATH } from "@catamorphic/workflow/project-layout";
 import type { OpenMode } from "../shared/open-mode.js";
 import { sanitizeProjectExperienceWhen } from "../shared/project-experience.js";
 import type { SidebarSourceItem } from "../shared/sidebar-source.js";
@@ -654,7 +655,7 @@ export function projectLocalSidebarFile(
 
 /** The project's shared, git-tracked sidebar (layer 2). */
 export function projectSidebarFile(projectRoot: string): string {
-  return path.join(projectRoot, ".catamorphic", "sidebar.js");
+  return path.join(projectRoot, PROJECT_SIDEBAR_PATH);
 }
 
 /** The candidate files for a resolution, most specific first. */
@@ -686,7 +687,7 @@ export function sidebarLayerFiles(opts: {
 /**
  * Layered sidebar resolution (ADR 0043 era): the FIRST existing file wins —
  * this user's per-project override, then the project's shared
- * `.catamorphic/sidebar.js`, then the profile-global `sidebar.js`, then the
+ * `.work/sidebar.js`, then the profile-global `sidebar.js`, then the
  * built-in default. A file that exists but fails to evaluate does NOT slide
  * to the next layer (that would silently reroute a typo); it retains that
  * file's last valid layout, or defaults if none has loaded. `layer` names
@@ -707,7 +708,7 @@ export function resolveSidebarConfig(opts: {
 
 /**
  * Watch one config-layer file for changes, tolerating the file — and its
- * containing directory — not existing yet (`.catamorphic/` is opt-in, and
+ * containing directory — not existing yet (`.work/` is opt-in, and
  * a profile's `sidebar-projects/` appears on first override). Watches the
  * file's directory when it exists, and the parent otherwise so we notice
  * the directory being created. Returns a disposer.
@@ -736,7 +737,7 @@ export function watchSidebarLayerFile(
       const watcher = fs.watch(dir, (_event, changed) => {
         if (changed === name) fire();
       });
-      // The directory can vanish (project deleted, .catamorphic removed);
+      // The directory can vanish (project deleted, .work removed);
       // drop the watcher and let the parent watch re-establish it.
       watcher.on("error", () => {
         watcher.close();

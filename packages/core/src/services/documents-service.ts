@@ -3,6 +3,7 @@ import pathModule from "node:path";
 import type { DB } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
+import { publishedRef } from "@catamorphic/workflow/project-layout";
 import { type Kysely, type Selectable, sql } from "kysely";
 import {
   type DocumentRef,
@@ -306,7 +307,7 @@ export class DocumentsService {
       input.projectId,
     );
     try {
-      return await repo.resolveRef("refs/catamorphic/published/main").then(
+      return await repo.resolveRef(publishedRef()).then(
         () => true,
         () => false,
       );

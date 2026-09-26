@@ -16,7 +16,7 @@ import { parseProject } from "./parser.js";
  *   contract problems;
  * - trigger bindings validated against the host's kind catalog, when the
  *   caller fetched one (`GET /trigger-kinds` on any Catamorphic host);
- * - generated-file drift: the committed `catamorphic-app-api.d.ts` files
+ * - generated-file drift: the committed `work-app-api.d.ts` files
  *   are re-derived from source and compared, so a stale projection fails a
  *   local run or CI instead of silently type-checking app code against the
  *   wrong contract.

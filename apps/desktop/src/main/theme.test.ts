@@ -150,6 +150,7 @@ describe("desktop theme", () => {
       agentHomesDir: path.join(root, "agent-homes"),
       harnessComponentsDir: path.join(root, "harness-components"),
       hostSkillsDir: path.join(root, "host-skills"),
+      attachmentsDir: path.join(root, "attachments"),
     };
     const profiles = new ProfilesStore(paths.profilesFile);
     const systemProfile = profiles.create("System");

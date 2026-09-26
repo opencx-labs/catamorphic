@@ -63,7 +63,7 @@ import {
   continueAuthorizationInBrowser,
   trackAuthorization,
 } from "./authorization-recovery.js";
-import { saveComposerFile } from "./composer-files.js";
+import { removeComposerFiles, saveComposerFile } from "./composer-files.js";
 import { parseConnectLink } from "./connect-link.js";
 import {
   type CreateConnectionInput,
@@ -211,7 +211,7 @@ export interface ProjectAgentsData {
   agents: ProjectAgentInfo[];
   /**
    * The project's committed default agent slug (`defaultAgent` in
-   * `.catamorphic/project.json`), when it declares one.
+   * `.work/project.json`), when it declares one.
    */
   projectDefaultSlug: string | null;
 }
@@ -725,7 +725,7 @@ export function registerIpcHandlers(
     },
   );
 
-  // --- project agents (committed .catamorphic/agents/<slug>.json definitions, ADR 0050) ---
+  // --- project agents (committed .work/agents/<slug>.json definitions, ADR 0050) ---
 
   const kindHarness = (kind: string): "ai-sdk" | "claude-code" | "codex" =>
     kind === "claude-code"
@@ -805,7 +805,7 @@ export function registerIpcHandlers(
   );
 
   // The project's committed default (ADR 0056 layer 2): a slug into the
-  // project's own agents/, written to `.catamorphic/project.json` — a
+  // project's own agents/, written to `.work/project.json` — a
   // work product every collaborator receives, not a personal preference.
   ipcMain.handle(
     "catamorphic:project-agents-set-default",
@@ -2430,6 +2430,10 @@ export function registerIpcHandlers(
       await server.catamorphic.core.projects.delete(identity, input.projectId);
       await server.projectRoots.delete(input.projectId);
       await server.workspaceStates.delete(input.projectId);
+      await removeComposerFiles({
+        attachmentsDir: paths.attachmentsDir,
+        projectId: input.projectId,
+      });
     },
   );
 
@@ -2484,12 +2488,15 @@ export function registerIpcHandlers(
     async (
       _event,
       input: { projectId: string; name: string; bytes: Uint8Array },
-    ) =>
-      saveComposerFile({
-        rootPath: await requireRoot(input.projectId),
+    ) => {
+      await requireRoot(input.projectId);
+      return saveComposerFile({
+        attachmentsDir: paths.attachmentsDir,
+        projectId: input.projectId,
         name: input.name,
         bytes: input.bytes,
-      }),
+      });
+    },
   );
 
   ipcMain.handle(

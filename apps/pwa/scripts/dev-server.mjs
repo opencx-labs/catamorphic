@@ -356,9 +356,9 @@ const server = http.createServer(async (req, res) => {
     path === `/api/projects/${PROJECT.id}/documents/content` &&
     req.method === "GET"
   ) {
-    if (THEME && url.searchParams.get("path") === ".catamorphic/theme.json") {
+    if (THEME && url.searchParams.get("path") === ".work/theme.json") {
       return json(res, 200, {
-        path: ".catamorphic/theme.json",
+        path: ".work/theme.json",
         source: "program",
         contentType: "application/json",
         size: 1,

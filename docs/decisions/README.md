@@ -156,11 +156,11 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0140](0140-local-agent-freedom-and-executable-sidebar-sources.md) | Local agent freedom and executable sidebar sources | Accepted |
 | [0141](0141-open-plain-folders-without-git.md) | Open plain folders without initializing Git | Accepted |
 
-| [0142](0142-contained-project-workspace.md) | A contained project workspace and local app data | Accepted |
+| [0142](0142-contained-project-workspace.md) | A contained project workspace and local app data | Accepted; folder name superseded by 0169 |
 | [0143](0143-profile-history-and-browser-import.md) | Profile history and shared browser import | Accepted |
 | [0144](0144-desktop-controls-and-default-browser.md) | App-styled controls and default browser | Accepted |
 | [0145](0145-work-product-identity.md) | Work is the home for the end-user experiences | Accepted |
-| [0146](0146-work-application-identity.md) | Work application identity | Accepted |
+| [0146](0146-work-application-identity.md) | Work application identity | Accepted; project paths superseded by 0169 |
 | [0147](0147-uniform-sidebar-sections.md) | Uniform sidebar sections: one status language and one drag-and-drop model | Accepted |
 | [0148](0148-session-access-for-apps.md) | Session access for apps | Accepted |
 | [0149](0149-observed-git-overviews.md) | Observed Git overviews | Accepted |
@@ -182,3 +182,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0165](0165-guests-and-shares.md) | Guests and shares for people outside the company | Accepted |
 | [0166](0166-members-work-from-their-own-agents.md) | Members work from their own agents over the project MCP | Accepted |
 | [0167](0167-machine-pools-access-and-owner-placement.md) | Machine pools, node access, and placement by owner | Accepted |
+| [0169](0169-work-project-workspace.md) | The project workspace is `.work/`, and what lands in repositories is named Work | Accepted |

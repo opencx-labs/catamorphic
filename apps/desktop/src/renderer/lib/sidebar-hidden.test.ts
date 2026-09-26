@@ -3,17 +3,14 @@ import { dropHiddenSubtrees } from "./sidebar-hidden.js";
 
 describe("dropHiddenSubtrees", () => {
   const items = [
-    { id: ".catamorphic", parentId: null },
-    { id: ".catamorphic/apps", parentId: ".catamorphic" },
-    { id: ".catamorphic/apps/work-log", parentId: ".catamorphic/apps" },
+    { id: ".work", parentId: null },
+    { id: ".work/apps", parentId: ".work" },
+    { id: ".work/apps/work-log", parentId: ".work/apps" },
     { id: "Launch plan.md", parentId: null },
   ];
 
   it("hides a folder's whole subtree, not just its row", () => {
-    const shown = dropHiddenSubtrees(
-      items,
-      (item) => item.id === ".catamorphic",
-    );
+    const shown = dropHiddenSubtrees(items, (item) => item.id === ".work");
     expect(shown.map((item) => item.id)).toEqual(["Launch plan.md"]);
   });
 

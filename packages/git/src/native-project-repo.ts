@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { type FileReadOptions, readFileSnapshot } from "./file-reads.js";
 import {
-  hasLocalGit,
-  INTERNAL_REMOTE_PREFIX,
-  nativeGit,
-  nativeGitBytes,
-} from "./native-git.js";
+  PROJECT_APP_DATA_DIR,
+  PROJECT_PERSONAL_DIR,
+  publishedRef,
+} from "@catamorphic/workflow/project-layout";
+import { type FileReadOptions, readFileSnapshot } from "./file-reads.js";
+import { hasLocalGit, nativeGit, nativeGitBytes } from "./native-git.js";
 import {
   ensurePersonalFilesExcluded,
   isPersonalFile,
@@ -253,9 +253,7 @@ export class NativeProjectRepo extends ProjectRepoImpl {
       }
     }
     const baseCommit = await this.resolveRef().catch(() => null);
-    const remoteHead = await this.resolveRef(
-      `${INTERNAL_REMOTE_PREFIX}/main`,
-    ).catch(() => null);
+    const remoteHead = await this.resolveRef(publishedRef()).catch(() => null);
     const counts =
       baseCommit && remoteHead
         ? (
@@ -385,15 +383,15 @@ export class NativeProjectRepo extends ProjectRepoImpl {
       "--worktree",
       "--",
       ".",
-      ":!.catamorphic/personal/",
+      `:!${PROJECT_PERSONAL_DIR}/`,
     ]);
     await nativeGit(this.repoPath, [
       "clean",
       "-fd",
       "-e",
-      ".catamorphic/app-data/",
+      `${PROJECT_APP_DATA_DIR}/`,
       "-e",
-      ".catamorphic/personal/",
+      `${PROJECT_PERSONAL_DIR}/`,
       "--",
       ".",
     ]);

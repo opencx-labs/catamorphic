@@ -143,9 +143,9 @@ the ADR column is the settled design record.
 
 A project is a folder that can hold documents, notes, data, plans, code,
 automations, and apps, in any mix. A blank project is a git repository, a
-`.catamorphic/project.json` manifest, and hidden seed skills; nothing in
+`.work/project.json` manifest, and hidden seed skills; nothing in
 the visible tree claims the project is about code. The workflow/app
-workspace (an independent Bun workspace under `.catamorphic/`: `contracts/`, `workflows/`, `apps/*`) is
+workspace (an independent Bun workspace under `.work/`: `contracts/`, `workflows/`, `apps/*`) is
 scaffolded on demand, the first time someone asks for an automation or
 app. Imported repositories are adopted as-is; existing files are never
 overwritten. (ADRs [0032](docs/decisions/0032-projects-are-bun-workspaces.md),
@@ -192,7 +192,7 @@ changes belong to one agent. (ADR
 [0063](docs/decisions/0063-agent-checkout-coordination.md))
 
 **Project agent definitions**: an agent can be a work product. Committed
-`.catamorphic/agents/<slug>.json` files (plus an optional `.catamorphic/agents/<slug>.md` persona)
+`.work/agents/<slug>.json` files (plus an optional `.work/agents/<slug>.md` persona)
 version with the project and appear in every collaborator's picker. A
 committed definition never runs on your personal credentials until you
 consent, and consent is bound to a hash of what you approved; definitions
@@ -307,7 +307,7 @@ and host shapes: [`INTEGRATION.md`](INTEGRATION.md#host-shapes-catamorphic-runs-
 Also worth knowing, because it's easy to miss from the package list:
 
 - **The product teaches agents from the inside.** Every project is seeded
-  with hidden skills (`.catamorphic/skills/`): the project model and on-demand
+  with hidden skills (`.work/skills/`): the project model and on-demand
   workspace scaffold (`catamorphic-projects`), workflow authoring
   (`writing-workflows`, `batch-workflows`, `durable-workflows`), and app
   building split into mechanics (`building-apps`) and replaceable design
@@ -527,7 +527,7 @@ form.
 Workflows subscribe to trigger kinds in code (`triggers:
 [trigger("kind", config)]`). Hosts define their own kinds with
 `defineTriggerKind` (typed payloads and configs via zod, generated
-`catamorphic-triggers.d.ts` per project) and fire them sync or async; a kind
+`work-triggers.d.ts` per project) and fire them sync or async; a kind
 whose payload varies per workflow uses typed holes, and kinds declared via
 `mcpToolKinds` are served as MCP tools from `POST /projects/:id/mcp`. See
 [`INTEGRATION.md`](INTEGRATION.md) and ADRs
@@ -790,7 +790,7 @@ Direction, not shipped. Tracked in [`TODO.md`](TODO.md):
   the Agent Client Protocol client (local command and remote endpoint
   transports) is the planned harness behind it.
 - **TS `defineAgent`**: a typed authoring layer that compiles to the
-  committed `.catamorphic/agents/<slug>.json` substrate.
+  committed `.work/agents/<slug>.json` substrate.
 - **Review-mode collaboration**: PR-first sync for shared projects, invites,
   native PR review depth (comments, approvals, merge).
 - **Remote blob storage**: user-connected stores (S3/R2/Drive-style) for

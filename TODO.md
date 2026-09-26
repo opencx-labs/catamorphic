@@ -29,7 +29,7 @@
 - **Collaboration on the git backend (next slice after ADR 0044).**
   Invite flow (= repo access on the code host), PR review rendered
   natively in the app, and PR-first "review mode" sync: when a project
-  declares review mode (likely in `.catamorphic/project.json`), auto-sync
+  declares review mode (likely in `.work/project.json`), auto-sync
   stops pushing `main` and work flows through branches + PRs instead —
   resolves the direct-push vs open-PR race deliberately deferred in
   ADR 0044. Also: a calm sync-status pill in the UI (up to date /
@@ -112,7 +112,7 @@
   agent conversations begun through Claude appear in the project's ordinary
   session history with their source attributed.
 - **TS `defineAgent` layer over project agent JSON.** The committed
-  `.catamorphic/agents/<slug>.json` files are the substrate (ADR 0050); add the
+  `.work/agents/<slug>.json` files are the substrate (ADR 0050); add the
   authoring layer: `defineAgent({...})` in project code, discovered by
   `@catamorphic/parser` like `defineSecrets`, compiled/projected into the
   JSON files (generated-projections style, ADR 0041) so the registry,

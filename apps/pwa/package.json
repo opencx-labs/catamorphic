@@ -18,6 +18,7 @@
     "@catamorphic/api-client": "workspace:*",
     "@catamorphic/react": "workspace:*",
     "@catamorphic/ui": "workspace:*",
+    "@catamorphic/workflow": "workspace:*",
     "@tanstack/react-query": "^5.101.2",
     "lucide-react": "^1.25.0",
     "react": "^19.2.7",

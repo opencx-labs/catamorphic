@@ -2014,7 +2014,7 @@ export function registerBrowserSupport(
     profileConfig.forProfile(windows.profileFor(event.sender)).sidebar;
 
   // Layered per project (ADR 0043): project-local override → project
-  // `.catamorphic/sidebar.js` → profile `sidebar.js` → built-in default.
+  // `.work/sidebar.js` → profile `sidebar.js` → built-in default.
   // Without a projectId only the profile layer applies (boot, settings).
   // The `-file`/`-source`/`-reset` handlers below stay profile-scoped:
   // they back the Settings "edit sidebar.js" surface.

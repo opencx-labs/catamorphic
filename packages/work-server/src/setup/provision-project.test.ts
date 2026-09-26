@@ -67,9 +67,8 @@ describe("provisionWorkProject", () => {
       {
         message: "Configure project roles",
         files: {
-          ".catamorphic/roles/manager.json":
-            expect.stringContaining('"Manager"'),
-          ".catamorphic/roles/member.json": expect.stringContaining('"Member"'),
+          ".work/roles/manager.json": expect.stringContaining('"Manager"'),
+          ".work/roles/member.json": expect.stringContaining('"Member"'),
         },
       },
     );

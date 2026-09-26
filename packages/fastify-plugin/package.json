@@ -34,6 +34,7 @@
     "kysely": "^0.29.3",
     "zod": "^4.4.3",
     "@catamorphic/otel": "workspace:*",
+    "@catamorphic/workflow": "workspace:*",
     "@opentelemetry/api": "^1.9.1"
   },
   "devDependencies": {

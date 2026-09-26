@@ -1,5 +1,6 @@
 import type { ProjectManager } from "@catamorphic/git";
 import type { SandboxProvider } from "@catamorphic/sandbox";
+import { PROJECT_NODE_MODULES_DIR } from "@catamorphic/workflow/project-layout";
 import type { Identity } from "../identity.js";
 
 /** A file the agent changed in its sandbox, mirrored into the dev tree. */
@@ -13,7 +14,7 @@ const SYNC_IGNORED_PREFIXES = [
   "_plugins/",
   "node_modules/",
   ".git/",
-  ".catamorphic/node_modules/",
+  `${PROJECT_NODE_MODULES_DIR}/`,
 ];
 
 /**
@@ -83,7 +84,7 @@ export async function syncSandboxChanges(opts: {
   // Advance the sandbox baseline so subsequent syncs report only new changes.
   await opts.provider.executeCommand(
     opts.sandboxProviderId,
-    "git add -A && (git -c user.name=catamorphic -c user.email=agent@catamorphic.dev commit -m sync --quiet || true)",
+    "git add -A && (git -c 'user.name=Work Agent' -c user.email=agent@work.software commit -m sync --quiet || true)",
     { cwd: dir },
   );
 

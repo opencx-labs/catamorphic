@@ -10,7 +10,7 @@ import { ArtifactsRemoteBackend } from "../artifacts-remote-backend.js";
 const tenantId = "11111111-1111-4111-8111-111111111111";
 const projectId = "22222222-2222-4222-8222-222222222222";
 const mainRef = "refs/heads/main";
-const watcherRef = "refs/heads/catamorphic/watchers/fixture";
+const watcherRef = "refs/heads/work/watchers/fixture";
 const sha = "a".repeat(40);
 let cachePath: string;
 let backend: ArtifactsRemoteBackend;

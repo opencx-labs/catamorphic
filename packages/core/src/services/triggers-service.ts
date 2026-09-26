@@ -9,13 +9,18 @@ import {
   parseProject,
   renderAppApiTypesModule,
 } from "@catamorphic/parser";
+import {
+  PROJECT_CHECK_SCRIPT_PATH,
+  PROJECT_WORKFLOWS_PACKAGE_PATH,
+  publishedRef,
+} from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import {
   hasProjectPermission,
   type Identity,
   SYSTEM_AUTHOR,
 } from "../identity.js";
-import { PROJECT_CHECK_SCRIPT, PROJECT_CHECK_SCRIPT_PATH } from "../seeds.js";
+import { PROJECT_CHECK_SCRIPT } from "../seeds.js";
 import { assertProjectPermission, resolveScope } from "./artifact-scope.js";
 import { requireTenantProject } from "./projects-service.js";
 import type {
@@ -222,7 +227,7 @@ export class TriggersService {
     return kind ? triggerKindInfo(kind) : null;
   }
 
-  /** Renders the generated `catamorphic-triggers.d.ts` content. */
+  /** Renders the generated `work-triggers.d.ts` content. */
   typesModuleContent(): string {
     return renderTriggerTypesModule([...this.registry.values()]);
   }
@@ -230,8 +235,8 @@ export class TriggersService {
   /**
    * Writes every generated type projection into the project's dev tree and
    * commits when drifted: the trigger-kinds augmentation
-   * (`.catamorphic/workflows/src/catamorphic-triggers.d.ts`) and, per app workspace, the
-   * typed app-api client (`.catamorphic/apps/<name>/src/catamorphic-app-api.d.ts`).
+   * (`.work/workflows/src/work-triggers.d.ts`) and, per app workspace, the
+   * typed app-api client (`.work/apps/<name>/src/work-app-api.d.ts`).
    * Generated files are projections of code the host or project owns —
    * regenerated on change, never hand-edited.
    */
@@ -250,8 +255,8 @@ export class TriggersService {
       const files = await repo.readAllFiles(WORKFLOW_READ_OPTIONS);
       // Generated types and the check script exist to serve the workflow
       // workspace. A project without one (docs-only, imported plain repo)
-      // must not have a .catamorphic/workflows/ directory conjured into it (ADR 0043).
-      if (files[".catamorphic/workflows/package.json"] === undefined) {
+      // must not have a .work/workflows/ directory conjured into it (ADR 0043).
+      if (files[PROJECT_WORKFLOWS_PACKAGE_PATH] === undefined) {
         return { paths: [], updated: false };
       }
       const changes = new Map<string, string>();
@@ -710,9 +715,7 @@ export class TriggersService {
         projectId: args.projectId,
         remoteBranch: "main",
       });
-      commitSha = await repo
-        .resolveRef("refs/catamorphic/published/main")
-        .catch(() => null);
+      commitSha = await repo.resolveRef(publishedRef()).catch(() => null);
       if (!commitSha) return { commitSha: null, bindings: [] };
       await this.deps.workflowEnablements?.().markUpdateAvailable({
         projectId: args.projectId,
@@ -791,7 +794,7 @@ export class TriggersService {
         remoteBranch: args.remoteBranch,
       });
       const fetchedCommit = await repo
-        .resolveRef(`refs/catamorphic/published/${args.remoteBranch}`)
+        .resolveRef(publishedRef(args.remoteBranch))
         .catch(() => null);
       if (fetchedCommit !== args.commitSha) {
         throw new Error(

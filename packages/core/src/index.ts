@@ -54,7 +54,6 @@ export {
   appScaffold,
   HOST_SKILLS,
   PROJECT_CHECK_SCRIPT,
-  PROJECT_CHECK_SCRIPT_PATH,
   SEED_SKILLS,
   workspaceFiles,
 } from "./seeds.js";
@@ -73,7 +72,6 @@ export { AgentContextService } from "./services/agent-context-service.js";
 export {
   AGENT_COORDINATION_STRATEGIES,
   AGENT_DEFINITION_KINDS,
-  AGENT_DEFINITIONS_DIR,
   type AgentCoordinationStrategy,
   type AgentDefinition,
   type AgentDefinitionCredentials,
@@ -390,7 +388,6 @@ export {
   ensureProjectWorkspace,
   isProjectDataPath,
   localDocumentRelativePath,
-  PROJECT_DATA_ROOT,
   projectDataDirectory,
 } from "./services/project-workspace.js";
 export {
@@ -458,7 +455,6 @@ export {
   fillTemplate,
   type ProjectRoleEntry,
   type ResolveRolesInput,
-  ROLES_DIR,
   type RoleDefinition,
   RoleDefinitionSchema,
   type RoleGrants,
@@ -558,7 +554,6 @@ export {
   humanizeSkillName,
   type ProjectSkill,
   parseSkillFrontmatter,
-  SKILLS_DIR,
   SkillsService,
 } from "./services/skills-service.js";
 export {

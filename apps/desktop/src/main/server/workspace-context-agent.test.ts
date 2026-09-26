@@ -267,7 +267,7 @@ describe("desktop facts and peers", () => {
       bridge: bridgeWith({ tabs: [] }),
       hasTools: true,
       desktopFacts: () => ({
-        personalFilesDirectory: "/project/.catamorphic/personal/p",
+        personalFilesDirectory: "/project/.work/personal/p",
         settingsErrors: errors,
       }),
     });
@@ -275,7 +275,7 @@ describe("desktop facts and peers", () => {
     await send(agent, session, "Write me a memo");
     expect(inner.lastContext).toContain("<desktop_context>");
     expect(inner.lastContext).toContain(
-      "save them in /project/.catamorphic/personal/p",
+      "save them in /project/.work/personal/p",
     );
     expect(inner.lastContext).toContain("theme.json: Unexpected token");
     errors = [];
@@ -298,7 +298,7 @@ describe("desktop facts and peers", () => {
             running: true,
             task: "Prepare the renewal deck",
             activity: null,
-            checkout: { kind: "managed", branch: "catamorphic/peer" },
+            checkout: { kind: "managed", branch: "work/peer" },
           },
         ],
         checkoutNotice: async () => "Returned to the project folder.",
@@ -308,7 +308,7 @@ describe("desktop facts and peers", () => {
     await send(agent, session, "Continue");
     expect(inner.lastMessage).toBe("Continue");
     expect(inner.lastContext).toContain(
-      '- "Renewal deck" (working now, in a separate worktree (catamorphic/peer)): Prepare the renewal deck',
+      '- "Renewal deck" (working now, in a separate worktree (work/peer)): Prepare the renewal deck',
     );
     expect(inner.lastContext).toContain("Returned to the project folder.");
     expect(inner.systemPrompt).toContain("Prefer a worktree");
@@ -340,7 +340,7 @@ describe("Work playbook", () => {
     const playbook = workPlaybook({ hasTools: true });
     expect(playbook).toContain("what is on their screen right now");
     expect(playbook.length).toBeLessThan(2000);
-    for (const jargon of ["worktree", "checkout", ".catamorphic", "Allocation"])
+    for (const jargon of ["worktree", "checkout", ".work", "Allocation"])
       expect(playbook).not.toContain(jargon);
   });
 });

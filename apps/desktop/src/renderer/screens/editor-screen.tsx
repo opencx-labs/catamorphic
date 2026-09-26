@@ -1,3 +1,4 @@
+import { PROJECT_PERSONAL_DIR } from "@catamorphic/workflow/project-layout";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ExternalLink, FileText } from "lucide-react";
@@ -13,6 +14,11 @@ import {
 import { localEditorPath } from "../lib/local-project-files.js";
 import { useMonacoTheme } from "../lib/monaco-setup.js";
 import { useTheme } from "../lib/theme.js";
+
+/** Personal files show relative to the profile's own personal folder. */
+const PERSONAL_PREFIX_PATTERN = new RegExp(
+  `^(?:.*/)?${PROJECT_PERSONAL_DIR.replaceAll(".", "\\.")}/[^/]+/`,
+);
 
 type EditorInstance = Parameters<OnMount>[0];
 type MonacoInstance = Parameters<OnMount>[1];
@@ -253,7 +259,7 @@ export function EditorScreen({
         className="flex h-12 shrink-0 items-center gap-2 px-3"
       >
         <span className="min-w-0 truncate font-mono text-xs text-fg-muted">
-          {filePath.replace(/^(?:.*\/)?\.catamorphic\/personal\/[^/]+\//, "")}
+          {filePath.replace(PERSONAL_PREFIX_PATTERN, "")}
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-0.5 rounded-lg border border-border bg-bg-raised p-0.5">
           <FileInspector

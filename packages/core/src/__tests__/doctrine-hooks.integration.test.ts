@@ -24,9 +24,9 @@ const identity: Identity = {
   externalUserId: "doctrine-test-user",
 };
 
-const MECHANICS_SKILL_PATH = ".catamorphic/skills/building-apps/SKILL.md";
-const DESIGN_SKILL_PATH = ".catamorphic/skills/designing-apps/SKILL.md";
-const ACME_DESIGN_SKILL_PATH = ".catamorphic/skills/acme-design/SKILL.md";
+const MECHANICS_SKILL_PATH = ".work/skills/building-apps/SKILL.md";
+const DESIGN_SKILL_PATH = ".work/skills/designing-apps/SKILL.md";
+const ACME_DESIGN_SKILL_PATH = ".work/skills/acme-design/SKILL.md";
 const ACME_DESIGN_SKILL = `---
 name: acme-design
 description: Acme's app design doctrine.
@@ -90,9 +90,7 @@ describeIf("doctrine hooks integration", () => {
     expect(skill?.content).toBe(HOST_SKILLS["workflow-lifecycle/SKILL.md"]);
     const files = await core.projects.readAllFiles(identity, project.id);
     expect(files[ACME_DESIGN_SKILL_PATH]).toBe(ACME_DESIGN_SKILL);
-    expect(
-      files[".catamorphic/skills/workflow-lifecycle/SKILL.md"],
-    ).toBeUndefined();
+    expect(files[".work/skills/workflow-lifecycle/SKILL.md"]).toBeUndefined();
   });
 
   it("serves deleted project guidance from the host tier without rewriting the checkout", async () => {
@@ -105,10 +103,7 @@ describeIf("doctrine hooks integration", () => {
       identity.externalUserId,
     );
     try {
-      await repo.writeFile(
-        ".catamorphic/workflows/package.json",
-        '{"private":true}',
-      );
+      await repo.writeFile(".work/workflows/package.json", '{"private":true}');
       await repo.deleteFile(MECHANICS_SKILL_PATH);
       const head = await repo.resolveRef("HEAD");
       const files = await repo.readAllFiles();
@@ -140,7 +135,7 @@ describeIf("doctrine hooks integration", () => {
     });
     const files = await core.projects.readAllFiles(identity, project.id);
     const skillPaths = Object.keys(files)
-      .filter((file) => file.startsWith(".catamorphic/skills/"))
+      .filter((file) => file.startsWith(".work/skills/"))
       .sort();
 
     // Custom doctrine present, ours absent, mechanics present.

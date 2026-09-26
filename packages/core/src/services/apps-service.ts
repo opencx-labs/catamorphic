@@ -7,7 +7,6 @@ import type { DB } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import { getTracer, markSpanError, withSpan } from "@catamorphic/otel";
 import {
-  APP_SOURCE_ROOT,
   type AppApiSurface,
   parseProject,
   SANDBOX_STRIPPED_PACKAGES,
@@ -19,6 +18,15 @@ import {
   resolveWorkflowPackageFallback,
   uploadPluginPayloads,
 } from "@catamorphic/sandbox";
+import {
+  AGENT_COMMIT_AUTHOR,
+  appWorkspaceName,
+  hasProjectLockfile,
+  isProjectSourcePath,
+  PROJECT_APPS_DIR,
+  PROJECT_WORKFLOWS_PACKAGE_PATH,
+  PROJECT_WORKSPACE_ROOT,
+} from "@catamorphic/workflow/project-layout";
 import type { Kysely, Selectable } from "kysely";
 import {
   confineIdentity,
@@ -185,7 +193,7 @@ export class AppPublishStateError extends Error {
 /**
  * Builds, publishes, and serves user-built frontend apps.
  *
- * Which apps exist is derived from the project repo (`.catamorphic/apps/<name>/package.json`)
+ * Which apps exist is derived from the project repo (`.work/apps/<name>/package.json`)
  * — code is the source of truth, and the `apps` table is only an anchor for
  * built artifacts and publish state, created lazily on first build.
  *
@@ -814,10 +822,7 @@ export class AppsService {
         try {
           const status = await repo.status();
           if (!status.dirty) return await repo.resolveRef("HEAD");
-          return await repo.commit(args.message, {
-            name: "catamorphic",
-            email: "agent@catamorphic.dev",
-          });
+          return await repo.commit(args.message, AGENT_COMMIT_AUTHOR);
         } finally {
           await repo.dispose();
         }
@@ -1137,7 +1142,7 @@ export class AppsService {
       buildRoot,
     );
 
-    const appDir = `${buildRoot}/${APP_SOURCE_ROOT}/${args.appName}`;
+    const appDir = `${buildRoot}/${PROJECT_APPS_DIR}/${args.appName}`;
     try {
       // @catamorphic/app is provided from the local install, not the
       // registry. Bun resolves the whole workspace at once, so strip the
@@ -1149,10 +1154,8 @@ export class AppsService {
         ),
       );
       const workflowPackage = await resolveWorkflowPackageFallback({
-        packageJson: manifests[".catamorphic/workflows/package.json"],
-        hasLockfile:
-          ".catamorphic/bun.lock" in args.files ||
-          ".catamorphic/bun.lockb" in args.files,
+        packageJson: manifests[PROJECT_WORKFLOWS_PACKAGE_PATH],
+        hasLockfile: hasProjectLockfile(args.files),
       });
       const suppliedPackages = [
         ...SANDBOX_STRIPPED_PACKAGES,
@@ -1177,7 +1180,10 @@ export class AppsService {
       const install = await this.deps.provider.executeCommand(
         sandbox.providerId,
         "bun install",
-        { cwd: `${buildRoot}/.catamorphic`, timeout: INSTALL_TIMEOUT_SECONDS },
+        {
+          cwd: `${buildRoot}/${PROJECT_WORKSPACE_ROOT}`,
+          timeout: INSTALL_TIMEOUT_SECONDS,
+        },
       );
       if (Object.keys(manifests).length > 0) {
         await this.deps.provider.uploadFiles(
@@ -1190,7 +1196,7 @@ export class AppsService {
         await uploadPluginPayloads({
           provider: this.deps.provider,
           sandboxId: sandbox.providerId,
-          projectDir: `${buildRoot}/.catamorphic`,
+          projectDir: `${buildRoot}/${PROJECT_WORKSPACE_ROOT}`,
           plugins: [
             await loadAppPackagePayload(),
             ...(workflowPackage ? [workflowPackage] : []),
@@ -1251,15 +1257,9 @@ export class AppsService {
     try {
       return args.kind === "published" && args.commitSha
         ? await repo.readAllFilesAtRef(args.commitSha, {
-            filter: (file) =>
-              file.startsWith(".catamorphic/") &&
-              !file.startsWith(".catamorphic/app-data/"),
+            filter: isProjectSourcePath,
           })
-        : await repo.readAllFiles({
-            filter: (file) =>
-              file.startsWith(".catamorphic/") &&
-              !file.startsWith(".catamorphic/app-data/"),
-          });
+        : await repo.readAllFiles({ filter: isProjectSourcePath });
     } finally {
       await repo.dispose();
     }
@@ -1324,12 +1324,9 @@ export class AppsService {
     try {
       const files = await repo.listFiles();
       const names = new Set<string>();
-      const pattern = new RegExp(
-        `^${APP_SOURCE_ROOT.replaceAll(".", "\\.")}/([a-z0-9][a-z0-9-]*)/package\\.json$`,
-      );
       for (const file of files) {
-        const match = pattern.exec(file);
-        if (match?.[1]) names.add(match[1]);
+        const name = appWorkspaceName(file);
+        if (name && /^[a-z0-9][a-z0-9-]*$/.test(name)) names.add(name);
       }
       return [...names].sort();
     } finally {
@@ -1459,7 +1456,7 @@ export function resolveAppAccess(
   files: Record<string, string>,
   appName: string,
 ): AppAccess {
-  const source = files[`${APP_SOURCE_ROOT}/${appName}/package.json`];
+  const source = files[`${PROJECT_APPS_DIR}/${appName}/package.json`];
   if (!source) return {};
   try {
     const manifest = JSON.parse(source) as {

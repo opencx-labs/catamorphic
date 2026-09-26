@@ -1,6 +1,16 @@
 import { APP_THEME_COLOR_TOKENS } from "@catamorphic/app";
 import { PARSER_PACKAGE_VERSION } from "@catamorphic/parser";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
+import {
+  PROJECT_APPS_DIR,
+  PROJECT_CHECK_SCRIPT_PATH,
+  PROJECT_CONTRACTS_DIR,
+  PROJECT_GITIGNORE_PATH,
+  PROJECT_PACKAGE_PATH,
+  PROJECT_SKILLS_DIR,
+  PROJECT_WORKFLOWS_DIR,
+  PROJECT_WORKFLOWS_PACKAGE_PATH,
+} from "@catamorphic/workflow/project-layout";
 import { BATCH_WORKFLOWS_SKILL } from "./batch-workflows-skill.js";
 import { DURABLE_WORKFLOWS_SKILL } from "./durable-workflows-skill.js";
 import { PROJECT_WORKSPACE_IGNORE } from "./services/project-workspace.js";
@@ -102,14 +112,14 @@ export const workspaceFiles = ({
   name: string;
   dependencies?: Record<string, string>;
 }): Record<string, string> => ({
-  ".catamorphic/package.json": rootWorkspacePkg(name),
-  ".catamorphic/.gitignore": PROJECT_WORKSPACE_IGNORE,
+  [PROJECT_PACKAGE_PATH]: rootWorkspacePkg(name),
+  [PROJECT_GITIGNORE_PATH]: PROJECT_WORKSPACE_IGNORE,
   [PROJECT_CHECK_SCRIPT_PATH]: PROJECT_CHECK_SCRIPT,
-  ".catamorphic/contracts/package.json": contractsPkg,
-  ".catamorphic/contracts/tsconfig.json": SHARED_TSCONFIG,
-  ".catamorphic/contracts/src/index.ts": CONTRACTS_INDEX,
-  ".catamorphic/workflows/package.json": workflowsPkg(dependencies),
-  ".catamorphic/workflows/tsconfig.json": SHARED_TSCONFIG,
+  [`${PROJECT_CONTRACTS_DIR}/package.json`]: contractsPkg,
+  [`${PROJECT_CONTRACTS_DIR}/tsconfig.json`]: SHARED_TSCONFIG,
+  [`${PROJECT_CONTRACTS_DIR}/src/index.ts`]: CONTRACTS_INDEX,
+  [PROJECT_WORKFLOWS_PACKAGE_PATH]: workflowsPkg(dependencies),
+  [`${PROJECT_WORKFLOWS_DIR}/tsconfig.json`]: SHARED_TSCONFIG,
 });
 
 const appPkg = (name: string) =>
@@ -185,7 +195,7 @@ if (root) createRoot(root).render(<App />);
 `;
 
 /**
- * Scaffold for one app under `.catamorphic/apps/<name>/`. Vite builds in IIFE lib mode to
+ * Scaffold for one app under `.work/apps/<name>/`. Vite builds in IIFE lib mode to
  * exactly one `dist/app.js` + one `dist/app.css`; everything imported (react
  * included) is bundled in, which is what lets the host render the bundle in a
  * credential-less sandboxed iframe.
@@ -195,16 +205,13 @@ export const appScaffold = ({
 }: {
   name: string;
 }): Record<string, string> => ({
-  [`.catamorphic/apps/${name}/package.json`]: appPkg(name),
-  [`.catamorphic/apps/${name}/tsconfig.json`]: APP_TSCONFIG,
-  [`.catamorphic/apps/${name}/vite.config.ts`]: APP_VITE_CONFIG,
-  [`.catamorphic/apps/${name}/src/main.tsx`]: APP_MAIN_TSX,
+  [`${PROJECT_APPS_DIR}/${name}/package.json`]: appPkg(name),
+  [`${PROJECT_APPS_DIR}/${name}/tsconfig.json`]: APP_TSCONFIG,
+  [`${PROJECT_APPS_DIR}/${name}/vite.config.ts`]: APP_VITE_CONFIG,
+  [`${PROJECT_APPS_DIR}/${name}/src/main.tsx`]: APP_MAIN_TSX,
 });
 
 export const APP_PACKAGE_VERSION = "0.0.4";
-
-/** Where the seeded project check script lives; owned by the project. */
-export const PROJECT_CHECK_SCRIPT_PATH = ".catamorphic/scripts/check.ts";
 
 /**
  * The seeded check script. Thin by design: everything it calls ships in
@@ -218,13 +225,13 @@ export const PROJECT_CHECK_SCRIPT = `/**
  *
  * Seeded by Catamorphic, owned by this project: edit it freely. The heavy
  * lifting lives in the \`@catamorphic/parser\` devDependency; this script is
- * just the how-to-run-it. (Missing the dependency? \`bun install --cwd .catamorphic\`,
- * or \`bun add --cwd .catamorphic -d @catamorphic/parser\`.)
+ * just the how-to-run-it. (Missing the dependency? \`bun install --cwd .work\`,
+ * or \`bun add --cwd .work -d @catamorphic/parser\`.)
  *
  * Usage:
- *   bun run --cwd .catamorphic check                # validate (exit 1 on errors) — CI-friendly
- *   bun run --cwd .catamorphic check -- --write     # also (re)write generated app-api types
- *   bun run --cwd .catamorphic check -- --host URL  # validate trigger bindings against a
+ *   bun run --cwd .work check                # validate (exit 1 on errors) — CI-friendly
+ *   bun run --cwd .work check -- --write     # also (re)write generated app-api types
+ *   bun run --cwd .work check -- --host URL  # validate trigger bindings against a
  *                                # running Catamorphic host (GET /api/trigger-kinds)
  */
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
@@ -242,7 +249,7 @@ async function collectFiles(root: string): Promise<Record<string, string>> {
         if (!IGNORED_DIRECTORIES.has(entry.name)) await walk(full);
         continue;
       }
-      const relative = ".catamorphic/" + path.relative(root, full).split(path.sep).join("/");
+      const relative = ".work/" + path.relative(root, full).split(path.sep).join("/");
       files[relative] = await readFile(full, "utf8").catch(() => "");
     }
   }
@@ -291,13 +298,14 @@ console.log(failed ? "check failed" : "check passed");
 process.exit(failed ? 1 : 0);
 `;
 
-export const BATCH_WORKFLOW_SKILL_PATH =
-  ".catamorphic/skills/batch-workflows/SKILL.md";
-export const DURABLE_WORKFLOW_SKILL_PATH =
-  ".catamorphic/skills/durable-workflows/SKILL.md";
+/** `.work/skills/<name>/SKILL.md` */
+const skillPath = (name: string) => `${PROJECT_SKILLS_DIR}/${name}/SKILL.md`;
 
-const SCAFFOLD_SKILL_DIR = ".catamorphic/skills/catamorphic-projects";
-const APPS_SKILL_DIR = ".catamorphic/skills/building-apps";
+export const BATCH_WORKFLOW_SKILL_PATH = skillPath("batch-workflows");
+export const DURABLE_WORKFLOW_SKILL_PATH = skillPath("durable-workflows");
+
+const SCAFFOLD_SKILL_DIR = `${PROJECT_SKILLS_DIR}/catamorphic-projects`;
+const APPS_SKILL_DIR = `${PROJECT_SKILLS_DIR}/building-apps`;
 
 /**
  * The workspace scaffold shipped as support files of the
@@ -317,7 +325,7 @@ const scaffoldSupportFiles = (): Record<string, string> => ({
 
 /**
  * The per-app scaffold shipped as support files of the `building-apps` seed
- * skill, so an agent creates `.catamorphic/apps/<name>/` by copying files instead of
+ * skill, so an agent creates `.work/apps/<name>/` by copying files instead of
  * reconstructing the vite/tsconfig contract from memory. Generated from the
  * same constants as `appScaffold` — the two cannot drift.
  */
@@ -330,7 +338,7 @@ const appSupportFiles = (): Record<string, string> => ({
 
 /**
  * Per-project agent skills seeded into every project. Skills live in the
- * project repo under `.catamorphic/skills/<name>/SKILL.md` (Agent Skills spec) so
+ * project repo under `.work/skills/<name>/SKILL.md` (Agent Skills spec) so
  * they are versioned with the code, scoped per project, and read by coding
  * agents from the dev sandbox checkout. The workflow skills are reference
  * material — consulted only when workflow work happens; seeding them does
@@ -357,13 +365,13 @@ description: What a Catamorphic project can hold, including documents, code, aut
 
 A Catamorphic project is a folder that can hold any kind of work — documents, notes, data, plans, code, automations (workflows), and user-facing apps, in any mix. Never assume the project is about code or automations: read what is actually there first.
 
-All Catamorphic capabilities live under \`.catamorphic/\`: its own Bun workspace, apps, workflows, contracts, scripts, agents, roles, skills, and shared settings. Leave existing project files and manifests unchanged. Opening a project or having an ordinary conversation does not create this workspace.
+All project capabilities live under \`.work/\`: its own Bun workspace, apps, workflows, contracts, scripts, agents, roles, skills, and shared settings. Leave existing project files and manifests unchanged. Opening a project or having an ordinary conversation does not create this workspace.
 
 ## Persistent project data
 
-Use \`.catamorphic/app-data/<app-or-workflow>/\` for project-owned mutable data. Create \`.catamorphic/.gitignore\` on first use with \`/app-data/\`, \`node_modules/\`, and \`dist/\`; preserve existing ignore choices. Users may deliberately track ordinary data by changing these rules. Catamorphic does not manage database exports or replication. Desktop-wide credentials, chats, profiles and caches stay in host-managed storage.
+Use \`.work/app-data/<app-or-workflow>/\` for project-owned mutable data. Create \`.work/.gitignore\` on first use with \`/app-data/\`, \`node_modules/\`, and \`dist/\`; preserve existing ignore choices. Users may deliberately track ordinary data by changing these rules. Catamorphic does not manage database exports or replication. Desktop-wide credentials, chats, profiles and caches stay in host-managed storage.
 
-Workflow execution uses an immutable source snapshot. For persistent local data, use \`process.env.CATAMORPHIC_APP_DATA_DIR\` and a subdirectory for your capability. The local host supplies this location when supported; fail clearly if it is absent rather than silently saving durable data into a temporary deployment. Cloud execution does not automatically sync local app data. Frontend apps call workflows for database/filesystem access.
+Workflow execution uses an immutable source snapshot. For persistent local data, use \`process.env.WORK_APP_DATA_DIR\` and a subdirectory for your capability. The local host supplies this location when supported; fail clearly if it is absent rather than silently saving durable data into a temporary deployment. Cloud execution does not automatically sync local app data. Frontend apps call workflows for database/filesystem access.
 
 ## App settings versus project content
 
@@ -376,22 +384,22 @@ Never assume a sandbox's filesystem is the host's configuration directory.
 
 ## Adding automations or apps to a project that has none
 
-Workflows and apps live in a bun workspace: an independent \`.catamorphic/package.json\` with \`"workspaces": ["contracts", "workflows", "apps/*"]\`. If \`.catamorphic/workflows/package.json\` does not exist yet, install the workspace BEFORE writing the first workflow, by copying this skill's support files (in \`files/\` next to this document) into place:
+Workflows and apps live in a bun workspace: an independent \`.work/package.json\` with \`"workspaces": ["contracts", "workflows", "apps/*"]\`. If \`.work/workflows/package.json\` does not exist yet, install the workspace BEFORE writing the first workflow, by copying this skill's support files (in \`files/\` next to this document) into place:
 
 | Copy | To |
 |---|---|
-| \`files/package.json\` | \`.catamorphic/package.json\` |
-| \`files/check.ts\` | \`.catamorphic/scripts/check.ts\` |
-| \`files/contracts.package.json\` | \`.catamorphic/contracts/package.json\` |
-| \`files/tsconfig.json\` | \`.catamorphic/contracts/tsconfig.json\` AND \`.catamorphic/workflows/tsconfig.json\` |
-| \`files/contracts.index.ts\` | \`.catamorphic/contracts/src/index.ts\` |
-| \`files/workflows.package.json\` | \`.catamorphic/workflows/package.json\` |
+| \`files/package.json\` | \`.work/package.json\` |
+| \`files/check.ts\` | \`.work/scripts/check.ts\` |
+| \`files/contracts.package.json\` | \`.work/contracts/package.json\` |
+| \`files/tsconfig.json\` | \`.work/contracts/tsconfig.json\` AND \`.work/workflows/tsconfig.json\` |
+| \`files/contracts.index.ts\` | \`.work/contracts/src/index.ts\` |
+| \`files/workflows.package.json\` | \`.work/workflows/package.json\` |
 
 Then:
 
-1. Set \`.catamorphic/package.json\` "name" to the project's name. Leave the imported project's root manifest, dependencies, and instruction files unchanged. Create \`.catamorphic/.gitignore\` with \`/app-data/\`, \`node_modules/\`, and \`dist/\` entries if it does not exist; preserve the user's existing ignore choices.
-2. Run \`bun install --cwd .catamorphic\`. Run workspace checks with \`bun run --cwd .catamorphic check\`.
-3. Read \`writing-workflows\` before writing workflow code and \`building-apps\` before creating an app under \`.catamorphic/apps/<name>/\`. Use the host's skill listing and reader: imported projects may receive these skills from the host without copies in \`.catamorphic/skills/\`.
+1. Set \`.work/package.json\` "name" to the project's name. Leave the imported project's root manifest, dependencies, and instruction files unchanged. Create \`.work/.gitignore\` with \`/app-data/\`, \`node_modules/\`, and \`dist/\` entries if it does not exist; preserve the user's existing ignore choices.
+2. Run \`bun install --cwd .work\`. Run workspace checks with \`bun run --cwd .work check\`.
+3. Read \`writing-workflows\` before writing workflow code and \`building-apps\` before creating an app under \`.work/apps/<name>/\`. Use the host's skill listing and reader: imported projects may receive these skills from the host without copies in \`.work/skills/\`.
 
 Do NOT install the workspace preemptively — only when automations or apps are actually wanted.
 
@@ -406,7 +414,7 @@ To share selected documents, use the host's sharing tools or UI and check the
 destination and audience. A desktop-local draft is not automatically available
 on a remote server. Follow the host's conflict and upload contract.
 For documents intended as shared project source, save a reviewed copy outside
-\`.catamorphic/app-data/\` and explicitly commit it. Owners may instead choose
+\`.work/app-data/\` and explicitly commit it. Owners may instead choose
 to track local data by editing ignore rules; that does not change document API
 permissions or upload it through store synchronization. Explain the destination
 before pushing or sharing.
@@ -416,23 +424,23 @@ before pushing or sharing.
 A project has one path namespace with two backings:
 
 - Everything in git is the **program**: docs, code, workflows, apps, and the
-  committed \`.catamorphic/agents/\` and \`.catamorphic/roles/\` files below. It changes by commit (and,
+  committed \`.work/agents/\` and \`.work/roles/\` files below. It changes by commit (and,
   for members without commit rights, by proposal — see below).
 - \`store/\` is the **project store**: data made by *using* the brain —
   per-customer notes, contracts, generated decks, uploads. It is versioned
   per write on the server and stamped with who wrote it. Logical document
   addresses use \`store/\`; local backing files live under
-  \`.catamorphic/app-data/store/\` and are ignored by default. Never create
+  \`.work/app-data/store/\` and are ignored by default. Never create
   a repository-root \`store/\` directory for these documents. Put audience-specific or fast-changing
   content there, never next to the handbook. Read and write it through the
   documents surface (\`documents_*\` MCP tools, \`context.documents\` in a
   workflow, or the folder itself in the desktop) — not by committing.
 
 Access is enforced by the host from **roles you commit** as
-\`.catamorphic/roles/<slug>.json\`, next to \`.catamorphic/agents/<slug>.json\`:
+\`.work/roles/<slug>.json\`, next to \`.work/agents/<slug>.json\`:
 
 \`\`\`jsonc
-// .catamorphic/roles/csm.json
+// .work/roles/csm.json
 {
   "version": 1,
   "name": "CSM",
@@ -447,11 +455,11 @@ Access is enforced by the host from **roles you commit** as
     { "path": "store/customers/{customer}/**", "access": "write" }   // their customers only
   ]
 }
-// .catamorphic/roles/admin.json
+// .work/roles/admin.json
 { "version": 1, "name": "Admin", "description": "Runs the brain: builds workflows, apps and agents. Comfortable with technical detail.", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["*"], "permissions": ["*"], "documents": ["store/**"] }
-// .catamorphic/roles/engineer.json
+// .work/roles/engineer.json
 { "version": 1, "name": "Engineer", "description": "Builds workflows and apps; ships them after review. Technical.", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["default"], "permissions": ["program:write", "runs:read", "secrets:read"] }
-// .catamorphic/roles/brain-maintainer.json
+// .work/roles/brain-maintainer.json
 { "version": 1, "name": "Brain Maintainer", "description": "Keeps the handbook and shared documents current. Edits text, not code.", "permissions": ["brain:maintain"], "agents": ["brain-maintainer"] }
 \`\`\`
 
@@ -468,8 +476,8 @@ Rules of thumb when authoring roles:
   every one of them. Nothing grants the store but \`documents\`: even an
   admin sees only the documents their role lists. Leave \`store/**\` off an
   admin role that must not read every customer's data.
-- Name agents by their file slug (\`.catamorphic/agents/csm-assistant.json\`), workflows by
-  their exported name, apps by \`.catamorphic/apps/<name>\`. A role may narrow an agent's
+- Name agents by their file slug (\`.work/agents/csm-assistant.json\`), workflows by
+  their exported name, apps by \`.work/apps/<name>\`. A role may narrow an agent's
   tools with \`toolPolicies\` (allow / ask / deny per tool, per connector
   server key, or \`catamorphic\` for the project's own workflow tools).
 - \`permissions\` says what a member may do beyond using those artifacts,
@@ -514,14 +522,14 @@ uncertain action just because a connection returned.
 ## Shape the project experience from capabilities
 
 In the Catamorphic desktop reference host, a project may ship a shared
-\`.catamorphic/sidebar.js\` and up to six New Tab starters in the ordinary
-\`.catamorphic/project.json\` manifest. Both may target resolved authority with
+\`.work/sidebar.js\` and up to six New Tab starters in the ordinary
+\`.work/project.json\` manifest. Both may target resolved authority with
 \`when: { permissions }\`; never branch on a role slug. Every declared
 condition must match, invalid conditions fail closed, and omitted configuration
 leaves no empty UI behind.
 
 \`\`\`jsonc
-// .catamorphic/project.json
+// .work/project.json
 {
   "startingActions": [
     {
@@ -535,7 +543,7 @@ leaves no empty UI behind.
 \`\`\`
 
 \`\`\`javascript
-// .catamorphic/sidebar.js
+// .work/sidebar.js
 module.exports = {
   left: [{ id: "project", title: "Project", icon: "House", sections: [
     { id: "chats", type: "chats" },
@@ -580,8 +588,8 @@ Two more things members do without commit rights:
 For searching documents, read the host skill \`searching-documents\` first
 (primitives — list, read, grep, full text — before building an index).
 `,
-  ".catamorphic/skills/writing-workflows/SKILL.md": WRITING_WORKFLOWS_SKILL,
-  ".catamorphic/skills/building-apps/SKILL.md": `---
+  [skillPath("writing-workflows")]: WRITING_WORKFLOWS_SKILL,
+  [skillPath("building-apps")]: `---
 name: building-apps
 description: The mechanics of building frontend apps that call this project's workflows — workspace shape, bundle contract, the typed app contract and client, storage, sandbox constraints, and the build/verify flow. Use when creating an app, wiring UI to workflows, exposing a workflow to apps, or changing the app contract.
 ---
@@ -615,15 +623,15 @@ The project-file steps below apply when the result belongs in the project.
 
 A project is a bun workspace with three kinds of member:
 
-- \`.catamorphic/contracts/\` — **types only, never runtime code.** The one package both
+- \`.work/contracts/\` — **types only, never runtime code.** The one package both
   sides may depend on.
-- \`.catamorphic/workflows/\` — backend code. Only this executes in a sandbox.
-- \`.catamorphic/apps/<name>/\` — one React frontend per directory, built by Vite to a
+- \`.work/workflows/\` — backend code. Only this executes in a sandbox.
+- \`.work/apps/<name>/\` — one React frontend per directory, built by Vite to a
   single \`dist/app.js\` + \`dist/app.css\` and rendered by the host in a
   credential-less sandboxed iframe.
 
-**Apps never import from \`.catamorphic/workflows/\`.** The boundary is structural —
-\`.catamorphic/contracts/\` has no JavaScript to bundle — but respect it in your head
+**Apps never import from \`.work/workflows/\`.** The boundary is structural —
+\`.work/contracts/\` has no JavaScript to bundle — but respect it in your head
 too: anything an app imports ships to every viewer's browser.
 
 ## Collections and compact host widgets
@@ -653,7 +661,7 @@ skill. Read that skill and the installed package declarations before authoring.
 
 ## The contract is the whole data path
 
-1. Declare the shape in \`.catamorphic/contracts/src/index.ts\`:
+1. Declare the shape in \`.work/contracts/src/index.ts\`:
 
 \`\`\`typescript
 import type { Workflow } from "@catamorphic/app";
@@ -671,7 +679,7 @@ export interface AppContract {
 }
 \`\`\`
 
-2. Implement and expose in \`.catamorphic/workflows/src/app-api.ts\`:
+2. Implement and expose in \`.work/workflows/src/app-api.ts\`:
 
 \`\`\`typescript
 import type { AppContract } from "@project/contracts";
@@ -694,13 +702,13 @@ const run = await workflows.reconcileLedger.start({ month: "2026-07" });
 const outcome = await run.result(); // or run.poll() for progress
 \`\`\`
 
-When a generated \`src/catamorphic-app-api.d.ts\` exists in the app
+When a generated \`src/work-app-api.d.ts\` exists in the app
 workspace, prefer its \`ProjectAppApi\` over a hand-written contract — it is
 projected from \`app-api.ts\` and the workflows' actual input/output types,
 so it cannot drift:
 
 \`\`\`typescript
-import type { ProjectAppApi } from "./catamorphic-app-api.js";
+import type { ProjectAppApi } from "./work-app-api.js";
 const workflows = createClient<ProjectAppApi>();
 \`\`\`
 
@@ -724,7 +732,7 @@ Rules that keep this sound:
   with a \`__catamorphicAppTypeError\` naming the field. Send ISO strings
   and plain objects; serialize deliberately.
 - The \`satisfies AppContract\` line is what catches drift: change a
-  workflow's real signature and \`.catamorphic/workflows/\` fails to typecheck in the
+  workflow's real signature and \`.work/workflows/\` fails to typecheck in the
   same commit. Never remove it or replace it with a cast.
 
 ## App-callable workflows receive untrusted input
@@ -807,18 +815,18 @@ workflows through the client instead. Do still use \`<form>\` +
 
 ## Creating an app
 
-Scaffold \`.catamorphic/apps/<name>/\` (kebab-case name) by copying this skill's
+Scaffold \`.work/apps/<name>/\` (kebab-case name) by copying this skill's
 support files (in \`files/\` next to this document) into place:
 
 | Copy | To |
 |---|---|
-| \`files/package.json\` | \`.catamorphic/apps/<name>/package.json\` (set \`"name"\` to \`<name>\`) |
-| \`files/tsconfig.json\` | \`.catamorphic/apps/<name>/tsconfig.json\` |
-| \`files/vite.config.ts\` | \`.catamorphic/apps/<name>/vite.config.ts\` |
-| \`files/main.tsx\` | \`.catamorphic/apps/<name>/src/main.tsx\` |
+| \`files/package.json\` | \`.work/apps/<name>/package.json\` (set \`"name"\` to \`<name>\`) |
+| \`files/tsconfig.json\` | \`.work/apps/<name>/tsconfig.json\` |
+| \`files/vite.config.ts\` | \`.work/apps/<name>/vite.config.ts\` |
+| \`files/main.tsx\` | \`.work/apps/<name>/src/main.tsx\` |
 
 Then write \`src/app.tsx\` exporting the \`App\` component \`main.tsx\`
-mounts, and run \`bun install\` inside \`.catamorphic/\`. When another app
+mounts, and run \`bun install\` inside \`.work/\`. When another app
 already exists in the workspace, prefer copying its config so
 project-local changes carry over.
 
@@ -864,7 +872,7 @@ define a workflow and call it through the app contract.
 Before writing app UI, consult the designing-apps skill for this
 workspace's UI standards, when present.
 `,
-  ".catamorphic/skills/designing-apps/SKILL.md": `---
+  [skillPath("designing-apps")]: `---
 name: designing-apps
 description: How apps should look and feel in this workspace — the @catamorphic/app/ui component kit, host theme tokens, the three data states, and the layout, motion, border, scrolling, overlay and drag-and-drop doctrine. Use when building or styling app UI.
 ---
@@ -1089,7 +1097,7 @@ nothing animates on load.
 
 /**
  * Host-tier skills: playbooks the HOST ships, listed alongside a project's
- * own `.catamorphic/skills/` without ever being written into the project repo.
+ * own `.work/skills/` without ever being written into the project repo.
  * Keys are paths relative to a host-skills root (`<name>/SKILL.md`), so a
  * host can materialize the set on disk (e.g. as a Claude Code plugin) with
  * the layout intact.

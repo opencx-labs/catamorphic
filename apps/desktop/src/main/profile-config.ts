@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { PROJECT_SETTINGS_PATH } from "@catamorphic/workflow/project-layout";
 import type { AppPrefs } from "../shared/app-prefs.js";
 import type { SettingsPatch, SettingsScope } from "../shared/settings.js";
 import { AgentBindingsStore } from "./agent-bindings-store.js";
@@ -159,7 +160,7 @@ export class ProfileConfigManager {
 
   /**
    * Layered sidebar resolution (ADR 0043): this user's per-project
-   * override, then the project's shared `.catamorphic/sidebar.js`, then
+   * override, then the project's shared `.work/sidebar.js`, then
    * the profile-global `sidebar.js`, then the built-in default. Requesting
    * a project's config lazily registers watchers on its layer files so
    * later edits broadcast like profile edits always have.
@@ -197,11 +198,7 @@ export class ProfileConfigManager {
         : {}),
       ...(project?.rootPath
         ? {
-            project: path.join(
-              project.rootPath,
-              ".catamorphic",
-              "settings.json",
-            ),
+            project: path.join(project.rootPath, PROJECT_SETTINGS_PATH),
           }
         : {}),
     };

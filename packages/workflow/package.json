@@ -9,6 +9,10 @@
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     },
+    "./project-layout": {
+      "import": "./dist/project-layout.js",
+      "types": "./dist/project-layout.d.ts"
+    },
     "./package.json": "./package.json"
   },
   "files": [

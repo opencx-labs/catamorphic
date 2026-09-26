@@ -1,13 +1,13 @@
 import { schemaHoles, typeFromJsonSchema } from "@catamorphic/parser";
+import { PROJECT_WORKFLOWS_DIR } from "@catamorphic/workflow/project-layout";
 import type { TriggerKindRuntime } from "./trigger-kinds.js";
 
 /**
  * Conventional location of the generated trigger-kinds augmentation inside a
- * project workspace. Lives under `.catamorphic/workflows/src` so the workflows package
+ * project workspace. Lives under `.work/workflows/src` so the workflows package
  * picks it up without tsconfig changes.
  */
-export const TRIGGER_TYPES_SOURCE_PATH =
-  ".catamorphic/workflows/src/catamorphic-triggers.d.ts";
+export const TRIGGER_TYPES_SOURCE_PATH = `${PROJECT_WORKFLOWS_DIR}/src/work-triggers.d.ts`;
 
 /**
  * Renders the module augmentation that projects `trigger()` calls type-check

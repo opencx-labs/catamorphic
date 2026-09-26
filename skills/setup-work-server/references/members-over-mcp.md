@@ -40,7 +40,7 @@ does not allow:
 ## The builder's loop
 
 1. Read `catamorphic-projects`, `writing-workflows`, and `building-apps` with
-   `read_skill`. A project with no `.catamorphic/workflows/package.json`
+   `read_skill`. A project with no `.work/workflows/package.json`
    needs the workspace first: copy the support files that
    `catamorphic-projects` lists with `program_files` and `program_write`.
 2. `program_write` the workflow or app. Nothing reaches others yet.
@@ -84,7 +84,7 @@ name the `environment` its workflows run in. See [sharing](sharing.md).
 
 - 401 after a while: sign in again from the client (`/mcp` in Claude Code).
 - "Your roles do not allow that": the role lacks the permission; ask a
-  project manager, who changes `.catamorphic/roles/*.json` through review.
+  project manager, who changes `.work/roles/*.json` through review.
 - `ask_agent` answers that no Environment satisfies the workload: the
   project has no Environment for agents that this member may use and that
   is online. Check `project_overview`, the role's `environments`, and the

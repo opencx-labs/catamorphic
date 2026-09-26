@@ -1,15 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
-/** Reserved local-only tree (ADR 0068), never part of a project program. */
-export const PERSONAL_FILES_ROOT = ".catamorphic/personal";
+import {
+  isProjectPathWithin,
+  PROJECT_PERSONAL_DIR,
+} from "@catamorphic/workflow/project-layout";
 
 export function isPersonalFile(filePath: string): boolean {
   const normalized = path.posix.normalize(filePath.replaceAll("\\", "/"));
-  return (
-    normalized === PERSONAL_FILES_ROOT ||
-    normalized.startsWith(`${PERSONAL_FILES_ROOT}/`)
-  );
+  return isProjectPathWithin(normalized, PROJECT_PERSONAL_DIR);
 }
 
 /** Also protects native git add/checkpoint operations, including linked worktrees. */
@@ -49,7 +47,7 @@ export async function ensurePersonalFilesExcluded({
         return "";
       throw error;
     });
-  const rule = `/${PERSONAL_FILES_ROOT}/`;
+  const rule = `/${PROJECT_PERSONAL_DIR}/`;
   if (current.split(/\r?\n/).includes(rule)) return;
   await fs.mkdir(path.dirname(excludePath), { recursive: true });
   await fs.appendFile(

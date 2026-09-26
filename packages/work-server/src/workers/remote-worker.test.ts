@@ -90,7 +90,7 @@ beforeAll(async () => {
     {
       message: "Configure execution",
       files: {
-        ".catamorphic/project.json": JSON.stringify({
+        ".work/project.json": JSON.stringify({
           environments: {
             build: { pool: { plane: "worker" }, workloads: ["agent"] },
             server: { pool: { plane: "control" }, workloads: ["agent"] },

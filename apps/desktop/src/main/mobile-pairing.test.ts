@@ -52,6 +52,7 @@ function makeService({
     agentHomesDir: path.join(root, "agent-homes"),
     harnessComponentsDir: path.join(root, "harness-components"),
     hostSkillsDir: path.join(root, "host-skills"),
+    attachmentsDir: path.join(root, "attachments"),
   };
   const profileConfig = new ProfileConfigManager(
     paths,

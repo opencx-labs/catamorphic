@@ -1,4 +1,10 @@
 import {
+  isProjectPathWithin,
+  PROJECT_APPS_DIR,
+  PROJECT_CONTRACTS_DIR,
+  PROJECT_WORKFLOWS_DIR,
+} from "@catamorphic/workflow/project-layout";
+import {
   type ArrowFunction,
   type CallExpression,
   type ForInStatement,
@@ -47,12 +53,7 @@ import type {
   WorkflowNode,
   WorkflowTriggerBinding,
 } from "./types.js";
-import {
-  APP_API_SOURCE_PATH,
-  APP_SOURCE_ROOT,
-  CONTRACTS_SOURCE_ROOT,
-  WORKFLOW_SOURCE_ROOT,
-} from "./types.js";
+import { APP_API_SOURCE_PATH } from "./types.js";
 
 let nodeCounter = 0;
 let currentWorkflowFile: string | undefined;
@@ -1387,13 +1388,13 @@ interface FoundObsoleteBatchWorkflow {
 
 type FoundWorkflow = FoundDefinedWorkflow | FoundObsoleteBatchWorkflow;
 
-/** Matches project convention: `.catamorphic/workflows/src/<kebab>.ts` for a workflow identifier. */
+/** Matches project convention: `.work/workflows/src/<kebab>.ts` for a workflow identifier. */
 export function defaultWorkflowSourcePath(workflowName: string): string {
   const fileSafe = workflowName
     .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
     .replace(/[^a-zA-Z0-9-]/g, "-")
     .toLowerCase();
-  return `${WORKFLOW_SOURCE_ROOT}/src/${fileSafe}.ts`;
+  return `${PROJECT_WORKFLOWS_DIR}/src/${fileSafe}.ts`;
 }
 
 function normalizeProjectPath(p: string): string {
@@ -1407,7 +1408,7 @@ function normalizeProjectPath(p: string): string {
  * the execution transform.
  */
 function isAppSourcePath(filePath: string): boolean {
-  return normalizeProjectPath(filePath).startsWith(`${APP_SOURCE_ROOT}/`);
+  return isProjectPathWithin(normalizeProjectPath(filePath), PROJECT_APPS_DIR);
 }
 
 function projectPathsEqual(a: string, b: string): boolean {
@@ -2765,7 +2766,7 @@ function createMultiFileProject(files: Record<string, string>): Project {
       // checker instead of degrading to `any`.
       paths: {
         "@catamorphic/workflow": [WORKFLOW_STUB_PATH],
-        "@project/contracts": [`/${CONTRACTS_SOURCE_ROOT}/src/index.ts`],
+        "@project/contracts": [`/${PROJECT_CONTRACTS_DIR}/src/index.ts`],
       },
     },
   });
@@ -2884,7 +2885,7 @@ export function parseProject(
 }
 
 /**
- * Resolves the app-facing contract surface: `.catamorphic/workflows/src/app-api.ts` exports
+ * Resolves the app-facing contract surface: `.work/workflows/src/app-api.ts` exports
  * an object literal (conventionally `appApi`) whose property values reference
  * workflow functions. The property names become the callable set apps are
  * authorized against, so resolution is strict — every value must resolve, via

@@ -85,7 +85,7 @@ export {
 
 /**
  * The catalog of trigger kinds the embedding host registers. Augmented
- * per-project by the generated `catamorphic-triggers.d.ts`. Until that file
+ * per-project by the generated `work-triggers.d.ts`. Until that file
  * exists, `trigger()` is uncallable — a workflow cannot bind to a kind the
  * host never registered.
  */

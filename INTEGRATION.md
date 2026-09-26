@@ -122,7 +122,7 @@ const scoped = catamorphic
 const project = await scoped.projects.create({ name: "onboarding" });
 await scoped.files.write({
   projectId: project.id,
-  path: ".catamorphic/workflows/src/welcome.ts",
+  path: ".work/workflows/src/welcome.ts",
   content: welcomeTs,
   commitMessage: "Add welcome workflow",
 });
@@ -169,7 +169,7 @@ workflows subscribe in code with `triggers: [trigger("kind", config)]`, and
 the host fires a kind with a typed payload (`fire`, sync or async — sync runs
 inline until the workflow's first durable wait, then detaches with an honest
 `suspended` outcome), lists subscribed workflows with their constant configs
-(`list`), and projects the generated `catamorphic-triggers.d.ts` into a
+(`list`), and projects the generated `work-triggers.d.ts` into a
 workspace (`syncTypes`). A trigger firing starts ordinary Runs — no new run
 family. See `docs/decisions/0039-custom-trigger-kinds.md`.
 
@@ -282,7 +282,7 @@ An identity is either **root** (`scope` absent: every project of the tenant, eve
 | --- | --- |
 | `{ kind: "app", projectId, name }` | The app's served document plus, transitively, the workflows frozen into its *active published* version. |
 | `{ kind: "workflow", projectId, name }` | One workflow directly (a per-customer MCP tool, a host-triggered action). |
-| `{ kind: "agent", projectId, name, toolPolicies? }` | Chat sessions on the committed project agent `.catamorphic/agents/<name>.json` (ADR 0050). Inside those sessions the caller's scope intersects the agent's tool policy: the project's tools server is narrowed to the caller's workflow refs, and `toolPolicies` (per connector server key, ADR 0054's shape) is one more narrowing layer. Own sessions only. |
+| `{ kind: "agent", projectId, name, toolPolicies? }` | Chat sessions on the committed project agent `.work/agents/<name>.json` (ADR 0050). Inside those sessions the caller's scope intersects the agent's tool policy: the project's tools server is narrowed to the caller's workflow refs, and `toolPolicies` (per connector server key, ADR 0054's shape) is one more narrowing layer. Own sessions only. |
 | `{ kind: "document", projectId, path, access? }` | A file (`docs/handbook.md`) or subtree (`store/customers/acme/**`) of the project's path namespace; `access` defaults to `read`, `write` implies read. Git paths are read-only through this ref; `store/…` paths are the project store, reachable ONLY through document refs, whatever permissions the identity holds. |
 
 ```ts
@@ -332,10 +332,10 @@ Which artifacts and permissions each user gets is host policy (a role file, an e
 
 ### Roles as files, memberships as the stock source (ADR 0055)
 
-Most hosts do not want to hand-write scopes. Commit roles into the project — `.catamorphic/roles/<slug>.json`, next to `.catamorphic/agents/` — and let core expand them:
+Most hosts do not want to hand-write scopes. Commit roles into the project — `.work/roles/<slug>.json`, next to `.work/agents/` — and let core expand them:
 
 ```jsonc
-// .catamorphic/roles/csm.json
+// .work/roles/csm.json
 {
   "version": 1,
   "name": "CSM",
@@ -344,13 +344,13 @@ Most hosts do not want to hand-write scopes. Commit roles into the project — `
   "apps": ["customer-tracker"],
   "documents": ["docs/**", { "path": "store/customers/{customer}/**", "access": "write" }]
 }
-// .catamorphic/roles/admin.json
+// .work/roles/admin.json
 { "version": 1, "name": "Admin", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["*"], "permissions": ["*"], "documents": ["store/**"] }
-// .catamorphic/roles/brain-maintainer.json
+// .work/roles/brain-maintainer.json
 { "version": 1, "name": "Brain Maintainer", "permissions": ["brain:maintain"], "agents": ["brain-maintainer"] }
 ```
 
-`{param}` placeholders are filled from per-user **grants** (`{ customer: ["acme", "globex"] }`), one ref per value; an entry whose placeholder has no grant yields nothing. `permissions` become the identity's `projectPermissions`; an admin who may not see the whole store simply lists fewer documents. Writing, committing or publishing any `.catamorphic/roles/*.json` needs `roles:write`, whoever made the edit. Role files are read from the shared origin `main` (a project without a remote reads its working tree), cached briefly (`rolesCacheTtlMs`, default 10s), and never throw: a broken file is reported by `GET /projects/:id/roles` and contributes nothing.
+`{param}` placeholders are filled from per-user **grants** (`{ customer: ["acme", "globex"] }`), one ref per value; an entry whose placeholder has no grant yields nothing. `permissions` become the identity's `projectPermissions`; an admin who may not see the whole store simply lists fewer documents. Writing, committing or publishing any `.work/roles/*.json` needs `roles:write`, whoever made the edit. Role files are read from the shared origin `main` (a project without a remote reads its working tree), cached briefly (`rolesCacheTtlMs`, default 10s), and never throw: a broken file is reported by `GET /projects/:id/roles` and contributes nothing.
 
 Two ways to turn a verified user into an identity:
 
@@ -382,7 +382,7 @@ sidebar sections, custom items, and New Tab starting actions with
 `when` to show an item to everyone.
 
 In the desktop reference host, shared navigation lives in
-`.catamorphic/sidebar.js`. New Tab actions live in the ordinary project
+`.work/sidebar.js`. New Tab actions live in the ordinary project
 manifest and remain visually absent when omitted:
 
 ```json
@@ -769,7 +769,7 @@ like* in your product is yours. Two `createCatamorphic` hooks receive the
 framework defaults and return the host-final set — replacing or removing
 entries is legitimate:
 
-- `projectSeeds` — the per-project seed files (`.catamorphic/skills/…`). The
+- `projectSeeds` — the per-project seed files (`.work/skills/…`). The
   seeded `building-apps` skill is mechanics (framework contracts — keep it);
   `designing-apps` is design doctrine, the seed you most likely swap for
   your own. These defaults also supply the host skill tier; agent turns never
@@ -787,8 +787,8 @@ export const catamorphic = createCatamorphic({
   environmentProvider,
   projectSeeds: (defaults) => {
     const seeds = { ...defaults };
-    delete seeds[".catamorphic/skills/designing-apps/SKILL.md"];
-    seeds[".catamorphic/skills/acme-design/SKILL.md"] = ACME_DESIGN_SKILL;
+    delete seeds[".work/skills/designing-apps/SKILL.md"];
+    seeds[".work/skills/acme-design/SKILL.md"] = ACME_DESIGN_SKILL;
     return seeds;
   },
 });
@@ -799,9 +799,9 @@ runs on the defaults.
 
 ## Validating projects in CI or a local editor
 
-Capability scaffolding includes `.catamorphic/scripts/check.ts` (project-owned;
+Capability scaffolding includes `.work/scripts/check.ts` (project-owned;
 the logic lives in the `@catamorphic/parser` devDependency).
-`bun run --cwd .catamorphic check` parses the workspace,
+`bun run --cwd .work check` parses the workspace,
 validates trigger bindings (add `--host <url>` to check against a live
 host's kind catalog), and fails on stale generated types; `--write`
 regenerates the app-api types. Sandbox installs strip the tooling
@@ -839,7 +839,7 @@ retry, rate limit, batch, or child call settles inline) and `.start(input)`
 ## Execution Environments and credential connections
 
 Hosts own physical execution and provider credentials. Projects name logical
-Environments in `.catamorphic/project.json` by what the work needs: workloads,
+Environments in `.work/project.json` by what the work needs: workloads,
 requirements, and an optional `pool` of machine labels (ADR 0167). The host's
 `EnvironmentProvider` places work: `defineStaticEnvironments` picks the first
 binding whose `labels` match the pool, and a scheduler receives the work's
@@ -952,8 +952,9 @@ separate reusable mechanics from the desktop reference presentation.
 
 ### Contained project workspace and local data
 
-Catamorphic source lives in an independent `.catamorphic/` Bun workspace.
-Run `bun install --cwd .catamorphic` and `bun run --cwd .catamorphic check`.
+Project capabilities live in an independent `.work/` Bun workspace; code
+builds its paths and Git names from `@catamorphic/workflow/project-layout`.
+Run `bun install --cwd .work` and `bun run --cwd .work check`.
 Imports and ordinary agent work leave existing repository files untouched.
 The workspace is created when workflows, apps, or other capabilities need it.
 
@@ -961,8 +962,8 @@ Local-process and microsandbox hosts can inject `projectDataDirectory` into
 their provider, an async callback receiving `{ projectId }` and returning
 an absolute persistent directory or `undefined`. For a project attached to a
 local folder, core's `projectDataDirectory({ root })` prepares
-`.catamorphic/app-data/` and creates `.catamorphic/.gitignore` only if absent.
-Deployment runtimes expose this storage as `CATAMORPHIC_APP_DATA_DIR`;
+`.work/app-data/` and creates `.work/.gitignore` only if absent.
+Deployment runtimes expose this storage as `WORK_APP_DATA_DIR`;
 workflow code should create its own named subdirectory there. Microsandbox
 bind-mounts the folder; local-process uses its absolute host path. The data
 outlives a runtime or deployment. Build and agent sandboxes do not receive it.
@@ -972,7 +973,7 @@ The scoped ignore file excludes app data by default. Owners can edit it to
 track ordinary data deliberately. Mutable data is excluded from immutable
 execution snapshots and the shared program/document surface. Documents retain
 logical `store/...` API addresses, backed locally by
-`.catamorphic/app-data/store/...`. Personal artifact privacy remains separately
+`.work/app-data/store/...`. Personal artifact privacy remains separately
 enforced. Per-user app view preferences, credentials, and conversation state
 remain in the host's database or private data directory. Database export and
 restore are not provided.

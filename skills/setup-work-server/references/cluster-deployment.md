@@ -49,7 +49,7 @@ brain become replicas. Never add a replica just for capacity.
    `available: true`, and `GET /_work/operator/workers` for its last contact.
 4. Nothing in projects changes: the `default` Environment already runs agents
    on any machine open to their owner. To reserve machines for some work, give
-   them a label and select it in `.catamorphic/project.json`
+   them a label and select it in `.work/project.json`
    (`{ "pool": { "class": "gpu" }, "workloads": ["agent"] }`); `node` and
    `plane` (`control` or `worker`) are always set.
 5. Verify as a member: `project_overview` shows the Environment runs agents,
@@ -222,7 +222,7 @@ Set explicit budgets in containers: OS memory reporting may describe the host.
 
 Agent definitions reuse `environment.requirements.resources`; there is no second
 agent resource configuration file. For example, merge this into an ordinary
-`.catamorphic/agents/developer.json` definition:
+`.work/agents/developer.json` definition:
 
 ```json
 {

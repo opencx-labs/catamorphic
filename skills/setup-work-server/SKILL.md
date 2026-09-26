@@ -70,7 +70,7 @@ disagree with the installed source, the source wins.
   request and have no default user, organization, or auth provider. The stock
   server's auth choices are not framework contracts.
 - **Sign-in identifies; project roles authorize.** Roles are committed files
-  in `.catamorphic/roles/*.json` granting agents, workflows, apps,
+  in `.work/roles/*.json` granting agents, workflows, apps,
   Environments, connection aliases, documents, and `thing:action` permissions
   such as `program:write`, `sessions:read`, and `memberships:write`
   (ADR 0158). An admin role grants `"*"`. Login alone grants no project, and
@@ -79,7 +79,7 @@ disagree with the installed source, the source wins.
   A setup agent provisions the first ordinary user and membership through the
   server's own operations.
 - **After setup, configuration is project code.** Roles, agents,
-  `.catamorphic/sidebar.js`, and `.catamorphic/project.json` change through
+  `.work/sidebar.js`, and `.work/project.json` change through
   ordinary review. Do not create a parallel bootstrap config.
 - **Unattended work needs explicit consent.** Each member reviews and enables
   a deployed workflow and authorizes its connections. Project automations

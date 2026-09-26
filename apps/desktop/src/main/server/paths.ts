@@ -35,6 +35,12 @@ export interface DataPaths {
    * claude-code harness discovers them natively. Rewritten at boot.
    */
   hostSkillsDir: string;
+  /**
+   * Files pasted into a chat composer, per project
+   * (`attachments/<projectId>/`). Host storage, so a paste never lands in
+   * the project folder or its Git history.
+   */
+  attachmentsDir: string;
 }
 
 export function resolveDataPaths(): DataPaths {
@@ -52,5 +58,6 @@ export function resolveDataPaths(): DataPaths {
     agentHomesDir: path.join(userData, "agent-homes"),
     harnessComponentsDir: path.join(userData, "harness-components"),
     hostSkillsDir: path.join(userData, "host-skills"),
+    attachmentsDir: path.join(userData, "attachments"),
   };
 }

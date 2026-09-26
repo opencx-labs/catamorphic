@@ -89,7 +89,7 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
     };
 
     await commitRoles({
-      ".catamorphic/roles/csm.json": JSON.stringify({
+      ".work/roles/csm.json": JSON.stringify({
         version: 1,
         name: "CSM",
         description: "Customer success managers; not technical.",
@@ -100,7 +100,7 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
           { path: "store/customers/{customer}/**", access: "write" },
         ],
       }),
-      ".catamorphic/roles/admin.json": JSON.stringify({
+      ".work/roles/admin.json": JSON.stringify({
         version: 1,
         name: "Admin",
         agents: ["*"],
@@ -109,12 +109,12 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
         permissions: ["program:*", "memberships:write", "roles:write"],
         documents: ["store/**"],
       }),
-      ".catamorphic/roles/membership-manager.json": JSON.stringify({
+      ".work/roles/membership-manager.json": JSON.stringify({
         version: 1,
         name: "Membership manager",
         permissions: ["memberships:write"],
       }),
-      ".catamorphic/roles/broken.json": "{ nope",
+      ".work/roles/broken.json": "{ nope",
     });
     admin = await core.roles.resolve({
       tenantId: root.tenantId,
@@ -324,7 +324,7 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
     );
     try {
       await secondRepo.writeFile(
-        ".catamorphic/roles/viewer.json",
+        ".work/roles/viewer.json",
         JSON.stringify({
           version: 1,
           name: "Viewer",
@@ -399,7 +399,7 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
       roles: ["csm"],
     });
     await commitRoles({
-      ".catamorphic/roles/csm.json": JSON.stringify({
+      ".work/roles/csm.json": JSON.stringify({
         version: 1,
         name: "CSM",
         agents: ["csm-assistant"],
@@ -421,17 +421,12 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
 
   it("protects committed role policy from program writers without roles:write", async () => {
     await expect(
-      core.projects.writeFile(
-        builder,
-        projectId,
-        ".catamorphic/roles/new.json",
-        {
-          content: JSON.stringify({ version: 1, name: "New" }),
-        },
-      ),
+      core.projects.writeFile(builder, projectId, ".work/roles/new.json", {
+        content: JSON.stringify({ version: 1, name: "New" }),
+      }),
     ).rejects.toThrow(AccessDeniedError);
     await expect(
-      core.projects.writeFile(admin, projectId, ".catamorphic/roles/new.json", {
+      core.projects.writeFile(admin, projectId, ".work/roles/new.json", {
         content: JSON.stringify({ version: 1, name: "New" }),
       }),
     ).resolves.toContain('"name":"New"');

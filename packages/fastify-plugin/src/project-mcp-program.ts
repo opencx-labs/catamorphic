@@ -12,6 +12,12 @@ import {
   mayUseProject,
 } from "@catamorphic/core";
 import { checkProject } from "@catamorphic/parser";
+import {
+  isProjectPathWithin,
+  PROJECT_APPS_DIR,
+  PROJECT_CONTRACTS_DIR,
+  PROJECT_WORKFLOWS_DIR,
+} from "@catamorphic/workflow/project-layout";
 import { toolError, toolValue } from "./mcp-shared.js";
 import type { SurfaceTool } from "./project-mcp-surface.js";
 
@@ -48,7 +54,7 @@ export function programTools(
         definition: {
           name: "program_files",
           description:
-            "Your draft of the project's program (workflows, apps, agents, roles and skills under .catamorphic/, plus any other files). Without a path, lists files and your unpublished changes; with a path, returns that file from your draft.",
+            "Your draft of the project's program (workflows, apps, agents, roles and skills under .work/, plus any other files). Without a path, lists files and your unpublished changes; with a path, returns that file from your draft.",
           inputSchema: {
             type: "object",
             properties: {
@@ -75,7 +81,7 @@ export function programTools(
         definition: {
           name: "program_write",
           description:
-            "Change files in your draft of the program. Nothing reaches members until program_deploy (or propose_change). Role files under .catamorphic/roles need roles:write.",
+            "Change files in your draft of the program. Nothing reaches members until program_deploy (or propose_change). Role files under .work/roles need roles:write.",
           inputSchema: {
             type: "object",
             properties: {
@@ -123,7 +129,7 @@ export function programTools(
         definition: {
           name: "program_check",
           description:
-            "Refresh your draft's generated types (the trigger kinds this server offers, in .catamorphic/workflows/src/catamorphic-triggers.d.ts, and each app's workflow API types), then validate it the way publishing does: workflow and app parse errors and trigger configurations. Run it after writing and before program_deploy.",
+            "Refresh your draft's generated types (the trigger kinds this server offers, in .work/workflows/src/work-triggers.d.ts, and each app's workflow API types), then validate it the way publishing does: workflow and app parse errors and trigger configurations. Run it after writing and before program_deploy.",
           inputSchema: { type: "object", properties: {} },
         },
         call: guarded(async () => checkDraft(core, identity, projectId)),
@@ -444,8 +450,8 @@ async function publishApps(args: {
     : undefined;
   const contractChanged = changed?.some(
     (path) =>
-      path.startsWith(".catamorphic/contracts/") ||
-      path.startsWith(".catamorphic/workflows/"),
+      isProjectPathWithin(path, PROJECT_CONTRACTS_DIR) ||
+      isProjectPathWithin(path, PROJECT_WORKFLOWS_DIR),
   );
   const results: Array<{
     app: string;
@@ -457,7 +463,7 @@ async function publishApps(args: {
       !changed ||
       contractChanged ||
       changed.some((path) =>
-        path.startsWith(`.catamorphic/apps/${summary.name}/`),
+        isProjectPathWithin(path, `${PROJECT_APPS_DIR}/${summary.name}`),
       );
     if (summary.activeVersionId && !touched) continue;
     try {
@@ -563,7 +569,7 @@ export async function projectInstructions(args: {
     );
   if (has("program_write"))
     lines.push(
-      `- Program changes (workflows, apps, agents under .catamorphic/): program_write edits your private draft, program_files reads it, program_check validates it${
+      `- Program changes (workflows, apps, agents under .work/): program_write edits your private draft, program_files reads it, program_check validates it${
         has("program_deploy")
           ? ", program_deploy publishes it."
           : ", and propose_change asks someone who may publish to review it."

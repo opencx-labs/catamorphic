@@ -12,6 +12,11 @@ import {
   workflowKeys,
 } from "@catamorphic/react";
 import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
+import {
+  PROJECT_APP_DATA_DIR,
+  PROJECT_SIDEBAR_PATH,
+  PROJECT_STORE_DIR,
+} from "@catamorphic/workflow/project-layout";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Check,
@@ -684,7 +689,7 @@ export function App({
   } | null>(null);
 
   // User-customizable sidebar layout (sidebar.js, file-watched). Resolved
-  // per project (project-local override → project .catamorphic/sidebar.js
+  // per project (project-local override → project .work/sidebar.js
   // → profile sidebar.js), so the fetch is keyed on the active project —
   // see the effect below projectId — and the changed event is a refetch
   // signal, not a payload.
@@ -2940,7 +2945,7 @@ export function App({
   };
 
   // Layered default agent (ADR 0056): this user's per-project override,
-  // then the project's committed default (.catamorphic/project.json), then
+  // then the project's committed default (.work/project.json), then
   // the profile default. `agentsData` is the refetch trigger — setting the
   // committed default broadcasts an agents-changed like any other layer.
   const [projectDefaultSlug, setProjectDefaultSlug] = useState<string | null>(
@@ -5213,7 +5218,7 @@ export function App({
       .then(([resolved, profileFile, root]) => {
         const file =
           resolved.layer === "project" && root
-            ? `${root}/.catamorphic/sidebar.js`
+            ? `${root}/${PROJECT_SIDEBAR_PATH}`
             : resolved.layer === "project-local" && projectId
               ? `${profileFile.slice(0, profileFile.lastIndexOf("/"))}/sidebar-projects/${projectId}.js`
               : profileFile;
@@ -6219,18 +6224,17 @@ export function App({
                         onEditorState(editor.localId, { dirty })
                       }
                       onShare={
-                        editor.filePath?.startsWith(
-                          ".catamorphic/app-data/store/",
-                        ) &&
+                        editor.filePath?.startsWith(`${PROJECT_STORE_DIR}/`) &&
                         remoteSurfaceStatus &&
                         remoteSurfaceStatus.capabilities?.features
                           .publications !== false
                           ? (path) =>
                               setRemotePublish({
-                                path: path.replace(
-                                  /^\.catamorphic\/app-data\//,
-                                  "",
-                                ),
+                                path: path.startsWith(
+                                  `${PROJECT_APP_DATA_DIR}/`,
+                                )
+                                  ? path.slice(PROJECT_APP_DATA_DIR.length + 1)
+                                  : path,
                                 features:
                                   remoteSurfaceStatus.capabilities?.features,
                               })
@@ -6240,9 +6244,7 @@ export function App({
                         remoteSurfaceStatus &&
                         remoteSurfaceStatus.capabilities?.features.proposals !==
                           false &&
-                        !editor.filePath?.startsWith(
-                          ".catamorphic/app-data/store/",
-                        )
+                        !editor.filePath?.startsWith(`${PROJECT_STORE_DIR}/`)
                           ? (path) =>
                               setRemotePropose({
                                 files: [path],

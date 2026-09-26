@@ -58,7 +58,7 @@ describeIf("AgentDefinitionsService (ADR 0050)", () => {
     );
     try {
       await repo.writeFile(
-        ".catamorphic/agents/triage.json",
+        ".work/agents/triage.json",
         JSON.stringify({
           version: 1,
           name: "Support Triage",
@@ -67,15 +67,12 @@ describeIf("AgentDefinitionsService (ADR 0050)", () => {
           credentials: { source: "profile" },
         }),
       );
+      await repo.writeFile(".work/agents/triage.md", "# Persona\nBe terse.\n");
       await repo.writeFile(
-        ".catamorphic/agents/triage.md",
-        "# Persona\nBe terse.\n",
-      );
-      await repo.writeFile(
-        ".catamorphic/agents/reviewer.json",
+        ".work/agents/reviewer.json",
         JSON.stringify({ version: 1, name: "Reviewer", kind: "codex" }),
       );
-      await repo.writeFile(".catamorphic/agents/broken.json", "{ not json");
+      await repo.writeFile(".work/agents/broken.json", "{ not json");
       await repo.commit("Add project agents", {
         name: "alice",
         email: "alice@example.com",

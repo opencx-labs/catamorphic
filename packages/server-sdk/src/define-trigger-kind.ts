@@ -25,7 +25,7 @@ export interface TriggerKindDefinition<Payload, Config>
 /**
  * Defines a custom trigger kind from zod schemas. The schemas are the single
  * source of truth: they validate payloads at fire time and configs at scan
- * time, and they generate the `catamorphic-triggers.d.ts` module that
+ * time, and they generate the `work-triggers.d.ts` module that
  * project workspaces type-check `trigger()` calls against.
  */
 export function defineTriggerKind<

@@ -1,3 +1,4 @@
+import { PROJECT_THEME_PATH } from "@catamorphic/workflow/project-layout";
 import { apiGet } from "./api.js";
 import type { PwaConnection } from "./store.js";
 
@@ -5,7 +6,7 @@ import type { PwaConnection } from "./store.js";
  * The desktop theme model (apps/desktop/src/main/theme.ts), pure parts
  * only: same tokens, same presets, same resolution — change both together.
  * A project opts into a pwa look by committing
- * `.catamorphic/theme.json` ({ "preset": "...", "overrides": {...} });
+ * `.work/theme.json` ({ "preset": "...", "overrides": {...} });
  * without one the app stays on Work Dark. No theme UI on mobile.
  */
 export const THEME_TOKENS = [
@@ -219,8 +220,6 @@ export function applyTheme(theme: ResolvedTheme): void {
     .querySelector('meta[name="theme-color"]')
     ?.setAttribute("content", theme.colors.bg);
 }
-
-export const PROJECT_THEME_PATH = ".catamorphic/theme.json";
 
 const projectThemes = new Map<string, ResolvedTheme | null>();
 

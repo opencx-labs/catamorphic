@@ -99,7 +99,7 @@ flowchart LR
 
 1. The Runs service resolves deployed `origin/main`, creates one canonical Run row, and enqueues Postgres work.
 2. An explicitly started host execution worker claims the job and resolves the immutable deployment artifact.
-3. Core reads the committed capability source under `.catamorphic/`, excludes `app-data/`, and uploads the verified execution snapshot. Deployment runtimes never clone the full imported repository (ADR 0142).
+3. Core reads the committed capability source under `.work/`, excludes `app-data/`, and uploads the verified execution snapshot. Deployment runtimes never clone the full imported repository (ADR 0142).
 4. `CloudflareSandboxProvider` creates or reuses the deployment-scoped sandbox through the Bridge Worker and materializes the immutable artifact.
 5. A warm Bun supervisor dispatches plain Workflow execution, boundary callbacks, or batch source/process/sink operations in isolated Bun Workers.
 6. Sequenced runtime events update `workflow_runs` and supporting state. Postgres schedules retries, pauses, child Runs, and subsequent scopes; the deployment sandbox may sleep between invocations.

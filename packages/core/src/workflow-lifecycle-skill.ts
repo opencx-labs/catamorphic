@@ -17,13 +17,13 @@ the host's actual capabilities and schemas; a skill does not enable a missing to
 | --- | --- | --- |
 | Tell me when a command's result changes or succeeds (a URL, a file, a CLI) | Use the host's \`watch_command\` when offered: it runs the check where your commands run. | Owned by this chat; ends on success, stop, expiry or archive. |
 | Remind me, follow up in this chat, or watch Project Events | Pass TypeScript directly to \`create_watcher\` or \`create_github_watcher\`. The host retains an isolated revision with this session. | Session-owned, with no default expiry. See \`session-workflows\` for time, attention, and cancellation. |
-| Save reusable automation for the project | Use \`.catamorphic/workflows/src/<name>.ts\`. | Deploy an immutable revision, then enable it for unattended execution. |
+| Save reusable automation for the project | Use \`.work/workflows/src/<name>.ts\`. | Deploy an immutable revision, then enable it for unattended execution. |
 | Run a reviewed workflow for one member | Reuse committed project source. | A member-owned enablement uses that member's authorized connections and Environment. |
 | Run it for the whole project (webhooks, PR reviews, shared inboxes) | Reuse committed project source. | A project enablement, turned on by someone with \`automations:write\`, runs as the project with shared connections and the permissions consented to. Its chats are project chats. |
 | Keep workflow source private | Use a private artifact capability only if this host provides one. | Follow that capability's execution support. An unpushed branch or incognito chat is not private source storage. |
 
 Personal execution does not make source private. The desktop reserves
-\`.catamorphic/personal/<profile-id>/workflows/\`, but private workflow discovery,
+\`.work/personal/<profile-id>/workflows/\`, but private workflow discovery,
 invocation, and schedules are not supplied by that directory. Do not fabricate
 an id or claim that saving there creates a runnable private workflow.
 
@@ -31,8 +31,8 @@ an id or claim that saving there creates a runnable private workflow.
 
 - Pass the source string to the watcher tool, without first writing it into an
   automatically checkpointed project folder. \`workflowName\` must match the export.
-- The host writes \`.catamorphic/workflows/src/artifacts/<artifact-id>.ts\` on
-  \`catamorphic/artifacts/<artifact-id>\` from the committed project origin.
+- The host writes \`.work/workflows/src/artifacts/<artifact-id>.ts\` on
+  \`work/artifacts/<artifact-id>\` from the committed project origin.
   Imports resolve there, not against this session's uncommitted helper files.
   Keep the source self-contained or use dependencies already committed in origin.
 - Session-owned watchers run on the session's authoritative host and Environment.
@@ -57,11 +57,11 @@ privacy boundary; discarding it prevents new use without erasing retained runs.
 
 ## Reusable project code and access
 
-For a project without a Catamorphic workspace, use the copyable support files in
-\`catamorphic-projects\` to create \`.catamorphic/\`. Preserve existing manifests
+For a project without a \`.work/\` workspace, use the copyable support files in
+\`catamorphic-projects\` to create it. Preserve existing manifests
 inside that workspace; leave the imported repository's root manifests unchanged.
-Put runtime dependencies in \`.catamorphic/workflows/package.json\`, shared
-app/workflow types in \`.catamorphic/contracts/src/\`, and expose workflows through \`app-api.ts\`
+Put runtime dependencies in \`.work/workflows/package.json\`, shared
+app/workflow types in \`.work/contracts/src/\`, and expose workflows through \`app-api.ts\`
 only when apps need access. Follow the established wrapper package, otherwise
 use \`@catamorphic/workflow\`; do not copy the runtime helpers into the project.
 
@@ -80,7 +80,7 @@ what was consented to.
 ## Saving, sharing, deploying, and enabling
 
 1. Validate source, imports, trigger payloads, and generated app contracts with
-   \`bun run --cwd .catamorphic check\`. Use the host's actual trigger schemas.
+   \`bun run --cwd .work check\`. Use the host's actual trigger schemas.
 2. Account for desktop checkpoints and configured automatic sync before editing.
    If sharing requires review, choose an isolated review flow first. Neither
    uncommitted files nor an unpushed branch guarantees privacy.

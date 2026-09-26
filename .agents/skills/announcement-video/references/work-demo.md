@@ -112,10 +112,10 @@ Each of these cost a take. Check them in the rehearsal.
   verdaccio registry ([infra/local-registry](../../../../infra/local-registry/README.md)).
   Bump and publish changed packages or agents build against the old kit. Build
   sandboxes are microVMs where `localhost` is the VM, so the demo project's
-  `.catamorphic/bunfig.toml` names the Mac's LAN address. The address changes with
+  `.work/bunfig.toml` names the Mac's LAN address. The address changes with
   the network: compare it with `ipconfig getifaddr en0` before any take that builds.
 - **Seeds:** seeded skills are written when a project is created. After changing
-  them, refresh the demo project's `.catamorphic/skills` from `SEED_SKILLS`.
+  them, refresh the demo project's `.work/skills` from `SEED_SKILLS`.
 - **Database:** a dev database that predates a rewritten migration fails at runtime
   (the app list returned 500). Recover it into a clean database rather than
   resetting a profile you care about.

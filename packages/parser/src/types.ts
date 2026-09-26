@@ -1,13 +1,10 @@
-/**
- * Workspace roots inside a user project. A project is a bun workspace holding
- * backend workflows and frontend apps in one repo; `contracts` carries only
- * types and is the sole package both sides may depend on.
- */
-export const PROJECT_WORKSPACE_ROOT = ".catamorphic";
-export const PROJECT_PACKAGE_PATH = `${PROJECT_WORKSPACE_ROOT}/package.json`;
-export const WORKFLOW_SOURCE_ROOT = `${PROJECT_WORKSPACE_ROOT}/workflows`;
-export const CONTRACTS_SOURCE_ROOT = `${PROJECT_WORKSPACE_ROOT}/contracts`;
-export const APP_SOURCE_ROOT = `${PROJECT_WORKSPACE_ROOT}/apps`;
+import {
+  hasProjectLockfile,
+  isProjectPathWithin,
+  isProjectSourcePath,
+  PROJECT_APPS_DIR,
+  PROJECT_WORKFLOWS_DIR,
+} from "@catamorphic/workflow/project-layout";
 
 /** Guest runtime package; frontend-only, never resolvable in execution installs. */
 export const APP_RUNTIME_PACKAGE = "@catamorphic/app";
@@ -39,20 +36,13 @@ export const SANDBOX_STRIPPED_PACKAGES: readonly string[] = [
 export function executionFiles(
   files: Record<string, string>,
 ): Record<string, string> {
-  const locked =
-    `${PROJECT_WORKSPACE_ROOT}/bun.lock` in files ||
-    `${PROJECT_WORKSPACE_ROOT}/bun.lockb` in files;
+  const locked = hasProjectLockfile(files);
   return Object.fromEntries(
     Object.entries(files)
       .filter(
         ([filePath]) =>
-          filePath
-            .replace(/^\/+/, "")
-            .startsWith(`${PROJECT_WORKSPACE_ROOT}/`) &&
-          !filePath
-            .replace(/^\/+/, "")
-            .startsWith(`${PROJECT_WORKSPACE_ROOT}/app-data/`) &&
-          (!filePath.replace(/^\/+/, "").startsWith(`${APP_SOURCE_ROOT}/`) ||
+          isProjectSourcePath(filePath) &&
+          (!isProjectPathWithin(filePath, PROJECT_APPS_DIR) ||
             (locked && filePath.endsWith("/package.json"))),
       )
       .map(([filePath, content]) => [
@@ -359,7 +349,7 @@ export interface ProjectParseResult {
   workflows: DiscoveredWorkflow[];
   secrets: DeclaredSecret[];
   /**
-   * The app-facing contract surface, when `.catamorphic/workflows/src/app-api.ts` exists.
+   * The app-facing contract surface, when `.work/workflows/src/app-api.ts` exists.
    * Property names on the exported contract object become the callable set
    * apps are authorized against.
    */
@@ -368,7 +358,7 @@ export interface ProjectParseResult {
 }
 
 /** Conventional location of the app contract surface inside a project. */
-export const APP_API_SOURCE_PATH = `${WORKFLOW_SOURCE_ROOT}/src/app-api.ts`;
+export const APP_API_SOURCE_PATH = `${PROJECT_WORKFLOWS_DIR}/src/app-api.ts`;
 
 export interface AppApiSurface {
   filePath: string;

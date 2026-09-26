@@ -1,4 +1,5 @@
 import nodeFs from "node:fs";
+import { MANAGED_BRANCH_PREFIX } from "@catamorphic/workflow/project-layout";
 import git from "isomorphic-git";
 import { nativeGit } from "./native-git.js";
 import { NativeProjectRepo } from "./native-project-repo.js";
@@ -205,10 +206,10 @@ export async function syncWithNetworkRemote(opts: {
   }
 }
 
-/** `catamorphic/diverged-YYYY-MM-DD_HH-mm` — groups rescue pushes on the host. */
+/** `work/diverged-YYYY-MM-DD_HH-mm` — groups rescue pushes on the host. */
 function rescueBranchName(now: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `catamorphic/diverged-${now.getUTCFullYear()}-${pad(
+  return `${MANAGED_BRANCH_PREFIX}diverged-${now.getUTCFullYear()}-${pad(
     now.getUTCMonth() + 1,
   )}-${pad(now.getUTCDate())}_${pad(now.getUTCHours())}-${pad(
     now.getUTCMinutes(),

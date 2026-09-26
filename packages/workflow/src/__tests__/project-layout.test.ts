@@ -1,0 +1,49 @@
+import { describe, expect, it } from "vitest";
+import {
+  appWorkspaceName,
+  hasProjectLockfile,
+  isProjectPathWithin,
+  isProjectSourcePath,
+  PROJECT_APPS_DIR,
+  PROJECT_MANIFEST_PATH,
+  projectPath,
+  publishedRef,
+} from "../project-layout.js";
+
+describe("project layout", () => {
+  it("derives every path from the workspace folder", () => {
+    expect(projectPath("skills", "notes")).toBe(".work/skills/notes");
+    expect(PROJECT_MANIFEST_PATH).toBe(".work/project.json");
+    expect(publishedRef()).toBe("refs/work/published/main");
+    expect(publishedRef("draft")).toBe("refs/work/published/draft");
+  });
+
+  it("matches whole path segments only", () => {
+    expect(isProjectPathWithin(".work/apps/x/a.ts", PROJECT_APPS_DIR)).toBe(
+      true,
+    );
+    expect(isProjectPathWithin("/.work/apps", PROJECT_APPS_DIR)).toBe(true);
+    expect(isProjectPathWithin(".work/apps-old/a.ts", PROJECT_APPS_DIR)).toBe(
+      false,
+    );
+  });
+
+  it("separates program sources from mutable app data", () => {
+    expect(isProjectSourcePath(".work/workflows/src/a.ts")).toBe(true);
+    expect(isProjectSourcePath(".work/app-data/store/a.md")).toBe(false);
+    expect(isProjectSourcePath("docs/readme.md")).toBe(false);
+  });
+
+  it("names app workspaces from their manifests", () => {
+    expect(appWorkspaceName(".work/apps/review/package.json")).toBe("review");
+    expect(appWorkspaceName(".work/apps/review/src/package.json")).toBe(
+      undefined,
+    );
+    expect(appWorkspaceName(".work/workflows/package.json")).toBe(undefined);
+  });
+
+  it("detects either capability lockfile", () => {
+    expect(hasProjectLockfile({ ".work/bun.lockb": "" })).toBe(true);
+    expect(hasProjectLockfile({ "bun.lock": "" })).toBe(false);
+  });
+});

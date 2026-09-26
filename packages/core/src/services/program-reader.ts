@@ -7,6 +7,7 @@ import {
   type ProjectManager,
   type ProjectRepo,
 } from "@catamorphic/git";
+import { publishedRef } from "@catamorphic/workflow/project-layout";
 
 /**
  * Reads of "the program as shared" (ADR 0055): the project's origin `main`
@@ -54,7 +55,7 @@ export async function withProgram<T>(
     try {
       if (options?.workingTree) return await fn(repo, null);
       const ref = await repo
-        .resolveRef("refs/catamorphic/published/main")
+        .resolveRef(publishedRef())
         .catch(() =>
           options?.publishedOnly
             ? null
@@ -88,9 +89,7 @@ export async function withProgram<T>(
       projectId,
       remoteBranch: "main",
     });
-    const sha = await repo
-      .resolveRef("refs/catamorphic/published/main")
-      .catch(() => null);
+    const sha = await repo.resolveRef(publishedRef()).catch(() => null);
     for (const [cachedKey, value] of recentFetches) {
       if (Date.now() - value.at >= FETCH_TTL_MS || recentFetches.size >= 256)
         recentFetches.delete(cachedKey);

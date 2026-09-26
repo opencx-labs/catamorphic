@@ -175,6 +175,3 @@ export async function discoverLocalFolder(input: {
     remoteBranch,
   };
 }
-
-/** Private publication refs never share the user's origin namespace. */
-export const INTERNAL_REMOTE_PREFIX = "refs/catamorphic/published";

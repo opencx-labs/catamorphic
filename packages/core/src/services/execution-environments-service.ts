@@ -9,6 +9,7 @@ import type {
   EnvironmentTrust,
 } from "@catamorphic/sandbox";
 import { environmentSatisfies } from "@catamorphic/sandbox";
+import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import type { Identity } from "../identity.js";
 import {
   hasProjectPermission,
@@ -357,7 +358,7 @@ export class ExecutionEnvironmentsService {
         for (const entry of policy.entries) {
           if (entry.invalid)
             reasons[entry.name] = [
-              `invalid in .catamorphic/project.json: ${entry.invalid.error}`,
+              `invalid in ${PROJECT_MANIFEST_PATH}: ${entry.invalid.error}`,
             ];
         }
         throw new NoCompatibleEnvironmentError(reasons);

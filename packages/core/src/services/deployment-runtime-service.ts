@@ -1,8 +1,5 @@
 import { getTracer, withSpan } from "@catamorphic/otel";
-import {
-  EXECUTION_TRANSFORM_VERSION,
-  WORKFLOW_SOURCE_ROOT,
-} from "@catamorphic/parser";
+import { EXECUTION_TRANSFORM_VERSION } from "@catamorphic/parser";
 import type { SandboxResources } from "@catamorphic/sandbox";
 import {
   DEPLOYMENT_RUNTIME_VERSION,
@@ -14,6 +11,11 @@ import {
   uploadPluginPayloads,
   WORKFLOW_PACKAGE_NAME,
 } from "@catamorphic/sandbox";
+import {
+  hasProjectLockfile,
+  PROJECT_WORKFLOWS_PACKAGE_PATH,
+  PROJECT_WORKSPACE_ROOT,
+} from "@catamorphic/workflow/project-layout";
 import type {
   DeploymentArtifact,
   DeploymentArtifactsService,
@@ -541,13 +543,9 @@ export class DeploymentRuntimeService {
     const workflowFallback = args.plugins?.find(
       (plugin) => plugin.packageName === WORKFLOW_PACKAGE_NAME,
     );
-    const packageJsonPath = `${WORKFLOW_SOURCE_ROOT}/package.json`;
+    const packageJsonPath = PROJECT_WORKFLOWS_PACKAGE_PATH;
     const packageJson = args.files[packageJsonPath];
-    if (
-      workflowFallback &&
-      (".catamorphic/bun.lock" in args.files ||
-        ".catamorphic/bun.lockb" in args.files)
-    ) {
+    if (workflowFallback && hasProjectLockfile(args.files)) {
       throw new Error(
         "The local @catamorphic/workflow fallback cannot be used with a lockfile",
       );
@@ -572,7 +570,7 @@ export class DeploymentRuntimeService {
         ? "bun install --no-save"
         : "if [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile --production --filter '!./apps/*'; else bun install --no-save; fi",
       {
-        cwd: `${args.projectDirectory}/.catamorphic`,
+        cwd: `${args.projectDirectory}/${PROJECT_WORKSPACE_ROOT}`,
         timeout: 300,
       },
     );
@@ -597,7 +595,7 @@ export class DeploymentRuntimeService {
     await uploadPluginPayloads({
       provider: this.deps.provider,
       sandboxId: args.sandboxId,
-      projectDir: `${args.projectDirectory}/.catamorphic`,
+      projectDir: `${args.projectDirectory}/${PROJECT_WORKSPACE_ROOT}`,
       plugins: args.plugins ? [...args.plugins] : undefined,
     });
     const protect = await this.deps.provider.executeCommand(

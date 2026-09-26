@@ -1,5 +1,6 @@
 import { posix } from "node:path";
 import type { DB } from "@catamorphic/db";
+import { PROJECT_ROLES_DIR } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import {
   type AppRef,
@@ -63,7 +64,11 @@ export function assertMayManageRolePolicy(
 export function isRolePolicyPath(path: string): boolean {
   // Normalize like the file APIs do, so `x/../` or `//` cannot hide a role file.
   const normalized = posix.normalize(path.replaceAll("\\", "/"));
-  return /^\.catamorphic\/roles\/[^/]+\.json$/.test(normalized);
+  return (
+    normalized.startsWith(`${PROJECT_ROLES_DIR}/`) &&
+    normalized.endsWith(".json") &&
+    !normalized.slice(PROJECT_ROLES_DIR.length + 1).includes("/")
+  );
 }
 
 export interface ResolvedScope {

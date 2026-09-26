@@ -128,7 +128,7 @@ more people are created by a signed-in member holding `memberships:write`
 through `POST /api/projects/PROJECT_ID/admission/invitations`; they are
 credential-free locators that desktop, PWA and MCP clients redeem after
 signing in. Ongoing configuration (roles, agents, sidebar, starting actions)
-is project code under `.catamorphic/`, changed through ordinary review.
+is project code under `.work/`, changed through ordinary review.
 
 ## Gotchas
 

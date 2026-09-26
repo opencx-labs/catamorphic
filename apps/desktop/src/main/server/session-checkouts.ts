@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { ensurePersonalFilesExcluded, hasLocalGit } from "@catamorphic/git";
+import {
+  AGENT_COMMIT_AUTHOR,
+  MANAGED_BRANCH_PREFIX,
+  PROJECT_PERSONAL_DIR,
+} from "@catamorphic/workflow/project-layout";
 import type { PGlite } from "@electric-sql/pglite";
 
 const execFileAsync = promisify(execFile);
@@ -296,7 +301,7 @@ export class SessionCheckouts {
       const prefix = input.sessionId.replace(/[^A-Za-z0-9]/g, "").slice(0, 8);
       const branch = await this.availableBranch(
         root,
-        `catamorphic/${prefix || "session"}`,
+        `${MANAGED_BRANCH_PREFIX}${prefix || "session"}`,
       );
       try {
         await git(root, ["worktree", "add", "-b", branch, worktreePath]);
@@ -401,7 +406,7 @@ export class SessionCheckouts {
       const prefix = input.sessionId.replace(/[^A-Za-z0-9]/g, "").slice(0, 8);
       branch = await this.availableBranch(
         this.requireRoot(input.projectId),
-        `catamorphic/${prefix || "session"}-review`,
+        `${MANAGED_BRANCH_PREFIX}${prefix || "session"}-review`,
       );
       await git(description.path, ["switch", "-c", branch]);
     }
@@ -426,7 +431,7 @@ export class SessionCheckouts {
       const personalFiles = await git(input.workingDirectory, [
         "ls-files",
         "--",
-        ".catamorphic/personal",
+        PROJECT_PERSONAL_DIR,
       ]);
       if (personalFiles.trim()) {
         throw new Error(
@@ -443,9 +448,9 @@ export class SessionCheckouts {
       await git(input.workingDirectory, ["add", "-A"]);
       await git(input.workingDirectory, [
         "-c",
-        "user.name=Catamorphic Agent",
+        `user.name=${AGENT_COMMIT_AUTHOR.name}`,
         "-c",
-        "user.email=agent@catamorphic.dev",
+        `user.email=${AGENT_COMMIT_AUTHOR.email}`,
         "commit",
         "-m",
         input.message,

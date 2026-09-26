@@ -1222,7 +1222,7 @@ export async function startEmbeddedServer(
   };
 
   // Project workspaces type-check `trigger()` against a generated
-  // catamorphic-triggers.d.ts; refresh it everywhere in the background so
+  // work-triggers.d.ts; refresh it everywhere in the background so
   // the coding agent always sees the host's current kinds.
   void triggers
     .syncAllProjectTypes((projectId) =>

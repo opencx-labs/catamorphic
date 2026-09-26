@@ -23,7 +23,7 @@ import {
 
 /**
  * Roles and memberships (ADR 0055). Roles are committed files
- * (`.catamorphic/roles/<slug>.json`) — read here, edited through the project file
+ * (`.work/roles/<slug>.json`) — read here, edited through the project file
  * routes like any other file. Memberships are the stock `user → roles +
  * grants` table: what a host's invite writes and its identity resolver
  * reads (`core.memberships.identityFor`). Reads need `memberships:read`

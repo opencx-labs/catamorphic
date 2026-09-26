@@ -55,7 +55,7 @@ createCatamorphic({ sandboxProvider, environmentProvider, /* ... */ });
 
 - Every Run executes an immutable deployed commit. There is no mutable-source
   or test mode.
-- The deployment runtime materializes the verified `.catamorphic/` capability
+- The deployment runtime materializes the verified `.work/` capability
   snapshot (ADR 0142), installs its workspace dependencies, and applies the
   parser transform to that copy only. Plugin payloads land under
   `node_modules/<packageName>/` via `uploadPluginPayloads`.
@@ -66,7 +66,7 @@ createCatamorphic({ sandboxProvider, environmentProvider, /* ... */ });
 - The supervisor forks one Bun child per invocation (`bun-worker.ts`) with
   `CATAMORPHIC_RUN_ID`, `CATAMORPHIC_WORKFLOW_NAME`, `CATAMORPHIC_WORKFLOW_FILE`,
   and `CATAMORPHIC_TRIGGER_DATA`. Providers that support persistent local data
-  set `CATAMORPHIC_APP_DATA_DIR`; it is absent otherwise.
+  set `WORK_APP_DATA_DIR`; it is absent otherwise.
 - Tables: `workflow_runs` (one per invocation), `workflow_run_states`,
   `workflow_step_attempts`, `workflow_pauses`, `workflow_run_steps`,
   `workflow_run_events`, `execution_jobs`, plus batch item/sink tables.
@@ -114,10 +114,10 @@ Rules that hold across harnesses:
   concurrency limit; core creates ordinary child sessions (hierarchy separate
   from fork lineage). A native subagent is only an optimization when it keeps
   that contract.
-- **Skills** live in `.catamorphic/skills/<name>/SKILL.md`; agents read them
+- **Skills** live in `.work/skills/<name>/SKILL.md`; agents read them
   from their checkout. `GET /api/projects/:projectId/skills` lists them.
 - **Connections**: project agents declare aliases in
-  `.catamorphic/agents/<slug>.json`. A workflow that delivers to that agent
+  `.work/agents/<slug>.json`. A workflow that delivers to that agent
   declares the same aliases in its `connections` so the member authorizes them
   before enabling it.
 - **Reaching a chat from a workflow** is `catamorphic.sessions.deliver`, by

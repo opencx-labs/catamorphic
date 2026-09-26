@@ -15,7 +15,7 @@ statically and can be regenerated at any time. Keep it that way:
   connections, and permissions without a sandbox, which is why those values
   must be inline constants.
 - Authorization is not part of a definition. A workflow declares what it needs
-  (`connections`, `permissions`, `triggers`). Committed `.catamorphic/roles/*.json`
+  (`connections`, `permissions`, `triggers`). Committed `.work/roles/*.json`
   files and server-side workflow enablements decide who may reach or turn it on
   ([ADR 0158](../../../docs/decisions/0158-project-permissions.md)). Never fold
   either into the graph.
@@ -25,7 +25,7 @@ For the authoring API and its guidance, use
 
 ## Pipeline
 
-1. Source lives in `.catamorphic/workflows/src/` of a project
+1. Source lives in `.work/workflows/src/` of a project
    ([ADR 0142](../../../docs/decisions/0142-contained-project-workspace.md)).
 2. `@catamorphic/parser` (ts-morph) turns it into a `WorkflowGraph`: nodes and
    edges, an execution descriptor, `inputSchema`/`outputSchema`, `triggers`,
@@ -35,7 +35,7 @@ For the authoring API and its guidance, use
 4. The same package drives execution (`prepareWorkflowExecution`), generated app
    API types ([ADR 0041](../../../docs/decisions/0041-generated-projections.md)),
    and `checkProject`, the engine behind each project's
-   `bun run --cwd .catamorphic check`.
+   `bun run --cwd .work check`.
 
 Code change, re-parse, re-render. The direction never reverses.
 

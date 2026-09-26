@@ -31,7 +31,7 @@ shared surface is a process bug, not a win. See the [historical log](DESIGN-HIST
 
 ## Contained project workspace
 
-Catamorphic capabilities live in `.catamorphic/`, including the independent Bun
+Project capabilities live in `.work/`, including the independent Bun
 workspace, workflows, apps, agent definitions, skills, and shared settings
 (ADR 0142). Persistent project data lives in its ignored `app-data/` directory.
 Opening an existing folder creates nothing. Desktop-wide state and temporary
@@ -798,7 +798,7 @@ name (`MessageCircleQuestion`) resolves through one shared resolver
 that accepts only members of the icon table, so an unknown name or a
 non-icon export such as `Icon` falls back to a dot, never text and never a
 crash; and hiding an item hides its
-subtree, since hiding only the `.catamorphic` row hoisted the workspace's
+subtree, since hiding only the `.work` row hoisted the workspace's
 folders into a project files section. Agents also finish an app with the
 host's `build_app` and an `app:<name>` link; a local `bun run build` alone
 leaves "no successful build yet" on the app's screen.

@@ -55,16 +55,19 @@ Concrete implications for any change you make:
 
 ### Contained project capabilities (ADR 0142)
 
-User-project capabilities live in `.catamorphic/`: its independent Bun workspace,
+User-project capabilities live in `.work/`: its independent Bun workspace,
 workflows, apps, contracts, scripts, agents, roles, skills, and shared config.
-Run capability checks with `bun run --cwd .catamorphic check`. Opening an existing
+Run capability checks with `bun run --cwd .work check`. Opening an existing
 folder is inert, including plain folders without Git; initialize Git only for an
 operation that needs it (ADR 0141). Preserve root manifests and owner instructions.
 
-Project-owned mutable data lives in `.catamorphic/app-data/`, ignored by the scoped
-`.catamorphic/.gitignore` by default. Preserve ignore edits. Logical `store/...`
+Project-owned mutable data lives in `.work/app-data/`, ignored by the scoped
+`.work/.gitignore` by default. Preserve ignore edits. Logical `store/...`
 document addresses map there locally; a root `store/` remains ordinary user content.
 Profiles, credentials, caches, staging, and managed worktrees stay in host storage.
+Code builds these paths and the Git-visible names (published ref, managed
+branch prefix, checkpoint author, app-data env and mount) from
+`@catamorphic/workflow/project-layout`; do not repeat the literals.
 
 This framework repository's `.agents/skills/`, `apps/`, and `packages/` are its own
 engineering layout. They are not generated user-project paths and stay in place.
@@ -96,7 +99,7 @@ Public developer surface:
 - `packages/ui`: React Flow editor components (canvas, panels, member review) + `AppMount` (sandboxed app iframe host); all opt-in/composable.
 - `packages/registry`: shadcn-style copy-paste component registry (project editor, file explorer, git panel, runs panel, agent chat, Monaco editor, and more).
 - `packages/api-client` — generated OpenAPI types + openapi-fetch client.
-- `packages/workflow` — **`@catamorphic/workflow`**: dependency-light `defineWorkflow`, boundary, batch-scope, pause, child-workflow, trigger-subscription, and physical batch-step authoring primitives; hosts may wrap and selectively re-export this surface.
+- `packages/workflow` — **`@catamorphic/workflow`**: dependency-light `defineWorkflow`, boundary, batch-scope, pause, child-workflow, trigger-subscription, and physical batch-step authoring primitives; hosts may wrap and selectively re-export this surface. Its dependency-free `project-layout` subpath names the user-project layout (`.work/` paths, `refs/work/published`, the `work/` branch prefix).
 - `packages/work-server` — **`@catamorphic/work-server`**: the Work server as a library (ADR 0160): `createWorkServer({ config, hooks })`, `workServerConfigFromEnv`, typed hooks (agent capabilities, connection providers and guards, directories, a machine provisioner, project seeds, routes). `apps/server` is only its image process. Framework packages never import it.
 - `packages/app` — **`@catamorphic/app`**: the guest runtime bundled into every user-built app (typed workflow client, persistent app-local storage shim, dual-dialect MCP Apps probe, `buildAppGuestDocument`) plus the **`@catamorphic/app/ui`** component kit, styled entirely by host theme tokens (ADR 0048).
 
@@ -106,7 +109,7 @@ Internal packages:
 - `packages/db` — Kysely instance, schema-scoped raw SQL migrations, programmatic `migrateToLatest`, codegen types.
 - `packages/git` — vendor-neutral git-backed project storage (isomorphic-git): `StorageBackend`/`RemoteBackend` contracts, `ProjectManager`, the remote sync engine (`syncWithNetworkRemote` — fetch/merge/push/rescue branches, ADR 0044), filesystem backends.
 - `packages/github` — **`@catamorphic/github`**: GitHub OAuth + device-flow helpers, REST API client, token stores. Consumed by core's `GithubService` (which implements `CodeHost`).
-- `packages/parser` — ts-morph AST-to-WorkflowGraph parser; also the engine behind each capability workspace's `.catamorphic/scripts/check.ts`.
+- `packages/parser` — ts-morph AST-to-WorkflowGraph parser; also the engine behind each capability workspace's `.work/scripts/check.ts`.
 - `packages/sandbox` — vendor-neutral sandbox + coding-agent contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`, `CodingAgentProvider`), the stdio supervisor transport, `instrumentSandboxProvider`, plugin-doc staging helpers. No vendor SDKs here.
 - `packages/microsandbox` — **`@catamorphic/microsandbox`**: local sandbox provider (the desktop's default execution).
 - `packages/local-process` — **`@catamorphic/local-process`**: sandboxless subprocess execution with an explicit env; trusted single-tenant hosts only (ADR 0047).
@@ -135,7 +138,7 @@ How the three connect (setting up / troubleshooting, read in this order):
 3. **QR pairing** (ADR 0060, palette → "Continue on mobile"): the desktop's LAN listener serves the built `apps/pwa/dist` at its root, exchanges a single-use 2-minute code for a device token, and proxies `/api/*` to the loopback embedded server (bearer required). The claim also hands the phone the profile's remote-project links + mirror map, and the focused chat's project/session (deep-link). The QR ships the **built** PWA — rebuild `apps/pwa` after UI changes.
 4. **Scoped members address agents as `project:<projectId>:<slug>`** — a bare session create starts on the member's permitted project default; the PWA derives the id from `GET /me`.
 5. **Sessions mirror to the linked remote** (ADR 0061): after every settled turn on a remote-linked project the desktop pushes the transcript to `PUT …/agent/sessions/:id/mirror`; the server's copy is continuable there (history-seeded re-anchor), and a `409 diverged` means the server owns the fork — the desktop stops pushing and stamps its copy with a `mirror_fork` marker clients use to lock the stale copy and link the live one. When the focused project has a remote, the pairing QR defaults to the REMOTE origin with a `session` deep-link.
-6. **Session privacy** (ADR 0062): incognito is a DESKTOP-LOCAL concept — a session-id set in `<userData>/incognito-sessions.json` the mirror pusher skips; it never touches core's schema or any wire (palette "New incognito chat", Ghost badge on the dock). `.catamorphic/project.json` `"allowIncognito": false` is the committed team policy hiding the affordance. Connected projects always hide incognito, and restored incognito tabs never mount remote chats (ADR 0098).
+6. **Session privacy** (ADR 0062): incognito is a DESKTOP-LOCAL concept — a session-id set in `<userData>/incognito-sessions.json` the mirror pusher skips; it never touches core's schema or any wire (palette "New incognito chat", Ghost badge on the dock). `.work/project.json` `"allowIncognito": false` is the committed team policy hiding the affordance. Connected projects always hide incognito, and restored incognito tabs never mount remote chats (ADR 0098).
 
 ## Skills
 
@@ -372,6 +375,8 @@ Use `@catamorphic/otel` (`getTracer("@catamorphic/<package>")` + `withSpan`). At
 db → core → fastify-plugin → api-client
 otel → sandbox → core
 otel → core
+workflow → git
+workflow → parser
 git → core
 git → s3
 github → core

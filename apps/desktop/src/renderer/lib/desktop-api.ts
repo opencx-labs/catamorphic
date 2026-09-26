@@ -164,7 +164,7 @@ export interface AgentsData {
 }
 
 /**
- * A PROJECT agent: a committed `.catamorphic/agents/<slug>.json` definition (ADR 0050),
+ * A PROJECT agent: a committed `.work/agents/<slug>.json` definition (ADR 0050),
  * listed for the active project. `consent` gates running it on the user's
  * own credentials; `invalid` marks unusable definitions (shown disabled).
  */
@@ -699,7 +699,7 @@ import type { SidebarConfig } from "../../shared/sidebar.js";
 
 /**
  * Which layer of the layered resolution produced the config: this user's
- * per-project override, the project's shared `.catamorphic/sidebar.js`,
+ * per-project override, the project's shared `.work/sidebar.js`,
  * the profile-global `sidebar.js`, or the built-in default.
  */
 export type SidebarLayer = "project-local" | "project" | "profile" | "default";

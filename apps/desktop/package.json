@@ -41,6 +41,7 @@
     "@catamorphic/sandbox": "workspace:*",
     "@catamorphic/server-sdk": "workspace:*",
     "@catamorphic/ui": "workspace:*",
+    "@catamorphic/workflow": "workspace:*",
     "@electric-sql/pglite": "^0.5.4",
     "@fastify/cors": "^11.3.0",
     "@lydell/node-pty": "1.2.0-beta.14",

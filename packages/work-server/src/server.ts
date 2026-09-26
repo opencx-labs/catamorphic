@@ -40,6 +40,7 @@ import {
   webhook,
 } from "@catamorphic/server-sdk";
 import { createPushTransport } from "@catamorphic/server-sdk/web-push";
+import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -486,7 +487,7 @@ async function createWorkServerInner(
     projectSeeds: (defaults) => {
       const seeds = {
         ...defaults,
-        ".catamorphic/agents/assistant.json": JSON.stringify({
+        [`${PROJECT_AGENTS_DIR}/assistant.json`]: JSON.stringify({
           version: 1,
           name: "Assistant",
           kind: "builtin",

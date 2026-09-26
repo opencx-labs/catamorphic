@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { PROJECT_APP_DATA_DIR } from "@catamorphic/workflow/project-layout";
 import type { Identity } from "../identity.js";
 import {
   DocumentConflictError,
@@ -31,7 +32,7 @@ import {
  *   reported; local deletions delete remotely. Edits outside `store/`
  *   are reported as not shippable (the program changes by commit/PR).
  *
- * State lives in `.catamorphic/app-data/remote-sync.json` in the folder: per path,
+ * State lives in `.work/app-data/remote-sync.json` in the folder: per path,
  * what was last synced (source, version/digest, content hash). Local
  * modification = current hash ≠ manifest hash.
  *
@@ -39,7 +40,7 @@ import {
  * backend, and — on the server itself — {@link documentsClientFor}, which
  * lets an agent's working copy pull/ship `store/` around every turn AS THE
  * CALLER (so a member's agent writing
- * `.catamorphic/app-data/store/customers/acme/notes.md` in
+ * `.work/app-data/store/customers/acme/notes.md` in
  * its folder lands in the store with the right author, and never anything
  * the member may not write).
  */
@@ -97,7 +98,7 @@ interface Manifest {
   serverCopies?: string[];
 }
 
-export const MANIFEST_PATH = ".catamorphic/app-data/remote-sync.json";
+export const MANIFEST_PATH = `${PROJECT_APP_DATA_DIR}/remote-sync.json`;
 export const STORE_PREFIX = "store/";
 
 export interface SyncReport {

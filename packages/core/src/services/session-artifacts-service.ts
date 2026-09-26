@@ -11,6 +11,11 @@ import {
 } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { parseProject } from "@catamorphic/parser";
+import {
+  MANAGED_BRANCH_PREFIX,
+  PROJECT_APPS_DIR,
+  PROJECT_WORKFLOWS_DIR,
+} from "@catamorphic/workflow/project-layout";
 import { type Kysely, type Selectable, sql } from "kysely";
 import { type Identity, identityCovers } from "../identity.js";
 import { appScaffold, workspaceFiles } from "../seeds.js";
@@ -67,7 +72,7 @@ export class SessionArtifactValidationError extends Error {
 }
 
 const tracer = getTracer("@catamorphic/core");
-const author = { name: "Catamorphic", email: "artifacts@catamorphic.dev" };
+const author = { name: "Work", email: "system@work.software" };
 const NAME = /^[a-zA-Z][a-zA-Z0-9_-]{0,99}$/;
 
 /** One retained source lifecycle for temporary apps and workflows. */
@@ -111,14 +116,14 @@ export class SessionArtifactsService {
         const id = randomUUID();
         const sourcePath =
           input.kind === "app"
-            ? `.catamorphic/apps/${input.name}/src/App.tsx`
-            : `.catamorphic/workflows/src/artifacts/${id}.ts`;
+            ? `${PROJECT_APPS_DIR}/${input.name}/src/App.tsx`
+            : `${PROJECT_WORKFLOWS_DIR}/src/artifacts/${id}.ts`;
         const remoteBranch = artifactCandidateBranch(id);
         const defaults =
           input.kind === "app"
             ? {
                 ...appScaffold({ name: input.name }),
-                [`.catamorphic/apps/${input.name}/src/main.tsx`]:
+                [`${PROJECT_APPS_DIR}/${input.name}/src/main.tsx`]:
                   'import { createRoot } from "react-dom/client";\nimport App from "./App";\ncreateRoot(document.getElementById("root")!).render(<App />);\n',
               }
             : {};
@@ -440,7 +445,7 @@ export class SessionArtifactsService {
           row.tenant_id,
           row.project_id,
           async (origin) => {
-            const prefix = `refs/heads/catamorphic/artifacts/${row.id}`;
+            const prefix = `refs/heads/${artifactBranchPrefix(row.id)}`;
             // Backends support listing the heads namespace, not arbitrary
             // string prefixes. Filter locally so flat candidate refs are found
             // consistently in filesystem, checkout and object-store origins.
@@ -691,7 +696,11 @@ export class SessionArtifactsService {
 
 // Flat candidate refs avoid git file/directory collisions with existing refs.
 function artifactCandidateBranch(artifactId: string): string {
-  return `catamorphic/artifacts/${artifactId}-${randomUUID()}`;
+  return `${artifactBranchPrefix(artifactId)}-${randomUUID()}`;
+}
+
+function artifactBranchPrefix(artifactId: string): string {
+  return `${MANAGED_BRANCH_PREFIX}artifacts/${artifactId}`;
 }
 
 function pathsOf(value: unknown): string[] {

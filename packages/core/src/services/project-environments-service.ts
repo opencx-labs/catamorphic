@@ -1,9 +1,10 @@
 import type { DB } from "@catamorphic/db";
-import { PROJECT_MANIFEST_PATH, type ProjectManager } from "@catamorphic/git";
+import type { ProjectManager } from "@catamorphic/git";
 import type {
   EnvironmentRequirements,
   WorkloadKind,
 } from "@catamorphic/sandbox";
+import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";

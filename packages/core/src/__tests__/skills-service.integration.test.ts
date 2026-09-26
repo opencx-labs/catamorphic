@@ -82,11 +82,11 @@ describeIf("SkillsService host tier (ADR 0049)", () => {
     );
     try {
       await repo.writeFile(
-        ".catamorphic/skills/local-notes/SKILL.md",
+        ".work/skills/local-notes/SKILL.md",
         "---\nname: local-notes\ndescription: A project skill.\n---\n\nproject body",
       );
       await repo.writeFile(
-        ".catamorphic/skills/shadowed/SKILL.md",
+        ".work/skills/shadowed/SKILL.md",
         "---\nname: shadowed\ndescription: The PROJECT version.\n---\n\nproject shadow body",
       );
       await repo.commit("Add project skills", {

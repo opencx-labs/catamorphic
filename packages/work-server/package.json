@@ -32,6 +32,7 @@
     "@catamorphic/otel": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
     "@catamorphic/server-sdk": "workspace:*",
+    "@catamorphic/workflow": "workspace:*",
     "@electric-sql/pglite": "^0.5.4",
     "ai": "^7.0.97",
     "better-auth": "1.6.26",

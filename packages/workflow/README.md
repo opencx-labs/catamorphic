@@ -143,3 +143,12 @@ export type {
   WorkflowDefinition,
 } from "@catamorphic/workflow";
 ```
+
+## Project layout
+
+`@catamorphic/workflow/project-layout` is a dependency-free subpath naming
+where things live in a user project: the `.work/` workspace and its paths
+(`PROJECT_SKILLS_DIR`, `PROJECT_APP_DATA_DIR`, ...), the published tracking
+ref (`publishedRef()`), the managed branch prefix, the agent checkpoint
+author, and the app-data environment variable and sandbox mount. Framework
+packages and hosts import these instead of repeating the literals.

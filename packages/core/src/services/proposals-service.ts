@@ -8,6 +8,7 @@ import {
   pushToRemote,
 } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
+import { publishedRef } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import { authorFor, type Identity, mayUseProject } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
@@ -327,9 +328,7 @@ export class ProposalsService {
         projectId,
         remoteBranch: "main",
       });
-      const base = await dev
-        .resolveRef("refs/catamorphic/published/main")
-        .catch(() => "HEAD");
+      const base = await dev.resolveRef(publishedRef()).catch(() => "HEAD");
       await dev.resetWorkingTree();
       await dev.createBranch(branch, base);
       for (const change of args.changes) {

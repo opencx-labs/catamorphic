@@ -3,7 +3,7 @@
  *
  * A host-defined trigger kind may leave named positions of its payload (or
  * output) template deliberately open: `hole("Args")` on the host side emits
- * `Hole<"Args">` into the generated `catamorphic-triggers.d.ts`. Each
+ * `Hole<"Args">` into the generated `work-triggers.d.ts`. Each
  * workflow that binds the kind instantiates every hole with its own input
  * type — nothing is written at the `trigger()` call site; the workflow's
  * first-step input (and last-step output) IS the instantiation, and the

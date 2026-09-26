@@ -63,7 +63,7 @@ it("exports desktop project signals using committed settings and machine destina
       const project = await window.catamorphicDesktop.createDefaultProject();
       return { id: project.id, root: await window.catamorphicDesktop.projectRoot(project.id) };
     })()`);
-    const manifestPath = path.join(project.root, ".catamorphic/project.json");
+    const manifestPath = path.join(project.root, ".work/project.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
     const settings = {
       OTEL_EXPORTER_OTLP_PROTOCOL: "http/json",

@@ -28,6 +28,10 @@ import {
   type ToolPermission,
   type TurnOptions,
 } from "@catamorphic/sandbox";
+import {
+  AGENT_COMMIT_AUTHOR,
+  PROJECT_MANIFEST_PATH,
+} from "@catamorphic/workflow/project-layout";
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import {
@@ -393,10 +397,7 @@ export const INTERRUPTED_TURN_MESSAGE =
  * Author on turn-checkpoint commits — distinct from human commits and from
  * the system author used for generated-file syncs, so history reads honestly.
  */
-const CHECKPOINT_AUTHOR = {
-  name: "Catamorphic Agent",
-  email: "agent@catamorphic.dev",
-};
+const CHECKPOINT_AUTHOR = AGENT_COMMIT_AUTHOR;
 
 const SESSION_TASK_SUMMARY_LIMIT = 240;
 
@@ -438,7 +439,7 @@ Every turn comes with fresh session context beside the person's message: who the
 
 ## Talk to the person you are working with
 
-Infer how technical they are from their role, how they write, and what the project holds. For non-technical people, speak in outcomes and plain words: what you made, where to find it, what happens next. Leave out file paths, internal folders such as .catamorphic, Git, commits, branches, deployments, environments, schemas, and the names of tools or skills, unless they ask. For engineers, be precise and keep the technical substance.
+Infer how technical they are from their role, how they write, and what the project holds. For non-technical people, speak in outcomes and plain words: what you made, where to find it, what happens next. Leave out file paths, internal folders such as .work, Git, commits, branches, deployments, environments, schemas, and the names of tools or skills, unless they ask. For engineers, be precise and keep the technical substance.
 
 Answer what was asked first. Reveal complexity only when it helps the person decide or act. Files you create only to test, check, or run something are yours to clean up; do not mention them. When a tool takes a short description, write one in plain words: the person sees it as what you are doing right now.
 
@@ -548,9 +549,9 @@ interface AgentSessionsDeps {
   /** Tenant app policy, for scope resolution (app refs). */
   appPolicies?: AppPoliciesService;
   /**
-   * The documents surface. When present, `.catamorphic/app-data/store/` in the caller's working
+   * The documents surface. When present, `.work/app-data/store/` in the caller's working
    * copy is pulled before each turn and shipped after it AS THE CALLER
-   * (ADR 0055): a member's agent writing `.catamorphic/app-data/store/customers/acme/notes.md`
+   * (ADR 0055): a member's agent writing `.work/app-data/store/customers/acme/notes.md`
    * lands it in the store with the right author, and never anything the
    * member may not write. Hosts whose working copies are the truth (the
    * desktop's local projects) leave it unset.
@@ -5282,11 +5283,7 @@ export class AgentSessionsService {
       args.identity.tenantId,
       args.projectId,
       async (repo, ref) => {
-        const text = await readProgramFile(
-          repo,
-          ref,
-          ".catamorphic/project.json",
-        );
+        const text = await readProgramFile(repo, ref, PROJECT_MANIFEST_PATH);
         try {
           return text ? JSON.parse(text) : {};
         } catch {
@@ -5852,7 +5849,7 @@ export class AgentSessionsService {
     const command = [
       "(git rev-parse --git-dir >/dev/null 2>&1 || git init -b main >/dev/null)",
       "git add -A",
-      `(git -c user.name=catamorphic -c user.email=agent@catamorphic.dev commit -m baseline --quiet || true)`,
+      `(git -c 'user.name=Work Agent' -c user.email=agent@work.software commit -m baseline --quiet || true)`,
     ].join(" && ");
     const result = await provider.executeCommand(sandboxProviderId, command, {
       cwd: dir,
@@ -5916,7 +5913,7 @@ export class AgentSessionsService {
    * clean or the commit failed — a checkpoint must never break a turn.
    */
   /**
-   * The folder whose `.catamorphic/app-data/store/` mirrors the caller's store view: the caller's
+   * The folder whose `.work/app-data/store/` mirrors the caller's store view: the caller's
    * own dev copy, which sandbox agents' edits sync back into. Host-execution
    * agents work in ONE folder per project shared by every caller, so their
    * store/ is never synced (one member's pulled files would be readable by

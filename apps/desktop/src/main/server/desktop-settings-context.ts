@@ -1,4 +1,5 @@
 import path from "node:path";
+import { PROJECT_PERSONAL_DIR } from "@catamorphic/workflow/project-layout";
 import type { ProfileConfigManager } from "../profile-config.js";
 import {
   projectLocalSidebarFile,
@@ -32,7 +33,7 @@ export function desktopSettingsContext({
     profileId,
     personalFilesDirectory:
       access === "native" && project.rootPath
-        ? path.join(project.rootPath, ".catamorphic", "personal", profileId)
+        ? path.join(project.rootPath, PROJECT_PERSONAL_DIR, profileId)
         : undefined,
     files: {
       preferences,

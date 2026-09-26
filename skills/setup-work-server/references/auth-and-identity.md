@@ -29,12 +29,12 @@ Ask only those not answered in the visible app or deployment.
 
 ## Roles and operators
 
-Roles live in `.catamorphic/roles/<slug>.json` and are reviewed with the project. Memberships
+Roles live in `.work/roles/<slug>.json` and are reviewed with the project. Memberships
 bind a stable external user id to those roles and grants. Editing the program
 (`program:write`), making it live (`program:publish`), membership management
 (`memberships:write`), and role-policy management (`roles:write`) are separate
 permissions; do not make everyone who edits the program an administrator by
-accident. Changing any `.catamorphic/roles/*.json` needs `roles:write`.
+accident. Changing any `.work/roles/*.json` needs `roles:write`.
 
 Role `permissions` use the `thing:action` form (ADR 0158). Core enforces
 `program` (read, write, publish) and `secrets`, `automations`, `webhooks`,

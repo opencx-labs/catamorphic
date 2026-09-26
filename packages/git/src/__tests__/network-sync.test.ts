@@ -9,7 +9,7 @@ import type { ProjectRepo } from "../types.js";
 
 const TENANT = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
 const PROJECT = "f1e2d3c4-b5a6-7890-dcba-fedcba987654";
-const AUTHOR = { name: "Catamorphic", email: "system@catamorphic.dev" };
+const AUTHOR = { name: "Work", email: "system@work.software" };
 
 // The network layer is mocked: `remote.sha` is what a fetch would find, and
 // pushes are recorded. Divergent "remote" histories are simulated by
@@ -130,9 +130,9 @@ describe("syncWithNetworkRemote", () => {
 
     const result = await sync();
     expect(result.status).toBe("diverged");
-    expect(result.rescueBranch).toBe("catamorphic/diverged-2026-08-13_12-30");
+    expect(result.rescueBranch).toBe("work/diverged-2026-08-13_12-30");
     expect(remote.pushes).toEqual([
-      { ref: "main", remoteBranch: "catamorphic/diverged-2026-08-13_12-30" },
+      { ref: "main", remoteBranch: "work/diverged-2026-08-13_12-30" },
     ]);
     // No conflict markers, no moved main — the user's tree is sacred.
     expect(await repo.resolveRef("refs/heads/main")).toBe(before);

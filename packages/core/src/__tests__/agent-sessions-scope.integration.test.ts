@@ -526,7 +526,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     // Project tools server: only the WORKFLOW tools outside the scope are
     // denied (by TOOL name); the documents/skills/ask surface and the poll
     // tool authorize themselves at the endpoint and stay reachable.
-    expect(start.toolPolicies?.catamorphic).toEqual([
+    expect(start.toolPolicies?.work).toEqual([
       { default: "allow", tools: { crm_update: "deny" } },
     ]);
     // The agent ref's own narrowing, keyed by normalized server key, with

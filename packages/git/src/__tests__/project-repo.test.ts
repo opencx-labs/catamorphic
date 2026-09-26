@@ -137,9 +137,9 @@ describe("ProjectRepo", () => {
       const files = await repo.listFiles();
       expect(files).toContain("src/a.ts");
       expect(files).toContain("src/b.ts");
-      expect(files).toContain(".catamorphic/project.json");
+      expect(files).toContain(".work/project.json");
       // The seeded ignore rules are project content…
-      expect(files).toContain(".catamorphic/.gitignore");
+      expect(files).toContain(".work/.gitignore");
       // …but the .git directory itself never lists.
       expect(files.some((f) => f === ".git" || f.startsWith(".git/"))).toBe(
         false,
@@ -151,7 +151,7 @@ describe("ProjectRepo", () => {
 
       const allFiles = await repo.readAllFiles();
       expect(allFiles["src/x.ts"]).toBe("x-content");
-      expect(allFiles[".catamorphic/project.json"]).toBeDefined();
+      expect(allFiles[".work/project.json"]).toBeDefined();
     });
 
     it("rejects paths with ..", async () => {
@@ -286,7 +286,7 @@ describe("ProjectRepo", () => {
       await repo.writeFile("src/changed.ts", "before");
       await repo.writeFile("src/deleted.ts", "delete me");
       await repo.commit("Baseline", author);
-      const ignore = await repo.readFile(".catamorphic/.gitignore");
+      const ignore = await repo.readFile(".work/.gitignore");
       await repo.writeFile(".gitignore", `${ignore}\n*.log\n`);
       await repo.writeFile("src/changed.ts", "after");
       await repo.writeFile("src/added.ts", "new");
@@ -422,7 +422,7 @@ describe("ProjectRepo", () => {
 describe("personal workflow files", () => {
   let directory: string;
   let repo: ProjectRepo;
-  const privatePath = ".catamorphic/personal/profile-one/workflows/private.ts";
+  const privatePath = ".work/personal/profile-one/workflows/private.ts";
 
   beforeEach(async () => {
     directory = await fs.mkdtemp(path.join(os.tmpdir(), "personal-workflows-"));

@@ -508,10 +508,14 @@ describe("context pills", () => {
     await runWait(`return pills().length === ${before + 1};`, {
       label: "clipboard binary saved",
     });
-    const root = await app.eval<string>(
-      `(async()=>{ const {url}=await window.catamorphicDesktop.getServerState(); const projects=await fetch(url+'/api/projects').then(r=>r.json()); return window.catamorphicDesktop.projectRoot(projects.items.find(p=>p.name==='pills-e2e').id); })()`,
+    const project = await app.eval<{ id: string; root: string }>(
+      `(async()=>{ const {url}=await window.catamorphicDesktop.getServerState(); const projects=await fetch(url+'/api/projects').then(r=>r.json()); const id=projects.items.find(p=>p.name==='pills-e2e').id; return { id, root: await window.catamorphicDesktop.projectRoot(id) }; })()`,
     );
-    const directory = path.join(root, ".catamorphic", "attachments");
+    // Pastes live in host storage, never in the project folder.
+    expect(fs.existsSync(path.join(project.root, ".work", "attachments"))).toBe(
+      false,
+    );
+    const directory = path.join(app.userDataDir, "attachments", project.id);
     const saved = fs
       .readdirSync(directory)
       .find((name) => name.endsWith("-mystery.bin"));
@@ -552,10 +556,9 @@ describe("context pills", () => {
     await runWait(
       `return timelineText().includes('Received 1 attachment: delayed.bin');`,
     );
-    await runWait(
-      `return timelineText().includes('.catamorphic/attachments/');`,
-      { label: "agent streamed the saved attachment path" },
-    );
+    await runWait(`return timelineText().includes('/attachments/');`, {
+      label: "agent streamed the saved attachment path",
+    });
     await run(`
       File.prototype.arrayBuffer=function(){return Promise.reject(new Error('Clipboard read failed'))};
       const data=new DataTransfer();data.items.add(new File(['bad'],'failed.bin'));
@@ -838,8 +841,6 @@ describe("context pills", () => {
     await runWait(
       `return timelineText().includes('Received 1 attachment: Screenshot.png');`,
     );
-    expect(await run(`return timelineText();`)).not.toContain(
-      ".catamorphic/attachments/",
-    );
+    expect(await run(`return timelineText();`)).not.toContain("/attachments/");
   });
 });

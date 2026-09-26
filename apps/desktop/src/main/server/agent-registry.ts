@@ -9,7 +9,6 @@ import type {
   ToolPermissionBroker,
 } from "@catamorphic/core";
 import {
-  AGENT_DEFINITIONS_DIR,
   connectionMcpServerName,
   definitionHash,
   projectAgentId,
@@ -22,6 +21,7 @@ import type {
   SandboxProvider,
 } from "@catamorphic/sandbox";
 import { PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
+import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { AgentDefaultModelResult } from "../../shared/agent-default-model.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
@@ -86,7 +86,7 @@ export interface DesktopAgentRegistryDeps {
   ) => AgentMcpServerConfig | undefined;
   /**
    * Project folder lookup for PROJECT agents (`project:<id>:<slug>`), whose
-   * committed `.catamorphic/agents/<slug>.json` definitions are read from disk here —
+   * committed `.work/agents/<slug>.json` definitions are read from disk here —
    * synchronously, because the registry contract is synchronous.
    */
   projectRootPath?: (projectId: string) => string | undefined;
@@ -533,7 +533,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   /**
    * Layered default resolution (ADR 0056), most specific first: the user's
    * per-project override, the project's committed `defaultAgent` (the
-   * `.catamorphic/project.json` manifest), the owning profile's global
+   * `.work/project.json` manifest), the owning profile's global
    * default, the first roster agent. A layer naming a missing agent is
    * skipped by the stores' own validation; an unconsented project default
    * resolves into 0050's fail-fast consent pointer — visible, not silent.
@@ -725,7 +725,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         missing: true,
       };
     }
-    const agentsDir = path.join(rootPath, AGENT_DEFINITIONS_DIR);
+    const agentsDir = path.join(rootPath, PROJECT_AGENTS_DIR);
     let rawText: string;
     try {
       rawText = fs.readFileSync(path.join(agentsDir, `${slug}.json`), "utf-8");
@@ -1409,7 +1409,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     try {
       const raw = JSON.parse(
         fs.readFileSync(
-          path.join(root, AGENT_DEFINITIONS_DIR, `${project.slug}.json`),
+          path.join(root, PROJECT_AGENTS_DIR, `${project.slug}.json`),
           "utf8",
         ),
       );
@@ -1435,7 +1435,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     try {
       const raw = JSON.parse(
         fs.readFileSync(
-          path.join(root, AGENT_DEFINITIONS_DIR, `${project.slug}.json`),
+          path.join(root, PROJECT_AGENTS_DIR, `${project.slug}.json`),
           "utf8",
         ),
       );

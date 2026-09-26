@@ -66,9 +66,9 @@ it("edits and resets profile and personal choices through the real Settings UI",
   );
 });
 it("shared file edits apply live, reset inherits them, and reload preserves sources", async () => {
-  fs.mkdirSync(`${root}/.catamorphic`, { recursive: true });
+  fs.mkdirSync(`${root}/.work`, { recursive: true });
   fs.writeFileSync(
-    `${root}/.catamorphic/settings.json`,
+    `${root}/.work/settings.json`,
     JSON.stringify({ contentFrame: false }),
   );
   await app.waitFor(

@@ -3,13 +3,18 @@ import type {
   ProjectManager,
   ProjectRepo,
 } from "@catamorphic/git";
-import { WORKFLOW_SOURCE_ROOT } from "@catamorphic/parser";
 import type { SandboxProvider, SandboxResources } from "@catamorphic/sandbox";
 import {
   resolveWorkflowPackageFallback,
   SandboxManagerImpl,
   uploadPluginPayloads,
 } from "@catamorphic/sandbox";
+import {
+  PROJECT_LOCKFILE_PATHS,
+  PROJECT_WORKFLOWS_PACKAGE_PATH,
+  PROJECT_WORKSPACE_ROOT,
+  publishedRef,
+} from "@catamorphic/workflow/project-layout";
 import type { Identity } from "../identity.js";
 import type { DbSandboxStore } from "./db-sandbox-store.js";
 import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
@@ -90,7 +95,7 @@ export class DevSandboxService {
       }
       const workflowPackage = await resolveWorkflowPackageFallback({
         hasLockfile: await Promise.all(
-          [".catamorphic/bun.lock", ".catamorphic/bun.lockb"].map((file) =>
+          PROJECT_LOCKFILE_PATHS.map((file) =>
             repo.readFile(file).then(
               () => true,
               () => false,
@@ -98,13 +103,13 @@ export class DevSandboxService {
           ),
         ).then((present) => present.some(Boolean)),
         packageJson: await repo
-          .readFile(`${WORKFLOW_SOURCE_ROOT}/package.json`)
+          .readFile(PROJECT_WORKFLOWS_PACKAGE_PATH)
           .catch(() => undefined),
       });
       await uploadPluginPayloads({
         provider: this.deps.provider,
         sandboxId: handle.providerId,
-        projectDir: `${this.projectDirectory}/.catamorphic`,
+        projectDir: `${this.projectDirectory}/${PROJECT_WORKSPACE_ROOT}`,
         plugins: workflowPackage ? [workflowPackage] : undefined,
       });
       return {
@@ -165,7 +170,7 @@ export class DevSandboxService {
     if (!status || status.dirty) return undefined;
     const head = await opts.repo.resolveRef("HEAD").catch(() => null);
     const remoteSha = await opts.repo
-      .resolveRef("refs/catamorphic/published/main")
+      .resolveRef(publishedRef())
       .catch(() => null);
     if (!head || head !== remoteSha) return undefined;
     return remoteBackend.getCloneSource(

@@ -10,7 +10,7 @@ For project-overridable settings, lowest to highest priority:
 
 1. Built-in default.
 2. Profile: `profiles/<id>/prefs.json`.
-3. Shared project: `<project>/.catamorphic/settings.json`.
+3. Shared project: `<project>/.work/settings.json`.
 4. Personal project: `profiles/<id>/settings-projects/<projectId>.json`.
 
 Layout, framed content, bookmarks presentation and link defaults support all three

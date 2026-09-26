@@ -165,10 +165,7 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
     // Nothing pulled into the shared folder (one folder serves every member)…
     await expect(
       fs.access(
-        path.join(
-          rootPath,
-          ".catamorphic/app-data/store/customers/acme/plan.md",
-        ),
+        path.join(rootPath, ".work/app-data/store/customers/acme/plan.md"),
       ),
     ).rejects.toThrow();
     // …and the agent's write stayed a file, not a store version.
@@ -198,34 +195,25 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
     await syncRemoteProject(folder, client);
     expect(
       await fs.readFile(
-        path.join(folder, ".catamorphic/app-data/store/customers/acme/plan.md"),
+        path.join(folder, ".work/app-data/store/customers/acme/plan.md"),
         "utf8",
       ),
     ).toBe("Plan v1\n");
     await expect(
       fs.access(
-        path.join(
-          folder,
-          ".catamorphic/app-data/store/customers/globex/secret.md",
-        ),
+        path.join(folder, ".work/app-data/store/customers/globex/secret.md"),
       ),
     ).rejects.toThrow();
 
-    await fs.mkdir(
-      path.join(folder, ".catamorphic/app-data/store/customers/globex"),
-      {
-        recursive: true,
-      },
-    );
+    await fs.mkdir(path.join(folder, ".work/app-data/store/customers/globex"), {
+      recursive: true,
+    });
     await fs.writeFile(
-      path.join(folder, ".catamorphic/app-data/store/customers/acme/notes.md"),
+      path.join(folder, ".work/app-data/store/customers/acme/notes.md"),
       "# Acme\nRenewal in Q4.\n",
     );
     await fs.writeFile(
-      path.join(
-        folder,
-        ".catamorphic/app-data/store/customers/globex/notes.md",
-      ),
+      path.join(folder, ".work/app-data/store/customers/globex/notes.md"),
       "should not land\n",
     );
     const report = await shipRemoteProject(folder, client);

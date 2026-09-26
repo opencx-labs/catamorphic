@@ -10,6 +10,10 @@ import type {
 } from "@catamorphic/sandbox";
 import { assertSandboxResources } from "@catamorphic/sandbox";
 import {
+  APP_DATA_ENV,
+  APP_DATA_MOUNT,
+} from "@catamorphic/workflow/project-layout";
+import {
   type SandboxStatus as MsbSandboxStatus,
   NetworkPolicy,
   type NetworkProfile,
@@ -140,8 +144,8 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
         : undefined;
     if (dataDirectory) {
       builder = builder
-        .volume("/catamorphic-app-data", (mount) => mount.bind(dataDirectory))
-        .env("CATAMORPHIC_APP_DATA_DIR", "/catamorphic-app-data");
+        .volume(APP_DATA_MOUNT, (mount) => mount.bind(dataDirectory))
+        .env(APP_DATA_ENV, APP_DATA_MOUNT);
     }
     const sandbox = await builder.create();
     this.connections.set(name, sandbox);

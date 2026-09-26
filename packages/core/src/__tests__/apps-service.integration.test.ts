@@ -142,7 +142,7 @@ describeIf("AppsService integration", () => {
       name: "apps-project",
       externalUserId: identity.externalUserId,
       initialFiles: {
-        ".catamorphic/workflows/src/orders.ts": [
+        ".work/workflows/src/orders.ts": [
           'import { defineWorkflow } from "@catamorphic/workflow";',
           "",
           "export const listOrders = defineWorkflow(({ defineBoundary }) => ({",
@@ -150,24 +150,24 @@ describeIf("AppsService integration", () => {
           "}));",
           "",
         ].join("\n"),
-        ".catamorphic/workflows/src/app-api.ts": [
+        ".work/workflows/src/app-api.ts": [
           'import { listOrders } from "./orders.js";',
           "",
           "export const appApi = { listOrders };",
           "",
         ].join("\n"),
-        ".catamorphic/apps/ops-dashboard/package.json": JSON.stringify({
+        ".work/apps/ops-dashboard/package.json": JSON.stringify({
           name: "ops-dashboard",
           private: true,
         }),
-        ".catamorphic/apps/ops-dashboard/src/main.tsx": "export {};",
+        ".work/apps/ops-dashboard/src/main.tsx": "export {};",
         // Declares that it reads the viewer's chats (ADR 0148).
-        ".catamorphic/apps/activity/package.json": JSON.stringify({
+        ".work/apps/activity/package.json": JSON.stringify({
           name: "activity",
           private: true,
           catamorphic: { access: { sessions: "read" } },
         }),
-        ".catamorphic/apps/activity/src/main.tsx": "export {};",
+        ".work/apps/activity/src/main.tsx": "export {};",
       },
     });
     try {
@@ -248,7 +248,7 @@ describeIf("AppsService integration", () => {
     const buildCommand = provider.commands.find(
       (entry) => entry.command === "NODE_ENV=production bun run build",
     );
-    expect(buildCommand?.cwd).toContain(".catamorphic/apps/ops-dashboard");
+    expect(buildCommand?.cwd).toContain(".work/apps/ops-dashboard");
   });
 
   it("freezes a declared session access into the version and widens the app identity with it (ADR 0148)", async () => {
@@ -647,9 +647,9 @@ describeIf("AppsService integration", () => {
       artifactId: source.id,
       revision: 1,
       files: {
-        ".catamorphic/workflows/src/helper.ts":
+        ".work/workflows/src/helper.ts":
           'import { defineWorkflow } from "@catamorphic/workflow"; export const echo = defineWorkflow(({ defineBoundary }) => ({ steps: [defineBoundary({ run: async () => "ok" })] }));',
-        ".catamorphic/workflows/src/app-api.ts":
+        ".work/workflows/src/app-api.ts":
           'import { echo } from "./helper"; export const appApi = { echo };',
       },
     });

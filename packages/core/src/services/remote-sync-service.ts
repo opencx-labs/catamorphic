@@ -9,6 +9,7 @@ import {
   syncWithNetworkRemote,
 } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
+import { MANAGED_BRANCH_PREFIX } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import { hasProjectPermission, type Identity } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
@@ -20,7 +21,7 @@ import type {
 
 const tracer = getTracer("@catamorphic/core");
 
-const SYNC_AUTHOR = { name: "Catamorphic", email: "system@catamorphic.dev" };
+const SYNC_AUTHOR = { name: "Work", email: "system@work.software" };
 
 export type RemoteSyncOutcome = { status: "no-remote" } | NetworkSyncResult;
 
@@ -383,7 +384,7 @@ function validLocalBranch(ref: string): boolean {
   );
 }
 
-/** `catamorphic/<title-slug>-HHmm` — readable on the host, unique enough. */
+/** `work/<title-slug>-HHmm` — readable on the host, unique enough. */
 function prBranchName(title: string, now: Date): string {
   const slug =
     title
@@ -392,7 +393,7 @@ function prBranchName(title: string, now: Date): string {
       .replace(/^-+|-+$/g, "")
       .slice(0, 40) || "change";
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `catamorphic/${slug}-${pad(now.getUTCHours())}${pad(
+  return `${MANAGED_BRANCH_PREFIX}${slug}-${pad(now.getUTCHours())}${pad(
     now.getUTCMinutes(),
   )}`;
 }

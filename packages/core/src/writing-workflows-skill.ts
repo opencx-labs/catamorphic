@@ -82,7 +82,7 @@ Labels describe real behavior: a formatting example must not claim to send mail.
 Declare \`triggers: [trigger("literal-kind", { constant: "config" })]\` alongside
 \`steps\`, with \`trigger\` imported from \`@catamorphic/workflow\` (it is not a
 builder argument). Kind names and config/payload shapes come from the host-generated
-\`.catamorphic/workflows/src/catamorphic-triggers.d.ts\`. Config is inline constant data, not an
+\`.work/workflows/src/work-triggers.d.ts\`. Config is inline constant data, not an
 expression evaluated at runtime. Conditions belong in ordinary workflow code.
 
 The trigger payload is the first scope's input. Multiple triggers require an
@@ -133,7 +133,7 @@ Declare the fewest that work; see \`workflow-lifecycle\`.
 
 ## App contracts and secrets
 
-Expose only intended workflows from \`.catamorphic/workflows/src/app-api.ts\`; use \`building-apps\`
+Expose only intended workflows from \`.work/workflows/src/app-api.ts\`; use \`building-apps\`
 for the app contract and client. App inputs are untrusted: validate identifiers,
 clamp numbers, and bound arrays before acting. Inputs and outputs must survive
 JSON: use ISO strings and plain data, not dates, maps, streams, or functions.
@@ -149,12 +149,12 @@ cannot start with \`CATAMORPHIC_\`. Configure values through the host; an unset
 required secret throws. Secrets stay in backend execution, never app bundles or
 returned results. Prefer declared connections for member accounts and brokered access.
 
-The host-provided non-secret \`process.env.CATAMORPHIC_APP_DATA_DIR\` is the location
+The host-provided non-secret \`process.env.WORK_APP_DATA_DIR\` is the location
 for persistent local data. Follow \`catamorphic-projects\` for its storage contract.
 
 ## Verify the result
 
-Run \`bun run --cwd .catamorphic check\` after structural changes. It checks parsing,
+Run \`bun run --cwd .work check\` after structural changes. It checks parsing,
 trigger bindings, and app contracts; \`--write\` refreshes generated app types.
 Fix the earliest boundary type mismatch instead of adding assertions or ignoring
 errors. Check the actual workflow through the host at the intended revision and

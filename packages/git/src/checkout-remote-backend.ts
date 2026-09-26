@@ -1,9 +1,5 @@
-import {
-  hasLocalGit,
-  INTERNAL_REMOTE_PREFIX,
-  nativeGit,
-  nativeGitBytes,
-} from "./native-git.js";
+import { PUBLISHED_REF_PREFIX } from "@catamorphic/workflow/project-layout";
+import { hasLocalGit, nativeGit, nativeGitBytes } from "./native-git.js";
 import { NativeProjectRepo } from "./native-project-repo.js";
 import type {
   CommitInfo,
@@ -57,7 +53,7 @@ class CheckoutOrigin implements OriginRepo {
   private publicationRef(ref: string): string {
     if (!ref.startsWith("refs/heads/"))
       throw new Error(`Unsupported publication ref: ${ref}`);
-    return `${INTERNAL_REMOTE_PREFIX}/${ref.slice("refs/heads/".length)}`;
+    return `${PUBLISHED_REF_PREFIX}/${ref.slice("refs/heads/".length)}`;
   }
   async resolveRef(ref: string): Promise<string | null> {
     return nativeGit(this.root, [
@@ -74,7 +70,7 @@ class CheckoutOrigin implements OriginRepo {
     const output = await nativeGit(this.root, [
       "for-each-ref",
       "--format=%(refname)%09%(objectname)",
-      `${INTERNAL_REMOTE_PREFIX}/`,
+      `${PUBLISHED_REF_PREFIX}/`,
     ]);
     return output
       .trim()
@@ -82,7 +78,7 @@ class CheckoutOrigin implements OriginRepo {
       .filter(Boolean)
       .flatMap((line) => {
         const [name, sha] = line.split("\t");
-        const ref = name?.replace(`${INTERNAL_REMOTE_PREFIX}/`, "refs/heads/");
+        const ref = name?.replace(`${PUBLISHED_REF_PREFIX}/`, "refs/heads/");
         return ref?.startsWith(prefix) && sha ? [{ ref, sha }] : [];
       });
   }

@@ -3,7 +3,7 @@
 The Work server is the prebuilt, self-hostable Catamorphic host (ADRs 0059,
 0159). Product-facing names say Work: the `work-server` image, `WORK_*`
 configuration, `work-<id>.local`, and the sign-in pages. Framework contracts
-(`@catamorphic/*`, `.catamorphic/`, the database schemas, key-derivation
+(`@catamorphic/*`, `.work/`, the database schemas, key-derivation
 labels) keep the Catamorphic name. The release workflow
 `.github/workflows/work-server-image.yml` builds, smoke-tests, and publishes
 the image for every `desktop-v*` release tag.
@@ -59,9 +59,9 @@ alone never free capacity.
 - Project managers use their ordinary OAuth identity and committed
   `memberships:read|write` or `roles:read|write` permissions (ADR 0158) for
   admission and membership APIs under `/api/projects/:projectId`.
-- Ongoing company-brain configuration is project code: `.catamorphic/roles/*.json`,
-  `.catamorphic/agents/*`, `.catamorphic/sidebar.js`, and
-  `.catamorphic/project.json`. The stock server must not grow a parallel
+- Ongoing company-brain configuration is project code: `.work/roles/*.json`,
+  `.work/agents/*`, `.work/sidebar.js`, and
+  `.work/project.json`. The stock server must not grow a parallel
   bootstrap configuration file. Role presentation targets resolved
   permissions, never hard-coded role names.
 

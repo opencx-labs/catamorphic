@@ -115,7 +115,7 @@ it("an embedded host executes each session on its Allocation and rejects revoked
       project.id,
     );
     await repo.writeFile(
-      ".catamorphic/project.json",
+      ".work/project.json",
       JSON.stringify({
         environments: {
           a: { pool: { machine: "a" }, workloads: ["agent"] },
@@ -177,7 +177,7 @@ it("an embedded host executes each session on its Allocation and rejects revoked
       project.id,
     );
     await changed.writeFile(
-      ".catamorphic/project.json",
+      ".work/project.json",
       JSON.stringify({
         environments: {
           b: { pool: { machine: "a" }, workloads: ["agent"] },
@@ -244,7 +244,7 @@ it("an authenticated member executes on this machine and loses execution immedia
       project.id,
     );
     await repo.writeFile(
-      ".catamorphic/project.json",
+      ".work/project.json",
       JSON.stringify({
         environments: {
           personal: { device: "member", workloads: ["agent"] },

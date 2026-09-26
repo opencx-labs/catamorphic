@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ProjectTelemetryConfiguration } from "@catamorphic/otel/node";
+import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import { z } from "zod";
 
 const Environment = z.record(z.string().regex(/^OTEL_[A-Z0-9_]+$/), z.string());
@@ -38,7 +39,7 @@ export function projectTelemetrySettings(args: {
   if ((args.env ?? process.env).OTEL_SDK_DISABLED?.toLowerCase() === "true")
     return {};
   const manifest = args.rootPath
-    ? readJson(path.join(args.rootPath, ".catamorphic/project.json"))
+    ? readJson(path.join(args.rootPath, PROJECT_MANIFEST_PATH))
     : undefined;
   const rawProject =
     manifest && typeof manifest === "object" && "telemetry" in manifest

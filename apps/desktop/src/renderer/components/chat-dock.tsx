@@ -10,6 +10,7 @@ import {
   useWatchers,
 } from "@catamorphic/react";
 import { AgentEnvironmentControl } from "@catamorphic/ui";
+import { PROJECT_APPS_DIR } from "@catamorphic/workflow/project-layout";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowUp,
@@ -267,9 +268,13 @@ interface TurnEvent {
   filePath?: string;
 }
 
-/** Project-app name from a file path under .catamorphic/apps/<name>/, if any. */
+const APP_SOURCE_PATTERN = new RegExp(
+  `(?:^|/)${PROJECT_APPS_DIR.replaceAll(".", "\\.")}/([a-z0-9][a-z0-9-]*)/`,
+);
+
+/** Project-app name from a file path under .work/apps/<name>/, if any. */
 const appNameFromPath = (filePath: string | undefined): string | undefined =>
-  filePath?.match(/(?:^|\/)\.catamorphic\/apps\/([a-z0-9][a-z0-9-]*)\//)?.[1];
+  filePath?.match(APP_SOURCE_PATTERN)?.[1];
 
 const firstLine = (value: string | undefined): string =>
   (value ?? "").split("\n", 1)[0]?.trim() ?? "";
@@ -295,7 +300,7 @@ function activityChips(
   let lastSubagentEvents: TurnEvent[] | undefined;
   let currentTurnEvents: TurnEvent[] = [];
   let currentTurnHasSubagents = false;
-  // Apps the agent worked on (file edits under .catamorphic/apps/<name>/); active while
+  // Apps the agent worked on (file edits under .work/apps/<name>/); active while
   // the CURRENT turn touches them.
   const apps = new Map<string, { active: boolean }>();
   // Tool calls whose tool declares an MCP Apps view; later events with the

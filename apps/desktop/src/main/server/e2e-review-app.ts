@@ -11,8 +11,8 @@ export function reviewAppFiles(value: unknown): Record<string, string> {
     })
     .parse(value);
   const scaffold = appScaffold({ name: "review" });
-  const packagePath = ".catamorphic/apps/review/package.json";
-  const configPath = ".catamorphic/apps/review/vite.config.ts";
+  const packagePath = ".work/apps/review/package.json";
+  const configPath = ".work/apps/review/vite.config.ts";
   const packageSource = scaffold[packagePath];
   const configSource = scaffold[configPath];
   if (!packageSource || !configSource)
@@ -32,7 +32,7 @@ export function reviewAppFiles(value: unknown): Record<string, string> {
   return {
     ...Object.fromEntries(
       pack.files.map((file) => [
-        `.catamorphic/apps/review/src/${file.path}`,
+        `.work/apps/review/src/${file.path}`,
         file.content,
       ]),
     ),

@@ -3,6 +3,7 @@ import {
   type Project,
   RoleDefinitionSchema,
 } from "@catamorphic/core";
+import { PROJECT_ROLES_DIR } from "@catamorphic/workflow/project-layout";
 import { z } from "zod";
 import type { AdmissionMode } from "../admission/admission-service.js";
 
@@ -140,7 +141,7 @@ export async function provisionWorkProject(args: {
     [...parsed.roles]
       .sort((left, right) => left.slug.localeCompare(right.slug))
       .map((role) => [
-        `.catamorphic/roles/${role.slug}.json`,
+        `${PROJECT_ROLES_DIR}/${role.slug}.json`,
         `${JSON.stringify(role.definition, null, 2)}\n`,
       ]),
   );

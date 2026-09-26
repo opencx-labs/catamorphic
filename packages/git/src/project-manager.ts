@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  MANAGED_BRANCH_PREFIX,
+  PROJECT_GITIGNORE_PATH,
+  PROJECT_MANIFEST_PATH,
+} from "@catamorphic/workflow/project-layout";
 import { FsBackend } from "./fs-backend.js";
 import { push } from "./git-sync.js";
 import { discoverLocalFolder } from "./native-git.js";
@@ -16,15 +21,6 @@ import type {
 } from "./types.js";
 
 /**
- * Where the project manifest lives. `.catamorphic/` is the project-owned
- * metadata directory (ADR 0043): the manifest marks a folder as a
- * Catamorphic project and is the future home of project-scoped config.
- * Deliberately NOT written when cloning a network remote — imported history
- * stays pristine until project-scoped config is actually needed.
- */
-export const PROJECT_MANIFEST_PATH = ".catamorphic/project.json";
-
-/**
  * Seeded into every new project (unless one exists): mirrors the
  * checkpoint walker's IGNORED_DIRS so git status and the walker agree on
  * what a project's history never contains.
@@ -37,15 +33,9 @@ dist/
 `;
 
 const SYSTEM_AUTHOR = {
-  name: "Catamorphic",
-  email: "system@catamorphic.dev",
+  name: "Work",
+  email: "system@work.software",
 };
-
-/**
- * Pattern used for auto-generated draft branches. Format is
- * `work/YYYY-MM-DD_HH-mm[-N]` where `-N` suffix is appended on collision.
- */
-export const WORK_BRANCH_PREFIX = "work/";
 
 export class ProjectManager {
   constructor(
@@ -314,7 +304,7 @@ export class ProjectManager {
     // Every project gets ignore rules from birth: without them the first
     // `bun install` floods git status (and every changes UI) with the
     // whole node_modules tree. Never overwrite one the user already has.
-    const gitignorePath = path.join(repoPath, ".catamorphic", ".gitignore");
+    const gitignorePath = path.join(repoPath, PROJECT_GITIGNORE_PATH);
     const gitignoreExists = await fs.access(gitignorePath).then(
       () => true,
       () => false,
@@ -424,7 +414,7 @@ export async function generateWorkBranchName(opts: {
 }): Promise<string> {
   const now = opts.now ?? new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
-  const base = `${WORK_BRANCH_PREFIX}${now.getUTCFullYear()}-${pad(
+  const base = `${MANAGED_BRANCH_PREFIX}${now.getUTCFullYear()}-${pad(
     now.getUTCMonth() + 1,
   )}-${pad(now.getUTCDate())}_${pad(now.getUTCHours())}-${pad(
     now.getUTCMinutes(),

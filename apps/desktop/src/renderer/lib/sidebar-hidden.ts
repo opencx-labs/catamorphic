@@ -1,6 +1,6 @@
 /**
  * Drops hidden items together with their descendants. Hiding only the row
- * would hoist its children to the top level: hiding `.catamorphic` in a
+ * would hoist its children to the top level: hiding `.work` in a
  * project files section used to spill the workspace's folders into it.
  */
 export function dropHiddenSubtrees<

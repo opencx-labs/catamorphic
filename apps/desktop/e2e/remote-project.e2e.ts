@@ -370,7 +370,7 @@ describe("remote projects (ADR 0055)", () => {
     // Files is a collapsible section, without builder-only Git controls.
     await runWait(
       `[...document.querySelectorAll('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')].find(button => button.textContent.trim() === 'Files')?.click();
-       return $('[data-testid="files-nav"]')?.textContent.includes('.catamorphic');`,
+       return $('[data-testid="files-nav"]')?.textContent.includes('.work');`,
       {
         timeoutMs: 60_000,
         label: "member files",
@@ -385,42 +385,30 @@ describe("remote projects (ADR 0055)", () => {
     ).toContain("Refunds take 5 days");
     expect(
       fs.readFileSync(
-        path.join(
-          projectDir,
-          ".catamorphic/app-data/store/customers/acme/notes.md",
-        ),
+        path.join(projectDir, ".work/app-data/store/customers/acme/notes.md"),
         "utf8",
       ),
     ).toBe("Acme notes v2\n");
     // The store never enters the local git history.
     expect(
-      fs.readFileSync(path.join(projectDir, ".catamorphic/.gitignore"), "utf8"),
+      fs.readFileSync(path.join(projectDir, ".work/.gitignore"), "utf8"),
     ).toContain("/app-data/");
   });
 
   it("ships a local store edit with the synced version", async () => {
     fs.writeFileSync(
-      path.join(
-        projectDir,
-        ".catamorphic/app-data/store/customers/acme/notes.md",
-      ),
+      path.join(projectDir, ".work/app-data/store/customers/acme/notes.md"),
       "Acme notes v2 + brief\n",
     );
-    fs.mkdirSync(
-      path.join(projectDir, ".catamorphic/app-data/store/customers/acme"),
-      {
-        recursive: true,
-      },
-    );
+    fs.mkdirSync(path.join(projectDir, ".work/app-data/store/customers/acme"), {
+      recursive: true,
+    });
     fs.writeFileSync(
-      path.join(
-        projectDir,
-        ".catamorphic/app-data/store/customers/acme/brief.md",
-      ),
+      path.join(projectDir, ".work/app-data/store/customers/acme/brief.md"),
       "# Brief\n",
     );
     fs.writeFileSync(
-      path.join(projectDir, ".catamorphic/app-data/store/private.txt"),
+      path.join(projectDir, ".work/app-data/store/private.txt"),
       "Private local draft",
     );
     await run(`window.dispatchEvent(new Event('focus')); return true;`);
@@ -465,7 +453,7 @@ describe("remote projects (ADR 0055)", () => {
       `[...document.querySelectorAll('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')].find(button => button.textContent.trim() === 'Files')?.click(); return true;`,
     );
     await runWait(
-      `for (const name of ['.catamorphic', 'app-data', 'store', 'customers']) { const folder = byText('[data-testid="files-nav"] button', name); if (folder?.getAttribute('aria-expanded') === 'false') { folder.click(); return false; } } return !!byText('[data-testid="files-nav"] button', 'acme');`,
+      `for (const name of ['.work', 'app-data', 'store', 'customers']) { const folder = byText('[data-testid="files-nav"] button', name); if (folder?.getAttribute('aria-expanded') === 'false') { folder.click(); return false; } } return !!byText('[data-testid="files-nav"] button', 'acme');`,
     );
     await runWait(
       `const folder = byText('[data-testid="files-nav"] button', 'acme');
@@ -473,7 +461,7 @@ describe("remote projects (ADR 0055)", () => {
       { label: "open customer folder" },
     );
     await runWait(
-      `const row = $('[data-testid="files-nav"] [data-sidebar-item-id=".catamorphic/app-data/store/customers/acme/brief.md"] [data-tree-primary]');
+      `const row = $('[data-testid="files-nav"] [data-sidebar-item-id=".work/app-data/store/customers/acme/brief.md"] [data-tree-primary]');
        if (!row) return false; row.click(); return true;`,
       {
         timeoutMs: 30_000,
