@@ -196,6 +196,6 @@ describe("agent tool access", () => {
     }>(`window.catamorphicDesktop.agentsList()`);
     const policies = agents.agents[0]?.toolPolicies;
     expect(policies?.[connectionId]).toEqual({ tools: { hello: "deny" } });
-    expect(policies?.work).toEqual({ default: "ask" });
+    expect(policies?.catamorphic).toEqual({ default: "ask" });
   }, 120_000);
 });
