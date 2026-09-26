@@ -34,6 +34,14 @@ export function Collapsible({
     const box = outer.current;
     const content = inner.current;
     if (!box || !content) return;
+    // A box inside another one writes its height on the next frame. Written
+    // inside the observer callback, it would resize the outer box's content
+    // (shallower in the tree) after the browser gathered this pass, which
+    // Chromium reports as an undelivered-notification loop error. The
+    // outermost box writes at once, so nesting costs one frame, not one per
+    // level.
+    const nested = Boolean(box.parentElement?.closest("[data-collapsible]"));
+    let frame = 0;
     const apply = () => {
       if (content.getClientRects().length === 0) {
         wasHidden.current = true;
@@ -51,16 +59,24 @@ export function Collapsible({
         now - lastChange.current < CONTINUOUS_MS ||
         animatingHeight(content);
       lastChange.current = now;
-      // transition-property is [height, opacity]; the fade keeps its tween.
-      box.style.transitionDuration = `${follow ? 0 : motionMs(200)}ms, ${motionMs(200)}ms`;
-      box.style.height = `${target}px`;
+      const write = () => {
+        // transition-property is [height, opacity]; the fade keeps its tween.
+        box.style.transitionDuration = `${follow ? 0 : motionMs(200)}ms, ${motionMs(200)}ms`;
+        box.style.height = `${target}px`;
+      };
+      cancelAnimationFrame(frame);
+      if (nested && settled.current) frame = requestAnimationFrame(write);
+      else write();
     };
     apply();
     settled.current = true;
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(apply);
     observer.observe(content);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
   }, [open]);
 
   return (
