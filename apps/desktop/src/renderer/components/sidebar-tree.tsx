@@ -104,6 +104,10 @@ export function SidebarTree<T extends TreeItem>({
                   item: target.item?.item ?? null,
                   position: target.position,
                 }),
+              onDragStart: (entry) => {
+                if (entry.item) dragAndDrop.onDragStart?.(entry.item);
+              },
+              onDragEnd: dragAndDrop.onDragEnd,
             }
           : undefined
       }

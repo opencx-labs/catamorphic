@@ -139,6 +139,48 @@ describe("configurable browser workspace", () => {
     ).toBe("false");
   });
 
+  it("draws one keyboard-led ring: none after right-click and Escape, the accent at once on Tab", async () => {
+    const point = await run<{ x: number; y: number }>(
+      "const r = $('[data-point-key=\"sidebar:Reference\"] [data-tree-primary]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }",
+    );
+    for (const type of ["mousePressed", "mouseReleased"])
+      await app.cdp("Input.dispatchMouseEvent", {
+        type,
+        ...point,
+        button: "right",
+        clickCount: 1,
+      });
+    await app.waitFor("!!document.querySelector('[data-sidebar-menu]')");
+    await app.press("Escape");
+    await app.waitFor(
+      "!!document.activeElement?.closest('[data-point-key=\"sidebar:Reference\"]')",
+      { label: "focus returned to the row" },
+    );
+    // Chromium turns :focus-visible on after the key; the pointer led, so no
+    // ring and no focus-opened preview.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(
+      await run(
+        "const row = document.activeElement.closest('[data-sidebar-item-id]'); return [document.documentElement.dataset.focusModality, getComputedStyle(row).outlineStyle, !!document.querySelector('[data-resource-inspector][data-open=true]')]",
+      ),
+    ).toEqual(["pointer", "none", false]);
+    // Sample every frame after Tab: the ring is the accent from its first
+    // frame, never faded in from the text color.
+    await run(
+      "const probe = document.createElement('i'); probe.style.color = 'var(--color-accent)'; document.body.append(probe); window.__accent = getComputedStyle(probe).color; probe.remove(); window.__rings = []; const t0 = performance.now(); const tick = () => { const row = document.querySelector('[data-sidebar-item-id]:has(:focus-visible)'); if (row) { const style = getComputedStyle(row); if (style.outlineStyle !== 'none') window.__rings.push(style.outlineColor); } if (performance.now() - t0 < 600) requestAnimationFrame(tick); }; requestAnimationFrame(tick);",
+    );
+    await app.press("Tab");
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    const rings = await app.eval<{ accent: string; colors: string[] }>(
+      "({ accent: window.__accent, colors: [...new Set(window.__rings)] })",
+    );
+    expect(rings.colors).toEqual([rings.accent]);
+    expect(
+      await app.eval("document.documentElement.dataset.focusModality"),
+    ).toBe("keyboard");
+    await run("document.activeElement.blur()");
+  });
+
   it("pins a bookmark as a tile and can change favorites to list rows", async () => {
     await run("$('button[aria-label=\"More actions for Reference\"]').click()");
     await app.waitFor("!!document.querySelector('[data-sidebar-menu]')");
@@ -191,10 +233,30 @@ describe("configurable browser workspace", () => {
       "const tile=$('[aria-label=\"Pinned bookmarks\"] [data-point-key=\"sidebar:Reference\"] button'); const r=tile.getBoundingClientRect(); tile.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true, clientX:r.x+r.width/2, clientY:r.y+r.height/2}))",
     );
     await app.waitFor("!!document.querySelector('[data-sidebar-menu]')");
+    // The emptied pinned area collapses through intermediate heights and
+    // stays mounted, instead of vanishing in one frame.
+    await run(
+      "const box = $('[aria-label=\"Pinned bookmarks scroll area\"]').closest('[data-collapsible]'); window.__pinnedBox = box; window.__pinnedHeights = []; const t0 = performance.now(); const tick = () => { window.__pinnedHeights.push(Math.round(box.getBoundingClientRect().height)); if (performance.now() - t0 < 1500) requestAnimationFrame(tick); }; requestAnimationFrame(tick);",
+    );
     await run("button('Unpin').click()");
     await app.waitFor(
       "!document.querySelector('[aria-label=\"Pinned bookmarks\"] [data-point-key]')",
     );
+    await new Promise((resolve) => setTimeout(resolve, 1600));
+    const collapse = await app.eval<{
+      heights: number[];
+      connected: boolean;
+      state: string;
+    }>(
+      "({ heights: window.__pinnedHeights, connected: window.__pinnedBox.isConnected, state: window.__pinnedBox.dataset.collapsible })",
+    );
+    const start = Math.max(...collapse.heights);
+    expect(start).toBeGreaterThan(20);
+    expect(collapse.heights.at(-1)).toBe(0);
+    expect(
+      collapse.heights.filter((height) => height > 0 && height < start).length,
+    ).toBeGreaterThan(2);
+    expect(collapse).toMatchObject({ connected: true, state: "closed" });
     await run("$('button[aria-label=\"More actions for Reference\"]').click()");
     await run("button('Edit bookmark…').click()");
     await app.waitFor(

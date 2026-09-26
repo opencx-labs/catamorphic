@@ -80,4 +80,28 @@ describe("design lint", () => {
     // Debt: DESIGN.md wants ShortcutHint everywhere. Lower when you convert one.
     expect(count(/\stitle=\{|\stitle="/g).length).toBeLessThanOrEqual(66);
   });
+  it("focus rings come from the ring tokens, never a private recipe", () => {
+    // One ring (DESIGN.md "Focus rings"): the global :focus-visible rule or
+    // `.focus-ring-inset`. Private utilities drifted to 1px rings, 2px and
+    // 4px offsets, and rings that ignored the keyboard-navigation gate.
+    expect(
+      count(/\b(?:focus|focus-visible|focus-within):(?:outline|ring)\b/g),
+    ).toEqual([]);
+    expect(count(/outline:\s*\d+px\s+solid/g)).toEqual([]);
+  });
+  it("checkboxes carry no private chrome", () => {
+    // form-controls.css draws every checkbox; per-site sizes and accent
+    // colors made some 14px and fought the shared mark.
+    const privateChrome = sources().flatMap(({ file, text }) =>
+      [...text.matchAll(/<input\b(?:(?!<input\b)[\s\S])*?\/>/g)]
+        .filter(([element]) => element.includes('type="checkbox"'))
+        .filter(([element]) =>
+          /className=["{`][^"}`]*\b(?:size-|w-|h-|accent-|border|bg-|rounded)/.test(
+            element,
+          ),
+        )
+        .map(() => file),
+    );
+    expect(privateChrome).toEqual([]);
+  });
 });

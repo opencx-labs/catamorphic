@@ -108,7 +108,7 @@ export function ReviewFileTree({
               }}
               onClick={() => (row.folder ? toggle() : file && onOpen(file))}
               style={{ paddingLeft: 8 + row.depth * 12 }}
-              className={`flex h-7 w-full min-w-0 items-center gap-1.5 rounded px-2 text-left text-xs hover:bg-bg-overlay focus-visible:outline focus-visible:outline-accent ${selectedPath === row.path ? "bg-bg-overlay text-fg" : "text-fg-muted"}`}
+              className={`flex h-7 w-full min-w-0 items-center gap-1.5 rounded px-2 text-left text-xs hover:bg-bg-overlay focus-ring-inset ${selectedPath === row.path ? "bg-bg-overlay text-fg" : "text-fg-muted"}`}
             >
               {row.folder ? (
                 <>

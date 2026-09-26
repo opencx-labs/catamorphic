@@ -268,7 +268,6 @@ export function BrowserImportDialog({
                     return next;
                   });
                 }}
-                className="size-4 accent-accent"
               />
             </label>
           ))}

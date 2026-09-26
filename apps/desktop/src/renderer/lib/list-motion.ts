@@ -6,8 +6,8 @@ import { type RefObject, useLayoutEffect, useRef } from "react";
  * without help survivors teleport up to fill holes and only the bottom gap
  * animates — a snap even when the container's height tweens. Instead:
  *
- * - Surviving rows FLIP: their old→new top delta is played as a translate
- *   easing to zero (a keystroke mid-glide continues from the in-flight
+ * - Surviving rows FLIP: their old→new offset is played as a translate
+ *   easing to zero (both axes, so a wrapping grid of tiles works too) (a keystroke mid-glide continues from the in-flight
  *   position, never teleports backwards).
  * - Rows the previous set didn't have fade-rise in.
  * - Reduced-motion users get the same filtering with no transforms or fades.
@@ -37,7 +37,7 @@ export function useListMotion(
    * rows). */
   reset: () => void;
 } {
-  const rowTopsRef = useRef(new Map<string, number>());
+  const rowTopsRef = useRef(new Map<string, { top: number; left: number }>());
   const { enterOnFirstPass = false, keepTransitions = "" } = opts;
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-measures on the keys list only; options are read on each pass
   useLayoutEffect(() => {
@@ -48,26 +48,37 @@ export function useListMotion(
     ).matches;
     const previousTops = rowTopsRef.current;
     const firstPass = previousTops.size === 0;
-    const nextTops = new Map<string, number>();
-    const rows: { row: HTMLElement; delta: number; entering: boolean }[] = [];
+    const nextTops = new Map<string, { top: number; left: number }>();
+    const rows: {
+      row: HTMLElement;
+      dx: number;
+      dy: number;
+      entering: boolean;
+    }[] = [];
     for (const node of sizer.children) {
       const row = node as HTMLElement;
       const id = row.dataset.itemId;
       if (!id) continue;
       const top = row.offsetTop;
-      nextTops.set(id, top);
+      const left = row.offsetLeft;
+      nextTops.set(id, { top, left });
       const before = previousTops.get(id);
       if (before === undefined) {
         rows.push({
           row,
-          delta: 0,
+          dx: 0,
+          dy: 0,
           entering: !firstPass || enterOnFirstPass,
         });
         continue;
       }
       const matrix = new DOMMatrixReadOnly(getComputedStyle(row).transform);
-      const delta = before + matrix.m42 - top;
-      rows.push({ row, delta: Math.round(delta), entering: false });
+      rows.push({
+        row,
+        dx: Math.round(before.left + matrix.m41 - left),
+        dy: Math.round(before.top + matrix.m42 - top),
+        entering: false,
+      });
     }
     rowTopsRef.current = nextTops;
     if (reducedMotion) {
@@ -78,10 +89,10 @@ export function useListMotion(
       }
       return;
     }
-    for (const { row, delta, entering } of rows) {
-      if (delta) {
+    for (const { row, dx, dy, entering } of rows) {
+      if (dx || dy) {
         row.style.transition = "none";
-        row.style.transform = `translateY(${delta}px)`;
+        row.style.transform = `translate(${dx}px, ${dy}px)`;
       } else if (entering) {
         row.style.transition = "none";
         row.style.transform = "translateY(4px)";
@@ -92,10 +103,10 @@ export function useListMotion(
         row.style.opacity = "";
       }
     }
-    if (!rows.some(({ delta, entering }) => delta || entering)) return;
+    if (!rows.some(({ dx, dy, entering }) => dx || dy || entering)) return;
     const frame = requestAnimationFrame(() => {
-      for (const { row, delta, entering } of rows) {
-        if (!delta && !entering) continue;
+      for (const { row, dx, dy, entering } of rows) {
+        if (!dx && !dy && !entering) continue;
         row.style.transition = [
           "transform 200ms cubic-bezier(0.2, 0, 0, 1)",
           "opacity 200ms cubic-bezier(0.2, 0, 0, 1)",

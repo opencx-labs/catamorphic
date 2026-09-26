@@ -185,11 +185,16 @@ it("separates relevance and content states while preserving a hidden widget and 
     if (!input) throw new Error("Missing widget");
     input.value = "Preserved";
     await render({ kind: "chat", sessionId: "a" }, "empty");
+    const widget = node.querySelector('[data-sidebar-widget="children"]');
+    // It collapses first (inert at once), then hides once the motion ends.
+    expect(widget?.hasAttribute("inert")).toBe(true);
     expect(
-      node
-        .querySelector('[data-sidebar-widget="children"]')
-        ?.hasAttribute("hidden"),
-    ).toBe(true);
+      widget
+        ?.querySelector("[data-collapsible]")
+        ?.getAttribute("data-collapsible"),
+    ).toBe("closed");
+    await act(() => new Promise((resolve) => setTimeout(resolve, 250)));
+    expect(widget?.hasAttribute("hidden")).toBe(true);
     await render({ kind: "chat", sessionId: "a" }, "error");
     expect(
       node.querySelector(

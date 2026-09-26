@@ -1,6 +1,19 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useLayoutEffect, useRef } from "react";
+import { motionMs } from "../lib/motion.js";
 
-/** The sidebar's structural motion, shared by every nesting level. */
+/** Height changes this close together are one continuous change (a resize
+ * drag reflowing text), which the box follows instead of chasing. */
+const CONTINUOUS_MS = 120;
+
+/**
+ * The sidebar's structural motion, shared by every nesting level: opening,
+ * closing, and any change in what it holds. Skeleton rows becoming rows, an
+ * empty sentence becoming a list, a pinned area emptying: the box tweens to
+ * its content's measured height over 200 ms instead of snapping. While
+ * something inside is already animating its own height (a tree sliding its
+ * rows, a nested collapsible) or the height is changing continuously, the box
+ * follows it exactly so the two never chase each other.
+ */
 export function Collapsible({
   open,
   children,
@@ -8,15 +21,82 @@ export function Collapsible({
   open: boolean;
   children: ReactNode;
 }) {
+  const outer = useRef<HTMLDivElement>(null);
+  const inner = useRef<HTMLDivElement>(null);
+  const lastChange = useRef(0);
+  const settled = useRef(false);
+
+  useLayoutEffect(() => {
+    const box = outer.current;
+    const content = inner.current;
+    if (!box || !content) return;
+    const apply = () => {
+      const target = open ? content.offsetHeight : 0;
+      const current = box.style.height;
+      if (current === `${target}px`) return;
+      const now = performance.now();
+      const follow =
+        !settled.current ||
+        now - lastChange.current < CONTINUOUS_MS ||
+        animatingHeight(content);
+      lastChange.current = now;
+      // transition-property is [height, opacity]; the fade keeps its tween.
+      box.style.transitionDuration = `${follow ? 0 : motionMs(200)}ms, ${motionMs(200)}ms`;
+      box.style.height = `${target}px`;
+    };
+    apply();
+    settled.current = true;
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(apply);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [open]);
+
   return (
     <div
-      className="grid transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none"
-      style={{ gridTemplateRows: open ? "1fr" : "0fr", opacity: open ? 1 : 0 }}
+      ref={outer}
+      className="overflow-hidden transition-[height,opacity] ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none"
+      style={{ opacity: open ? 1 : 0 }}
       inert={!open}
       aria-hidden={!open}
       data-collapsible={open ? "open" : "closed"}
     >
-      <div className="min-h-0 overflow-hidden">{children}</div>
+      <div ref={inner} className="flow-root">
+        {children}
+      </div>
     </div>
   );
+}
+
+const SIZE_PROPERTIES = new Set([
+  "height",
+  "max-height",
+  "min-height",
+  "grid-template-rows",
+]);
+
+function animatingHeight(root: Element): boolean {
+  if (typeof root.getAnimations !== "function") return false;
+  return root.getAnimations({ subtree: true }).some((animation) => {
+    if (animation.playState !== "running") return false;
+    if (
+      typeof CSSTransition !== "undefined" &&
+      animation instanceof CSSTransition
+    )
+      return SIZE_PROPERTIES.has(animation.transitionProperty);
+    const effect = animation.effect;
+    return (
+      typeof KeyframeEffect !== "undefined" &&
+      effect instanceof KeyframeEffect &&
+      effect
+        .getKeyframes()
+        .some((frame) =>
+          Object.keys(frame).some((key) =>
+            SIZE_PROPERTIES.has(
+              key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`),
+            ),
+          ),
+        )
+    );
+  });
 }

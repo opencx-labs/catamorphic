@@ -150,17 +150,24 @@ export const APP_KIT_CSS = `
 
 /* ---------------------------------------------------- checkbox & switch */
 .cat-checkbox{
-  appearance:none;flex:none;width:14px;height:14px;margin:0;cursor:pointer;
-  border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);
-  background:var(--color-bg-inset);position:relative;vertical-align:-2px;
+  appearance:none;display:inline-grid;place-content:center;flex:none;width:16px;height:16px;margin:0;
+  cursor:pointer;border:0;border-radius:var(--radius-sm);vertical-align:-3px;
+  background:color-mix(in srgb,var(--color-fg) 14%,transparent);
   transition:background-color var(--cat-motion-fast) var(--ease-standard),
-    border-color var(--cat-motion-fast) var(--ease-standard);
+    scale 100ms var(--ease-standard);
 }
-.cat-checkbox:checked{background:var(--color-accent);border-color:var(--color-accent)}
-.cat-checkbox:checked::after{
-  content:"";position:absolute;left:4px;top:1px;width:3px;height:7px;
-  border-right:1.5px solid var(--color-accent-fg);
-  border-bottom:1.5px solid var(--color-accent-fg);rotate:45deg;
+.cat-checkbox:hover:not(:disabled,:checked){background:color-mix(in srgb,var(--color-fg) 22%,transparent)}
+.cat-checkbox:active:not(:disabled){scale:.88}
+.cat-checkbox:checked{background:var(--color-accent)}
+.cat-checkbox::before{
+  content:"";width:10px;height:10px;background:var(--color-accent-fg);
+  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.75 5.25 4 7.5l4.25-5'/%3E%3C/svg%3E") center/10px 10px no-repeat;
+  clip-path:inset(0 100% 0 0);opacity:0;
+  transition:opacity 100ms var(--ease-standard),clip-path 0ms linear 100ms;
+}
+.cat-checkbox:checked::before{
+  clip-path:inset(0 0 0 0);opacity:1;
+  transition:opacity 100ms var(--ease-standard),clip-path var(--cat-motion-fast) var(--ease-standard);
 }
 .cat-checkbox:disabled{opacity:.55;cursor:default}
 .cat-switch{
@@ -633,7 +640,7 @@ export const APP_KIT_CSS = `
   }
   .cat-skeleton::after{animation:none}
   .cat-btn,.cat-tab,.cat-input,.cat-textarea,.cat-select select,
-  .cat-checkbox,.cat-switch,.cat-switch::after,.cat-cal-day,.cat-cal-nav,
+  .cat-checkbox,.cat-checkbox::before,.cat-switch,.cat-switch::after,.cat-cal-day,.cat-cal-nav,
   .cat-table tbody tr,.cat-table-sort .cat-table-arrow,.cat-scrollhint-fade,
   .cat-datepicker-clear{transition-duration:1ms}
 }
@@ -661,11 +668,12 @@ export const APP_KIT_CSS = `
    Rows slide and the tree resizes on expand/collapse with the base curve. */
 [role="tree"]{transition:height var(--cat-motion-base) var(--ease-standard)}
 [role="tree"] [role="treeitem"]{transition:top var(--cat-motion-base) var(--ease-standard)}
-[role="tree"][data-dragging] [role="treeitem"]{transition:none}
-[data-tree-drop-line]{height:2px;background:var(--color-accent);border-radius:1px;z-index:1;animation:cat-fade-in var(--cat-motion-fast) var(--ease-standard)}
+[role="tree"] [data-tree-dragging]>*{opacity:.4}
+[role="tree"] [data-tree-settling]>*{opacity:0;transition:none}
+[data-tree-drop-line]{height:2px;background:var(--color-accent);border-radius:1px;z-index:1;animation:cat-fade-in var(--cat-motion-fast) var(--ease-standard);transition:top 100ms var(--ease-standard)}
 [data-tree-drop-line]::before{content:"";position:absolute;left:4px;top:-3px;width:8px;height:8px;border-radius:50%;background:var(--color-accent)}
 [role="treeitem"][data-drop="inside"]>*,[role="tree"][data-drop-root="inside"]{border-radius:var(--radius-md);box-shadow:inset 0 0 0 1px var(--color-accent);background:color-mix(in srgb,var(--color-accent) 10%,transparent)}
-[role="tree"] [role="treeitem"]>*{transition-property:box-shadow,background-color,color;transition-duration:var(--cat-motion-fast);transition-timing-function:var(--ease-standard)}
+[role="tree"] [role="treeitem"]>*{transition-property:box-shadow,background-color,color,opacity;transition-duration:var(--cat-motion-fast);transition-timing-function:var(--ease-standard)}
 
 /* ------------------------------------------------------ popover growth */
 .cat-popover[data-settled]{transition:height var(--cat-motion-base) var(--ease-standard),top var(--cat-motion-base) var(--ease-standard)}

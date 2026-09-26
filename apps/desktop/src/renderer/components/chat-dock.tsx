@@ -2423,7 +2423,7 @@ function ChatDockContent({
                   />
                   <button
                     type="button"
-                    className="max-w-48 truncate rounded hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                    className="max-w-48 truncate rounded hover:underline"
                     onClick={() =>
                       onLinkClick?.(`artifact:${watcher.id}`, "tab")
                     }
@@ -2448,7 +2448,7 @@ function ChatDockContent({
                   {watcher.lastRun && (
                     <button
                       type="button"
-                      className={`rounded hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${watcher.lastRun.status === "failed" ? "text-danger" : "text-fg-muted"}`}
+                      className={`rounded hover:underline ${watcher.lastRun.status === "failed" ? "text-danger" : "text-fg-muted"}`}
                       onClick={() =>
                         onLinkClick?.(`run:${watcher.lastRun?.id}`, "tab")
                       }
