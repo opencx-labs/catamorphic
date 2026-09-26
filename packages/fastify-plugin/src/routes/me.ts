@@ -33,6 +33,9 @@ export function registerMeRoutes(app: FastifyInstance, ctx: RouteContext) {
             (ref) => ref.projectId === projectId,
           );
           const permissions = effectiveProjectPermissions(identity, projectId);
+          const overview = await Promise.resolve()
+            .then(() => ctx.core?.projects.getOverview({ identity, projectId }))
+            .catch(() => undefined);
           const project =
             permissions.includes("program:read") && ctx.core?.projects
               ? await ctx.core.projects.get(identity, projectId)
@@ -45,6 +48,7 @@ export function registerMeRoutes(app: FastifyInstance, ctx: RouteContext) {
             })) ?? [];
           return {
             projectId,
+            name: overview?.name ?? projectId,
             source: project?.remoteUrl
               ? {
                   remoteUrl: project.remoteUrl,

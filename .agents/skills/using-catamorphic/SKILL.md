@@ -17,7 +17,7 @@ Related guidance:
   Read the section for whatever you are wiring.
 - [embedding-guide](../embedding-guide/SKILL.md): composing the UI (workflow
   editor, inspectors, member consent, sessions, registry components).
-- [setup-catamorphic-server](../../../skills/setup-catamorphic-server/SKILL.md):
+- [setup-work-server](../../../skills/setup-work-server/SKILL.md):
   stock-server setup, machine enrollment, and multi-instance deployment.
 - Reference hosts: the desktop's embedded server
   [`apps/desktop/src/main/server/boot.ts`](../../../apps/desktop/src/main/server/boot.ts)

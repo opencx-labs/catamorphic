@@ -90,14 +90,17 @@ export class ProjectRootsStore {
             return input.reopen(id);
         }
       }
+      let rootExisted = true;
       if (!input.existing) {
         const entries = await fs.readdir(root).catch((error: unknown) => {
           if (
             error instanceof Error &&
             "code" in error &&
             error.code === "ENOENT"
-          )
+          ) {
+            rootExisted = false;
             return [];
+          }
           throw error;
         });
         if (entries.length > 0)
@@ -118,6 +121,19 @@ export class ProjectRootsStore {
         return await input.create(id, canonical);
       } catch (error) {
         await this.delete(id);
+        // The folder was empty or absent: take back what this attempt wrote
+        // so choosing the same place again works.
+        if (!input.existing) {
+          if (!rootExisted) {
+            await fs.rm(canonical, { recursive: true, force: true });
+          } else {
+            for (const entry of await fs.readdir(canonical).catch(() => []))
+              await fs.rm(path.join(canonical, entry), {
+                recursive: true,
+                force: true,
+              });
+          }
+        }
         throw error;
       }
     } finally {

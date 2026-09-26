@@ -13,6 +13,7 @@ import type { Identity } from "../identity.js";
 import {
   hasProjectPermission,
   identityMayUseEnvironment,
+  isProjectPrincipal,
   mayUseProject,
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
@@ -64,12 +65,9 @@ export class EnvironmentAccessDeniedError extends Error {
 }
 
 export class EnvironmentBindingUnavailableError extends Error {
-  constructor(
-    readonly environment: string,
-    readonly bindingId: string,
-  ) {
+  constructor(readonly environment: string) {
     super(
-      `Environment '${environment}' requires unavailable binding '${bindingId}'`,
+      `No machine for Environment '${environment}' is online and open to this work`,
     );
     this.name = "EnvironmentBindingUnavailableError";
   }
@@ -89,35 +87,58 @@ export class EnvironmentIncompatibleError extends Error {
 
 export class NoCompatibleEnvironmentError extends Error {
   constructor(readonly reasons: Readonly<Record<string, readonly string[]>>) {
-    super("No accessible project Environment satisfies this workload");
+    const detail = Object.entries(reasons)
+      .map(([name, why]) => `${name}: ${why.join("; ")}`)
+      .join(". ");
+    super(
+      `No accessible project Environment satisfies this workload${
+        detail ? ` (${detail})` : ""
+      }`,
+    );
     this.name = "NoCompatibleEnvironmentError";
   }
 }
+
+/** A session's or caller's user, or null for the project's own work. */
+export function placementOwner(externalUserId: string): string | null {
+  return isProjectPrincipal(externalUserId) ? null : externalUserId;
+}
+
+/**
+ * Whose work is being placed (ADR 0167). Omitted, the caller's; `null`, the
+ * project's own work, which only nodes open to everyone take.
+ */
+export type PlacementOwner = string | null | undefined;
 
 export class ExecutionEnvironmentsService {
   constructor(
     private readonly projects: ProjectEnvironmentsService,
     private readonly provider: EnvironmentProvider,
+    /** A member's own connected computer, for `device: "member"` (ADR 0098). */
+    private readonly memberDevices?: EnvironmentProvider,
   ) {}
 
   /** Resolve the host-only runtime realization recorded by an Allocation. */
   getRuntimeBinding(args: {
     identity: Identity;
     bindingId: string;
+    workerNodeId?: string;
   }):
     | Promise<EnvironmentRuntimeBinding | undefined>
     | EnvironmentRuntimeBinding
     | undefined {
     return this.provider.get({
       tenantId: args.identity.tenantId,
-      bindingId: args.bindingId,
+      pool: {},
       allocationBindingId: args.bindingId,
+      ...(args.workerNodeId ? { workerNodeId: args.workerNodeId } : {}),
     });
   }
 
   async discover(args: {
     identity: Identity;
     projectId: string;
+    owner?: PlacementOwner;
     requirements: EnvironmentRequirements;
     allowed?: readonly string[];
     preferred?: readonly string[];
@@ -171,7 +192,7 @@ export class ExecutionEnvironmentsService {
             "admission" in evaluated
               ? []
               : evaluated.bindingUnavailable
-                ? ["Host binding is unavailable"]
+                ? ["No machine for it is online and open to this work"]
                 : evaluated.reasons;
           const reasons = allowed
             ? compatibilityReasons
@@ -186,11 +207,11 @@ export class ExecutionEnvironmentsService {
           items.push({
             name,
             label:
-              definition.binding === "this-machine" ||
+              definition.device === "member" ||
               admission?.binding.trust === "local"
                 ? "This machine"
                 : name,
-            clientRequired: definition.binding === "this-machine",
+            clientRequired: definition.device === "member",
             ...(definition.description
               ? { description: definition.description }
               : {}),
@@ -252,6 +273,7 @@ export class ExecutionEnvironmentsService {
   async admit(args: {
     identity: Identity;
     projectId: string;
+    owner?: PlacementOwner;
     environment?: string;
     workerNodeId?: string;
     allocationBindingId?: string;
@@ -293,10 +315,7 @@ export class ExecutionEnvironmentsService {
           });
           if ("admission" in evaluated) return evaluated.admission;
           if (evaluated.bindingUnavailable) {
-            throw new EnvironmentBindingUnavailableError(
-              args.environment,
-              definition.binding,
-            );
+            throw new EnvironmentBindingUnavailableError(args.environment);
           }
           throw new EnvironmentIncompatibleError(
             args.environment,
@@ -332,8 +351,14 @@ export class ExecutionEnvironmentsService {
           );
           if ("admission" in evaluated) return evaluated.admission;
           reasons[name] = evaluated.bindingUnavailable
-            ? ["Host binding is unavailable"]
+            ? ["No machine for it is online and open to this work"]
             : evaluated.reasons;
+        }
+        for (const entry of policy.entries) {
+          if (entry.invalid)
+            reasons[entry.name] = [
+              `invalid in .catamorphic/project.json: ${entry.invalid.error}`,
+            ];
         }
         throw new NoCompatibleEnvironmentError(reasons);
       },
@@ -343,6 +368,7 @@ export class ExecutionEnvironmentsService {
   private async evaluate(args: {
     identity: Identity;
     projectId: string;
+    owner?: PlacementOwner;
     name: string;
     workerNodeId?: string;
     allocationBindingId?: string;
@@ -365,12 +391,19 @@ export class ExecutionEnvironmentsService {
       args.requirements,
       definition.requirements,
     );
-    const runtime = await this.provider.get({
+    const source =
+      definition.device === "member" ? this.memberDevices : this.provider;
+    const owner =
+      args.owner === undefined
+        ? placementOwner(args.identity.externalUserId)
+        : args.owner;
+    const runtime = await source?.get({
       tenantId: args.identity.tenantId,
-      bindingId: definition.binding,
+      pool: definition.pool ?? {},
+      ...(definition.strict ? { strict: true } : {}),
       requirements: effectiveRequirements,
       projectId: args.projectId,
-      externalUserId: args.identity.externalUserId,
+      ...(owner ? { ownerUserId: owner } : {}),
       clientRunnerId: args.identity.clientRunnerId,
       allocationBindingId: args.allocationBindingId,
       workerNodeId: args.workerNodeId,

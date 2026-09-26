@@ -1,4 +1,4 @@
-import type { CatamorphicCore } from "@catamorphic/core";
+import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import {
   AccessDeniedError,
   DeploymentBlockedError,
@@ -85,6 +85,34 @@ export interface CatamorphicPluginOptions {
    * as webhook URLs. Defaults to the request's own origin and mount prefix.
    */
   publicApiBase?: string;
+  /** Host additions to the project MCP endpoint (ADR 0166). */
+  projectMcp?: ProjectMcpHost;
+}
+
+/**
+ * What a host adds to `POST /projects/:projectId/mcp`: the name a client
+ * shows, a paragraph appended to the orientation every client receives at
+ * `initialize`, and tools the host owns (the Work server's shares). Host
+ * tools see the caller's identity and enforce their own permissions.
+ */
+export interface ProjectMcpHost {
+  serverInfo?: { name: string; title: string; version?: string };
+  instructions?: string;
+  tools?: (args: {
+    identity: Identity;
+    projectId: string;
+  }) => ProjectMcpHostTool[];
+}
+
+export interface ProjectMcpHostTool {
+  definition: {
+    name: string;
+    description: string;
+    inputSchema: Record<string, unknown>;
+    annotations?: Record<string, unknown>;
+  };
+  /** Returns the tool's result; a thrown error becomes a tool error. */
+  call: (args: Record<string, unknown>) => Promise<unknown>;
 }
 
 /** What a host enables for all callers; defaults are the most permissive. */
@@ -110,6 +138,7 @@ export interface RouteContext {
   core?: CatamorphicCore;
   features: HostFeatures;
   publicApiBase?: string;
+  projectMcp?: ProjectMcpHost;
 }
 
 /**
@@ -193,6 +222,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
 
   const ctx: RouteContext = {
     core: opts.core,
+    ...(opts.projectMcp ? { projectMcp: opts.projectMcp } : {}),
     ...(opts.publicApiBase
       ? { publicApiBase: opts.publicApiBase.replace(/\/$/, "") }
       : {}),

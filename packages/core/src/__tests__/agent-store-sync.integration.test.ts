@@ -111,7 +111,7 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
     alice = {
       ...root,
       externalUserId: "alice",
-      executionScope: [{ projectId, name: "local" }],
+      executionScope: [{ projectId, name: "default" }],
       scope: [
         { kind: "agent", projectId, name: "csm" },
         {

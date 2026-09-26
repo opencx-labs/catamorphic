@@ -439,8 +439,8 @@ Access is enforced by the host from **roles you commit** as
   "description": "Customer success managers. Not technical: they want plain answers about their customers' accounts, renewals and health, and ready-to-send drafts. Never show them code.",
   "agents": ["csm-assistant"],                 // or { "name": "…", "toolPolicies": { "slack": { "default": "ask" } } }
   "workflows": ["crm.lookup", "docs.search"],
-  "environments": ["local"],
-  "connections": [{ "environment": "local", "alias": "gmail" }],
+  "environments": ["default"],
+  "connections": [{ "environment": "default", "alias": "gmail" }],
   "apps": ["customer-tracker"],
   "documents": [
     "docs/**",                                                       // read the handbook
@@ -450,7 +450,7 @@ Access is enforced by the host from **roles you commit** as
 // .catamorphic/roles/admin.json
 { "version": 1, "name": "Admin", "description": "Runs the brain: builds workflows, apps and agents. Comfortable with technical detail.", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["*"], "permissions": ["*"], "documents": ["store/**"] }
 // .catamorphic/roles/engineer.json
-{ "version": 1, "name": "Engineer", "description": "Builds workflows and apps; ships them after review. Technical.", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["local"], "permissions": ["program:write", "runs:read", "secrets:read"] }
+{ "version": 1, "name": "Engineer", "description": "Builds workflows and apps; ships them after review. Technical.", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["default"], "permissions": ["program:write", "runs:read", "secrets:read"] }
 // .catamorphic/roles/brain-maintainer.json
 { "version": 1, "name": "Brain Maintainer", "description": "Keeps the handbook and shared documents current. Edits text, not code.", "permissions": ["brain:maintain"], "agents": ["brain-maintainer"] }
 \`\`\`
@@ -492,18 +492,24 @@ Rules of thumb when authoring roles:
 
 ## Choose where agents run
 
-The project manifest declares logical Environments; roles grant them and an
-agent's \`environment.allowed\` / \`environment.preferred\` policy narrows and
-recommends the choices. A machine is usable only when the host has supplied a
-compatible, available binding. Do not invent a server id or treat adding a JSON
+The project manifest declares logical Environments by what the work needs:
+\`workloads\`, \`requirements\`, and an optional \`pool\` of machine labels
+that must all match (\`{ "pool": { "class": "gpu" } }\`). Every project has a
+\`default\` Environment that selects nothing, so it runs wherever the host
+places work. Roles grant Environments by name, and an agent's
+\`environment.allowed\` / \`environment.preferred\` policy narrows and
+recommends the choices. The host decides which machines exist, how they are
+labeled, and whose work each takes: a person's agents land on their own
+machine first, then a team's, then a shared one. \`strict: true\` never falls
+back to a broader machine. Do not invent machine names or treat adding a JSON
 entry as provisioning a machine.
 
 A remote project keeps one authority for membership, connections, and history.
-\`binding: "this-machine"\` offers an authenticated member device when the host
-supports client execution. It never requires the member to receive database
-credentials. A managed server is enrolled by the host operator. Moving a session
-is explicit and resumes its saved checkpoint; never retry an uncertain action
-just because a connection returned.
+\`device: "member"\` offers an authenticated member's own computer when the
+host supports client execution. It never requires the member to receive
+database credentials. Managed machines are enrolled by the host operator.
+Moving a session is explicit and resumes its saved checkpoint; never retry an
+uncertain action just because a connection returned.
 
 ## Shape the project experience from capabilities
 

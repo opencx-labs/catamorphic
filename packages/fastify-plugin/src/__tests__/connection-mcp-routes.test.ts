@@ -1,3 +1,4 @@
+import { ConnectionActionDeniedError } from "@catamorphic/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestApp } from "./test-app.js";
 
@@ -12,6 +13,9 @@ afterEach(async () => {
 function appWithBroker(args: { listFailure?: Error } = {}) {
   const invoke = vi.fn(async (input: { action: string }) => {
     if (input.action === "explode") throw new Error("raw provider secret");
+    if (input.action === "scan") {
+      throw new ConnectionActionDeniedError("the query reads every row");
+    }
     return { ok: true };
   });
   const app = createTestApp({
@@ -37,7 +41,7 @@ function appWithBroker(args: { listFailure?: Error } = {}) {
               {
                 bindingId: BINDING_ID,
                 alias: "workspace",
-                capabilities: ["lookup", "explode"],
+                capabilities: ["lookup", "explode", "scan"],
               },
             ],
           },
@@ -142,6 +146,34 @@ describe("connection capability MCP gateway", () => {
         action: "lookup",
         input: { query: "Ada" },
       }),
+    );
+  });
+
+  it("tells the agent why the gateway refused an action", async () => {
+    const { app, invoke } = appWithBroker();
+    const refused = await rpc({
+      app,
+      token: "valid",
+      payload: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "scan", arguments: { sql: "select * from orders" } },
+      },
+    });
+    expect(refused.json()).toMatchObject({
+      result: {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "Connection action denied: the query reads every row",
+          },
+        ],
+      },
+    });
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ caller: "agent", agentSessionId: "session" }),
     );
   });
 

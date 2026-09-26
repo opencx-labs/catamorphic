@@ -13,7 +13,8 @@ export function allocationSandboxProvider(args: {
   db: Kysely<DB>;
   allocation: ExecutionAllocation;
   provider: SandboxProvider;
-  workerLeaseToken?: string;
+  /** The node lease this instance holds now; read at each check. */
+  workerLeaseToken?: string | (() => string | undefined);
 }): SandboxProvider {
   const { db, allocation, provider } = args;
   const limits = allocation.policy.requirements.resources;
@@ -24,12 +25,18 @@ export function allocationSandboxProvider(args: {
     gpu: limits?.gpu,
   };
   const requireActive = async (sandboxId?: string) => {
+    const leaseToken =
+      typeof args.workerLeaseToken === "function"
+        ? args.workerLeaseToken()
+        : args.workerLeaseToken;
     if (allocation.workerNodeId && args.workerLeaseToken) {
+      if (!leaseToken)
+        throw new Error("This machine no longer owns its execution lease");
       const live = await db
         .selectFrom("worker_nodes")
         .select("id")
         .where("id", "=", allocation.workerNodeId)
-        .where("lease_token", "=", args.workerLeaseToken)
+        .where("lease_token", "=", leaseToken)
         .where("enabled", "=", true)
         .where("lease_expires_at", ">", sql<Date>`now()`)
         .executeTakeFirst();

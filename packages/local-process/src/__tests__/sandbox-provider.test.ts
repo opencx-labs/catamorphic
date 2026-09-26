@@ -109,6 +109,19 @@ describe("LocalProcessSandboxProvider", () => {
     await provider.destroySandbox(sandbox.id);
   });
 
+  it("removes a sandbox whose deployment was made read-only", async () => {
+    const sandbox = await provider.createSandbox({});
+    await provider.executeCommand(
+      sandbox.id,
+      "mkdir -p deployment/nested && echo x > deployment/nested/file && chmod -R a-w deployment",
+    );
+    await provider.destroySandbox(sandbox.id);
+    expect(await provider.getSandboxStatus(sandbox.id)).not.toBe("started");
+    expect(
+      fs.readdirSync(root).some((name) => name.startsWith(sandbox.id)),
+    ).toBe(false);
+  });
+
   it("round-trips files through virtual /workspace paths", async () => {
     const sandbox = await provider.createSandbox({});
     await provider.uploadFiles(

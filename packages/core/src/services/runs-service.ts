@@ -1720,6 +1720,9 @@ export class RunsService {
     const binding = await this.deps.executionEnvironments.getRuntimeBinding({
       identity: args.identity,
       bindingId: allocation.bindingId,
+      ...(allocation.workerNodeId
+        ? { workerNodeId: allocation.workerNodeId }
+        : {}),
     });
     const baseProvider = binding?.sandboxProvider;
     const provider =

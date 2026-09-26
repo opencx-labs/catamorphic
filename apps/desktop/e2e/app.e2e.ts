@@ -455,7 +455,7 @@ describe("chat flows", () => {
     );
     expect(previewText).toContain("Fake Agent");
     expect(previewText).toContain("Environment");
-    expect(previewText).toContain("local");
+    expect(previewText).toContain("default");
     expect(previewText).toContain("Status");
     expect(previewText).toContain("Ready");
   });

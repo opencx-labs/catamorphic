@@ -21,24 +21,42 @@ const ResourcePolicySchema = z.object({
   maxConcurrency: z.number().int().positive().optional(),
 });
 
-const ProjectEnvironmentDefinitionSchema = z.object({
-  binding: z.string().min(1),
-  description: z.string().optional(),
-  workloads: z.array(z.enum(["agent", "workflow"])).min(1),
-  requirements: z
-    .object({
-      trust: z.enum(["local", "managed"]).optional(),
-      isolation: z.enum(["none", "process", "sandbox"]).optional(),
-      capabilities: z.array(z.string().min(1)).optional(),
-      resources: ResourcePolicySchema.optional(),
-    })
-    .optional(),
-});
+const LABEL = /^[a-z0-9][a-z0-9._-]{0,62}$/;
+
+const ProjectEnvironmentDefinitionSchema = z
+  .strictObject({
+    description: z.string().optional(),
+    workloads: z.array(z.enum(["agent", "workflow"])).min(1),
+    /** Node labels that must all match (ADR 0167); none selects any node. */
+    pool: z
+      .record(z.string().regex(LABEL), z.string().min(1).max(128))
+      .optional(),
+    /** A member's own connected computer (ADR 0098). */
+    device: z.literal("member").optional(),
+    /** Never fall back past the narrowest nodes open to the owner. */
+    strict: z.boolean().optional(),
+    requirements: z
+      .strictObject({
+        trust: z.enum(["local", "managed"]).optional(),
+        isolation: z.enum(["none", "process", "sandbox"]).optional(),
+        capabilities: z.array(z.string().min(1)).optional(),
+        resources: ResourcePolicySchema.optional(),
+      })
+      .optional(),
+  })
+  .refine((definition) => !(definition.device && definition.pool), {
+    message: "An Environment runs on a member's device or on a pool, not both",
+  });
+
+/** The Environment every project has unless its manifest declares others. */
+export const DEFAULT_ENVIRONMENT = "default";
 
 export interface ProjectEnvironmentDefinition {
-  binding: string;
   description?: string;
   workloads: readonly WorkloadKind[];
+  pool?: Readonly<Record<string, string>>;
+  device?: "member";
+  strict?: boolean;
   requirements?: Omit<EnvironmentRequirements, "workload" | "topology">;
 }
 
@@ -55,16 +73,15 @@ export interface ProjectEnvironmentPolicy {
   invalid?: { error: string };
 }
 
-function defaultLocalEnvironmentPolicy(): ProjectEnvironmentPolicy {
+function defaultEnvironmentPolicy(): ProjectEnvironmentPolicy {
   const definition: ProjectEnvironmentDefinition = {
-    binding: "local",
-    description: "Run on this machine",
+    description: "Run where this host places work",
     workloads: ["agent", "workflow"],
   };
   return {
-    environments: { local: definition },
-    defaultEnvironment: "local",
-    entries: [{ name: "local", definition }],
+    environments: { [DEFAULT_ENVIRONMENT]: definition },
+    defaultEnvironment: DEFAULT_ENVIRONMENT,
+    entries: [{ name: DEFAULT_ENVIRONMENT, definition }],
   };
 }
 
@@ -81,7 +98,7 @@ export function parseProjectEnvironmentPolicy(
   const manifest = raw as Record<string, unknown>;
   const rawEnvironments = manifest.environments;
   if (rawEnvironments === undefined) {
-    return defaultLocalEnvironmentPolicy();
+    return defaultEnvironmentPolicy();
   }
   if (
     typeof rawEnvironments !== "object" ||
@@ -177,7 +194,7 @@ export class ProjectEnvironmentsService {
       },
     );
     if (!content) {
-      return defaultLocalEnvironmentPolicy();
+      return defaultEnvironmentPolicy();
     }
     try {
       return parseProjectEnvironmentPolicy(JSON.parse(content));

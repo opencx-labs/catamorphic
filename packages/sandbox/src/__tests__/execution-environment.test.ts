@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  accessTier,
   type EnvironmentBinding,
   environmentSatisfies,
+  placementOrder,
+  poolMatches,
 } from "../execution-environment.js";
 
 const binding: EnvironmentBinding = {
@@ -74,5 +77,60 @@ describe("environmentSatisfies", () => {
         "Isolation level 'sandbox' is required",
       ],
     });
+  });
+});
+
+describe("placement (ADR 0167)", () => {
+  const alice = { userId: "alice@example.com", groups: ["eng@example.com"] };
+
+  it("matches every pool label", () => {
+    expect(poolMatches({ class: "gpu", plane: "worker" }, {})).toBe(true);
+    expect(poolMatches({ class: "gpu" }, { class: "gpu" })).toBe(true);
+    expect(poolMatches({ class: "gpu" }, { class: "gpu", zone: "a" })).toBe(
+      false,
+    );
+    expect(poolMatches(undefined, { class: "gpu" })).toBe(false);
+  });
+
+  it("ranks a person's own node before a group's before everyone's", () => {
+    expect(
+      accessTier({ users: ["alice@example.com"], groups: [] }, alice),
+    ).toBe(0);
+    expect(
+      accessTier(
+        { users: ["alice@example.com", "bob@example.com"], groups: [] },
+        alice,
+      ),
+    ).toBe(1);
+    expect(accessTier({ users: [], groups: ["eng@example.com"] }, alice)).toBe(
+      1,
+    );
+    expect(accessTier({ everyone: true }, alice)).toBe(2);
+    expect(
+      accessTier({ users: ["bob@example.com"], groups: [] }, alice),
+    ).toBeUndefined();
+    // Project-owned work only lands on nodes open to everyone.
+    expect(
+      accessTier({ users: [], groups: ["eng@example.com"] }, undefined),
+    ).toBeUndefined();
+    expect(accessTier({ everyone: true }, undefined)).toBe(2);
+  });
+
+  it("orders narrowest first and stays there when strict", () => {
+    const tiers: Record<string, 0 | 1 | 2 | undefined> = {
+      shared: 2,
+      team: 1,
+      desk: 0,
+      bobs: undefined,
+    };
+    const nodes = ["shared", "bobs", "team", "desk"];
+    expect(placementOrder(nodes, (node) => tiers[node])).toEqual([
+      "desk",
+      "team",
+      "shared",
+    ]);
+    expect(
+      placementOrder(nodes, (node) => tiers[node], { strict: true }),
+    ).toEqual(["desk"]);
   });
 });

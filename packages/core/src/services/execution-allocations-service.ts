@@ -34,6 +34,7 @@ const AllocationPolicySchema = z.object({
       .array(z.enum(["cpuMillis", "memoryMb", "storageMb", "gpu"]))
       .optional(),
     resources: z.record(z.string(), z.union([z.number(), z.boolean()])),
+    labels: z.record(z.string(), z.string()).optional(),
   }),
   requirements: z.object({
     workload: z.enum(["agent", "workflow"]),

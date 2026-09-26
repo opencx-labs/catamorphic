@@ -6,7 +6,12 @@ export {
   identityFromBearer,
   identityFromHeaders,
 } from "./http-identity.js";
-export type { CatamorphicPluginOptions, RouteContext } from "./plugin.js";
+export type {
+  CatamorphicPluginOptions,
+  ProjectMcpHost,
+  ProjectMcpHostTool,
+  RouteContext,
+} from "./plugin.js";
 export { catamorphicPlugin } from "./plugin.js";
 export { projectToolCapabilities } from "./project-capabilities.js";
 export { pwaManifestWithLaunch, serveSpaDist } from "./spa.js";

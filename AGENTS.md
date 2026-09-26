@@ -73,7 +73,7 @@ engineering layout. They are not generated user-project paths and stay in place.
 
 - **Every dependency is an axis.** Postgres or pglite; cloud sandboxes (`@catamorphic/cloudflare` default cloud provider, `@catamorphic/daytona` alternate), local sandboxes (`@catamorphic/microsandbox`), or plain subprocesses (`@catamorphic/local-process`, trusted single-tenant only — ADR 0047); S3-compatible or filesystem code storage. Hosts construct backends explicitly at boot (ADRs 0008, 0012, 0047; see `apps/desktop/src/main/server/boot.ts` and `CLOUDFLARE.md`).
 - **Postgres for everything stateful.** Tables live in a dedicated schema (default `catamorphic`). When you need queues or scheduling, build them on the same Postgres (`SKIP LOCKED`) instead of adding infrastructure.
-- **Managed machines share one brain.** ADR 0099 accepts multiple Catamorphic server instances sharing network Postgres, accessible authoritative storage, and one logical authority. Each instance has its own identity and fenced execution ownership. PGlite remains standalone; the member's **This machine** execution does not receive database credentials (ADR 0098). Network Postgres deployments use shared object storage and leased machine dispatch. Keep [setup guidance](skills/setup-catamorphic-server/references/cluster-deployment.md) aligned with implemented enrollment and recovery capabilities.
+- **A control plane and credential-less workers.** Work server replicas share network Postgres, object storage, and one authority for availability (ADR 0099). Execution capacity comes from enrolled workers that hold only a machine credential; the replica a worker connects to holds its node lease, runs its agents' controller loops, and forwards sandbox operations through a lease-fenced queue (ADR 0164). Workflow runs and every credential stay on the control plane; credentials reach systems only through the gateway (ADR 0162). Environments say what work needs and an optional `pool` of machine labels; the host places each piece of work by its owner, preferring the owner's own machine, then a group's, then a shared one, and machine rules keep per-person or per-team machines in step with the directory (ADR 0167). The member's **This machine** execution does not receive database credentials (ADR 0098). Keep [setup guidance](skills/setup-work-server/references/cluster-deployment.md) aligned with implemented enrollment and recovery capabilities.
 - **OpenTelemetry throughout.** Libraries instrument with `@opentelemetry/api` only (via `@catamorphic/otel`); the host owns the SDK/exporters. New service methods on hot paths (runs, deploys, sandbox ops, project mutations) should get spans with `catamorphic.*` attributes. For dev, the repo-root docker-compose ships an OTel collector (:4317/:4318) writing to ClickHouse (:8124 HTTP / :19001 native, db `otel`); hosts register the host-side SDK themselves (see `INTEGRATION.md`).
 - **Bun** for running, bundling, and inside sandboxes.
 
@@ -91,12 +91,13 @@ Big desktop design/philosophy choices are additionally logged in
 Public developer surface:
 
 - `packages/server-sdk`: **`@catamorphic/server-sdk`**, the core backend SDK. `createCatamorphic({ database, storage, environmentProvider, sandboxProvider?, github?, triggerKinds?, mcpToolKinds?, plugins?, projectSeeds?, standingAgentPrompt?, ... })`; identity binds per request via `forTenant({ tenantId }).forUser({ externalUserId, scope? })`.
-- `packages/fastify-plugin` — **`@catamorphic/fastify-plugin`**: mountable Fastify plugin (`catamorphicPlugin`) + standalone `createApp` factory with Zod schemas and OpenAPI spec. Also serves the per-project MCP endpoints (`/projects/:id/mcp` — workflow tools + documents + skills + `ask_agent`, narrowed by identity (ADR 0055); `/projects/:id/apps-mcp` MCP Apps) and app guest documents.
+- `packages/fastify-plugin` — **`@catamorphic/fastify-plugin`**: mountable Fastify plugin (`catamorphicPlugin`) + standalone `createApp` factory with Zod schemas and OpenAPI spec. Also serves the per-project MCP endpoints (`/projects/:id/mcp` — the member's working loop: overview, draft/check/deploy, workflow runs, documents, skills, `ask_agent`, `ai.tool-call` workflow tools, and host tools via `projectMcp`, narrowed by identity (ADRs 0055, 0166); `/projects/:id/apps-mcp` MCP Apps) and app guest documents.
 - `packages/react` — headless React bindings (provider, TanStack Query hooks, jotai atoms).
 - `packages/ui`: React Flow editor components (canvas, panels, member review) + `AppMount` (sandboxed app iframe host); all opt-in/composable.
 - `packages/registry`: shadcn-style copy-paste component registry (project editor, file explorer, git panel, runs panel, agent chat, Monaco editor, and more).
 - `packages/api-client` — generated OpenAPI types + openapi-fetch client.
 - `packages/workflow` — **`@catamorphic/workflow`**: dependency-light `defineWorkflow`, boundary, batch-scope, pause, child-workflow, trigger-subscription, and physical batch-step authoring primitives; hosts may wrap and selectively re-export this surface.
+- `packages/work-server` — **`@catamorphic/work-server`**: the Work server as a library (ADR 0160): `createWorkServer({ config, hooks })`, `workServerConfigFromEnv`, typed hooks (agent capabilities, connection providers and guards, directories, a machine provisioner, project seeds, routes). `apps/server` is only its image process. Framework packages never import it.
 - `packages/app` — **`@catamorphic/app`**: the guest runtime bundled into every user-built app (typed workflow client, persistent app-local storage shim, dual-dialect MCP Apps probe, `buildAppGuestDocument`) plus the **`@catamorphic/app/ui`** component kit, styled entirely by host theme tokens (ADR 0048).
 
 Internal packages:
@@ -125,7 +126,7 @@ Apps:
 
 - `apps/desktop` — the Work desktop app (Electron), the in-repo reference host: it embeds the server in-process (`src/main/server/boot.ts`) and consumes the same hooks as any embedder. It is also a **dev shell** (ADR 0045): Claude Code fidelity (CLAUDE.md/`.claude` honored), worktrees, Monaco diff tabs, sidebar Changes/PRs, ghostty/PTY terminals with OSC 133, embedded browser, command palette. See `apps/desktop/AGENTS.md` and `apps/desktop/DESIGN.md`. Catamorphic itself remains embed-only.
 - `apps/pwa` — the mobile PWA (ADR 0058): phone-sized client of any Catamorphic server — projects → sessions → chat (queue/send-now nudge, interrupt, agent questions, tool-permission cards), OAuth server connections, and local profiles. Reaches a server through a credential-free invite, direct host sign-in, or desktop QR pairing (ADR 0060). See `apps/pwa/AGENTS.md`.
-- `apps/server` — the stock self-hostable server (ADR 0059): `docker run`-able, zero external services (PGlite + bare git origins + local-process execution), Better Auth with built-in local auth and optional OAuth/OIDC providers, agent-driven machine-local provisioning, credential-free project invitations, unique-per-install mDNS hostname for LAN reach, and `DATABASE_URL` opt-in for real Postgres. Microsandbox is selectable for isolated remote development with per-agent limits and managed workspace budgets (ADR 0100). **Single-tenant only** (ADR 0047). See `apps/server/AGENTS.md`.
+- `apps/server` — the Work server, the prebuilt self-hostable server (ADRs 0059, 0159; `WORK_*` configuration, `work-server` image published with every release): `docker run`-able, zero external services (PGlite + bare git origins + local-process execution), Better Auth with built-in local auth and optional OAuth/OIDC providers, agent-driven machine-local provisioning, credential-free project invitations, unique-per-install mDNS hostname for LAN reach, and `DATABASE_URL` opt-in for real Postgres. Microsandbox is selectable for isolated remote development with per-agent limits and managed workspace budgets (ADR 0100). **Single-tenant only** (ADR 0047). See `apps/server/AGENTS.md`.
 
 How the three connect (setting up / troubleshooting, read in this order):
 
@@ -140,7 +141,7 @@ How the three connect (setting up / troubleshooting, read in this order):
 
 - `.agents/skills/announcement-video/SKILL.md`: Work/Catamorphic product films: purposeful browse, chat, and app demos; real sent messages, readable animations, capture, and website integration
 
-- `skills/setup-catamorphic-server/SKILL.md` — the public adaptive entry for stock-server setup and embedding Catamorphic in an existing host
+- `skills/setup-work-server/SKILL.md` — the public adaptive entry for Work server setup and embedding Catamorphic in an existing host
 - `.agents/skills/` — canonical repository-internal skills, following the
   [Agent Skills](https://agentskills.io) layout. `.cursor/skills` is a
   compatibility symlink to this directory.
@@ -386,5 +387,6 @@ runtime → local-process
 mcp → ai-sdk
 core → claude-code
 core → server-sdk
+server-sdk → work-server → apps/server
 api-client → react → ui → registry
 ```

@@ -5,6 +5,9 @@ export type {
   BatchProgress,
   CancelRunInput,
   CatamorphicCore,
+  ConnectionActionContext,
+  ConnectionActionGuard,
+  ConnectionGuardVerdict,
   ConnectionProvider,
   ConnectionRequirement,
   CreateProjectInput,
@@ -53,6 +56,8 @@ export type {
 export {
   AccessDeniedError,
   appScaffold,
+  ConnectionActionDeniedError,
+  ConnectionActionRefusedError,
   createCatamorphicCore,
   GithubNotConnectedError,
   GithubTokenExpiredError,
@@ -161,6 +166,7 @@ export type {
   EnvironmentRuntimeBinding,
   SandboxProvider,
 } from "@catamorphic/sandbox";
+export { aiToolCall, aiToolKind } from "./ai-tool-trigger-kind.js";
 export { connectionAuthorizationPage } from "./authorization-page.js";
 export type {
   CatamorphicHostConfig,
@@ -194,6 +200,15 @@ export {
   githubPullRequestReview,
   githubWorkflowRun,
 } from "./github-trigger-kinds.js";
+export {
+  defineHttpApiConnectionProvider,
+  type HttpApiConnectionOptions,
+} from "./http-connection-provider.js";
+export {
+  definePostgresConnectionProvider,
+  type PostgresConnectionLimits,
+  type PostgresConnectionOptions,
+} from "./postgres-connection-provider.js";
 export { PostgresObjectStore } from "./postgres-object-store.js";
 export { schedule } from "./schedule-trigger-kind.js";
 export type {

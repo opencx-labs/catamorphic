@@ -223,7 +223,7 @@ describe("temporary watchers", () => {
                 deployment_artifact_id: artifact.id,
                 commit_sha: String(input.commitSha),
                 remote_branch: String(input.remoteBranch),
-                environment_name: String(input.environment ?? "local"),
+                environment_name: String(input.environment ?? "default"),
                 owner_kind: "member",
                 owner_external_user_id: identity.externalUserId,
                 owner_identity: JSON.parse(JSON.stringify(input.identity)),
@@ -252,7 +252,7 @@ describe("temporary watchers", () => {
               )
               .execute();
             await input.onCreate?.({ transaction, enablement });
-            return { id, environment: String(input.environment ?? "local") };
+            return { id, environment: String(input.environment ?? "default") };
           });
         },
       ),
@@ -600,7 +600,7 @@ describe("temporary watchers", () => {
     const scopedIdentity: Identity = {
       ...identity,
       scope: [{ kind: "agent", projectId, name: "reviewer" }],
-      executionScope: [{ projectId, name: "local" }],
+      executionScope: [{ projectId, name: "default" }],
     };
     await watchers.create({
       identity: scopedIdentity,
@@ -696,7 +696,7 @@ describe("temporary watchers", () => {
     });
     expect(triggered.at(-1)).toMatchObject({
       workflowName: "periodicCheck",
-      environment: "local",
+      environment: "default",
     });
     await watchers.stop({
       identity,
@@ -789,13 +789,13 @@ describe("temporary watchers", () => {
     {
       archived: true,
       host: "local-host",
-      environment: "local",
+      environment: "default",
       error: "Restore the session",
     },
     {
       archived: false,
       host: "remote-host",
-      environment: "local",
+      environment: "default",
       error: "authoritative host",
     },
     {
@@ -816,7 +816,7 @@ describe("temporary watchers", () => {
           external_user_id: identity.externalUserId,
           provider: "test",
           authority_host_id: host,
-          environment_name: "local",
+          environment_name: "default",
         })
         .execute();
       if (archived)

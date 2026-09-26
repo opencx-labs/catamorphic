@@ -26,6 +26,8 @@ import type {
 
 /** Local-checkout adapter. File IO stays shared; Git honors the user's repository format and tools. */
 export class NativeProjectRepo extends ProjectRepoImpl {
+  protected override readonly followsSymlinks = true;
+
   private nativeRemote:
     | { url: string; credentials?: GitCredentials }
     | undefined;
@@ -282,7 +284,7 @@ export class NativeProjectRepo extends ProjectRepoImpl {
   override async commit(
     message: string,
     author: { name: string; email: string },
-    opts?: { paths?: readonly string[] },
+    opts?: { paths?: readonly string[]; allowEmpty?: boolean },
   ): Promise<string> {
     const paths = opts?.paths;
     for (const file of paths ?? []) assertSafePath(file);
@@ -340,6 +342,7 @@ export class NativeProjectRepo extends ProjectRepoImpl {
       "commit",
       "-m",
       message,
+      ...(opts?.allowEmpty ? ["--allow-empty"] : []),
       ...(paths ? ["--only", "--", ...paths] : []),
     ]);
     return this.resolveRef();

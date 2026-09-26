@@ -134,6 +134,10 @@ export interface CatamorphicHostConfig {
   clientExecution?: boolean;
   credentialVault?: CredentialVault;
   connectionProviders?: readonly ConnectionProvider[];
+  /** Every node lease this process holds, including remote workers (ADR 0164). */
+  heldWorkerNodes?: CatamorphicCoreConfig["heldWorkerNodes"];
+  /** Review every brokered connection action (ADR 0162). */
+  connectionGuards?: CatamorphicCoreConfig["connectionGuards"];
   /** Re-resolve current member authority before unattended dispatch. */
   resolveMemberIdentity?: CatamorphicCoreConfig["resolveMemberIdentity"];
   /** URL resolver for the Fastify plugin's brokered `/connection-mcp` route. */
@@ -343,6 +347,9 @@ export class Catamorphic {
       hostId: config.hostId,
       agentCapabilities: config.agentCapabilities,
       workerNode: config.workerNode,
+      ...(config.heldWorkerNodes
+        ? { heldWorkerNodes: config.heldWorkerNodes }
+        : {}),
       db,
       projectManager: resolveStorage(config.storage),
       sandboxProvider: config.sandboxProvider,
@@ -350,6 +357,9 @@ export class Catamorphic {
       clientExecution: config.clientExecution,
       credentialVault: config.credentialVault,
       connectionProviders: contributions.connectionProviders,
+      ...(config.connectionGuards
+        ? { connectionGuards: config.connectionGuards }
+        : {}),
       resolveMemberIdentity: config.resolveMemberIdentity,
       connectionMcpUrl: config.connectionMcpUrl,
       pluginResolver: config.pluginResolver,

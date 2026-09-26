@@ -209,7 +209,7 @@ beforeAll(async () => {
   const allocation = await cat.core.executionAllocations.create({
     identity: alice,
     projectId,
-    environmentName: "local",
+    environmentName: "default",
     workloadKind: "agent",
     rootWorkloadId: sessionId,
     policy: {
@@ -361,7 +361,7 @@ it("keeps context small and excludes other users, credentials, and permission li
   expect(value).toMatchObject({
     currentUser: { id: "alice", displayName: "Alice" },
     agentLoopHost: null,
-    environment: "local",
+    environment: "default",
     execution: {
       declaredCapabilities: ["docker"],
       harnessSandbox: "provider_configured",
@@ -520,7 +520,7 @@ it("refreshes member authority without treating host root identities as members"
       { kind: "workflow", projectId, name: "*" },
     ],
     projectPermissions: [{ projectId, permission: "*" }],
-    executionScope: [{ projectId, name: "local" }],
+    executionScope: [{ projectId, name: "default" }],
   };
   memberIdentity = scoped;
   const memberGateway = cat.core.agentCapabilities.forSession({

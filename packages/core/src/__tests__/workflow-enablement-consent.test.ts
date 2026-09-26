@@ -7,7 +7,7 @@ const base = {
   deploymentArtifactDigest: "artifact-digest",
   commitSha: "a".repeat(40),
   remoteBranch: "main",
-  environment: "local",
+  environment: "default",
   owner: { type: "member" as const, externalUserId: "alice" },
   connections: [
     {

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import Fastify from "fastify";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
   safeStorage: {
@@ -12,7 +12,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { forwardRemoteApi } from "./remote-api.js";
+import { forwardRemoteApi, proxiedGuestUrl } from "./remote-api.js";
 import { RemoteProjectsStore } from "./remote-projects-store.js";
 
 it("routes a linked project under the member token and never falls through to local root", async () => {
@@ -81,4 +81,34 @@ it("routes a linked project under the member token and never falls through to lo
     await remote.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+describe("proxiedGuestUrl", () => {
+  it("routes a server app's document through the desktop proxy", () => {
+    expect(
+      proxiedGuestUrl({
+        state: {
+          state: "ready",
+          guestUrl:
+            "https://brain.example.com/api/projects/remote-1/apps/pilot/guest?channel=dev&versionId=v1",
+        },
+        localBase:
+          "http://127.0.0.1:4000/desktop/projects/local-1/remote-api/api",
+        remoteProjectId: "remote-1",
+        localProjectId: "local-1",
+      }),
+    ).toEqual({
+      state: "ready",
+      guestUrl:
+        "http://127.0.0.1:4000/desktop/projects/local-1/remote-api/api/projects/local-1/apps/pilot/guest?channel=dev&versionId=v1",
+    });
+    expect(
+      proxiedGuestUrl({
+        state: { state: "not_published" },
+        localBase: "x",
+        remoteProjectId: "r",
+        localProjectId: "l",
+      }),
+    ).toEqual({ state: "not_published" });
+  });
 });

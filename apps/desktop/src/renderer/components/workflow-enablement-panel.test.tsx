@@ -20,7 +20,7 @@ const memberEnablement = {
   deploymentArtifactId: "artifact-1",
   commitSha: "b".repeat(40),
   remoteBranch: "main",
-  environment: "local",
+  environment: "default",
   owner: { type: "member", externalUserId: "alice" },
   connections: [],
   capabilities: [],
@@ -65,10 +65,10 @@ vi.mock("@catamorphic/react", async (importOriginal) => ({
   }),
   useEnvironments: () => ({
     data: {
-      defaultEnvironment: "local",
+      defaultEnvironment: "default",
       items: [
         {
-          name: "local",
+          name: "default",
           label: "This Mac",
           allowed: true,
           compatible: true,
@@ -154,7 +154,7 @@ describe("WorkflowEnablementPanel", () => {
       deploymentArtifactDigest: "digest-2",
       commitSha: "a".repeat(40),
       remoteBranch: "main",
-      environment: "local",
+      environment: "default",
       owner: { type: "member", externalUserId: "alice" },
       connections: [],
       capabilities: ["messages.search"],
@@ -203,7 +203,7 @@ it("returns to exact consent review after account authorization without enabling
     new CatamorphicError({
       code: "authentication_required",
       details: {
-        environment: "local",
+        environment: "default",
         requirements: [
           {
             alias: "directory",
@@ -218,7 +218,7 @@ it("returns to exact consent review after account authorization without enabling
     projectId: "project-1",
     workflowName: "watchInbox",
     commitSha: "e".repeat(40),
-    environment: "local",
+    environment: "default",
     owner: { type: "member", externalUserId: "alice" },
     connections: [
       {
@@ -278,7 +278,7 @@ it("enables a workflow for the project and shows its webhook URL to automation m
     projectId: "project-1",
     workflowName: "watchInbox",
     commitSha: "f".repeat(40),
-    environment: "local",
+    environment: "default",
     owner: { type: "project" },
     connections: [],
     connectionLabels: {},
@@ -319,7 +319,7 @@ it("enables a workflow for the project and shows its webhook URL to automation m
   await act(async () => button("Enable for the project")?.click());
   expect(preview).toHaveBeenCalledWith({
     workflowName: "watchInbox",
-    environment: "local",
+    environment: "default",
     owner: { type: "project" },
   });
   expect(container.textContent).toContain("The project");
@@ -328,7 +328,7 @@ it("enables a workflow for the project and shows its webhook URL to automation m
   await act(async () => button("Confirm and enable")?.click());
   expect(create).toHaveBeenCalledWith({
     workflowName: "watchInbox",
-    environment: "local",
+    environment: "default",
     owner: { type: "project" },
     connectionSelections: {},
     consentDigest: "project-digest",
@@ -373,7 +373,7 @@ it("offers to publish a saved workflow before turning it on", async () => {
     projectId: "project-1",
     workflowName: "watchInbox",
     commitSha: "a".repeat(40),
-    environment: "local",
+    environment: "default",
     owner: { type: "member", externalUserId: "alice" },
     connections: [],
     connectionLabels: {},

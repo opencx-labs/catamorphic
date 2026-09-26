@@ -30,6 +30,8 @@ export interface EnvironmentBinding {
   capabilities: readonly string[];
   resources: EnvironmentResourcePolicy;
   resourceLimits?: readonly ("cpuMillis" | "memoryMb" | "storageMb" | "gpu")[];
+  /** Host-assigned labels an Environment's `pool` selects on (ADR 0167). */
+  labels?: Readonly<Record<string, string>>;
 }
 
 /** Internal realization. Provider objects never cross an API boundary. */
@@ -53,11 +55,19 @@ export interface EnvironmentRequirements {
 export interface EnvironmentProvider {
   get(args: {
     tenantId: string;
-    externalUserId?: string;
     projectId?: string;
+    /**
+     * Whose work this is: the session owner. Absent for project-owned work,
+     * which only nodes open to everyone take (ADR 0167).
+     */
+    ownerUserId?: string;
     clientRunnerId?: string;
+    /** Resolve an existing Allocation's binding again, by its id. */
     allocationBindingId?: string;
-    bindingId: string;
+    /** Node labels the Environment selects; every key must match. */
+    pool: Readonly<Record<string, string>>;
+    /** Never fall back past the narrowest nodes open to the owner. */
+    strict?: boolean;
     requirements?: EnvironmentRequirements;
     /** Preserve an existing Allocation's physical owner when resolving a pool. */
     workerNodeId?: string;
@@ -65,6 +75,64 @@ export interface EnvironmentProvider {
     | Promise<EnvironmentRuntimeBinding | undefined>
     | EnvironmentRuntimeBinding
     | undefined;
+}
+
+/** Whether a binding's labels satisfy an Environment's pool selector. */
+export function poolMatches(
+  labels: Readonly<Record<string, string>> | undefined,
+  pool: Readonly<Record<string, string>>,
+): boolean {
+  return Object.entries(pool).every(([key, value]) => labels?.[key] === value);
+}
+
+/**
+ * Whose work a node takes (ADR 0167): everyone, or named people and
+ * groups. Host state, never declared by the node itself.
+ */
+export type NodeAccess =
+  | { everyone: true }
+  | { everyone?: false; users: readonly string[]; groups: readonly string[] };
+
+/**
+ * How narrowly a node serves an owner: 0 for a node of theirs alone, 1 for
+ * one they share with named people or groups, 2 for a node open to
+ * everyone, undefined when the node does not take their work.
+ */
+export function accessTier(
+  access: NodeAccess,
+  owner: { userId: string; groups: readonly string[] } | undefined,
+): 0 | 1 | 2 | undefined {
+  if (access.everyone) return 2;
+  if (!owner) return undefined;
+  const named = access.users.includes(owner.userId);
+  if (named && access.users.length === 1 && access.groups.length === 0)
+    return 0;
+  if (named || access.groups.some((group) => owner.groups.includes(group)))
+    return 1;
+  return undefined;
+}
+
+/**
+ * Candidates the owner may use, narrowest first. `strict` keeps only the
+ * narrowest tier present, so a full dedicated machine never spills onto a
+ * shared one.
+ */
+export function placementOrder<T>(
+  candidates: readonly T[],
+  tier: (candidate: T) => 0 | 1 | 2 | undefined,
+  options?: { strict?: boolean },
+): T[] {
+  const ranked = candidates
+    .map((candidate) => ({ candidate, tier: tier(candidate) }))
+    .filter(
+      (entry): entry is { candidate: T; tier: 0 | 1 | 2 } =>
+        entry.tier !== undefined,
+    )
+    .sort((left, right) => left.tier - right.tier);
+  const narrowest = ranked[0]?.tier;
+  return ranked
+    .filter((entry) => !options?.strict || entry.tier === narrowest)
+    .map((entry) => entry.candidate);
 }
 
 export type EnvironmentCompatibility =

@@ -100,7 +100,7 @@ through that registration interval. A regression failed before the fix and passe
 afterward; the editor test exercises the normal end-to-end file path.
 
 See [ADR 0100](decisions/0100-workspace-resource-admission.md) and the
-[capacity setup and recovery reference](../skills/setup-catamorphic-server/references/cluster-deployment.md#capacity-and-isolated-development).
+[capacity setup and recovery reference](../skills/setup-work-server/references/cluster-deployment.md#capacity-and-isolated-development).
 
 ## Verification
 

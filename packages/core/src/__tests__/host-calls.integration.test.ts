@@ -271,7 +271,7 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     const alice: Identity = {
       ...root,
       externalUserId: "alice",
-      executionScope: [{ projectId, name: "local" }],
+      executionScope: [{ projectId, name: "default" }],
       scope: [
         { kind: "workflow", projectId, name: "whoAmI" },
         { kind: "document", projectId, path: "store/customers/acme/**" },
@@ -312,7 +312,7 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     const alice: Identity = {
       ...root,
       externalUserId: "alice",
-      executionScope: [{ projectId, name: "local" }],
+      executionScope: [{ projectId, name: "default" }],
       scope: [
         { kind: "workflow", projectId, name: "briefCustomer" },
         { kind: "document", projectId, path: "store/customers/acme/**" },
@@ -360,7 +360,7 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     const bob: Identity = {
       ...root,
       externalUserId: "bob",
-      executionScope: [{ projectId, name: "local" }],
+      executionScope: [{ projectId, name: "default" }],
       scope: [{ kind: "workflow", projectId, name: "lookupAccount" }],
       projectPermissions: [
         { projectId, permission: "sessions:*" },

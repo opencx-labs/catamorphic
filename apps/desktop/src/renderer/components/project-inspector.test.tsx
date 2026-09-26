@@ -225,7 +225,7 @@ describe("ProjectInspectorView", () => {
     expect(container.textContent).not.toContain("Worktrees");
     expect(container.textContent).not.toContain("Open pull requests");
   });
-  it("shows the Git remote independently of a Catamorphic server connection", async () => {
+  it("shows the Git remote independently of a Work server connection", async () => {
     await act(async () => {
       root.render(
         <ProjectInspectorView

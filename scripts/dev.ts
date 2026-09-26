@@ -91,9 +91,9 @@ function reportPlan(input: {
   console.log(
     `  CDP:          http://127.0.0.1:${plan.env.CATAMORPHIC_DESKTOP_CDP_PORT}`,
   );
-  console.log(`  Public API:   ${plan.env.CATAMORPHIC_PUBLIC_URL}/api`);
+  console.log(`  Public API:   ${plan.env.WORK_PUBLIC_URL}/api`);
   console.log(
-    `  Operator:     http://127.0.0.1:${plan.env.CATAMORPHIC_OPERATOR_PORT}/_catamorphic/operator`,
+    `  Operator:     http://127.0.0.1:${plan.env.WORK_OPERATOR_PORT}/_work/operator`,
   );
 }
 

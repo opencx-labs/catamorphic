@@ -58,6 +58,11 @@ describe("PGlite migrations", () => {
       "018_session_actions.sql",
       "019_project_automations.sql",
       "020_single_secret_stage.sql",
+      "021_work_host_tables.sql",
+      "022_work_company_identity.sql",
+      "023_sealed_project_secrets.sql",
+      "024_remote_workers.sql",
+      "025_work_shares.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
@@ -83,7 +88,7 @@ describe("PGlite migrations", () => {
       WHERE table_schema = ${DEFAULT_SCHEMA}
         AND table_type = 'BASE TABLE'
     `.execute(db);
-    expect(tables.rows[0]?.count).toBe(76);
+    expect(tables.rows[0]?.count).toBe(87);
   });
 
   it("supports the runtime primitives core relies on", {

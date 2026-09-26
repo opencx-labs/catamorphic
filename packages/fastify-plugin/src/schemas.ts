@@ -1770,6 +1770,8 @@ export const MeSchema = z.object({
   projects: z.array(
     z.object({
       projectId: z.string(),
+      /** The project's display name, for every member. */
+      name: z.string(),
       source: z
         .object({
           remoteUrl: z.string(),

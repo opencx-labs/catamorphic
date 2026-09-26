@@ -1,3 +1,4 @@
+import { posix } from "node:path";
 import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
 import {
@@ -60,7 +61,8 @@ export function assertMayManageRolePolicy(
 }
 
 export function isRolePolicyPath(path: string): boolean {
-  const normalized = path.replaceAll("\\", "/").replace(/^\.\//, "");
+  // Normalize like the file APIs do, so `x/../` or `//` cannot hide a role file.
+  const normalized = posix.normalize(path.replaceAll("\\", "/"));
   return /^\.catamorphic\/roles\/[^/]+\.json$/.test(normalized);
 }
 

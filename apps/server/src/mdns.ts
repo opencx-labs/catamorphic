@@ -5,12 +5,12 @@ import os from "node:os";
  * A minimal mDNS responder (RFC 6762), zero dependencies: answers A
  * queries for one `.local` hostname with this machine's IPv4 addresses,
  * and announces on start. That's exactly enough for a phone browser to
- * open `http://catamorphic.local:<port>` — browsers can't run mDNS
+ * open `http://work.local:<port>` — browsers can't run mDNS
  * themselves, but every phone OS resolves `.local` hostnames.
  *
  * Deliberately not implemented: conflict probing, IPv6 answers, service
  * enumeration (DNS-SD), name compression. If another responder already
- * owns the name, pass a different one (CATAMORPHIC_MDNS_NAME).
+ * owns the name, pass a different one (WORK_MDNS).
  *
  * In Docker this needs the host's network (`--network host`) — multicast
  * does not cross the default bridge.

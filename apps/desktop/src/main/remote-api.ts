@@ -84,6 +84,7 @@ export async function forwardRemoteApi(args: {
     args.reply.status(response.status);
     for (const key of [
       "content-type",
+      "content-security-policy",
       "cache-control",
       "etag",
       "retry-after",
@@ -98,6 +99,18 @@ export async function forwardRemoteApi(args: {
       response.body
     ) {
       await args.reply.send(Readable.fromWeb(response.body));
+    } else if (/\/apps\/[^/]+\/view-state$/.test(target.pathname)) {
+      // The app document loads in a frame, which carries no bearer: point
+      // its URL back through this proxy, which adds the member's token.
+      const state: unknown = await response.json();
+      await args.reply.send(
+        proxiedGuestUrl({
+          state,
+          localBase: `${args.request.protocol}://${args.request.host}/desktop/projects/${encodeURIComponent(args.projectId)}/remote-api/api`,
+          remoteProjectId: link.remoteProjectId,
+          localProjectId: args.projectId,
+        }),
+      );
     } else {
       const bytes = Buffer.from(await response.arrayBuffer());
       await args.reply.send(bytes);
@@ -115,6 +128,31 @@ export async function forwardRemoteApi(args: {
   } finally {
     args.reply.raw.off("close", disconnect);
   }
+}
+
+/** A view-state whose guest URL goes through the desktop's proxy. */
+export function proxiedGuestUrl(args: {
+  state: unknown;
+  localBase: string;
+  remoteProjectId: string;
+  localProjectId: string;
+}): unknown {
+  const state = args.state;
+  if (
+    typeof state !== "object" ||
+    state === null ||
+    !("guestUrl" in state) ||
+    typeof state.guestUrl !== "string"
+  )
+    return state;
+  const remote = new URL(state.guestUrl);
+  const path = remote.pathname
+    .replace(/^\/api/, "")
+    .replace(
+      `/projects/${args.remoteProjectId}/`,
+      `/projects/${encodeURIComponent(args.localProjectId)}/`,
+    );
+  return { ...state, guestUrl: `${args.localBase}${path}${remote.search}` };
 }
 
 export function remapAgentIds(

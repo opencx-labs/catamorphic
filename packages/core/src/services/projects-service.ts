@@ -56,6 +56,11 @@ export interface CreateProjectInput {
   /** Adopt the folder's existing contents instead of scaffolding. */
   importExisting?: boolean;
   /**
+   * Start with no files: a local copy another authority fills (a member's
+   * copy of a server project), so nothing local competes on first sync.
+   */
+  empty?: boolean;
+  /**
    * Populate the project by cloning a network git remote instead of
    * scaffolding. Library-direct only (like `rootPath`) — HTTP callers go
    * through the GitHub surface, which resolves credentials server-side.
@@ -282,6 +287,7 @@ export class ProjectsService {
         initialFiles: this.seedFiles,
         rootPath: input.rootPath,
         importExisting: input.importExisting,
+        empty: input.empty,
         cloneFrom: input.cloneFrom,
       });
       await repo.dispose();
@@ -659,6 +665,32 @@ export class ProjectsService {
           }
           return input.content;
         });
+      },
+    );
+  }
+
+  /** Remove a file from the caller's working copy (their draft). */
+  async deleteFile(
+    identity: Identity,
+    projectId: string,
+    filePath: string,
+  ): Promise<void> {
+    return withSpan(
+      {
+        tracer,
+        name: "project.delete_file",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        await this.requireExists(identity, projectId, "program:write");
+        assertMayManageRolePolicy(identity, projectId, [filePath]);
+        await this.withDev(identity, projectId, (repo) =>
+          repo.deleteFile(filePath),
+        );
       },
     );
   }

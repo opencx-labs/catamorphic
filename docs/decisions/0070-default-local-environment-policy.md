@@ -1,6 +1,6 @@
 # 0070: Default local Environment policy
 
-- **Status:** Accepted
+- **Status:** Accepted; refined by 0167: the default Environment is `default` and selects no pool
 - **Date:** 2026-08-26
 - **Refines:** 0064, 0066
 

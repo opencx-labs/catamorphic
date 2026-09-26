@@ -14,7 +14,7 @@ import {
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ProjectEnvironmentsService } from "./project-environments-service.js";
-import { toJson } from "./run-coordinator.js";
+import { jsonColumn, toJson } from "./run-coordinator.js";
 
 const tracer = getTracer("@catamorphic/core");
 const resourceLimitsSchema = z.array(
@@ -110,6 +110,49 @@ export const ClientRunnerResultSchema = z.union([
   handleSchema,
   z.object({ exitCode: z.number(), result: z.string() }),
 ]);
+
+/**
+ * A sandbox provider whose every operation is executed elsewhere: by a
+ * member's desktop runner or by a remote worker (ADR 0164). `call` delivers
+ * one operation and resolves with the runner's response.
+ */
+export function forwardingSandboxProvider(args: {
+  workspaceRoot: string;
+  call: (operation: ClientRunnerOperation) => Promise<unknown>;
+}): SandboxProvider {
+  const { call } = args;
+  return {
+    workspaceRoot: args.workspaceRoot,
+    createSandbox: async (options) =>
+      handleSchema.parse(await call({ kind: "create", options })),
+    startSandbox: async (sandboxId) => {
+      await call({ kind: "start", sandboxId });
+    },
+    stopSandbox: async (sandboxId) => {
+      await call({ kind: "stop", sandboxId });
+    },
+    destroySandbox: async (sandboxId) => {
+      await call({ kind: "destroy", sandboxId });
+    },
+    getSandboxStatus: async (sandboxId) =>
+      statusSchema.parse(await call({ kind: "status", sandboxId })),
+    executeCommand: async (sandboxId, command, options) =>
+      z
+        .object({ exitCode: z.number(), result: z.string() })
+        .parse(await call({ kind: "execute", sandboxId, command, options })),
+    uploadFiles: async (sandboxId, files, basePath) => {
+      await call({ kind: "upload", sandboxId, files, basePath });
+    },
+    downloadFile: async (sandboxId, path) =>
+      z.string().parse(await call({ kind: "download", sandboxId, path })),
+    gitClone: async (sandboxId, url, path, options) => {
+      await call({ kind: "clone", sandboxId, url, path, options });
+    },
+    gitCheckout: async (sandboxId, path, ref) => {
+      await call({ kind: "checkout", sandboxId, path, ref });
+    },
+  };
+}
 
 /** Authenticated member clients provide execution, never database access. */
 export class ClientRunnersService {
@@ -243,7 +286,7 @@ export class ClientRunnersService {
       .updateTable("client_runner_jobs")
       .set({
         status: args.error ? "failed" : "completed",
-        response: toJson(args.response ?? null),
+        response: jsonColumn(toJson(args.response ?? null)),
         error: args.error ?? null,
       })
       .where("id", "=", args.jobId)
@@ -304,7 +347,7 @@ export class ClientRunnersService {
 
   async binding(args: {
     tenantId: string;
-    externalUserId?: string;
+    ownerUserId?: string;
     projectId?: string;
     clientRunnerId?: string;
     allocationBindingId?: string;
@@ -314,14 +357,14 @@ export class ClientRunnersService {
       ? args.allocationBindingId.split(":")
       : undefined;
     const id = allocationParts?.[1] ?? args.clientRunnerId;
-    if (!id || !args.externalUserId || !args.projectId) return undefined;
+    if (!id || !args.ownerUserId || !args.projectId) return undefined;
     const runner = await this.db
       .selectFrom("client_runners")
       .selectAll()
       .where("id", "=", id)
       .where("tenant_id", "=", args.tenantId)
       .where("project_id", "=", args.projectId)
-      .where("external_user_id", "=", args.externalUserId)
+      .where("external_user_id", "=", args.ownerUserId)
       .where("lease_expires_at", ">", sql<Date>`now()`)
       .executeTakeFirst();
     if (
@@ -387,37 +430,10 @@ export class ClientRunnersService {
           );
         },
       );
-    const provider: SandboxProvider = {
+    const provider = forwardingSandboxProvider({
       workspaceRoot: runner.workspace_root,
-      createSandbox: async (options) =>
-        handleSchema.parse(await call({ kind: "create", options })),
-      startSandbox: async (sandboxId) => {
-        await call({ kind: "start", sandboxId });
-      },
-      stopSandbox: async (sandboxId) => {
-        await call({ kind: "stop", sandboxId });
-      },
-      destroySandbox: async (sandboxId) => {
-        await call({ kind: "destroy", sandboxId });
-      },
-      getSandboxStatus: async (sandboxId) =>
-        statusSchema.parse(await call({ kind: "status", sandboxId })),
-      executeCommand: async (sandboxId, command, options) =>
-        z
-          .object({ exitCode: z.number(), result: z.string() })
-          .parse(await call({ kind: "execute", sandboxId, command, options })),
-      uploadFiles: async (sandboxId, files, basePath) => {
-        await call({ kind: "upload", sandboxId, files, basePath });
-      },
-      downloadFile: async (sandboxId, path) =>
-        z.string().parse(await call({ kind: "download", sandboxId, path })),
-      gitClone: async (sandboxId, url, path, options) => {
-        await call({ kind: "clone", sandboxId, url, path, options });
-      },
-      gitCheckout: async (sandboxId, path, ref) => {
-        await call({ kind: "checkout", sandboxId, path, ref });
-      },
-    };
+      call,
+    });
     return {
       descriptor: {
         id: `client:${runner.id}:${runner.lease_token}`,
@@ -467,7 +483,7 @@ export class ClientRunnersService {
     )
       throw new AccessDeniedError();
     const policy = await this.environments.list(args);
-    if (policy.environments[args.environment]?.binding !== "this-machine")
+    if (policy.environments[args.environment]?.device !== "member")
       throw new AccessDeniedError();
   }
 }

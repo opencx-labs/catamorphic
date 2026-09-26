@@ -645,10 +645,11 @@ export interface ProjectSandboxes {
 
 export interface ProjectSecrets {
   created_at: Generated<Timestamp>;
+  credential_ref: string | null;
   name: string;
   project_id: string;
   updated_at: Generated<Timestamp>;
-  value: string;
+  value: string | null;
 }
 
 export interface Publications {
@@ -800,40 +801,6 @@ export interface SessionSyncIntents {
   updated_at: Generated<Timestamp>;
 }
 
-export interface StockProjectAccessRequests {
-  decided_at: Timestamp | null;
-  decided_by_external_user_id: string | null;
-  email: string;
-  email_verified: boolean;
-  external_user_id: string;
-  id: Generated<string>;
-  project_id: string;
-  requested_at: Generated<Timestamp>;
-  status: Generated<string>;
-}
-
-export interface StockProjectAdmissionPolicies {
-  approved_domains: Generated<Json>;
-  default_role: string;
-  mode: string;
-  project_id: string;
-  updated_at: Generated<Timestamp>;
-  updated_by_external_user_id: string;
-}
-
-export interface StockProjectInvitations {
-  created_at: Generated<Timestamp>;
-  created_by_external_user_id: string;
-  expires_at: Timestamp;
-  grants: Generated<Json>;
-  id: Generated<string>;
-  invited_email: string | null;
-  project_id: string;
-  redeemed_at: Timestamp | null;
-  redeemed_by_external_user_id: string | null;
-  roles: Json;
-}
-
 export interface StoredObjects {
   data: Buffer;
   etag: Generated<string>;
@@ -971,6 +938,34 @@ export interface WebhookEndpoints {
   name: string;
   project_id: string;
   token: string;
+}
+
+export interface WorkAccounts {
+  directory_checked_at: Timestamp | null;
+  directory_groups: Generated<Json>;
+  disabled_at: Timestamp | null;
+  disabled_reason: string | null;
+  updated_at: Generated<Timestamp>;
+  user_id: string;
+}
+
+export interface WorkDirectoryGrants {
+  project_id: string;
+  roles: Generated<Json>;
+  updated_at: Generated<Timestamp>;
+  user_id: string;
+}
+
+export interface WorkerNodeJobs {
+  created_at: Generated<Timestamp>;
+  error: string | null;
+  expires_at: Timestamp;
+  id: Generated<string>;
+  lease_token: string;
+  node_id: string;
+  operation: Json;
+  response: Json | null;
+  status: Generated<string>;
 }
 
 export interface WorkerNodes {
@@ -1150,6 +1145,127 @@ export interface WorkflowStepAttempts {
   updated_at: Generated<Timestamp>;
 }
 
+export interface WorkMachineReconciler {
+  expires_at: Timestamp;
+  holder: string;
+  tenant_id: string;
+}
+
+export interface WorkMachineRules {
+  created_at: Generated<Timestamp>;
+  definition: Json;
+  name: string;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface WorkProjectAccessRequests {
+  decided_at: Timestamp | null;
+  decided_by_external_user_id: string | null;
+  email: string;
+  email_verified: boolean;
+  external_user_id: string;
+  id: Generated<string>;
+  project_id: string;
+  requested_at: Generated<Timestamp>;
+  status: Generated<string>;
+}
+
+export interface WorkProjectAdmissionPolicies {
+  approved_domains: Generated<Json>;
+  default_role: string;
+  directory_roles: Generated<Json>;
+  mode: string;
+  project_id: string;
+  updated_at: Generated<Timestamp>;
+  updated_by_external_user_id: string;
+}
+
+export interface WorkProjectInvitations {
+  created_at: Generated<Timestamp>;
+  created_by_external_user_id: string;
+  expires_at: Timestamp;
+  grants: Generated<Json>;
+  id: Generated<string>;
+  invited_email: string | null;
+  project_id: string;
+  redeemed_at: Timestamp | null;
+  redeemed_by_external_user_id: string | null;
+  roles: Json;
+}
+
+export interface WorkRefreshTokens {
+  family_id: string;
+  grant_id: string;
+  issued_at: Generated<Timestamp>;
+  rotated_at: Timestamp | null;
+  token_hash: string;
+}
+
+export interface WorkShareEvents {
+  action: string;
+  created_at: Generated<Timestamp>;
+  detail: string | null;
+  id: Generated<Int8>;
+  share_id: string;
+  viewer_email: string;
+  viewer_user_id: string;
+}
+
+export interface WorkShares {
+  audience_domains: Generated<Json>;
+  audience_emails: Generated<Json>;
+  created_at: Generated<Timestamp>;
+  created_by: string;
+  environment: string | null;
+  expires_at: Timestamp | null;
+  id: string;
+  kind: string;
+  project_id: string;
+  revoked_at: Timestamp | null;
+  target: string;
+  title: string;
+}
+
+export interface WorkTokenFamilies {
+  client_id: string;
+  created_at: Generated<Timestamp>;
+  expires_at: Timestamp;
+  id: Generated<string>;
+  revoked_at: Timestamp | null;
+  revoked_reason: string | null;
+  user_id: string;
+}
+
+export interface WorkWorkerEnrollments {
+  access: Generated<Json>;
+  code_hash: string;
+  created_at: Generated<Timestamp>;
+  expires_at: Timestamp;
+  labels: Generated<Json>;
+  machine_ref: string | null;
+  machine_rule: string | null;
+  name: string;
+  tenant_id: string;
+  trusted: Generated<boolean>;
+  used_at: Timestamp | null;
+}
+
+export interface WorkWorkers {
+  access: Generated<Json>;
+  credential_hash: string;
+  enrolled_at: Generated<Timestamp>;
+  labels: Generated<Json>;
+  last_seen_at: Timestamp | null;
+  machine_ref: string | null;
+  machine_rule: string | null;
+  name: string;
+  node_id: string;
+  revoked_at: Timestamp | null;
+  tenant_id: string;
+  trusted: Generated<boolean>;
+}
+
 export interface DB {
   _migrations: _Migrations;
   active_run_invocations: ActiveRunInvocations;
@@ -1201,9 +1317,6 @@ export interface DB {
   session_artifacts: SessionArtifacts;
   session_mailbox_items: SessionMailboxItems;
   session_sync_intents: SessionSyncIntents;
-  stock_project_access_requests: StockProjectAccessRequests;
-  stock_project_admission_policies: StockProjectAdmissionPolicies;
-  stock_project_invitations: StockProjectInvitations;
   store_document_versions: StoreDocumentVersions;
   store_documents: StoreDocuments;
   stored_objects: StoredObjects;
@@ -1216,6 +1329,20 @@ export interface DB {
   watcher_runs: WatcherRuns;
   watchers: Watchers;
   webhook_endpoints: WebhookEndpoints;
+  work_accounts: WorkAccounts;
+  work_directory_grants: WorkDirectoryGrants;
+  work_machine_reconciler: WorkMachineReconciler;
+  work_machine_rules: WorkMachineRules;
+  work_project_access_requests: WorkProjectAccessRequests;
+  work_project_admission_policies: WorkProjectAdmissionPolicies;
+  work_project_invitations: WorkProjectInvitations;
+  work_refresh_tokens: WorkRefreshTokens;
+  work_share_events: WorkShareEvents;
+  work_shares: WorkShares;
+  work_token_families: WorkTokenFamilies;
+  work_worker_enrollments: WorkWorkerEnrollments;
+  work_workers: WorkWorkers;
+  worker_node_jobs: WorkerNodeJobs;
   worker_nodes: WorkerNodes;
   workflow_enablement_connections: WorkflowEnablementConnections;
   workflow_enablement_events: WorkflowEnablementEvents;

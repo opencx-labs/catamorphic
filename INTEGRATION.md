@@ -11,7 +11,7 @@ A host application runs catamorphic services in-process against its own Postgres
 Most hosts use 2 + 3 together: the server-sdk boots the core once, the fastify plugin exposes it to the frontend.
 
 For agent-guided setup, start with
-[`skills/setup-catamorphic-server`](skills/setup-catamorphic-server/SKILL.md).
+[`skills/setup-work-server`](skills/setup-work-server/SKILL.md).
 It inspects an existing application, auth, database, and deployment before
 asking questions, then routes to stock-host or custom-host guidance.
 
@@ -47,7 +47,7 @@ Common host shapes, composed from those axes:
   (ADR 0040): the trust statement attaches to a reviewed deploy, not to
   whatever an agent typed five minutes ago. Never use this provider for
   multi-tenant hosts — the only isolation is a process boundary and an
-  explicit env. **This shape ships ready-made as the stock server**
+  explicit env. **This shape ships ready-made as the Work server**
   (`apps/server`, ADRs 0059, 0071, 0072): `docker run` with everything on
   disk, stock Better Auth with local or configured provider sign-in,
   OAuth/PKCE remote clients, credential-free admission links, mDNS LAN
@@ -839,12 +839,15 @@ retry, rate limit, batch, or child call settles inline) and `.start(input)`
 ## Execution Environments and credential connections
 
 Hosts own physical execution and provider credentials. Projects name logical
-Environments in `.catamorphic/project.json`; the host maps each binding id to
-an actual provider with `defineStaticEnvironments`. An Environment is
-project-visible policy, a binding is its host-owned realization, and an
-Allocation is the immutable decision for one root session or workflow run.
-WorkerNode selection is a later placement concern and is never a project
-choice.
+Environments in `.catamorphic/project.json` by what the work needs: workloads,
+requirements, and an optional `pool` of machine labels (ADR 0167). The host's
+`EnvironmentProvider` places work: `defineStaticEnvironments` picks the first
+binding whose `labels` match the pool, and a scheduler receives the work's
+owner (`ownerUserId`, absent for project work) to prefer machines reserved for
+that person or their groups, using `accessTier` and `placementOrder` from
+`@catamorphic/sandbox`. An Environment is project-visible policy, a binding is
+its host-owned realization, and an Allocation is the immutable decision for
+one root session or workflow run. Machine selection is never a project choice.
 
 The managed multi-machine target is multiple Catamorphic server instances of
 one logical authority, sharing network Postgres and accessible authoritative
@@ -858,7 +861,7 @@ durable approvals. Custom hosts register `WorkerNodesService` leases, inject
 `workerNode: { id, token }`, and renew/release them with their host lifecycle.
 Enable `clientExecution: true` to accept authenticated member sandbox runners;
 `startClientRunner` supplies the transport-independent client loop. See the
-[cluster setup reference](skills/setup-catamorphic-server/references/cluster-deployment.md)
+[cluster setup reference](skills/setup-work-server/references/cluster-deployment.md)
 for the current limitations and required evidence. Custom hosts continue to
 inject their own infrastructure and auth.
 
@@ -931,7 +934,7 @@ Providers advertise `resourceLimits` and enforce `CreateSandboxOpts.resources`;
 unsupported limits fail rather than falling back to unbounded execution. Native
 host CLI execution does not inherit controller-sandbox resource guarantees.
 See [ADR 0100](docs/decisions/0100-workspace-resource-admission.md) and the
-[stock setup example](skills/setup-catamorphic-server/references/cluster-deployment.md#capacity-and-isolated-development).
+[stock setup example](skills/setup-work-server/references/cluster-deployment.md#capacity-and-isolated-development).
 
 ### Agent context and deferred host capabilities
 

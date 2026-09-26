@@ -300,7 +300,7 @@ export function ProjectInspectorView({
           </p>
         </Section>
       )}
-      <Section icon={<Radio className="size-3.5" />} title="Catamorphic server">
+      <Section icon={<Radio className="size-3.5" />} title="Work server">
         {loading ? (
           <EmptyLine loading empty="" />
         ) : snapshot.remote === null || snapshot.remote === undefined ? (

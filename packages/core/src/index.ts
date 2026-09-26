@@ -197,6 +197,7 @@ export {
   ClientRunnerOperationSchema,
   ClientRunnerResultSchema,
   ClientRunnersService,
+  forwardingSandboxProvider,
 } from "./services/client-runners-service.js";
 export type {
   CodeHost,
@@ -212,10 +213,24 @@ export {
   singleAgentRegistry,
 } from "./services/coding-agent-registry.js";
 export { ConnectionAdmissionService } from "./services/connection-admission.js";
-export { ConnectionBroker } from "./services/connection-broker.js";
+export {
+  ConnectionActionDeniedError,
+  ConnectionActionRefusedError,
+  ConnectionBroker,
+  type ConnectionGateway,
+} from "./services/connection-broker.js";
 export { ConnectionCapabilityGrantsService } from "./services/connection-capability-grants.js";
 export {
+  type ConnectionActionContext,
+  type ConnectionActionGuard,
+  type ConnectionGuardRecord,
+  type ConnectionGuardVerdict,
+  type ConnectionReviewOutcome,
+  reviewConnectionAction,
+} from "./services/connection-guards.js";
+export {
   type AuthorizationChallenge,
+  type ConnectionActionDefinition,
   type ConnectionAuthorizationResult,
   type ConnectionProvider,
   ConnectionProviderRegistry,
@@ -295,7 +310,10 @@ export {
   STORE_ROOT,
 } from "./services/documents-service.js";
 export { DurableToolPermissionBroker } from "./services/durable-tool-permission-broker.js";
-export { EncryptedCredentialVault } from "./services/encrypted-credential-vault.js";
+export {
+  EncryptedCredentialVault,
+  vaultKeyId,
+} from "./services/encrypted-credential-vault.js";
 export {
   type EnvironmentAllocationPolicy,
   type ExecutionAllocation,
@@ -350,6 +368,7 @@ export {
 } from "./services/plugins-service.js";
 export { forgetProgramFetch } from "./services/program-reader.js";
 export {
+  DEFAULT_ENVIRONMENT,
   type ProjectEnvironmentDefinition,
   type ProjectEnvironmentEntry,
   type ProjectEnvironmentPolicy,
@@ -423,6 +442,10 @@ export {
   type RemoteSyncOutcome,
   RemoteSyncService,
 } from "./services/remote-sync-service.js";
+export {
+  RemoteWorkerJobsService,
+  RemoteWorkerLeaseLostError,
+} from "./services/remote-worker-jobs-service.js";
 export {
   DEFAULT_RUN_RETENTION_DAYS,
   type PurgeResult,

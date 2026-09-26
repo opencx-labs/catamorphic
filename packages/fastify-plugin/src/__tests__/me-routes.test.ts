@@ -63,6 +63,7 @@ describe("GET /me (ADR 0055 introspection)", () => {
       projects: [
         {
           projectId: PROJECT_ID,
+          name: PROJECT_ID,
           source: null,
           // Implications expanded, so a client simply tests membership.
           permissions: ["sessions:read", "sessions:write", "brain:maintain"],
@@ -79,6 +80,7 @@ describe("GET /me (ADR 0055 introspection)", () => {
         },
         {
           projectId: "other",
+          name: "other",
           source: null,
           permissions: ["runs:read", "runs:write"],
           agents: ["*"],
@@ -147,6 +149,7 @@ describe("GET /me (ADR 0055 introspection)", () => {
       projects: [
         {
           projectId: PROJECT_ID,
+          name: PROJECT_ID,
           source: null,
           permissions: ["not-namespaced"],
           agents: [],

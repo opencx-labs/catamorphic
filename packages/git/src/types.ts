@@ -137,7 +137,7 @@ export interface ProjectRepo {
   commit(
     message: string,
     author: { name: string; email: string },
-    opts?: { paths?: readonly string[] },
+    opts?: { paths?: readonly string[]; allowEmpty?: boolean },
   ): Promise<string>;
   log(options?: { maxCount?: number; ref?: string }): Promise<CommitInfo[]>;
   resolveRef(ref?: string): Promise<string>;

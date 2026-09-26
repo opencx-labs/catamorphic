@@ -20,7 +20,13 @@ import {
   toolError,
   toolValue,
 } from "../mcp-shared.js";
-import { allowedWorkflowNames, surfaceTools } from "../project-mcp-surface.js";
+import { programTools, projectInstructions } from "../project-mcp-program.js";
+import {
+  allowedWorkflowNames,
+  mayUseProject,
+  type SurfaceTool,
+  surfaceTools,
+} from "../project-mcp-surface.js";
 
 /**
  * MCP server for a project (ADR 0042, ADR 0055): the single "bring your own
@@ -71,6 +77,14 @@ export function registerProjectMcpRoutes(
   app: FastifyInstance,
   ctx: RouteContext,
 ) {
+  // Stateless Streamable HTTP: no server-initiated stream, no session to end.
+  const notAllowed = async (
+    _request: unknown,
+    reply: import("fastify").FastifyReply,
+  ) => reply.status(405).header("allow", "POST").send();
+  app.get("/projects/:projectId/mcp", notAllowed);
+  app.delete("/projects/:projectId/mcp", notAllowed);
+
   app.post("/projects/:projectId/mcp", async (request, reply) => {
     const core = ctx.core;
     if (!core) {
@@ -87,6 +101,10 @@ export function registerProjectMcpRoutes(
       allocationId?: string;
     };
     const identity = resolveIdentity(request);
+    // Someone the project grants nothing sees no project here at all.
+    if (!mayUseProject(identity, projectId)) {
+      return reply.status(404).send({ error: "Project not found" });
+    }
     const abort = new AbortController();
     reply.raw.once("close", () => abort.abort());
     const gatewayTools = sessionId
@@ -100,13 +118,24 @@ export function registerProjectMcpRoutes(
           abort.signal,
         )
       : [];
-    const surface = surfaceTools(
-      core,
-      identity,
-      projectId,
-      ctx.features,
-      sessionId,
-    );
+    const surface: SurfaceTool[] = [
+      ...surfaceTools(core, identity, projectId, ctx.features, sessionId),
+      ...programTools(core, identity, projectId),
+      ...(ctx.projectMcp?.tools?.({ identity, projectId }) ?? []).map(
+        (tool) => ({
+          definition: tool.definition,
+          call: async (args: Record<string, unknown>) => {
+            try {
+              return toolValue(await tool.call(args));
+            } catch (error) {
+              return toolError(
+                error instanceof Error ? error.message : String(error),
+              );
+            }
+          },
+        }),
+      ),
+    ];
 
     return handleMcpPost(reply, request.body, async (method, params) => {
       switch (method) {
@@ -115,10 +144,23 @@ export function registerProjectMcpRoutes(
             protocolVersion: negotiateProtocolVersion(params.protocolVersion),
             capabilities: { tools: { listChanged: false } },
             serverInfo: {
-              name: "catamorphic",
-              title: "Catamorphic project",
               version: "1.0.0",
+              ...(ctx.projectMcp?.serverInfo ?? {
+                name: "catamorphic",
+                title: "Catamorphic project",
+              }),
             },
+            instructions: await projectInstructions({
+              core,
+              identity,
+              projectId,
+              toolNames: new Set(
+                surface.map((tool) => String(tool.definition.name)),
+              ),
+              ...(ctx.projectMcp?.instructions
+                ? { host: ctx.projectMcp.instructions }
+                : {}),
+            }),
           };
         case "ping":
           return {};

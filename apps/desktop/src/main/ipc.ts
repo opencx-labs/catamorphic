@@ -1865,6 +1865,7 @@ export function registerIpcHandlers(
     const me = await client.me();
     const project = me.projects.find((p) => p.projectId === remoteProjectId);
     return {
+      name: project?.name,
       source: project?.source ?? null,
       permissions: me.identity.root
         ? [...ROOT_REMOTE_PROJECT_PERMISSIONS]
@@ -2019,14 +2020,16 @@ export function registerIpcHandlers(
             return github.importRepo(identity, {
               id,
               fullName: githubFullName,
-              name: input.name,
+              name: capabilities.name ?? input.name,
               rootPath,
             });
           }
+          // The server's name, not the link's: a bare link carries none.
           return server.catamorphic.core.projects.create(identity, {
             id,
-            name: input.name,
+            name: capabilities.name ?? input.name,
             rootPath,
+            empty: true,
           });
         },
       });
@@ -2036,7 +2039,7 @@ export function registerIpcHandlers(
         connectionId: crypto.randomUUID(),
         serverUrl,
         remoteProjectId: input.remoteProjectId,
-        remoteProjectName: input.name,
+        remoteProjectName: capabilities.name ?? input.name,
         lastSyncAt: null,
       };
       writeRemoteProjectLocator(input.rootPath, remoteLink);

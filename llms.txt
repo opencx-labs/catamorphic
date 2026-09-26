@@ -1,8 +1,8 @@
 # Work
 
-> Canonical copy: https://work.software/llms.txt (this file mirrors it with repository-relative links; keep both in step, see docs in the website repository).
-
 > Work is a free, open-source desktop app for getting work done with AI agents: your projects, a real browser, terminals and editors, and agents that reshape the app and build tools for you. It runs on your Mac, uses the AI accounts you already pay for, and keeps your work on your machine unless you choose to run your own server.
+
+> Canonical copy: https://work.software/llms.txt (this file mirrors it with repository-relative links; keep both in step, see docs in the website repository).
 
 Work is the product; Catamorphic is the open-source framework it is built on. Both live in one repository: https://github.com/opencx-labs/catamorphic (Apache-2.0).
 
@@ -12,10 +12,11 @@ Work is the product; Catamorphic is the open-source framework it is built on. Bo
 - Framework underneath: Catamorphic (same repository)
 - License: Apache-2.0
 - Price: free; no account, subscription or hosted service required
-- Platform: macOS 12 or newer on Apple silicon (desktop); a mobile web companion; a self-hosted server (Docker)
+- Platform: macOS 12 or newer on Apple silicon (desktop); a mobile web companion; the Work server, a self-hosted Docker image
 - Install: `brew install --cask opencx-labs/tap/work@alpha`, or the DMG on https://github.com/opencx-labs/catamorphic/releases
 - AI: your own Claude Code or Codex account, or API keys (Anthropic, OpenAI, OpenRouter); providers bill you directly
 - Data: stays on your Mac by default; optionally on a server you run
+- Work server: `ghcr.io/opencx-labs/work-server`, published with every release (tags: the release version, `alpha`, and `latest` for Stable); one `docker run` with zero external services, `DATABASE_URL` opts into Postgres
 - Connect other tools: MCP (a project on your server is an MCP endpoint)
 - Website: https://work.software
 - This guide, with the linked documents inlined: https://work.software/llms-full.txt
@@ -26,7 +27,7 @@ Work is the product; Catamorphic is the open-source framework it is built on. Bo
 - **Open source and free, no strings attached.** Apache-2.0 license. No account, no subscription, no hosted service required. Nothing leaves your machine unless you send it.
 - **It is a browser.** Work embeds a real Chromium browser: tabs, Chrome-style profiles, bookmarks (pinned tiles and lists, per project too), history, and a password manager: it offers to save sign-ins, suggests saved logins under the field, generates strong passwords for new accounts, and keeps notes with each login, unlocked with Touch ID. You can use it as a clean browser and nothing more.
 - **It uses your existing AI subscriptions.** Sign in with the Claude Code or Codex account you already have, or add API keys (Anthropic, OpenAI, OpenRouter). Providers charge you directly; Work adds nothing.
-- **Completely local, or your own server.** The desktop app runs with an embedded database and local sandboxes; no cloud. When you want your work and agents available from your phone or while the Mac sleeps, run the stock server yourself (one Docker container, `apps/server`) and keep everything on hardware you control.
+- **Completely local, or your own server.** The desktop app runs with an embedded database and local sandboxes; no cloud. When you want your work and agents available from your phone or while the Mac sleeps, run the Work server yourself (one Docker container published with every release, `apps/server`) and keep everything on hardware you control. A company brain on that server can admit only its Google Workspace accounts, revokes a departed person's access within minutes, gives agents reviewed access to company systems without handing them credentials, and shares specific documents, folders, or apps with customers behind their own sign-in.
 - **Completely customizable.** The sidebar, theme, shortcuts, tabs, notifications and terminal macros are plain files (`sidebar.js`, `theme.json`, settings). Ask the assistant to change them and it edits the files; the app updates live. Agents build apps and workflows inside a project that look and behave like built-in parts of the app.
 - **Three ways to use it.** A coding workspace (worktrees, terminals, editors, diffs, pull requests, several coding harnesses side by side). A company brain (shared projects, roles and memberships, automations, apps, tuned agent roles, reachable from desktop, mobile PWA or any MCP client). Or just a nice, clean browser with an assistant a keystroke away.
 
@@ -43,6 +44,9 @@ We built Work because we believe one well-built piece of software can replace mo
 - Automations run for you or for the whole project. A workflow starts from a schedule, a chat event, GitHub, or a webhook sent to your server, and can message your chat or a shared project chat that anyone in the project can continue (one per pull request review, one per inbound request).
 - Agents run long commands in the background and can watch a command (a deploy, a file, a status page); the chat wakes when it finishes, succeeds or changes, including after the computer sleeps.
 - The mobile companion (a PWA) pairs with the desktop by QR code over your LAN, or connects to your server, so a chat can continue from your phone.
+- The Work server is a company brain in one image. People sign in through Google Workspace: only the company domain gets in, people suspended or removed in the directory are signed out within minutes, and directory groups can map to project roles. Agents and workflows reach MCP servers, HTTP APIs and a production database through a gateway that holds the keys; guards (a model reviewer, a person's approval, or both) review each action, and database access is read-only with cost and row limits. Project secrets are sealed in an encrypted vault. Enrolled workers add execution capacity holding only a machine credential, never the database or secrets; each worker serves everyone or named people and groups, so a person's agents run on their own machine first, and machine rules can give every member of a directory group a machine of their own. A single machine stays one `docker run`.
+- Shares send customers or partners a sign-in link to one document, folder or live app. They sign in with their own account (for example your product's own sign-in over OpenID Connect) and see only what was shared.
+- A company adds its own code (guards, directories, connection providers, routes) by extending the image with `@catamorphic/work-server` hooks instead of forking. Anyone can ask their coding agent to set up a Work server with the setup skill, and members work from Claude Code or any MCP client connected to the project's MCP endpoint with their own roles: read and search the project, draft, check and deploy workflows and apps, run workflows and read their runs, ask the project's agents, and share with customers.
 - Privacy: incognito chats stay on the device and are never mirrored; a project's private working files are separate from shared project source.
 
 ## Install
@@ -57,7 +61,9 @@ We built Work because we believe one well-built piece of software can replace mo
 - The desktop's design language and decision log (how the app is meant to feel, what changed and why): apps/desktop/DESIGN.md
 - Architecture decision records, one file per decision: docs/decisions
 - The self-hosted server (a company brain): apps/server/README.md
-- Setting one up with an agent, end to end: skills/setup-catamorphic-server/SKILL.md (start with references/first-brain.md)
+- Setting one up with an agent, end to end: skills/setup-work-server/SKILL.md (start with references/first-brain.md; company identity, secrets and the gateway, machines, and sharing each have a reference beside it)
+- Extending the Work server with your own code: packages/work-server/README.md
+- Working on a Work server project from Claude Code or any MCP client: skills/setup-work-server/references/members-over-mcp.md
 - Embedding the framework in your own product: INTEGRATION.md
 - How agents are expected to work inside the repository itself: AGENTS.md and apps/desktop/AGENTS.md
 - What is being worked on next: TODO.md
@@ -66,4 +72,4 @@ We built Work because we believe one well-built piece of software can replace mo
 ## Pages on this site
 
 - https://work.software/ (home, with a short film of the app in use)
-- https://work.software/#brain (the company brain, and one message that sets one up with your agent)
+- https://work.software/#brain (the company brain on the Work server, and one message that sets one up with your agent)

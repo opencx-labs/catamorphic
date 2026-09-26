@@ -1,7 +1,8 @@
-import type {
-  CatamorphicCore,
-  ConnectionProvider,
-  Identity,
+import {
+  type CatamorphicCore,
+  type ConnectionProvider,
+  DEFAULT_ENVIRONMENT,
+  type Identity,
 } from "@catamorphic/core";
 import type { Json } from "@catamorphic/db";
 import { connectMcpServer } from "@catamorphic/mcp";
@@ -129,7 +130,7 @@ export async function syncProfileMcpWorkflowConnections(input: {
         await service.detachMember({
           identity: input.identity,
           projectId: project.id,
-          environment: "local",
+          environment: DEFAULT_ENVIRONMENT,
           alias: previousAlias,
         });
       }
@@ -156,7 +157,7 @@ export async function syncProfileMcpWorkflowConnections(input: {
       await service.bind({
         identity: input.identity,
         projectId: project.id,
-        environment: "local",
+        environment: DEFAULT_ENVIRONMENT,
         alias,
         providerKind: DESKTOP_PROFILE_MCP_PROVIDER_KIND,
         principalKinds: ["member"],
@@ -165,7 +166,7 @@ export async function syncProfileMcpWorkflowConnections(input: {
       await service.attachMember({
         identity: input.identity,
         projectId: project.id,
-        environment: "local",
+        environment: DEFAULT_ENVIRONMENT,
         alias,
         connectionId: adopted.id,
       });
@@ -188,7 +189,7 @@ export async function syncProfileMcpWorkflowConnections(input: {
         await service.detachMember({
           identity: input.identity,
           projectId: project.id,
-          environment: "local",
+          environment: DEFAULT_ENVIRONMENT,
           alias,
         });
       }

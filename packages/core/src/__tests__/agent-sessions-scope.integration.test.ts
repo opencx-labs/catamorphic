@@ -167,7 +167,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     viewer = {
       ...root,
       externalUserId: "csm-alice",
-      executionScope: [{ projectId, name: "local" }],
+      executionScope: [{ projectId, name: "default" }],
       scope: [
         {
           kind: "agent",
@@ -182,7 +182,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     admin = {
       ...root,
       externalUserId: "admin-bob",
-      executionScope: [{ projectId, name: "local" }],
+      executionScope: [{ projectId, name: "default" }],
       ...projectAdmin(projectId),
     };
   });
@@ -672,7 +672,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     const project = projectPrincipalIdentity({
       tenantId: root.tenantId,
       projectId,
-      environment: "local",
+      environment: "default",
     });
     const shared = await sessions.create(project, projectId, {
       agentId: csmAgentId,

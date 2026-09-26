@@ -1,6 +1,6 @@
 ---
 name: desktop-release
-description: Use when preparing, dry-running, publishing, repairing, or verifying a Work desktop Stable or Preview release (macOS, GitHub Releases, and the opencx-labs/homebrew-tap casks and update feeds). Not for ordinary desktop development or for publishing framework npm packages.
+description: Use when preparing, dry-running, publishing, repairing, or verifying a Work Stable or Preview release (the macOS desktop through GitHub Releases and the opencx-labs/homebrew-tap casks and update feeds, and the matching work-server image). Not for ordinary desktop development or for publishing framework npm packages.
 ---
 
 # Desktop release
@@ -17,6 +17,9 @@ Read these completely before changing or publishing anything:
 - [.github/workflows/desktop-prerelease.yml](../../../.github/workflows/desktop-prerelease.yml)
   (workflow name "Desktop release"): tag pushes publish, manual dispatch only
   builds and verifies.
+- [.github/workflows/work-server-image.yml](../../../.github/workflows/work-server-image.yml)
+  (workflow name "Work server image"): the same tag publishes the multi-arch
+  `work-server` image to GHCR; manual dispatch builds and smoke-tests only.
 - [scripts/desktop-release.ts](../../../scripts/desktop-release.ts): tag, version,
   cask and feed rules.
 - `apps/desktop/package.json`: the version being released.
@@ -80,6 +83,7 @@ If `main` already carries the intended version, skip the PR.
 
 ```sh
 gh workflow run desktop-prerelease.yml --ref main
+gh workflow run work-server-image.yml --ref main
 gh run list --workflow desktop-prerelease.yml --limit 1 --json databaseId,headSha,status
 ```
 
@@ -87,7 +91,8 @@ Confirm the run's `headSha` is the recorded SHA and watch it to completion
 (`gh run watch <id>`). The environment requires reviewer approval, so the run
 waits for a person. A dispatch signs, notarizes, verifies and uploads the DMG,
 ZIP, blockmaps, feed and `SHA256SUMS.txt` as workflow artifacts. It never creates
-a release or touches the tap.
+a release or touches the tap. The server image dispatch builds and smoke-tests
+both architectures but never pushes.
 
 For a signing-credential change or a material packaging change, pause for the
 clean-account install checks in RELEASING.md. Never claim Gatekeeper, URL-handler,
@@ -125,6 +130,9 @@ Use a temporary directory for downloads and a tap clone. Confirm:
 - the tap files for the channel (above) all advanced in one commit made after the
   release was published, each cask names the version and DMG checksum, and each
   feed points only at this release's assets;
+- the `work-server` image has the version and `alpha` tags (plus `latest` for
+  Stable), `linux/amd64` and `linux/arm64` manifests, and a provenance
+  attestation that `gh attestation verify` accepts;
 - the release and workflow run URLs are recorded for the user.
 
 Do not run `brew install`, replace `/Applications/Work.app`, or run an updater

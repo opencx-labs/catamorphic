@@ -522,13 +522,18 @@ export function surfaceTools(
     tools.push({
       definition: {
         name: "ask_agent",
-        description: `Ask one of the project's agents (${hint}) and get its reply — a full turn with the agent's own tools and persona. Pass sessionId to continue an earlier conversation.`,
+        description: `Ask one of the project's agents (${hint}) and get its reply — a full turn with the agent's own tools and persona. Pass sessionId to continue an earlier conversation, or environment to choose where a new one runs.`,
         inputSchema: {
           type: "object",
           properties: {
             agent: { type: "string", description: "The agent's slug" },
             message: { type: "string" },
             sessionId: { type: "string" },
+            environment: {
+              type: "string",
+              description:
+                "Environment for a new conversation (project_overview lists yours)",
+            },
           },
           required: ["agent", "message"],
         },
@@ -545,6 +550,9 @@ export function surfaceTools(
             await sessions.create(identity, projectId, {
               agentId,
               source: "mcp",
+              ...(str(args.environment)
+                ? { environment: str(args.environment) }
+                : {}),
             })
           ).id;
         const reply = await sessions.sendMessage(

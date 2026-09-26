@@ -2,22 +2,20 @@ import { describe, expect, it } from "vitest";
 import { parseProjectEnvironmentPolicy } from "../services/project-environments-service.js";
 
 describe("project Environment policy", () => {
-  it("defaults a legacy manifest without Environments to local", () => {
+  it("defaults a manifest without Environments to one that selects nothing", () => {
     expect(parseProjectEnvironmentPolicy({ name: "legacy-project" })).toEqual({
-      defaultEnvironment: "local",
+      defaultEnvironment: "default",
       environments: {
-        local: {
-          binding: "local",
-          description: "Run on this machine",
+        default: {
+          description: "Run where this host places work",
           workloads: ["agent", "workflow"],
         },
       },
       entries: [
         {
-          name: "local",
+          name: "default",
           definition: {
-            binding: "local",
-            description: "Run on this machine",
+            description: "Run where this host places work",
             workloads: ["agent", "workflow"],
           },
         },
@@ -25,18 +23,18 @@ describe("project Environment policy", () => {
     });
   });
 
-  it("parses a default and preserves per-Environment policy", () => {
+  it("parses pools, member devices, and per-Environment requirements", () => {
     expect(
       parseProjectEnvironmentPolicy({
         environments: {
-          local: {
-            binding: "local",
-            description: "Run on this desktop",
+          default: {
+            description: "Anywhere",
             workloads: ["agent", "workflow"],
           },
-          company: {
-            binding: "managed-standard",
-            workloads: ["agent", "workflow"],
+          gpu: {
+            workloads: ["agent"],
+            pool: { class: "gpu" },
+            strict: true,
             requirements: {
               trust: "managed",
               isolation: "sandbox",
@@ -44,21 +42,24 @@ describe("project Environment policy", () => {
               resources: { memoryMb: 8192 },
             },
           },
+          mine: { workloads: ["agent"], device: "member" },
         },
-        defaultEnvironment: "local",
+        defaultEnvironment: "default",
       }),
     ).toMatchObject({
-      defaultEnvironment: "local",
+      defaultEnvironment: "default",
       environments: {
-        local: { binding: "local" },
-        company: {
-          binding: "managed-standard",
+        default: { workloads: ["agent", "workflow"] },
+        gpu: {
+          pool: { class: "gpu" },
+          strict: true,
           requirements: {
             trust: "managed",
             isolation: "sandbox",
             resources: { memoryMb: 8192 },
           },
         },
+        mine: { device: "member" },
       },
     });
   });
@@ -66,25 +67,33 @@ describe("project Environment policy", () => {
   it.each([
     [
       "invalid name",
-      {
-        environments: {
-          "not allowed": { binding: "local", workloads: ["agent"] },
-        },
-      },
+      { environments: { "not allowed": { workloads: ["agent"] } } },
       "Invalid Environment name",
     ],
     [
-      "missing binding",
-      { environments: { local: { workloads: ["agent"] } } },
+      "a retired binding",
+      { environments: { local: { binding: "local", workloads: ["agent"] } } },
       "binding",
     ],
     [
-      "unsupported workload",
+      "a device and a pool",
       {
         environments: {
-          local: { binding: "local", workloads: ["container"] },
+          both: { workloads: ["agent"], device: "member", pool: { a: "b" } },
         },
       },
+      "not both",
+    ],
+    [
+      "an invalid label name",
+      {
+        environments: { x: { workloads: ["agent"], pool: { "Big Key": "v" } } },
+      },
+      "pool",
+    ],
+    [
+      "unsupported workload",
+      { environments: { local: { workloads: ["container"] } } },
       "expected one of",
     ],
   ])("reports %s without hiding other entries", (_name, manifest, message) => {
@@ -99,9 +108,7 @@ describe("project Environment policy", () => {
 
   it("rejects an unknown default Environment", () => {
     const parsed = parseProjectEnvironmentPolicy({
-      environments: {
-        local: { binding: "local", workloads: ["agent"] },
-      },
+      environments: { default: { workloads: ["agent"] } },
       defaultEnvironment: "company",
     });
     expect(parsed.invalid?.error).toContain("defaultEnvironment");
