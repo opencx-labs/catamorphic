@@ -195,7 +195,6 @@ export const WorkflowEnablementOwnerSchema = z.discriminatedUnion("type", [
 
 export const WorkflowEnablementConnectionSchema = z.object({
   alias: z.string(),
-  bindingId: z.string().uuid(),
   connectionId: z.string().uuid(),
   providerKind: z.string(),
   principalKind: z.enum(["member", "project_service", "tenant_service"]),
@@ -615,6 +614,8 @@ export const ConnectionRecordSchema = z.object({
   projectId: z.string().uuid().nullable(),
   providerKind: z.string(),
   principalKind: z.enum(["member", "project_service", "tenant_service"]),
+  /** A service connection's name; Environment bindings refer to it. */
+  name: z.string().nullable(),
   ownerExternalUserId: z.string().nullable(),
   label: z.string(),
   status: z.enum(["pending", "ready", "expired", "revoked"]),
@@ -636,21 +637,17 @@ const ConnectionBindingPrincipalStatusSchema = z.object({
   scopes: z.array(z.string()),
 });
 
+/** One alias an Environment commits in `.work/project.json` (ADR 0172). */
 export const ConnectionBindingSchema = z.object({
-  id: z.string().uuid(),
-  projectId: z.string().uuid(),
   environment: z.string(),
   alias: z.string(),
-  providerKind: z.string(),
-  principalKinds: z.array(
-    z.enum(["member", "project_service", "tenant_service"]),
-  ),
-  serviceConnectionId: z.string().uuid().nullable(),
-  capabilities: z.array(z.string()),
+  provider: z.string(),
+  principal: z.enum(["member", "service", "either"]),
+  /** The service connection's name; shown to connection administrators. */
+  service: z.string().nullable(),
+  capabilities: z.array(z.string()).nullable(),
   memberConnection: ConnectionBindingPrincipalStatusSchema.nullable(),
   serviceConnection: ConnectionBindingPrincipalStatusSchema.nullable(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
 });
 
 export const AuthorizationChallengeSchema = z.discriminatedUnion("kind", [
@@ -1766,7 +1763,17 @@ export const PublicationParamsSchema = ProjectIdParamsSchema.extend({
 // --- Introspection (ADR 0055) ---
 export const MeSchema = z.object({
   version: z.literal(1),
-  identity: z.object({ externalUserId: z.string(), root: z.boolean() }),
+  identity: z.object({
+    externalUserId: z.string(),
+    root: z.boolean(),
+    /**
+     * Host-issued permissions over the organization's shared resources
+     * (ADR 0172), expanded: `connections:write` also lists `connections:read`.
+     */
+    controlPlanePermissions: z.array(
+      z.enum(["connections:read", "connections:write"]),
+    ),
+  }),
   projects: z.array(
     z.object({
       projectId: z.string(),

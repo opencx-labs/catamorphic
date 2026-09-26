@@ -393,17 +393,18 @@ export interface ConnectionAuditEvents {
 }
 
 export interface ConnectionAuthorizationAttempts {
-  alias: string;
+  alias: string | null;
   completed_at: Timestamp | null;
   created_at: Generated<Timestamp>;
-  environment_name: string;
+  environment_name: string | null;
   expires_at: Timestamp;
   external_user_id: string;
   id: Generated<string>;
   private_state_ref: string | null;
-  project_id: string;
+  project_id: string | null;
   provider_kind: string;
   reauthorize_connection_id: string | null;
+  service_connection_id: string | null;
   state_hash: string;
   status: Generated<string>;
   tenant_id: string;
@@ -411,8 +412,8 @@ export interface ConnectionAuthorizationAttempts {
 
 export interface ConnectionCapabilityGrants {
   agent_session_id: string | null;
+  alias: string;
   allocation_id: string;
-  binding_id: string;
   capabilities: Json;
   connection_id: string;
   created_at: Generated<Timestamp>;
@@ -432,6 +433,7 @@ export interface Connections {
   expires_at: Timestamp | null;
   id: Generated<string>;
   label: string;
+  name: string | null;
   owner_external_user_id: string | null;
   principal_kind: string;
   project_id: string | null;
@@ -470,20 +472,6 @@ export interface DeploymentRuntimes {
   replica_index: Generated<number>;
   sandbox_id: string;
   status: Generated<string>;
-}
-
-export interface EnvironmentConnectionBindings {
-  alias: string;
-  capabilities: Generated<Json>;
-  created_at: Generated<Timestamp>;
-  environment_name: string;
-  id: Generated<string>;
-  principal_kinds: Json;
-  project_id: string;
-  provider_kind: string;
-  service_connection_id: string | null;
-  tenant_id: string;
-  updated_at: Generated<Timestamp>;
 }
 
 export interface ExecutionAllocations {
@@ -941,6 +929,7 @@ export interface WebhookEndpoints {
 }
 
 export interface WorkAccounts {
+  administrator: Generated<boolean>;
   directory_checked_at: Timestamp | null;
   directory_groups: Generated<Json>;
   disabled_at: Timestamp | null;
@@ -983,7 +972,6 @@ export interface WorkerNodes {
 
 export interface WorkflowEnablementConnections {
   alias: string;
-  binding_id: string;
   capabilities: Generated<Json>;
   connection_id: string;
   created_at: Generated<Timestamp>;
@@ -1294,7 +1282,6 @@ export interface DB {
   connections: Connections;
   deployment_artifacts: DeploymentArtifacts;
   deployment_runtimes: DeploymentRuntimes;
-  environment_connection_bindings: EnvironmentConnectionBindings;
   execution_allocations: ExecutionAllocations;
   execution_jobs: ExecutionJobs;
   member_connection_attachments: MemberConnectionAttachments;

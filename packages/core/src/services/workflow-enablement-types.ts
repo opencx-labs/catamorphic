@@ -14,7 +14,6 @@ export type WorkflowEnablementOwner =
 
 export interface WorkflowEnablementConnection {
   alias: string;
-  bindingId: string;
   connectionId: string;
   providerKind: string;
   principalKind: ConnectionPrincipalKind;

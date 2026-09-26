@@ -51,7 +51,6 @@ const AllocationPolicySchema = z.object({
   connections: z
     .array(
       z.object({
-        bindingId: z.string().uuid(),
         connectionId: z.string().uuid(),
         alias: z.string(),
         providerKind: z.string(),

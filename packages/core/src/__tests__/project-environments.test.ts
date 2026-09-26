@@ -113,4 +113,100 @@ describe("project Environment policy", () => {
     });
     expect(parsed.invalid?.error).toContain("defaultEnvironment");
   });
+
+  it("parses committed connection bindings (ADR 0172)", () => {
+    const parsed = parseProjectEnvironmentPolicy({
+      environments: {
+        review: {
+          workloads: ["agent"],
+          pool: { pool: "review" },
+          connections: {
+            github: {
+              provider: "github",
+              principal: "service",
+              service: "github",
+              capabilities: ["get", "post"],
+            },
+            prod: {
+              provider: "prod-replica",
+              principal: "service",
+              service: "prod-replica",
+              capabilities: ["query", "explain", "schema"],
+            },
+            mail: { provider: "mail", principal: "member" },
+            docs: { provider: "docs", principal: "either", service: "docs" },
+          },
+        },
+        default: { workloads: ["agent", "workflow"] },
+      },
+    });
+    expect(parsed.invalid).toBeUndefined();
+    expect(parsed.environments.review?.connections).toEqual({
+      github: {
+        provider: "github",
+        principal: "service",
+        service: "github",
+        capabilities: ["get", "post"],
+      },
+      prod: {
+        provider: "prod-replica",
+        principal: "service",
+        service: "prod-replica",
+        capabilities: ["query", "explain", "schema"],
+      },
+      mail: { provider: "mail", principal: "member" },
+      docs: { provider: "docs", principal: "either", service: "docs" },
+    });
+    expect(parsed.environments.default?.connections).toBeUndefined();
+  });
+
+  it.each([
+    [
+      "a service binding without a service",
+      { provider: "github", principal: "service" },
+      "names its service connection",
+    ],
+    [
+      "a member binding naming a service",
+      { provider: "mail", principal: "member", service: "mail" },
+      "does not name a service connection",
+    ],
+    [
+      "an unknown principal",
+      { provider: "mail", principal: "robot" },
+      "principal",
+    ],
+    [
+      "an unknown field",
+      { provider: "mail", principal: "member", token: "secret" },
+      "token",
+    ],
+    [
+      "an invalid service name",
+      { provider: "db", principal: "service", service: "Prod DB" },
+      "service",
+    ],
+  ])("reports %s as an invalid Environment", (_name, binding, message) => {
+    const parsed = parseProjectEnvironmentPolicy({
+      environments: {
+        review: { workloads: ["agent"], connections: { alias: binding } },
+        default: { workloads: ["agent"] },
+      },
+    });
+    const review = parsed.entries.find((entry) => entry.name === "review");
+    expect(review?.invalid?.error).toContain(message);
+    expect(parsed.environments.default).toBeDefined();
+  });
+
+  it("rejects an invalid connection alias", () => {
+    const parsed = parseProjectEnvironmentPolicy({
+      environments: {
+        review: {
+          workloads: ["agent"],
+          connections: { "not an alias": { provider: "x", principal: "member" } },
+        },
+      },
+    });
+    expect(parsed.entries[0]?.invalid).toBeDefined();
+  });
 });

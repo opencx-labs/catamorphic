@@ -34,7 +34,7 @@ export function registerConnectionMcpRoutes(
         allocationId: grant.allocationId,
       });
       const binding = allocation?.policy.connections?.find(
-        (candidate) => candidate.bindingId === grant.bindingId,
+        (candidate) => candidate.alias === grant.alias,
       );
       if (allocation?.status !== "active" || !binding) {
         return reply
