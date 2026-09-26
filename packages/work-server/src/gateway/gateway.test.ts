@@ -177,6 +177,89 @@ describe("gateway configuration", () => {
     });
   });
 
+  it("takes HTTP limits within the host ceiling and MCP OAuth clients (ADR 0172)", () => {
+    const config = gatewayConfigFromFile({
+      path: write({
+        connections: [
+          {
+            type: "http",
+            kind: "github",
+            displayName: "GitHub",
+            baseUrl: "https://api.github.com",
+            maxResponseBytes: 4 * 1024 * 1024,
+            timeoutMs: 60_000,
+          },
+          {
+            type: "postgres",
+            kind: "prod-replica",
+            displayName: "Production replica",
+            poolSize: 3,
+          },
+          {
+            kind: "slack",
+            displayName: "Slack",
+            url: "https://mcp.slack.test/mcp",
+            oauth: {
+              client: {
+                id: "1234.5678",
+                secretEnv: "SLACK_CLIENT_SECRET",
+                scopes: ["search:read"],
+              },
+            },
+          },
+        ],
+      }),
+      env: { SLACK_CLIENT_SECRET: "slack-secret" },
+    });
+    expect(config.connections[0]).toMatchObject({
+      maxResponseBytes: 4 * 1024 * 1024,
+      timeoutMs: 60_000,
+    });
+    expect(config.connections[2]).toMatchObject({
+      oauth: {
+        client: { id: "1234.5678", secret: "slack-secret", scopes: ["search:read"] },
+      },
+    });
+    const providers = gatewayProviders(config);
+    expect(providers.map((provider) => provider.kind)).toEqual([
+      "github",
+      "prod-replica",
+      "slack",
+    ]);
+    expect(typeof providers[1]?.close).toBe("function");
+    expect(() =>
+      gatewayConfigFromFile({
+        path: write({
+          connections: [
+            {
+              type: "http",
+              kind: "github",
+              displayName: "GitHub",
+              baseUrl: "https://api.github.com",
+              maxResponseBytes: 64 * 1024 * 1024,
+            },
+          ],
+        }),
+        env: {},
+      }),
+    ).toThrow("maxResponseBytes");
+    expect(() =>
+      gatewayConfigFromFile({
+        path: write({
+          connections: [
+            {
+              kind: "slack",
+              displayName: "Slack",
+              url: "https://mcp.slack.test/mcp",
+              oauth: { client: { id: "x", secretEnv: "MISSING_SECRET" } },
+            },
+          ],
+        }),
+        env: {},
+      }),
+    ).toThrow("MISSING_SECRET");
+  });
+
   it("names the missing key instead of starting without a reviewer", () => {
     expect(() =>
       gatewayConfigFromFile({

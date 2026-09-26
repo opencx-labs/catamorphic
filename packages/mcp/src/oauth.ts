@@ -150,11 +150,7 @@ export async function beginMcpAuthorization(
   const memory = memoryStore({
     ...(opts.client
       ? {
-          clientInformation: {
-            client_id: opts.client.clientId,
-            redirect_uris: [opts.redirectUri],
-            token_endpoint_auth_method: "none",
-          },
+          clientInformation: preRegisteredClient(opts.client, opts.redirectUri),
         }
       : {}),
   });
@@ -224,6 +220,24 @@ export async function completeMcpAuthorization(
   }
   const state = memory.load();
   return { ...state, codeVerifier: undefined };
+}
+
+/**
+ * The stored client information for a pre-registered client. A public
+ * client authenticates with PKCE alone; a confidential one also sends its
+ * secret, by whichever method the authorization server advertises.
+ */
+function preRegisteredClient(
+  client: McpOAuthClientHint,
+  redirectUri: string,
+): StoredOAuthClientInformation {
+  return {
+    client_id: client.clientId,
+    redirect_uris: [redirectUri],
+    ...(client.clientSecret
+      ? { client_secret: client.clientSecret }
+      : { token_endpoint_auth_method: "none" }),
+  };
 }
 
 function memoryStore(initial: McpOAuthState): McpOAuthStore {
@@ -325,11 +339,7 @@ export async function authorizeMcpServer(
     store.save({
       ...store.load(),
       clientInformation: opts.client
-        ? {
-            client_id: opts.client.clientId,
-            redirect_uris: [listener.redirectUrl],
-            token_endpoint_auth_method: "none",
-          }
+        ? preRegisteredClient(opts.client, listener.redirectUrl)
         : undefined,
       tokens: undefined,
       tokensObtainedAt: undefined,

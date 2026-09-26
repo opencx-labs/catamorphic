@@ -72,6 +72,9 @@ import { workGithub } from "./github-config.js";
 import { AccountLifecycle } from "./identity/account-lifecycle.js";
 import type { DirectoryProvider } from "./identity/directory.js";
 import { GoogleWorkspaceDirectory } from "./identity/google-directory.js";
+import { registerAdministratorRoutes } from "./identity/administrator-routes.js";
+import { WorkAdministrators } from "./identity/administrators.js";
+import { registerConnectionSetup } from "./setup/connections.js";
 import { registerMachineSetup } from "./setup/machines.js";
 import {
   loadWorkOperatorSecret,
@@ -421,6 +424,14 @@ async function createWorkServerInner(
     tenantId: SERVER_TENANT_ID,
   });
 
+  const gatewayConnectionProviders = config.gateway
+    ? gatewayProviders(config.gateway)
+    : [];
+  disposers.push(() =>
+    Promise.all(
+      gatewayConnectionProviders.map((provider) => provider.close?.()),
+    ),
+  );
   const catamorphic = createCatamorphic({
     ...(github ? { github: github.config, proposalBot: github.identity } : {}),
     hostId,
@@ -464,7 +475,7 @@ async function createWorkServerInner(
       ...(hooks.connectionGuards ?? []),
     ],
     connectionProviders: [
-      ...(config.gateway ? gatewayProviders(config.gateway) : []),
+      ...gatewayConnectionProviders,
       ...(hooks.connectionProviders ?? []),
     ],
     connectionMcpUrl: () => `${publicBase}/api/connection-mcp`,
@@ -521,6 +532,12 @@ async function createWorkServerInner(
     signInGate: (account) => accountLifecycle.admitSignIn(account),
   });
   await workAuth.migrate();
+  // Organization administrators hold the host-issued connections
+  // permissions on the API they call (ADR 0172); roles never grant them.
+  const administrators = new WorkAdministrators({
+    db: ownDb,
+    auth: workAuth,
+  });
 
   // PGlite is a single serialized connection: one worker lane there;
   // real Postgres gets a few.
@@ -795,20 +812,25 @@ async function createWorkServerInner(
       : {}),
   });
   // --- HTTP: the standard API app + the server's own routes -----------
-  const app = createApp({
-    core,
-    identity: identityFromBearer(async (token) => {
-      const authenticated = await workAuth.resolveAccessToken({
-        authorization: `Bearer ${token}`,
-      });
-      if (!authenticated) return null;
-      if (!(await accountLifecycle.isActive(authenticated.userId))) return null;
-      if (await shares.isGuest(authenticated.userId)) return null;
-      return core.memberships.identityForUser({
+  // A signed-in member's identity: their roles, plus the administrator's
+  // connections permissions when they hold that flag.
+  const memberIdentity = async (
+    authorization: string,
+  ): Promise<Identity | null> => {
+    const authenticated = await workAuth.resolveAccessToken({ authorization });
+    if (!authenticated) return null;
+    if (!(await accountLifecycle.isActive(authenticated.userId))) return null;
+    if (await shares.isGuest(authenticated.userId)) return null;
+    return administrators.withPermissions(
+      await core.memberships.identityForUser({
         tenantId: SERVER_TENANT_ID,
         externalUserId: authenticated.userId,
-      });
-    }),
+      }),
+    );
+  };
+  const app = createApp({
+    core,
+    identity: identityFromBearer((token) => memberIdentity(`Bearer ${token}`)),
     features: { publications: "members" },
     projectMcp: {
       serverInfo: { name: "work", title: "Work" },
@@ -896,6 +918,14 @@ async function createWorkServerInner(
       });
     },
   });
+  registerAdministratorRoutes(app, {
+    administrators,
+    caller: async (request) => {
+      const header = request.headers.authorization;
+      const authorization = Array.isArray(header) ? header[0] : header;
+      return authorization ? memberIdentity(authorization) : null;
+    },
+  });
   registerWorkAdmissionRoutes(app, {
     publicBases: config.publicBases,
     auth: workAuth,
@@ -940,6 +970,14 @@ async function createWorkServerInner(
     operatorSecret,
     publicBase,
     ...(machineReconciler ? { machines: machineReconciler } : {}),
+  });
+  registerConnectionSetup({
+    app: operatorApp,
+    operatorSecret,
+    operatorIdentity: rootIdentity,
+    connections: () => core.connections,
+    administrators,
+    publicBase,
   });
   operatorApp.post("/_work/operator/projects", async (request, reply) => {
     const authorization = Array.isArray(request.headers.authorization)
@@ -997,7 +1035,16 @@ async function createWorkServerInner(
         operatorIdentity: rootIdentity,
         input: parsed.data,
       });
-      return reply.status(201).send(result);
+      if (parsed.data.administrator) {
+        await administrators.set({
+          userId: result.user.id,
+          administrator: true,
+        });
+      }
+      return reply.status(201).send({
+        ...result,
+        administrator: parsed.data.administrator ?? false,
+      });
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Provision failed";

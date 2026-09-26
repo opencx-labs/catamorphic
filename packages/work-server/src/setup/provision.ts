@@ -12,6 +12,8 @@ export const ProvisionWorkUserInputSchema = z.strictObject({
   name: z.string().trim().min(1).max(200),
   password: z.string().min(8).max(128),
   email: z.email().optional(),
+  /** An organization administrator (ADR 0172): manages service connections. */
+  administrator: z.boolean().optional(),
   memberships: z
     .array(
       z.strictObject({

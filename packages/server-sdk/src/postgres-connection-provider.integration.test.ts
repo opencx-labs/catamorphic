@@ -10,6 +10,7 @@ const reader = `gateway_reader_${suffix}`;
 const writer = `gateway_writer_${suffix}`;
 const signaller = `gateway_signaller_${suffix}`;
 const password = randomBytes(12).toString("hex");
+const CONNECTION = { id: `connection-${suffix}`, revision: 1 };
 
 function urlFor(role: string): string {
   const url = new URL(databaseUrl ?? "postgres://localhost/test");
@@ -97,6 +98,7 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
         purpose: "test",
       },
       capabilities: ["query"],
+      connection: CONNECTION,
     });
     expect(result).toMatchObject({
       columns: ["id", "cents"],
@@ -124,6 +126,7 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
         action: "query",
         input: { sql, purpose: "test" },
         capabilities: ["query"],
+        connection: CONNECTION,
       });
     await expect(query(`DELETE FROM ${schema}.orders`)).rejects.toThrow(
       "only one SELECT",
@@ -155,12 +158,99 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
         action: "query",
         input: { sql: "SELECT repeat('x', 5000) AS big", purpose: "test" },
         capabilities: ["query"],
+        connection: CONNECTION,
       }),
     ).rejects.toThrow("single row exceeds");
     const count = await admin.query(
       `SELECT count(*)::int AS n FROM ${schema}.orders`,
     );
     expect(count.rows[0]?.n).toBe(5000);
+  });
+
+  it("reuses a small pool per credential and closes it on rotation", async () => {
+    const provider = definePostgresConnectionProvider({
+      kind: "prod-db",
+      displayName: "Production",
+      poolSize: 2,
+    });
+    const openSessions = async () =>
+      (
+        await admin.query(
+          `SELECT count(*)::int AS n FROM pg_stat_activity
+            WHERE usename = $1 AND application_name = 'work-gateway'`,
+          [reader],
+        )
+      ).rows[0]?.n;
+    const material = await authorize(provider, urlFor(reader));
+    // Other tests' pools hold their own sessions of this role.
+    const before = await openSessions();
+    const connection = { id: `pooled-${suffix}`, revision: 1 };
+    const backend = async (revision: number) => {
+      const result = await provider.invoke({
+        material,
+        action: "query",
+        input: { sql: "SELECT pg_backend_pid() AS pid", purpose: "test" },
+        capabilities: ["query"],
+        connection: { ...connection, revision },
+      });
+      if (
+        typeof result !== "object" ||
+        result === null ||
+        Array.isArray(result) ||
+        !Array.isArray(result.rows)
+      ) {
+        throw new Error("unexpected result");
+      }
+      return JSON.stringify(result.rows[0]);
+    };
+    const sessions = new Set<string>();
+    for (let call = 0; call < 50; call += 1) sessions.add(await backend(1));
+    // Sequential calls share one session; concurrent ones stay within the pool.
+    expect(sessions.size).toBe(1);
+    const concurrent = new Set(
+      await Promise.all(Array.from({ length: 10 }, () => backend(1))),
+    );
+    expect(concurrent.size).toBeLessThanOrEqual(2);
+    expect(provider.pools()).toEqual([
+      { connectionId: connection.id, revision: 1, total: expect.any(Number) },
+    ]);
+    // Every per-call step still applies on a reused session.
+    await expect(
+      provider.invoke({
+        material,
+        action: "query",
+        input: { sql: `DELETE FROM ${schema}.orders`, purpose: "test" },
+        capabilities: ["query"],
+        connection,
+      }),
+    ).rejects.toThrow("only one SELECT");
+    const settings = await provider.invoke({
+      material,
+      action: "query",
+      input: {
+        sql: "SELECT current_setting('transaction_read_only') AS ro, current_setting('statement_timeout') AS timeout",
+        purpose: "test",
+      },
+      capabilities: ["query"],
+      connection,
+    });
+    expect(settings).toMatchObject({ rows: [{ ro: "on", timeout: "10s" }] });
+    // A rotated credential (a new revision) closes the old pool.
+    const rotated = await backend(2);
+    expect(sessions.has(rotated)).toBe(false);
+    expect(provider.pools().map((pool) => pool.revision)).toEqual([2]);
+    await provider.release?.({ connectionId: connection.id });
+    expect(provider.pools()).toEqual([]);
+    // Backends leave pg_stat_activity just after their sockets close.
+    for (
+      let wait = 0;
+      wait < 40 && (await openSessions()) !== before;
+      wait += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(await openSessions()).toBe(before);
+    await provider.close();
   });
 
   it("describes the tables the role may read", async () => {
@@ -174,6 +264,7 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
       action: "schema",
       input: { schema },
       capabilities: ["schema"],
+      connection: CONNECTION,
     });
     expect(described).toEqual({
       tables: [

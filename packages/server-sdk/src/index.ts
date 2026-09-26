@@ -208,6 +208,7 @@ export {
   definePostgresConnectionProvider,
   type PostgresConnectionLimits,
   type PostgresConnectionOptions,
+  type PostgresConnectionProvider,
 } from "./postgres-connection-provider.js";
 export { PostgresObjectStore } from "./postgres-object-store.js";
 export { schedule } from "./schedule-trigger-kind.js";
