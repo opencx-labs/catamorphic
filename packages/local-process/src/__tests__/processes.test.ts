@@ -33,7 +33,8 @@ describe("LocalProcessSandboxProvider background processes (ADR 0174)", () => {
     });
     const started = await provider.processes.startProcess({
       sandboxId: sandbox.id,
-      command: 'echo "$SANDBOX_VALUE $CALL_VALUE $(pwd)"; sleep 0.3; echo done; exit 7',
+      command:
+        'echo "$SANDBOX_VALUE $CALL_VALUE $(pwd)"; sleep 0.3; echo done; exit 7',
       cwd: "/workspace/app",
       env: { CALL_VALUE: "from-call" },
       name: "Build",
@@ -182,7 +183,7 @@ describe("LocalProcessSandboxProvider background processes (ADR 0174)", () => {
     const [stopped] = await provider.processes.listProcesses({
       sandboxId: sandbox.id,
     });
-    expect(stopped?.status).toBe("exited");
+    expect(stopped).toMatchObject({ status: "exited", signal: "SIGKILL" });
     await provider.destroySandbox(sandbox.id);
   }, 20_000);
 });

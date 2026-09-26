@@ -1,4 +1,3 @@
-import type { SandboxProcessProvider } from "./processes.js";
 import type {
   RuntimeArtifactIdentity,
   RuntimeBatchStepSuspension,
@@ -9,6 +8,7 @@ import type {
   RuntimeSupervisorHealth,
   RuntimeTerminalResult,
 } from "@catamorphic/runtime";
+import type { SandboxProcessProvider } from "./processes.js";
 
 export type SandboxType = "execution" | "dev";
 

@@ -160,9 +160,18 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
         { id: "bash", displayName: "Bash" },
         ...(this.opts.sandboxProvider.processes
           ? [
-              { id: "run_background_command", displayName: "Run in Background" },
-              { id: "read_background_output", displayName: "Read Background Output" },
-              { id: "stop_background_command", displayName: "Stop Background Command" },
+              {
+                id: "run_background_command",
+                displayName: "Run in Background",
+              },
+              {
+                id: "read_background_output",
+                displayName: "Read Background Output",
+              },
+              {
+                id: "stop_background_command",
+                displayName: "Stop Background Command",
+              },
             ]
           : []),
         { id: "ask_user", displayName: "Ask User" },

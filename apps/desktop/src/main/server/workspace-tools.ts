@@ -878,7 +878,7 @@ export function buildWorkspaceToolkit(
     {
       name: "read_background_output",
       description:
-        "Read a background command's output since your last read, with its status (running, finished, stopped) and exit code. Pass wait_seconds to block until it prints something new or finishes, when you have nothing else to do meanwhile.",
+        "Read a background command's output since your last read, with its status (running, finished, stopped) and exit code. wait_seconds blocks until it prints something new or finishes; with wait_for, until a line matches.",
       parameters: {
         id: z.string().describe("The id run_background_command returned"),
         wait_seconds: z
@@ -887,7 +887,8 @@ export function buildWorkspaceToolkit(
           .min(0)
           .max(600)
           .optional()
-          .describe("Block up to this long for new output or the end"),
+          .describe("Seconds to wait"),
+        wait_for: z.string().optional().describe("Regex of a line to wait for"),
       },
       execute: (input, ctx) =>
         bridge.readBackgroundCommand({
@@ -895,6 +896,9 @@ export function buildWorkspaceToolkit(
           id: String(input.id),
           ...(typeof input.wait_seconds === "number"
             ? { waitMs: input.wait_seconds * 1000 }
+            : {}),
+          ...(typeof input.wait_for === "string" && input.wait_for
+            ? { waitFor: input.wait_for }
             : {}),
         }),
     },

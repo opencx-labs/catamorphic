@@ -68,7 +68,11 @@ export interface SandboxProcess {
   status: SandboxProcessStatus;
   /** The command's exit code; null while running or when a signal ended it. */
   exitCode: number | null;
-  /** The last signal sent through {@link SandboxProcessProvider.signalProcess}. */
+  /**
+   * The signal that stopped it, when known: the last one sent through
+   * {@link SandboxProcessProvider.signalProcess}, or one the provider saw
+   * end it (a stopped sandbox).
+   */
   signal: ProcessSignal | null;
   startedAt: string;
   endedAt: string | null;
@@ -143,8 +147,7 @@ export function decodeUtf8Prefix(
     for (let back = 1; back <= Math.min(4, bytes.length); back++) {
       const byte = bytes[bytes.length - back] ?? 0;
       if ((byte & 0xc0) === 0x80) continue;
-      const length =
-        byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : byte >= 0xc0 ? 2 : 1;
+      const length = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : byte >= 0xc0 ? 2 : 1;
       if (length > back) end = bytes.length - back;
       break;
     }
@@ -228,10 +231,7 @@ export async function followProcess(args: {
 }): Promise<FollowProcessResult> {
   const deadline = Date.now() + Math.max(0, args.timeoutMs);
   const output = new OutputWindow(args.outputLimit ?? 30_000);
-  const pollMs = Math.min(
-    args.pollMs ?? 5_000,
-    PROCESS_READ_MAX_WAIT_MS,
-  );
+  const pollMs = Math.min(args.pollMs ?? 5_000, PROCESS_READ_MAX_WAIT_MS);
   const backlogBytes = args.backlogBytes ?? 1024 * 1024;
   let cursor = args.cursor;
   let partial = "";
@@ -247,7 +247,9 @@ export async function followProcess(args: {
       sandboxId: args.sandboxId,
       processId: args.processId,
       cursor,
-      waitMs: args.signal?.aborted ? 0 : Math.max(0, Math.min(remaining, pollMs)),
+      waitMs: args.signal?.aborted
+        ? 0
+        : Math.max(0, Math.min(remaining, pollMs)),
     });
     cursor = read.nextCursor;
     if (read.chunk) {

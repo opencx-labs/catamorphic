@@ -353,6 +353,7 @@ export interface ClientRunners {
   label: string;
   lease_expires_at: Timestamp;
   lease_token: string;
+  processes: Generated<boolean>;
   project_id: string;
   resource_limits: Generated<Json>;
   tenant_id: string;

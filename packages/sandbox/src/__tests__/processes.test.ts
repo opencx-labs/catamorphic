@@ -33,7 +33,9 @@ function hostExecute(
       output += chunk.toString();
     });
     child.on("error", reject);
-    child.on("close", (code) => resolve({ exitCode: code ?? 1, result: output }));
+    child.on("close", (code) =>
+      resolve({ exitCode: code ?? 1, result: output }),
+    );
   });
 }
 

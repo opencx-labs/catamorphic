@@ -291,7 +291,10 @@ describe("AiSdkCodingAgent background commands", () => {
               },
               {
                 type: "finish" as const,
-                finishReason: { unified: "tool-calls" as const, raw: undefined },
+                finishReason: {
+                  unified: "tool-calls" as const,
+                  raw: undefined,
+                },
                 usage,
               },
             ],

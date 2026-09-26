@@ -116,16 +116,9 @@ export class BackgroundCommands {
   }> {
     const command = input.command.trim();
     if (!command) throw new Error("Empty command.");
-    let wakeOnOutput: RegExp | null = null;
-    if (input.wakeOnOutput) {
-      try {
-        wakeOnOutput = new RegExp(input.wakeOnOutput, "m");
-      } catch (error) {
-        throw new Error(
-          `wake_on_output is not a valid regular expression: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    }
+    const wakeOnOutput = input.wakeOnOutput
+      ? outputPattern(input.wakeOnOutput, "wake_on_output")
+      : null;
     const { terminals } = this.deps;
     const created = await terminals.create(
       input.projectId,
@@ -187,28 +180,49 @@ export class BackgroundCommands {
 
   /**
    * New output since the agent's last read. With `waitMs`, blocks until the
-   * command finishes or prints something new, whichever comes first.
+   * command finishes or prints something new, whichever comes first; with
+   * `waitFor` too, until it prints a line matching that pattern (the same
+   * contract as sandbox background commands, ADR 0174).
    */
   async read(input: {
     sessionId: string;
     id: string;
     waitMs?: number;
+    waitFor?: string;
   }): Promise<{
     status: BackgroundCommandView["status"];
     exitCode: number | null;
     output: string;
+    matched?: string;
   }> {
     const tracked = this.owned(input.sessionId, input.id);
+    const waitFor = input.waitFor
+      ? outputPattern(input.waitFor, "wait_for")
+      : undefined;
     const deadline =
       Date.now() + Math.min(Math.max(input.waitMs ?? 0, 0), READ_MAX_WAIT_MS);
+    const { terminals } = this.deps;
+    let scanned = tracked.readOffset;
+    let matched: string | undefined;
+    const waiting = () => {
+      if (tracked.status !== "running") return false;
+      const end = terminals.bufferLength(tracked.id) ?? 0;
+      if (end <= tracked.readOffset) return true;
+      if (!waitFor) return false;
+      if (end > scanned) {
+        scanned = end;
+        matched = this.deps
+          .modelOutput(
+            terminals.readFrom(tracked.id, tracked.readOffset, RAW_READ_CAP),
+          )
+          .split("\n")
+          .find((line) => waitFor.test(line));
+      }
+      return matched === undefined;
+    };
     tracked.reading++;
     try {
-      while (
-        Date.now() < deadline &&
-        tracked.status === "running" &&
-        (this.deps.terminals.bufferLength(tracked.id) ?? 0) <=
-          tracked.readOffset
-      ) {
+      while (Date.now() < deadline && waiting()) {
         await sleep(250);
         this.observe(tracked, { wake: false });
       }
@@ -218,6 +232,7 @@ export class BackgroundCommands {
         status: tracked.status,
         exitCode: tracked.exitCode,
         output: this.takeOutput(tracked),
+        ...(matched !== undefined ? { matched } : {}),
       };
     } finally {
       tracked.reading--;
@@ -415,6 +430,16 @@ export class BackgroundCommands {
 
   private changed(): void {
     this.deps.changed(this.list());
+  }
+}
+
+function outputPattern(source: string, name: string): RegExp {
+  try {
+    return new RegExp(source, "m");
+  } catch (error) {
+    throw new Error(
+      `${name} is not a valid regular expression: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 

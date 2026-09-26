@@ -300,13 +300,15 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
       outputBytes: 0,
     };
     const entry = { process: record, child, log };
-    const ended = (exitCode: number | null) => {
+    const ended = (exitCode: number | null, signal?: NodeJS.Signals | null) => {
       if (entry.process.status === "exited") return;
       entry.process.status = "exited";
       entry.process.exitCode = exitCode;
+      entry.process.signal ??=
+        PROCESS_SIGNALS.find((known) => known === signal) ?? null;
       entry.process.endedAt = new Date().toISOString();
     };
-    child.once("exit", (code) => ended(code));
+    child.once("exit", (code, signal) => ended(code, signal));
     child.once("error", (error) => {
       fs.appendFileSync(log, `${error.message}\n`);
       ended(127);
@@ -360,7 +362,9 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     };
   }
 
-  private async signalProcess(args: SignalProcessArgs): Promise<SandboxProcess> {
+  private async signalProcess(
+    args: SignalProcessArgs,
+  ): Promise<SandboxProcess> {
     if (!PROCESS_SIGNALS.includes(args.signal))
       throw new Error(`Unsupported signal '${args.signal}'`);
     const entry = this.backgroundProcess(args);

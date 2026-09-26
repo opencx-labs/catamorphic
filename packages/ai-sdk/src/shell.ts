@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import {
-  followProcess,
   type FollowProcessResult,
+  followProcess,
   type SandboxProcessProvider,
   type SandboxProvider,
 } from "@catamorphic/sandbox";
@@ -91,9 +91,7 @@ export async function runShell(input: {
         }));
   const at = result.output.lastIndexOf(marker);
   if (at !== -1) {
-    const directory = result.output
-      .slice(at + marker.length)
-      .split("\n", 1)[0];
+    const directory = result.output.slice(at + marker.length).split("\n", 1)[0];
     if (directory) input.state.cwd = directory;
   }
   const output = (

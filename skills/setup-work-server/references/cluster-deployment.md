@@ -231,7 +231,11 @@ agent resource configuration file. For example, merge this into an ordinary
     "preferred": ["development"],
     "requirements": {
       "isolation": "sandbox",
-      "resources": { "cpuMillis": 2000, "memoryMb": 4096 }
+      "resources": {
+        "cpuMillis": 2000,
+        "memoryMb": 4096,
+        "commandTimeoutSeconds": 1800
+      }
     }
   }
 }
@@ -241,9 +245,14 @@ Microsandbox enforces whole-core CPU limits (multiples of 1000 millicores) and
 memory in MiB. Disk and GPU limits are currently rejected by the stock providers.
 Native host CLI execution does not enforce these sandbox limits; use controller
 agents for this setup. The stock controller and connection broker remain outside
-the VM. Agent command timeouts are bounded by `timeoutSeconds` when supplied.
-The local-process backend has a workspace-slot budget but rejects CPU/memory
-budgets; it is still for trusted single-tenant work only.
+the VM. `resources.commandTimeoutSeconds` bounds one foreground command, an
+agent's shell command included (ten minutes when unset). Longer work runs as a
+background command: the built-in agent starts it with `run_background_command`,
+follows it with `read_background_output`, and stops it with
+`stop_background_command`. Background processes run inside the workspace on
+the worker and end when the chat closes or the workspace is destroyed
+(ADR 0174). The local-process backend has a workspace-slot budget but rejects
+CPU/memory budgets; it is still for trusted single-tenant work only.
 
 A managed session reserves its workspace at creation, including between turns.
 Background development servers stay within the same VM and budget. Full machines

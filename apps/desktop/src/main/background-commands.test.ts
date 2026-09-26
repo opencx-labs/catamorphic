@@ -275,6 +275,36 @@ describe("BackgroundCommands", () => {
     commands.dispose();
   });
 
+  it("waits for a matching line across several prints", async () => {
+    const { fake, commands } = setup();
+    const started = commands.start({
+      projectId: "p",
+      sessionId: "chat",
+      command: "bun run dev",
+      description: "Start the dev server",
+      wakeOnExit: false,
+    });
+    await until(() => fake.written.length > 0);
+    await started;
+    setTimeout(() => fake.print("t1", "compiling…\n"), 50);
+    setTimeout(() => fake.print("t1", "ready on port 3000\n"), 400);
+    const waited = await commands.read({
+      sessionId: "chat",
+      id: "t1",
+      waitMs: 5_000,
+      waitFor: "ready on port \\d+",
+    });
+    expect(waited).toMatchObject({
+      status: "running",
+      matched: "ready on port 3000",
+    });
+    expect(waited.output).toContain("compiling…");
+    await expect(
+      commands.read({ sessionId: "chat", id: "t1", waitFor: "(" }),
+    ).rejects.toThrow("wait_for is not a valid regular expression");
+    commands.dispose();
+  });
+
   it("rejects an invalid output pattern before starting anything", async () => {
     const { fake, commands } = setup();
     await expect(

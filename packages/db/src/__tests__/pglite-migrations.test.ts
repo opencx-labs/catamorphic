@@ -63,6 +63,7 @@ describe("PGlite migrations", () => {
       "023_sealed_project_secrets.sql",
       "024_remote_workers.sql",
       "025_work_shares.sql",
+      "030_client_runner_processes.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

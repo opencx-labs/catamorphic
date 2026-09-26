@@ -245,6 +245,8 @@ export class ClientRunnersService {
     workspaceRoot: string;
     resourceLimits?: ("cpuMillis" | "memoryMb" | "storageMb" | "gpu")[];
     isolation?: "none" | "process" | "sandbox";
+    /** The runner's provider runs background processes (ADR 0174). */
+    processes?: boolean;
   }) {
     if (
       !args.workspaceRoot.startsWith("/") ||
@@ -269,6 +271,7 @@ export class ClientRunnersService {
           resourceLimitsSchema.parse(args.resourceLimits ?? []),
         ),
         isolation: isolationSchema.parse(args.isolation ?? "none"),
+        processes: args.processes ?? false,
         lease_token: token,
         lease_expires_at: sql`now() + interval '45 seconds'`,
       })
@@ -285,6 +288,7 @@ export class ClientRunnersService {
               resourceLimitsSchema.parse(args.resourceLimits ?? []),
             ),
             isolation: isolationSchema.parse(args.isolation ?? "none"),
+            processes: args.processes ?? false,
             environment_name: args.environment,
           })
           .where("client_runners.tenant_id", "=", args.identity.tenantId)
@@ -507,9 +511,7 @@ export class ClientRunnersService {
       );
     const provider = forwardingSandboxProvider({
       workspaceRoot: runner.workspace_root,
-      // Member runners use the desktop's sandbox providers, which run
-      // background processes; one that cannot answers each call with why.
-      processes: true,
+      processes: runner.processes,
       call,
     });
     return {

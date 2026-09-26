@@ -48,6 +48,7 @@ export class RemoteClientRunners {
               workspaceRoot: this.provider.workspaceRoot,
               resourceLimits: [...(this.provider.resourceLimits ?? [])],
               isolation: this.provider.isolation ?? "none",
+              processes: Boolean(this.provider.processes),
             },
           },
         );
