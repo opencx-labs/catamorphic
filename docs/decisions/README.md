@@ -193,8 +193,9 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0172](0172-committed-connection-bindings-and-named-service-connections.md) | Committed connection bindings, named service connections, organization administrators | Accepted |
 | [0173](0173-keyed-chat-lifecycle-and-chat-placement.md) | Keyed chats: project keys, close, idle release, and their own placement | Accepted |
 | [0174](0174-background-processes-as-a-sandbox-capability.md) | Background processes are a sandbox capability | Accepted |
-| [0175](0175-grants-reach-sandboxes.md) | Grants reach sandboxes; credentials never do | Accepted (Git implementation notes; workspaces at a ref in 0178) |
+| [0175](0175-grants-reach-sandboxes.md) | Grants reach sandboxes; credentials never do | Accepted (Git implementation notes; workspaces at a ref in 0178; models and harnesses in 0180) |
 | [0176](0176-environment-images-containers-egress-and-modes.md) | Environments choose images, containers, egress, and what agents may change | Accepted |
 | [0177](0177-github-is-a-connection.md) | GitHub is a connection | Accepted |
 | [0178](0178-session-workspaces-at-a-ref.md) | Session workspaces at a ref of the project's remote | Accepted |
 | [0179](0179-integrations-from-project-code-slack.md) | Integrations from project code: named HTTP operations and declared delivery ids | Accepted |
+| [0180](0180-harnesses-run-in-the-sandbox-models-through-the-gateway.md) | Harnesses run in the sandbox; models through the gateway | Accepted |

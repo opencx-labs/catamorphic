@@ -103,6 +103,11 @@ not declare it here.
   a password or access token (a form); the gateway uses it for sandboxes'
   fetches and pushes. Code-host providers that serve Git (GitHub) need no
   entry here.
+- `model`: a model API (`"api": "anthropic"` or `"openai"`, with a
+  `baseUrl` for OpenRouter or a self-hosted server) that Claude Code and
+  Codex reach from sandboxes through `/api/gateway/model/<alias>/…`.
+  `anthropic` and `openai` are built in; see
+  [Harnesses on the server](harnesses.md).
 
 ## Service connections and administrators
 
