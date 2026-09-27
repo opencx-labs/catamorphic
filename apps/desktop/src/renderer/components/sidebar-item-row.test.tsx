@@ -102,6 +102,20 @@ describe("SidebarItemRow hover preview", () => {
     ).toContain("Production deployments");
   });
 
+  it("does not preview focus handed back while the pointer leads", () => {
+    vi.useFakeTimers();
+    const container = mountRow();
+    const button = container.querySelector("button");
+    document.documentElement.dataset.focusModality = "pointer";
+    try {
+      act(() => button?.focus());
+      act(() => vi.advanceTimersByTime(SIDEBAR_PREVIEW_DELAY_MS));
+      expect(document.querySelector("[data-resource-inspector]")).toBeNull();
+    } finally {
+      delete document.documentElement.dataset.focusModality;
+    }
+  });
+
   it("keeps the preview open while the pointer moves onto the card", () => {
     vi.useFakeTimers();
     const container = mountRow();

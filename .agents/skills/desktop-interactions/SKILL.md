@@ -17,6 +17,8 @@ are changing. The guide describes the current product; update it in the same cha
 | Idle CPU and memory | [Performance](../../../apps/desktop/docs/performance.md) |
 | Loading buttons, modal stability | [Buttons](../../../apps/desktop/DESIGN.md#buttons) |
 | Selects and checkboxes | [Dropdowns and checkboxes](../../../apps/desktop/DESIGN.md#dropdowns-and-checkboxes) |
+| Keyboard focus rings | [Focus rings](../../../apps/desktop/DESIGN.md#focus-rings) |
+| Sidebar motion and drag and drop | [Sidebar sections](../../../apps/desktop/DESIGN.md#sidebar-sections) |
 
 Record a changed decision in an ADR or a short [design log](../../../apps/desktop/DESIGN.md)
 entry. Older log entries and `DESIGN-HISTORY.md` explain past intent; they are not
@@ -35,6 +37,12 @@ instructions to restore superseded behavior.
   [form-controls.css](../../../apps/desktop/src/renderer/form-controls.css)
   (`appearance: base-select`). No JavaScript select replacements, OS-native menus,
   browser-default checkboxes or per-screen control styles.
+- Focus rings come from the ring tokens and follow keyboard navigation. Do not
+  add `focus-visible:outline-*` utilities; use `.focus-ring-inset` for rows and
+  clipped containers.
+- Sidebar content that appears, disappears or changes height goes through
+  `Collapsible`; lists and drag and drop go through the shared `Tree`. Never
+  mount or unmount a sidebar region instantly.
 - A new setting goes into the settings catalog and its Settings destination. Keep
   search metadata independent of live values.
 - Project agents learn desktop configuration from the `configuring-catamorphic-desktop`

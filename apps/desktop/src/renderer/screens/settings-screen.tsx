@@ -12,7 +12,13 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { ACTION_LABELS, KEYBINDING_ACTIONS } from "../../shared/actions.js";
 import { bindingFromEvent, parseBinding } from "../../shared/keybindings.js";
 import {
@@ -891,11 +897,28 @@ function LayoutSection({
   children?: ReactNode;
 }) {
   const [scope, setScope] = useState<SettingsScope>("profile");
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
   const [snapshot, setSnapshot] = useState<SettingsSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Reads and scope changes: a stale read or a save for another scope never
+  // lands. Saves in flight are tracked separately (see `pending`).
   const generation = useRef(0);
   const [refreshKey, setRefreshKey] = useState(0);
+  // Changes show at once and stay on screen until their own save settles:
+  // every snapshot that arrives meanwhile (an older save's answer, the
+  // refresh a save triggers) gets them layered back on top, so a quick
+  // second click never flickers back to the first value.
+  const pending = useRef(
+    new Map<SettingKey, { save: number; value: unknown }>(),
+  );
+  const server = useRef<SettingsSnapshot | null>(null);
+  const saves = useRef(0);
+  const showServer = useCallback((result: SettingsSnapshot) => {
+    server.current = result;
+    setSnapshot(withPending(result, pending.current));
+  }, []);
   // biome-ignore lint/correctness/useExhaustiveDependencies: Retry intentionally restarts a failed IPC read.
   useEffect(() => {
     let alive = true;
@@ -905,7 +928,7 @@ function LayoutSection({
         .getSettings({ projectId, scope })
         .then((result) => {
           if (alive && request === generation.current) {
-            setSnapshot(result);
+            showServer(result);
             setError(null);
           }
         })
@@ -913,6 +936,8 @@ function LayoutSection({
           if (alive && request === generation.current) setError(String(cause));
         });
     };
+    pending.current.clear();
+    server.current = null;
     setSnapshot(null);
     refresh();
     const unsubscribe = desktopApi.onPrefsChanged(refresh);
@@ -921,24 +946,48 @@ function LayoutSection({
       generation.current++;
       unsubscribe();
     };
-  }, [projectId, scope, refreshKey]);
+  }, [projectId, scope, refreshKey, showServer]);
+  // Controls stay enabled while saving (a disabled checkbox dims for the
+  // length of the save). A reset waits for the answer: only it knows which
+  // layer the value falls back to.
   const save = async (patch: SettingsPatch) => {
-    const request = generation.current;
+    const forScope = scope;
+    const id = ++saves.current;
+    for (const [key, value] of Object.entries(patch) as [
+      SettingKey,
+      unknown,
+    ][]) {
+      if (value === null || value === undefined) pending.current.delete(key);
+      else pending.current.set(key, { save: id, value });
+    }
+    if (server.current)
+      setSnapshot(withPending(server.current, pending.current));
     setSaving(true);
     setError(null);
+    const settleOwn = () => {
+      for (const [key, entry] of pending.current)
+        if (entry.save === id) pending.current.delete(key);
+    };
     try {
       const result = await desktopApi.setSettings({ projectId, scope, patch });
-      if (request === generation.current) setSnapshot(result);
+      if (forScope !== scopeRef.current) return;
+      settleOwn();
+      showServer(result);
     } catch (cause) {
-      if (request === generation.current) setError(String(cause));
+      if (forScope !== scopeRef.current) return;
+      // Only this save's keys go back, to whatever the server holds now.
+      settleOwn();
+      if (server.current) showServer(server.current);
+      setError(String(cause));
     } finally {
-      setSaving(false);
+      if (id === saves.current) setSaving(false);
     }
   };
   return (
     <section
       className="settings-card mt-4 flex flex-col gap-3"
       data-settings-layout={title === "Workspace layout" ? "" : undefined}
+      aria-busy={saving || undefined}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-sm font-semibold">{title}</h2>
@@ -947,7 +996,6 @@ function LayoutSection({
             aria-label="Settings scope"
             className="field h-8 min-w-0 max-w-full rounded-md px-2 text-xs"
             value={scope}
-            disabled={saving}
             onChange={(event) => setScope(event.target.value as SettingsScope)}
           >
             <option value="profile">Profile</option>
@@ -1007,7 +1055,8 @@ function LayoutSection({
                 )}
                 <p className="mt-1 grid text-[11px] text-fg-muted">
                   {/* Reserve the longest source label so toggling an override
-                      cannot change the row's height when its text wraps. */}
+                      cannot change the row's height when its text wraps; the
+                      two labels cross-fade in that one cell. */}
                   <span
                     aria-hidden="true"
                     className="invisible col-start-1 row-start-1"
@@ -1015,10 +1064,20 @@ function LayoutSection({
                     {SETTING_SOURCE_LABELS[scope]} · From{" "}
                     {SETTING_SOURCE_LABELS.default.toLowerCase()}
                   </span>
-                  <span className="col-start-1 row-start-1">
-                    {overridden
-                      ? `Custom for ${SETTING_SOURCE_LABELS[scope].toLowerCase()}`
-                      : `${SETTING_SOURCE_LABELS[scope]} · From ${SETTING_SOURCE_LABELS[snapshot.sources[key]].toLowerCase()}`}
+                  <span
+                    aria-hidden={!overridden}
+                    data-source-current={overridden || undefined}
+                    className={`col-start-1 row-start-1 transition-opacity duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${overridden ? "opacity-100" : "opacity-0"}`}
+                  >
+                    Custom for {SETTING_SOURCE_LABELS[scope].toLowerCase()}
+                  </span>
+                  <span
+                    aria-hidden={overridden}
+                    data-source-current={!overridden || undefined}
+                    className={`col-start-1 row-start-1 transition-opacity duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${overridden ? "opacity-0" : "opacity-100"}`}
+                  >
+                    {SETTING_SOURCE_LABELS[scope]} · From{" "}
+                    {SETTING_SOURCE_LABELS[snapshot.sources[key]].toLowerCase()}
                   </span>
                 </p>
               </div>
@@ -1032,17 +1091,18 @@ function LayoutSection({
                   >
                     Reset
                   </span>
-                  {overridden && (
-                    <button
-                      type="button"
-                      aria-label={`Reset ${definition.label} to inherited`}
-                      disabled={saving}
-                      className="col-start-1 row-start-1 text-xs text-fg-muted hover:text-fg disabled:opacity-40"
-                      onClick={() => void save({ [key]: null })}
-                    >
-                      Reset
-                    </button>
-                  )}
+                  {/* Always mounted: it fades in and out in its reserved cell. */}
+                  <button
+                    type="button"
+                    aria-label={`Reset ${definition.label} to inherited`}
+                    aria-hidden={!overridden}
+                    inert={!overridden}
+                    tabIndex={overridden ? undefined : -1}
+                    className={`col-start-1 row-start-1 text-xs text-fg-muted transition-[opacity,color] duration-150 ease-[cubic-bezier(0.2,0,0,1)] hover:text-fg ${overridden ? "opacity-100" : "pointer-events-none opacity-0"}`}
+                    onClick={() => void save({ [key]: null })}
+                  >
+                    Reset
+                  </button>
                 </span>
                 {"range" in definition ? (
                   <input
@@ -1052,7 +1112,6 @@ function LayoutSection({
                     min={definition.range.min}
                     max={definition.range.max}
                     step={definition.range.step}
-                    disabled={saving}
                     value={Number(value)}
                     className="field h-8 w-20 rounded-md px-2 text-sm"
                     onChange={(event) => {
@@ -1064,7 +1123,6 @@ function LayoutSection({
                   <select
                     id={id}
                     name={key}
-                    disabled={saving}
                     value={String(value)}
                     className="field h-8 min-w-0 max-w-full rounded-md px-2 text-sm"
                     onChange={(event) =>
@@ -1084,9 +1142,7 @@ function LayoutSection({
                     id={id}
                     name={key}
                     type="checkbox"
-                    disabled={saving}
                     checked={value === true}
-                    className="size-4 accent-(--color-accent)"
                     onChange={(event) =>
                       void save({ [key]: event.target.checked })
                     }
@@ -1604,7 +1660,7 @@ function ThemeSection({
                   overrides: {},
                 })
               }
-              className={`flex min-w-0 cursor-pointer flex-col gap-2 rounded-lg border p-2.5 text-left transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+              className={`flex min-w-0 cursor-pointer flex-col gap-2 rounded-lg border p-2.5 text-left transition-colors duration-150 ${
                 active
                   ? "border-accent bg-accent/10"
                   : "border-border bg-bg-raised/40 hover:border-border-strong"
@@ -2038,4 +2094,19 @@ function ConfigurationErrors({ projectId }: { projectId?: string }) {
       ))}
     </div>
   );
+}
+
+/** A server snapshot with the changes still being saved laid over it. */
+function withPending(
+  snapshot: SettingsSnapshot,
+  pending: ReadonlyMap<SettingKey, { value: unknown }>,
+): SettingsSnapshot {
+  if (pending.size === 0) return snapshot;
+  const values = { ...snapshot.values };
+  const overrides = { ...snapshot.overrides };
+  for (const [key, { value }] of pending) {
+    Reflect.set(overrides, key, value);
+    Reflect.set(values, key, value);
+  }
+  return { ...snapshot, values, overrides };
 }

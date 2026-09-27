@@ -37,9 +37,9 @@ type Flow =
 type AiSdkProvider = "anthropic" | "openai" | "openrouter";
 
 const primaryActionClass =
-  "min-h-9 w-full cursor-pointer rounded-md bg-accent px-3 py-2 text-sm font-medium text-accent-fg transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50";
+  "min-h-9 w-full cursor-pointer rounded-md bg-accent px-3 py-2 text-sm font-medium text-accent-fg transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 disabled:cursor-not-allowed disabled:opacity-50";
 const secondaryActionClass =
-  "min-h-9 w-full cursor-pointer rounded-md border border-border px-3 py-2 text-sm text-fg-muted transition-[background-color,border-color,color,opacity,transform] duration-150 hover:border-border-strong hover:bg-bg-overlay hover:text-fg active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50";
+  "min-h-9 w-full cursor-pointer rounded-md border border-border px-3 py-2 text-sm text-fg-muted transition-[background-color,border-color,color,opacity,transform] duration-150 hover:border-border-strong hover:bg-bg-overlay hover:text-fg active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 disabled:cursor-not-allowed disabled:opacity-50";
 
 const OPTIONS: Array<{
   id: "claude-code" | "codex" | "api-key" | "free";

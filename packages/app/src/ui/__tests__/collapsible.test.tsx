@@ -2,10 +2,9 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it } from "vitest";
-import { APP_KIT_CSS } from "../../kit-css.js";
 import { Collapsible } from "../collapsible.js";
 
-it("keeps closed content mounted but inert and animates through grid rows", async () => {
+it("keeps closed content mounted but inert and tweens its measured height", async () => {
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
   const node = document.createElement("div");
   const root = createRoot(node);
@@ -29,6 +28,8 @@ it("keeps closed content mounted but inert and animates through grid rows", asyn
   );
   expect(box.dataset.state).toBe("open");
   expect(box.hasAttribute("inert")).toBe(false);
-  expect(APP_KIT_CSS).toContain("grid-template-rows:0fr");
+  // Geometry is inline so hosts without the kit sheet share the motion.
+  expect(box.style.overflow).toBe("hidden");
+  expect(box.style.transitionProperty).toBe("height, opacity");
   await act(async () => root.unmount());
 });

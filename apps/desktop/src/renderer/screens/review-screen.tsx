@@ -481,7 +481,7 @@ export function ReviewScreen({
                 open
                 className="review-description min-w-0 rounded-xl border border-border bg-bg-raised"
               >
-                <summary className="cursor-pointer rounded-t-xl border-b border-border px-6 py-4 text-sm font-semibold hover:bg-bg-overlay focus-visible:outline-2 focus-visible:outline-accent">
+                <summary className="cursor-pointer rounded-t-xl border-b border-border px-6 py-4 text-sm font-semibold hover:bg-bg-overlay">
                   Description
                 </summary>
                 <div className="px-6 py-5 @min-[900px]/review:px-8">

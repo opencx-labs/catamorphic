@@ -39,18 +39,18 @@ it("edits and resets profile and personal choices through the real Settings UI",
   ).toBe(false);
   await app.eval(`document.querySelector('[name="contentFrame"]').click()`);
   await app.waitFor(
-    `!!document.querySelector('[aria-label="Reset Framed content to inherited"]')`,
+    `!!document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])')`,
   );
   await chooseScope("personal");
   await app.waitFor(
-    `document.querySelector('[data-setting="contentFrame"]').textContent.includes('From profile')`,
+    `document.querySelector('[data-setting="contentFrame"] [data-source-current]').textContent.includes('From profile')`,
   );
   expect(
     await app.eval(`document.querySelector('[name="contentFrame"]').checked`),
   ).toBe(true);
   await app.eval(`document.querySelector('[name="contentFrame"]').click()`);
   await app.waitFor(
-    `!!document.querySelector('[aria-label="Reset Framed content to inherited"]')`,
+    `!!document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])')`,
   );
   expect(
     await app.eval(
@@ -59,10 +59,10 @@ it("edits and resets profile and personal choices through the real Settings UI",
   ).toBe("personal");
   await app.screenshot("/tmp/settings-personal-overrides.png");
   await app.eval(
-    `document.querySelector('[aria-label="Reset Framed content to inherited"]').click()`,
+    `document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])').click()`,
   );
   await app.waitFor(
-    `document.querySelector('[name="contentFrame"]').checked && !document.querySelector('[aria-label="Reset Framed content to inherited"]')`,
+    `document.querySelector('[name="contentFrame"]').checked && !document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])')`,
   );
 });
 it("shared file edits apply live, reset inherits them, and reload preserves sources", async () => {
@@ -72,20 +72,20 @@ it("shared file edits apply live, reset inherits them, and reload preserves sour
     JSON.stringify({ contentFrame: false }),
   );
   await app.waitFor(
-    `!document.querySelector('[name="contentFrame"]').checked && document.querySelector('[data-setting="contentFrame"]').textContent.includes('From project')`,
+    `!document.querySelector('[name="contentFrame"]').checked && document.querySelector('[data-setting="contentFrame"] [data-source-current]').textContent.includes('From project')`,
   );
   await app.eval(`document.querySelector('[name="contentFrame"]').click()`);
   await app.waitFor(
-    `!!document.querySelector('[aria-label="Reset Framed content to inherited"]')`,
+    `!!document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])')`,
   );
   await app.eval(
-    `document.querySelector('[aria-label="Reset Framed content to inherited"]').click()`,
+    `document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])').click()`,
   );
   await app.waitFor(`!document.querySelector('[name="contentFrame"]').checked`);
   await chooseScope("project");
   await app.screenshot("/tmp/settings-project-defaults.png");
   await app.eval(
-    `document.querySelector('[aria-label="Reset Framed content to inherited"]').click()`,
+    `document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])').click()`,
   );
   await app.waitFor(`document.querySelector('[name="contentFrame"]').checked`);
   await app.reload();
@@ -119,7 +119,7 @@ it("keeps inherited controls usable in the compact light settings view", async (
   await app.waitFor(`!!document.querySelector('[name="contentFrame"]')`);
   await chooseScope("personal");
   await app.waitFor(
-    `document.querySelector('[data-setting="contentFrame"]').textContent.includes('From profile')`,
+    `document.querySelector('[data-setting="contentFrame"] [data-source-current]').textContent.includes('From profile')`,
   );
   expect(
     await app.eval(
@@ -140,7 +140,7 @@ it("keeps checkbox rows and neighboring controls stable while changing and reset
       `window.catamorphicDesktop.setSettings({projectId:${JSON.stringify(projectId)},scope:'profile',patch:{contentFrame:true}})`,
     );
     await app.waitFor(
-      `document.querySelector('[data-setting="contentFrame"]').textContent.includes('Custom for profile') && !document.querySelector('[name="contentFrame"]').disabled`,
+      `document.querySelector('[data-setting="contentFrame"] [data-source-current]').textContent.includes('Custom for profile') && !document.querySelector('[name="contentFrame"]').disabled`,
     );
     await app.eval(
       `window.catamorphicDesktop.devWindow('setSize',${width},760)`,
@@ -173,10 +173,10 @@ it("keeps checkbox rows and neighboring controls stable while changing and reset
     const rowsBefore = await rows();
     await app.screenshot(`/tmp/settings-checkbox-before-${width}.png`);
     await app.eval(
-      `document.querySelector('[aria-label="Reset Framed content to inherited"]').click()`,
+      `document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])').click()`,
     );
     await app.waitFor(
-      `!document.querySelector('[aria-label="Reset Framed content to inherited"]') && !document.querySelector('[name="contentFrame"]').disabled`,
+      `!document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])') && !document.querySelector('[name="contentFrame"]').disabled`,
     );
     await app.screenshot(`/tmp/settings-checkbox-reset-${width}.png`);
     expect(
@@ -185,7 +185,7 @@ it("keeps checkbox rows and neighboring controls stable while changing and reset
     ).toEqual(before);
     await app.eval(`document.querySelector('[name="contentFrame"]').click()`);
     await app.waitFor(
-      `!!document.querySelector('[aria-label="Reset Framed content to inherited"]') && !document.querySelector('[name="contentFrame"]').disabled`,
+      `!!document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])') && !document.querySelector('[name="contentFrame"]').disabled`,
     );
     expect(
       await geometry(),

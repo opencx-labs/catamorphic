@@ -185,8 +185,13 @@ Do not add a JavaScript select replacement or per-screen checkbox styling.
 
 Match project/profile menus: overlay surface, hairline border, 10px outer radius,
 6px rows, 13px type, selected accent checkmark and 32px minimum choice rows.
-Open and close use paired 150ms opacity/translation on the standard easing;
-checkbox marks animate opacity/scale over 150ms. Respect reduced motion. Disabled
+Open and close use paired 150ms opacity/translation on the standard easing.
+A checkbox is a 16px square: a faint fill with a neutral 1.5px inset edge
+when off (`--color-fg` at 40% dark, 50% light: never white, and at least 3:1
+against the surface), a solid accent with no edge when on. Its 10px mark sits on whole pixels, draws left
+to right over 150ms and fades out when unchecked; pressing the box sinks it
+to 88%. Screens never size or color a checkbox themselves (design lint).
+Respect reduced motion. Disabled
 controls retain their label and explain why. A picker owns Escape before its
 dialog; selecting a value or dismissing it restores the trigger's focus.
 
@@ -210,6 +215,28 @@ the desktop shell, including its registry components and document task lists.
   child inside it, and never in addition to the box's own border. Nested
   bordered boxes, square rings inside rounded ones, and a ring beside a border
   are defects; check every new surface with keyboard focus before shipping.
+
+## Focus rings
+
+One ring everywhere (ADR 0168): 2px of the accent, drawn as
+`outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent)`.
+It sits outside a standalone control (`--focus-ring-offset`, 1px) and inside
+a row, tile, menu item, scroll container or anything stacked or clipped
+(`--focus-ring-inset`, -1px, which covers a 1px border instead of doubling
+it). Use the global `:focus-visible` rule or `.focus-ring-inset`; sidebar
+rows and tree items already draw the inset ring on their rounded box. Text
+fields keep their border-and-glow focus instead.
+
+- **The keyboard leads.** `lib/focus-modality.ts` marks the root `pointer`
+  after a pointer press and `keyboard` after Tab, arrows, Home/End,
+  PageUp/PageDown, F6 or the context-menu key. While the pointer leads, rings
+  are off, so Escape or Enter after a click never lights the focused control.
+  Row previews open on focus only when the keyboard leads.
+- **Rings appear at once.** Every element rests with the accent as its
+  outline color, so a transition that includes outline color never fades a
+  ring in from the text color.
+- **No private recipes.** `focus-visible:outline-*` utilities and literal
+  `outline: Npx solid` rings fail design lint.
 
 ## Motion contract
 
@@ -370,8 +397,22 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   attributes are defects.
 - **Rows and tiles.** A row's overflow menu button appears on hover; a tile
   has no room for one and opens the same menu on right-click only. Keyboard
-  focus rings sit inside the row (negative outline offset, above siblings) so
-  stacked rows never cover or clip them.
+  focus rings sit inside the row (the inset ring, above siblings) so stacked
+  rows never cover or clip them.
+- **Nothing in the sidebar snaps.** `Collapsible` tweens to its content's
+  height whenever that changes (skeleton to rows, empty sentence to a list),
+  following exactly while something inside animates its own height. Sections
+  hidden when empty collapse before they hide and open when they fill; the
+  pinned area and the library group open and close the same way, and a group
+  carries its own bottom spacing so its gap leaves with it. A removed tree row
+  leaves the layout at once and fades where it stood while the rows below
+  slide. The dragged row dims; a dropped row fades into its new slot as its
+  neighbours slide. The insertion line glides between slots and never leaves
+  the viewport. A tree whose rows fit never scrolls, so no scrollbar flashes
+  while it grows.
+- **Drags reveal only what accepts them.** The pinned area opens for drags it
+  could pin and stays open until a pin dropped into it arrives. Hover
+  previews close when a drag starts.
 - **Groups inside a section are subsections.** `SidebarSubsection` is the only
   way to label a sub-list: the same quiet label row every section uses, with
   the section chevron and collapsible motion when `collapsible`. A section whose
@@ -444,6 +485,41 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-09-26: Opening other apps asks where you can see it; layout motion stays smooth over pages
+
+A page that wants to open another app now names it ("github.com wants to
+open Slack"). If Work is in the background, the requesting tab comes forward
+and the Dock icon bounces until the question is answered, and the question
+is withdrawn when the tab moves to another page: a late answer never
+launches an app for a page that is gone (ADR 0150).
+
+Opening the sidebar over a web page stuttered because the page, rendered in
+its own process, resized on every frame. Heavy content (pages, terminals,
+the code editor, app frames) now holds one width through a layout transition
+and resizes once ([performance](docs/performance.md)). Apps agents build get
+the same focus rings, checkboxes, select menu and collapsible motion as the
+shell (ADR 0168).
+
+### 2026-09-26: One focus ring, simple checkboxes, a sidebar that moves
+
+Right-clicking a sidebar row and pressing Escape lit the row with a white
+ring that turned orange. Two causes: Chromium shows `:focus-visible` after any
+key press, and the row's color transition faded the ring in from the text
+color. Rings now follow the keyboard (Tab and arrows turn them on, a click
+turns them off) and appear at once, and every ring comes from one set of
+tokens instead of a dozen utilities (ADR 0168).
+
+Checkboxes lost their white border and the mark that drifted as it scaled:
+a neutral edge when off, a solid accent with no edge when on, a mark that
+draws itself and a small press.
+
+The sidebar framework stopped snapping. Unpinning the last item used to
+drop the pinned area in one frame and every drag in the window popped it
+open; empty sections vanished and reappeared; removed rows faded, paused,
+then closed the gap; dropped rows glided in from where they started. The
+shared `Collapsible` and `Tree` now carry all of that motion, so every
+section inherits it, and vertical workspace tabs use the shared drag model.
+
 ### 2026-09-24: Permissions replace the builder flag
 
 A remote project used to split people into members and builders, and a

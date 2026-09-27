@@ -119,6 +119,8 @@ interface PendingPrompt<TRequest, TAnswer> {
   profileId: string;
   resolve: (answer: TAnswer | null) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** Undoes whatever delivery started (an attention request). */
+  cleanup?: () => void;
 }
 
 /** A prompt nobody answers (tab left open, user away) denies itself. */
@@ -138,7 +140,8 @@ export class PromptBroker<
   ask(
     profileId: string,
     request: TRequest,
-    deliver: (request: TRequest) => void,
+    /** Shows the prompt; may return an undo run when it settles. */
+    deliver: (request: TRequest) => unknown,
   ): Promise<TAnswer | null> {
     return new Promise((resolve) => {
       const timer = setTimeout(
@@ -146,8 +149,15 @@ export class PromptBroker<
         REQUEST_LIFETIME_MS,
       );
       timer.unref?.();
-      this.pending.set(request.id, { request, profileId, resolve, timer });
-      deliver(request);
+      const entry: PendingPrompt<TRequest, TAnswer> = {
+        request,
+        profileId,
+        resolve,
+        timer,
+      };
+      this.pending.set(request.id, entry);
+      const undo = deliver(request);
+      if (typeof undo === "function") entry.cleanup = () => undo();
     });
   }
 
@@ -169,8 +179,13 @@ export class PromptBroker<
 
   /** Requests of a guest that closed: denied, and reported for withdrawal. */
   withdrawGuest(guestId: number): string[] {
+    return this.withdrawWhere((request) => request.guestId === guestId);
+  }
+
+  /** Requests matching `predicate`: denied, and reported for withdrawal. */
+  withdrawWhere(predicate: (request: TRequest) => boolean): string[] {
     const ids = [...this.pending.values()]
-      .filter((entry) => entry.request.guestId === guestId)
+      .filter((entry) => predicate(entry.request))
       .map((entry) => entry.request.id);
     for (const id of ids) this.settle(id, null);
     return ids;
@@ -185,6 +200,7 @@ export class PromptBroker<
     if (!entry) return;
     clearTimeout(entry.timer);
     this.pending.delete(id);
+    entry.cleanup?.();
     entry.resolve(answer);
   }
 }
@@ -200,8 +216,9 @@ export class SitePermissionBroker extends PromptBroker<
       origin: string;
       guestId: number;
       kinds: SitePermissionKind[];
+      externalApp?: SitePermissionRequest["externalApp"];
     },
-    deliver: (request: SitePermissionRequest) => void,
+    deliver: (request: SitePermissionRequest) => unknown,
   ): Promise<SitePermissionAnswer | null> {
     return this.ask(
       input.profileId,
@@ -210,8 +227,20 @@ export class SitePermissionBroker extends PromptBroker<
         guestId: input.guestId,
         origin: input.origin,
         kinds: input.kinds,
+        ...(input.externalApp ? { externalApp: input.externalApp } : {}),
       },
       deliver,
+    );
+  }
+
+  /**
+   * A tab that navigated away takes back its requests to open another app:
+   * answering later must not launch an app for a page no longer showing.
+   */
+  withdrawExternalApps(guestId: number): string[] {
+    return this.withdrawWhere(
+      (request) =>
+        request.guestId === guestId && request.externalApp !== undefined,
     );
   }
 }

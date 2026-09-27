@@ -174,7 +174,6 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0156](0156-project-automations-webhooks-and-command-watches.md) | Project automations, one deliver, webhooks, and command watches | Accepted |
 | [0155](0155-shells-background-commands-and-live-status.md) | Native shells, host background commands, and the agent's live status | Accepted |
 | [0156](0156-project-automations-webhooks-and-command-watches.md) | Project automations, one deliver, webhooks, and command watches | Accepted (webhook ingress refined by 0171) |
-| [0155](0155-shells-background-commands-and-live-status.md) | Native shells, host background commands, and the agent's live status | Accepted |
 | [0156](0156-project-automations-webhooks-and-command-watches.md) | Project automations, one deliver, webhooks, and command watches | Accepted (keys and chat placement refined by 0173) |
 | [0157](0157-workflow-status-chrome.md) | Workflow tabs: status chrome and a panel that follows its subject | Accepted |
 | [0158](0158-project-permissions.md) | Project permissions: read, write, publish, and what workflows declare | Accepted |
@@ -187,6 +186,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0165](0165-guests-and-shares.md) | Guests and shares for people outside the company | Accepted |
 | [0166](0166-members-work-from-their-own-agents.md) | Members work from their own agents over the project MCP | Accepted |
 | [0167](0167-machine-pools-access-and-owner-placement.md) | Machine pools, node access, and placement by owner | Accepted (project access and chat placement refined by 0173) |
+| [0168](0168-keyboard-led-focus-rings-and-continuous-sidebar-motion.md) | Keyboard-led focus rings and continuous sidebar motion | Accepted |
 | [0169](0169-work-project-workspace.md) | The project workspace is `.work/`, and what lands in repositories is named Work | Accepted |
 | [0170](0170-attached-repositories-receive-pull-requests.md) | Attached repositories receive pull requests, never pushes | Accepted |
 | [0171](0171-project-trigger-kinds-and-declarative-webhook-ingress.md) | Project-defined trigger kinds and declarative webhook ingress | Accepted (GitHub host kinds removed by 0177; `prefix` leaf in 0181) |
@@ -199,3 +199,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0178](0178-session-workspaces-at-a-ref.md) | Session workspaces at a ref of the project's remote | Accepted |
 | [0179](0179-integrations-from-project-code-slack.md) | Integrations from project code: named HTTP operations and declared delivery ids | Accepted (session event keys in 0181) |
 | [0181](0181-project-chats-use-their-environments-bindings.md) | Project chats use their Environment's bindings; session events carry keys | Accepted |
+| [0167](0167-machine-pools-access-and-owner-placement.md) | Machine pools, node access, and placement by owner | Accepted |

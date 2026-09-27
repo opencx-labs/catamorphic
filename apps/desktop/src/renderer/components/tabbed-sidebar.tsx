@@ -17,6 +17,8 @@ import type {
 } from "../../shared/sidebar.js";
 import { matchesSidebarSurface } from "../../shared/sidebar.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
+import { motionMs } from "../lib/motion.js";
+import { Collapsible } from "./collapsible.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 import type { SidebarContentState } from "./sidebar-contribution.js";
 
@@ -181,6 +183,7 @@ export function TabbedSidebar({
           );
       }}
       data-sidebar={side}
+      data-layout-transition
       data-tab-motion={tabMotion}
       data-resizing={resizing || undefined}
       data-sidebar-revealed={revealed}
@@ -298,7 +301,7 @@ export function TabbedSidebar({
                 type="button"
                 onClick={onCustomize}
                 aria-label="Customize sidebar"
-                className="mx-auto flex h-9 cursor-pointer items-center justify-center gap-2 rounded-lg border border-border px-4 text-[13px] text-fg-muted transition-colors duration-150 hover:border-border-strong hover:bg-bg-overlay hover:text-fg focus-visible:outline-2 focus-visible:outline-accent"
+                className="mx-auto flex h-9 cursor-pointer items-center justify-center gap-2 rounded-lg border border-border px-4 text-[13px] text-fg-muted transition-colors duration-150 hover:border-border-strong hover:bg-bg-overlay hover:text-fg"
               >
                 <Plus className="size-4" aria-hidden="true" />
                 Customize sidebar
@@ -396,20 +399,35 @@ function SidebarSlot({
     (state: SidebarContentState) => report(section.id, state),
     [report, section.id],
   );
+  // A section that empties collapses before it hides, and one that fills
+  // opens from nothing: sections below slide instead of jumping.
+  const [shownAvailable, setShownAvailable] = useState(available);
+  const [leaving, setLeaving] = useState(false);
+  if (available !== shownAvailable) {
+    setShownAvailable(available);
+    setLeaving(!available);
+  }
+  useEffect(() => {
+    if (!leaving) return;
+    const timer = setTimeout(() => setLeaving(false), motionMs(200));
+    return () => clearTimeout(timer);
+  }, [leaving]);
   return (
     <div
       data-sidebar-widget={section.id}
-      hidden={!available}
+      hidden={!available && !leaving}
       inert={!available}
     >
-      {(visited || (mounted && relevant)) &&
-        renderSection(
-          section,
-          visible && relevant && available,
-          onState,
-          relevant,
-          observeEmpty,
-        )}
+      <Collapsible open={available}>
+        {(visited || (mounted && relevant)) &&
+          renderSection(
+            section,
+            visible && relevant && available,
+            onState,
+            relevant,
+            observeEmpty,
+          )}
+      </Collapsible>
     </div>
   );
 }

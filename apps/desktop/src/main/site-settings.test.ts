@@ -154,4 +154,48 @@ describe("SitePermissionBroker", () => {
     broker.withdrawGuest(8);
     await expect(other).resolves.toBeNull();
   });
+
+  it("withdraws a tab's requests to open another app when it navigates", async () => {
+    const broker = new SitePermissionBroker();
+    const ids: string[] = [];
+    const openApp = broker.askPermission(
+      {
+        profileId: "p1",
+        origin: "https://team.slack.test",
+        guestId: 7,
+        kinds: ["externalApps"],
+        externalApp: { scheme: "slack", name: "Slack" },
+      },
+      (request) => ids.push(request.id),
+    );
+    const camera = broker.askPermission(
+      { profileId: "p1", origin: "https://a.test", guestId: 7, kinds: [] },
+      (request) => ids.push(request.id),
+    );
+    expect(broker.withdrawExternalApps(7)).toEqual([ids[0]]);
+    await expect(openApp).resolves.toBeNull();
+    expect(broker.has(ids[1] ?? "")).toBe(true);
+    broker.withdrawGuest(7);
+    await expect(camera).resolves.toBeNull();
+  });
+
+  it("undoes a delivery's attention request once the prompt settles", async () => {
+    const broker = new SitePermissionBroker();
+    let attention = 0;
+    let id = "";
+    const pending = broker.askPermission(
+      { profileId: "p1", origin: "https://a.test", guestId: 7, kinds: [] },
+      (request) => {
+        id = request.id;
+        attention++;
+        return () => {
+          attention--;
+        };
+      },
+    );
+    expect(attention).toBe(1);
+    broker.answer(id, { id, decision: "allow", remember: false });
+    await pending;
+    expect(attention).toBe(0);
+  });
 });
