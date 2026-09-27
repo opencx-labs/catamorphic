@@ -272,6 +272,14 @@ beforeAll(async () => {
           environment: { allowed: ["review"], preferred: ["review"] },
           connections: ["code"],
         }),
+        ".work/agents/inspector.json": JSON.stringify({
+          version: 1,
+          name: "Inspector",
+          kind: "builtin",
+          sandboxing: "contained",
+          environment: { allowed: ["review"], preferred: ["review"] },
+          connections: ["code"],
+        }),
       },
     },
   );
@@ -520,6 +528,47 @@ describe("a pull request review chat with Git through the gateway", () => {
     expect(
       audit.filter((row) => row.action === "push" && row.outcome === "denied"),
     ).toHaveLength(3);
+  }, 120_000);
+
+  it("refuses a contained agent's push and says why (ADR 0182)", async () => {
+    const delivered = await server.catamorphic.core.capabilities.call(
+      "catamorphic.sessions",
+      "deliver",
+      {
+        caller: identity,
+        projectId,
+        runId,
+        workflowName: "reviewPullRequests",
+      },
+      {
+        key: "pr-42-inspect",
+        agentSlug: "inspector",
+        title: "Inspect: pull request 42",
+        content: "run true",
+        idempotencyKey: randomUUID(),
+      },
+    );
+    if (
+      !delivered ||
+      typeof delivered !== "object" ||
+      !("sessionId" in delivered)
+    )
+      throw new Error("No session");
+    const sessions = server.catamorphic.core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const pushed = (
+      await sessions.sendMessage(
+        identity,
+        projectId,
+        String(delivered.sessionId),
+        "run git checkout -q -b work/inspect && git -c user.name=Agent -c user.email=agent@example.test commit -q --allow-empty -m probe && git push origin work/inspect 2>&1",
+      )
+    ).content;
+    expect(pushed).not.toMatch(/^exit=0/);
+    expect(pushed).toContain("sandboxing is contained");
+    await expect(
+      nativeGit(repository, ["rev-parse", "--verify", "refs/heads/work/inspect"]),
+    ).rejects.toThrow();
   }, 120_000);
 
   it("stops honoring the grant once the chat is closed", async () => {

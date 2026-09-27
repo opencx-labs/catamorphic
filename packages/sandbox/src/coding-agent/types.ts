@@ -3,6 +3,7 @@ import type {
   TurnContextFragment,
 } from "../agent-capabilities.js";
 import type { AgentEvent, AgentQuestion, SandboxProvider } from "../types.js";
+import type { HarnessPermissions } from "./harness-permissions.js";
 import type { McpToolPolicyLayers } from "./tool-policy.js";
 
 /**
@@ -289,6 +290,12 @@ export interface TurnOptions {
   capabilities?: AgentCapabilityGateway;
   model?: string;
   effort?: AgentEffort;
+  /**
+   * The harness's own permission mode for this turn (ADR 0182), in its
+   * native values. Overrides the harness's configured default; a harness
+   * ignores the fields it does not have.
+   */
+  harnessPermissions?: HarnessPermissions;
   /** Media sent with this turn's user message. */
   attachments?: AgentAttachment[];
   /**

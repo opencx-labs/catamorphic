@@ -176,7 +176,7 @@ describe("the reviewing-pull-requests skill", () => {
     );
     expect(agent.success, JSON.stringify(agent.error)).toBe(true);
     expect(agent.data).toMatchObject({
-      mode: "edit",
+      sandboxing: "propose",
       environment: { preferred: ["review"], allowed: ["review"] },
     });
   });

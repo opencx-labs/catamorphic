@@ -3,6 +3,12 @@ import {
   RoleDefinitionSchema as CoreRoleDefinitionSchema,
   PROJECT_PERMISSION_PATTERN,
 } from "@catamorphic/core";
+import {
+  CLAUDE_CODE_PERMISSION_MODES,
+  CODEX_APPROVAL_POLICIES,
+  CODEX_SANDBOX_MODES,
+  SANDBOXING_LEVELS,
+} from "@catamorphic/sandbox";
 import { z } from "zod";
 
 // --- Params ---
@@ -1615,7 +1621,16 @@ export const ProjectAgentDefinitionSchema = z.object({
   kind: z.string(),
   model: z.string().optional(),
   effort: AgentEffortSchema.optional(),
-  mode: z.enum(["read-only", "edit", "full-access"]).optional(),
+  /** What may leave the agent's sandbox (ADR 0182). */
+  sandboxing: z.enum(SANDBOXING_LEVELS).optional(),
+  /** The harness's own permission mode, in its native values (ADR 0182). */
+  harnessPermissions: z
+    .object({
+      permissionMode: z.enum(CLAUDE_CODE_PERMISSION_MODES).optional(),
+      sandbox: z.enum(CODEX_SANDBOX_MODES).optional(),
+      approvals: z.enum(CODEX_APPROVAL_POLICIES).optional(),
+    })
+    .optional(),
   memory: z.boolean().optional(),
   description: z.string().optional(),
   credentials: z

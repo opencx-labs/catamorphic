@@ -22,6 +22,7 @@ import type {
   AgentPluginConfig,
   AgentQuestion,
   AgentTurnUsage,
+  ClaudeCodePermissionMode,
   CodingAgentProvider,
   ExtraTool,
   ExtraToolContext,
@@ -147,13 +148,16 @@ export interface ClaudeCodeAgentOpts {
   /** How to ask the user about an `ask` tool; omitted = ask fails closed. */
   onToolPermission?: ToolPermissionHandler;
   /**
-   * Claude Code permission mode for every session. Defaults to
-   * "acceptEdits" — the designed unattended mode (file edits land without
-   * prompts; unlisted tools are still denied). "plan" makes sessions
-   * read-only; "bypassPermissions" lifts the CLI's own checks entirely
-   * (the host's MCP tool policies still apply through `canUseTool`).
+   * Claude Code permission mode for every session (ADR 0182), unless a turn
+   * names its own (`TurnOptions.harnessPermissions`). Defaults to
+   * "acceptEdits", the designed unattended mode: file edits land without
+   * prompts and unlisted tools are still denied. "plan" makes sessions
+   * read-only; "auto" lets a classifier approve; "dontAsk" denies what is
+   * not pre-approved; "bypassPermissions" lifts the CLI's own checks
+   * entirely (the host's MCP tool policies still apply through
+   * `canUseTool`).
    */
-  permissionMode?: "default" | "acceptEdits" | "plan" | "bypassPermissions";
+  permissionMode?: ClaudeCodePermissionMode;
   /**
    * Run the CLI inside each turn's sandbox instead of on this host (ADR
    * 0180). The host passes the sandbox and the model gateway on every turn
@@ -860,7 +864,11 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       this.opts.hostOwnsSubagents ||
       (workspaceServer !== undefined &&
         extraTools.some((tool) => tool.name === "spawn_subsession"));
-    const readOnly = this.opts.permissionMode === "plan";
+    const permissionMode = claudePermissionMode({
+      turn,
+      configured: this.opts.permissionMode,
+    });
+    const readOnly = permissionMode === "plan";
     const disallowedTools = [
       ...(readOnly ? SHELL_EXECUTION_TOOLS : []),
       ...(hostOwnsBackground ? NATIVE_BACKGROUND_TOOLS : []),
@@ -902,7 +910,9 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         ...(hostOwnsBackground
           ? { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" }
           : {}),
-        ...(sandboxRun ? sandboxEnv(sandboxRun) : this.opts.env),
+        ...(sandboxRun
+          ? sandboxEnv({ run: sandboxRun, permissionMode })
+          : this.opts.env),
       },
       ...(sandboxRun
         ? {
@@ -920,7 +930,11 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
           }),
       model: turn?.model ?? this.opts.model,
       effort: turn?.effort ?? this.opts.effort,
-      permissionMode: this.opts.permissionMode ?? "acceptEdits",
+      permissionMode,
+      // The SDK refuses to bypass its checks unless told this is deliberate.
+      ...(permissionMode === "bypassPermissions"
+        ? { allowDangerouslySkipPermissions: true }
+        : {}),
       ...(workspaceServer || Object.keys(externalServers).length > 0
         ? {
             mcpServers: {
@@ -1028,13 +1042,31 @@ function sandboxRunFor(
 }
 
 /** The CLI's whole environment in the sandbox, beside the SDK's own. */
-function sandboxEnv(run: SandboxRun): Record<string, string> {
+function sandboxEnv(args: {
+  run: SandboxRun;
+  permissionMode: ClaudeCodePermissionMode;
+}): Record<string, string> {
   return {
-    ANTHROPIC_BASE_URL: run.gateway.baseUrl,
+    ANTHROPIC_BASE_URL: args.run.gateway.baseUrl,
     CLAUDE_CODE_API_KEY_HELPER_TTL_MS: String(API_KEY_HELPER_TTL_MS),
     DISABLE_AUTOUPDATER: "1",
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    // The CLI refuses to bypass its checks as root outside a sandbox; this
+    // is one, and Work's sandboxing governs what leaves it (ADR 0182).
+    ...(args.permissionMode === "bypassPermissions" ? { IS_SANDBOX: "1" } : {}),
   };
+}
+
+/** The turn's permission mode, else the configured one, else acceptEdits. */
+function claudePermissionMode(args: {
+  turn: TurnOptions | undefined;
+  configured: ClaudeCodePermissionMode | undefined;
+}): ClaudeCodePermissionMode {
+  return (
+    args.turn?.harnessPermissions?.permissionMode ??
+    args.configured ??
+    "acceptEdits"
+  );
 }
 
 /** The SDK's spawn, carried out in the sandbox over process operations. */

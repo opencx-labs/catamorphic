@@ -358,6 +358,65 @@ describe("ClaudeCodeAgent", () => {
     );
   });
 
+  it("passes every native permission mode through; bypass says it is deliberate (ADR 0182)", async () => {
+    for (const permissionMode of [
+      "default",
+      "acceptEdits",
+      "auto",
+      "dontAsk",
+      "bypassPermissions",
+    ] as const) {
+      queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+      await collect(new ClaudeCodeAgent({ permissionMode }), "Go");
+      const options = lastQueryOptions();
+      expect(options.permissionMode).toBe(permissionMode);
+      expect(options.allowDangerouslySkipPermissions).toBe(
+        permissionMode === "bypassPermissions" ? true : undefined,
+      );
+      expect(options.disallowedTools ?? []).not.toContain("Bash");
+    }
+  });
+
+  it("lets a turn's permission mode override the configured one", async () => {
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+    const agent = new ClaudeCodeAgent({ permissionMode: "acceptEdits" });
+    await collect(agent, "Plan it", {
+      harnessPermissions: { permissionMode: "plan", sandbox: "read-only" },
+    });
+    const options = lastQueryOptions();
+    expect(options.permissionMode).toBe("plan");
+    expect(options.disallowedTools).toContain("Bash");
+  });
+
+  it("bypasses permissions inside a sandbox as the sandbox it is", async () => {
+    queryMock.mockReturnValue(scriptedQuery([successResult]));
+    const agent = new ClaudeCodeAgent({ sandbox: {} });
+    const sandbox = {
+      provider: fakeSandboxProvider(true),
+      sandboxId: "sandbox-1",
+      stateDirectory: "/workspace/.work-session",
+    };
+    const modelGateway = {
+      alias: "anthropic",
+      api: "anthropic",
+      baseUrl: "https://work.example.test/api/gateway/model/anthropic",
+      keyFile: "/workspace/.work-session/grants/anthropic",
+    };
+    await collect(agent, "hello", {
+      sandbox,
+      modelGateway,
+      harnessPermissions: { permissionMode: "bypassPermissions" },
+    });
+    let options = lastQueryOptions();
+    expect(options.permissionMode).toBe("bypassPermissions");
+    expect(options.allowDangerouslySkipPermissions).toBe(true);
+    expect(options.env?.IS_SANDBOX).toBe("1");
+    await collect(agent, "hello", { sandbox, modelGateway });
+    options = lastQueryOptions();
+    expect(options.permissionMode).toBe("acceptEdits");
+    expect(options.env?.IS_SANDBOX).toBeUndefined();
+  });
+
   it("keeps plan mode read-only despite native tool auto-approval", async () => {
     const agent = new ClaudeCodeAgent({ permissionMode: "plan" });
     queryMock.mockReturnValueOnce(scriptedQuery([successResult]));

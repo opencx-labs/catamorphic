@@ -2,6 +2,7 @@ import type {
   AgentExecutionTopology,
   CodingAgentProvider,
   McpToolPolicyLayers,
+  Sandboxing,
   TurnOptions,
 } from "@catamorphic/sandbox";
 import type {
@@ -17,12 +18,12 @@ export interface RegisteredCodingAgent {
   provider: CodingAgentProvider;
   topology: AgentExecutionTopology;
   /**
-   * What the agent may change outside its own sandbox (ADR 0176), enforced
-   * by core at every boundary: read-only changes nothing, edit may propose,
-   * full access may publish. Also ranks delegation. Undefined: the host
-   * declared no mode, and nothing is narrowed.
+   * What may leave the agent's sandbox (ADR 0176, named in ADR 0182),
+   * enforced by core at every boundary: `contained` lets nothing leave,
+   * `propose` may propose, `publish` may deploy and publish. Also ranks
+   * delegation. Undefined: the host declared none, and nothing is narrowed.
    */
-  privilege?: "read-only" | "edit" | "full-access";
+  sandboxing?: Sandboxing;
   /**
    * The agent's own tool-policy narrowing by server key (ADR 0054 agent
    * scope), layered with the caller's role policies on every turn.

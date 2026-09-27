@@ -13,6 +13,16 @@ export {
   type AgentEventBufferOptions,
 } from "./coding-agent/event-buffer.js";
 export {
+  CLAUDE_CODE_PERMISSION_MODES,
+  CODEX_APPROVAL_POLICIES,
+  CODEX_SANDBOX_MODES,
+  type ClaudeCodePermissionMode,
+  type CodexApprovalPolicy,
+  type CodexSandboxMode,
+  type HarnessPermissions,
+  harnessPermissionIssues,
+} from "./coding-agent/harness-permissions.js";
+export {
   buildPluginsPreamble,
   PLUGIN_STAGE_DIR,
   stagedPluginFiles,
@@ -164,20 +174,20 @@ export {
   type WriteProcessInputArgs,
 } from "./processes.js";
 export {
-  AGENT_MODES,
-  type AgentMode,
   dockerfileDigest,
   dockerfileImageReference,
   type EnvironmentNetworkPolicy,
   gatewayHostOf,
   isEgressPattern,
-  modeAllows,
-  modeRefusal,
   resolveEgress,
   SANDBOX_CAPABILITIES,
+  SANDBOXING_LEVELS,
   type SandboxCapability,
   type SandboxEgress,
   type SandboxImage,
+  type Sandboxing,
+  sandboxingAllows,
+  sandboxingRefusal,
 } from "./sandbox-environment.js";
 export type { SandboxStore } from "./sandbox-manager.js";
 export { SandboxManagerImpl } from "./sandbox-manager.js";

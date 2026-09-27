@@ -79,7 +79,7 @@ export const REVIEWER_AGENT = `{
   "name": "Reviewer",
   "kind": "builtin",
   "description": "Reviews pull requests for correctness, security, data safety, performance, and tests, verifying by running them.",
-  "mode": "edit",
+  "sandboxing": "propose",
   "environment": { "preferred": ["review"], "allowed": ["review"] },
   "connections": [
     { "alias": "github", "principal": "service" },
@@ -369,7 +369,7 @@ ${GITHUB_TRIGGER_LIBRARY}\`\`\`
 
 ## .work/agents/reviewer.json
 
-The reviewer runs only in \`review\`. Mode \`edit\` lets it write reviews, check
+The reviewer runs only in \`review\`. Sandboxing \`propose\` lets it write reviews, check
 runs, comments, and \`work/*\` branches through its bindings, and never
 deploys or publishes. Its GitHub tools are an allowlist on top of the binding.
 
