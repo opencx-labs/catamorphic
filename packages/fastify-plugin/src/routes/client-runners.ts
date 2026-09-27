@@ -123,6 +123,9 @@ export function registerClientRunnerRoutes(
   typed.post(
     "/client-runners/complete",
     {
+      // A receipt carries a whole result: a 1 MiB process read or a
+      // downloaded file, escaped as JSON. Same bound as worker receipts.
+      bodyLimit: 64 * 1024 * 1024,
       schema: {
         body: Lease.extend({
           jobId: z.string().uuid(),

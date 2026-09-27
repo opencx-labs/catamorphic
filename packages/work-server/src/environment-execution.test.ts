@@ -283,6 +283,9 @@ it("an authenticated member executes on this machine and loses execution immedia
         renew: () => service.renew({ ...lease, identity }),
         poll: () => service.poll({ ...lease, identity }),
         complete: async (receipt) => {
+          // The receipt route's bound on an error message.
+          if ((receipt.error?.length ?? 0) > 4000)
+            throw new Error("Receipt refused: error too long");
           await service.complete({ ...lease, identity, ...receipt });
         },
         disconnect: () => service.disconnect({ ...lease, identity }),
@@ -326,6 +329,46 @@ it("an authenticated member executes on this machine and loses execution immedia
       status: "exited",
       exitCode: 4,
     });
+    // Output Postgres cannot store as is (NUL) still arrives.
+    const binary = await processes.startProcess({
+      sandboxId,
+      command: "printf 'a\\0b'",
+    });
+    await expect(
+      followProcess({
+        processes,
+        sandboxId,
+        processId: binary.processId,
+        cursor: 0,
+        timeoutMs: 20_000,
+      }),
+    ).resolves.toMatchObject({ output: "a�b", status: "exited" });
+    // A failure with a long message fails that operation, not the runner.
+    await expect(
+      member.sandboxProvider?.downloadFile(
+        sandboxId,
+        `/workspace/${"missing-".repeat(700)}`,
+      ),
+    ).rejects.toThrow();
+    // A read waiting for output does not hold up other operations.
+    const quiet = await processes.startProcess({
+      sandboxId,
+      command: "sleep 15",
+    });
+    const waiting = processes.readProcessOutput({
+      sandboxId,
+      processId: quiet.processId,
+      waitMs: 12_000,
+    });
+    const listedAt = Date.now();
+    await processes.listProcesses({ sandboxId });
+    expect(Date.now() - listedAt).toBeLessThan(5_000);
+    await processes.signalProcess({
+      sandboxId,
+      processId: quiet.processId,
+      signal: "SIGKILL",
+    });
+    await waiting;
     const oldBinding = (
       await cat.core.executionAllocations.get({
         identity,

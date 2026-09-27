@@ -154,6 +154,8 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         keepSandboxes: true,
         maxSandboxes: execution.capacity.workspaces,
         idleDelayMs: 0,
+        // One operation per lane: the lanes are the concurrency.
+        concurrency: 1,
         onError: (error) => {
           if (!(error instanceof SessionEndedError)) {
             log(
