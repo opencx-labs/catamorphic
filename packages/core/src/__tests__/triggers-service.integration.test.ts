@@ -728,19 +728,19 @@ const GITHUB_TRIGGERS = `
 import { defineTrigger, trigger } from "@catamorphic/workflow";
 
 export const delivery = defineTrigger({
-  name: "gh.delivery",
+  name: "github.delivery",
   from: trigger("webhook", { name: "github" }),
 });
 
 export const pullRequest = defineTrigger({
-  name: "gh.pull_request",
-  from: trigger("gh.delivery"),
+  name: "github.pull_request",
+  from: trigger("github.delivery"),
   where: { payload: { headers: { "x-github-event": "pull_request" } } },
 });
 
 export const issueComment = defineTrigger({
-  name: "gh.issue_comment",
-  from: trigger("gh.delivery"),
+  name: "github.issue_comment",
+  from: trigger("github.delivery"),
   where: { payload: { headers: { "x-github-event": "issue_comment" } } },
 });
 `;
@@ -748,7 +748,7 @@ export const issueComment = defineTrigger({
 const GITHUB_WORKFLOWS = `
 export const onMerged = defineWorkflow(({ defineBoundary }) => ({
   triggers: [
-    trigger("gh.pull_request", {
+    trigger("github.pull_request", {
       where: { payload: { body: { action: "closed", pull_request: { merged: true } } } },
     }),
   ],
@@ -756,12 +756,12 @@ export const onMerged = defineWorkflow(({ defineBoundary }) => ({
 }));
 
 export const onPullRequest = defineWorkflow(({ defineBoundary }) => ({
-  triggers: [trigger("gh.pull_request")],
+  triggers: [trigger("github.pull_request")],
   steps: [defineBoundary({ run: async ({ input }: BoundaryContext<{ id: string }>) => ({ id: input.id }) })],
 }));
 
 export const onActivity = defineWorkflow(({ defineBoundary }) => ({
-  triggers: [trigger("gh.pull_request"), trigger("gh.issue_comment")],
+  triggers: [trigger("github.pull_request"), trigger("github.issue_comment")],
   steps: [defineBoundary({ run: async ({ input }: BoundaryContext<{ id: string }>) => ({ id: input.id }) })],
 }));
 `;
@@ -863,7 +863,7 @@ describeIf("Project trigger kinds end to end", () => {
       {
         workflowName: "onActivity",
         kind: "webhook",
-        projectKind: "gh.issue_comment",
+        projectKind: "github.issue_comment",
         config: { name: "github" },
         where: [
           { payload: { headers: { "x-github-event": "issue_comment" } } },
@@ -872,14 +872,14 @@ describeIf("Project trigger kinds end to end", () => {
       {
         workflowName: "onActivity",
         kind: "webhook",
-        projectKind: "gh.pull_request",
+        projectKind: "github.pull_request",
         config: { name: "github" },
         where: [{ payload: { headers: { "x-github-event": "pull_request" } } }],
       },
       {
         workflowName: "onMerged",
         kind: "webhook",
-        projectKind: "gh.pull_request",
+        projectKind: "github.pull_request",
         config: { name: "github" },
         where: [
           {
@@ -893,7 +893,7 @@ describeIf("Project trigger kinds end to end", () => {
       {
         workflowName: "onPullRequest",
         kind: "webhook",
-        projectKind: "gh.pull_request",
+        projectKind: "github.pull_request",
         config: { name: "github" },
         where: [{ payload: { headers: { "x-github-event": "pull_request" } } }],
       },

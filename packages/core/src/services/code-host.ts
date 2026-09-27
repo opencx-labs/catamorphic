@@ -1,64 +1,109 @@
-import type { GitCredentials } from "@catamorphic/git";
-import type { Identity } from "../identity.js";
+import type { Json } from "@catamorphic/db";
+import type { ConnectionCredentialVersion } from "./connection-providers.js";
+import type { ConnectionPrincipalKind } from "./connection-types.js";
 
 /**
- * The seam between generic git sync and a specific code host (ADR 0044).
- * The sync engine needs only `credentials`; everything else is an optional
- * capability. GitHub is the first implementation; GitLab, a self-hosted git
- * server, or git bolted onto S3-compatible storage are new implementations,
- * not rewrites — core never imports anything provider-specific.
+ * One connection a code-host operation acts through (ADR 0177), opened for
+ * the duration of a single call on the control plane. `material` is the
+ * connection's sealed credential; it never leaves the host process.
+ */
+export interface CodeHostCredential {
+  connection: ConnectionCredentialVersion;
+  principalKind: ConnectionPrincipalKind;
+  /** The provider's account summary (a login, an App installation). */
+  account: Json;
+  material: Uint8Array;
+}
+
+/** A repository as a code host describes it. */
+export interface CodeHostRepository {
+  /** Host-specific path, e.g. `owner/name`. */
+  fullName: string;
+  name: string;
+  owner: string;
+  private: boolean;
+  defaultBranch: string;
+  cloneUrl: string;
+  description: string | null;
+  /** ISO timestamp of the last push. */
+  pushedAt: string | null;
+}
+
+interface CodeHostCall {
+  credential: CodeHostCredential;
+  remoteUrl: string;
+}
+
+/**
+ * What a code host adds on top of a connection (ADRs 0044, 0177). Git
+ * credentials for sync come from the connection provider's `git`
+ * capability; a code host adds pull requests and repositories. Each call
+ * receives the connection that backs the project's origin: the caller's own
+ * member connection when they have one, else the service connection named
+ * like the provider. Core never imports anything provider-specific;
+ * `githubCodeHost` from `@catamorphic/server-sdk` is the first
+ * implementation.
  */
 export interface CodeHost {
-  /** Stable provider id, e.g. "github". */
-  id: string;
-  /** Whether this host can authenticate operations on the remote URL. */
-  handles(remoteUrl: string): boolean;
-  /**
-   * Git-over-HTTP(S) credentials for the identity, or undefined when the
-   * identity is not connected to this host.
-   */
-  credentials(identity: Identity): Promise<GitCredentials | undefined>;
-  /** Optional capability: open a pull request on the host. */
+  /** Kind of the connection provider this host acts through, e.g. `github`. */
+  readonly provider: string;
+  /** Open a pull request; `head` is already pushed. */
   createPullRequest?(
-    identity: Identity,
-    input: {
-      remoteUrl: string;
+    input: CodeHostCall & {
       title: string;
-      /** Head branch name (already pushed to the remote). */
       head: string;
-      /** Base branch name. */
       base: string;
       body?: string;
     },
   ): Promise<{ url: string; number: number }>;
-  /** Optional capability: open pull requests, most recently updated first. */
-  listPullRequests?(
-    identity: Identity,
-    input: { remoteUrl: string },
-  ): Promise<PullRequestSummary[]>;
-  /** Optional capability: read one pull request regardless of its lifecycle state. */
+  /** Open pull requests, most recently updated first. */
+  listPullRequests?(input: CodeHostCall): Promise<PullRequestSummary[]>;
+  /** One pull request regardless of its lifecycle state. */
   pullRequest?(
-    identity: Identity,
-    input: { remoteUrl: string; number: number },
+    input: CodeHostCall & { number: number },
   ): Promise<PullRequestSummary>;
   pullRequestDiscussion?(
-    identity: Identity,
-    input: { remoteUrl: string; number: number },
+    input: CodeHostCall & { number: number },
   ): Promise<PullRequestDiscussion>;
   commentOnPullRequest?(
-    identity: Identity,
-    input: {
-      remoteUrl: string;
-      number: number;
-      body: string;
-      replyTo?: number;
-    },
+    input: CodeHostCall & { number: number; body: string; replyTo?: number },
   ): Promise<PullRequestComment>;
-  /** Optional capability: a pull request's changed files with patches. */
+  /** A pull request's changed files with patches. */
   pullRequestFiles?(
-    identity: Identity,
-    input: { remoteUrl: string; number: number },
+    input: CodeHostCall & { number: number },
   ): Promise<PullRequestFile[]>;
+  /** Approve or request changes on the reviewed head. */
+  reviewPullRequest?(
+    input: CodeHostCall & {
+      number: number;
+      headSha: string;
+      decision: "approve" | "request_changes";
+      body?: string;
+    },
+  ): Promise<void>;
+  /** Merge the reviewed head into its base. */
+  mergePullRequest?(
+    input: CodeHostCall & { number: number; headSha: string },
+  ): Promise<void>;
+  /** Who the connection acts as, for "your review" signals. */
+  viewer?(input: { credential: CodeHostCredential }): Promise<{
+    login: string;
+  }>;
+  /** Repositories the connection can reach, most recently pushed first. */
+  listRepositories?(input: {
+    credential: CodeHostCredential;
+  }): Promise<CodeHostRepository[]>;
+  repository?(input: {
+    credential: CodeHostCredential;
+    fullName: string;
+  }): Promise<CodeHostRepository>;
+  /** Create an empty repository; the first push defines its history. */
+  createRepository?(input: {
+    credential: CodeHostCredential;
+    name: string;
+    organization?: string;
+    private: boolean;
+  }): Promise<CodeHostRepository>;
 }
 
 /** Host-neutral PR shapes — what review surfaces render. */

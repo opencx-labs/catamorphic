@@ -34,11 +34,11 @@ declare module "../src/index.js" {
         verify?: { scheme: "hmac"; secret: string; header: string };
       };
     };
-    "gh.pull_request": {
+    "github.pull_request": {
       payload: PayloadOf<typeof pullRequest>;
       config: Record<string, never>;
     };
-    "gh.merged": {
+    "github.merged": {
       payload: PayloadOf<typeof merged>;
       config: Record<string, never>;
     };
@@ -77,7 +77,7 @@ void untyped;
 // An explicit payload type narrows what the underlying kind delivers; the
 // kind's `where` is typed against it.
 const pullRequest = defineTrigger<PullRequestDelivery>({
-  name: "gh.pull_request",
+  name: "github.pull_request",
   description: "A pull request changed",
   from: trigger("webhook", {
     name: "github",
@@ -89,8 +89,8 @@ const pullRequest = defineTrigger<PullRequestDelivery>({
 // Without a type argument the kind delivers what `from` delivers, and a
 // project kind may build on another project kind.
 const merged = defineTrigger({
-  name: "gh.merged",
-  from: trigger("gh.pull_request", {
+  name: "github.merged",
+  from: trigger("github.pull_request", {
     where: { payload: { body: { action: "closed" } } },
   }),
   where: { payload: { body: { pull_request: { merged: true } } } },
@@ -112,7 +112,7 @@ void anyPayload;
 // value, a list of values, or `{ exists }`.
 defineWorkflow(({ defineBoundary }) => ({
   triggers: [
-    trigger("gh.pull_request", {
+    trigger("github.pull_request", {
       where: {
         payload: {
           body: {
@@ -122,7 +122,7 @@ defineWorkflow(({ defineBoundary }) => ({
         },
       },
     }),
-    trigger("gh.merged"),
+    trigger("github.merged"),
   ],
   steps: [
     defineBoundary({
@@ -140,13 +140,13 @@ const filteredWebhook = trigger("webhook", {
 });
 void filteredWebhook;
 
-const wrongValue = trigger("gh.pull_request", {
+const wrongValue = trigger("github.pull_request", {
   // @ts-expect-error A where leaf must hold a value of the payload's type.
   where: { payload: { body: { action: "reopened" } } },
 });
 void wrongValue;
 
-const wrongKey = trigger("gh.pull_request", {
+const wrongKey = trigger("github.pull_request", {
   // @ts-expect-error A where names only positions the payload has.
   where: { payload: { bdy: { action: "opened" } } },
 });
@@ -161,7 +161,7 @@ void unknownProjectKind;
 
 // @ts-expect-error The payload must satisfy the first step's input.
 defineWorkflow(({ defineBoundary }) => ({
-  triggers: [trigger("gh.pull_request")],
+  triggers: [trigger("github.pull_request")],
   steps: [
     defineBoundary({
       run: async ({ input }: BoundaryContext<{ ticketId: string }>) => ({

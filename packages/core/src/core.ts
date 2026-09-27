@@ -39,6 +39,8 @@ import {
   parseChatDelivery,
 } from "./services/chat-delivery.js";
 import { ClientRunnersService } from "./services/client-runners-service.js";
+import type { CodeHost } from "./services/code-host.js";
+import { CodeHostsService } from "./services/code-hosts-service.js";
 import {
   type CodingAgentRegistry,
   isCodingAgentRegistry,
@@ -69,11 +71,6 @@ import { ExecutionAllocationsService } from "./services/execution-allocations-se
 import { ExecutionEnvironmentsService } from "./services/execution-environments-service.js";
 import { ExecutionJobsService } from "./services/execution-jobs-service.js";
 import { ExecutionWorkerService } from "./services/execution-worker-service.js";
-import { GithubProjectEventSource } from "./services/github-event-source.js";
-import {
-  GithubService,
-  type GithubServiceConfig,
-} from "./services/github-service.js";
 import { executeHostCall } from "./services/host-calls.js";
 import { MembershipsService } from "./services/memberships-service.js";
 import { PluginsService } from "./services/plugins-service.js";
@@ -150,13 +147,6 @@ export interface CatamorphicCoreConfig {
    * text and the search index always stay in the database.
    */
   documentBlobStore?: DocumentBlobStore;
-  /**
-   * The identity whose code-host connection opens pull requests for members'
-   * proposals (ADR 0055) — the organisation's bot account, connected to
-   * GitHub like any user. Absent = proposals land as branches on the
-   * project origin only.
-   */
-  proposalBot?: Identity;
   /**
    * Pull the caller's `store/` view into the agent's folder before each
    * turn and ship its writes after (ADR 0055). Default on. Hosts whose
@@ -258,11 +248,13 @@ export interface CatamorphicCoreConfig {
   /** Hard cap on a built app bundle (js + css). Defaults to 5 MiB. */
   maxAppBundleBytes?: number;
   /**
-   * GitHub App registration for repo import + push-back. Hosts bring their
-   * own app (client id, and the secret when using the server web flow).
-   * Without it, the GitHub surfaces are unavailable.
+   * Code hosts over connections (ADRs 0044, 0177): pull requests and
+   * repositories for remotes a connection provider serves with Git. Each
+   * names a registered `connectionProviders` kind. Sync, pull requests,
+   * proposals, import, and publishing act through the caller's own
+   * connection to that provider, else the service connection named like it.
    */
-  github?: GithubServiceConfig;
+  codeHosts?: readonly CodeHost[];
   /**
    * Host-defined trigger kinds. Workflows subscribe with
    * `triggers: [trigger("kind", config)]`; the host fires a kind with a
@@ -388,7 +380,7 @@ export class CatamorphicCore {
   readonly documents: DocumentsService;
   /** Propose-a-change: member edits as branches/PRs on their behalf (ADR 0055). */
   readonly proposals: ProposalsService;
-  /** Whether proposals open pull requests (a proposalBot is configured). */
+  /** Whether proposals can open pull requests (a code host is configured). */
   readonly proposalsOpenPullRequests: boolean;
   /** Publications: documents served to an audience at a stable URL (ADR 0055). */
   readonly publications: PublicationsService;
@@ -419,7 +411,8 @@ export class CatamorphicCore {
   readonly apps?: AppsService;
   readonly sessionArtifacts: SessionArtifactsService;
   readonly appPolicies: AppPoliciesService;
-  readonly github?: GithubService;
+  /** Pull requests and repositories through connections (ADR 0177). */
+  readonly codeHosts: CodeHostsService;
   readonly remoteSync: RemoteSyncService;
   readonly notifications: UserNotificationsService;
   readonly appStorage: AppStorageService;
@@ -666,26 +659,7 @@ export class CatamorphicCore {
     this.appStorage = new AppStorageService(this.db);
     this.agentRuntimeEvents = new AgentRuntimeEventsService(this.db);
     this.agentRuntimeRequests = new AgentRuntimeRequestsService(this.db);
-    this.github = config.github
-      ? new GithubService(
-          this.db,
-          this.projectManager,
-          this.projects,
-          config.github,
-          this.projectEvents,
-        )
-      : undefined;
-    this.projectEventSources = [
-      ...(this.github ? [new GithubProjectEventSource(this.github)] : []),
-      ...(config.projectEventSources ?? []),
-    ];
-    // Provider-agnostic remote sync (ADR 0044); code hosts contribute
-    // credentials/capabilities through the CodeHost seam.
-    this.remoteSync = new RemoteSyncService(
-      this.db,
-      this.projectManager,
-      this.github ? [this.github.codeHost] : [],
-    );
+    this.projectEventSources = config.projectEventSources ?? [];
     this.workflows = new WorkflowsService(this.projectManager, this.projects);
     this.projectEnvironments = new ProjectEnvironmentsService(
       this.db,
@@ -726,8 +700,8 @@ export class CatamorphicCore {
         "credentialVault is required when connectionProviders are configured",
       );
     }
+    const providers = new ConnectionProviderRegistry(connectionProviders);
     if (connectionProviders.length > 0 && credentialVault) {
-      const providers = new ConnectionProviderRegistry(connectionProviders);
       const hostBindings = config.connectionBindings;
       this.connections = new ConnectionsService({
         db: this.db,
@@ -795,6 +769,21 @@ export class CatamorphicCore {
         this.executionAllocations,
       );
     }
+    this.codeHosts = new CodeHostsService({
+      db: this.db,
+      projectManager: this.projectManager,
+      projects: this.projects,
+      hosts: config.codeHosts ?? [],
+      providers,
+      ...(this.connections ? { connections: this.connections } : {}),
+    });
+    // Provider-agnostic remote sync (ADR 0044): credentials come from the
+    // connection that backs the origin (ADR 0177).
+    this.remoteSync = new RemoteSyncService(
+      this.db,
+      this.projectManager,
+      this.codeHosts,
+    );
     this.deployment = new DeploymentService(this.projectManager, (input) =>
       this.workflowEnablements.markUpdateAvailable(input),
     );
@@ -1014,12 +1003,11 @@ export class CatamorphicCore {
         : {}),
     });
     this.publications = new PublicationsService(this.db);
-    this.proposalsOpenPullRequests = Boolean(config.proposalBot);
+    this.proposalsOpenPullRequests = this.codeHosts.available;
     this.proposals = new ProposalsService(
       this.db,
       this.projectManager,
-      this.github ? [this.github.codeHost] : [],
-      config.proposalBot,
+      this.codeHosts,
     );
 
     if (config.codingAgent) {
@@ -1109,7 +1097,7 @@ export class CatamorphicCore {
         events: this.projectEvents,
         monitors: this.projectEventMonitors,
         sessions: this.agentSessions,
-        github: this.github,
+        eventSources: this.projectEventSources,
       });
       this.sessionActions = new SessionActionsService(
         this.db,
@@ -1132,7 +1120,7 @@ export class CatamorphicCore {
   /**
    * One pass of durable event delivery (ADR 0138, 0156): retire expired
    * watchers, then run every active workflow bound to new Project Events
-   * (webhooks, chat events, GitHub). Hosts call it on a timer with
+   * (webhooks, chat events, polled sources). Hosts call it on a timer with
    * `startEventDispatcher`, whether or not coding agents are configured.
    */
   async dispatchEvents(input: { limit?: number } = {}): Promise<number> {

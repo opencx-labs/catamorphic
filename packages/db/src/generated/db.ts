@@ -401,6 +401,7 @@ export interface ConnectionAuthorizationAttempts {
   expires_at: Timestamp;
   external_user_id: string;
   id: Generated<string>;
+  personal: Generated<boolean>;
   private_state_ref: string | null;
   project_id: string | null;
   provider_kind: string;

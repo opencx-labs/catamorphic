@@ -104,8 +104,10 @@ Webhooks use \`trigger("webhook", { name: "github" })\`: a lowercase name that
 becomes the project's URL segment. The server stores each request durably and
 answers 202 before the workflow runs, so a redelivery (same delivery id header) runs
 once. The payload's \`payload\` holds \`{ name, headers, query, contentType, body }\`,
-with JSON and form bodies parsed. The config declares how the endpoint checks
-senders, always with a project secret's name:
+with JSON and form bodies parsed, and \`hostVerified: true\` when the host fetched
+the event itself instead of receiving a signed request (the desktop's GitHub
+poller). The config declares how the endpoint checks senders, always with a
+project secret's name:
 
 - \`verify: { scheme: "hmac", secret, header, prefix?, encoding?: "hex" | "base64",
   algorithm?: "sha1" | "sha256" | "sha512", content?, timestamp?, pattern?,
@@ -171,8 +173,10 @@ regenerates \`work-triggers.d.ts\` with these kinds; \`bun run --cwd .work check
 checks them. \`.work/package.json\` needs \`@catamorphic/workflow\` in
 \`devDependencies\` so these files type-check.
 
-A GitHub library, for a repository webhook sending JSON to the project's
-\`github\` URL with the secret stored as \`GITHUB_WEBHOOK_SECRET\`:
+A GitHub library, for a repository or GitHub App webhook sending JSON to the
+project's \`github\` URL with the secret stored as \`GITHUB_WEBHOOK_SECRET\`. The
+desktop has no public URL; its session watchers receive the same events by
+polling (see \`session-workflows\`), so this library works there too:
 
 \`\`\`typescript
 // .work/triggers/github.ts
@@ -195,7 +199,7 @@ export interface IssueCommentEvent {
 
 /** Every signed delivery from the repository's webhook. */
 export const delivery = defineTrigger({
-  name: "gh.delivery",
+  name: "github.delivery",
   description: "Any delivery from the GitHub webhook",
   from: trigger("webhook", {
     name: "github",
@@ -204,16 +208,16 @@ export const delivery = defineTrigger({
 });
 
 export const pullRequest = defineTrigger<Delivery<PullRequestEvent>>({
-  name: "gh.pull_request",
+  name: "github.pull_request",
   description: "A pull request was opened, updated, or closed",
-  from: trigger("gh.delivery"),
+  from: trigger("github.delivery"),
   where: { payload: { headers: { "x-github-event": "pull_request" } } },
 });
 
 export const issueComment = defineTrigger<Delivery<IssueCommentEvent>>({
-  name: "gh.issue_comment",
+  name: "github.issue_comment",
   description: "Someone commented on an issue or pull request",
-  from: trigger("gh.delivery"),
+  from: trigger("github.delivery"),
   where: { payload: { headers: { "x-github-event": "issue_comment" }, body: { action: "created" } } },
 });
 \`\`\`
@@ -272,14 +276,14 @@ async function summarizeMerge({ title, url }: { title: string; url: string }) {
 /** @displayname Note merged pull requests */
 export const noteMergedPullRequests = defineWorkflow(({ defineBoundary }) => ({
   triggers: [
-    trigger("gh.pull_request", {
+    trigger("github.pull_request", {
       where: { payload: { body: { action: "closed", pull_request: { merged: true } } } },
     }),
   ],
   steps: [
     /** @displayname Summarize */
     defineBoundary({
-      run: async ({ input }: BoundaryContext<TriggerPayload<"gh.pull_request">>) => {
+      run: async ({ input }: BoundaryContext<TriggerPayload<"github.pull_request">>) => {
         const pull = input.payload.body.pull_request;
         return { summary: await summarizeMerge({ title: pull.title, url: pull.html_url }) };
       },

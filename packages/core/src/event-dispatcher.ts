@@ -1,7 +1,7 @@
 import type { CatamorphicCore } from "./core.js";
 
 /**
- * Deliver Project Events on a timer: webhooks, chat events and GitHub
+ * Deliver Project Events on a timer: webhooks, chat events and polled
  * events start the workflows bound to them within about a second. Every
  * host that runs workflows starts one.
  */

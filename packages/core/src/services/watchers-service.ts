@@ -4,8 +4,11 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely, Selectable } from "kysely";
 import type { Identity } from "../identity.js";
 import type { AgentSessionsService } from "./agent-sessions-service.js";
-import type { GithubService } from "./github-service.js";
-import type { ProjectEventMonitorsService } from "./project-event-monitors-service.js";
+import type {
+  EventSourcePlacement,
+  ProjectEventMonitorsService,
+  ProjectEventSourceProvider,
+} from "./project-event-monitors-service.js";
 import type { ProjectEventsService } from "./project-events-service.js";
 import type { RunsService } from "./runs-service.js";
 import { nextScheduledTime } from "./schedules-service.js";
@@ -45,7 +48,8 @@ interface WatchersDeps {
   events: ProjectEventsService;
   monitors: ProjectEventMonitorsService;
   sessions: AgentSessionsService;
-  github?: GithubService;
+  /** Host-registered polled event sources a watcher may start (ADR 0177). */
+  eventSources?: readonly ProjectEventSourceProvider[];
 }
 
 const tracer = getTracer("@catamorphic/core");
@@ -60,6 +64,11 @@ export class WatchersService {
   }
   private readonly artifacts: SessionArtifactsService;
 
+  /**
+   * Start a temporary workflow for a session. With `eventSource`, a
+   * host-registered polled source (for example a desktop's code-host poller)
+   * observes the project for this watcher, from now on.
+   */
   async create(input: {
     identity: Identity;
     projectId: string;
@@ -68,69 +77,63 @@ export class WatchersService {
     source: string;
     environment?: string;
     expiresInSeconds?: number;
+    eventSource?: {
+      kind: string;
+      placement?: EventSourcePlacement;
+      pollIntervalSeconds?: number;
+    };
   }): Promise<Watcher> {
     await this.deps.sessions.assertSession(
       input.identity,
       input.projectId,
       input.sessionId,
     );
-    return this.createPinned({
-      ...input,
-      monitorId: null,
-      cursorSequence: await this.latestProjectSequence(input.projectId),
-    });
-  }
-
-  async createGithub(input: {
-    identity: Identity;
-    projectId: string;
-    sessionId: string;
-    workflowName: string;
-    source: string;
-    environment?: string;
-    placement?: "local" | "remote" | "any";
-    expiresInSeconds?: number;
-    pollIntervalSeconds?: number;
-  }): Promise<Watcher> {
-    await this.deps.sessions.assertSession(
-      input.identity,
-      input.projectId,
-      input.sessionId,
+    const { eventSource, ...rest } = input;
+    if (!eventSource) {
+      return this.createPinned({
+        ...rest,
+        monitorId: null,
+        cursorSequence: await this.latestProjectSequence(input.projectId),
+      });
+    }
+    const provider = this.deps.eventSources?.find(
+      (candidate) => candidate.kind === eventSource.kind,
     );
-    if (!this.deps.github) throw new Error("GitHub is not configured");
-
-    // Verify the caller's current GitHub credential can read the linked repo,
-    // seed the provider cursor, and make pre-existing activity invisible to
-    // this new watcher. A watcher observes changes after creation by default.
-    const initial = await this.deps.github.pollProjectEvents(
-      input.identity,
-      input.projectId,
-    );
+    if (!provider) {
+      throw new Error(
+        `Unknown event source '${eventSource.kind}'. Available: ${
+          (this.deps.eventSources ?? []).map((item) => item.kind).join(", ") ||
+          "none"
+        }`,
+      );
+    }
+    // Check access and seed the cursor, so pre-existing activity stays
+    // invisible to the new watcher.
+    const started = provider.start
+      ? await provider.start({
+          identity: input.identity,
+          projectId: input.projectId,
+          config: {},
+          signal: AbortSignal.timeout(45_000),
+        })
+      : { cursor: null };
     const monitor = await this.deps.monitors.ensure({
       identity: input.identity,
       projectId: input.projectId,
-      sourceKind: "github",
+      sourceKind: provider.kind,
       sourceKey: input.projectId,
-      placement: input.placement ?? "local",
+      placement: eventSource.placement ?? "local",
       config: {},
-      cursor: initial.nextCursor
-        ? { externalId: initial.nextCursor }
-        : undefined,
-      pollIntervalSeconds: input.pollIntervalSeconds ?? 30,
+      ...(started.cursor !== null ? { cursor: started.cursor } : {}),
+      pollIntervalSeconds: eventSource.pollIntervalSeconds ?? 30,
     });
     return this.createPinned({
-      identity: input.identity,
-      projectId: input.projectId,
-      sessionId: input.sessionId,
-      workflowName: input.workflowName,
-      source: input.source,
-      ...(input.environment ? { environment: input.environment } : {}),
-      ...(input.expiresInSeconds !== undefined
-        ? { expiresInSeconds: input.expiresInSeconds }
-        : {}),
+      ...rest,
       monitorId: monitor.id,
       cursorSequence: await this.latestProjectSequence(input.projectId),
-      requiredTriggerPrefix: "github.",
+      ...(provider.eventKinds?.length
+        ? { requiredTriggerKinds: provider.eventKinds }
+        : {}),
     });
   }
 
@@ -144,7 +147,7 @@ export class WatchersService {
     expiresInSeconds?: number;
     monitorId: string | null;
     cursorSequence: number;
-    requiredTriggerPrefix?: string;
+    requiredTriggerKinds?: readonly string[];
   }): Promise<Watcher> {
     return withSpan(
       {
@@ -170,7 +173,7 @@ export class WatchersService {
     expiresInSeconds?: number;
     monitorId: string | null;
     cursorSequence: number;
-    requiredTriggerPrefix?: string;
+    requiredTriggerKinds?: readonly string[];
   }): Promise<Watcher> {
     const session = await this.assertWatcherSession(input, this.db);
     input = {
@@ -203,15 +206,13 @@ export class WatchersService {
           `Watcher workflow '${input.workflowName}' must declare at least one trigger`,
         );
       }
-      const requiredTriggerPrefix = input.requiredTriggerPrefix;
+      const required = input.requiredTriggerKinds;
       if (
-        requiredTriggerPrefix &&
-        !bindings.some((binding) =>
-          binding.kind.startsWith(requiredTriggerPrefix),
-        )
+        required &&
+        !bindings.some((binding) => required.includes(binding.kind))
       ) {
         throw new Error(
-          `Watcher workflow '${input.workflowName}' must declare at least one ${requiredTriggerPrefix} trigger`,
+          `Watcher workflow '${input.workflowName}' must declare a trigger its event source fires (${required.join(", ")})`,
         );
       }
       const triggerKinds = [

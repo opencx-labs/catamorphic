@@ -48,6 +48,14 @@ workStatus. Omitting sessionId observes authorized matching sessions in the
 project. Example: trigger("session.turn-changed", { sessionId: "actual-id",
 statuses: ["completed", "failed"] }). Never guess an id.
 
+A watcher may bind the project's own trigger kinds too, such as the GitHub
+library in writing-workflows. A host without a public webhook URL (the desktop)
+can observe for it instead: pass the host's event source to create_watcher
+(eventSource: "github"). The host polls the repository with your GitHub
+connection from the watcher's start and records events shaped like the webhook's
+deliveries, with payload.hostVerified true in place of a signature, so the same
+trigger kinds and where filters match on every host.
+
 Events are normalized Project Events. input.payload.session is the snapshot at
 the transition; input.payload.detail contains the message/turn/visibility change.
 input.payload.actor identifies the initiator. message-received means inbound context;
@@ -187,7 +195,7 @@ export const remindUser = defineWorkflow(({ defineBoundary }) => ({
 ### A chat per pull request
 
 A project automation that reviews each pull request in its own chat, shared with
-everyone in the project. It binds \`gh.pull_request\` from the GitHub trigger
+everyone in the project. It binds \`github.pull_request\` from the GitHub trigger
 library in \`writing-workflows\` (\`.work/triggers/github.ts\`), and its \`where\`
 lets only opened and updated, non-draft pull requests start a run. Enable it for
 the project; the key reuses the chat when the same pull request changes again.
@@ -198,14 +206,14 @@ import { type BoundaryContext, defineWorkflow, type TriggerPayload, trigger } fr
 /** @displayname Review pull requests */
 export const reviewPullRequests = defineWorkflow(({ defineBoundary }) => ({
   triggers: [
-    trigger("gh.pull_request", {
+    trigger("github.pull_request", {
       where: { payload: { body: { action: ["opened", "synchronize", "reopened"], pull_request: { draft: false } } } },
     }),
   ],
   steps: [
     /** @displayname Ask for a review */
     defineBoundary({
-      run: ({ input, host }: BoundaryContext<TriggerPayload<"gh.pull_request">>) => {
+      run: ({ input, host }: BoundaryContext<TriggerPayload<"github.pull_request">>) => {
         const event = input.payload.body;
         return host["catamorphic.sessions"].deliver({
           key: "pr-" + event.repository.full_name + "-" + event.number,

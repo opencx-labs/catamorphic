@@ -245,6 +245,181 @@ export class ConnectionsService {
     });
   }
 
+  /**
+   * Start authorizing (or re-authorizing) the caller's personal connection
+   * to a provider (ADR 0177): their own account, used for repository import,
+   * sync, and pull requests in every project they work in.
+   */
+  async beginPersonalAuthorization(args: {
+    identity: Identity;
+    providerKind: string;
+    redirectUri: string;
+  }): Promise<{ authorizationId: string; challenge: AuthorizationChallenge }> {
+    if (!this.providers.get(args.providerKind)) {
+      throw new Error(`Unknown connection provider '${args.providerKind}'`);
+    }
+    const current = await this.personal(args);
+    return this.startAttempt({
+      identity: args.identity,
+      providerKind: args.providerKind,
+      redirectUri: args.redirectUri,
+      target: { personal: true, reauthorizeConnectionId: current?.id ?? null },
+    });
+  }
+
+  /**
+   * Store a personal connection from authorization completed by the host
+   * (or by a personal attempt), replacing the caller's current one.
+   */
+  async savePersonal(args: {
+    identity: Identity;
+    providerKind: string;
+    authorized: ConnectionAuthorizationResult;
+    label?: string;
+  }): Promise<ConnectionRecord> {
+    const provider = this.providers.get(args.providerKind);
+    if (!provider) {
+      throw new Error(`Unknown connection provider '${args.providerKind}'`);
+    }
+    const current = await this.db
+      .selectFrom("connections")
+      .selectAll()
+      .where("tenant_id", "=", args.identity.tenantId)
+      .where("principal_kind", "=", "member")
+      .where("owner_external_user_id", "=", args.identity.externalUserId)
+      .where("provider_kind", "=", args.providerKind)
+      .where("project_id", "is", null)
+      .where("status", "!=", "revoked")
+      .executeTakeFirst();
+    if (current) {
+      const row = await this.replaceCredential({
+        identity: args.identity,
+        current,
+        authorized: args.authorized,
+      });
+      await this.audit({
+        identity: args.identity,
+        connectionId: current.id,
+        eventType: "connection.rotated",
+        outcome: "allowed",
+      });
+      return row;
+    }
+    const ref = await this.vault.put({
+      tenantId: args.identity.tenantId,
+      material: args.authorized.material,
+    });
+    try {
+      const row = await this.db
+        .insertInto("connections")
+        .values({
+          tenant_id: args.identity.tenantId,
+          project_id: null,
+          provider_kind: args.providerKind,
+          principal_kind: "member",
+          owner_external_user_id: args.identity.externalUserId,
+          label: args.label ?? provider.displayName,
+          status: "ready",
+          credential_ref: ref.id,
+          account_summary: toJson(args.authorized.account ?? {}),
+          scopes: toJson(args.authorized.scopes ?? []),
+          capabilities: toJson(args.authorized.capabilities ?? []),
+          expires_at: args.authorized.expiresAt ?? null,
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      await this.audit({
+        identity: args.identity,
+        connectionId: row.id,
+        eventType: "connection.created",
+        outcome: "allowed",
+        metadata: { personal: true },
+      });
+      return mapConnection(row);
+    } catch (cause) {
+      await this.vault.delete({ tenantId: args.identity.tenantId, ref });
+      throw cause;
+    }
+  }
+
+  /** The caller's live personal connection to a provider, ready or not. */
+  async personal(args: {
+    identity: Identity;
+    providerKind: string;
+  }): Promise<ConnectionRecord | undefined> {
+    const row = await this.db
+      .selectFrom("connections")
+      .selectAll()
+      .where("tenant_id", "=", args.identity.tenantId)
+      .where("principal_kind", "=", "member")
+      .where("owner_external_user_id", "=", args.identity.externalUserId)
+      .where("provider_kind", "=", args.providerKind)
+      .where("project_id", "is", null)
+      .where("status", "!=", "revoked")
+      .executeTakeFirst();
+    return row ? mapConnection(row) : undefined;
+  }
+
+  /**
+   * The caller's own ready connection to a provider for one project: one
+   * they authorized in the project, else their personal one.
+   */
+  async ownConnection(args: {
+    identity: Identity;
+    projectId?: string;
+    providerKind: string;
+  }): Promise<ConnectionRecord | undefined> {
+    const rows = await this.db
+      .selectFrom("connections")
+      .selectAll()
+      .where("tenant_id", "=", args.identity.tenantId)
+      .where("principal_kind", "=", "member")
+      .where("owner_external_user_id", "=", args.identity.externalUserId)
+      .where("provider_kind", "=", args.providerKind)
+      .where("status", "=", "ready")
+      .where((eb) =>
+        args.projectId
+          ? eb.or([
+              eb("project_id", "=", args.projectId),
+              eb("project_id", "is", null),
+            ])
+          : eb("project_id", "is", null),
+      )
+      .orderBy("updated_at", "desc")
+      .execute();
+    const ready = rows.filter(isReady);
+    const chosen =
+      ready.find((row) => row.project_id !== null) ??
+      ready.find((row) => row.project_id === null);
+    return chosen ? mapConnection(chosen) : undefined;
+  }
+
+  /**
+   * A live service connection by name: the project's own first, then the
+   * tenant's (ADR 0172). Without a project, only the tenant's.
+   */
+  async serviceConnection(args: {
+    tenantId: string;
+    projectId?: string;
+    name: string;
+  }): Promise<ConnectionRecord | undefined> {
+    const row = args.projectId
+      ? await this.findService({
+          tenantId: args.tenantId,
+          projectId: args.projectId,
+          name: args.name,
+        })
+      : await this.db
+          .selectFrom("connections")
+          .selectAll()
+          .where("tenant_id", "=", args.tenantId)
+          .where("name", "=", args.name)
+          .where("principal_kind", "=", "tenant_service")
+          .where("status", "!=", "revoked")
+          .executeTakeFirst();
+    return row ? mapConnection(row) : undefined;
+  }
+
   async authorizationStatus(args: {
     identity: Identity;
     state: string;
@@ -287,7 +462,8 @@ export class ConnectionsService {
       .executeTakeFirst();
     if (!attempt)
       throw new ConnectionUnavailableError("authorization", "Attempt expired");
-    const subject = attempt.alias ?? attempt.service_connection_id ?? "service";
+    const subject =
+      attempt.alias ?? attempt.service_connection_id ?? attempt.provider_kind;
     const provider = this.providers.get(attempt.provider_kind);
     const completeAuthorization = provider?.completeAuthorization;
     if (
@@ -353,6 +529,19 @@ export class ConnectionsService {
       const connection = await this.storeServiceCredential({
         identity: args.identity,
         connectionId: attempt.service_connection_id,
+        authorized,
+      });
+      await this.finishAttempt({
+        identity: args.identity,
+        attempt,
+        status: "completed",
+      });
+      return connection;
+    }
+    if (attempt.personal) {
+      const connection = await this.savePersonal({
+        identity: args.identity,
+        providerKind: attempt.provider_kind,
         authorized,
       });
       await this.finishAttempt({
@@ -1343,12 +1532,15 @@ export class ConnectionsService {
           alias: string;
           reauthorizeConnectionId: string | null;
         }
-      | { serviceConnectionId: string };
+      | { serviceConnectionId: string }
+      | { personal: true; reauthorizeConnectionId: string | null };
   }): Promise<{ authorizationId: string; challenge: AuthorizationChallenge }> {
     const subject =
       "alias" in args.target
         ? args.target.alias
-        : args.target.serviceConnectionId;
+        : "serviceConnectionId" in args.target
+          ? args.target.serviceConnectionId
+          : args.providerKind;
     const provider = this.providers.get(args.providerKind);
     const beginAuthorization = provider?.beginAuthorization;
     if (!beginAuthorization) {
@@ -1372,7 +1564,9 @@ export class ConnectionsService {
                 "catamorphic.connection.environment": args.target.environment,
                 "catamorphic.connection.alias": args.target.alias,
               }
-            : { "catamorphic.connection.id": args.target.serviceConnectionId }),
+            : "serviceConnectionId" in args.target
+              ? { "catamorphic.connection.id": args.target.serviceConnectionId }
+              : { "catamorphic.connection.personal": true }),
         },
       },
       () =>
@@ -1406,7 +1600,12 @@ export class ConnectionsService {
               alias: args.target.alias,
               reauthorize_connection_id: args.target.reauthorizeConnectionId,
             }
-          : { service_connection_id: args.target.serviceConnectionId }),
+          : "serviceConnectionId" in args.target
+            ? { service_connection_id: args.target.serviceConnectionId }
+            : {
+                personal: true,
+                reauthorize_connection_id: args.target.reauthorizeConnectionId,
+              }),
       })
       .execute();
     return { authorizationId: state, challenge: started.challenge };

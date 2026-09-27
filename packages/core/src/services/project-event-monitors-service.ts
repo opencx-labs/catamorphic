@@ -24,8 +24,31 @@ export interface ProjectEventMonitor {
   leaseToken: string | null;
 }
 
+/**
+ * A host-registered source of Project Events that is polled rather than
+ * pushed (ADRs 0074, 0177), such as a desktop's poller of a code host for projects
+ * without a public webhook URL. A watcher names the source; a monitor keeps
+ * its cursor and lease; `poll` appends events through the host's own
+ * `ProjectEventsService`.
+ */
 export interface ProjectEventSourceProvider {
   kind: string;
+  /**
+   * Trigger kinds the source's events fire, e.g. `webhook`. A watcher on
+   * this source must bind at least one of them.
+   */
+  eventKinds?: readonly string[];
+  /**
+   * Check that the caller may read the source for this project and return
+   * the cursor at which new events begin, so a new watcher sees only what
+   * happens after it starts.
+   */
+  start?(input: {
+    identity: Identity;
+    projectId: string;
+    config: Json;
+    signal: AbortSignal;
+  }): Promise<{ cursor: Json | null }>;
   poll(input: {
     monitor: ProjectEventMonitor;
     identity: Identity;

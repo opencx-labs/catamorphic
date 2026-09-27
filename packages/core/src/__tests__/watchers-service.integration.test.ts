@@ -21,7 +21,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import type { AgentSessionsService } from "../services/agent-sessions-service.js";
 import { ProjectEventDispatcher } from "../services/project-event-dispatcher.js";
-import type { ProjectEventMonitorsService } from "../services/project-event-monitors-service.js";
+import {
+  ProjectEventMonitorsService,
+  type ProjectEventSourceProvider,
+} from "../services/project-event-monitors-service.js";
 import { ProjectEventsService } from "../services/project-events-service.js";
 import type { RunsService } from "../services/runs-service.js";
 import { SchedulesService } from "../services/schedules-service.js";
@@ -59,6 +62,7 @@ describe("temporary watchers", () => {
   let failingEventId: string | null = null;
   let beforeEnablementCreate: (() => Promise<void>) | undefined;
   let enablements: WorkflowEnablementsService;
+  let watcherDeps: ConstructorParameters<typeof WatchersService>[1];
   /** What core's dispatchEvents does: expire watchers, then deliver. */
   const dispatchPending = async () => {
     await watchers.expireDue();
@@ -267,7 +271,7 @@ describe("temporary watchers", () => {
       }),
       disable: disableEnablement,
     } as unknown as WorkflowEnablementsService;
-    watchers = new WatchersService(db, {
+    watcherDeps = {
       projectManager,
       runs,
       triggers,
@@ -275,7 +279,8 @@ describe("temporary watchers", () => {
       monitors,
       sessions,
       workflowEnablements: enablements,
-    });
+    };
+    watchers = new WatchersService(db, watcherDeps);
   }, 30_000);
 
   afterAll(async () => {
@@ -965,5 +970,78 @@ describe("temporary watchers", () => {
         (item) => item.id === reminder.id,
       )?.status,
     ).toBe("stopped");
+  });
+
+  it("starts a host-registered polled event source from now on (ADR 0177)", async () => {
+    const started: Array<{ projectId: string; externalUserId: string }> = [];
+    const source: ProjectEventSourceProvider = {
+      kind: "issues-poller",
+      eventKinds: ["issue.changed"],
+      start: async (input) => {
+        started.push({
+          projectId: input.projectId,
+          externalUserId: input.identity.externalUserId,
+        });
+        return { cursor: { after: "evt-41" } };
+      },
+      poll: async ({ monitor }) => ({ cursor: monitor.cursor }),
+    };
+    const polled = new WatchersService(db, {
+      ...watcherDeps,
+      monitors: new ProjectEventMonitorsService(db),
+      eventSources: [source],
+    });
+    const workflow = (name: string, kind: string) => `
+      import { defineWorkflow, trigger } from "@catamorphic/workflow";
+      export const ${name} = defineWorkflow(({ defineBoundary }) => ({
+        triggers: [trigger("${kind}")],
+        steps: [defineBoundary({ run: async ({ input }) => input })],
+      }));
+    `;
+    await expect(
+      polled.create({
+        identity,
+        projectId,
+        sessionId,
+        workflowName: "watchPolledIssue",
+        source: workflow("watchPolledIssue", "issue.changed"),
+        eventSource: { kind: "missing" },
+      }),
+    ).rejects.toThrow("Unknown event source 'missing'");
+    await expect(
+      polled.create({
+        identity,
+        projectId,
+        sessionId,
+        workflowName: "watchPolledScope",
+        source: workflow("watchPolledScope", "scope.changed"),
+        eventSource: { kind: "issues-poller" },
+      }),
+    ).rejects.toThrow("must declare a trigger its event source fires");
+    const watcher = await polled.create({
+      identity,
+      projectId,
+      sessionId,
+      workflowName: "watchPolledIssue",
+      source: workflow("watchPolledIssue", "issue.changed"),
+      eventSource: { kind: "issues-poller", pollIntervalSeconds: 60 },
+    });
+    expect(started.at(-1)).toEqual({
+      projectId,
+      externalUserId: identity.externalUserId,
+    });
+    expect(watcher.monitorId).toBeTruthy();
+    const monitor = await db
+      .selectFrom("project_event_monitors")
+      .selectAll()
+      .where("id", "=", String(watcher.monitorId))
+      .executeTakeFirstOrThrow();
+    expect(monitor).toMatchObject({
+      source_kind: "issues-poller",
+      source_key: projectId,
+      placement: "local",
+      cursor: { after: "evt-41" },
+      poll_interval_seconds: 60,
+    });
   });
 });

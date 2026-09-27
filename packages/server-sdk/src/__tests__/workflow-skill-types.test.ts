@@ -45,9 +45,9 @@ it("shipped workflow recipes typecheck against the public API and real host trig
     const parsed = parseProject(files);
     expect(parsed.errors).toEqual([]);
     expect(parsed.triggerKinds.map((kind) => kind.name)).toEqual([
-      "gh.delivery",
-      "gh.issue_comment",
-      "gh.pull_request",
+      "github.delivery",
+      "github.issue_comment",
+      "github.pull_request",
       "slack.event",
     ]);
     for (const [file, content] of Object.entries(files)) {

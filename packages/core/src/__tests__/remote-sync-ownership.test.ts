@@ -6,8 +6,9 @@ import { FsBackend, nativeGit, ProjectManager } from "@catamorphic/git";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { RemoteSyncService } from "../services/remote-sync-service.js";
+import { fakeCodeHost } from "./code-host-fixture.js";
 
 /**
  * ADR 0170 through the core service: whatever sync and pull-request calls
@@ -74,18 +75,10 @@ async function linkedProject(ownership: "owned" | "attached") {
     undefined,
     async () => root,
   );
-  const createPullRequest = vi.fn(async () => ({
-    url: "https://example.invalid/pr/1",
-    number: 1,
-  }));
-  const service = new RemoteSyncService(db, manager, [
-    {
-      id: "test",
-      handles: () => true,
-      credentials: async () => undefined,
-      createPullRequest,
-    },
-  ]);
+  const forge = fakeCodeHost({ db, projectManager: manager, remoteBase: base });
+  await forge.connectPersonal(identity, `token-${ownership}`);
+  const service = new RemoteSyncService(db, manager, forge.codeHosts);
+  const createPullRequest = forge.createPullRequest;
   const commit = async (dir: string, file: string) => {
     await fs.writeFile(path.join(dir, file), file);
     await nativeGit(dir, ["add", "."]);
@@ -142,7 +135,6 @@ describe("remote sync by ownership (ADR 0170)", () => {
     );
     expect(pr.branch).toMatch(/^work\/local-notes-/);
     expect(project.createPullRequest).toHaveBeenCalledWith(
-      identity,
       expect.objectContaining({ base: "trunk", head: pr.branch }),
     );
     const after = await project.refs();

@@ -199,11 +199,21 @@ export {
 } from "./services/client-runners-service.js";
 export type {
   CodeHost,
+  CodeHostCredential,
+  CodeHostRepository,
   PullRequestComment,
   PullRequestDiscussion,
   PullRequestFile,
   PullRequestSummary,
 } from "./services/code-host.js";
+export {
+  CodeHostNotConnectedError,
+  type CodeHostPrincipal,
+  CodeHostsService,
+  CodeHostUnsupportedError,
+  ProjectAlreadyLinkedError,
+  ProjectHasNoRemoteError,
+} from "./services/code-hosts-service.js";
 export {
   type CodingAgentRegistry,
   isCodingAgentRegistry,
@@ -350,19 +360,6 @@ export {
   type ExecutionWorkerOptions,
   ExecutionWorkerService,
 } from "./services/execution-worker-service.js";
-export { GithubProjectEventSource } from "./services/github-event-source.js";
-export {
-  type GithubConnectionStatus,
-  GithubNotConnectedError,
-  GithubService,
-  type GithubServiceConfig,
-  GithubTokenExpiredError,
-  githubEventKind,
-  type ImportGithubRepoInput,
-  ProjectAlreadyLinkedError,
-  ProjectNotLinkedToGithubError,
-  type PublishGithubProjectInput,
-} from "./services/github-service.js";
 export { executeHostCall, type HostCallInput } from "./services/host-calls.js";
 export {
   type GrantMembershipInput,
@@ -447,8 +444,6 @@ export {
   RateReservationsService,
 } from "./services/rate-reservations-service.js";
 export {
-  ProjectHasNoRemoteError,
-  PullRequestsUnsupportedError,
   type RemoteSyncOutcome,
   RemoteSyncService,
 } from "./services/remote-sync-service.js";
