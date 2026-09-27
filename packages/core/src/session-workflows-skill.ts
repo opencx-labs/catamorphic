@@ -240,38 +240,18 @@ export const closePullRequestChats = defineWorkflow(({ defineBoundary }) => ({
 
 ### A chat per Slack thread
 
-Mentions of the Slack app become one project chat per thread, with the
-\`slack.event\` kind from \`writing-workflows\`. Slack may redeliver an event it
-thinks was lost; the delivery key keeps each event to one message.
-
-\`\`\`typescript
-import { type BoundaryContext, defineWorkflow, type TriggerPayload, trigger } from "@catamorphic/workflow";
-
-/** @displayname Answer Slack mentions */
-export const answerSlackMentions = defineWorkflow(({ defineBoundary }) => ({
-  triggers: [trigger("slack.event", { where: { payload: { body: { event: { type: "app_mention" } } } } })],
-  steps: [
-    /** @displayname Hand the mention to the agent */
-    defineBoundary({
-      run: ({ input, host }: BoundaryContext<TriggerPayload<"slack.event">>) => {
-        const body = input.payload.body;
-        const thread = body.event.thread_ts ?? body.event.ts ?? body.event_id;
-        return host["catamorphic.sessions"].deliver({
-          key: "slack-" + (body.event.channel ?? "") + "-" + thread,
-          title: "Slack: " + (body.event.text ?? "mention").slice(0, 60),
-          content: "Someone mentioned you in Slack: " + (body.event.text ?? ""),
-          idempotencyKey: body.event_id,
-        });
-      },
-    }),
-  ],
-}));
-\`\`\`
+Mentions of the Slack app become one project chat per thread, keyed
+\`slack:<channel>:<thread_ts>\`, and the agent's settled reply is posted back
+to the thread by a second automation reacting to \`session.turn-changed\`.
+Both recipes, with the trigger library they bind, are in the \`slack\` skill.
 
 ## Session actions and delivery
 
 - inspect/list/history are authorized reads. history is bounded; increase its
-  limit only when needed. Read a child as an ordinary session.
+  limit only when needed. Read a child as an ordinary session. history also
+  returns the chat's key, and through: "<messageId>" ends it at that message,
+  so a workflow on session.turn-changed reads exactly the reply the event's
+  detail.resultMessageId names, even after later turns.
 - deliver message_only records context without a model turn; next_turn starts
   work when idle or queues behind the active turn; interrupt requests a course
   change. The host preserves origin in model input and in visible history.

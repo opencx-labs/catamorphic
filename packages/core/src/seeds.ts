@@ -16,6 +16,7 @@ import { DURABLE_WORKFLOWS_SKILL } from "./durable-workflows-skill.js";
 import { PROJECT_WORKSPACE_IGNORE } from "./services/project-workspace.js";
 import { SESSION_ARTIFACTS_SKILL } from "./session-artifacts-skill.js";
 import { SESSION_WORKFLOWS_SKILL } from "./session-workflows-skill.js";
+import { SLACK_SKILL } from "./slack-skill.js";
 import { WORKFLOW_LIFECYCLE_SKILL } from "./workflow-lifecycle-skill.js";
 import { WRITING_WORKFLOWS_SKILL } from "./writing-workflows-skill.js";
 
@@ -1187,6 +1188,7 @@ export const HOST_SKILLS: Record<string, string> = {
   "workflow-lifecycle/SKILL.md": WORKFLOW_LIFECYCLE_SKILL,
   "session-workflows/SKILL.md": SESSION_WORKFLOWS_SKILL,
   "searching-documents/SKILL.md": SEARCHING_DOCUMENTS_SKILL,
+  "slack/SKILL.md": SLACK_SKILL,
   "publishing-to-github/SKILL.md": `---
 name: publishing-to-github
 title: Publish to GitHub
