@@ -27,6 +27,7 @@ async function authorize(
     tenantId: "t",
     projectId: "p",
     externalUserId: "u",
+    principal: "service",
     callback: { connectionString },
   });
   if (!result) throw new Error("no authorization result");

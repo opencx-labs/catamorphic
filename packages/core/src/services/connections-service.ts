@@ -488,6 +488,7 @@ export class ConnectionsService {
         tenantId: args.identity.tenantId,
         ...(attempt.project_id ? { projectId: attempt.project_id } : {}),
         externalUserId: args.identity.externalUserId,
+        principal: attempt.service_connection_id ? "service" : "member",
         callback: args.callback,
         ...(privateState ? { privateState } : {}),
       });
@@ -1574,6 +1575,8 @@ export class ConnectionsService {
           tenantId: args.identity.tenantId,
           ...(args.projectId ? { projectId: args.projectId } : {}),
           externalUserId: args.identity.externalUserId,
+          principal:
+            "serviceConnectionId" in args.target ? "service" : "member",
           redirectUri: args.redirectUri,
           state,
         }),

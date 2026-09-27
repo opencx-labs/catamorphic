@@ -11,6 +11,7 @@ import {
   verifyWebhookRequest,
   WEBHOOK_DEFAULT_MAX_BYTES,
   WEBHOOK_MAX_BYTES_LIMIT,
+  WEBHOOK_NAME_PATTERN,
   type WebhookCheck,
   type WebhookConfig,
   type WebhookHandshake,
@@ -20,6 +21,7 @@ import {
 } from "../webhook-ingress.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ProjectEventsService } from "./project-events-service.js";
+import { requireTenantProject } from "./projects-service.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -287,6 +289,29 @@ export class WebhooksService {
       endpoint.path = `/hooks/${input.projectId}/${endpoint.name}/${token}`;
     }
     return endpoints;
+  }
+
+  /**
+   * The URL path of a webhook name, whether or not a workflow binds it yet,
+   * so a sender can be registered before its trigger library lands (ADR
+   * 0177). Requests reach no workflow until one listens on the name.
+   */
+  async endpointPath(input: {
+    identity: Identity;
+    projectId: string;
+    name: string;
+  }): Promise<string> {
+    if (!hasProjectPermission(input.identity, input.projectId, "webhooks:read"))
+      throw new AccessDeniedError();
+    if (!WEBHOOK_NAME_PATTERN.test(input.name))
+      throw new Error(`Invalid webhook name '${input.name}'`);
+    await requireTenantProject(
+      this.db,
+      input.identity.tenantId,
+      input.projectId,
+    );
+    const token = await this.ensureToken(input.projectId, input.name);
+    return `/hooks/${input.projectId}/${input.name}/${token}`;
   }
 
   /** Replace a webhook's token; senders need the new URL. */

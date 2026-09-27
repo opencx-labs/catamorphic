@@ -97,6 +97,12 @@ export interface ConnectionProvider {
     tenantId: string;
     projectId?: string;
     externalUserId: string;
+    /**
+     * Whose authority is being authorized: a member's own account or a
+     * service connection (ADR 0177). A provider may challenge differently,
+     * e.g. GitHub asks a person to sign in but an administrator for an App.
+     */
+    principal: "member" | "service";
     redirectUri: string;
     state: string;
   }): Promise<{ challenge: AuthorizationChallenge; privateState?: Uint8Array }>;
@@ -104,6 +110,7 @@ export interface ConnectionProvider {
     tenantId: string;
     projectId?: string;
     externalUserId: string;
+    principal: "member" | "service";
     callback: Readonly<Record<string, string>>;
     privateState?: Uint8Array;
   }): Promise<ConnectionAuthorizationResult>;
