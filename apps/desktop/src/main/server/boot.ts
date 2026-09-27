@@ -366,6 +366,7 @@ export async function startEmbeddedServer(
     sandboxProvider,
     agentHomesDir: paths.agentHomesDir,
     harnessComponentsDir: paths.harnessComponentsDir,
+    attachmentsDir: paths.attachmentsDir,
     e2eFake: e2eFakeAgent,
     workspaceBridge,
     toolPermissions,

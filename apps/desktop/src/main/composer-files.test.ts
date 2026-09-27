@@ -2,7 +2,11 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { removeComposerFiles, saveComposerFile } from "./composer-files.js";
+import {
+  readableAttachments,
+  removeComposerFiles,
+  saveComposerFile,
+} from "./composer-files.js";
 
 const roots: string[] = [];
 const temp = async () => {
@@ -62,5 +66,22 @@ describe("clipboard file persistence", () => {
         bytes: new Uint8Array([1]),
       }),
     ).rejects.toThrow("Invalid project");
+  });
+});
+
+describe("readable attachments", () => {
+  it("shares a project's pasted files with its agent, and nothing for a malformed id", async () => {
+    const attachmentsDir = await temp();
+    const saved = await saveComposerFile({
+      attachmentsDir,
+      projectId: "project-1",
+      name: "notes.txt",
+      bytes: new TextEncoder().encode("notes"),
+    });
+    const roots = readableAttachments({ attachmentsDir });
+    const [root] = roots({ projectId: "project-1" });
+    expect(root).toBeDefined();
+    expect(saved.path.startsWith(`${root}${path.sep}`)).toBe(true);
+    expect(roots({ projectId: "../project-1" })).toEqual([]);
   });
 });

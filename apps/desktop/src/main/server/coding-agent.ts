@@ -71,6 +71,8 @@ export interface BuildAiSdkAgentOpts {
     | Record<string, McpToolPolicyLayers>
     | (() => Record<string, McpToolPolicyLayers>);
   onToolPermission?: ToolPermissionHandler;
+  /** Read-only directories per project, e.g. its pasted attachments. */
+  readableRoots?: (context: { projectId: string }) => readonly string[];
 }
 
 export function buildAiSdkAgent({
@@ -84,6 +86,7 @@ export function buildAiSdkAgent({
   onElicit,
   mcpPolicies,
   onToolPermission,
+  readableRoots,
 }: BuildAiSdkAgentOpts): AiSdkCodingAgent | undefined {
   if (!config.apiKey || !modelId) return undefined;
   const provider = config.provider ?? "anthropic";
@@ -111,5 +114,6 @@ export function buildAiSdkAgent({
     ...(onElicit ? { onElicit } : {}),
     ...(mcpPolicies ? { mcpPolicies } : {}),
     ...(onToolPermission ? { onToolPermission } : {}),
+    ...(readableRoots ? { readableRoots } : {}),
   });
 }

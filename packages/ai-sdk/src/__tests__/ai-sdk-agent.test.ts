@@ -636,6 +636,49 @@ describe("AiSdkCodingAgent", () => {
     });
   });
 
+  it("reads files in the host's read-only roots, and never writes there", async () => {
+    const pasted = "/host/attachments/project-1/9f2-notes.txt";
+    const provider = createProvider({
+      [pasted]: "pasted notes",
+      "/host/attachments/project-2/secret.txt": "another project's paste",
+    });
+    const model = new MockLanguageModelV4({
+      doStream: [
+        toolCallStream("read", { path: pasted }),
+        toolCallStream("read", {
+          path: "/host/attachments/project-2/secret.txt",
+        }),
+        toolCallStream("write", { path: pasted, content: "overwritten" }),
+        textStream("Read the notes."),
+      ],
+    });
+    const readableRoots = vi.fn(({ projectId }: { projectId: string }) => [
+      `/host/attachments/${projectId}`,
+    ]);
+    const agent = new AiSdkCodingAgent({
+      model,
+      sandboxProvider: provider,
+      readableRoots,
+    });
+    const session = await start(agent);
+
+    const events = await collect(agent, session, "Summarize my paste");
+
+    expect(readableRoots).toHaveBeenCalledWith({ projectId: "project-1" });
+    expect(provider.downloadFile).toHaveBeenCalledTimes(1);
+    expect(provider.downloadFile).toHaveBeenCalledWith("sandbox-1", pasted);
+    expect(events).toContainEqual({
+      type: "diagnostic",
+      content:
+        "Tool read failed: Path escapes the project working directory: /host/attachments/project-2/secret.txt",
+    });
+    expect(events).toContainEqual({
+      type: "diagnostic",
+      content: `Tool write failed: Path escapes the project working directory: ${pasted}`,
+    });
+    expect(provider.uploadFiles).not.toHaveBeenCalled();
+  });
+
   it("runs bash in the project folder with the requested timeout", async () => {
     const provider = createProvider();
     const model = new MockLanguageModelV4({
