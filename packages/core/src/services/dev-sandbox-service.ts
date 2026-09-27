@@ -17,7 +17,11 @@ import {
 } from "@catamorphic/workflow/project-layout";
 import type { Identity } from "../identity.js";
 import type { DbSandboxStore } from "./db-sandbox-store.js";
-import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
+import {
+  SandboxSyncError,
+  type SyncedFileChange,
+  syncSandboxChanges,
+} from "./sandbox-sync.js";
 
 export interface PreparedDevSandbox {
   id: string;
@@ -149,6 +153,8 @@ export class DevSandboxService {
     if (status === "stopped" || status === "archived") {
       await this.deps.provider.startSandbox(existing.providerId);
     }
+    // A build goes on with the dev tree as it is; the turn's own sync
+    // reports the failure on its reply.
     return syncSandboxChanges({
       provider: this.deps.provider,
       projectManager: this.deps.projectManager,
@@ -156,6 +162,10 @@ export class DevSandboxService {
       projectId: opts.projectId,
       sandboxProviderId: existing.providerId,
       projectDir: this.projectDirectory,
+    }).catch((error: unknown) => {
+      if (!(error instanceof SandboxSyncError)) throw error;
+      console.warn(`[catamorphic] ${error.message}`);
+      return [];
     });
   }
 

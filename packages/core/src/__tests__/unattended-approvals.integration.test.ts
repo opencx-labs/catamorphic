@@ -155,6 +155,14 @@ describeIf("unattended approvals (ADR 0176)", () => {
       ]);
     });
 
+    // Holding the chat is not enough once approvers are named.
+    await expect(
+      broker.answer(
+        pending.id,
+        { decision: "allow" },
+        { tenantId, externalUserId: "dave" },
+      ),
+    ).rejects.toBeInstanceOf(AccessDeniedError);
     // Someone who is not an approver cannot answer it.
     await expect(
       broker.answer(pending.id, { decision: "allow" }, member("carol")),

@@ -110,7 +110,11 @@ import {
   sandboxGrantFile,
   seedSandboxRepository,
 } from "./sandbox-git.js";
-import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
+import {
+  SandboxSyncError,
+  type SyncedFileChange,
+  syncSandboxChanges,
+} from "./sandbox-sync.js";
 import { nextScheduledTime } from "./schedules-service.js";
 import {
   SessionMailboxesService,
@@ -4540,7 +4544,12 @@ export class AgentSessionsService {
       allocationId: input.allocationId,
     });
     if (allocation?.status !== "active") return false;
-    if (input.sandboxProviderId) {
+    const agent = await this.resolveAgent(input.agentId, projectId).catch(
+      () => undefined,
+    );
+    // A read-only agent's changes never leave its sandbox (ADR 0176), so
+    // its workspace is given back without saving them.
+    if (input.sandboxProviderId && agent?.privilege !== "read-only") {
       const runtime = await this.executionEnvironments.getRuntimeBinding({
         identity,
         bindingId: allocation.bindingId,
@@ -4563,6 +4572,7 @@ export class AgentSessionsService {
       const status = await provider.getSandboxStatus(input.sandboxProviderId);
       if (status === "stopped" || status === "archived")
         await provider.startSandbox(input.sandboxProviderId);
+      // Throws when the changes cannot be read: the workspace is kept.
       await syncSandboxChanges({
         provider,
         projectManager: this.projectManager,
@@ -4615,9 +4625,6 @@ export class AgentSessionsService {
     });
     if (!released) return false;
     if (input.providerSessionId) {
-      const agent = await this.resolveAgent(input.agentId, projectId).catch(
-        () => undefined,
-      );
       await agent?.provider
         .dispose({
           providerSessionId: input.providerSessionId,
@@ -5514,6 +5521,9 @@ export class AgentSessionsService {
           const keepsChangesInSandbox = Boolean(
             anchor.sandboxProviderId && agent.privilege === "read-only",
           );
+          // A sandbox whose changes cannot be read keeps them; the reply
+          // says so instead of reporting an unchanged workspace.
+          let workspaceSyncError: string | undefined;
           const changedFiles = keepsChangesInSandbox
             ? []
             : anchor.sandboxProviderId && runtime.provider
@@ -5523,7 +5533,14 @@ export class AgentSessionsService {
                   projectId,
                   anchor.sandboxProviderId,
                   this.usesSessionCopy(session) ? sessionId : undefined,
-                )
+                ).catch((error: unknown) => {
+                  if (!(error instanceof SandboxSyncError)) throw error;
+                  console.warn(
+                    `[catamorphic] Session ${sessionId}: ${error.message}`,
+                  );
+                  workspaceSyncError = error.message;
+                  return [];
+                })
               : hostChangedFiles(events, settledWorkingDirectory);
 
           // Ship the turn's `store/` writes as the caller (ADR 0055) before the
@@ -5656,6 +5673,9 @@ export class AgentSessionsService {
             // What the turn's store/ writes became (ADR 0055): shipped, refused,
             // conflicted, or outside store/. Hosts render it beside the reply.
             ...(storeSync ? { storeSync } : {}),
+            ...(workspaceSyncError
+              ? { workspaceSync: { error: workspaceSyncError } }
+              : {}),
             ...(errorKind ? { errorKind } : {}),
             ...(interrupted && failed ? { interrupted: true } : {}),
             ...(failed && !interrupted && heldText
@@ -5894,20 +5914,22 @@ export class AgentSessionsService {
           projectId,
           sessionId,
         );
-        await this.db
-          .updateTable("agent_turns")
-          .set({
-            status: "cancelled",
-            error: "Chat closed",
-            completed_at: new Date(),
-            lease_owner: null,
-            lease_token: null,
-            lease_expires_at: null,
-            updated_at: new Date(),
-          })
-          .where("session_id", "in", sessionIds)
-          .where("status", "in", ["queued", "held"])
-          .execute();
+        const cancelOpenTurns = (executor: Kysely<DB> | Transaction<DB>) =>
+          executor
+            .updateTable("agent_turns")
+            .set({
+              status: "cancelled",
+              error: "Chat closed",
+              completed_at: new Date(),
+              lease_owner: null,
+              lease_token: null,
+              lease_expires_at: null,
+              updated_at: new Date(),
+            })
+            .where("session_id", "in", sessionIds)
+            .where("status", "in", ["queued", "held"])
+            .execute();
+        await cancelOpenTurns(this.db);
         for (const id of sessionIds) {
           await this.cancelAutoRetry(id);
           await this.interrupt(identity, projectId, id, {
@@ -5934,17 +5956,12 @@ export class AgentSessionsService {
             await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
               trx,
             );
-          const previous = await trx
-            .selectFrom("agent_sessions")
-            .select(["id", "provider_session_id"])
-            .where("id", "in", sessionIds)
-            .forUpdate()
-            .execute();
+          // The provider session stays recorded until it is disposed below,
+          // so a close retried after a crash still finds it.
           const rows = await trx
             .updateTable("agent_sessions")
             .set({
               status: "closed",
-              provider_session_id: null,
               sandbox_id: null,
               activity: null,
               updated_at: new Date(),
@@ -5952,6 +5969,9 @@ export class AgentSessionsService {
             .where("id", "in", sessionIds)
             .returningAll()
             .execute();
+          // Work delivered while the running turns stopped would wait on a
+          // closed chat forever: cancel it with the closing, under the lock.
+          await cancelOpenTurns(trx);
           for (const row of rows) {
             if (row.allocation_id)
               await this.executionAllocations.release({
@@ -5960,13 +5980,8 @@ export class AgentSessionsService {
                 transaction: trx,
               });
           }
-          return { rows, previous };
+          return rows;
         });
-        const sessions = await this.db
-          .selectFrom("agent_sessions")
-          .selectAll()
-          .where("id", "in", sessionIds)
-          .execute();
         // Admission rechecks status under this session's row lock. Sweep any
         // watcher that committed before closure, after further admission is barred.
         await this.archiveResources?.stop({
@@ -5974,16 +5989,26 @@ export class AgentSessionsService {
           projectId,
           sessionIds,
         });
-        for (const row of closed.rows) {
+        for (const row of closed) {
           await this.releaseClosedResources({
             identity,
             projectId,
             session: row,
-            providerSessionId: closed.previous.find(
-              (candidate) => candidate.id === row.id,
-            )?.provider_session_id,
+            providerSessionId: row.provider_session_id,
           });
+          if (row.provider_session_id)
+            await this.db
+              .updateTable("agent_sessions")
+              .set({ provider_session_id: null })
+              .where("id", "=", row.id)
+              .where("provider_session_id", "=", row.provider_session_id)
+              .execute();
         }
+        const sessions = await this.db
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "in", sessionIds)
+          .execute();
         const root = sessions.find((row) => row.id === sessionId);
         if (!root) throw new AgentSessionNotFoundError(sessionId);
         return mapSession(root, false, this.hostId, this.authorityLeaseMs);

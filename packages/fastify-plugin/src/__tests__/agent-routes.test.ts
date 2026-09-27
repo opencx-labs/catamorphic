@@ -1,4 +1,4 @@
-import { AgentNotConfiguredError } from "@catamorphic/core";
+import { AccessDeniedError, AgentNotConfiguredError } from "@catamorphic/core";
 import { describe, expect, it, vi } from "vitest";
 import { createTestApp } from "./test-app.js";
 
@@ -306,5 +306,97 @@ describe("tool permission routes (no core → 503, validation first)", () => {
     });
     expect(badBody.statusCode).toBe(400);
     await app.close();
+  });
+});
+
+describe("tool permission routes with named approvers (ADR 0176)", () => {
+  const APPROVAL_ID = "c3d4e5f6-a7b8-4890-8def-123456789012";
+  const OPEN_ID = "d4e5f6a7-b8c9-4890-8ef0-234567890123";
+  const request = {
+    server: "connection_prod",
+    tool: "query",
+    description: "Needs approval",
+    input: {},
+  };
+  const pending = [
+    {
+      id: APPROVAL_ID,
+      sessionId: SESSION_ID,
+      request,
+      createdAt: "2026-09-27T00:00:00.000Z",
+      expiresAt: "2026-09-27T00:30:00.000Z",
+      approvers: ["alice"],
+    },
+    {
+      id: OPEN_ID,
+      sessionId: SESSION_ID,
+      request,
+      createdAt: "2026-09-27T00:00:00.000Z",
+      expiresAt: "2026-09-27T00:30:00.000Z",
+    },
+  ];
+  /** The chat is held by the test user; alice only approves. */
+  function app() {
+    const answered: string[] = [];
+    const server = createTestApp({
+      core: {
+        agentSessions: {
+          assertSession: async (identity: { externalUserId: string }) => {
+            if (identity.externalUserId !== "test-user")
+              throw new AccessDeniedError();
+          },
+        },
+        toolPermissions: {
+          list: async () => pending,
+          get: async (id: string) => pending.find((entry) => entry.id === id),
+          answer: async (id: string) => {
+            answered.push(id);
+            return true;
+          },
+        },
+      } as never,
+    });
+    return { server, answered };
+  }
+  const asAlice = {
+    "x-catamorphic-tenant-id": "test-tenant",
+    "x-external-user-id": "alice",
+  };
+  const ids = (body: { permissions: Array<{ id: string }> }) =>
+    body.permissions.map((entry) => entry.id);
+
+  it("shows an ask that names approvers to them alone", async () => {
+    const { server } = app();
+    const holder = await server.inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/permissions`,
+    });
+    expect(ids(holder.json())).toEqual([OPEN_ID]);
+    const approver = await server.inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/permissions`,
+      headers: asAlice,
+    });
+    expect(ids(approver.json())).toEqual([APPROVAL_ID]);
+    await server.close();
+  });
+
+  it("lets only the named approvers answer it", async () => {
+    const { server, answered } = app();
+    const holder = await server.inject({
+      method: "POST",
+      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/permissions/${APPROVAL_ID}`,
+      payload: { decision: "allow" },
+    });
+    expect(holder.statusCode).toBe(403);
+    const approver = await server.inject({
+      method: "POST",
+      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/permissions/${APPROVAL_ID}`,
+      payload: { decision: "allow" },
+      headers: asAlice,
+    });
+    expect(approver.statusCode).toBe(200);
+    expect(answered).toEqual([APPROVAL_ID]);
+    await server.close();
   });
 });

@@ -29,8 +29,9 @@ export interface PendingToolPermission {
   createdAt: string;
   expiresAt: string;
   /**
-   * People who may answer besides those who may change the chat: an
-   * unattended chat's approvers (ADR 0176).
+   * The people who answer this ask, an unattended chat's approvers (ADR
+   * 0176): only they see and answer it. Absent, whoever may change the
+   * chat does.
    */
   approvers?: string[];
 }
