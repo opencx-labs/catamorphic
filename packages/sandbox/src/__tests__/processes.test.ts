@@ -9,6 +9,7 @@ import {
   OutputWindow,
   type ProcessOutput,
   processReadBounds,
+  type SandboxProcessProvider,
   shellSandboxProcesses,
 } from "../processes.js";
 import { sandboxCommandLine, spawnInSandbox } from "../sandbox-stdio.js";
@@ -425,6 +426,39 @@ describe("stdio processes in a sandbox (ADR 0180)", () => {
       fs.readFileSync(path.join(root, "logs", "child.stderr"), "utf8"),
     ).toBe("oops\noops\n");
   }, 30_000);
+
+  it("stops a stdio process whose output can no longer be read", async () => {
+    const signals: string[] = [];
+    const failing: SandboxProcessProvider = {
+      ...processes,
+      readProcessOutput: async () => {
+        throw new Error("The worker's queue timed out");
+      },
+      signalProcess: async (args) => {
+        signals.push(args.signal);
+        return processes.signalProcess(args);
+      },
+    };
+    const child = spawnInSandbox({
+      processes: failing,
+      sandboxId,
+      command: "sleep",
+      args: ["30"],
+      cwd: root,
+      stderrPath: path.join(root, "logs", "sleep.stderr"),
+    });
+    child.on("error", () => {});
+    const code = await new Promise((resolve) => child.once("exit", resolve));
+    expect(code).toBe(1);
+    expect(signals).toEqual(["SIGKILL"]);
+    await expect
+      .poll(async () =>
+        (await processes.listProcesses({ sandboxId }))
+          .filter((item) => item.command.includes("sleep 30"))
+          .every((item) => item.status === "exited"),
+      )
+      .toBe(true);
+  }, 20_000);
 
   it("resolves path variables from the working directory, inside the sandbox", () => {
     expect(
