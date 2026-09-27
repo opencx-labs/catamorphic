@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { defineHttpApiConnectionProvider } from "./http-connection-provider.js";
+import { z } from "zod";
+import {
+  defineHttpApiConnectionProvider,
+  type HttpApiConnectionOptions,
+} from "./http-connection-provider.js";
 
 const KEY = new TextEncoder().encode("sk-live-secret");
+const CONNECTION = { id: "connection", revision: 1 };
 
 function provider(overrides: { paths?: string[] } = {}) {
   const requests: Array<{ url: string; init: RequestInit }> = [];
@@ -25,6 +30,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
       tenantId: "t",
       projectId: "p",
       externalUserId: "u",
+      principal: "service",
       redirectUri: "https://work.test/cb",
       state: "s",
     });
@@ -38,6 +44,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
       tenantId: "t",
       projectId: "p",
       externalUserId: "u",
+      principal: "service",
       callback: { apiKey: "  sk-live-secret " },
     });
     expect(new TextDecoder().decode(result?.material)).toBe("sk-live-secret");
@@ -61,6 +68,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
         body: { amount: 10 },
       },
       capabilities: ["post"],
+      connection: CONNECTION,
     });
     expect(requests[0]?.url).toBe(
       "https://api.billing.test/v1/invoices?expand=lines",
@@ -80,6 +88,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
         action: "get",
         input: JSON.parse(JSON.stringify(input)),
         capabilities: ["get"],
+        connection: CONNECTION,
       });
     await expect(call({ path: "/customers" })).rejects.toThrow("allowed paths");
     await expect(call({ path: "/invoices/../admin" })).rejects.toThrow("..");
@@ -97,6 +106,232 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
     await expect(call({ path: "/invoices/42" })).resolves.toMatchObject({
       status: 200,
     });
+  });
+
+  it("reads a body larger than one call in ranges, on whole characters", async () => {
+    // 5 MiB of diff text with multi-byte characters straddling part ends.
+    const line = "+ const café = 'ünïcødé';\n";
+    const diff = line.repeat(
+      Math.ceil((5 * 1024 * 1024) / new TextEncoder().encode(line).length),
+    );
+    const total = new TextEncoder().encode(diff).byteLength;
+    const fetched: string[] = [];
+    const api = defineHttpApiConnectionProvider({
+      kind: "github",
+      displayName: "GitHub",
+      baseUrl: "https://api.github.test",
+      maxResponseBytes: 1024 * 1024,
+      fetch: async (url) => {
+        fetched.push(url);
+        return new Response(diff, {
+          headers: { "content-type": "text/x-diff" },
+        });
+      },
+    });
+    const get = async (range?: { offset: number; length?: number }) =>
+      z
+        .object({
+          status: z.number(),
+          body: z.string(),
+          truncated: z.literal(true).optional(),
+          range: z
+            .object({
+              offset: z.number(),
+              length: z.number(),
+              nextOffset: z.number().optional(),
+              totalBytes: z.number().optional(),
+            })
+            .optional(),
+        })
+        .parse(
+          await api.invoke({
+            material: KEY,
+            action: "get",
+            input: {
+              path: "/repos/acme/app/pulls/7",
+              ...(range ? { range } : {}),
+            },
+            capabilities: ["get"],
+            connection: CONNECTION,
+          }),
+        );
+    const parts: string[] = [];
+    let next: number | undefined = 0;
+    let first = true;
+    while (next !== undefined) {
+      const part = await get(first ? undefined : { offset: next });
+      first = false;
+      expect(part.range?.totalBytes).toBe(total);
+      expect(part.range?.length).toBeLessThanOrEqual(1024 * 1024);
+      expect(part.body).not.toContain("�");
+      parts.push(part.body);
+      next = part.range?.nextOffset;
+      if (next !== undefined) expect(part.truncated).toBe(true);
+    }
+    expect(parts.length).toBeGreaterThanOrEqual(5);
+    expect(parts.join("")).toBe(diff);
+    // A short explicit range, and a range past the end.
+    const small = await get({ offset: 0, length: 10 });
+    expect(small.body).toBe(diff.slice(0, 10));
+    const past = await get({ offset: total + 5 });
+    expect(past).toMatchObject({
+      body: "",
+      range: { length: 0, totalBytes: total },
+    });
+    // A small body still comes back whole and parsed.
+    const { api: small2 } = provider();
+    await expect(
+      small2.invoke({
+        material: KEY,
+        action: "get",
+        input: { path: "/invoices" },
+        capabilities: ["get"],
+        connection: CONNECTION,
+      }),
+    ).resolves.not.toHaveProperty("range");
+    await expect(
+      small2.invoke({
+        material: KEY,
+        action: "post",
+        input: { path: "/invoices", range: { offset: 0 } },
+        capabilities: ["post"],
+        connection: CONNECTION,
+      }),
+    ).rejects.toThrow("Only GET");
+  });
+
+  it("named actions make each operation its own capability (ADR 0179)", async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const slack = defineHttpApiConnectionProvider({
+      kind: "slack",
+      displayName: "Slack",
+      baseUrl: "https://slack.test/api",
+      actions: [
+        {
+          name: "conversations.replies",
+          method: "get",
+          path: "/conversations.replies",
+          description: "Read a thread",
+        },
+        { name: "chat.postMessage", method: "post", path: "/chat.postMessage" },
+      ],
+      fetch: async (url, init) => {
+        requests.push({ url, init });
+        return Response.json({ ok: true });
+      },
+    });
+    const authorized = await slack.completeAuthorization?.({
+      tenantId: "t",
+      externalUserId: "u",
+      principal: "service",
+      callback: { apiKey: "xoxb-bot" },
+    });
+    expect(authorized?.capabilities).toEqual([
+      "conversations.replies",
+      "chat.postMessage",
+    ]);
+    const listed = await slack.listActions?.({
+      material: KEY,
+      capabilities: ["chat.postMessage"],
+    });
+    expect(listed?.map((action) => action.name)).toEqual(["chat.postMessage"]);
+    expect(listed?.[0]?.inputSchema).toMatchObject({
+      properties: { body: {} },
+      additionalProperties: false,
+    });
+    expect(listed?.[0]?.inputSchema).not.toHaveProperty("properties.path");
+    expect(listed?.[0]?.annotations).toEqual({ readOnlyHint: false });
+
+    const call = (action: string, input: Record<string, unknown>) =>
+      slack.invoke({
+        material: new TextEncoder().encode("xoxb-bot"),
+        action,
+        input: JSON.parse(JSON.stringify(input)),
+        capabilities: ["conversations.replies", "chat.postMessage"],
+        connection: CONNECTION,
+      });
+    await call("chat.postMessage", {
+      body: { channel: "C1", thread_ts: "1.2", text: "Done" },
+    });
+    await call("conversations.replies", {
+      query: { channel: "C1", ts: "1.2" },
+    });
+    expect(requests.map(({ url, init }) => [init.method, url])).toEqual([
+      ["POST", "https://slack.test/api/chat.postMessage"],
+      ["GET", "https://slack.test/api/conversations.replies?channel=C1&ts=1.2"],
+    ]);
+    const headers = new Headers(requests[0]?.init.headers);
+    expect(headers.get("authorization")).toBe("Bearer xoxb-bot");
+    expect(headers.get("content-type")).toBe("application/json; charset=utf-8");
+    expect(requests[0]?.init.body).toBe(
+      JSON.stringify({ channel: "C1", thread_ts: "1.2", text: "Done" }),
+    );
+
+    // The path is the action's; generic methods are not offered.
+    await expect(
+      call("chat.postMessage", { path: "/admin.users.remove", body: {} }),
+    ).rejects.toThrow("path is fixed");
+    await expect(call("post", { path: "/chat.postMessage" })).rejects.toThrow(
+      "Unknown action",
+    );
+    expect(requests).toHaveLength(2);
+  });
+
+  it("counts a named action as read-only by its declared method (ADR 0176)", () => {
+    const slack = defineHttpApiConnectionProvider({
+      kind: "slack",
+      displayName: "Slack",
+      baseUrl: "https://slack.test/api",
+      actions: [
+        {
+          name: "conversations.history",
+          method: "get",
+          path: "/conversations.history",
+        },
+        // Named like a read, but it writes.
+        { name: "get", method: "post", path: "/chat.postMessage" },
+      ],
+    });
+    expect(slack.readOnly?.("conversations.history")).toBe(true);
+    expect(slack.readOnly?.("get")).toBe(false);
+    expect(slack.readOnly?.("unknown")).toBe(false);
+    const generic = provider().api;
+    expect(generic.readOnly?.("get")).toBe(true);
+    expect(generic.readOnly?.("post")).toBe(false);
+  });
+
+  it("refuses malformed named actions", () => {
+    const define = (overrides: Partial<HttpApiConnectionOptions>) => () =>
+      defineHttpApiConnectionProvider({
+        kind: "slack",
+        displayName: "Slack",
+        baseUrl: "https://slack.test/api",
+        ...overrides,
+      });
+    const post = { name: "chat.postMessage", method: "post" as const };
+    expect(
+      define({
+        paths: ["/chat.postMessage"],
+        actions: [{ ...post, path: "/chat.postMessage" }],
+      }),
+    ).toThrow("either actions or paths");
+    expect(
+      define({
+        actions: [
+          { ...post, path: "/chat.postMessage" },
+          { ...post, path: "/chat.update" },
+        ],
+      }),
+    ).toThrow("duplicate");
+    expect(define({ actions: [{ ...post, path: "/a/../b" }] })).toThrow(
+      "plain path",
+    );
+    expect(define({ actions: [{ ...post, path: "/a?b=c" }] })).toThrow(
+      "plain path",
+    );
+    expect(
+      define({ actions: [{ ...post, name: "has space", path: "/a" }] }),
+    ).toThrow("invalid action name");
   });
 
   it("requires HTTPS for remote APIs", () => {

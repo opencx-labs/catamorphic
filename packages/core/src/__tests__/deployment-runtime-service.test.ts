@@ -100,8 +100,8 @@ describe("DeploymentRuntimeService lifecycle", () => {
             lastUsedAt: old.toISOString(),
           },
           files: {
-            ".catamorphic/package.json": "{}",
-            ".catamorphic/bun.lock": "locked",
+            ".work/package.json": "{}",
+            ".work/bun.lock": "locked",
           },
         }),
       ).rejects.toThrow(
@@ -125,7 +125,7 @@ describe("DeploymentRuntimeService lifecycle", () => {
               readyAt: old.toISOString(),
               lastUsedAt: old.toISOString(),
             },
-            files: { ".catamorphic/package.json": "{}" },
+            files: { ".work/package.json": "{}" },
           }),
         ).rejects.toBeInstanceOf(DeploymentPreparationError);
       }

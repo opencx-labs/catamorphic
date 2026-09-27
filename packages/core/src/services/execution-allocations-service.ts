@@ -2,12 +2,17 @@ import type { DB } from "@catamorphic/db";
 import type {
   EnvironmentBinding,
   EnvironmentRequirements,
+  SandboxEgress,
+  SandboxImage,
   WorkloadKind,
 } from "@catamorphic/sandbox";
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
-import type { ResolvedConnectionBinding } from "./connection-types.js";
+import {
+  CONNECTION_ALIAS_PATTERN,
+  type ResolvedConnectionBinding,
+} from "./connection-types.js";
 import { requireTenantProject } from "./projects-service.js";
 import { toJson } from "./run-coordinator.js";
 import {
@@ -51,23 +56,70 @@ const AllocationPolicySchema = z.object({
   connections: z
     .array(
       z.object({
-        bindingId: z.string().uuid(),
         connectionId: z.string().uuid(),
-        alias: z.string(),
+        // Names files, Git config sections and helper arguments in sandboxes.
+        alias: z.string().regex(CONNECTION_ALIAS_PATTERN),
         providerKind: z.string(),
         principalKind: z.enum(["member", "project_service", "tenant_service"]),
         capabilities: z.array(z.string()),
+        git: z
+          .object({
+            repositories: z.array(z.string()).optional(),
+            push: z.array(z.string()).optional(),
+          })
+          .optional(),
+        model: z
+          .object({
+            allow: z.array(z.string()).optional(),
+          })
+          .optional(),
       }),
     )
     .optional(),
   workflowEnablementId: z.string().uuid().optional(),
+  sandbox: z
+    .object({
+      image: z
+        .discriminatedUnion("kind", [
+          z.object({ kind: z.literal("oci"), reference: z.string() }),
+          z.object({
+            kind: z.literal("dockerfile"),
+            path: z.string(),
+            content: z.string(),
+            digest: z.string(),
+          }),
+        ])
+        .optional(),
+      containers: z.boolean().optional(),
+      egress: z
+        .discriminatedUnion("mode", [
+          z.object({ mode: z.literal("open") }),
+          z.object({
+            mode: z.literal("allowlist"),
+            allow: z.array(z.string()),
+          }),
+        ])
+        .optional(),
+    })
+    .optional(),
+  approvals: z.object({ waitMinutes: z.number() }).optional(),
 });
+
+/** What an Allocation's sandbox is given (ADR 0176), fixed at admission. */
+export interface EnvironmentSandbox {
+  image?: SandboxImage;
+  containers?: boolean;
+  egress?: SandboxEgress;
+}
 
 export interface EnvironmentAllocationPolicy {
   binding: EnvironmentBinding;
   requirements: EnvironmentRequirements;
   connections?: readonly ResolvedConnectionBinding[];
   workflowEnablementId?: string;
+  sandbox?: EnvironmentSandbox;
+  /** How long unattended escalations wait for a person (ADR 0176). */
+  approvals?: { waitMinutes: number };
 }
 
 export interface ExecutionAllocation {
@@ -80,9 +132,17 @@ export interface ExecutionAllocation {
   workerNodeId: string | null;
   policy: EnvironmentAllocationPolicy;
   status: "active" | "released";
+  /** `idle`: a chat gave its workspace back while waiting (ADR 0173). */
+  releaseReason: AllocationReleaseReason | null;
   createdAt: string;
   releasedAt: string | null;
 }
+
+/**
+ * Why an Allocation ended. Only `idle` invites a fresh admission on the
+ * workload's next turn; every other end is final for that Allocation.
+ */
+export type AllocationReleaseReason = "idle" | "retired";
 
 export class ExecutionAllocationConflictError extends Error {
   constructor(readonly rootWorkloadId: string) {
@@ -208,11 +268,16 @@ export class ExecutionAllocationsService {
   async release(args: {
     identity: Identity;
     allocationId: string;
+    reason?: AllocationReleaseReason;
     transaction?: Transaction<DB>;
   }): Promise<ExecutionAllocation | undefined> {
     const row = await (args.transaction ?? this.db)
       .updateTable("execution_allocations")
-      .set({ status: "released", released_at: new Date() })
+      .set({
+        status: "released",
+        released_at: new Date(),
+        release_reason: args.reason ?? "retired",
+      })
       .where("tenant_id", "=", args.identity.tenantId)
       .where("id", "=", args.allocationId)
       .where("status", "=", "active")
@@ -236,6 +301,10 @@ function mapAllocation(
     workerNodeId: row.worker_node_id,
     policy,
     status: row.status as "active" | "released",
+    releaseReason:
+      row.release_reason === "idle" || row.release_reason === "retired"
+        ? row.release_reason
+        : null,
     createdAt: row.created_at.toISOString(),
     releasedAt: row.released_at?.toISOString() ?? null,
   };

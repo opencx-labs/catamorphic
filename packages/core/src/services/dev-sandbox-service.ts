@@ -3,16 +3,25 @@ import type {
   ProjectManager,
   ProjectRepo,
 } from "@catamorphic/git";
-import { WORKFLOW_SOURCE_ROOT } from "@catamorphic/parser";
 import type { SandboxProvider, SandboxResources } from "@catamorphic/sandbox";
 import {
   resolveWorkflowPackageFallback,
   SandboxManagerImpl,
   uploadPluginPayloads,
 } from "@catamorphic/sandbox";
+import {
+  PROJECT_LOCKFILE_PATHS,
+  PROJECT_WORKFLOWS_PACKAGE_PATH,
+  PROJECT_WORKSPACE_ROOT,
+  publishedRef,
+} from "@catamorphic/workflow/project-layout";
 import type { Identity } from "../identity.js";
 import type { DbSandboxStore } from "./db-sandbox-store.js";
-import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
+import {
+  SandboxSyncError,
+  type SyncedFileChange,
+  syncSandboxChanges,
+} from "./sandbox-sync.js";
 
 export interface PreparedDevSandbox {
   id: string;
@@ -90,7 +99,7 @@ export class DevSandboxService {
       }
       const workflowPackage = await resolveWorkflowPackageFallback({
         hasLockfile: await Promise.all(
-          [".catamorphic/bun.lock", ".catamorphic/bun.lockb"].map((file) =>
+          PROJECT_LOCKFILE_PATHS.map((file) =>
             repo.readFile(file).then(
               () => true,
               () => false,
@@ -98,13 +107,13 @@ export class DevSandboxService {
           ),
         ).then((present) => present.some(Boolean)),
         packageJson: await repo
-          .readFile(`${WORKFLOW_SOURCE_ROOT}/package.json`)
+          .readFile(PROJECT_WORKFLOWS_PACKAGE_PATH)
           .catch(() => undefined),
       });
       await uploadPluginPayloads({
         provider: this.deps.provider,
         sandboxId: handle.providerId,
-        projectDir: `${this.projectDirectory}/.catamorphic`,
+        projectDir: `${this.projectDirectory}/${PROJECT_WORKSPACE_ROOT}`,
         plugins: workflowPackage ? [workflowPackage] : undefined,
       });
       return {
@@ -144,6 +153,8 @@ export class DevSandboxService {
     if (status === "stopped" || status === "archived") {
       await this.deps.provider.startSandbox(existing.providerId);
     }
+    // A build goes on with the dev tree as it is; the turn's own sync
+    // reports the failure on its reply.
     return syncSandboxChanges({
       provider: this.deps.provider,
       projectManager: this.deps.projectManager,
@@ -151,6 +162,10 @@ export class DevSandboxService {
       projectId: opts.projectId,
       sandboxProviderId: existing.providerId,
       projectDir: this.projectDirectory,
+    }).catch((error: unknown) => {
+      if (!(error instanceof SandboxSyncError)) throw error;
+      console.warn(`[catamorphic] ${error.message}`);
+      return [];
     });
   }
 
@@ -165,7 +180,7 @@ export class DevSandboxService {
     if (!status || status.dirty) return undefined;
     const head = await opts.repo.resolveRef("HEAD").catch(() => null);
     const remoteSha = await opts.repo
-      .resolveRef("refs/catamorphic/published/main")
+      .resolveRef(publishedRef())
       .catch(() => null);
     if (!head || head !== remoteSha) return undefined;
     return remoteBackend.getCloneSource(

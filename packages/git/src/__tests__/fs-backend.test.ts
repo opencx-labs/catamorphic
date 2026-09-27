@@ -98,6 +98,32 @@ describe("FsBackend", () => {
     expect(await backend.exists(TENANT, PROJECT)).toBe(false);
   });
 
+  it("keeps a copy for the project principal and refuses traversal", async () => {
+    const copy = await backend.initProject(TENANT, PROJECT, {
+      externalUserId: "catamorphic:project",
+    });
+    expect(path.basename(copy)).toBe("catamorphic%3Aproject");
+    expect(await backend.exists(TENANT, PROJECT, "catamorphic:project")).toBe(
+      true,
+    );
+    const plain = await backend.initProject(TENANT, PROJECT, {
+      externalUserId: "user-1.dev",
+    });
+    expect(path.basename(plain)).toBe("user-1.dev");
+    for (const unsafe of ["..", ".", "a'b"]) {
+      await expect(
+        backend.initProject(TENANT, PROJECT, { externalUserId: unsafe }),
+      ).rejects.toThrow("Invalid externalUserId");
+    }
+    expect(
+      path.basename(
+        await backend.initProject(TENANT, PROJECT, {
+          externalUserId: "../escape",
+        }),
+      ),
+    ).toBe("..%2Fescape");
+  });
+
   it("rejects invalid UUIDs", async () => {
     await expect(backend.initProject("not-a-uuid", PROJECT)).rejects.toThrow(
       "Invalid UUID",

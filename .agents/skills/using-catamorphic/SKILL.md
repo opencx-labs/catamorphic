@@ -145,7 +145,7 @@ const scoped = catamorphic
   shown on `GET /me` but grant no framework authority.
 
 Which user gets what is host policy; Catamorphic enforces the result. To avoid
-hand-writing scopes, commit roles as `.catamorphic/roles/<slug>.json` and
+hand-writing scopes, commit roles as `.work/roles/<slug>.json` and
 expand them with `resolveRoles(core, { tenantId, projectId, externalUserId, roles, grants })`
 (from `@catamorphic/core`), or keep memberships in the stock table and call
 `catamorphic.core.memberships.identityFor({ tenantId, projectId, externalUserId })`.
@@ -163,7 +163,7 @@ Every public method takes one keyed object. The scoped client exposes
 const project = await scoped.projects.create({ name: "onboarding" });
 await scoped.files.write({
   projectId: project.id,
-  path: ".catamorphic/workflows/src/welcome-user.ts", // workflow sources live here (ADR 0142)
+  path: ".work/workflows/src/welcome-user.ts", // workflow sources live here (ADR 0142)
   content: source,
   commitMessage: "Add welcome workflow",
 });

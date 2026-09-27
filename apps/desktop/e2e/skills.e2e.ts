@@ -119,12 +119,7 @@ describe("skills as commands", () => {
       ["team-notes", "How this team writes notes."],
       ["checklist", "The release checklist."],
     ]) {
-      const dir = path.join(
-        projectRoot,
-        ".catamorphic",
-        "skills",
-        String(name),
-      );
+      const dir = path.join(projectRoot, ".work", "skills", String(name));
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(
         path.join(dir, "SKILL.md"),
@@ -353,7 +348,7 @@ describe("skills as commands", () => {
   });
 
   it("requires project-agent consent and refreshes a changed definition before discovery", async () => {
-    const dir = path.join(projectRoot, ".catamorphic", "agents");
+    const dir = path.join(projectRoot, ".work", "agents");
     fs.mkdirSync(dir, { recursive: true });
     const definition = {
       version: 1,

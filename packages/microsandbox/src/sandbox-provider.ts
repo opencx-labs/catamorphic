@@ -4,22 +4,38 @@ import type {
   ExecOpts,
   ExecResult,
   GitCloneOpts,
+  SandboxCapability,
   SandboxHandle,
+  SandboxProcessProvider,
   SandboxProvider,
   SandboxStatus,
 } from "@catamorphic/sandbox";
-import { assertSandboxResources } from "@catamorphic/sandbox";
+import {
+  assertSandboxResources,
+  dockerfileImageReference,
+  SANDBOX_CAPABILITIES,
+  shellSandboxProcesses,
+} from "@catamorphic/sandbox";
+import {
+  APP_DATA_ENV,
+  APP_DATA_MOUNT,
+} from "@catamorphic/workflow/project-layout";
 import {
   type SandboxStatus as MsbSandboxStatus,
-  NetworkPolicy,
   type NetworkProfile,
   Sandbox,
 } from "microsandbox";
+import { microsandboxEgressPolicy } from "./egress-policy.js";
+import { cachedImageBuilder, type ImageBuilder } from "./image-builder.js";
 import { msbStdioRuntimeProvider } from "./stdio-runtime-provider.js";
 
 const DEFAULT_IMAGE = "oven/bun";
 const DEFAULT_MEMORY_MIB = 1024;
 const DEFAULT_CPUS = 1;
+const DEFAULT_CONTAINER_DISK_MIB = 8192;
+/** Marks a VM whose Docker daemon should run whenever it boots. */
+const CONTAINERS_MARKER = "/etc/work-containers";
+const DOCKER_DATA = "/var/lib/docker";
 
 function mapMsbStatus(status: MsbSandboxStatus): SandboxStatus {
   switch (status) {
@@ -59,29 +75,69 @@ export interface MicrosandboxProviderConfig {
   networkProfiles?: readonly NetworkProfile[];
   /**
    * Shell command run once inside every new sandbox before it is handed to
-   * the caller. Defaults to installing git when the image lacks it — core's
-   * agent sessions require git for change detection, and common runtime
-   * images (oven/bun) don't ship it. Pass an empty string to disable.
+   * the caller. Defaults to installing git and bash when the image lacks
+   * them — core's agent sessions require git for change detection, and
+   * common runtime images (oven/bun, docker:dind) don't ship both. Pass an
+   * empty string to disable.
    */
   setupCommand?: string;
+  /**
+   * Builds project Dockerfiles on this machine (ADR 0176), for example
+   * `dockerImageBuilder()`. Without one the provider boots registry images
+   * only and does not advertise `images.build`.
+   */
+  imageBuilder?: ImageBuilder;
+  /**
+   * Nested containers (ADR 0176): a sandbox that asks for them gets a
+   * private disk for the image's Docker daemon, which runs inside the VM
+   * and dies with it. Default on.
+   */
+  containers?: boolean;
+  /** Size of each container sandbox's Docker disk. Default 8 GiB. */
+  containerDiskMib?: number;
 }
 
-/** Runs once per new sandbox; ~20s on first use, no-op when git exists. */
+/** Runs once per new sandbox; ~20s on first use, no-op when both exist. */
 const DEFAULT_SETUP_COMMAND =
-  "command -v git >/dev/null 2>&1 || " +
-  "(apt-get update -qq && apt-get install -y -qq git)";
+  "{ command -v git && command -v bash; } >/dev/null 2>&1 || " +
+  "if command -v apt-get >/dev/null 2>&1; then " +
+  "apt-get update -qq && apt-get install -y -qq git bash; " +
+  "elif command -v apk >/dev/null 2>&1; then apk add --no-cache -q git bash; " +
+  "else echo 'The image has neither git nor a known package manager' >&2; exit 1; fi";
+
+/** Start the image's Docker daemon unless it already answers. */
+const ENSURE_DOCKER = [
+  "docker info >/dev/null 2>&1 && exit 0",
+  "command -v dockerd >/dev/null 2>&1 || { echo 'This image has no Docker daemon: use an image with Docker (docker:dind, or a Dockerfile FROM it)' >&2; exit 1; }",
+  "(dockerd >/var/log/dockerd.log 2>&1 &)",
+  "i=0; while [ $i -lt 120 ]; do docker info >/dev/null 2>&1 && exit 0; i=$((i+1)); sleep 0.5; done",
+  "tail -20 /var/log/dockerd.log >&2; exit 1",
+].join("\n");
 
 export class MicrosandboxSandboxProvider implements SandboxProvider {
   readonly isolation = "sandbox";
   readonly workspaceRoot = "/workspace";
   readonly resourceLimits = ["cpuMillis", "memoryMb"] as const;
+  readonly capabilities: readonly SandboxCapability[];
   readonly deploymentRuntime: DeploymentRuntimeProvider;
+  /**
+   * Background processes (ADR 0174) run inside the VM in their own session;
+   * their output and state live in the VM, so they end when it does.
+   */
+  readonly processes: SandboxProcessProvider = shellSandboxProcesses({
+    executeCommand: (sandboxId, command, opts) =>
+      this.executeCommand(sandboxId, command, opts),
+    workspaceRoot: this.workspaceRoot,
+  });
   private readonly config: Required<
-    Omit<MicrosandboxProviderConfig, "projectDataDirectory" | "networkProfiles">
+    Omit<
+      MicrosandboxProviderConfig,
+      "projectDataDirectory" | "networkProfiles" | "imageBuilder"
+    >
   > &
     Pick<
       MicrosandboxProviderConfig,
-      "projectDataDirectory" | "networkProfiles"
+      "projectDataDirectory" | "networkProfiles" | "imageBuilder"
     >;
   private readonly connections = new Map<string, Sandbox>();
 
@@ -95,7 +151,18 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       namePrefix: config?.namePrefix ?? "cata",
       networkProfiles: config?.networkProfiles,
       setupCommand: config?.setupCommand ?? DEFAULT_SETUP_COMMAND,
+      imageBuilder: config?.imageBuilder
+        ? cachedImageBuilder(config.imageBuilder)
+        : undefined,
+      containers: config?.containers ?? true,
+      containerDiskMib: config?.containerDiskMib ?? DEFAULT_CONTAINER_DISK_MIB,
     };
+    this.capabilities = [
+      SANDBOX_CAPABILITIES.images,
+      SANDBOX_CAPABILITIES.egressPolicy,
+      ...(this.config.containers ? [SANDBOX_CAPABILITIES.containers] : []),
+      ...(this.config.imageBuilder ? [SANDBOX_CAPABILITIES.imageBuild] : []),
+    ];
     this.deploymentRuntime = msbStdioRuntimeProvider({
       connect: (sandboxId) => this.connect(sandboxId),
       uploadFiles: (sandboxId, files, basePath) =>
@@ -110,9 +177,12 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       throw new Error(
         "Microsandbox CPU limits must be whole cores (multiples of 1000 millicores)",
       );
+    if (opts.containers && !this.config.containers)
+      throw new Error("This machine does not run containers in sandboxes");
+    const image = await this.imageFor(opts);
     const name = `${this.config.namePrefix}-${crypto.randomUUID().slice(0, 12)}`;
     let builder = Sandbox.builder(name)
-      .image(opts.snapshotName ?? this.config.image)
+      .image(image)
       .memory(opts.resources?.memoryMb ?? this.config.memoryMib)
       .cpus(cpuMillis / 1000)
       .idleTimeout(
@@ -126,10 +196,16 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       .detached(true);
     if (opts.envVars) builder = builder.envs(opts.envVars);
     if (opts.labels) builder = builder.labels(opts.labels);
-    const profiles = this.config.networkProfiles;
-    if (profiles && profiles.length > 0) {
-      builder = builder.network((network) =>
-        network.policy(NetworkPolicy.fromProfiles(profiles)),
+    const policy = microsandboxEgressPolicy({
+      egress: opts.egress,
+      profiles: this.config.networkProfiles,
+    });
+    if (policy) builder = builder.network((network) => network.policy(policy));
+    if (opts.containers) {
+      // Docker's overlay storage cannot sit on the VM's overlay root; a
+      // disk owned by this sandbox can, and is removed with it.
+      builder = builder.volume(DOCKER_DATA, (mount) =>
+        mount.owned({ kind: "disk", sizeMib: this.config.containerDiskMib }),
       );
     }
     const dataDirectory =
@@ -140,20 +216,30 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
         : undefined;
     if (dataDirectory) {
       builder = builder
-        .volume("/catamorphic-app-data", (mount) => mount.bind(dataDirectory))
-        .env("CATAMORPHIC_APP_DATA_DIR", "/catamorphic-app-data");
+        .volume(APP_DATA_MOUNT, (mount) => mount.bind(dataDirectory))
+        .env(APP_DATA_ENV, APP_DATA_MOUNT);
     }
     const sandbox = await builder.create();
     this.connections.set(name, sandbox);
-    if (this.config.setupCommand) {
-      const setup = await this.executeCommand(name, this.config.setupCommand, {
-        timeout: 300,
-      });
-      if (setup.exitCode !== 0) {
+    const prepare = async (command: string, what: string) => {
+      const result = await shellIn(sandbox, command, 300);
+      if (result.exitCode !== 0) {
         await this.destroySandbox(name).catch(() => {});
-        throw new Error(`Sandbox setup command failed: ${setup.result}`);
+        throw new Error(`${what} failed: ${result.result}`);
       }
-    }
+    };
+    if (this.config.setupCommand)
+      await prepare(
+        this.config.setupCommand,
+        opts.egress?.mode === "allowlist"
+          ? "Sandbox setup command (egress is restricted, so the image must already have git and bash)"
+          : "Sandbox setup command",
+      );
+    if (opts.containers)
+      await prepare(
+        `touch ${CONTAINERS_MARKER}\n${ENSURE_DOCKER}`,
+        "Starting the sandbox's container runtime",
+      );
     return {
       id: name,
       providerId: name,
@@ -165,7 +251,24 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
   async startSandbox(sandboxId: string): Promise<void> {
     const handle = await Sandbox.get(sandboxId);
     if (handle.status === "running") return;
-    this.connections.set(sandboxId, await bringUp(handle));
+    this.connections.set(sandboxId, await booted(await bringUp(handle)));
+  }
+
+  /** The image reference to boot, building a Dockerfile image when needed. */
+  private async imageFor(opts: CreateSandboxOpts): Promise<string> {
+    const image = opts.image;
+    if (!image) return opts.snapshotName ?? this.config.image;
+    if (image.kind === "oci") return image.reference;
+    if (!this.config.imageBuilder)
+      throw new Error(
+        `This machine cannot build ${image.path}; place the Environment on a machine that builds images`,
+      );
+    const reference = dockerfileImageReference(image.digest);
+    await this.config.imageBuilder.build({
+      reference,
+      dockerfile: image.content,
+    });
+    return reference;
   }
 
   async stopSandbox(sandboxId: string): Promise<void> {
@@ -190,7 +293,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
       return;
     }
-    if (handle.status === "running") await handle.killWithTimeout(0);
+    if (handle.status === "running") await handle.kill();
     await handle.remove();
     await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
   }
@@ -298,7 +401,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     const sandbox =
       handle.status === "running"
         ? await handle.connect()
-        : await bringUp(handle);
+        : await booted(await bringUp(handle));
     this.connections.set(sandboxId, sandbox);
     return sandbox;
   }
@@ -316,6 +419,38 @@ async function bringUp(
     return handle.connect();
   }
   return handle.startDetached();
+}
+
+/** Run a POSIX shell command: images without bash still prepare. */
+async function shellIn(
+  sandbox: Sandbox,
+  command: string,
+  timeoutSeconds: number,
+): Promise<ExecResult> {
+  const output = await sandbox.execWith("sh", (exec) =>
+    exec.args(["-c", command]).timeout(timeoutSeconds * 1_000),
+  );
+  const stdout = output.stdout();
+  const stderr = output.stderr();
+  return {
+    exitCode: output.code,
+    result:
+      stderr.length > 0 ? `${stdout}${stdout ? "\n" : ""}${stderr}` : stdout,
+  };
+}
+
+/** Restart a container sandbox's Docker daemon after its VM boots again. */
+async function booted(sandbox: Sandbox): Promise<Sandbox> {
+  const result = await shellIn(
+    sandbox,
+    `[ -f ${CONTAINERS_MARKER} ] || exit 0\n${ENSURE_DOCKER}`,
+    120,
+  );
+  if (result.exitCode !== 0)
+    throw new Error(
+      `The sandbox's container runtime did not start: ${result.result}`,
+    );
+  return sandbox;
 }
 
 function withCredentials(url: string, opts?: GitCloneOpts): string {

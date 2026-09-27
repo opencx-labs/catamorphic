@@ -27,7 +27,8 @@ brain become replicas. Never add a replica just for capacity.
    lowercase letters, digits, and dashes. The code expires in 30 minutes.
    Add placement in the same request (see [placement](#placement-labels-and-access)):
    `labels` (`{ "class": "gpu" }`), `access` (`{ "everyone": true }`, the
-   default, or `{ "people": ["dana@example.com"], "groups": ["eng@example.com"] }`),
+   default, or `{ "people": ["dana@example.com"], "groups": ["eng@example.com"] }`,
+   or `{ "projects": ["<project id>"] }` for one project's own work),
    and `trusted`.
 2. On the worker machine, run the same image version with the worker command
    and its own empty data volume:
@@ -49,7 +50,7 @@ brain become replicas. Never add a replica just for capacity.
    `available: true`, and `GET /_work/operator/workers` for its last contact.
 4. Nothing in projects changes: the `default` Environment already runs agents
    on any machine open to their owner. To reserve machines for some work, give
-   them a label and select it in `.catamorphic/project.json`
+   them a label and select it in `.work/project.json`
    (`{ "pool": { "class": "gpu" }, "workloads": ["agent"] }`); `node` and
    `plane` (`control` or `worker`) are always set.
 5. Verify as a member: `project_overview` shows the Environment runs agents,
@@ -79,23 +80,46 @@ when an Environment should select it.
 
 Every machine carries labels: the server's own `node` and `plane`, plus the
 operator's. An Environment's `pool` selects machines whose labels all match.
-Each worker also has **access**, which only the operator sets: everyone, or
-named people and directory groups by email. The server places a piece of
-work for its owner (the session's member; project chats and workflow runs
-have none and use machines open to everyone):
+Each worker also has **access**, which only the operator sets: everyone,
+named people and directory groups by email, or named projects. The server
+places a piece of work for its owner (the session's member). Project chats
+and automation runs have no owner: they use machines opened to their project
+(`"projects": ["<project id>"]`) and machines open to everyone, never a
+person's machine. A machine opened only to projects takes no member's chat.
 
-1. the owner's own machine (access naming only them),
-2. then a machine shared with named people or their groups,
+1. the owner's own machine (access naming only them), or for a project's own
+   work a machine opened to that project alone,
+2. then a machine shared with named people, their groups, or several projects,
 3. then machines open to everyone.
+
+A dedicated review pool for one project is a labelled worker opened to that
+project: `{ "labels": { "pool": "review" }, "access": { "projects": ["<id>"] },
+"trusted": true }`. The project selects it with an Environment
+(`"review": { "pool": { "pool": "review" }, "workloads": ["agent"] }`) and its
+reviewing agent prefers it (`"environment": { "preferred": ["review"],
+"allowed": ["review"] }`). A workflow on the control plane that delivers to
+that agent's chat places the chat on the review pool: each workload is placed by
+its own Environment, so control-plane machines need no `review` label.
 
 When the narrowest tier is full, work falls back to the next unless the
 Environment sets `"strict": true`. A worker serving more than one person must
 run `WORK_SANDBOX=microsandbox`; the control plane refuses to connect a
 process-isolated shared worker unless the operator vouches for the people it
-serves with `"trusted": true`. Change placement with
+serves with `"trusted": true`. A machine opened to exactly one project counts
+as serving one owner. Change placement with
 `PATCH /_work/operator/workers/:name` (`labels`, `access`, `trusted`); it
 applies to the next placement, and an existing session re-checks it on its
 next turn.
+
+Chats give their workspace back while they wait. An Environment's
+`idleReleaseMinutes` (default 30, `0` keeps it) says how long a chat may go
+without a turn before its sandbox is saved to its session branch and
+destroyed, freeing the slot and CPU and memory reservation. The next turn
+admits a fresh workspace and restores it. Closing a chat
+(`close({ key })` from a workflow, `session_close` over MCP, or
+`DELETE /api/projects/:id/agent/chats/:key`) releases the workspace for good,
+deletes its session branch, and frees the key. Capacity follows activity,
+not open chats.
 
 Groups come from the Google Workspace directory (see [company
 identity](company-identity.md)): the server checks the groups that access
@@ -181,11 +205,16 @@ Do not call a controller sandbox a locally running model or promise offline use.
 ## Connections and verification
 
 `WORK_GATEWAY_CONFIG` declares the connections the server brokers (MCP
-endpoints, HTTP APIs, databases) and the guards that review them; see
+endpoints, HTTP APIs, databases, Git hosts, model APIs); guards that review
+them are code in a custom server. See
 [secrets and the gateway](secrets-and-gateway.md). This is host endpoint
 configuration, not workflow logic or a second role model.
-Commit project aliases and role capability grants separately. Members authorize
-their own accounts and explicitly review each workflow before enabling it.
+Organization administrators connect the named service connections once;
+projects commit which Environment binds which name in `.work/project.json`,
+and roles grant the aliases (ADR 0172). Members authorize their own accounts
+and explicitly review each workflow before enabling it. Service credentials
+stay on the control plane: workers reach them only through the gateway, and
+Postgres sessions are pooled on the control plane, not on workers.
 
 Verify cross-instance sign-in, PKCE exchange, refresh, approval replies, chosen
 machine execution, role revocation, and checkpoint recovery with deterministic
@@ -222,7 +251,7 @@ Set explicit budgets in containers: OS memory reporting may describe the host.
 
 Agent definitions reuse `environment.requirements.resources`; there is no second
 agent resource configuration file. For example, merge this into an ordinary
-`.catamorphic/agents/developer.json` definition:
+`.work/agents/developer.json` definition:
 
 ```json
 {
@@ -231,7 +260,11 @@ agent resource configuration file. For example, merge this into an ordinary
     "preferred": ["development"],
     "requirements": {
       "isolation": "sandbox",
-      "resources": { "cpuMillis": 2000, "memoryMb": 4096 }
+      "resources": {
+        "cpuMillis": 2000,
+        "memoryMb": 4096,
+        "commandTimeoutSeconds": 1800
+      }
     }
   }
 }
@@ -241,9 +274,14 @@ Microsandbox enforces whole-core CPU limits (multiples of 1000 millicores) and
 memory in MiB. Disk and GPU limits are currently rejected by the stock providers.
 Native host CLI execution does not enforce these sandbox limits; use controller
 agents for this setup. The stock controller and connection broker remain outside
-the VM. Agent command timeouts are bounded by `timeoutSeconds` when supplied.
-The local-process backend has a workspace-slot budget but rejects CPU/memory
-budgets; it is still for trusted single-tenant work only.
+the VM. `resources.commandTimeoutSeconds` bounds one foreground command, an
+agent's shell command included (ten minutes when unset). Longer work runs as a
+background command: the built-in agent starts it with `run_background_command`,
+follows it with `read_background_output`, and stops it with
+`stop_background_command`. Background processes run inside the workspace on
+the worker and end when the chat closes or the workspace is destroyed
+(ADR 0174). The local-process backend has a workspace-slot budget but rejects
+CPU/memory budgets; it is still for trusted single-tenant work only.
 
 A managed session reserves its workspace at creation, including between turns.
 Background development servers stay within the same VM and budget. Full machines
@@ -282,15 +320,85 @@ member's **This machine** runner); neither receives Postgres, vault, or
 sign-in secrets. A private Environment grant alone does not make unrestricted
 processes safe on a shared worker: use microsandbox for code you do not trust.
 
+## Images, containers, and egress
+
+An Environment chooses its sandbox (ADR 0176) in `.work/project.json`:
+
+```json
+{
+  "environments": {
+    "review": {
+      "workloads": ["agent"],
+      "image": ".work/images/review.Dockerfile",
+      "requirements": { "containers": true },
+      "network": { "egress": "allowlist", "allow": ["github.com", "*.npmjs.org"] },
+      "approvals": { "waitMinutes": 60 }
+    }
+  }
+}
+```
+
+- `image` is an OCI reference (`node:22`) or a project Dockerfile. Only
+  microsandbox machines boot images. A Dockerfile needs a machine with a
+  builder: set `WORK_IMAGE_BUILDER=docker` (or `podman`) and install that CLI
+  and its daemon on the machine. The build context is the Dockerfile alone;
+  each machine builds a digest once and keeps it cached. Build steps (`RUN`)
+  use the builder's network, not the Environment's `network.egress`, so
+  review a Dockerfile's downloads like the rest of the program, or give the
+  builder's daemon a restricted default network or proxy.
+- `requirements.containers` places the work where the sandbox gets its own
+  container runtime. On microsandbox, Docker runs inside the VM (on by
+  default; `WORK_SANDBOX_CONTAINERS=0` turns it off) on a private disk, and
+  the image must ship `dockerd`: use `docker:dind` or a Dockerfile `FROM` it.
+  A trusted local-process machine offers containers with
+  `WORK_DOCKER_SOCKET=/var/run/docker.sock`: each sandbox gets its own
+  endpoint as `DOCKER_HOST` that serves only the API routes and settings the
+  Docker CLI and Compose use. The sandbox sees only what it started, cannot
+  run privileged containers, add capabilities or devices, share host
+  namespaces, use other volume drivers, or mount host paths outside its
+  workspace, and everything it started is removed with it. Images are a
+  cache shared by the machine. Builds use the classic builder
+  (`DOCKER_BUILDKIT=0` is set for the sandbox), so `docker buildx` and
+  BuildKit-only Dockerfile features are not available there. Where Compose
+  is a per-user plugin (Docker Desktop), also set `WORK_DOCKER_CLI_PLUGINS`
+  to that plugin directory.
+- `network.egress` is `open` (default), `gateway` (only this server's public
+  host and port, from `WORK_PUBLIC_URL`, and DNS), or `allowlist`. Only microsandbox
+  enforces it, containers inside the VM included. A restricted image must
+  already contain git and bash, since the setup step cannot install them.
+  Local-process refuses such Environments unless the operator sets
+  `WORK_UNENFORCED_EGRESS=accept`, which runs them with open egress.
+
+Machines advertise `images`, `images.build`, `containers`, and
+`network.policy`; `GET /_work/operator/machines` shows them. An Environment
+no machine satisfies reports which capability is missing. VM budgets include
+nested containers; the Docker disk has its own size, and local-process
+containers are not budgeted.
+
+## Unattended agents
+
+A committed agent's `sandboxing` decides what leaves its sandbox:
+`contained` keeps every change in the sandbox, pushes nothing, and calls only
+read connection actions, `propose` may propose but not deploy or publish,
+`publish` may do what its roles allow. The Work server defaults project
+agents to `propose`. Its `toolPolicies` narrow tools on the server as on the
+desktop. A Claude Code or Codex agent's own permission mode is separate:
+`harnessPermissions` (see [harnesses](harnesses.md)).
+
+An approval in a project chat goes to the approvers the automation named when
+it delivered (`deliver({ key, audience: "project", approvers: { members: [...],
+roles: ["reviewer"] } })`). They get a notification, the chat appears for
+them, and they may answer its approval card without otherwise holding the chat.
+It waits `approvals.waitMinutes` (30 by default) and then is denied with a
+reason. A chat with no approvers refuses at once.
+
 ## Docker, development services, and private HTTP
 
 Catamorphic does not require a team service manifest or parse Compose files.
-Agents can run `docker compose up`, package scripts, or other ordinary commands
-when their execution provider, harness permission mode, and host policy permit
-those commands. Provision Docker Engine and dependencies on the actual command
-target. Advertising a `docker` capability does not install Docker or grant access
-to its socket. For sandboxed work, verify the selected backend/image supports the
-needed daemon or containers; do not assume a host Docker socket is available.
+Agents run `docker compose up`, package scripts, or other ordinary commands
+in an Environment that asks for `containers` (above). Advertising a custom
+`docker` capability does not install Docker or grant access to a socket, and
+no sandbox receives the host's Docker socket directly.
 Keep database volumes outside disposable checkouts and back them up through the
 host's normal process. Archiving or moving a session can destroy its workspace.
 

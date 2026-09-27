@@ -11,12 +11,19 @@
   integration test (`packages/claude-code/src/__tests__/
   ask-user-core.integration.test.ts` — real AgentSessionsService + real
   Postgres, DATABASE_URL-gated), and the renderer panel via the fake-agent
-  e2e. The one uncovered layer is the SDK↔CLI boundary itself: a fixture
-  "fake claude" executable speaking the SDK's stdio protocol (pointed at
-  via `pathToClaudeCodeExecutable` under an e2e env flag) would let the
-  desktop e2e drive a REAL Claude Code harness end to end — questions,
-  permission round-trips, background tasks — without model calls. Worth
-  building once; every harness regression class lands in it.
+  e2e. The SDK↔CLI boundary now has a fixture CLI
+  (`packages/work-server/src/workers/fake-claude-cli.ts`, ADR 0180) that the
+  Work server e2e drives through a real harness, gateway and worker; it
+  speaks initialize, user turns, Bash tool use and results. Remaining: point
+  the desktop e2e at it (`pathToClaudeCodeExecutable` under an e2e env flag)
+  and grow it for questions, permission round-trips (`can_use_tool`), hook
+  callbacks and background tasks.
+- **Harnesses on the server, follow-ups (ADR 0180).** Codex in a sandbox has
+  no Work capability tools: carry them over the app-server protocol's
+  dynamic tools instead of the loopback listener. Renew connection MCP
+  (`mcp` channel) grants during long sessions. Serve project harness agents
+  when the server has no control-plane model (today `/me` reports chat off).
+  A usage view for gateway usage (`model_usage`) per project and member.
 - **Dev-shell follow-ups (ADR 0045).** PR review depth on the CodeHost
   seam: inline comments, approvals, merge-from-app; a human-facing worktree
   cleanup surface (agents can create and adopt worktrees, but Catamorphic
@@ -28,13 +35,15 @@
   ("project config (broken)" case is already reported by the resolver).
 - **Collaboration on the git backend (next slice after ADR 0044).**
   Invite flow (= repo access on the code host), PR review rendered
-  natively in the app, and PR-first "review mode" sync: when a project
-  declares review mode (likely in `.catamorphic/project.json`), auto-sync
-  stops pushing `main` and work flows through branches + PRs instead —
-  resolves the direct-push vs open-PR race deliberately deferred in
-  ADR 0044. Also: a calm sync-status pill in the UI (up to date /
-  syncing / diverged→rescue branch), and surfacing checkpoint history
-  per chat reply via `agent_messages.commit_sha`.
+  natively in the app. (PR-first sync is settled by ADR 0170: attached
+  repositories are never pushed to outside `work/` branches, with no
+  per-project mode.) Also: a calm sync-status pill in the UI (up to date /
+  syncing / ahead: open a pull request / diverged), and surfacing
+  checkpoint history per chat reply via `agent_messages.commit_sha`.
+  The publishing-to-github skill still publishes through `gh repo create`,
+  which leaves the project unlinked in core; route it through
+  `core.codeHosts.publishProject` (an owned link, ADR 0177) when the desktop
+  gains a publish surface.
 - **Registry git-panel: drafts are now commits-ahead.** ADR 0044 made
   "draft" mean local-commits-not-yet-pushed instead of a dirty tree;
   `git-panel`/`useCommitChanges` in packages/registry still assume the
@@ -88,7 +97,7 @@
   and optional profile sync before implementation. This is intentionally
   deferred from temporary project Watchers.
 - **Agent channel integrations: Slack, code review.** The per-agent
-  schema (capabilities + tool policies + mode) is the substrate; what's
+  schema (capabilities + tool policies + sandboxing) is the substrate; what's
   missing is the *binding* of an agent to a channel. Slack: a
   Claude-Tag-class experience — a project agent wired to a Slack
   connector answers mentions/threads, with the agent's toolPolicies
@@ -97,7 +106,7 @@
   (`slack.mention`) + a workflow that opens an `ask_agent` turn, so it
   rides ADR 0039/0042 rather than new machinery. Code review: an agent
   assigned ONLY to reviews — a `github.pr-opened` trigger (CodeHost
-  seam, ADR 0045) invoking a read-only-mode agent whose persona is the
+  seam, ADR 0045) invoking a contained agent whose persona is the
   review doctrine, posting via the PR-review surface. Both are
   consumers of ADR 0056; neither needs new agent-side schema.
 - **Claude plugin for Catamorphic project connections.** Ship a general
@@ -112,7 +121,7 @@
   agent conversations begun through Claude appear in the project's ordinary
   session history with their source attributed.
 - **TS `defineAgent` layer over project agent JSON.** The committed
-  `.catamorphic/agents/<slug>.json` files are the substrate (ADR 0050); add the
+  `.work/agents/<slug>.json` files are the substrate (ADR 0050); add the
   authoring layer: `defineAgent({...})` in project code, discovered by
   `@catamorphic/parser` like `defineSecrets`, compiled/projected into the
   JSON files (generated-projections style, ADR 0041) so the registry,

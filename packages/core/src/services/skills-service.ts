@@ -1,5 +1,6 @@
 import type { DB } from "@catamorphic/db";
 import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
+import { PROJECT_SKILLS_DIR } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import {
   hasProjectPermission,
@@ -9,23 +10,6 @@ import {
 import { AccessDeniedError } from "./artifact-scope.js";
 import { readProgramFiles, withProgram } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
-
-/**
- * Directory (relative to the project root) where per-project agent skills
- * live, following the Agent Skills spec layout:
- *
- * ```
- * .catamorphic/skills/<name>/SKILL.md
- * .catamorphic/skills/<name>/references/…
- * ```
- *
- * The project repo is the single source of truth for these skills — its
- * canonical storage is the project origin (e.g. Cloudflare Artifacts), so
- * skills are versioned with the workflow code and scoped per project/tenant
- * by construction. Coding agents read them from the dev sandbox checkout; no
- * separate skill store exists.
- */
-export const SKILLS_DIR = ".catamorphic/skills";
 
 export interface ProjectSkill {
   /** Directory name == declared skill name. */
@@ -51,7 +35,7 @@ export interface ProjectSkill {
 }
 
 /**
- * Read-only view over a project's `.catamorphic/skills/` directory, merged with
+ * Read-only view over a project's `.work/skills/` directory, merged with
  * the calling user's personal tier (ADR 0056) and the host-tier skill set
  * (ADR 0049). Writes go through the normal project file APIs (project
  * skills are just files in the repo); host skills are config, resolved once
@@ -149,7 +133,7 @@ export class SkillsService {
       projectId,
       (repo, ref) =>
         ref
-          ? readProgramFiles(repo, ref, `${SKILLS_DIR}/`)
+          ? readProgramFiles(repo, ref, `${PROJECT_SKILLS_DIR}/`)
           : Promise.resolve<Record<string, string>>({}),
       { publishedOnly: true },
     );
@@ -174,7 +158,7 @@ export class SkillsService {
       projectId,
       (repo, ref) =>
         ref
-          ? readProgramFiles(repo, ref, `${SKILLS_DIR}/`)
+          ? readProgramFiles(repo, ref, `${PROJECT_SKILLS_DIR}/`)
           : Promise.resolve<Record<string, string>>({}),
       { publishedOnly: true },
     );
@@ -190,9 +174,10 @@ export class SkillsService {
   }
 
   private async listProjectSkills(repo: ProjectRepo): Promise<ProjectSkill[]> {
-    const files = await repo.listFiles({ prefix: `${SKILLS_DIR}/` });
+    const files = await repo.listFiles({ prefix: `${PROJECT_SKILLS_DIR}/` });
     const skillFiles = files.filter(
-      (file) => file.startsWith(`${SKILLS_DIR}/`) && file.endsWith("/SKILL.md"),
+      (file) =>
+        file.startsWith(`${PROJECT_SKILLS_DIR}/`) && file.endsWith("/SKILL.md"),
     );
     const contents = await Promise.all(
       skillFiles.map(
@@ -264,17 +249,17 @@ function skillsFromTier(
     });
 }
 
-/** `.catamorphic/skills/<name>/SKILL.md` files → skills, sorted by name. */
+/** `.work/skills/<name>/SKILL.md` files → skills, sorted by name. */
 function skillsFromFiles(files: Record<string, string>): ProjectSkill[] {
   return Object.entries(files)
     .filter(
       ([file]) =>
-        file.startsWith(`${SKILLS_DIR}/`) && file.endsWith("/SKILL.md"),
+        file.startsWith(`${PROJECT_SKILLS_DIR}/`) && file.endsWith("/SKILL.md"),
     )
     .map(([file, source]) => {
       const frontmatter = parseSkillFrontmatter(source);
       const dirName = file.slice(
-        SKILLS_DIR.length + 1,
+        PROJECT_SKILLS_DIR.length + 1,
         file.length - "/SKILL.md".length,
       );
       const name = frontmatter.name ?? dirName;

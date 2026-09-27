@@ -143,6 +143,13 @@ it.skipIf(!db)(
       downloadFile: async () => "",
       gitClone: async () => {},
       gitCheckout: async () => {},
+      processes: {
+        startProcess: vi.fn(),
+        readProcessOutput: vi.fn(),
+        signalProcess: vi.fn(),
+        listProcesses: vi.fn(async () => []),
+        writeProcessInput: vi.fn(),
+      },
     };
     const scoped = allocationSandboxProvider({
       db,
@@ -158,9 +165,19 @@ it.skipIf(!db)(
         resources: expect.objectContaining({ cpuMillis: 1000, memoryMb: 1024 }),
       }),
     );
+    // Background processes are fenced like every other operation (ADR 0174).
+    await expect(
+      scoped.processes?.listProcesses({ sandboxId: "sandbox" }),
+    ).resolves.toEqual([]);
     await allocations.release({ identity, allocationId: allocation.id });
     await expect(
       scoped.executeCommand("sandbox", "touch unsafe"),
+    ).rejects.toThrow("no longer active");
+    await expect(
+      scoped.processes?.startProcess({
+        sandboxId: "sandbox",
+        command: "touch unsafe",
+      }),
     ).rejects.toThrow("no longer active");
     await expect(create()).rejects.toBeInstanceOf(EnvironmentCapacityError);
     destroySandbox.mockRejectedValueOnce(new Error("Backend unavailable"));

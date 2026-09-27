@@ -8,6 +8,7 @@ import {
   push,
 } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
+import { publishedRef } from "@catamorphic/workflow/project-layout";
 import { authorFor } from "../identity.js";
 import { forgetProgramFetch } from "./program-reader.js";
 
@@ -110,7 +111,7 @@ export class DeploymentService {
         projectId,
         remoteBranch: REMOTE_BRANCH,
       }).catch(() => null);
-      const ref = opts?.ref ?? `refs/catamorphic/published/${REMOTE_BRANCH}`;
+      const ref = opts?.ref ?? publishedRef(REMOTE_BRANCH);
       return repo.log({ ref, maxCount: opts?.maxCount ?? 50 });
     });
   }
@@ -249,7 +250,7 @@ export class DeploymentService {
           remoteBranch: REMOTE_BRANCH,
         }).catch(() => null);
         const live = await repo
-          .resolveRef(`refs/catamorphic/published/${REMOTE_BRANCH}`)
+          .resolveRef(publishedRef(REMOTE_BRANCH))
           .catch(() => null);
         const paths = live
           ? (await repo.diff({ base: live, head: sha })).map(
@@ -332,7 +333,7 @@ export class DeploymentService {
         remoteBranch: REMOTE_BRANCH,
       }).catch(() => null);
       const remoteSha = await repo
-        .resolveRef(`refs/catamorphic/published/${REMOTE_BRANCH}`)
+        .resolveRef(publishedRef(REMOTE_BRANCH))
         .catch(() => null);
 
       if (!commitSha) {

@@ -2,6 +2,7 @@ import {
   type CatamorphicCore,
   type ConnectionProvider,
   DEFAULT_ENVIRONMENT,
+  type EnvironmentConnectionBinding,
   type Identity,
 } from "@catamorphic/core";
 import type { Json } from "@catamorphic/db";
@@ -84,6 +85,30 @@ export function workflowMcpConnectionEntries(
 }
 
 /**
+ * The aliases this desktop offers in a project's default Environment: its
+ * profile's enabled MCP servers, each the member's own connection (ADR
+ * 0086). A host binding beside the committed ones (ADR 0172); a project
+ * that commits the same alias decides it instead.
+ */
+export function profileMcpConnectionBindings(input: {
+  profiles: ProfilesStore;
+  profileConfig: ProfileConfigManager;
+  projectId: string;
+  environment: string;
+}): Record<string, EnvironmentConnectionBinding> {
+  if (input.environment !== DEFAULT_ENVIRONMENT) return {};
+  const profile = input.profiles.profileForProject(input.projectId);
+  return Object.fromEntries(
+    workflowMcpConnectionEntries(
+      input.profileConfig.forProfile(profile.id).connections.list(),
+    ).map(({ alias }) => [
+      alias,
+      { provider: DESKTOP_PROFILE_MCP_PROVIDER_KIND, principal: "member" },
+    ]),
+  );
+}
+
+/**
  * Adopt profile MCP authorization into the ordinary connection broker. The
  * secret is copied only between two encrypted main-process stores; workflow
  * code and sandboxes receive aliases and capability names, never material.
@@ -148,21 +173,13 @@ export async function syncProfileMcpWorkflowConnections(input: {
             identity: input.identity,
             projectId: project.id,
             providerKind: DESKTOP_PROFILE_MCP_PROVIDER_KIND,
-            principalKind: "member",
             label: connection.name,
             material,
             account,
             capabilities,
           });
-      await service.bind({
-        identity: input.identity,
-        projectId: project.id,
-        environment: DEFAULT_ENVIRONMENT,
-        alias,
-        providerKind: DESKTOP_PROFILE_MCP_PROVIDER_KIND,
-        principalKinds: ["member"],
-        capabilities,
-      });
+      // The alias is offered by `profileMcpConnectionBindings`; attaching
+      // makes this account the member's authority behind it.
       await service.attachMember({
         identity: input.identity,
         projectId: project.id,

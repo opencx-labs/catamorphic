@@ -14,7 +14,6 @@ export type WorkflowEnablementOwner =
 
 export interface WorkflowEnablementConnection {
   alias: string;
-  bindingId: string;
   connectionId: string;
   providerKind: string;
   principalKind: ConnectionPrincipalKind;
@@ -24,8 +23,11 @@ export interface WorkflowEnablementConnection {
 export interface WorkflowEnablementTrigger {
   id: string;
   definitionId: string;
+  /** The host kind that fires it. */
   kind: string;
   config: unknown;
+  /** The project trigger kind the workflow bound (ADR 0171). */
+  projectKind?: string;
   status: "active" | "paused";
 }
 
@@ -69,7 +71,7 @@ export interface WorkflowEnablementPreview {
   permissions: string[];
   consentDigest: string;
   triggerCount: number;
-  triggers: Array<{ kind: string; config: unknown }>;
+  triggers: Array<{ kind: string; config: unknown; projectKind?: string }>;
   connectionLabels: Record<string, string>;
 }
 

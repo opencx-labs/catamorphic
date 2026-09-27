@@ -39,6 +39,7 @@
         "@catamorphic/sandbox": "workspace:*",
         "@catamorphic/server-sdk": "workspace:*",
         "@catamorphic/ui": "workspace:*",
+        "@catamorphic/workflow": "workspace:*",
         "@electric-sql/pglite": "^0.5.4",
         "@fastify/cors": "^11.3.0",
         "@lydell/node-pty": "1.2.0-beta.14",
@@ -97,6 +98,7 @@
         "zod": "^4.1.8",
       },
       "devDependencies": {
+        "@catamorphic/parser": "workspace:*",
         "@tailwindcss/vite": "^4.2.2",
         "@types/node": "^26.1.1",
         "@types/qrcode": "^1.5.5",
@@ -118,6 +120,7 @@
         "@catamorphic/api-client": "workspace:*",
         "@catamorphic/react": "workspace:*",
         "@catamorphic/ui": "workspace:*",
+        "@catamorphic/workflow": "workspace:*",
         "@noble/hashes": "2.3.0",
         "@tanstack/react-query": "^5.101.2",
         "lucide-react": "^1.25.0",
@@ -271,7 +274,6 @@
         "@catamorphic/app": "workspace:*",
         "@catamorphic/db": "workspace:*",
         "@catamorphic/git": "workspace:*",
-        "@catamorphic/github": "workspace:*",
         "@catamorphic/otel": "workspace:*",
         "@catamorphic/parser": "workspace:*",
         "@catamorphic/plugins": "workspace:*",
@@ -327,11 +329,11 @@
         "@catamorphic/core": "workspace:*",
         "@catamorphic/db": "workspace:*",
         "@catamorphic/git": "workspace:*",
-        "@catamorphic/github": "workspace:*",
         "@catamorphic/otel": "workspace:*",
         "@catamorphic/parser": "workspace:*",
         "@catamorphic/plugins": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
+        "@catamorphic/workflow": "workspace:*",
         "@fastify/cors": "^11.3.0",
         "@fastify/swagger": "^9.8.0",
         "@fastify/swagger-ui": "^6.1.0",
@@ -349,6 +351,7 @@
       "name": "@catamorphic/git",
       "version": "0.0.1",
       "dependencies": {
+        "@catamorphic/workflow": "workspace:*",
         "ignore": "^5.3.2",
         "isomorphic-git": "^1.38.6",
       },
@@ -369,6 +372,7 @@
       "dependencies": {
         "@catamorphic/runtime": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
+        "@catamorphic/workflow": "workspace:*",
       },
       "devDependencies": {
         "@types/node": "^26.1.1",
@@ -392,6 +396,7 @@
       "dependencies": {
         "@catamorphic/runtime": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
+        "@catamorphic/workflow": "workspace:*",
         "microsandbox": "0.7.2",
       },
       "devDependencies": {
@@ -459,6 +464,7 @@
       "name": "@catamorphic/parser",
       "version": "0.0.2",
       "dependencies": {
+        "@catamorphic/workflow": "workspace:*",
         "dagre": "^0.8.5",
         "ts-morph": "^28.0.0",
       },
@@ -591,6 +597,7 @@
       },
       "devDependencies": {
         "@catamorphic/fastify-plugin": "workspace:*",
+        "@catamorphic/parser": "workspace:*",
         "@electric-sql/pglite": "^0.5.4",
         "@opentelemetry/api": "^1.9.1",
         "@opentelemetry/sdk-trace-node": "^2.9.0",
@@ -636,6 +643,8 @@
         "@ai-sdk/openai": "^4.0.65",
         "@catamorphic/ai-sdk": "workspace:*",
         "@catamorphic/app": "workspace:*",
+        "@catamorphic/claude-code": "workspace:*",
+        "@catamorphic/codex": "workspace:*",
         "@catamorphic/core": "workspace:*",
         "@catamorphic/db": "workspace:*",
         "@catamorphic/fastify-plugin": "workspace:*",
@@ -645,8 +654,8 @@
         "@catamorphic/otel": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
         "@catamorphic/server-sdk": "workspace:*",
+        "@catamorphic/workflow": "workspace:*",
         "@electric-sql/pglite": "^0.5.4",
-        "ai": "^7.0.97",
         "better-auth": "1.6.26",
         "fastify": "^5.10.0",
         "kysely": "^0.29.3",

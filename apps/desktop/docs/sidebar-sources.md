@@ -5,7 +5,7 @@ A custom section can load live data using ordinary TypeScript:
 ```js
 {
   id: "todos", type: "custom", title: "My todos",
-  source: { type: "custom", module: ".catamorphic/todos.ts" },
+  source: { type: "custom", module: ".work/todos.ts" },
   height: 280,
   headerActions: [{ label: "Refresh todos", action: "refresh", icon: "RefreshCw" }]
 }
@@ -45,7 +45,7 @@ focus and animate changed rows with the desktop's normal reduced-motion support.
 ## File-backed todos
 
 Initialize `todos.json` with `[{"id":"plan","text":"Plan the week","done":false}]`.
-Save the following as `.catamorphic/todos.ts`:
+Save the following as `.work/todos.ts`:
 
 ```ts
 import { watch } from "node:fs";

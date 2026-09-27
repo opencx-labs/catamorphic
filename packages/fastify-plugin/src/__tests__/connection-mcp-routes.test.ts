@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestApp } from "./test-app.js";
 
 const ALLOCATION_ID = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
-const BINDING_ID = "b1b2c3d4-e5f6-4890-abcd-ef1234567890";
 const apps: ReturnType<typeof createTestApp>[] = [];
 
 afterEach(async () => {
@@ -28,7 +27,7 @@ function appWithBroker(args: { listFailure?: Error } = {}) {
                 projectId: "project",
                 allocationId: ALLOCATION_ID,
                 agentSessionId: "session",
-                bindingId: BINDING_ID,
+                alias: "workspace",
               }
             : null,
       },
@@ -39,7 +38,6 @@ function appWithBroker(args: { listFailure?: Error } = {}) {
           policy: {
             connections: [
               {
-                bindingId: BINDING_ID,
                 alias: "workspace",
                 capabilities: ["lookup", "explode", "scan"],
               },

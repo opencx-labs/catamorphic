@@ -125,9 +125,7 @@ describe("git-sync", () => {
         projectId: PROJECT,
       });
       expect(result.sha).toBe(bSha);
-      const trackingSha = await repoA.resolveRef(
-        "refs/catamorphic/published/main",
-      );
+      const trackingSha = await repoA.resolveRef("refs/work/published/main");
       expect(trackingSha).toBe(bSha);
     } finally {
       await repoB.dispose();

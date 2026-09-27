@@ -1,10 +1,14 @@
 import {
   type FetchLike,
   GithubApiError,
+  type GithubCheckRun,
+  type GithubCheckRunFields,
   type GithubPullRequest,
   type GithubPullRequestFile,
   type GithubRepo,
   type GithubRepositoryEvent,
+  type GithubReviewComment,
+  type GithubReviewEvent,
   type GithubUser,
 } from "./types.js";
 
@@ -210,6 +214,46 @@ export class GithubApi {
   }
 
   /**
+   * Create an empty repository for the authenticated user, or in
+   * `organization` when given. Nothing is initialized, so the first push
+   * defines its history.
+   */
+  async createRepo(input: {
+    name: string;
+    organization?: string;
+    private: boolean;
+    description?: string;
+  }): Promise<GithubRepo> {
+    if (!/^[\w.-]+$/.test(input.name)) {
+      throw new GithubApiError(400, `Invalid repository name: ${input.name}`);
+    }
+    if (input.organization && !/^[\w.-]+$/.test(input.organization)) {
+      throw new GithubApiError(
+        400,
+        `Invalid organization: ${input.organization}`,
+      );
+    }
+    return mapRepo(
+      await this.request<RawRepo>(
+        input.organization
+          ? `/orgs/${input.organization}/repos`
+          : "/user/repos",
+        {
+          method: "POST",
+          body: {
+            name: input.name,
+            private: input.private,
+            auto_init: false,
+            ...(input.description !== undefined
+              ? { description: input.description }
+              : {}),
+          },
+        },
+      ),
+    );
+  }
+
+  /**
    * Open a pull request. `head` and `base` are branch names in the same
    * repository (cross-fork PRs are out of scope for now).
    */
@@ -295,6 +339,98 @@ export class GithubApi {
         method: "POST",
         body: { body: input.body },
       }),
+    );
+  }
+
+  /**
+   * Submit a pull request review, optionally with inline comments anchored
+   * to lines of the diff. Without `event` the review stays pending on GitHub;
+   * `COMMENT` publishes it without a verdict.
+   */
+  async createReview(input: {
+    fullName: string;
+    number: number;
+    event?: GithubReviewEvent;
+    body?: string;
+    /** The revision reviewed; defaults to the pull request's current head. */
+    commitId?: string;
+    comments?: readonly GithubReviewComment[];
+  }): Promise<{ id: number; url: string; state: string }> {
+    const raw = await this.request<{
+      id: number;
+      html_url: string;
+      state: string;
+    }>(
+      `/repos/${repositoryPath(input.fullName)}/pulls/${positive(input.number)}/reviews`,
+      {
+        method: "POST",
+        body: {
+          ...(input.event ? { event: input.event } : {}),
+          ...(input.body !== undefined ? { body: input.body } : {}),
+          ...(input.commitId ? { commit_id: input.commitId } : {}),
+          ...(input.comments?.length
+            ? {
+                comments: input.comments.map((comment) => ({
+                  path: comment.path,
+                  body: comment.body,
+                  ...(comment.line !== undefined ? { line: comment.line } : {}),
+                  ...(comment.side ? { side: comment.side } : {}),
+                  ...(comment.startLine !== undefined
+                    ? { start_line: comment.startLine }
+                    : {}),
+                  ...(comment.startSide
+                    ? { start_side: comment.startSide }
+                    : {}),
+                })),
+              }
+            : {}),
+        },
+      },
+    );
+    return { id: raw.id, url: raw.html_url, state: raw.state };
+  }
+
+  /** Report a check run on a commit (requires the app's `checks` permission). */
+  async createCheckRun(
+    input: GithubCheckRunFields & {
+      fullName: string;
+      name: string;
+      headSha: string;
+    },
+  ): Promise<GithubCheckRun> {
+    return mapCheckRun(
+      await this.request<RawCheckRunResult>(
+        `/repos/${repositoryPath(input.fullName)}/check-runs`,
+        {
+          method: "POST",
+          body: {
+            name: input.name,
+            head_sha: input.headSha,
+            ...checkRunBody(input),
+          },
+        },
+      ),
+    );
+  }
+
+  async updateCheckRun(
+    input: GithubCheckRunFields & {
+      fullName: string;
+      checkRunId: number;
+      name?: string;
+    },
+  ): Promise<GithubCheckRun> {
+    return mapCheckRun(
+      await this.request<RawCheckRunResult>(
+        `/repos/${repositoryPath(input.fullName)}/check-runs/${positive(input.checkRunId)}`,
+        {
+          method: "PATCH",
+          body: {
+            ...(input.name ? { name: input.name } : {}),
+            ...checkRunBody(input),
+          },
+        },
+      ),
     );
   }
 
@@ -593,6 +729,83 @@ export class GithubApi {
       (b.pushedAt ?? "").localeCompare(a.pushedAt ?? ""),
     );
   }
+
+  /** Repositories a GitHub App installation token can reach. */
+  async listInstallationRepos(): Promise<GithubRepo[]> {
+    const repos: GithubRepo[] = [];
+    for (let page = 1; ; page += 1) {
+      const result = await this.request<{ repositories: RawRepo[] }>(
+        `/installation/repositories?per_page=100&page=${page}`,
+      );
+      repos.push(...result.repositories.map(mapRepo));
+      if (result.repositories.length < 100) break;
+    }
+    return repos.sort((a, b) =>
+      (b.pushedAt ?? "").localeCompare(a.pushedAt ?? ""),
+    );
+  }
+}
+
+interface RawCheckRunResult {
+  id: number;
+  html_url: string | null;
+  status: string;
+  conclusion: string | null;
+}
+
+function mapCheckRun(raw: RawCheckRunResult): GithubCheckRun {
+  return {
+    id: raw.id,
+    url: raw.html_url,
+    status: raw.status,
+    conclusion: raw.conclusion,
+  };
+}
+
+function checkRunBody(fields: GithubCheckRunFields) {
+  return {
+    ...(fields.status ? { status: fields.status } : {}),
+    ...(fields.conclusion ? { conclusion: fields.conclusion } : {}),
+    ...(fields.detailsUrl ? { details_url: fields.detailsUrl } : {}),
+    ...(fields.externalId ? { external_id: fields.externalId } : {}),
+    ...(fields.startedAt ? { started_at: fields.startedAt } : {}),
+    ...(fields.completedAt ? { completed_at: fields.completedAt } : {}),
+    ...(fields.output
+      ? {
+          output: {
+            title: fields.output.title,
+            summary: fields.output.summary,
+            ...(fields.output.text ? { text: fields.output.text } : {}),
+            ...(fields.output.annotations?.length
+              ? {
+                  annotations: fields.output.annotations.map((annotation) => ({
+                    path: annotation.path,
+                    start_line: annotation.startLine,
+                    end_line: annotation.endLine,
+                    annotation_level: annotation.level,
+                    message: annotation.message,
+                    ...(annotation.title ? { title: annotation.title } : {}),
+                  })),
+                }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function repositoryPath(fullName: string): string {
+  if (!/^[\w.-]+\/[\w.-]+$/.test(fullName) || fullName.includes("..")) {
+    throw new GithubApiError(400, `Invalid repository name: ${fullName}`);
+  }
+  return fullName;
+}
+
+function positive(value: number): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new GithubApiError(400, `Invalid number: ${value}`);
+  }
+  return value;
 }
 
 function mapRepo(raw: RawRepo): GithubRepo {

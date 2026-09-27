@@ -80,7 +80,7 @@ const catamorphic = createCatamorphic({
 - `getCloneSource` mints a short-lived scoped repo token and returns
   `{ url, username, password }` so dev sandboxes can clone the complete
   editable project directly from Artifacts when its working copy is in sync.
-  Deployment runtimes instead receive the verified `.catamorphic/` capability
+  Deployment runtimes instead receive the verified `.work/` capability
   snapshot, excluding app data and unrelated imported files (ADR 0142).
 
 Artifacts is in closed beta. Accounts without access get REST error `10004`

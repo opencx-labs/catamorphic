@@ -2,7 +2,6 @@ import type {
   BranchInfo,
   CommitInfo,
   DiffEntry,
-  GitCredentials,
   ProjectRepo,
   RepoStatus,
 } from "@catamorphic/git";
@@ -22,7 +21,6 @@ export class DaytonaProjectRepo implements ProjectRepo {
   readonly repoPath: string;
   private readonly sandboxId: string;
   private readonly client: Daytona;
-  private credentials: GitCredentials | undefined;
 
   constructor(opts: DaytonaProjectRepoOpts) {
     this.projectId = opts.projectId;
@@ -242,47 +240,6 @@ export class DaytonaProjectRepo implements ProjectRepo {
       this.repoPath,
     );
     return result.result.trim();
-  }
-
-  async setRemote(url: string, credentials?: GitCredentials): Promise<void> {
-    const sandbox = await this.getSandbox();
-    await sandbox.process.executeCommand(
-      "git remote remove origin 2>/dev/null; true",
-      this.repoPath,
-    );
-    await sandbox.process.executeCommand(
-      `git remote add origin ${url}`,
-      this.repoPath,
-    );
-    if (credentials) {
-      this.credentials = credentials;
-    }
-  }
-
-  async fetch(): Promise<void> {
-    const sandbox = await this.getSandbox();
-    const creds = this.credentials;
-    if (creds) {
-      await sandbox.process.executeCommand(
-        `git -c credential.helper='!f() { echo username=${creds.username}; echo password=${creds.password}; }; f' fetch origin`,
-        this.repoPath,
-      );
-    } else {
-      await sandbox.process.executeCommand("git fetch origin", this.repoPath);
-    }
-  }
-
-  async push(): Promise<void> {
-    const sandbox = await this.getSandbox();
-    const creds = this.credentials;
-    if (creds) {
-      await sandbox.process.executeCommand(
-        `git -c credential.helper='!f() { echo username=${creds.username}; echo password=${creds.password}; }; f' push origin`,
-        this.repoPath,
-      );
-    } else {
-      await sandbox.process.executeCommand("git push origin", this.repoPath);
-    }
   }
 
   async checkout(ref?: string): Promise<void> {

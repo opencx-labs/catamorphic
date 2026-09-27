@@ -1,4 +1,5 @@
 import nodeFs from "node:fs";
+import { publishedRef } from "@catamorphic/workflow/project-layout";
 import git from "isomorphic-git";
 import { nativeGit } from "./native-git.js";
 import { NativeProjectRepo } from "./native-project-repo.js";
@@ -22,8 +23,8 @@ import type {
  */
 
 const SYSTEM_AUTHOR = {
-  name: "Catamorphic",
-  email: "system@catamorphic.dev",
+  name: "Work",
+  email: "system@work.software",
 };
 
 export interface PushOpts {
@@ -35,6 +36,11 @@ export interface PushOpts {
   remoteBranch?: string;
   /** SHA on the dev side to push. Defaults to the tip of the current branch. */
   localSha?: string;
+  /**
+   * Move the branch even when it is not a fast-forward. Only for branches
+   * Work owns outright, such as a session's `sessions/<id>` whose base moved.
+   */
+  force?: boolean;
 }
 
 export interface FetchOpts {
@@ -69,7 +75,7 @@ export async function push(opts: PushOpts): Promise<{ sha: string }> {
         return { sha: localSha };
       }
 
-      if (currentRemote) {
+      if (currentRemote && !opts.force) {
         const fastForward = await isAncestor({
           dev: opts.dev,
           ancestor: currentRemote,
@@ -108,7 +114,7 @@ export async function push(opts: PushOpts): Promise<{ sha: string }> {
 
 /**
  * Copy the tip of the remote branch into the dev repo and update the
- * `refs/catamorphic/published/<branch>` tracking ref. Does not touch the working tree.
+ * `refs/work/published/<branch>` tracking ref. Does not touch the working tree.
  */
 export async function fetchRemote(opts: FetchOpts): Promise<{
   sha: string | null;
@@ -464,7 +470,7 @@ async function syncRemoteTrackingRef(opts: {
   if (opts.dev instanceof NativeProjectRepo) {
     await nativeGit(opts.dev.repoPath, [
       "update-ref",
-      `refs/catamorphic/published/${opts.branch}`,
+      publishedRef(opts.branch),
       opts.sha,
     ]);
     return;
@@ -472,7 +478,7 @@ async function syncRemoteTrackingRef(opts: {
   await git.writeRef({
     fs: nodeFs,
     dir: opts.dev.repoPath,
-    ref: `refs/catamorphic/published/${opts.branch}`,
+    ref: publishedRef(opts.branch),
     value: opts.sha,
     force: true,
   });

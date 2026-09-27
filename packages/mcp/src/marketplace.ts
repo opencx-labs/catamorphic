@@ -212,6 +212,12 @@ export interface InstalledPluginInfo {
 /** A pre-registered OAuth client for a remote MCP server. */
 export interface McpOAuthClientHint {
   clientId: string;
+  /**
+   * A confidential client's secret, for servers that register only those.
+   * Hosts supply it from their own configuration (never a plugin file); it
+   * travels with the sealed authorization state, never to a sandbox.
+   */
+  clientSecret?: string;
   /** Loopback port the registered redirect URI (`/callback`) uses. */
   callbackPort?: number;
   scopes?: string[];

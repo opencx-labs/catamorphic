@@ -26,18 +26,20 @@ Environment variables parsed by `workServerConfigFromEnv` in
 | `PORT` | Public listener (default 4700). |
 | `WORK_DATA_DIR` | Data directory (default `/data`). Back up all of it. |
 | `WORK_PUBLIC_URL` | Public origin for OAuth, invitations, and webhook URLs. Must be HTTPS unless loopback. |
-| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` | Model for the built-in agent. `WORK_MODEL`, `WORK_EFFORT` tune it. `WORK_FAKE_AGENT=1` runs a deterministic echo agent. |
-| `WORK_AUTH_CONFIG` | Path to the auth config (default `<data>/auth-config.json`). |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` | Model for the built-in agent. `WORK_MODEL`, `WORK_EFFORT` tune it. `WORK_FAKE_AGENT=1` runs a deterministic echo agent. Claude Code and Codex agents never see these; they use model connections ([Harnesses on the server](harnesses.md)). |
+| `WORK_AUTH_CONFIG` | Path to the sign-in config (default `<data>/auth-config.json`), read at boot. |
 | `WORK_OPERATOR_PORT` | Loopback-only setup listener (default 4701). |
 | `WORK_OPERATOR_SECRET` | Supplies the operator credential instead of the generated `<data>/operator-secret`. |
 | `WORK_MDNS` | `off`, or a hostname (default a unique `work-<id>.local`). |
 | `DATABASE_URL` | Network Postgres instead of PGlite; then `WORK_SECRET`, `WORK_VAULT_KEY`, and a public URL are required. |
 | `WORK_SECRET` | Deployment secret for sign-in state. Generated under the data directory when absent (PGlite only). |
 | `WORK_VAULT_KEY`, `WORK_VAULT_PREVIOUS_KEYS` | Credential vault keys (32 bytes, base64); see [secrets and the gateway](secrets-and-gateway.md). |
-| `WORK_GITHUB_CLIENT_ID`, `WORK_GITHUB_TOKEN` | Service account for GitHub-backed projects. |
-| `WORK_GATEWAY_CONFIG` | Connections (MCP, HTTP APIs, databases) and the guards that review them; see [secrets and the gateway](secrets-and-gateway.md). |
+| `WORK_GATEWAY_CONFIG` | Connections the gateway brokers (MCP, HTTP APIs, databases, Git hosts, model APIs); see [secrets and the gateway](secrets-and-gateway.md). The image ships no guards. |
 | `WORK_SANDBOX` and budget variables | `local-process` (default) or `microsandbox`; see the machines reference. |
+| `WORK_IMAGE_BUILDER`, `WORK_SANDBOX_CONTAINERS` | Microsandbox: build project Dockerfiles with `docker` or `podman`; `0` turns off Docker inside sandboxes. See [images, containers, and egress](cluster-deployment.md#images-containers-and-egress). |
+| `WORK_DOCKER_SOCKET`, `WORK_DOCKER_CLI_PLUGINS`, `WORK_UNENFORCED_EGRESS` | Local-process: give sandboxes filtered Docker access through this daemon socket; `accept` runs restricted-egress Environments without enforcement. |
 | `WORK_MACHINE_NAME`, `WORK_MACHINE_LABELS` | This machine's name and labels (`pool=agents,class=large`) that Environment pools select; see the machines reference. |
+| `WORK_WEBHOOK_MAX_BYTES` | Largest webhook body any endpoint may accept (default 1 MiB, at most 64 MiB); a binding opts in with `maxBodyBytes`. |
 | `WORK_CONTROL_PLANE_WORKLOADS` | What the server runs itself: `agent,workflow` (default), `workflow`, or empty. Agents then run on enrolled workers. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Telemetry export (`OBSERVABILITY.md`). |
 
@@ -69,6 +71,28 @@ Register the provider's redirect URI as
 `<WORK_PUBLIC_URL>/api/auth/oauth2/callback/<id>`. `scopes` defaults to
 `openid email profile`. Keep client secrets out of the repository.
 
+## A custom server
+
+Company code (guards, directories, connection providers, routes) goes in a
+custom server: a short file built on `@catamorphic/work-server` in an image
+extended from the published one, never a fork (ADR 0160; see
+[its README](../../../packages/work-server/README.md)). Its `config` is typed
+data and its `hooks` are code (ADR 0183):
+
+- `workServerConfigFromEnv(process.env)` is the only code that reads `WORK_*`
+  variables and files. It turns the sign-in file into `config.auth` and
+  `WORK_GATEWAY_CONFIG` into `config.gateway`, with the secrets the file names
+  by variable resolved into values. `createWorkServer` reads no config file.
+- A server that keeps configuration in a secret manager builds `config.auth`
+  and `config.gateway` in code instead, in the same shape as the files, and
+  they are validated by the same rules at boot. A Google Workspace directory
+  then takes its service account key inline (`"credentials": { "key": … }`)
+  rather than as a file.
+- Guards, directories, and providers go in `hooks`; see
+  [Guards are host code](secrets-and-gateway.md#guards-are-host-code).
+- Generated state stays under the data directory: the vault key, generated
+  secrets, the host id, and worker credentials.
+
 ## Provisioning the first project and person
 
 The server exposes machine-local operations on a separate listener bound to
@@ -82,10 +106,16 @@ not a human CLI.
 3. `POST /_work/operator/projects` with `name`, `roles`
    (`[{ slug, definition }]`), `admission` (`mode`: `invitation_only`,
    `approved_domain`, `request`, or `open`; `defaultRole`;
-   `approvedDomains`), and optionally `githubRepository: "owner/repo"`.
+   `approvedDomains`), and optionally `repository: "owner/repo"` (a GitHub
+   repository, attached through the `github` service connection).
+   `roles` is required unless the repository already defines them. The
+   response carries `project` and `roles.source`: `committed` (a project the
+   server created), `repository` (the repository's own roles, used as they
+   are), or `proposed` (with `branch` and `pullRequest.url`, see below).
 4. For local sign-in, `POST /_work/operator/users` with `username`,
-   `name`, `password`, optional `email`, and `memberships`
-   (`[{ projectId, roles, grants? }]`).
+   `name`, `password`, optional `email`, optional `administrator: true` (an
+   organization administrator, who manages service connections), and
+   `memberships` (`[{ projectId, roles, grants? }]`).
 5. Verify sign-in, OAuth discovery, membership, and revocation through the
    normal application paths.
 
@@ -117,11 +147,29 @@ tokens.
 
 ## GitHub-backed projects
 
-Use a service account distinct from human reviewers and never give its token
-to members. Provisioning with `githubRepository` imports the source and
-pushes the role files. The server syncs the linked repository every minute,
-so merged PRs reach members through their normal download. If sync fails,
-preserve both histories and resolve; never force-push one over the other.
+Connect the company's GitHub App first ([Connect GitHub](connect-github.md)):
+its installation is the `github` service connection, distinct from the
+people who review, and members never receive its tokens. An imported
+repository is attached (ADR 0170): Work never
+commits or pushes to its default branch or to any branch it did not create.
+Everything Work originates there arrives as a `work/` branch and a pull
+request, reviewed like any other change. A direct deploy to such a project is
+refused; propose the change instead. The server takes what the default branch
+accepts every minute; if its copy ever diverges from that branch, the project
+reports `remoteDivergedAt` and the server logs that it stopped receiving
+updates until the two histories are reconciled.
+
+Provisioning with `repository` imports the source through that connection. When the default
+branch already has `.work/roles/*.json`, those roles are used as they are and
+the supplied `roles` are not written. Otherwise the supplied roles are
+proposed as a pull request; give the person `roles.pullRequest.url` to
+review and merge. The admission policy is recorded immediately and may name
+the proposed roles, but nobody can join with a role until the pull request
+merges, because admission reads committed roles. The server syncs the
+linked repository every minute, so the merged roles, and every later merged
+pull request, reach the server and its members without further steps. If
+sync reports divergence, preserve both histories and resolve through review;
+never force-push one over the other.
 
 ## Webhooks and project automations
 
@@ -131,8 +179,14 @@ reach; webhook URLs are `/api/hooks/<projectId>/<name>/<token>` under it.
 Someone with `automations:write` plus every permission the workflow declares
 enables it for the project; holders of `webhooks:read` copy its URL from the
 workflow's **Automatic** view, and `webhooks:write` rotates it. Signed senders
-use a project secret named in the trigger's `verify`. Requests are answered
-202 once stored; failures show in the workflow's runs.
+use a project secret named in the trigger's `verify`; declared handshakes
+(Slack URL verification, GET subscription challenges) are answered at once.
+Other requests are answered 202 once stored; failures show in the workflow's
+runs. Bodies over 1 MiB need a binding's `maxBodyBytes` and, beyond the
+server's default, `WORK_WEBHOOK_MAX_BYTES` (ADR 0171). A sender's retry of
+one event is stored once (its delivery-id header, or the binding's
+`deliveryId`). [Connect Slack](connect-slack.md) walks through a complete
+integration.
 
 ## Boundaries
 

@@ -39,6 +39,8 @@ const project = {
   name: "Alpha",
   storageType: "managed" as const,
   remoteUrl: null,
+  remoteOwnership: null,
+  remoteDivergedAt: null,
   defaultBranch: "main",
   createdAt: "2026-08-29T00:00:00.000Z",
   updatedAt: "2026-08-29T00:00:00.000Z",

@@ -12,7 +12,6 @@ export interface DataPaths {
   /** FsBundleStore app bundles. */
   appBundles: string;
   /** GitHub connection encrypted through safeStorage. */
-  githubFile: string;
   /** Chrome-style profiles (plain JSON). */
   profilesFile: string;
   /**
@@ -35,6 +34,12 @@ export interface DataPaths {
    * claude-code harness discovers them natively. Rewritten at boot.
    */
   hostSkillsDir: string;
+  /**
+   * Files pasted into a chat composer, per project
+   * (`attachments/<projectId>/`). Host storage, so a paste never lands in
+   * the project folder or its Git history.
+   */
+  attachmentsDir: string;
 }
 
 export function resolveDataPaths(): DataPaths {
@@ -46,11 +51,11 @@ export function resolveDataPaths(): DataPaths {
     projects: path.join(root, "projects"),
     remotes: path.join(root, "remotes"),
     appBundles: path.join(root, "app-bundles"),
-    githubFile: path.join(userData, "github.json"),
     profilesFile: path.join(userData, "profiles.json"),
     profilesDir: path.join(userData, "profiles"),
     agentHomesDir: path.join(userData, "agent-homes"),
     harnessComponentsDir: path.join(userData, "harness-components"),
     hostSkillsDir: path.join(userData, "host-skills"),
+    attachmentsDir: path.join(userData, "attachments"),
   };
 }

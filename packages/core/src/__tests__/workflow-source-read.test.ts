@@ -24,7 +24,7 @@ it("workflow graph reads exclude large media and other repositories before loadi
   );
   try {
     await repo.writeFile(
-      ".catamorphic/workflows/main.ts",
+      ".work/workflows/main.ts",
       `import { defineWorkflow } from "@catamorphic/workflow";
       export const example = defineWorkflow(({ defineBoundary }) => ({ steps: [defineBoundary({ run: () => "ok" })] }));`,
     );
@@ -65,7 +65,7 @@ it("workflow graph reads exclude large media and other repositories before loadi
       projectId: "f1e2d3c4-b5a6-7890-dcba-fedcba987654",
       workflowName: "example",
     });
-    expect(detail.allFiles[".catamorphic/workflows/main.ts"]).toContain(
+    expect(detail.allFiles[".work/workflows/main.ts"]).toContain(
       "defineWorkflow",
     );
     expect(detail.allFiles["video.mp4"]).toBeUndefined();

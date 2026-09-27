@@ -10,7 +10,7 @@ For project-overridable settings, lowest to highest priority:
 
 1. Built-in default.
 2. Profile: `profiles/<id>/prefs.json`.
-3. Shared project: `<project>/.catamorphic/settings.json`.
+3. Shared project: `<project>/.work/settings.json`.
 4. Personal project: `profiles/<id>/settings-projects/<projectId>.json`.
 
 Layout, framed content, bookmarks presentation and link defaults support all three
@@ -63,7 +63,7 @@ profile, exact file paths, access mode and validation errors. It resolves the pr
 project folder even when the session runs in a worktree or another profile is
 foreground. Turn context carries only current validation errors (ADR 0152). Native
 agents edit files directly with ordinary file/shell facilities; native permissions
-still apply. Read-only agents inspect only. Sandboxed agents without host filesystem
+still apply. Agents whose sandboxing is contained inspect only. Sandboxed agents without host filesystem
 access must report that limitation. No settings write tools or mirrored
 configuration transport exist.
 

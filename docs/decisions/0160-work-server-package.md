@@ -1,6 +1,6 @@
 # 0160 — The Work server is a package with typed hooks
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by 0183)
 - **Date:** 2026-09-25
 - **Refines:** 0059, 0071, 0159
 

@@ -49,6 +49,7 @@ describe("session workflow trigger contracts", () => {
         detail: { status: "completed" },
         session: {
           id: "s",
+          key: "slack:C1:1.2",
           title: null,
           status: "active",
           workStatus: "open",
@@ -60,6 +61,7 @@ describe("session workflow trigger contracts", () => {
         },
       },
     };
+    expect(kind?.validatePayload(payload)).toEqual({ ok: true });
     expect(kind?.matches?.({ config: {}, payload })).toBe(true);
     expect(
       kind?.matches?.({

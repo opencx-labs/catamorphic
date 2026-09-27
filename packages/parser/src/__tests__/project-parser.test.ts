@@ -34,7 +34,7 @@ async function sendEmail({ to }: { to: string }) {
 
   it("ignores frontend app sources when discovering workflows and steps", () => {
     const files = {
-      ".catamorphic/workflows/src/welcome.ts": `
+      ".work/workflows/src/welcome.ts": `
 export const welcomeUser = defineWorkflow(({ defineBoundary }) => ({
   steps: [
     defineBoundary({
@@ -54,7 +54,7 @@ async function sendEmail({ to }: { to: string }) {
 `,
       // Same step name in app code must not override the workflow's step, and
       // an app-side workflow definition must not be discovered.
-      ".catamorphic/apps/dashboard/src/main.tsx": `
+      ".work/apps/dashboard/src/main.tsx": `
 async function sendEmail({ to }: { to: string }) {
   "use step";
 }
@@ -394,7 +394,7 @@ async function sendNotification({ to }: { to: string }) {
 
   it("resolves by workflow file path when the exported workflow was renamed", () => {
     const files = {
-      ".catamorphic/workflows/src/untitled-workflow2.ts": `
+      ".work/workflows/src/untitled-workflow2.ts": `
 /**
  * @displayname Hello
  */
@@ -426,12 +426,13 @@ async function printHelloWorld() {
 describe("declared secrets", () => {
   it("collects defineSecrets declarations with their options", () => {
     const files = {
-      ".catamorphic/workflows/src/secrets.ts": `
+      ".work/workflows/src/secrets.ts": `
 import { defineSecrets } from "@catamorphic/workflow";
 
 export const secrets = defineSecrets({
   STRIPE_API_KEY: { description: "Stripe secret key" },
   REGION: { required: false, default: "eu-west-1" },
+  SIGNING_SECRET: { use: "webhook" },
 });
 `,
     };
@@ -446,7 +447,17 @@ export const secrets = defineSecrets({
         description: undefined,
         required: false,
         default: "eu-west-1",
-        filePath: ".catamorphic/workflows/src/secrets.ts",
+        use: "run",
+        filePath: ".work/workflows/src/secrets.ts",
+      },
+      {
+        name: "SIGNING_SECRET",
+        label: undefined,
+        description: undefined,
+        required: true,
+        default: undefined,
+        use: "webhook",
+        filePath: ".work/workflows/src/secrets.ts",
       },
       {
         name: "STRIPE_API_KEY",
@@ -454,14 +465,15 @@ export const secrets = defineSecrets({
         description: "Stripe secret key",
         required: true,
         default: undefined,
-        filePath: ".catamorphic/workflows/src/secrets.ts",
+        use: "run",
+        filePath: ".work/workflows/src/secrets.ts",
       },
     ]);
   });
 
   it("reports an error when the declaration is not statically readable", () => {
     const files = {
-      ".catamorphic/workflows/src/secrets.ts": `
+      ".work/workflows/src/secrets.ts": `
 import { defineSecrets } from "@catamorphic/workflow";
 const declarations = { STRIPE_API_KEY: {} };
 export const secrets = defineSecrets(declarations);
@@ -472,6 +484,82 @@ export const secrets = defineSecrets(declarations);
 
     expect(result.secrets).toEqual([]);
     expect(result.errors[0]?.message).toMatch(/inline object literal/);
+  });
+
+  it("reads use as a constant and never lets a webhook secret fall back to run", () => {
+    const uses = (source: string) => {
+      const result = parseProject({
+        ".work/workflows/src/secrets.ts": `
+import { defineSecrets } from "@catamorphic/workflow";
+const WEBHOOK = "webhook";
+const base = { use: "webhook" as const };
+${source}
+`,
+      });
+      return {
+        uses: Object.fromEntries(
+          result.secrets.map((secret) => [secret.name, secret.use]),
+        ),
+        errors: result.errors.map((error) => error.message),
+      };
+    };
+    expect(
+      uses(`export const secrets = defineSecrets({
+  AS_CONST: { use: "webhook" as const },
+  SATISFIES: { use: ("webhook" satisfies string) },
+  TEMPLATE: { use: \`webhook\` },
+  RUN: { use: "run" },
+  PLAIN: {},
+});`),
+    ).toEqual({
+      uses: {
+        AS_CONST: "webhook",
+        SATISFIES: "webhook",
+        TEMPLATE: "webhook",
+        RUN: "run",
+        PLAIN: "run",
+      },
+      errors: [],
+    });
+    const unreadable = uses(`export const secrets = defineSecrets({
+  IDENTIFIER: { use: WEBHOOK },
+  SUBSTITUTION: { use: \`\${WEBHOOK}\` },
+  OTHER: { use: "sometimes" },
+  SPREAD: { ...base },
+  OPTIONS: base,
+});`);
+    expect(unreadable.uses).toEqual({
+      IDENTIFIER: "webhook",
+      SUBSTITUTION: "webhook",
+      OTHER: "webhook",
+      SPREAD: "webhook",
+      OPTIONS: "webhook",
+    });
+    expect(unreadable.errors).toEqual([
+      `defineSecrets: 'IDENTIFIER' use must be the literal "run" or "webhook".`,
+      `defineSecrets: 'SUBSTITUTION' use must be the literal "run" or "webhook".`,
+      `defineSecrets: 'OTHER' use must be the literal "run" or "webhook".`,
+      "defineSecrets: declare 'SPREAD' with an inline object of plain 'key: value' properties.",
+      "defineSecrets: declare 'OPTIONS' with an inline object of plain 'key: value' properties.",
+    ]);
+  });
+
+  it("keeps a secret webhook-only when any declaration of it says so", () => {
+    const result = parseProject({
+      ".work/workflows/src/a.ts": `
+import { defineSecrets } from "@catamorphic/workflow";
+export const a = defineSecrets({ SIGNING: { use: "webhook" } });
+export const b = defineSecrets({ SIGNING: { use: "run" } });
+`,
+      ".work/workflows/src/z.ts": `
+import { defineSecrets } from "@catamorphic/workflow";
+export const c = defineSecrets({ SIGNING: {} });
+`,
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.secrets.map((secret) => [secret.name, secret.use])).toEqual([
+      ["SIGNING", "webhook"],
+    ]);
   });
 });
 
@@ -498,8 +586,8 @@ export const refundOrder = defineWorkflow(({ defineBoundary }) => ({
 
   it("resolves exported entries to workflows via bindings", () => {
     const files = {
-      ".catamorphic/workflows/src/orders.ts": ordersFile,
-      ".catamorphic/workflows/src/app-api.ts": `
+      ".work/workflows/src/orders.ts": ordersFile,
+      ".work/workflows/src/app-api.ts": `
 import { listOrders, refundOrder as refund } from "./orders.js";
 
 export const appApi = { listOrders, refundOrders: refund };
@@ -525,8 +613,8 @@ export const appApi = { listOrders, refundOrders: refund };
 
   it("accepts a satisfies expression around the contract object", () => {
     const files = {
-      ".catamorphic/workflows/src/orders.ts": ordersFile,
-      ".catamorphic/workflows/src/app-api.ts": `
+      ".work/workflows/src/orders.ts": ordersFile,
+      ".work/workflows/src/app-api.ts": `
 import { listOrders } from "./orders.js";
 type AppContract = { listOrders: unknown };
 
@@ -543,7 +631,7 @@ export const appApi = { listOrders } satisfies AppContract;
 
   it("is null when the project has no app-api.ts", () => {
     const result = parseProject({
-      ".catamorphic/workflows/src/orders.ts": ordersFile,
+      ".work/workflows/src/orders.ts": ordersFile,
     });
     expect(result.appApi).toBeNull();
     expect(result.errors).toEqual([]);
@@ -551,8 +639,8 @@ export const appApi = { listOrders } satisfies AppContract;
 
   it("fails closed when an entry does not resolve to a workflow", () => {
     const files = {
-      ".catamorphic/workflows/src/orders.ts": ordersFile,
-      ".catamorphic/workflows/src/app-api.ts": `
+      ".work/workflows/src/orders.ts": ordersFile,
+      ".work/workflows/src/app-api.ts": `
 import { listOrders } from "./orders.js";
 
 const helper = async () => [];
@@ -570,8 +658,8 @@ export const appApi = { listOrders, sneaky: helper };
 
   it("rejects computed or non-identifier entries", () => {
     const files = {
-      ".catamorphic/workflows/src/orders.ts": ordersFile,
-      ".catamorphic/workflows/src/app-api.ts": `
+      ".work/workflows/src/orders.ts": ordersFile,
+      ".work/workflows/src/app-api.ts": `
 import * as orders from "./orders.js";
 
 export const appApi = { listOrders: orders.listOrders };
@@ -589,73 +677,88 @@ export const appApi = { listOrders: orders.listOrders };
 describe("executionFiles", () => {
   it("preserves locked manifests but never includes frontend source", () => {
     const files = {
-      ".catamorphic/bun.lock": "locked dependency bytes",
-      ".catamorphic/package.json": JSON.stringify({
+      ".work/bun.lock": "locked dependency bytes",
+      ".work/package.json": JSON.stringify({
         devDependencies: { "@catamorphic/parser": "0.0.1" },
       }),
-      ".catamorphic/contracts/package.json": JSON.stringify({
+      ".work/contracts/package.json": JSON.stringify({
         devDependencies: { "@catamorphic/app": "0.0.4" },
       }),
-      ".catamorphic/apps/dashboard/package.json": JSON.stringify({
+      ".work/apps/dashboard/package.json": JSON.stringify({
         name: "dashboard",
         dependencies: { react: "19.0.0" },
       }),
-      ".catamorphic/apps/dashboard/src/main.tsx":
-        "export default function App() {}",
-      ".catamorphic/workflows/src/quote.ts": "export const quote = 1;",
+      ".work/apps/dashboard/src/main.tsx": "export default function App() {}",
+      ".work/workflows/src/quote.ts": "export const quote = 1;",
     };
     const result = executionFiles(files);
-    expect(result[".catamorphic/package.json"]).toBe(
-      files[".catamorphic/package.json"],
+    expect(result[".work/package.json"]).toBe(files[".work/package.json"]);
+    expect(result[".work/contracts/package.json"]).toBe(
+      files[".work/contracts/package.json"],
     );
-    expect(result[".catamorphic/contracts/package.json"]).toBe(
-      files[".catamorphic/contracts/package.json"],
+    expect(result[".work/apps/dashboard/package.json"]).toBe(
+      files[".work/apps/dashboard/package.json"],
     );
-    expect(result[".catamorphic/apps/dashboard/package.json"]).toBe(
-      files[".catamorphic/apps/dashboard/package.json"],
-    );
-    expect(result[".catamorphic/bun.lock"]).toBe(
-      files[".catamorphic/bun.lock"],
-    );
-    expect(result).not.toHaveProperty(
-      ".catamorphic/apps/dashboard/src/main.tsx",
-    );
-    expect(result[".catamorphic/workflows/src/quote.ts"]).toBe(
-      files[".catamorphic/workflows/src/quote.ts"],
+    expect(result[".work/bun.lock"]).toBe(files[".work/bun.lock"]);
+    expect(result).not.toHaveProperty(".work/apps/dashboard/src/main.tsx");
+    expect(result[".work/workflows/src/quote.ts"]).toBe(
+      files[".work/workflows/src/quote.ts"],
     );
   });
   it("drops app sources and strips the frontend-only runtime dependency", () => {
     const files = {
-      ".catamorphic/package.json": JSON.stringify({
+      ".work/package.json": JSON.stringify({
         name: "root",
         workspaces: ["contracts"],
       }),
-      ".catamorphic/contracts/package.json": JSON.stringify({
+      ".work/contracts/package.json": JSON.stringify({
         name: "@project/contracts",
         devDependencies: { "@catamorphic/app": "0.0.1" },
       }),
-      ".catamorphic/workflows/package.json": JSON.stringify({
+      ".work/workflows/package.json": JSON.stringify({
         name: "@project/workflows",
         dependencies: { "@catamorphic/workflow": "0.0.3" },
       }),
-      ".catamorphic/workflows/src/a.ts": "export const a = 1;",
-      ".catamorphic/apps/dashboard/src/main.tsx": "export {};",
+      ".work/workflows/src/a.ts": "export const a = 1;",
+      ".work/apps/dashboard/src/main.tsx": "export {};",
     };
 
     const result = executionFiles(files);
 
     expect(Object.keys(result).sort()).toEqual([
-      ".catamorphic/contracts/package.json",
-      ".catamorphic/package.json",
-      ".catamorphic/workflows/package.json",
-      ".catamorphic/workflows/src/a.ts",
+      ".work/contracts/package.json",
+      ".work/package.json",
+      ".work/workflows/package.json",
+      ".work/workflows/src/a.ts",
     ]);
-    expect(result[".catamorphic/contracts/package.json"]).not.toContain(
+    expect(result[".work/contracts/package.json"]).not.toContain(
       "@catamorphic/app",
     );
     // Untouched manifests pass through byte-identical (digest stability).
-    expect(result[".catamorphic/workflows/package.json"]).toBe(
-      files[".catamorphic/workflows/package.json"],
+    expect(result[".work/workflows/package.json"]).toBe(
+      files[".work/workflows/package.json"],
+    );
+  });
+
+  it("strips the root's type-only workflow package but keeps the workflows package's", () => {
+    const files = {
+      ".work/package.json": JSON.stringify({
+        devDependencies: {
+          "@catamorphic/parser": "0.0.1",
+          "@catamorphic/workflow": "0.0.3",
+          typescript: "5.9.0",
+        },
+      }),
+      ".work/workflows/package.json": JSON.stringify({
+        dependencies: { "@catamorphic/workflow": "0.0.3" },
+      }),
+    };
+    const result = executionFiles(files);
+    expect(JSON.parse(result[".work/package.json"] ?? "{}")).toEqual({
+      devDependencies: { typescript: "5.9.0" },
+    });
+    expect(result[".work/workflows/package.json"]).toBe(
+      files[".work/workflows/package.json"],
     );
   });
 });

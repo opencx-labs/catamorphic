@@ -275,7 +275,7 @@ memory of *why* the app is the way it is.
   is shown so users/agents know where the JSON lives.
 - The chat agent can reconfigure the app: DesktopConfigAgent wraps the
   coding agent, staging a `configuring-catamorphic-desktop` skill and a
-  fresh keybindings mirror at `.catamorphic/desktop/keybindings.json` in
+  fresh keybindings mirror at `.work/desktop/keybindings.json` in
   the sandbox before every turn, and applying mirror edits after the
   turn (in a `finally`, before core's draft sync). Mirror commits keep
   config files out of the user's project drafts. Mechanism generalizes:
@@ -506,7 +506,7 @@ memory of *why* the app is the way it is.
 - The palette became data: **`<userData>/profiles/<id>/theme.json`** holds
   `{ preset, overrides }`, following the keybindings/sidebar pattern —
   plain JSON, profile-local, file-watched, applies live, and staged as an
-  agent mirror file (`.catamorphic/desktop/theme.json`) so "make the
+  agent mirror file (`.work/desktop/theme.json`) so "make the
   accent purple" is a chat request.
 - Four presets ship in `src/main/theme.ts`: **Catamorphic Dark**
   (default — identical to the old hardcoded palette), **Catamorphic
@@ -1543,15 +1543,15 @@ by [chat state](docs/chat-state.md) and [workspace interactions](docs/workspace-
   `systemPrompt` (replacing the SDK preset), so those sessions get no
   desktop persona at all — persona parity across harnesses.
 
-### 2026-08-13 — General-purpose projects: lazy scaffold + `.catamorphic/` (ADR 0043)
-- A blank project is now a git repo + `.catamorphic/project.json` + the
+### 2026-08-13 — General-purpose projects: lazy scaffold + `.work/` (ADR 0043)
+- A blank project is now a git repo + `.work/project.json` + the
   hidden seed skills — no visible workspace files. The bun workspace
   (contracts/workflows/apps) appears on demand: templates carry it, and
   agents install it via the new `catamorphic-projects` seed skill, whose
   support files ARE the canonical scaffold (generated from the same
   constants as the template scaffold — `ProjectManager`'s drifted
   duplicate blank scaffold is deleted).
-- `.catamorphic/` is the project-owned metadata dir (walker-allowlisted
+- `.work/` is the project-owned metadata dir (walker-allowlisted
   like `.agents/`, which also fixes a latent permanently-dirty-tree
   asymmetry: `status()` saw dotfiles the commit walker skipped). Cloned
   imports stay pristine — no manifest is written on `cloneFrom`.
@@ -1564,7 +1564,7 @@ by [chat state](docs/chat-state.md) and [workspace interactions](docs/workspace-
 ### 2026-08-13 — Checkpoint commits, remote sync, agent git verbs (ADR 0044)
 - **Every turn that changed files ends in a checkpoint commit** at the
   point where both harness families converge (sandbox sync-back done /
-  host edits already in the tree), authored "Catamorphic Agent", subject
+  host edits already in the tree), authored "Work Agent", subject
   from the user's request, sha stamped on the assistant message
   (`agent_messages.commit_sha`, previously never written). Sweeps the
   whole dirty tree — host harnesses under-report changed files, and a
@@ -1577,7 +1577,7 @@ by [chat state](docs/chat-state.md) and [workspace interactions](docs/workspace-
 - **Linked projects sync automatically**: after each settled turn, at
   boot, and every 10 minutes, `RemoteSyncService` converges local `main`
   with the remote — push/ff-pull when one side is ahead, clean 3-way
-  merge when diverged, **rescue branch** (`catamorphic/diverged-…`) on
+  merge when diverged, **rescue branch** (`work/diverged-…`) on
   merge conflict so no work is ever stranded, and a hard rule that a
   background sync never touches a dirty tree and never leaves conflict
   markers.
@@ -1598,10 +1598,10 @@ by [chat state](docs/chat-state.md) and [workspace interactions](docs/workspace-
   the honest model while desktop projects are single-user.
 
 ### 2026-08-13 — Layered sidebar config (project-local → project → profile)
-- Revises 2026-08-01 "Customizable sidebar": with `.catamorphic/` as the
+- Revises 2026-08-01 "Customizable sidebar": with `.work/` as the
   project-owned metadata dir (ADR 0043), the sidebar resolves the FIRST
   existing layer — `profiles/<id>/sidebar-projects/<projectId>.js` (this
-  user's override for one project), `<root>/.catamorphic/sidebar.js`
+  user's override for one project), `<root>/.work/sidebar.js`
   (the project's shared default; a normal git-tracked file that travels
   with the repo), `profiles/<id>/sidebar.js` (profile-global), built-in
   default. One format, one eval+sanitize path for every layer
@@ -1616,18 +1616,18 @@ by [chat state](docs/chat-state.md) and [workspace interactions](docs/workspace-
   what any renderer should show. The renderer refetches, keyed on the
   active project. Non-profile layer files are watched lazily — first
   request for a project's config registers watchers that tolerate the
-  file *and* its directory not existing yet (`.catamorphic/` is opt-in).
+  file *and* its directory not existing yet (`.work/` is opt-in).
 - **Agent editability follows the layering**: the shared
-  `.catamorphic/sidebar.js` is edited as a NORMAL project file (file
+  `.work/sidebar.js` is edited as a NORMAL project file (file
   tools, syncs to collaborators — deliberately not a mirror), while two
   sandbox mirrors cover the personal layers:
-  `.catamorphic/desktop/sidebar.local.js` ↔ this user's view of THIS
+  `.work/desktop/sidebar.local.js` ↔ this user's view of THIS
   project (staged empty when no override exists; empty is never a
-  deletion) and `.catamorphic/desktop/sidebar.js` ↔ the global
+  deletion) and `.work/desktop/sidebar.js` ↔ the global
   fallback. Both mirrors keep the ≥1-section validity guard and apply
   independently.
 - Nothing is seeded into projects: a project that wants a shared layout
-  opts in by creating `.catamorphic/sidebar.js`.
+  opts in by creating `.work/sidebar.js`.
 
 ### 2026-08-13 — The desktop is a dev shell (ADR 0045)
 - **Engineers are first-class users.** Import a real monorepo and the app
@@ -3000,7 +3000,7 @@ there is no shortcut to float the current tab.
   failure preserves local work and never pretends the project was disconnected.
 - **Reconnect starts from the project, not a blank form.** Every remote working
   copy keeps a gitignored, credential-free locator in
-  `.catamorphic/remote.json`. The server and remote project remain visible even
+  `.work/remote.json`. The server and remote project remain visible even
   if encrypted profile credentials or app data are unavailable, so the recovery
   action can open browser sign-in in place.
 - **Sending while remote access is broken is explicit.** The local message is
@@ -3322,7 +3322,7 @@ there is no shortcut to float the current tab.
 ### Project-shaped navigation and one session inspector (2026-09-04)
 
 - **Projects ship their default sidebar.** The shared
-  `.catamorphic/sidebar.js` remains the project's authored navigation for its
+  `.work/sidebar.js` remains the project's authored navigation for its
   members, including builder surfaces such as Changes and Pull Requests when
   the project wants them. The renderer narrows that presentation to the
   current caller's capabilities. A profile or per-project personal override

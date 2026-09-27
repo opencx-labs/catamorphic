@@ -6,9 +6,9 @@ import {
   CheckoutRemoteBackend,
   FsBackend,
   FsRemoteBackend,
-  PROJECT_MANIFEST_PATH,
   ProjectManager,
 } from "@catamorphic/git";
+import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
@@ -114,7 +114,7 @@ describe("project Environment policy persistence", () => {
         (await service.list({ identity: scoped, projectId: project.id }))
           .defaultEnvironment,
       ).toBe("default");
-      expect(await fs.readdir(root)).toEqual([".catamorphic"]);
+      expect(await fs.readdir(root)).toEqual([".work"]);
       const sha = await repo.commit("Publish policy", {
         name: "Test",
         email: "test@example.com",

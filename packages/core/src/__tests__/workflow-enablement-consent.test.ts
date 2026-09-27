@@ -12,7 +12,6 @@ const base = {
   connections: [
     {
       alias: "mail",
-      bindingId: "binding-1",
       connectionId: "connection-1",
       providerKind: "mcp",
       principalKind: "member" as const,

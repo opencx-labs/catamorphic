@@ -82,7 +82,7 @@ it.skipIf(!process.env.DATABASE_URL)(
         {
           message: "Configure machine policy",
           files: {
-            ".catamorphic/project.json": JSON.stringify({
+            ".work/project.json": JSON.stringify({
               environments: {
                 primary: {
                   pool: { node: aHealth.machine.id },
@@ -96,15 +96,14 @@ it.skipIf(!process.env.DATABASE_URL)(
               defaultEnvironment: "primary",
               defaultAgent: "researcher",
             }),
-            ".catamorphic/agents/researcher.json": JSON.stringify({
+            ".work/agents/researcher.json": JSON.stringify({
               version: 1,
               name: "Researcher",
               kind: "builtin",
               environment: { allowed: ["secondary"], preferred: ["secondary"] },
             }),
-            ".catamorphic/agents/researcher.md":
-              "Use the shared company sources.",
-            ".catamorphic/roles/member.json": JSON.stringify({
+            ".work/agents/researcher.md": "Use the shared company sources.",
+            ".work/roles/member.json": JSON.stringify({
               version: 1,
               name: "Member",
               agents: ["researcher"],
@@ -217,14 +216,12 @@ it.skipIf(!process.env.DATABASE_URL)(
           use: (value) => Buffer.from(value).toString(),
         }),
       ).toBe("private credential");
-      const brokerA = new DurableToolPermissionBroker(
-        a.catamorphic.core.db,
-        5000,
-      );
-      const brokerB = new DurableToolPermissionBroker(
-        b.catamorphic.core.db,
-        5000,
-      );
+      const brokerA = new DurableToolPermissionBroker(a.catamorphic.core.db, {
+        timeoutMs: 5000,
+      });
+      const brokerB = new DurableToolPermissionBroker(b.catamorphic.core.db, {
+        timeoutMs: 5000,
+      });
       const permission = brokerA.handlerFor("Researcher")({
         sessionId: session.id,
         server: "crm",

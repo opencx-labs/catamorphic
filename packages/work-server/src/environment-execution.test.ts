@@ -5,12 +5,13 @@ import path from "node:path";
 import type { Identity } from "@catamorphic/core";
 import { type DB, DEFAULT_SCHEMA } from "@catamorphic/db";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
-import type {
-  AgentEvent,
-  CodingAgentProvider,
-  EnvironmentRuntimeBinding,
-  ProviderSession,
-  StartSessionOpts,
+import {
+  type AgentEvent,
+  type CodingAgentProvider,
+  type EnvironmentRuntimeBinding,
+  followProcess,
+  type ProviderSession,
+  type StartSessionOpts,
 } from "@catamorphic/sandbox";
 import {
   createCatamorphic,
@@ -115,7 +116,7 @@ it("an embedded host executes each session on its Allocation and rejects revoked
       project.id,
     );
     await repo.writeFile(
-      ".catamorphic/project.json",
+      ".work/project.json",
       JSON.stringify({
         environments: {
           a: { pool: { machine: "a" }, workloads: ["agent"] },
@@ -177,7 +178,7 @@ it("an embedded host executes each session on its Allocation and rejects revoked
       project.id,
     );
     await changed.writeFile(
-      ".catamorphic/project.json",
+      ".work/project.json",
       JSON.stringify({
         environments: {
           b: { pool: { machine: "a" }, workloads: ["agent"] },
@@ -244,7 +245,7 @@ it("an authenticated member executes on this machine and loses execution immedia
       project.id,
     );
     await repo.writeFile(
-      ".catamorphic/project.json",
+      ".work/project.json",
       JSON.stringify({
         environments: {
           personal: { device: "member", workloads: ["agent"] },
@@ -268,6 +269,7 @@ it("an authenticated member executes on this machine and loses execution immedia
       environment: "personal",
       label: "Laptop",
       workspaceRoot: provider.workspaceRoot,
+      processes: true,
     });
     await expect(
       service.poll({
@@ -281,6 +283,9 @@ it("an authenticated member executes on this machine and loses execution immedia
         renew: () => service.renew({ ...lease, identity }),
         poll: () => service.poll({ ...lease, identity }),
         complete: async (receipt) => {
+          // The receipt route's bound on an error message.
+          if ((receipt.error?.length ?? 0) > 4000)
+            throw new Error("Receipt refused: error too long");
           await service.complete({ ...lease, identity, ...receipt });
         },
         disconnect: () => service.disconnect({ ...lease, identity }),
@@ -296,6 +301,74 @@ it("an authenticated member executes on this machine and loses execution immedia
       "Where am I?",
     );
     expect(result.content).toContain(path.join(directory, "employee-machine"));
+    // Background processes run on the member's machine, followed through
+    // short queued operations (ADR 0174).
+    const member = await service.binding({
+      tenantId: identity.tenantId,
+      ownerUserId: identity.externalUserId,
+      projectId: project.id,
+      clientRunnerId: identity.clientRunnerId,
+    });
+    const processes = member?.sandboxProvider?.processes;
+    const sandboxId = agent.sessions.get(session.id)?.sandboxId;
+    if (!processes || !sandboxId) throw new Error("Member processes missing");
+    const started = await processes.startProcess({
+      sandboxId,
+      command: "echo from-member; sleep 0.2; exit 4",
+    });
+    await expect(
+      followProcess({
+        processes,
+        sandboxId,
+        processId: started.processId,
+        cursor: 0,
+        timeoutMs: 20_000,
+      }),
+    ).resolves.toMatchObject({
+      output: "from-member\n",
+      status: "exited",
+      exitCode: 4,
+    });
+    // Output Postgres cannot store as is (NUL) still arrives.
+    const binary = await processes.startProcess({
+      sandboxId,
+      command: "printf 'a\\0b'",
+    });
+    await expect(
+      followProcess({
+        processes,
+        sandboxId,
+        processId: binary.processId,
+        cursor: 0,
+        timeoutMs: 20_000,
+      }),
+    ).resolves.toMatchObject({ output: "a�b", status: "exited" });
+    // A failure with a long message fails that operation, not the runner.
+    await expect(
+      member.sandboxProvider?.downloadFile(
+        sandboxId,
+        `/workspace/${"missing-".repeat(700)}`,
+      ),
+    ).rejects.toThrow();
+    // A read waiting for output does not hold up other operations.
+    const quiet = await processes.startProcess({
+      sandboxId,
+      command: "sleep 15",
+    });
+    const waiting = processes.readProcessOutput({
+      sandboxId,
+      processId: quiet.processId,
+      waitMs: 12_000,
+    });
+    const listedAt = Date.now();
+    await processes.listProcesses({ sandboxId });
+    expect(Date.now() - listedAt).toBeLessThan(5_000);
+    await processes.signalProcess({
+      sandboxId,
+      processId: quiet.processId,
+      signal: "SIGKILL",
+    });
+    await waiting;
     const oldBinding = (
       await cat.core.executionAllocations.get({
         identity,
@@ -328,6 +401,17 @@ it("an authenticated member executes on this machine and loses execution immedia
       label: "Laptop",
       workspaceRoot: provider.workspaceRoot,
     });
+    // A runner that does not say it runs processes is not offered them.
+    expect(
+      (
+        await service.binding({
+          tenantId: identity.tenantId,
+          ownerUserId: identity.externalUserId,
+          projectId: project.id,
+          clientRunnerId: identity.clientRunnerId,
+        })
+      )?.sandboxProvider?.processes,
+    ).toBeUndefined();
     expect(
       await service.binding({
         tenantId: identity.tenantId,

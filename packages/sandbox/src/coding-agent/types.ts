@@ -3,6 +3,7 @@ import type {
   TurnContextFragment,
 } from "../agent-capabilities.js";
 import type { AgentEvent, AgentQuestion, SandboxProvider } from "../types.js";
+import type { HarnessPermissions } from "./harness-permissions.js";
 import type { McpToolPolicyLayers } from "./tool-policy.js";
 
 /**
@@ -43,6 +44,12 @@ export interface StartSessionOpts {
   userId: string;
   sandboxId: string;
   workingDirectory: string;
+  /**
+   * The Environment's budget for one foreground command, in seconds (ADR
+   * 0174). Harnesses that run commands through the sandbox bound their
+   * shell by it; absent means the harness default.
+   */
+  commandTimeoutSeconds?: number;
   /**
    * The host-side chat session id this provider session anchors (not the
    * provider's own id). Lets host-supplied tools attribute the surfaces
@@ -224,8 +231,44 @@ export interface AgentTextAttachment {
 
 export type AgentAttachment = AgentMediaAttachment | AgentTextAttachment;
 
+/**
+ * A model reached through the connection gateway from inside a sandbox
+ * (ADR 0180). The harness process there sends the provider's own HTTP API
+ * to `baseUrl` with the session's grant, read from `keyFile` at each use,
+ * as its API key; the gateway forwards with the real key.
+ */
+export interface SandboxModelGateway {
+  /** The Environment binding alias of the model connection. */
+  alias: string;
+  /** Which HTTP API the connection's provider speaks. */
+  api: "anthropic" | "openai";
+  /**
+   * Where the provider's paths go: `<baseUrl>/v1/messages` for Anthropic
+   * (an `ANTHROPIC_BASE_URL`), `<baseUrl>/responses` for OpenAI (an
+   * `OPENAI_BASE_URL`).
+   */
+  baseUrl: string;
+  /** Absolute sandbox path of the file holding the current grant. */
+  keyFile: string;
+}
+
+/**
+ * The sandbox a turn runs in, for harnesses that run their own process
+ * inside it (ADR 0180). Host-only; never crosses an API boundary.
+ */
+export interface TurnSandbox {
+  provider: SandboxProvider;
+  sandboxId: string;
+  /** Absolute sandbox directory for the harness's own files. */
+  stateDirectory: string;
+}
+
 /** Per-turn overrides; anything unset falls back to the provider's defaults. */
 export interface TurnOptions {
+  /** The session's sandbox, for sandbox-resident harnesses (ADR 0180). */
+  sandbox?: TurnSandbox;
+  /** The agent's model through the gateway (ADR 0180). */
+  modelGateway?: SandboxModelGateway;
   /** Host-owned question persistence and answer delivery. */
   askQuestion?: (input: {
     requestId: string;
@@ -247,6 +290,12 @@ export interface TurnOptions {
   capabilities?: AgentCapabilityGateway;
   model?: string;
   effort?: AgentEffort;
+  /**
+   * The harness's own permission mode for this turn (ADR 0182), in its
+   * native values. Overrides the harness's configured default; a harness
+   * ignores the fields it does not have.
+   */
+  harnessPermissions?: HarnessPermissions;
   /** Media sent with this turn's user message. */
   attachments?: AgentAttachment[];
   /**

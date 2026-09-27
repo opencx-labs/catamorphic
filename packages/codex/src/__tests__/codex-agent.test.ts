@@ -1,5 +1,9 @@
 import { access, readFile } from "node:fs/promises";
-import type { ProviderSession } from "@catamorphic/sandbox";
+import type {
+  ProviderSession,
+  SandboxProvider,
+  TurnOptions,
+} from "@catamorphic/sandbox";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,6 +27,35 @@ vi.mock("../app-server.js", () => ({
 
 import { CodexAgent } from "../codex-agent.js";
 
+/** A sandbox whose operations are never reached in these tests. */
+function fakeSandboxProvider(withProcesses: boolean): SandboxProvider {
+  const never = () => Promise.reject(new Error("not in this test"));
+  return {
+    workspaceRoot: "/workspace",
+    createSandbox: never,
+    startSandbox: never,
+    stopSandbox: never,
+    destroySandbox: never,
+    getSandboxStatus: never,
+    executeCommand: never,
+    uploadFiles: never,
+    downloadFile: never,
+    gitClone: never,
+    gitCheckout: never,
+    ...(withProcesses
+      ? {
+          processes: {
+            startProcess: never,
+            readProcessOutput: never,
+            signalProcess: never,
+            listProcesses: never,
+            writeProcessInput: never,
+          },
+        }
+      : {}),
+  };
+}
+
 const session: ProviderSession = {
   providerSessionId: "thread-1",
   sessionId: "chat-1",
@@ -45,9 +78,10 @@ async function collect(
   agent: CodexAgent,
   message: string,
   providerSession: ProviderSession = session,
+  turn?: TurnOptions,
 ) {
   const events = [];
-  for await (const event of agent.sendMessage(providerSession, message)) {
+  for await (const event of agent.sendMessage(providerSession, message, turn)) {
     events.push(event);
   }
   return events;
@@ -74,6 +108,126 @@ describe("CodexAgent", () => {
       expect.objectContaining({ approvalPolicy: "on-request" }),
     );
     await agent.dispose(session);
+  });
+
+  it("defaults to workspace-write without approvals on the host", async () => {
+    resumeThread.mockReturnValueOnce(
+      scriptedThread([{ type: "turn.completed", usage: dummyUsage() }]),
+    );
+    const agent = new CodexAgent({});
+    await collect(agent, "continue");
+    expect(resumeThread).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        sandboxMode: "workspace-write",
+        approvalPolicy: "never",
+      }),
+    );
+    await agent.dispose(session);
+  });
+
+  it("honors the configured sandbox and approvals, and a turn's own (ADR 0182)", async () => {
+    resumeThread.mockReturnValue(
+      scriptedThread([{ type: "turn.completed", usage: dummyUsage() }]),
+    );
+    const agent = new CodexAgent({
+      sandboxMode: "danger-full-access",
+      approvalPolicy: "untrusted",
+      onToolPermission: async () => ({ decision: "deny" }),
+    });
+    await collect(agent, "continue");
+    expect(resumeThread).toHaveBeenLastCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        sandboxMode: "danger-full-access",
+        approvalPolicy: "untrusted",
+      }),
+    );
+    await collect(agent, "continue", session, {
+      harnessPermissions: {
+        sandbox: "read-only",
+        approvals: "on-failure",
+        permissionMode: "bypassPermissions",
+      },
+    });
+    expect(resumeThread).toHaveBeenLastCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        sandboxMode: "read-only",
+        approvalPolicy: "on-failure",
+      }),
+    );
+    await agent.dispose(session);
+  });
+
+  it("runs the app server in the turn's sandbox with the gateway as its model provider (ADR 0180)", async () => {
+    startThread.mockReturnValue(
+      scriptedThread([
+        { type: "thread.started", thread_id: "thread-9" },
+        {
+          type: "turn.completed",
+          usage: {
+            input_tokens: 1,
+            cached_input_tokens: 0,
+            output_tokens: 1,
+            reasoning_output_tokens: 0,
+            cache_write_input_tokens: 0,
+          },
+        },
+      ]),
+    );
+    const agent = new CodexAgent({ sandbox: {}, apiKey: "host-key" });
+    const events = [];
+    for await (const event of agent.sendMessage(
+      { ...session, providerSessionId: null },
+      "hello",
+      {
+        sandbox: {
+          provider: fakeSandboxProvider(true),
+          sandboxId: "sandbox-1",
+          stateDirectory: "/workspace/.work-session",
+        },
+        modelGateway: {
+          alias: "openai",
+          api: "openai",
+          baseUrl: "https://work.example.test/api/gateway/model/openai",
+          keyFile: "/workspace/.work-session/grants/openai",
+        },
+      },
+    ))
+      events.push(event);
+    expect(events.at(-1)).toMatchObject({ type: "done" });
+    const options = codexCtor.mock.calls[0]?.[0];
+    // No host key and no host environment: the gateway is the provider.
+    expect(options).not.toHaveProperty("apiKey");
+    expect(options).not.toHaveProperty("env");
+    expect(options.codexPathOverride).toBe("codex");
+    expect(options.config).toMatchObject({
+      model_provider: "work",
+      model_providers: {
+        work: {
+          base_url: "https://work.example.test/api/gateway/model/openai",
+          wire_api: "responses",
+          auth: { command: "sh", args: ["-c", 'cat "$WORK_MODEL_KEY_FILE"'] },
+        },
+      },
+    });
+  });
+
+  it("refuses a sandbox turn whose sandbox cannot run processes", async () => {
+    const agent = new CodexAgent({ sandbox: {} });
+    const events = [];
+    for await (const event of agent.sendMessage(session, "hello", {
+      sandbox: {
+        provider: fakeSandboxProvider(false),
+        sandboxId: "sandbox-1",
+        stateDirectory: "/workspace/.work-session",
+      },
+    }))
+      events.push(event);
+    expect(events[0]).toMatchObject({ type: "error" });
+    expect(String(events[0]?.content)).toContain("cannot run it");
+    expect(codexCtor).not.toHaveBeenCalled();
   });
 
   it("keeps completed SDK error items non-fatal", async () => {

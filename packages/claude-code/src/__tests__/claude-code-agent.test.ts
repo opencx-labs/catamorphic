@@ -1,4 +1,4 @@
-import type { ProviderSession } from "@catamorphic/sandbox";
+import type { ProviderSession, SandboxProvider } from "@catamorphic/sandbox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -44,6 +44,35 @@ const successResult = {
   is_error: false,
   result: "ok",
 };
+
+/** A sandbox whose operations are never reached in these tests. */
+function fakeSandboxProvider(withProcesses: boolean): SandboxProvider {
+  const never = () => Promise.reject(new Error("not in this test"));
+  return {
+    workspaceRoot: "/workspace",
+    createSandbox: never,
+    startSandbox: never,
+    stopSandbox: never,
+    destroySandbox: never,
+    getSandboxStatus: never,
+    executeCommand: never,
+    uploadFiles: never,
+    downloadFile: never,
+    gitClone: never,
+    gitCheckout: never,
+    ...(withProcesses
+      ? {
+          processes: {
+            startProcess: never,
+            readProcessOutput: never,
+            signalProcess: never,
+            listProcesses: never,
+            writeProcessInput: never,
+          },
+        }
+      : {}),
+  };
+}
 
 const session: ProviderSession = {
   providerSessionId: "sess-1",
@@ -213,6 +242,65 @@ describe("ClaudeCodeAgent", () => {
     expect(lastQueryOptions().effort).toBeUndefined();
   });
 
+  it("runs the CLI in the turn's sandbox with only the gateway's address and a key helper (ADR 0180)", async () => {
+    queryMock.mockReturnValue(scriptedQuery([successResult]));
+    process.env.HOST_ONLY_SECRET = "host-secret";
+    const provider = fakeSandboxProvider(true);
+    const agent = new ClaudeCodeAgent({ sandbox: {} });
+    try {
+      await collect(agent, "hello", {
+        sandbox: {
+          provider,
+          sandboxId: "sandbox-1",
+          stateDirectory: "/workspace/.work-session",
+        },
+        modelGateway: {
+          alias: "anthropic",
+          api: "anthropic",
+          baseUrl: "https://work.example.test/api/gateway/model/anthropic",
+          keyFile: "/workspace/.work-session/grants/anthropic",
+        },
+      });
+    } finally {
+      delete process.env.HOST_ONLY_SECRET;
+    }
+    const options = queryMock.mock.calls[0]?.[0].options;
+    expect(options?.env).toMatchObject({
+      ANTHROPIC_BASE_URL:
+        "https://work.example.test/api/gateway/model/anthropic",
+    });
+    expect(options?.env?.HOST_ONLY_SECRET).toBeUndefined();
+    expect(options?.env?.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(options?.settings).toEqual({
+      apiKeyHelper: 'cat "$WORK_MODEL_KEY_FILE"',
+    });
+    expect(options?.pathToClaudeCodeExecutable).toBe("claude");
+    expect(typeof options?.spawnClaudeCodeProcess).toBe("function");
+  });
+
+  it("refuses a sandbox turn without a model connection it can speak", async () => {
+    const agent = new ClaudeCodeAgent({ sandbox: {} });
+    const sandbox = {
+      provider: fakeSandboxProvider(true),
+      sandboxId: "sandbox-1",
+      stateDirectory: "/workspace/.work-session",
+    };
+    const missing = await collect(agent, "hello", { sandbox });
+    expect(missing[0]).toMatchObject({ type: "error" });
+    expect(String(missing[0]?.content)).toContain("no model connection");
+    const openai = await collect(agent, "hello", {
+      sandbox,
+      modelGateway: {
+        alias: "openai",
+        api: "openai",
+        baseUrl: "https://work.example.test/api/gateway/model/openai",
+        keyFile: "/workspace/.work-session/grants/openai",
+      },
+    });
+    expect(String(openai[0]?.content)).toContain("speaks the Anthropic API");
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
   it("denies tools outside the allowlist via canUseTool", async () => {
     queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
     const agent = new ClaudeCodeAgent();
@@ -268,6 +356,65 @@ describe("ClaudeCodeAgent", () => {
     expect(options.allowedTools).toContain(
       "mcp__workspace__run_background_command",
     );
+  });
+
+  it("passes every native permission mode through; bypass says it is deliberate (ADR 0182)", async () => {
+    for (const permissionMode of [
+      "default",
+      "acceptEdits",
+      "auto",
+      "dontAsk",
+      "bypassPermissions",
+    ] as const) {
+      queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+      await collect(new ClaudeCodeAgent({ permissionMode }), "Go");
+      const options = lastQueryOptions();
+      expect(options.permissionMode).toBe(permissionMode);
+      expect(options.allowDangerouslySkipPermissions).toBe(
+        permissionMode === "bypassPermissions" ? true : undefined,
+      );
+      expect(options.disallowedTools ?? []).not.toContain("Bash");
+    }
+  });
+
+  it("lets a turn's permission mode override the configured one", async () => {
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+    const agent = new ClaudeCodeAgent({ permissionMode: "acceptEdits" });
+    await collect(agent, "Plan it", {
+      harnessPermissions: { permissionMode: "plan", sandbox: "read-only" },
+    });
+    const options = lastQueryOptions();
+    expect(options.permissionMode).toBe("plan");
+    expect(options.disallowedTools).toContain("Bash");
+  });
+
+  it("bypasses permissions inside a sandbox as the sandbox it is", async () => {
+    queryMock.mockReturnValue(scriptedQuery([successResult]));
+    const agent = new ClaudeCodeAgent({ sandbox: {} });
+    const sandbox = {
+      provider: fakeSandboxProvider(true),
+      sandboxId: "sandbox-1",
+      stateDirectory: "/workspace/.work-session",
+    };
+    const modelGateway = {
+      alias: "anthropic",
+      api: "anthropic",
+      baseUrl: "https://work.example.test/api/gateway/model/anthropic",
+      keyFile: "/workspace/.work-session/grants/anthropic",
+    };
+    await collect(agent, "hello", {
+      sandbox,
+      modelGateway,
+      harnessPermissions: { permissionMode: "bypassPermissions" },
+    });
+    let options = lastQueryOptions();
+    expect(options.permissionMode).toBe("bypassPermissions");
+    expect(options.allowDangerouslySkipPermissions).toBe(true);
+    expect(options.env?.IS_SANDBOX).toBe("1");
+    await collect(agent, "hello", { sandbox, modelGateway });
+    options = lastQueryOptions();
+    expect(options.permissionMode).toBe("acceptEdits");
+    expect(options.env?.IS_SANDBOX).toBeUndefined();
   });
 
   it("keeps plan mode read-only despite native tool auto-approval", async () => {

@@ -5,6 +5,7 @@ import type {
   CapabilityProviderRuntime,
   CatamorphicCore,
   CatamorphicCoreConfig,
+  CodeHost,
   CodingAgentRegistry,
   ConnectionProvider,
   CredentialVault,
@@ -13,7 +14,6 @@ import type {
   DeploymentRuntimeRetirementResult,
   ExecutionWorkerHandle,
   ExecutionWorkerOptions,
-  GithubServiceConfig,
   Identity,
   McpToolKindSpec,
   NativeAgentCheckout,
@@ -138,6 +138,13 @@ export interface CatamorphicHostConfig {
   heldWorkerNodes?: CatamorphicCoreConfig["heldWorkerNodes"];
   /** Review every brokered connection action (ADR 0162). */
   connectionGuards?: CatamorphicCoreConfig["connectionGuards"];
+  /** How long one guard may take before its action escalates (ADR 0183). */
+  connectionGuardTimeoutMs?: CatamorphicCoreConfig["connectionGuardTimeoutMs"];
+  /**
+   * Connection aliases the host offers beside those committed in each
+   * Environment of `.work/project.json` (ADR 0172).
+   */
+  connectionBindings?: CatamorphicCoreConfig["connectionBindings"];
   /** Re-resolve current member authority before unattended dispatch. */
   resolveMemberIdentity?: CatamorphicCoreConfig["resolveMemberIdentity"];
   /** URL resolver for the Fastify plugin's brokered `/connection-mcp` route. */
@@ -146,6 +153,11 @@ export interface CatamorphicHostConfig {
     sessionId: string;
     alias: string;
   }) => string | undefined;
+  /**
+   * The plugin's gateway routes (`<api>/gateway`) as sandboxes reach them
+   * (ADR 0175); enables Git through the gateway for Git-capable aliases.
+   */
+  gatewayUrl?: CatamorphicCoreConfig["gatewayUrl"];
   /** Required once the host uses plugins + secrets. */
   pluginResolver?: PluginResolver;
   /**
@@ -177,12 +189,13 @@ export interface CatamorphicHostConfig {
   /** Hard cap on a built app bundle (js + css). Defaults to 5 MiB. */
   maxAppBundleBytes?: number;
   /**
-   * GitHub App registration enabling repo import + push-back. Embedders
-   * register their own GitHub App and pass its client id (and, when using the
-   * server-side web OAuth flow, its client secret). Omit to leave the GitHub
-   * surfaces disabled.
+   * Code hosts over connections (ADR 0177), e.g. `githubCodeHost(github)`
+   * beside `defineGithubConnectionProvider` in `connectionProviders`. Sync,
+   * pull requests, proposals, repository import, and publishing act through
+   * the caller's own connection to the host's provider, else the service
+   * connection named like the provider.
    */
-  github?: GithubServiceConfig;
+  codeHosts?: readonly CodeHost[];
   /**
    * The host's custom trigger kinds, built with `defineTriggerKind`.
    * Workflows subscribe with `triggers: [trigger("kind", config)]`; firing a
@@ -197,6 +210,12 @@ export interface CatamorphicHostConfig {
    * named kind. Every named kind must also appear in `triggerKinds`.
    */
   mcpToolKinds?: readonly McpToolKindSpec[];
+  /**
+   * Project webhook intake: `maxBodyBytes` is the largest body any endpoint
+   * may accept (default 1 MiB, at most 64 MiB). A binding's
+   * `trigger("webhook", { maxBodyBytes })` may ask for up to it.
+   */
+  webhooks?: { maxBodyBytes?: number };
   /**
    * Fires after a coding-agent chat turn settles — a natural place to fire
    * a chat trigger kind. Exceptions are swallowed and never delay the turn.
@@ -235,7 +254,7 @@ export interface CatamorphicHostConfig {
   projectSeeds?: (defaults: Record<string, string>) => Record<string, string>;
   /**
    * Transform the default host-tier skills: playbooks the host ships,
-   * listed alongside a project's own `.catamorphic/skills/` without being
+   * listed alongside a project's own `.work/skills/` without being
    * written into the project repo. Same contract as `projectSeeds`
    * (ADR 0049); a project skill with the same name shadows a host skill.
    */
@@ -258,14 +277,11 @@ export interface CatamorphicHostConfig {
   standingAgentPrompt?: string | false;
   /**
    * ADR 0055 knobs, passed through to core: where store bytes live, the
-   * roles cache, the identity whose GitHub connection opens members'
-   * proposals as pull requests, and whether agents' `store/` writes ship
-   * around turns (default on; a host whose folders are the truth sets
-   * false).
+   * roles cache, and whether agents' `store/` writes ship around turns
+   * (default on; a host whose folders are the truth sets false).
    */
   documentBlobStore?: CatamorphicCoreConfig["documentBlobStore"];
   rolesCacheTtlMs?: number;
-  proposalBot?: CatamorphicCoreConfig["proposalBot"];
   storeSyncAroundTurns?: boolean;
   /**
    * The HTTP answer surface for tool-permission asks (ADR 0054): harnesses
@@ -274,6 +290,11 @@ export interface CatamorphicHostConfig {
    * register one anyway and race the two.
    */
   toolPermissions?: CatamorphicCoreConfig["toolPermissions"];
+  /**
+   * Hosts and ports (`work.acme.com:443`) sandboxes reach this control plane
+   * at; restricted egress always allows them (ADR 0176).
+   */
+  gatewayHosts?: CatamorphicCoreConfig["gatewayHosts"];
 }
 
 function resolveDatabase(config: DatabaseConfig): {
@@ -360,8 +381,15 @@ export class Catamorphic {
       ...(config.connectionGuards
         ? { connectionGuards: config.connectionGuards }
         : {}),
+      ...(config.connectionGuardTimeoutMs
+        ? { connectionGuardTimeoutMs: config.connectionGuardTimeoutMs }
+        : {}),
+      ...(config.connectionBindings
+        ? { connectionBindings: config.connectionBindings }
+        : {}),
       resolveMemberIdentity: config.resolveMemberIdentity,
       connectionMcpUrl: config.connectionMcpUrl,
+      ...(config.gatewayUrl ? { gatewayUrl: config.gatewayUrl } : {}),
       pluginResolver: config.pluginResolver,
       codingAgent: config.codingAgent,
       nativeAgentCheckout: config.nativeAgentCheckout,
@@ -373,10 +401,11 @@ export class Catamorphic {
         : { deploymentRuntime: config.deploymentRuntime }),
       appBundleStore: config.appBundleStore,
       maxAppBundleBytes: config.maxAppBundleBytes,
-      github: config.github,
+      ...(config.codeHosts ? { codeHosts: config.codeHosts } : {}),
       triggerKinds: contributions.triggerKinds,
       projectEventSources: config.projectEventSources,
       mcpToolKinds: contributions.mcpToolKinds,
+      ...(config.webhooks ? { webhooks: config.webhooks } : {}),
       onAgentTurnSettled: config.onAgentTurnSettled,
       pushNotifications: config.pushNotifications,
       capabilityProviders: contributions.capabilityProviders,
@@ -387,9 +416,9 @@ export class Catamorphic {
       standingAgentPrompt: config.standingAgentPrompt,
       documentBlobStore: config.documentBlobStore,
       rolesCacheTtlMs: config.rolesCacheTtlMs,
-      proposalBot: config.proposalBot,
       storeSyncAroundTurns: config.storeSyncAroundTurns,
       toolPermissions: config.toolPermissions,
+      gatewayHosts: config.gatewayHosts,
     });
   }
 

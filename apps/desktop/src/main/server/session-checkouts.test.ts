@@ -72,7 +72,7 @@ describe("SessionCheckouts", () => {
         kind === "primary"
           ? rootPath
           : (await checkouts.createManaged({ projectId, sessionId })).path;
-      const personal = ".catamorphic/personal/profile-one/workflows/check.ts";
+      const personal = ".work/personal/profile-one/workflows/check.ts";
       await fs.mkdir(path.dirname(path.join(workingDirectory, personal)), {
         recursive: true,
       });
@@ -106,12 +106,123 @@ describe("SessionCheckouts", () => {
     },
   );
 
+  it("starts a worktree at a commit held by the host's mirror (ADR 0178)", async () => {
+    // A mirror holding a pull request head the project's checkout lacks.
+    const mirror = path.join(tmpDir, "mirror.git");
+    await execFileAsync("git", ["clone", "-q", "--bare", rootPath, mirror]);
+    const work = path.join(tmpDir, "pr-work");
+    await execFileAsync("git", ["clone", "-q", mirror, work]);
+    await fs.writeFile(path.join(work, "README.md"), "pull request\n");
+    await git(work, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-qam",
+      "Change",
+    ]);
+    const head = (await git(work, ["rev-parse", "HEAD"])).trim();
+    await git(work, ["push", "-q", mirror, `HEAD:refs/work/base/${sessionId}`]);
+
+    const created = await checkouts.createManaged({
+      projectId,
+      sessionId,
+      start: {
+        repository: mirror,
+        ref: `refs/work/base/${sessionId}`,
+        commit: head,
+      },
+    });
+    expect((await git(created.path, ["rev-parse", "HEAD"])).trim()).toBe(head);
+    expect(
+      await fs.readFile(path.join(created.path, "README.md"), "utf8"),
+    ).toBe("pull request\n");
+    expect(created.branch).toMatch(/^work\/22222222/);
+  });
+
+  it("moves a chat asked for a new base out of the project folder, never touching it (ADR 0178)", async () => {
+    const mirror = path.join(tmpDir, "move-mirror.git");
+    await execFileAsync("git", ["clone", "-q", "--bare", rootPath, mirror]);
+    const work = path.join(tmpDir, "move-work");
+    await execFileAsync("git", ["clone", "-q", mirror, work]);
+    await fs.writeFile(path.join(work, "README.md"), "new base\n");
+    await git(work, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-qam",
+      "Base",
+    ]);
+    const head = (await git(work, ["rev-parse", "HEAD"])).trim();
+    await git(work, ["push", "-q", mirror, `HEAD:refs/work/move/${sessionId}`]);
+    // The person's own work in the project folder.
+    const before = (await git(rootPath, ["rev-parse", "HEAD"])).trim();
+    await fs.writeFile(path.join(rootPath, "README.md"), "my edit\n");
+    await fs.writeFile(path.join(rootPath, "draft.md"), "untracked\n");
+    const requiresIsolation = async () => false;
+
+    // Without a base, the chat works in the project folder, which is not its own.
+    expect(
+      await checkouts.resolveForAgent({
+        projectId,
+        sessionId,
+        requiresIsolation,
+      }),
+    ).toEqual({ path: rootPath, owned: false });
+    // A pending move gives it its own worktree at the new base.
+    const moved = await checkouts.resolveForAgent({
+      projectId,
+      sessionId,
+      workspace: {
+        repository: mirror,
+        pin: `refs/work/move/${sessionId}`,
+        commit: head,
+      },
+      requiresIsolation,
+    });
+    expect(moved.owned).toBe(true);
+    expect(moved.path).not.toBe(rootPath);
+    expect((await git(moved.path, ["rev-parse", "HEAD"])).trim()).toBe(head);
+    expect((await git(rootPath, ["rev-parse", "HEAD"])).trim()).toBe(before);
+    expect(await fs.readFile(path.join(rootPath, "README.md"), "utf8")).toBe(
+      "my edit\n",
+    );
+    expect(await fs.readFile(path.join(rootPath, "draft.md"), "utf8")).toBe(
+      "untracked\n",
+    );
+    // Later turns stay in the chat's own worktree.
+    expect(
+      await checkouts.resolveForAgent({
+        projectId,
+        sessionId,
+        requiresIsolation,
+      }),
+    ).toEqual({ path: moved.path, owned: true });
+  });
+
+  it("never reports an assigned worktree as the chat's own", async () => {
+    const external = path.join(tmpDir, "assigned");
+    await git(rootPath, ["worktree", "add", "-q", "-b", "assigned", external]);
+    await checkouts.adopt({ projectId, sessionId, path: external });
+    const resolved = await checkouts.resolveForAgent({
+      projectId,
+      sessionId,
+      workspace: { repository: rootPath, pin: "refs/heads/main", commit: "0" },
+      requiresIsolation: async () => false,
+    });
+    expect(resolved.owned).toBe(false);
+    expect(resolved.path).toBe(await fs.realpath(external));
+  });
+
   it("keeps a new session on primary until it creates a worktree", async () => {
     expect(await checkouts.resolve({ projectId, sessionId })).toBe(rootPath);
 
     const created = await checkouts.createManaged({ projectId, sessionId });
     expect(created.kind).toBe("managed");
-    expect(created.branch).toMatch(/^catamorphic\/22222222/);
+    expect(created.branch).toMatch(/^work\/22222222/);
     expect(await checkouts.resolve({ projectId, sessionId })).toBe(
       created.path,
     );
@@ -145,8 +256,8 @@ describe("SessionCheckouts", () => {
       sessionId: secondSessionId,
     });
 
-    expect(first.branch).toBe("catamorphic/22222222");
-    expect(second.branch).toBe("catamorphic/22222222-1");
+    expect(first.branch).toBe("work/22222222");
+    expect(second.branch).toBe("work/22222222-1");
   });
 
   it("returns one managed checkout for parallel creation in the same session", async () => {
@@ -182,11 +293,7 @@ describe("SessionCheckouts", () => {
 
     await expect(fs.access(managedPath)).rejects.toThrow();
     await expect(
-      git(rootPath, [
-        "show-ref",
-        "--verify",
-        "refs/heads/catamorphic/22222222",
-      ]),
+      git(rootPath, ["show-ref", "--verify", "refs/heads/work/22222222"]),
     ).rejects.toThrow();
     expect(await checkouts.describe({ projectId, sessionId })).toMatchObject({
       kind: "primary",
@@ -394,7 +501,7 @@ describe("SessionCheckouts", () => {
       message: "Prepare review",
     });
 
-    expect(prepared.branch).toBe("catamorphic/22222222-review");
+    expect(prepared.branch).toBe("work/22222222-review");
     expect((await git(external, ["status", "--porcelain"])).trim()).toBe("");
     expect((await git(external, ["branch", "--show-current"])).trim()).toBe(
       prepared.branch,

@@ -14,7 +14,12 @@ export interface EnvironmentResourcePolicy {
   memoryMb?: number;
   storageMb?: number;
   gpu?: boolean;
-  timeoutSeconds?: number;
+  /**
+   * The longest one foreground command may run (ADR 0174): an agent's
+   * shell command, a workflow step's sandbox command. Background processes
+   * are bounded by their sandbox's lifetime instead.
+   */
+  commandTimeoutSeconds?: number;
   maxConcurrency?: number;
 }
 
@@ -58,7 +63,8 @@ export interface EnvironmentProvider {
     projectId?: string;
     /**
      * Whose work this is: the session owner. Absent for project-owned work,
-     * which only nodes open to everyone take (ADR 0167).
+     * which only nodes open to everyone or to `projectId` take (ADR 0167,
+     * 0173).
      */
     ownerUserId?: string;
     clientRunnerId?: string;
@@ -87,26 +93,46 @@ export function poolMatches(
 
 /**
  * Whose work a node takes (ADR 0167): everyone, or named people and
- * groups. Host state, never declared by the node itself.
+ * groups, and the owner-less work of named projects (ADR 0173). Host state,
+ * never declared by the node itself.
  */
 export type NodeAccess =
   | { everyone: true }
-  | { everyone?: false; users: readonly string[]; groups: readonly string[] };
+  | {
+      everyone?: false;
+      users: readonly string[];
+      groups: readonly string[];
+      /** Projects whose own work (project chats, automations) it takes. */
+      projects?: readonly string[];
+    };
 
 /**
- * How narrowly a node serves an owner: 0 for a node of theirs alone, 1 for
- * one they share with named people or groups, 2 for a node open to
- * everyone, undefined when the node does not take their work.
+ * How narrowly a node serves a piece of work: 0 for a node of the owner's
+ * alone (or, for a project's own work, of that project's alone), 1 for one
+ * shared with other named people, groups or projects, 2 for a node open to
+ * everyone, undefined when the node does not take the work. A member's
+ * work never lands on a node opened only to projects.
  */
-export function accessTier(
-  access: NodeAccess,
-  owner: { userId: string; groups: readonly string[] } | undefined,
-): 0 | 1 | 2 | undefined {
+export function accessTier(args: {
+  access: NodeAccess;
+  /** The work's owner; absent for a project's own work. */
+  owner: { userId: string; groups: readonly string[] } | undefined;
+  projectId?: string;
+}): 0 | 1 | 2 | undefined {
+  const { access, owner } = args;
   if (access.everyone) return 2;
-  if (!owner) return undefined;
+  if (!owner) {
+    const projects = access.projects ?? [];
+    if (!args.projectId || !projects.includes(args.projectId)) return undefined;
+    return projects.length === 1 &&
+      access.users.length === 0 &&
+      access.groups.length === 0
+      ? 0
+      : 1;
+  }
   const named = access.users.includes(owner.userId);
   if (named && access.users.length === 1 && access.groups.length === 0)
-    return 0;
+    return (access.projects ?? []).length === 0 ? 0 : 1;
   if (named || access.groups.some((group) => owner.groups.includes(group)))
     return 1;
   return undefined;
@@ -223,9 +249,9 @@ export function environmentSatisfies(
     reasons,
   });
   compareResource({
-    requested: requirements.resources?.timeoutSeconds,
-    ceiling: binding.resources.timeoutSeconds,
-    label: "Timeout requirement",
+    requested: requirements.resources?.commandTimeoutSeconds,
+    ceiling: binding.resources.commandTimeoutSeconds,
+    label: "Command time requirement",
     unit: " seconds",
     reasons,
   });

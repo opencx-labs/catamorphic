@@ -103,11 +103,11 @@ describe("opening a local repository", () => {
     await fs.writeFile(path.join(root, "file.txt"), "primary changes");
     await fs.writeFile(path.join(linked, "file.txt"), "discard this");
     await nativeGit(linked, ["add", "file.txt"]);
-    await fs.mkdir(path.join(linked, ".catamorphic/app-data/store"), {
+    await fs.mkdir(path.join(linked, ".work/app-data/store"), {
       recursive: true,
     });
     await fs.writeFile(
-      path.join(linked, ".catamorphic/app-data/store/private.txt"),
+      path.join(linked, ".work/app-data/store/private.txt"),
       "keep private",
     );
     await fs.writeFile(path.join(linked, "untracked.txt"), "discard this too");
@@ -124,7 +124,7 @@ describe("opening a local repository", () => {
     );
     expect(
       await fs.readFile(
-        path.join(linked, ".catamorphic/app-data/store/private.txt"),
+        path.join(linked, ".work/app-data/store/private.txt"),
         "utf8",
       ),
     ).toBe("keep private");
@@ -153,7 +153,7 @@ describe("opening a local repository", () => {
       `${root}\n`,
     );
     expect(
-      await fs.access(path.join(destination, ".catamorphic")).then(
+      await fs.access(path.join(destination, ".work")).then(
         () => true,
         () => false,
       ),
@@ -199,7 +199,7 @@ describe("opening a local repository", () => {
 
   it("keeps personal files outside native reads and checkpoints", async () => {
     const repo = new NativeProjectRepo(project, root, async () => {});
-    const personal = ".catamorphic/personal/private.ts";
+    const personal = ".work/personal/private.ts";
     await fs.mkdir(path.dirname(path.join(root, personal)), {
       recursive: true,
     });
@@ -408,7 +408,7 @@ describe("plain local folders", () => {
       "src",
       ".github",
       "ignored",
-      ".catamorphic/personal",
+      ".work/personal",
       "nested/.git",
     ])
       await fs.mkdir(path.join(root, directory), { recursive: true });
@@ -416,7 +416,7 @@ describe("plain local folders", () => {
       "src/flow.ts",
       ".github/flow.ts",
       "ignored/flow.ts",
-      ".catamorphic/personal/flow.ts",
+      ".work/personal/flow.ts",
       "nested/flow.ts",
     ])
       await fs.writeFile(path.join(root, file), "defineWorkflow");

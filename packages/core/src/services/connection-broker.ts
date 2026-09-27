@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import type { Json } from "@catamorphic/db";
+import type { Json, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
+import { type Sandboxing, sandboxingRefusal } from "@catamorphic/sandbox";
 import type { Identity } from "../identity.js";
 import { identityMayUseConnection } from "../identity.js";
 import {
@@ -9,14 +10,22 @@ import {
   reviewConnectionAction,
 } from "./connection-guards.js";
 import {
+  type ConnectionModelEndpoint,
+  type ConnectionProvider,
   type ConnectionProviderRegistry,
+  type GitRemoteCredentials,
   isConnectionAuthorizationExpiredError,
 } from "./connection-providers.js";
+import {
+  MODEL_CAPABILITY,
+  type ResolvedConnectionBinding,
+} from "./connection-types.js";
 import {
   type ConnectionsService,
   ConnectionUnavailableError,
 } from "./connections-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
+import { bindingRepositories } from "./git-repositories.js";
 import type { ToolPermissionChannel } from "./tool-permission-broker.js";
 import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
 
@@ -48,10 +57,22 @@ export class ConnectionActionRefusedError extends Error {
 /** Review policy for every brokered action (ADR 0162). */
 export interface ConnectionGateway {
   guards: readonly ConnectionActionGuard[];
+  /** How long one guard may take before the action escalates (ADR 0183). */
+  guardTimeoutMs?: number;
   /** Where an escalated agent action asks its person for approval. */
   approvals?: ToolPermissionChannel;
   /** The member who owns an agent session, for review and audit. */
   sessionOwner?: (sessionId: string) => Promise<string | undefined>;
+  /** The session agent's sandboxing: contained agents only read (ADR 0182). */
+  sessionSandboxing?: (sessionId: string) => Promise<Sandboxing | undefined>;
+  /**
+   * A project's linked remote URL, which scopes a Git-serving binding that
+   * names no repositories (ADR 0175). Without it such a binding reaches none.
+   */
+  projectRemote?: (args: {
+    tenantId: string;
+    projectId: string;
+  }) => Promise<string | null | undefined>;
 }
 
 export class ConnectionBroker {
@@ -146,6 +167,37 @@ export class ConnectionBroker {
       });
       throw new Error(`Connection action '${args.action}' is not permitted`);
     }
+    if (
+      args.caller === "agent" &&
+      args.agentSessionId &&
+      (await this.gateway.sessionSandboxing?.(args.agentSessionId)) ===
+        "contained" &&
+      !(await this.readsOnly({
+        identity: args.identity,
+        connectionId: binding.connectionId,
+        capabilities: binding.capabilities,
+        provider,
+        action: args.action,
+      }))
+    ) {
+      await this.connections.audit({
+        identity: args.identity,
+        projectId: allocation.projectId,
+        connectionId: binding.connectionId,
+        allocationId: allocation.id,
+        eventType: "connection.invoked",
+        outcome: "denied",
+        action: args.action,
+        argumentsDigest: digest,
+        metadata: { sandboxing: "contained" },
+      });
+      throw new ConnectionActionDeniedError(
+        sandboxingRefusal({
+          sandboxing: "contained",
+          action: `call ${args.alias} ${args.action}, which can change ${args.alias}`,
+        }),
+      );
+    }
     const review = await this.review({
       ...args,
       projectId: allocation.projectId,
@@ -174,15 +226,30 @@ export class ConnectionBroker {
         identity: args.identity,
         connectionId: binding.connectionId,
       });
+      const git = provider.git;
+      const repositories = git
+        ? bindingRepositories({
+            policy: binding.git,
+            bases: git.remoteBaseUrls,
+            projectRemote: binding.git?.repositories
+              ? undefined
+              : await this.gateway.projectRemote?.({
+                  tenantId: args.identity.tenantId,
+                  projectId: allocation.projectId,
+                }),
+          })
+        : undefined;
       const result = await this.connections.withCredential({
         identity: args.identity,
         connectionId: binding.connectionId,
-        use: (material) =>
+        use: (material, connection) =>
           provider.invoke({
             material,
             action: args.action,
             input: args.input,
             capabilities: binding.capabilities,
+            connection: { id: connection.id, revision: connection.revision },
+            ...(repositories ? { repositories } : {}),
           }),
       });
       await this.connections.audit({
@@ -232,6 +299,386 @@ export class ConnectionBroker {
   }
 
   /**
+   * Upstream Git credentials for one request through the Git gateway
+   * (ADR 0175). The binding must be a Git connection holding `git:read`
+   * (fetch) or `git:write` (push). With `review`, the action passes the
+   * guards like any brokered action (kind = the provider, action `fetch` or
+   * `push`, input = repository and refs) and the returned `audit` records
+   * how it ended. Write access for an agent session also needs a mode that
+   * may propose changes: a read-only agent never pushes (ADR 0176). The
+   * credentials serve this one request and never leave the control plane.
+   */
+  async gitAccess(args: {
+    identity: Identity;
+    allocationId: string;
+    alias: string;
+    access: "read" | "write";
+    remoteUrl: string;
+    /** The agent session asking, whose mode bounds write access. */
+    agentSessionId?: string;
+    review?: {
+      action: "fetch" | "push";
+      input: Json;
+      agentSessionId?: string;
+    };
+  }): Promise<{
+    credentials: GitRemoteCredentials;
+    binding: ResolvedConnectionBinding;
+    audit: (outcome: "allowed" | "error", metadata?: Json) => Promise<void>;
+  }> {
+    return withSpan(
+      {
+        tracer,
+        name: "connection.git",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "catamorphic.allocation.id": args.allocationId,
+          "catamorphic.connection.alias": args.alias,
+          "catamorphic.connection.action":
+            args.review?.action ?? `git:${args.access}`,
+        },
+      },
+      async () => {
+        const { allocation, binding, provider } =
+          await this.resolveInvocation(args);
+        const git = provider.git;
+        if (!git) {
+          throw new ConnectionActionRefusedError(
+            `Connection '${args.alias}' does not serve Git`,
+          );
+        }
+        const record = async (
+          outcome: "allowed" | "denied" | "error",
+          metadata?: Json,
+        ) => {
+          if (!args.review) return;
+          await this.connections.audit({
+            identity: args.identity,
+            projectId: allocation.projectId,
+            connectionId: binding.connectionId,
+            allocationId: allocation.id,
+            eventType: "connection.git",
+            outcome,
+            action: args.review.action,
+            argumentsDigest: createHash("sha256")
+              .update(JSON.stringify(args.review.input))
+              .digest("hex"),
+            ...(metadata === undefined ? {} : { metadata }),
+          });
+        };
+        const capability = args.access === "write" ? "git:write" : "git:read";
+        if (!binding.capabilities.includes(capability)) {
+          await record("denied", { reason: `missing ${capability}` });
+          throw new ConnectionActionDeniedError(
+            args.access === "write"
+              ? `this session may not push through '${args.alias}' (it lacks git:write)`
+              : `this session may not fetch through '${args.alias}' (it lacks git:read)`,
+          );
+        }
+        // A contained agent's work never leaves its sandbox (ADR 0182):
+        // refuse the push advertisement and the push itself.
+        const sessionId = args.agentSessionId ?? args.review?.agentSessionId;
+        const sandboxing =
+          args.access === "write" && sessionId
+            ? await this.gateway.sessionSandboxing?.(sessionId)
+            : undefined;
+        if (sandboxing === "contained") {
+          await record("denied", {
+            sandboxing,
+            ...(args.review ? { input: args.review.input } : {}),
+          });
+          throw new ConnectionActionDeniedError(
+            sandboxingRefusal({
+              sandboxing,
+              action: `push through '${args.alias}'`,
+            }),
+          );
+        }
+        const review = args.review
+          ? await this.review({
+              identity: args.identity,
+              projectId: allocation.projectId,
+              allocationId: allocation.id,
+              connection: {
+                id: binding.connectionId,
+                kind: binding.providerKind,
+                alias: binding.alias,
+              },
+              action: args.review.action,
+              input: args.review.input,
+              caller: "agent",
+              ...(args.review.agentSessionId
+                ? { agentSessionId: args.review.agentSessionId }
+                : {}),
+            })
+          : undefined;
+        const reviewMetadata: Json = review?.metadata ?? {};
+        if (review?.verdict === "deny") {
+          await record("denied", {
+            ...jsonObject(review.metadata),
+            ...(args.review ? { input: args.review.input } : {}),
+          });
+          throw new ConnectionActionDeniedError(review.reason);
+        }
+        try {
+          await this.connections.refreshIfNeeded({
+            identity: args.identity,
+            connectionId: binding.connectionId,
+          });
+          const credentials = await this.connections.withCredential({
+            identity: args.identity,
+            connectionId: binding.connectionId,
+            use: (material) =>
+              git.credentials({
+                material,
+                remoteUrl: args.remoteUrl,
+                access: args.access,
+              }),
+          });
+          return {
+            credentials,
+            binding,
+            audit: (outcome, metadata) =>
+              record(outcome, {
+                ...jsonObject(reviewMetadata),
+                ...(args.review ? { input: args.review.input } : {}),
+                ...(metadata === undefined ? {} : jsonObject(metadata)),
+              }),
+          };
+        } catch (cause) {
+          await record("error", {
+            ...jsonObject(reviewMetadata),
+            ...(args.review ? { input: args.review.input } : {}),
+          });
+          if (
+            cause instanceof ConnectionUnavailableError ||
+            isConnectionAuthorizationExpiredError(cause)
+          ) {
+            throw new ConnectionUnavailableError(
+              args.alias,
+              isConnectionAuthorizationExpiredError(cause)
+                ? "Connection authorization has expired"
+                : "Connection is unavailable",
+              binding.connectionId,
+            );
+          }
+          throw cause;
+        }
+      },
+    );
+  }
+
+  /**
+   * Read credentials for the control plane's own fetch of a remote through
+   * one of a session's Git-capable bindings (ADR 0178: seeding a workspace
+   * at a ref). Undefined when no binding serves the remote with `git:read`.
+   * Audited as a `mirror` fetch; the credential never leaves the control
+   * plane.
+   */
+  async mirrorCredentials(args: {
+    identity: Identity;
+    projectId: string;
+    bindings: readonly ResolvedConnectionBinding[];
+    remoteUrl: string;
+  }): Promise<GitRemoteCredentials | undefined> {
+    const match = args.bindings.flatMap((binding) => {
+      const git = this.providers.get(binding.providerKind)?.git;
+      return git &&
+        binding.capabilities.includes("git:read") &&
+        git.remoteBaseUrls.some((base) => args.remoteUrl.startsWith(base))
+        ? [{ binding, git }]
+        : [];
+    })[0];
+    if (!match) return undefined;
+    const { binding, git } = match;
+    const audit = (outcome: "allowed" | "error") =>
+      this.connections.audit({
+        identity: args.identity,
+        projectId: args.projectId,
+        connectionId: binding.connectionId,
+        eventType: "connection.git",
+        outcome,
+        action: "mirror",
+        metadata: { alias: binding.alias, remoteUrl: args.remoteUrl },
+      });
+    try {
+      await this.connections.refreshIfNeeded({
+        identity: args.identity,
+        connectionId: binding.connectionId,
+      });
+      const credentials = await this.connections.withCredential({
+        identity: args.identity,
+        connectionId: binding.connectionId,
+        use: (material) =>
+          git.credentials({
+            material,
+            remoteUrl: args.remoteUrl,
+            access: "read",
+          }),
+      });
+      await audit("allowed");
+      return credentials;
+    } catch (error) {
+      await audit("error");
+      throw error;
+    }
+  }
+
+  /**
+   * The upstream endpoint and key headers of a model alias (ADR 0180). The
+   * binding must hold `model`. The gateway keeps the result briefly per
+   * grant and connection revision, so a call does not decrypt the key
+   * again; the headers never leave the control plane.
+   */
+  async modelEndpoint(args: {
+    identity: Identity;
+    allocationId: string;
+    alias: string;
+    agentSessionId?: string;
+  }): Promise<{
+    endpoint: ConnectionModelEndpoint;
+    headers: Record<string, string>;
+    binding: ResolvedConnectionBinding;
+    projectId: string;
+  }> {
+    return withSpan(
+      {
+        tracer,
+        name: "connection.model.resolve",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "catamorphic.allocation.id": args.allocationId,
+          "catamorphic.connection.alias": args.alias,
+        },
+      },
+      async () => {
+        const { allocation, binding, provider } =
+          await this.resolveInvocation(args);
+        const endpoint = provider.model;
+        if (!endpoint) {
+          throw new ConnectionActionRefusedError(
+            `Connection '${args.alias}' is not a model API`,
+          );
+        }
+        if (!binding.capabilities.includes(MODEL_CAPABILITY)) {
+          await this.connections.audit({
+            identity: args.identity,
+            projectId: allocation.projectId,
+            connectionId: binding.connectionId,
+            allocationId: allocation.id,
+            eventType: "connection.model",
+            outcome: "denied",
+            metadata: {
+              ...(args.agentSessionId
+                ? { sessionId: args.agentSessionId }
+                : {}),
+              reason: `missing ${MODEL_CAPABILITY}`,
+            },
+          });
+          throw new ConnectionActionDeniedError(
+            `this session may not call models through '${args.alias}' (it lacks ${MODEL_CAPABILITY})`,
+          );
+        }
+        try {
+          await this.connections.refreshIfNeeded({
+            identity: args.identity,
+            connectionId: binding.connectionId,
+          });
+          const headers = await this.connections.withCredential({
+            identity: args.identity,
+            connectionId: binding.connectionId,
+            use: async (material) => endpoint.headers({ material }),
+          });
+          return {
+            endpoint,
+            headers,
+            binding,
+            projectId: allocation.projectId,
+          };
+        } catch (cause) {
+          if (
+            cause instanceof ConnectionUnavailableError ||
+            isConnectionAuthorizationExpiredError(cause)
+          ) {
+            throw new ConnectionUnavailableError(
+              args.alias,
+              "Connection is unavailable",
+              binding.connectionId,
+            );
+          }
+          throw cause;
+        }
+      },
+    );
+  }
+
+  /** Whether any guard reviews connections of `kind` (ADR 0183). */
+  reviews(kind: string): boolean {
+    return this.gateway.guards.some(
+      (guard) => !guard.kinds || guard.kinds.includes(kind),
+    );
+  }
+
+  /**
+   * Review one model call as connection kind `model` (action = method and
+   * path, input = provider, model and stream, never the prompt) and return
+   * how to audit its end. Without guards this reads nothing.
+   */
+  async reviewModelCall(args: {
+    identity: Identity;
+    projectId: string;
+    allocationId: string;
+    connectionId: string;
+    alias: string;
+    action: string;
+    input: JsonObject;
+    agentSessionId?: string;
+  }): Promise<
+    (outcome: "allowed" | "error", metadata?: Json) => Promise<void>
+  > {
+    const record = (outcome: "allowed" | "denied" | "error", metadata?: Json) =>
+      this.connections.audit({
+        identity: args.identity,
+        projectId: args.projectId,
+        connectionId: args.connectionId,
+        allocationId: args.allocationId,
+        eventType: "connection.model",
+        outcome,
+        action: args.action,
+        metadata: {
+          ...(args.agentSessionId ? { sessionId: args.agentSessionId } : {}),
+          input: args.input,
+          ...(metadata === undefined ? {} : jsonObject(metadata)),
+        },
+      });
+    const review = await this.review({
+      identity: args.identity,
+      projectId: args.projectId,
+      allocationId: args.allocationId,
+      connection: {
+        id: args.connectionId,
+        kind: MODEL_CAPABILITY,
+        alias: args.alias,
+      },
+      action: args.action,
+      input: args.input,
+      caller: "agent",
+      // The gateway's identity is already the session's owner.
+      actor: args.identity.externalUserId,
+      ...(args.agentSessionId ? { agentSessionId: args.agentSessionId } : {}),
+    });
+    if (review.verdict === "deny") {
+      await record("denied", review.metadata);
+      throw new ConnectionActionDeniedError(review.reason);
+    }
+    return (outcome, metadata) =>
+      record(outcome, {
+        ...jsonObject(review.metadata),
+        ...(metadata === undefined ? {} : jsonObject(metadata)),
+      });
+  }
+
+  /**
    * Run the gateway's guards. Escalations ask the agent session's person;
    * a workflow cannot wait on a person mid-step, so it is refused.
    */
@@ -244,6 +691,8 @@ export class ConnectionBroker {
     input: Json;
     caller?: "agent" | "workflow";
     agentSessionId?: string;
+    /** The member acting, when the caller already knows it. */
+    actor?: string;
   }): Promise<
     | { verdict: "allow"; metadata: Json }
     | { verdict: "deny"; reason: string; metadata: Json }
@@ -253,11 +702,15 @@ export class ConnectionBroker {
     }
     const caller = args.caller ?? "workflow";
     const actor =
+      args.actor ||
       (args.agentSessionId &&
         (await this.gateway.sessionOwner?.(args.agentSessionId))) ||
       args.identity.externalUserId;
     const outcome = await reviewConnectionAction({
       guards: this.gateway.guards,
+      ...(this.gateway.guardTimeoutMs
+        ? { timeoutMs: this.gateway.guardTimeoutMs }
+        : {}),
       context: {
         tenantId: args.identity.tenantId,
         projectId: args.projectId,
@@ -314,6 +767,34 @@ export class ConnectionBroker {
         };
   }
 
+  /** Whether a provider action only reads (ADR 0176). */
+  private async readsOnly(args: {
+    identity: Identity;
+    connectionId: string;
+    capabilities: readonly string[];
+    provider: ConnectionProvider;
+    action: string;
+  }): Promise<boolean> {
+    if (args.provider.readOnly) return args.provider.readOnly(args.action);
+    const listActions = args.provider.listActions;
+    if (!listActions) return false;
+    const actions = await this.connections.withCredential({
+      identity: args.identity,
+      connectionId: args.connectionId,
+      use: (material) =>
+        listActions({ material, capabilities: args.capabilities }),
+    });
+    const annotations = actions.find(
+      (candidate) => candidate.name === args.action,
+    )?.annotations;
+    return (
+      typeof annotations === "object" &&
+      annotations !== null &&
+      !Array.isArray(annotations) &&
+      annotations.readOnlyHint === true
+    );
+  }
+
   private async resolveInvocation(args: {
     identity: Identity;
     allocationId: string;
@@ -360,6 +841,12 @@ export class ConnectionBroker {
     if (!provider) throw new Error("Connection provider is unavailable");
     return { allocation, binding, provider };
   }
+}
+
+function jsonObject(value: Json | undefined): JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value
+    : {};
 }
 
 function jsonRecord(value: Json): Record<string, unknown> {

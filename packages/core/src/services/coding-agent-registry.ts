@@ -1,6 +1,8 @@
 import type {
   AgentExecutionTopology,
   CodingAgentProvider,
+  McpToolPolicyLayers,
+  Sandboxing,
   TurnOptions,
 } from "@catamorphic/sandbox";
 import type {
@@ -15,12 +17,28 @@ export interface RegisteredCodingAgent {
   id: string;
   provider: CodingAgentProvider;
   topology: AgentExecutionTopology;
-  /** Coarse execution ceiling used to prevent wildcard privilege escalation. */
-  privilege?: "read-only" | "edit" | "full-access";
+  /**
+   * What may leave the agent's sandbox (ADR 0176, named in ADR 0182),
+   * enforced by core at every boundary: `contained` lets nothing leave,
+   * `propose` may propose, `publish` may deploy and publish. Also ranks
+   * delegation. Undefined: the host declared none, and nothing is narrowed.
+   */
+  sandboxing?: Sandboxing;
+  /**
+   * The agent's own tool-policy narrowing by server key (ADR 0054 agent
+   * scope), layered with the caller's role policies on every turn.
+   */
+  toolPolicies?: Readonly<Record<string, McpToolPolicyLayers>>;
   /** Additional compatibility requirements for profile-defined agents. */
   environment?: AgentEnvironmentPolicy;
   /** Brokered connection aliases required before this agent can start. */
   connectionRequirements?: readonly (string | ConnectionRequirement)[];
+  /**
+   * The Environment alias of the model connection a sandbox-resident
+   * harness reaches through the gateway (ADR 0180). Core hands the harness
+   * that alias's gateway URL and grant file on every sandbox turn.
+   */
+  modelConnection?: string;
   /** Per-turn defaults applied when the session carries no override. */
   defaults?: TurnOptions;
   /** Committed persona instructions supplied by a project harness factory. */

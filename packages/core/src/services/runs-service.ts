@@ -5,7 +5,6 @@ import {
   executionFiles,
   prepareWorkflowExecution,
   validateAgainstSchema,
-  WORKFLOW_SOURCE_ROOT,
   type WorkflowCapabilities,
   type WorkflowExecutionDescriptor,
   type WorkflowGraph,
@@ -19,6 +18,13 @@ import {
   type SandboxProvider,
   type WorkflowPackagePayload,
 } from "@catamorphic/sandbox";
+import {
+  hasProjectLockfile,
+  isProjectSourcePath,
+  MANAGED_BRANCH_PREFIX,
+  PROJECT_WORKFLOWS_PACKAGE_PATH,
+  publishedRef,
+} from "@catamorphic/workflow/project-layout";
 import { type Kysely, type Selectable, sql } from "kysely";
 import {
   hasProjectPermission,
@@ -46,7 +52,10 @@ import { DeploymentRuntimeService as EnvironmentDeploymentRuntimeService } from 
 import { KyselyDeploymentRuntimeStore } from "./deployment-runtime-store.js";
 import type { DevSandboxService } from "./dev-sandbox-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
-import type { ExecutionEnvironmentsService } from "./execution-environments-service.js";
+import {
+  admissionPolicy,
+  type ExecutionEnvironmentsService,
+} from "./execution-environments-service.js";
 import type { ExecutionJobsService } from "./execution-jobs-service.js";
 import type {
   ExecutionWorkerHandle,
@@ -1977,7 +1986,10 @@ export class RunsService {
                 .executeTakeFirst();
               if (!revision) throw new AccessDeniedError();
             } else if (
-              /^catamorphic\/(artifacts|watchers)\//.test(args.remoteBranch)
+              [
+                `${MANAGED_BRANCH_PREFIX}artifacts/`,
+                `${MANAGED_BRANCH_PREFIX}watchers/`,
+              ].some((prefix) => (args.remoteBranch ?? "").startsWith(prefix))
             )
               throw new AccessDeniedError();
           }
@@ -1997,12 +2009,13 @@ export class RunsService {
             workloadKind: "workflow",
             rootWorkloadId: runId,
             workerNodeId: admission.runtime.workerNodeId,
-            policy: {
-              binding: admission.binding,
-              requirements: admission.effectiveRequirements,
+            policy: admissionPolicy({
+              admission,
               connections,
-              workflowEnablementId: args.workflowEnablementId,
-            },
+              ...(args.workflowEnablementId
+                ? { workflowEnablementId: args.workflowEnablementId }
+                : {}),
+            }),
             transaction: trx,
           });
           await trx
@@ -2306,15 +2319,10 @@ export class RunsService {
 const PREPARED_SOURCE_CACHE_MAX = 32;
 
 /** The source every viewer of a published app runs. */
-const PUBLISHED_REF = "refs/catamorphic/published/main";
+const PUBLISHED_REF = publishedRef();
 
 /** Files a run's workflows are parsed from; app data is host state, not source. */
-function isWorkflowSourceFile(file: string): boolean {
-  return (
-    file.startsWith(".catamorphic/") &&
-    !file.startsWith(".catamorphic/app-data/")
-  );
-}
+const isWorkflowSourceFile = isProjectSourcePath;
 
 /** Whether a run is an app on its `dev` channel calling in (ADR 0148). */
 function callsPreviewApp(identity: Identity): boolean {
@@ -2360,8 +2368,7 @@ async function prepareSource(args: {
     commitSha: args.commitSha,
     workflowPackage: await resolveWorkflowPackageFallback({
       packageJson: workflowPackageJson(files),
-      hasLockfile:
-        ".catamorphic/bun.lock" in files || ".catamorphic/bun.lockb" in files,
+      hasLockfile: hasProjectLockfile(files),
     }),
   };
 }
@@ -2372,7 +2379,7 @@ async function prepareSource(args: {
 function workflowPackageJson(
   files: Record<string, string>,
 ): string | undefined {
-  return files[`${WORKFLOW_SOURCE_ROOT}/package.json`];
+  return files[PROJECT_WORKFLOWS_PACKAGE_PATH];
 }
 
 function mapRun(args: {

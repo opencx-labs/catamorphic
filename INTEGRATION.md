@@ -52,7 +52,12 @@ Common host shapes, composed from those axes:
   disk, stock Better Auth with local or configured provider sign-in,
   OAuth/PKCE remote clients, credential-free admission links, mDNS LAN
   discovery, and `DATABASE_URL` to swap PGlite for real Postgres. Read it as the
-  reference for this shape before writing a host from scratch.
+  reference for this shape before writing a host from scratch. A company that
+  needs its own code runs the same server as a library
+  ([`@catamorphic/work-server`](packages/work-server/README.md), ADR 0160):
+  `config` is typed data validated by the image's file schemas, `hooks` are
+  code, and only `workServerConfigFromEnv` reads `WORK_*` variables and files
+  (ADR 0183).
 - **Read-only embed / reporting**: `@catamorphic/db` migrations plus SQL
   joins, or the SDK without a sandbox provider.
 
@@ -122,7 +127,7 @@ const scoped = catamorphic
 const project = await scoped.projects.create({ name: "onboarding" });
 await scoped.files.write({
   projectId: project.id,
-  path: ".catamorphic/workflows/src/welcome.ts",
+  path: ".work/workflows/src/welcome.ts",
   content: welcomeTs,
   commitMessage: "Add welcome workflow",
 });
@@ -145,10 +150,19 @@ Advanced hosts can inject their own wiring instead: `database: { db }` with a pr
 ### Scoped-client surface
 
 The scoped client exposes project CRUD, workflow listing/fetching, file I/O,
-the complete identity-bound Runs resource, the Triggers resource, and — when
-`github` is configured on `createCatamorphic` — a `scoped.github` resource
-(connection status, repo listing, repo import; token acquisition uses the
-OAuth/device-flow helpers exported from `@catamorphic/github`). Every public
+the complete identity-bound Runs resource, the Triggers resource, and
+`scoped.codeHosts` (the caller's personal connection to a code host,
+repository listing, repository import, and `publishProject` to a new
+repository Work owns). Code hosts act through connections (ADR 0177):
+register the provider and its code host,
+`connectionProviders: [github]` and `codeHosts: [githubCodeHost(github)]`
+with `const github = defineGithubConnectionProvider({ oauth })`. A call uses
+the caller's own connection (authorized in the project, or their personal
+connection from `core.connections.beginPersonalAuthorization`), else the
+service connection named like the provider. An imported repository is attached
+(ADR 0170): every network push passes the guard in `@catamorphic/git`, so
+Work only creates `work/` branches there and shares changes as pull
+requests, whichever host embeds it. Every public
 method takes one keyed object parameter, for example
 `scoped.projects.get({ projectId })`,
 `scoped.workflows.get({ projectId, workflowName })`, and
@@ -169,11 +183,24 @@ workflows subscribe in code with `triggers: [trigger("kind", config)]`, and
 the host fires a kind with a typed payload (`fire`, sync or async — sync runs
 inline until the workflow's first durable wait, then detaches with an honest
 `suspended` outcome), lists subscribed workflows with their constant configs
-(`list`), and projects the generated `catamorphic-triggers.d.ts` into a
+(`list`), and projects the generated `work-triggers.d.ts` into a
 workspace (`syncTypes`). A trigger firing starts ordinary Runs — no new run
 family. See `docs/decisions/0039-custom-trigger-kinds.md`.
 
-Project Events (webhooks, chat events, GitHub) reach workflows through the
+Projects compose their own kinds from the host's (ADR 0171): an export of
+`defineTrigger({ name, from: trigger("webhook", { ... }), where })` in
+`.work/triggers/` is a kind workflows bind by name. Every binding may carry
+`where`, a declarative filter over the payload (value, list of values,
+`{ $exists }`, or `{ $prefix }` for strings) that core evaluates before a run
+starts, on every fire path and without running project code. Session events
+carry the chat's key (`payload.session.key`), so a workflow selects a family of
+keyed chats with `{ $prefix: "slack:" }` (ADR 0181). At scan a project-kind binding resolves to the
+host kind it builds on, with all filters along the chain; `list` reports
+`kind` (the host kind), `where`, and `projectKind`. Codegen adds project kinds
+to `work-triggers.d.ts`, so `syncTypes` needs nothing from the host.
+
+Project Events (webhooks, chat events, polled sources such as a desktop's
+GitHub poller registered in `projectEventSources`) reach workflows through the
 event dispatcher. Start it once per server, whether or not coding agents are
 configured, and stop it on shutdown:
 
@@ -188,10 +215,20 @@ Webhooks are a built-in trigger kind: register `webhook` from
 public URL of the mounted API, including its prefix) to `catamorphicPlugin` or
 `createApp` so the webhook URLs people copy point at the reachable host.
 `POST <api>/hooks/:projectId/:name/:token` is public; the token and the
-optional HMAC check are its credential. Holders of `webhooks:read` list URLs with
-`GET <api>/projects/:projectId/webhooks`, and holders of `webhooks:write`
-rotate one with `POST <api>/projects/:projectId/webhooks/:name/rotate`. See
-ADR 0156.
+binding's declared `verify` are its credential: `hmac` (algorithm, header,
+prefix, encoding, a signed-content template over `{body}`, `{timestamp}` and
+`{header:<name>}`, a replay window, base64 keys) or `token` (a shared secret in
+a header or query parameter), each naming a project secret. Declared `respond`
+rules answer handshakes (Slack `url_verification`, GET `hub.challenge`) with
+200 and the echoed value, which is why the same path also accepts `GET`;
+anything else is stored and answered 202. A sender's retry is stored once,
+identified by its delivery-id header or by the binding's `deliveryId`, a value
+the sender repeats in the body (`"body.event_id"` for Slack, ADR 0179). Bodies are capped at 1 MiB unless a
+binding sets `maxBodyBytes`, up to the host maximum
+`createCatamorphic({ webhooks: { maxBodyBytes } })`. Holders of
+`webhooks:read` list URLs with `GET <api>/projects/:projectId/webhooks`, and
+holders of `webhooks:write` rotate one with
+`POST <api>/projects/:projectId/webhooks/:name/rotate`. See ADRs 0156 and 0171.
 
 Enablements belong to a member or to the project (`owner: { type: "project"
 }`). A project enablement runs as the project principal with shared
@@ -282,7 +319,7 @@ An identity is either **root** (`scope` absent: every project of the tenant, eve
 | --- | --- |
 | `{ kind: "app", projectId, name }` | The app's served document plus, transitively, the workflows frozen into its *active published* version. |
 | `{ kind: "workflow", projectId, name }` | One workflow directly (a per-customer MCP tool, a host-triggered action). |
-| `{ kind: "agent", projectId, name, toolPolicies? }` | Chat sessions on the committed project agent `.catamorphic/agents/<name>.json` (ADR 0050). Inside those sessions the caller's scope intersects the agent's tool policy: the project's tools server is narrowed to the caller's workflow refs, and `toolPolicies` (per connector server key, ADR 0054's shape) is one more narrowing layer. Own sessions only. |
+| `{ kind: "agent", projectId, name, toolPolicies? }` | Chat sessions on the committed project agent `.work/agents/<name>.json` (ADR 0050). Inside those sessions the caller's scope intersects the agent's tool policy: the project's tools server is narrowed to the caller's workflow refs, and `toolPolicies` (per connector server key, ADR 0054's shape) is one more narrowing layer. Own sessions only. |
 | `{ kind: "document", projectId, path, access? }` | A file (`docs/handbook.md`) or subtree (`store/customers/acme/**`) of the project's path namespace; `access` defaults to `read`, `write` implies read. Git paths are read-only through this ref; `store/…` paths are the project store, reachable ONLY through document refs, whatever permissions the identity holds. |
 
 ```ts
@@ -332,10 +369,10 @@ Which artifacts and permissions each user gets is host policy (a role file, an e
 
 ### Roles as files, memberships as the stock source (ADR 0055)
 
-Most hosts do not want to hand-write scopes. Commit roles into the project — `.catamorphic/roles/<slug>.json`, next to `.catamorphic/agents/` — and let core expand them:
+Most hosts do not want to hand-write scopes. Commit roles into the project — `.work/roles/<slug>.json`, next to `.work/agents/` — and let core expand them:
 
 ```jsonc
-// .catamorphic/roles/csm.json
+// .work/roles/csm.json
 {
   "version": 1,
   "name": "CSM",
@@ -344,13 +381,13 @@ Most hosts do not want to hand-write scopes. Commit roles into the project — `
   "apps": ["customer-tracker"],
   "documents": ["docs/**", { "path": "store/customers/{customer}/**", "access": "write" }]
 }
-// .catamorphic/roles/admin.json
+// .work/roles/admin.json
 { "version": 1, "name": "Admin", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["*"], "permissions": ["*"], "documents": ["store/**"] }
-// .catamorphic/roles/brain-maintainer.json
+// .work/roles/brain-maintainer.json
 { "version": 1, "name": "Brain Maintainer", "permissions": ["brain:maintain"], "agents": ["brain-maintainer"] }
 ```
 
-`{param}` placeholders are filled from per-user **grants** (`{ customer: ["acme", "globex"] }`), one ref per value; an entry whose placeholder has no grant yields nothing. `permissions` become the identity's `projectPermissions`; an admin who may not see the whole store simply lists fewer documents. Writing, committing or publishing any `.catamorphic/roles/*.json` needs `roles:write`, whoever made the edit. Role files are read from the shared origin `main` (a project without a remote reads its working tree), cached briefly (`rolesCacheTtlMs`, default 10s), and never throw: a broken file is reported by `GET /projects/:id/roles` and contributes nothing.
+`{param}` placeholders are filled from per-user **grants** (`{ customer: ["acme", "globex"] }`), one ref per value; an entry whose placeholder has no grant yields nothing. `permissions` become the identity's `projectPermissions`; an admin who may not see the whole store simply lists fewer documents. Writing, committing or publishing any `.work/roles/*.json` needs `roles:write`, whoever made the edit. Role files are read from the shared origin `main` (a project without a remote reads its working tree), cached briefly (`rolesCacheTtlMs`, default 10s), and never throw: a broken file is reported by `GET /projects/:id/roles` and contributes nothing.
 
 Two ways to turn a verified user into an identity:
 
@@ -382,7 +419,7 @@ sidebar sections, custom items, and New Tab starting actions with
 `when` to show an item to everyone.
 
 In the desktop reference host, shared navigation lives in
-`.catamorphic/sidebar.js`. New Tab actions live in the ordinary project
+`.work/sidebar.js`. New Tab actions live in the ordinary project
 manifest and remain visually absent when omitted:
 
 ```json
@@ -529,6 +566,29 @@ supplies two things:
   `agent-chat`) renders the consent. Unanswered asks deny after five minutes.
   Persisting an "always allow" is the host's job — it knows where the
   connection's policy lives.
+- **Unattended chats** (ADR 0176) — `DurableToolPermissionBroker` (durable,
+  any replica answers) routes an ask in a project chat, or one a workflow
+  delivered with `approvers: { members, roles }`, to those people: it
+  publishes an `approval_requested` notification, promotes the chat in their
+  list, and lets them answer the card without otherwise holding the chat
+  (the permission routes filter to what they may answer). It waits the
+  Environment's `approvals.waitMinutes` (options `timeoutMs` and
+  `unattendedTimeoutMs` set the defaults: five and 30 minutes) and denies
+  with a `reason` the agent reads. Role holders come from stock memberships;
+  hosts with their own directory name members.
+
+Core also applies a committed definition's `toolPolicies` (keyed by
+connection alias or `catamorphic`) as the agent's layer on every host, and
+enforces its `sandboxing` at the control plane (ADR 0182): a `contained`
+session's changes never leave its sandbox, it cannot push through the
+gateway, and only read connection actions run
+(`ConnectionProvider.readOnly(action)`, else the action's `readOnlyHint`); a
+`propose` session may not invoke capabilities marked `sandboxing: "publish"`.
+`RegisteredCodingAgent.sandboxing` and `.toolPolicies` carry the same for
+agents a host defines itself. A definition's `harnessPermissions` (Claude
+Code `permissionMode`; Codex `sandbox` and `approvals`) reach the harness as
+`TurnOptions.harnessPermissions` on every turn; harnesses honor them over
+their constructor defaults.
 
 ## Ready-made components: `@catamorphic/ui`
 
@@ -738,7 +798,7 @@ files remain available as original bytes through the documents surface or on dis
 
 Two more members' surfaces, both enforced by core and served by the plugin:
 
-- **Propose a change** — `POST /projects/:id/proposals` `{ title, body?, changes: [{ path, content } | { path, delete: true }] }` (also the MCP tool `propose_change`). Program paths only (store paths ship directly). Core commits the files on a fresh `proposals/<member>/<title>-<stamp>` branch from the shared `main`, authored as the member, and — when the project is linked to a code host and you configured `proposalBot` (the identity whose GitHub connection acts for members) — pushes it and opens a pull request "Proposed by <member> via Catamorphic". Without a bot the branch lands on the project origin, where holders of `program:read` see it. Approving and applying a proposal needs `program:publish`. Anyone who may use the project may propose.
+- **Propose a change** — `POST /projects/:id/proposals` `{ title, body?, changes: [{ path, content } | { path, delete: true }] }` (also the MCP tool `propose_change`). Program paths only (store paths ship directly). Core commits the files on a fresh `work/proposals/<member>/<title>-<stamp>` branch from the shared `main`, authored as the member, and — when the project is linked to a code host with a ready service connection named like its provider (the organization's GitHub App as `github`, ADR 0177) — pushes it and opens a pull request "Proposed by <member> via Work". Without one the branch lands on the project origin, where holders of `program:read` see it. Approving and applying a proposal needs `program:publish`. Anyone who may use the project may propose.
 - **Publications** — `POST /projects/:id/publications` `{ path, audience: "public" | "members", slug? }` → `{ slug, url, … }`; `GET` lists your own, or everyone's with `publications:read`; `DELETE …/:slug` revokes your own, or anyone's with `publications:write`. Publishing a program path needs `program:publish`; members publish what they may write (their own store documents). Serving: `GET /projects/:id/publications/:slug` for members (host auth) and `GET /public/:id/:slug` for `public` — the one route the identity hook lets through unauthenticated (route config `public: true`); it reads the document as an anonymous identity scoped to exactly that document, so nothing else is reachable. Unknown, revoked and not-for-you are one uniform 404.
 
 ### Reference architecture: a database per project
@@ -769,7 +829,7 @@ like* in your product is yours. Two `createCatamorphic` hooks receive the
 framework defaults and return the host-final set — replacing or removing
 entries is legitimate:
 
-- `projectSeeds` — the per-project seed files (`.catamorphic/skills/…`). The
+- `projectSeeds` — the per-project seed files (`.work/skills/…`). The
   seeded `building-apps` skill is mechanics (framework contracts — keep it);
   `designing-apps` is design doctrine, the seed you most likely swap for
   your own. These defaults also supply the host skill tier; agent turns never
@@ -787,8 +847,8 @@ export const catamorphic = createCatamorphic({
   environmentProvider,
   projectSeeds: (defaults) => {
     const seeds = { ...defaults };
-    delete seeds[".catamorphic/skills/designing-apps/SKILL.md"];
-    seeds[".catamorphic/skills/acme-design/SKILL.md"] = ACME_DESIGN_SKILL;
+    delete seeds[".work/skills/designing-apps/SKILL.md"];
+    seeds[".work/skills/acme-design/SKILL.md"] = ACME_DESIGN_SKILL;
     return seeds;
   },
 });
@@ -799,9 +859,9 @@ runs on the defaults.
 
 ## Validating projects in CI or a local editor
 
-Capability scaffolding includes `.catamorphic/scripts/check.ts` (project-owned;
+Capability scaffolding includes `.work/scripts/check.ts` (project-owned;
 the logic lives in the `@catamorphic/parser` devDependency).
-`bun run --cwd .catamorphic check` parses the workspace,
+`bun run --cwd .work check` parses the workspace,
 validates trigger bindings (add `--host <url>` to check against a live
 host's kind catalog), and fails on stale generated types; `--write`
 regenerates the app-api types. Sandbox installs strip the tooling
@@ -839,7 +899,7 @@ retry, rate limit, batch, or child call settles inline) and `.start(input)`
 ## Execution Environments and credential connections
 
 Hosts own physical execution and provider credentials. Projects name logical
-Environments in `.catamorphic/project.json` by what the work needs: workloads,
+Environments in `.work/project.json` by what the work needs: workloads,
 requirements, and an optional `pool` of machine labels (ADR 0167). The host's
 `EnvironmentProvider` places work: `defineStaticEnvironments` picks the first
 binding whose `labels` match the pool, and a scheduler receives the work's
@@ -871,6 +931,19 @@ external systems are enabled. The host vault stores opaque encrypted material us
 wrapping key remains outside the database. Provider code runs in the control plane. Workflows call
 `context.connections.<alias>.<action>(args)` and agents use allocation-bound
 Catamorphic MCP grants. Neither receives upstream credentials.
+
+Review policy is host code (ADRs 0162, 0183): pass `connectionGuards`, each a
+`ConnectionActionGuard` (`name`, optional provider `kinds`, and
+`review(context)` answering `allow`, `deny`, or `escalate`). The framework and
+the Work server ship none. Core runs them in order on every brokered action
+(connections, Git, models) and keeps the mechanics: any deny wins, a guard
+that throws denies, one slower than `connectionGuardTimeoutMs` (default 30
+seconds) escalates, an escalation asks the agent session's person or a project
+chat's approvers through `toolPermissions` (a workflow's is refused), and each
+verdict lands in the connection audit. Guards skip connections outside their
+`kinds`, so the audit holds only verdicts that were judged. Provider limits,
+Git push rules, and model allowlists and budgets are mechanics and stay in
+providers and bindings.
 Connection aliases use letters, numbers, underscores, and hyphens only. Core
 does not perform lossy alias normalization, so one alias always maps to one MCP
 server and policy key.
@@ -881,25 +954,103 @@ connection access. Projects cannot declare physical endpoints, OAuth clients,
 credential values, or service identities.
 
 Member connections use the authorization flow supported by the provider.
-Project and tenant service connections are created only by a host identity
-with `connections:write` (`connections:read` reads them and their audit).
-These are host-issued; project roles cannot grant `connections:*`. An
-Environment binding chooses allowed principal kinds, capabilities, and any assigned service connection. A trigger
-scan is the unattended enablement boundary: it must resolve every required
-alias to an assigned service connection, then freezes those ids for dispatch.
-Member connections are never eligible for project automations (schedules,
-webhooks and events that run while nobody is present). To prevent a
-privileged service action from running in a local Environment, do not create
-that alias binding there and grant it only in the managed Environment.
+Project and tenant service connections are named (ADR 0172) and created only
+by an identity with `connections:write` (`connections:read` reads them and
+their audit): `POST /service-connections` creates one pending, and
+`POST /service-connections/:id/authorize` runs the provider's own challenge
+(form, URL returning to this API's `/connection-authorizations/callback`, or
+device), which also rotates a ready one. These permissions are host-issued
+(`Identity.controlPlanePermissions`, reported by `/me`); project roles cannot
+grant `connections:*`. The Work server gives them to organization
+administrators.
+
+Environment bindings are committed in `.work/project.json`:
+`environments.<name>.connections.<alias>` is
+`{ provider, principal: "member" | "service" | "either", service?, capabilities? }`,
+where `service` names a service connection (the project's own name first,
+then the tenant's) and `capabilities` narrows the alias. Core reads them with
+the Environment on demand; there is no binding table or API. A host may offer
+extra aliases beside the committed ones with the `connectionBindings` option
+of `createCatamorphic` (the desktop offers its profile MCP servers this way);
+a committed alias of the same name wins. A trigger scan is the unattended
+enablement boundary: it must resolve every required alias to a service
+connection, then freezes those ids for dispatch; a later dispatch fails
+closed if the name resolves elsewhere. Member connections are never eligible
+for project automations (schedules, webhooks and events that run while nobody
+is present). A project chat (owned by the project, not a member) uses the
+service bindings of the Environment it runs in, whichever automation delivered
+to it, and never a member's connection (ADR 0181). To keep a privileged
+service action out of a local Environment, bind that alias only in the managed
+Environment.
+
+Git through the gateway (ADR 0175): a provider that serves Git sets
+`git: { remoteBaseUrls, credentials({ material, remoteUrl, access }) }`
+(`defineGitConnectionProvider` from `@catamorphic/server-sdk` covers any host
+with a stored username and password or token; the GitHub provider mints
+repository tokens). Such a connection carries `git:read` and `git:write`, and a
+binding may add `git: { repositories?, push? }`. Pass `gatewayUrl` to
+`createCatamorphic` (the plugin's `<api>/gateway` as sandboxes reach it; the
+Work server uses its public URL, the desktop its loopback URL). At each sandbox
+turn core writes the session's grant for every Git-capable alias into the
+sandbox, configures `url.<gateway>/git/<alias>/.insteadOf <remote base>` and a
+credential helper that reads the grant, and renews it while the turn runs.
+The plugin serves Git smart HTTP at `/gateway/git/:alias/*` (public route;
+the grant is the Basic password or a bearer), streams both directions, and
+enforces the binding's repositories and push rules (never a default branch,
+no deletes) before forwarding with the upstream credential; guards see kind
+= the provider, action `fetch` or `push`, and the refs. Hosts with their own
+401 challenge must leave `/gateway/` answering `WWW-Authenticate: Basic` so
+Git's credential helpers run.
+
+Models through the gateway (ADR 0180): a provider whose connection is a model
+key sets `model: { api, baseUrl, headers({ material }) }`
+(`defineModelConnectionProvider` from `@catamorphic/server-sdk`, `api`
+`anthropic` or `openai`; `builtinModelConnectionProviders()` returns the
+`anthropic` and `openai` kinds). Its connections carry the `model`
+capability, and a binding may add `model: { allow? }`. The plugin serves
+`/gateway/model/:alias/*` (public route; the grant is `x-api-key` or a
+bearer), a thin pass-through: any method and path below the base URL, the
+body byte for byte, headers but a small denylist (the caller's key, host,
+cookies, hop-by-hop, proxy and forwarding headers), and the answer streamed
+back unchanged. Guards see kind `model` with action = method and path
+(`POST v1/messages`) and input = provider, model, stream; endpoint and
+spending rules belong in guards. Usage lands in `model_usage` per session and
+turn, read passively from Anthropic and OpenAI answers (zero when a format is
+not recognized, such as a Chat Completions stream without
+`stream_options.include_usage`). At each sandbox turn core writes the grant of every model alias into
+the sandbox (the same `sandbox`-channel grants as Git) and passes the turn
+`TurnOptions.sandbox` and, for an agent registered with `modelConnection:
+<alias>`, `TurnOptions.modelGateway`. `ClaudeCodeAgent` and `CodexAgent` with
+`sandbox: {}` then run their CLI inside that sandbox over process operations
+(`spawnInSandbox`; providers implement `processes.writeProcessInput` for a
+process started with `stdin: true`), with the gateway as their only model
+endpoint. Harness binaries come from the Environment image.
+
+Workspaces at a ref (ADR 0178): `create` and `deliver` accept
+`workspace: { ref, update? }`. The control plane fetches the ref from the
+project's linked remote (`projects.remote_url`) into a per-project bare mirror
+(`StorageBackend.mirrorPath`, `FsBackend` keeps it under `.mirrors/`) with the
+session's Git binding or, failing that, the code host's credentials
+(`RemoteSyncService.origin`), publishes it as the session's `sessions/<id>`
+branch, and seeds the sandbox from a shallow pack. Native checkouts receive
+`workspace: { ref, commit, repository, pin }` in
+`NativeAgentCheckout.resolve` (the base, or the one a pending move asks
+for) and start a new worktree at that commit when the session has none of
+its own. `resolve` returns `{ path, owned }`: `owned` is true only for a
+checkout the host made for that session, and core moves a base only in an
+owned checkout, never in a person's own folder. A session at a ref always
+works in its own session copy, and its DTO reports `workspace: { ref, commit }`.
 
 Long-lived API keys and service-account material use service connections, not
-project secrets. The service-credential API accepts provider-defined opaque
-text. For `defineMcpConnectionProvider`, that text is a JSON
-`McpConnectionCredential`, for example
-`{"headers":{"Authorization":"Bearer ..."}}`. The broker opens it only for
-the provider call. A workflow step that will later invoke an agent inherits the
-workflow's Environment, Allocation, and narrowed grants; it must not create a
-second credential selection path.
+project secrets. A provider's `completeAuthorization` turns the challenge's
+answer into vault material, so its checks (the Postgres provider's read-only
+role check, an MCP OAuth exchange) always run. The broker opens the material
+only for the provider call and passes `connection: { id, revision }` so a
+provider can reuse upstream sessions per credential; a provider that does
+implements `release({ connectionId })`, which core calls after rotation,
+refresh, and revocation. A workflow step that will later invoke an agent
+inherits the workflow's Environment, Allocation, and narrowed grants; it must
+not create a second credential selection path.
 
 Vault backup and rotation are host responsibilities. Back up encrypted records
 and their wrapping key together, restrict both to the server account, rotate
@@ -915,6 +1066,29 @@ Google Cloud OAuth client or a service account with administrator-approved
 domain-wide delegation. Remote deployments need stable HTTPS callback URLs,
 correct proxy headers, a backed-up vault key, and a documented rotation plan.
 
+
+### Images, containers, and egress (ADR 0176)
+
+An Environment may declare `image` (OCI reference or project Dockerfile),
+`requirements.containers`, `network` (`open`, `gateway`, `allowlist`), and
+`approvals.waitMinutes`. Admission turns them into capability requirements
+(`images`, `images.build`, `containers`, `network.policy`) and fixes the
+resolved image (Dockerfile content and digest), containers flag, and egress
+allowlist in the Allocation; `allocationSandboxProvider` passes them to
+`CreateSandboxOpts` (`image`, `containers`, `egress`). A provider lists what
+it enforces in `SandboxProvider.capabilities` and must refuse create options
+it cannot honor; include them in the binding descriptor's `capabilities` so
+placement matches. Pass `gatewayHosts` (the control plane's public host) to
+`createCatamorphic`: restricted egress always reaches it.
+
+`MicrosandboxSandboxProvider` boots the image, runs Docker inside the VM on a
+sandbox-owned disk (`containers`, `containerDiskMib`), builds Dockerfiles
+with an injected `imageBuilder` (`dockerImageBuilder({ command })`), and
+enforces egress with a deny-by-default network policy.
+`LocalProcessSandboxProvider` offers containers on trusted machines through
+`docker: { socketPath }`: a per-sandbox filtering endpoint that labels,
+confines, and removes what the sandbox starts. It cannot enforce egress
+unless the host sets `acceptUnenforcedEgress` knowingly.
 
 ### Managed workspace resources
 
@@ -952,8 +1126,13 @@ separate reusable mechanics from the desktop reference presentation.
 
 ### Contained project workspace and local data
 
-Catamorphic source lives in an independent `.catamorphic/` Bun workspace.
-Run `bun install --cwd .catamorphic` and `bun run --cwd .catamorphic check`.
+Project capabilities live in an independent `.work/` Bun workspace; code
+builds its paths and Git names from `@catamorphic/workflow/project-layout`.
+Hosts check it the way publishing does (the project MCP `program_check`
+tool). `bun install --cwd .work` and `bun run --cwd .work check` do the same
+locally, but the `@catamorphic/*` packages are not yet on a public registry,
+so the install needs a registry that serves them (the repository's dev-only
+`infra/local-registry`).
 Imports and ordinary agent work leave existing repository files untouched.
 The workspace is created when workflows, apps, or other capabilities need it.
 
@@ -961,8 +1140,8 @@ Local-process and microsandbox hosts can inject `projectDataDirectory` into
 their provider, an async callback receiving `{ projectId }` and returning
 an absolute persistent directory or `undefined`. For a project attached to a
 local folder, core's `projectDataDirectory({ root })` prepares
-`.catamorphic/app-data/` and creates `.catamorphic/.gitignore` only if absent.
-Deployment runtimes expose this storage as `CATAMORPHIC_APP_DATA_DIR`;
+`.work/app-data/` and creates `.work/.gitignore` only if absent.
+Deployment runtimes expose this storage as `WORK_APP_DATA_DIR`;
 workflow code should create its own named subdirectory there. Microsandbox
 bind-mounts the folder; local-process uses its absolute host path. The data
 outlives a runtime or deployment. Build and agent sandboxes do not receive it.
@@ -972,7 +1151,7 @@ The scoped ignore file excludes app data by default. Owners can edit it to
 track ordinary data deliberately. Mutable data is excluded from immutable
 execution snapshots and the shared program/document surface. Documents retain
 logical `store/...` API addresses, backed locally by
-`.catamorphic/app-data/store/...`. Personal artifact privacy remains separately
+`.work/app-data/store/...`. Personal artifact privacy remains separately
 enforced. Per-user app view preferences, credentials, and conversation state
 remain in the host's database or private data directory. Database export and
 restore are not provided.

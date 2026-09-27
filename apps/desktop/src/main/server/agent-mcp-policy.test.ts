@@ -20,12 +20,12 @@ function fixture() {
     projects: `${root}/projects`,
     remotes: `${root}/remotes`,
     appBundles: `${root}/apps`,
-    githubFile: `${root}/github.json`,
     profilesFile: `${root}/profiles.json`,
     profilesDir: `${root}/profiles`,
     agentHomesDir: `${root}/agents`,
     harnessComponentsDir: `${root}/harness`,
     hostSkillsDir: `${root}/skills`,
+    attachmentsDir: `${root}/attachments`,
   };
   const profiles = new ProfilesStore(paths.profilesFile);
   const one = profiles.create("One"),
@@ -53,9 +53,9 @@ it("allows ordinary local connectors by default and honors explicit restrictions
     return resolveToolPermissionAcross(layers, "write_file", {});
   };
   expect(permission()).toBe("allow");
-  stores.agents.update(agent.id, { mode: "edit" });
+  stores.agents.update(agent.id, { sandboxing: "propose" });
   expect(permission()).toBe("ask");
-  stores.agents.update(agent.id, { mode: "full-access" });
+  stores.agents.update(agent.id, { sandboxing: "publish" });
   stores.connections.setToolPermission(connection.id, "write_file", "deny");
   expect(permission()).toBe("deny");
   const layers =

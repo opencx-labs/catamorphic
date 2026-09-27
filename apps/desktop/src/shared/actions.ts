@@ -405,6 +405,26 @@ export const BUILTIN_ACTIONS = [
     ],
   },
   {
+    id: "change-permission-mode",
+    label: "Change permission mode…",
+    description:
+      "set the harness's own permission mode (Claude Code's mode, or Codex's sandbox and approvals) for the focused chat's agent, or the default agent when no chat is focused",
+    defaultBinding: null,
+    keywords: [
+      "permission",
+      "permissions",
+      "mode",
+      "plan",
+      "auto",
+      "bypass",
+      "accept edits",
+      "approvals",
+      "sandbox",
+      "claude",
+      "codex",
+    ],
+  },
+  {
     id: "connect-remote-project",
     label: "Connect to a remote project…",
     description:

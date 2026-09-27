@@ -68,7 +68,10 @@ The zero-service setup keeps PGlite, git origins, credentials, and project data
 under one data directory. A deployment can opt into real Postgres as it grows.
 The accepted multi-machine architecture uses server instances sharing one
 Postgres and one authority, with machines exposed as permitted Environments.
-Postgres mode shares origins, artifacts, credentials, auth, and leased execution. See
+Postgres mode shares origins, artifacts, credentials, auth, and leased execution.
+Each Environment can choose its sandbox image, give agents their own Docker,
+and limit which hosts they reach; an agent's sandboxing decides what leaves
+its sandbox, apart from its harness's own permission mode. See
 [the machine setup and recovery model](skills/setup-work-server/references/cluster-deployment.md).
 The Work server is single-tenant because its local-process execution can access
 the host machine. Run one trusted organization or household per deployment.
@@ -143,9 +146,9 @@ the ADR column is the settled design record.
 
 A project is a folder that can hold documents, notes, data, plans, code,
 automations, and apps, in any mix. A blank project is a git repository, a
-`.catamorphic/project.json` manifest, and hidden seed skills; nothing in
+`.work/project.json` manifest, and hidden seed skills; nothing in
 the visible tree claims the project is about code. The workflow/app
-workspace (an independent Bun workspace under `.catamorphic/`: `contracts/`, `workflows/`, `apps/*`) is
+workspace (an independent Bun workspace under `.work/`: `contracts/`, `workflows/`, `apps/*`) is
 scaffolded on demand, the first time someone asks for an automation or
 app. Imported repositories are adopted as-is; existing files are never
 overwritten. (ADRs [0032](docs/decisions/0032-projects-are-bun-workspaces.md),
@@ -155,14 +158,20 @@ overwritten. (ADRs [0032](docs/decisions/0032-projects-are-bun-workspaces.md),
 
 Work is tracked without anyone performing git. Every agent turn that
 changed files ends in a **checkpoint commit**, its sha stamped on the chat
-message, so every reply's diff is addressable forever. Linked projects
-sync with their remote automatically (fetch, fast-forward, merge, push);
-a conflicting divergence lands on a **rescue branch** instead of a stuck
-state, so no work is ever stranded. Everything provider-specific sits
-behind one `CodeHost` interface; GitHub is the first implementation
-(connect, repo import, pull requests). Agents get explicit git verbs
-(`sync_project`, `create_pull_request`) rather than raw git.
-(ADR [0044](docs/decisions/0044-checkpoint-commits-and-remote-sync.md))
+message, so every reply's diff is addressable forever. Work never updates
+the default branch of a repository it did not create, or any branch there
+it did not make: sync fetches and fast-forwards, and local work reaches a
+shared repository as a `work/` branch plus a **pull request**. A repository
+Work created itself syncs automatically (fetch, fast-forward, merge, push),
+and a conflicting divergence lands on a **rescue branch** instead of a stuck
+state. A code host acts through an ordinary connection: the person's own
+account, or the organization's service connection (a GitHub App
+installation), with tokens minted per call. GitHub is the first code host
+(repository import, publish, pull requests, reviews). Agents get explicit
+git verbs (`sync_project`, `create_pull_request`) rather than raw git.
+(ADRs [0044](docs/decisions/0044-checkpoint-commits-and-remote-sync.md),
+[0170](docs/decisions/0170-attached-repositories-receive-pull-requests.md),
+[0177](docs/decisions/0177-github-is-a-connection.md))
 
 ## Coding agents, multi-harness
 
@@ -192,7 +201,7 @@ changes belong to one agent. (ADR
 [0063](docs/decisions/0063-agent-checkout-coordination.md))
 
 **Project agent definitions**: an agent can be a work product. Committed
-`.catamorphic/agents/<slug>.json` files (plus an optional `.catamorphic/agents/<slug>.md` persona)
+`.work/agents/<slug>.json` files (plus an optional `.work/agents/<slug>.md` persona)
 version with the project and appear in every collaborator's picker. A
 committed definition never runs on your personal credentials until you
 consent, and consent is bound to a hash of what you approved; definitions
@@ -216,7 +225,8 @@ workflow is an exported `defineWorkflow` value, every run executes a
 deployed commit. Boundaries (atomic retry scopes), batch scopes, pauses
 and signals, correlation keys, shared rate budgets, retention, and
 triggers, including host-defined trigger kinds with typed payloads and
-sync-until-first-wait firing. Full authoring model below.
+sync-until-first-wait firing, project-defined kinds, and declarative `where`
+filters. Full authoring model below.
 
 Role access is separate from unattended consent. Each member previews and
 enables an exact deployed workflow with its trigger, Environment, agent, and
@@ -307,8 +317,8 @@ and host shapes: [`INTEGRATION.md`](INTEGRATION.md#host-shapes-catamorphic-runs-
 Also worth knowing, because it's easy to miss from the package list:
 
 - **The product teaches agents from the inside.** Every project is seeded
-  with hidden skills (`.catamorphic/skills/`): the project model and on-demand
-  workspace scaffold (`catamorphic-projects`), workflow authoring
+  with hidden skills (`.work/skills/`): the project model and on-demand
+  workspace scaffold (`work-projects`), workflow authoring
   (`writing-workflows`, `batch-workflows`, `durable-workflows`), and app
   building split into mechanics (`building-apps`) and replaceable design
   doctrine (`designing-apps`). Coding agents learn Catamorphic's authoring
@@ -327,7 +337,7 @@ Also worth knowing, because it's easy to miss from the package list:
 
 | Package | What it is |
 | --- | --- |
-| `@catamorphic/server-sdk` | The core SDK for your Node/Bun backend. Takes a Postgres connection (or `pg.Pool`), manages its own schema-scoped tables and migrations, and exposes projects, workflows, files, runs, triggers, agent sessions, and GitHub. |
+| `@catamorphic/server-sdk` | The core SDK for your Node/Bun backend. Takes a Postgres connection (or `pg.Pool`), manages its own schema-scoped tables and migrations, and exposes projects, workflows, files, runs, triggers, agent sessions, connections, and code hosts (`githubCodeHost` over the `github` connection provider). |
 | `@catamorphic/fastify-plugin` | A mountable Fastify plugin (`app.register(catamorphicPlugin, { core, prefix: "/api" })`) exposing the standard HTTP API for frontends, plus the per-project MCP endpoints. Also exports a standalone `createApp` factory for sidecar deployments. |
 | `@catamorphic/react` | Headless React bindings: `CatamorphicProvider`, TanStack Query hooks, and jotai atoms. Build a fully custom UI on top of these. |
 | `@catamorphic/ui` | Ready-made components: the React Flow workflow canvas, member review and consent, the Runs panel, and `AppMount` (the sandboxed app iframe host). Every piece is opt-in. |
@@ -342,8 +352,8 @@ Supporting packages (consumed through the surface above, importable directly for
 | --- | --- |
 | `@catamorphic/core` | Framework-agnostic service layer: projects, workflows, runs, deployments, triggers, apps, app storage, plugins, secrets, agent sessions, agent definitions, remote sync, and the CodeHost seam. The kernel behind `server-sdk` and `fastify-plugin`. |
 | `@catamorphic/db` | Kysely + Postgres. Schema-scoped (default schema `catamorphic`), raw SQL migrations, programmatic `migrateToLatest`. |
-| `@catamorphic/git` | Git-backed project storage (`isomorphic-git`): per-user working copies, pluggable origin remotes (`RemoteBackend`), and the remote sync engine (`syncWithNetworkRemote`: fetch, fast-forward, merge, push, rescue branches). |
-| `@catamorphic/github` | GitHub as a code host: OAuth + device-flow auth helpers, the REST API client, token stores. Feeds core's `GithubService` and its `CodeHost` implementation. |
+| `@catamorphic/git` | Git-backed project storage (`isomorphic-git`): per-user working copies, pluggable origin remotes (`RemoteBackend`), and the remote sync engine (`syncWithNetworkRemote`: fetch and fast-forward; merge, push, and rescue branches only for repositories Work created), with the one push guard every network push passes (`work/` branches only on attached repositories). |
+| `@catamorphic/github` | GitHub mechanics: OAuth + device-flow helpers, GitHub App auth (app JWTs, installation tokens, manifest registration), and the REST API client. The server SDK builds the `github` connection provider and code host on it. |
 | `@catamorphic/parser` | ts-morph AST → `WorkflowGraph` parser + dagre layout; also powers the seeded project `check` script. |
 | `@catamorphic/sandbox` | Vendor-neutral sandbox + coding-agent contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`, `CodingAgentProvider`), the stdio supervisor transport, OTel instrumentation. |
 | `@catamorphic/microsandbox` | Local sandbox provider over the microsandbox SDK: the desktop's default execution. |
@@ -527,12 +537,28 @@ form.
 Workflows subscribe to trigger kinds in code (`triggers:
 [trigger("kind", config)]`). Hosts define their own kinds with
 `defineTriggerKind` (typed payloads and configs via zod, generated
-`catamorphic-triggers.d.ts` per project) and fire them sync or async; a kind
+`work-triggers.d.ts` per project) and fire them sync or async; a kind
 whose payload varies per workflow uses typed holes, and kinds declared via
-`mcpToolKinds` are served as MCP tools from `POST /projects/:id/mcp`. See
-[`INTEGRATION.md`](INTEGRATION.md) and ADRs
+`mcpToolKinds` are served as MCP tools from `POST /projects/:id/mcp`.
+Projects define their own kinds on top of the host's in `.work/triggers/`
+(`defineTrigger({ name, from: trigger("webhook", { ... }), where })`), and
+every binding may add a `where` filter the host checks before a run starts,
+so a GitHub or Slack integration is project code on the webhook kind, whose
+verification schemes and handshakes are declared in its config. The host
+skill `slack` is the worked example: a chat per Slack thread, replies posted
+back through a gateway connection whose named operations are its
+capabilities ([Connect Slack](skills/setup-work-server/references/connect-slack.md)).
+The host skill `reviewing-pull-requests` is the larger one: a code and
+security review of every pull request, in a chat per pull request on a
+dedicated review pool, verified by running the change and posted as a review
+and a check run
+([Review pull requests](skills/setup-work-server/references/review-pull-requests.md)).
+See [`INTEGRATION.md`](INTEGRATION.md) and ADRs
 [0039](docs/decisions/0039-custom-trigger-kinds.md) /
-[0042](docs/decisions/0042-parameterized-trigger-kinds-and-workflow-tools-mcp.md).
+[0042](docs/decisions/0042-parameterized-trigger-kinds-and-workflow-tools-mcp.md) /
+[0171](docs/decisions/0171-project-trigger-kinds-and-declarative-webhook-ingress.md) /
+[0179](docs/decisions/0179-integrations-from-project-code-slack.md) /
+[0181](docs/decisions/0181-project-chats-use-their-environments-bindings.md).
 
 ### Long-lived journeys: correlation keys, signals, shared rate budgets
 
@@ -790,7 +816,7 @@ Direction, not shipped. Tracked in [`TODO.md`](TODO.md):
   the Agent Client Protocol client (local command and remote endpoint
   transports) is the planned harness behind it.
 - **TS `defineAgent`**: a typed authoring layer that compiles to the
-  committed `.catamorphic/agents/<slug>.json` substrate.
+  committed `.work/agents/<slug>.json` substrate.
 - **Review-mode collaboration**: PR-first sync for shared projects, invites,
   native PR review depth (comments, approvals, merge).
 - **Remote blob storage**: user-connected stores (S3/R2/Drive-style) for

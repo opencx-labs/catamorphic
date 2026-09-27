@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { projectDataDirectory } from "@catamorphic/core";
+import { PROJECT_APP_DATA_DIR } from "@catamorphic/workflow/project-layout";
 import { safeStorage } from "electron";
 import type { RemoteOAuthCredentials } from "./remote-oauth.js";
 
@@ -18,6 +19,8 @@ export interface RemoteCapabilities {
   documents: Array<{ path: string; access: "read" | "write" }>;
   /** The member's roles, described, for their agents' context (ADR 0152). */
   roles?: Array<{ name: string; description?: string }>;
+  /** Manages the organization's service connections; absent on older links. */
+  administrator?: boolean;
   features: {
     publications: "public" | "members" | false;
     proposals: boolean;
@@ -59,7 +62,7 @@ interface StoreFile {
   credentials: Record<string, StoredCredentials>;
 }
 
-export const REMOTE_PROJECT_LOCATOR_PATH = ".catamorphic/app-data/remote.json";
+export const REMOTE_PROJECT_LOCATOR_PATH = `${PROJECT_APP_DATA_DIR}/remote.json`;
 
 interface RemoteProjectLocatorFile {
   version: 1;

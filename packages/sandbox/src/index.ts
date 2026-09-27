@@ -13,6 +13,16 @@ export {
   type AgentEventBufferOptions,
 } from "./coding-agent/event-buffer.js";
 export {
+  CLAUDE_CODE_PERMISSION_MODES,
+  type ClaudeCodePermissionMode,
+  CODEX_APPROVAL_POLICIES,
+  CODEX_SANDBOX_MODES,
+  type CodexApprovalPolicy,
+  type CodexSandboxMode,
+  type HarnessPermissions,
+  harnessPermissionIssues,
+} from "./coding-agent/harness-permissions.js";
+export {
   buildPluginsPreamble,
   PLUGIN_STAGE_DIR,
   stagedPluginFiles,
@@ -105,9 +115,11 @@ export type {
   ExtraToolContext,
   McpServersSource,
   ProviderSession,
+  SandboxModelGateway,
   SessionCaller,
   StartSessionOpts,
   TurnOptions,
+  TurnSandbox,
 } from "./coding-agent/types.js";
 export {
   AGENT_EFFORT_LEVELS,
@@ -136,8 +148,59 @@ export {
   type PluginPayload,
   uploadPluginPayloads,
 } from "./plugin-upload.js";
+export {
+  assertProcessId,
+  assertWriteSize,
+  decodeProcessChunk,
+  decodeUtf8Prefix,
+  type FollowProcessResult,
+  followProcess,
+  newProcessId,
+  OutputWindow,
+  PROCESS_READ_DEFAULT_BYTES,
+  PROCESS_READ_MAX_BYTES,
+  PROCESS_READ_MAX_WAIT_MS,
+  PROCESS_READ_MIN_BYTES,
+  PROCESS_SIGNALS,
+  PROCESS_WRITE_MAX_BYTES,
+  type ProcessOutput,
+  type ProcessSignal,
+  processReadBounds,
+  type ReadProcessOutputArgs,
+  type SandboxProcess,
+  type SandboxProcessProvider,
+  type SandboxProcessStatus,
+  type SignalProcessArgs,
+  type StartProcessArgs,
+  shellSandboxProcesses,
+  type WriteProcessInputArgs,
+} from "./processes.js";
+export {
+  dockerfileDigest,
+  dockerfileImageReference,
+  type EnvironmentNetworkPolicy,
+  gatewayHostOf,
+  isEgressPattern,
+  resolveEgress,
+  SANDBOX_CAPABILITIES,
+  SANDBOXING_LEVELS,
+  type SandboxCapability,
+  type SandboxEgress,
+  type SandboxImage,
+  type Sandboxing,
+  sandboxingAllows,
+  sandboxingRefusal,
+} from "./sandbox-environment.js";
 export type { SandboxStore } from "./sandbox-manager.js";
 export { SandboxManagerImpl } from "./sandbox-manager.js";
+export {
+  type SandboxStdioProcess,
+  type SandboxStdioSpawnArgs,
+  sandboxCommandLine,
+  shellWord,
+  spawnInSandbox,
+  splitUtf8,
+} from "./sandbox-stdio.js";
 export type {
   StdioSupervisorTransport,
   SupervisorProcessHandle,

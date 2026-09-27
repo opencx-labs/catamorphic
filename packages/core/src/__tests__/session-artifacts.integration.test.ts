@@ -114,7 +114,7 @@ suite("session artifact source lifecycle", () => {
       expect(artifact.appName).toBe(`session-${artifact.id}`);
       expect(await repo.resolveRef("HEAD")).toBe(head);
       expect(await repo.listFiles()).not.toContain(
-        ".catamorphic/apps/review/src/App.tsx",
+        ".work/apps/review/src/App.tsx",
       );
       const files = await artifacts.files({
         identity,
@@ -123,7 +123,7 @@ suite("session artifact source lifecycle", () => {
       });
       expect(files[artifact.sourcePath]).toBe(source);
       expect(files["unrelated.txt"]).toBeUndefined();
-      expect(files[".catamorphic/contracts/package.json"]).toContain(
+      expect(files[".work/contracts/package.json"]).toContain(
         "@project/contracts",
       );
     } finally {
@@ -184,7 +184,7 @@ suite("session artifact source lifecycle", () => {
     });
     const remote = manager.remoteBackend;
     if (!remote) throw new Error("Missing origin");
-    const originalBranch = `catamorphic/artifacts/${artifact.id}`;
+    const originalBranch = `work/artifacts/${artifact.id}`;
     await remote.withOrigin(identity.tenantId, projectId, async (origin) => {
       await origin.updateRef({
         ref: `refs/heads/${originalBranch}`,
@@ -364,7 +364,7 @@ suite("session artifact source lifecycle", () => {
         projectId,
         async (origin) => {
           await origin.updateRef({
-            ref: `refs/heads/catamorphic/artifacts/${artifact.id}-late`,
+            ref: `refs/heads/work/artifacts/${artifact.id}-late`,
             sha: artifact.commitSha,
           });
         },
@@ -384,7 +384,7 @@ suite("session artifact source lifecycle", () => {
           projectId,
           (origin) => origin.listRefs("refs/heads/"),
         );
-      const prefix = `refs/heads/catamorphic/artifacts/${artifact.id}`;
+      const prefix = `refs/heads/work/artifacts/${artifact.id}`;
       const before = await inventory();
       expect(before.some(({ ref }) => ref === `${prefix}-late`)).toBe(true);
       await artifacts.cleanup();
@@ -506,8 +506,8 @@ suite("session artifact source lifecycle", () => {
         name: "ambiguous",
         source,
         files: {
-          ".catamorphic/workflows/src/first.ts": helper,
-          ".catamorphic/workflows/src/second.ts": helper,
+          ".work/workflows/src/first.ts": helper,
+          ".work/workflows/src/second.ts": helper,
         },
       }),
     ).rejects.toThrow("Workflow export helper is ambiguous");
@@ -546,23 +546,21 @@ suite("session artifact source lifecycle", () => {
       name: "cleanup",
       source,
       files: {
-        ".catamorphic/apps/cleanup/src/unused.ts": "export const old = true",
+        ".work/apps/cleanup/src/unused.ts": "export const old = true",
       },
     });
     const address = { identity, projectId, artifactId: artifact.id };
     await artifacts.update({
       ...address,
       revision: 1,
-      files: { ".catamorphic/apps/cleanup/src/unused.ts": null },
+      files: { ".work/apps/cleanup/src/unused.ts": null },
     });
     expect(
-      (await artifacts.files(address))[
-        ".catamorphic/apps/cleanup/src/unused.ts"
-      ],
+      (await artifacts.files(address))[".work/apps/cleanup/src/unused.ts"],
     ).toBeUndefined();
     expect(
       (await artifacts.files({ ...address, commitSha: artifact.commitSha }))[
-        ".catamorphic/apps/cleanup/src/unused.ts"
+        ".work/apps/cleanup/src/unused.ts"
       ],
     ).toContain("old");
   });

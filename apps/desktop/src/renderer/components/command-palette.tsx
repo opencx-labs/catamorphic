@@ -39,6 +39,7 @@ import {
   Send,
   Settings2,
   Settings as SettingsIcon,
+  ShieldCheck,
   SlidersHorizontal,
   Smartphone,
   Sparkles,
@@ -66,6 +67,7 @@ import {
   BUILTIN_ACTIONS,
   type KeybindingAction,
 } from "../../shared/actions.js";
+import { permissionModeLabel } from "../../shared/agent-permissions.js";
 import type { FileSearchResult } from "../../shared/file-search.js";
 import type { HistoryEntry } from "../../shared/history.js";
 import type { OpenMode as CommitMode } from "../../shared/open-mode.js";
@@ -77,6 +79,7 @@ import {
   useAgentDefaultModel,
 } from "../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
+import { permissionModeChoices } from "../lib/agent-permissions.js";
 import { commandScore } from "../lib/command-score.js";
 import {
   type AgentEffort,
@@ -84,6 +87,7 @@ import {
   type Bookmark,
   desktopApi,
   type HarnessModelInfo,
+  type HarnessPermissions,
   type OpenRouterCatalog,
   type Profile,
   type ProjectAgentInfo,
@@ -175,6 +179,7 @@ const ACTION_ICONS: Partial<Record<ActionId, LucideIcon>> = {
   "switch-agent": Bot,
   "configure-agent": Settings2,
   "change-effort": Gauge,
+  "change-permission-mode": ShieldCheck,
   "switch-model": Cpu,
   "manage-connectors": Plug,
   "connect-remote-project": Link2,
@@ -190,6 +195,7 @@ export type PaletteInPicker =
   | "switch-agent"
   | "configure-agent"
   | "effort"
+  | "permission-mode"
   | "model";
 
 const PICKER_CHIPS: Record<
@@ -216,6 +222,11 @@ const PICKER_CHIPS: Record<
     icon: Gauge,
     placeholder: "Pick reasoning effort…",
   },
+  "permission-mode": {
+    chip: "Permission mode",
+    icon: ShieldCheck,
+    placeholder: "Pick the agent's permission mode…",
+  },
   model: {
     chip: "Model",
     icon: Cpu,
@@ -229,6 +240,7 @@ const PICKER_ACTIONS: Partial<Record<ActionId, PaletteInPicker>> = {
   "switch-agent": "switch-agent",
   "configure-agent": "configure-agent",
   "change-effort": "effort",
+  "change-permission-mode": "permission-mode",
   "switch-model": "model",
 };
 
@@ -276,7 +288,9 @@ function projectAgentDetail(agent: ProjectAgentInfo): string {
         ? "changed — approve again"
         : agent.credentialsSource === "secret"
           ? "project secret"
-          : "approved";
+          : agent.credentialsSource === "connection"
+            ? "server model connection"
+            : "approved";
   return `${kind} · ${state}`;
 }
 
@@ -576,6 +590,7 @@ export function CommandPalette({
   onClearDefaultOverride,
   onPickEffort,
   onPickModel,
+  onPickHarnessPermissions,
   onHighlightTarget,
   pickerRequest,
   searchRequest,
@@ -654,6 +669,11 @@ export function CommandPalette({
   onPickEffort: (effort: AgentEffort | null) => void;
   /** Change the target agent's model ("" = the automatic default). */
   onPickModel: (agentId: string, model: string) => void;
+  /** Change a profile agent's harness permission mode (ADR 0182). */
+  onPickHarnessPermissions: (
+    agentId: string,
+    patch: HarnessPermissions,
+  ) => void;
   /**
    * The highlighted row targets a specific surface ("chat" = the focused
    * chat, "close" = whatever close-tab would close) — reported up so the
@@ -1082,6 +1102,7 @@ export function CommandPalette({
       "switch-agent",
       "switch-model",
       "change-effort",
+      "change-permission-mode",
     ]);
     const ordered = hasFocusedChat
       ? [
@@ -1725,135 +1746,160 @@ export function CommandPalette({
 
     if (picker) {
       const rows: PaletteItem[] =
-        picker === "effort"
-          ? [
-              ...(focusedChat
-                ? [
-                    {
-                      id: "pick:effort:default",
-                      icon: Gauge,
-                      label: "Agent default",
-                      detail:
-                        effectiveEffort(
-                          targetAgent,
-                          targetAgent?.effort,
-                          effortModel,
-                        ) ?? "Unavailable",
-                      keywords: ["default", "inherit", "effort"],
-                      kind: "action" as const,
-                      ...(focusedChat.effort === null ? { current: true } : {}),
-                      run: () => onPickEffort(null),
+        picker === "permission-mode"
+          ? permissionModeChoices(targetAgent).map((choice) => ({
+              id: `pick:permission:${choice.id}`,
+              icon: ShieldCheck,
+              label: choice.label,
+              detail: choice.detail,
+              keywords: choice.keywords,
+              kind: "action" as const,
+              ...(choice.current ? { current: true } : {}),
+              run: () => {
+                if (targetAgent)
+                  onPickHarnessPermissions(targetAgent.id, choice.patch);
+              },
+            }))
+          : picker === "effort"
+            ? [
+                ...(focusedChat
+                  ? [
+                      {
+                        id: "pick:effort:default",
+                        icon: Gauge,
+                        label: "Agent default",
+                        detail:
+                          effectiveEffort(
+                            targetAgent,
+                            targetAgent?.effort,
+                            effortModel,
+                          ) ?? "Unavailable",
+                        keywords: ["default", "inherit", "effort"],
+                        kind: "action" as const,
+                        ...(focusedChat.effort === null
+                          ? { current: true }
+                          : {}),
+                        run: () => onPickEffort(null),
+                      },
+                    ]
+                  : []),
+                ...EFFORT_LEVELS.filter((level) =>
+                  supportedEfforts(targetAgent, effortModel).includes(level.id),
+                ).map((level) => {
+                  const current = effectiveEffort(
+                    targetAgent,
+                    focusedChat ? focusedChat.effort : targetAgent?.effort,
+                    effortModel,
+                  );
+                  return {
+                    id: `pick:effort:${level.id}`,
+                    icon: Gauge,
+                    label: level.label,
+                    detail: level.description,
+                    keywords: [level.id, "effort", "reasoning"],
+                    kind: "action" as const,
+                    // Supported levels keep their low-to-high order; the check
+                    // alone marks the active one (no reordering).
+                    ...(level.id === current ? { current: true } : {}),
+                    run: () => onPickEffort(level.id),
+                  };
+                }),
+              ]
+            : [
+                ...agents.map((agent) => {
+                  const isCurrent =
+                    picker === "configure-agent"
+                      ? false
+                      : picker === "default-agent"
+                        ? agent.id === defaultAgentId
+                        : agent.id ===
+                          ((focusedChat?.agentId ?? defaultAgentId) || "");
+                  return {
+                    id: `pick:agent:${agent.id}`,
+                    icon: picker === "configure-agent" ? Settings2 : Bot,
+                    label: agent.name,
+                    detail: [
+                      agentSourceLabel(agent),
+                      agentAuthLabel(agent),
+                      permissionModeLabel({
+                        harness: agent.harness,
+                        permissions: agent.harnessPermissions,
+                      }),
+                    ]
+                      .filter(Boolean)
+                      .join(" · "),
+                    keywords: [
+                      agent.name,
+                      agent.harness,
+                      agent.provider ?? "",
+                      agent.model,
+                    ],
+                    kind: "action" as const,
+                    ...(isCurrent ? { current: true } : {}),
+                    run: () =>
+                      picker === "default-agent"
+                        ? onPickDefaultAgent(agent.id)
+                        : picker === "configure-agent"
+                          ? onConfigureAgent(agent.id)
+                          : onPickSessionAgent(agent.id),
+                  };
+                }),
+                // The active project's committed agents (ADR 0050), under
+                // their own scope label. Invalid definitions stay visible —
+                // disabled, with the error where the description goes — so
+                // a typo'd file is diagnosable from the picker itself. The
+                // configure picker keeps them clickable: its modal shows
+                // the full error and where to fix it.
+                ...projectAgents.map((agent) => {
+                  const isCurrent =
+                    picker === "configure-agent"
+                      ? false
+                      : picker === "default-agent"
+                        ? agent.id === defaultAgentId
+                        : agent.id ===
+                          ((focusedChat?.agentId ?? defaultAgentId) || "");
+                  return {
+                    id: `pick:agent:${agent.id}`,
+                    icon: picker === "configure-agent" ? Settings2 : Bot,
+                    label: agent.name,
+                    detail: projectAgentDetail(agent),
+                    keywords: [agent.name, agent.slug, "project", agent.kind],
+                    kind: "action" as const,
+                    group: "Project agents",
+                    ...(isCurrent ? { current: true } : {}),
+                    ...(agent.invalid && picker !== "configure-agent"
+                      ? { disabled: true }
+                      : {}),
+                    run: () => {
+                      if (picker === "configure-agent") {
+                        onConfigureAgent(agent.id);
+                        return;
+                      }
+                      if (agent.invalid) return;
+                      onPickProjectAgent(
+                        agent,
+                        picker === "default-agent" ? "default" : "session",
+                      );
                     },
-                  ]
-                : []),
-              ...EFFORT_LEVELS.filter((level) =>
-                supportedEfforts(targetAgent, effortModel).includes(level.id),
-              ).map((level) => {
-                const current = effectiveEffort(
-                  targetAgent,
-                  focusedChat ? focusedChat.effort : targetAgent?.effort,
-                  effortModel,
-                );
-                return {
-                  id: `pick:effort:${level.id}`,
-                  icon: Gauge,
-                  label: level.label,
-                  detail: level.description,
-                  keywords: [level.id, "effort", "reasoning"],
-                  kind: "action" as const,
-                  // Supported levels keep their low-to-high order; the check
-                  // alone marks the active one (no reordering).
-                  ...(level.id === current ? { current: true } : {}),
-                  run: () => onPickEffort(level.id),
-                };
-              }),
-            ]
-          : [
-              ...agents.map((agent) => {
-                const isCurrent =
-                  picker === "configure-agent"
-                    ? false
-                    : picker === "default-agent"
-                      ? agent.id === defaultAgentId
-                      : agent.id ===
-                        ((focusedChat?.agentId ?? defaultAgentId) || "");
-                return {
-                  id: `pick:agent:${agent.id}`,
-                  icon: picker === "configure-agent" ? Settings2 : Bot,
-                  label: agent.name,
-                  detail: `${agentSourceLabel(agent)} · ${agentAuthLabel(agent)}`,
-                  keywords: [
-                    agent.name,
-                    agent.harness,
-                    agent.provider ?? "",
-                    agent.model,
-                  ],
-                  kind: "action" as const,
-                  ...(isCurrent ? { current: true } : {}),
-                  run: () =>
-                    picker === "default-agent"
-                      ? onPickDefaultAgent(agent.id)
-                      : picker === "configure-agent"
-                        ? onConfigureAgent(agent.id)
-                        : onPickSessionAgent(agent.id),
-                };
-              }),
-              // The active project's committed agents (ADR 0050), under
-              // their own scope label. Invalid definitions stay visible —
-              // disabled, with the error where the description goes — so
-              // a typo'd file is diagnosable from the picker itself. The
-              // configure picker keeps them clickable: its modal shows
-              // the full error and where to fix it.
-              ...projectAgents.map((agent) => {
-                const isCurrent =
-                  picker === "configure-agent"
-                    ? false
-                    : picker === "default-agent"
-                      ? agent.id === defaultAgentId
-                      : agent.id ===
-                        ((focusedChat?.agentId ?? defaultAgentId) || "");
-                return {
-                  id: `pick:agent:${agent.id}`,
-                  icon: picker === "configure-agent" ? Settings2 : Bot,
-                  label: agent.name,
-                  detail: projectAgentDetail(agent),
-                  keywords: [agent.name, agent.slug, "project", agent.kind],
-                  kind: "action" as const,
-                  group: "Project agents",
-                  ...(isCurrent ? { current: true } : {}),
-                  ...(agent.invalid && picker !== "configure-agent"
-                    ? { disabled: true }
-                    : {}),
-                  run: () => {
-                    if (picker === "configure-agent") {
-                      onConfigureAgent(agent.id);
-                      return;
-                    }
-                    if (agent.invalid) return;
-                    onPickProjectAgent(
-                      agent,
-                      picker === "default-agent" ? "default" : "session",
-                    );
-                  },
-                };
-              }),
-              // Layered defaults (ADR 0056): while this user's per-project
-              // override is set, offer the way back to the layers below.
-              ...(picker === "default-agent" && defaultAgentOverridden
-                ? [
-                    {
-                      id: "pick:agent-default-clear",
-                      icon: Bot,
-                      label: "Use the project's default",
-                      detail:
-                        "Clear your override for this project (falls back to the project, then your global default)",
-                      keywords: ["clear", "project", "default", "reset"],
-                      kind: "action" as const,
-                      run: () => onClearDefaultOverride?.(),
-                    },
-                  ]
-                : []),
-            ];
+                  };
+                }),
+                // Layered defaults (ADR 0056): while this user's per-project
+                // override is set, offer the way back to the layers below.
+                ...(picker === "default-agent" && defaultAgentOverridden
+                  ? [
+                      {
+                        id: "pick:agent-default-clear",
+                        icon: Bot,
+                        label: "Use the project's default",
+                        detail:
+                          "Clear your override for this project (falls back to the project, then your global default)",
+                        keywords: ["clear", "project", "default", "reset"],
+                        kind: "action" as const,
+                        run: () => onClearDefaultOverride?.(),
+                      },
+                    ]
+                  : []),
+              ];
       if (rows.length === 0) {
         return [
           {
@@ -1874,7 +1920,10 @@ export function CommandPalette({
       }
       // Agent pickers pin the current agent first while unfiltered; the
       // effort picker keeps its low→high order (three fixed rows).
-      if (!trimmed) return picker === "effort" ? rows : pinCurrentFirst(rows);
+      if (!trimmed)
+        return picker === "effort" || picker === "permission-mode"
+          ? rows
+          : pinCurrentFirst(rows);
       return rows
         .map((item) => ({
           item,
@@ -2148,6 +2197,7 @@ export function CommandPalette({
     onClearDefaultOverride,
     onPickEffort,
     onPickModel,
+    onPickHarnessPermissions,
     targetAgent,
     catalog,
     harnessModels,
@@ -2198,13 +2248,16 @@ export function CommandPalette({
       ? null
       : picker === "switch-agent"
         ? "chat"
-        : picker === "effort" || picker === "model"
+        : picker === "effort" ||
+            picker === "model" ||
+            picker === "permission-mode"
           ? focusedChat
             ? "chat"
             : null
           : selectedId === "action:switch-agent"
             ? "chat"
             : selectedId === "action:change-effort" ||
+                selectedId === "action:change-permission-mode" ||
                 selectedId === "action:switch-model" ||
                 selectedId?.startsWith("skill:")
               ? focusedChat

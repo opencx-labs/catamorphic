@@ -40,6 +40,8 @@ In the company's Google Cloud project:
    Google Cloud (`"credentials": { "metadataServer": true }`). Otherwise create
    a JSON key, store it with the deployment's secret mechanism, and mount it
    read-only (`"credentials": { "keyFile": "/run/secrets/directory.json" }`).
+   A custom server that reads the key from a secret manager passes it inline
+   in `config.auth` instead (`"credentials": { "key": <the key JSON> }`).
 3. A super admin opens the Admin console, creates a custom admin role with the
    Admin API privileges **Users: Read** and **Groups: Read**, and assigns it to
    the service account's email. Domain-wide delegation is not needed; do not

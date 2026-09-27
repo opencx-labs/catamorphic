@@ -8,7 +8,7 @@ vi.mock("@catamorphic/mcp", () => ({
 }));
 
 import { connectMcpServer } from "@catamorphic/mcp";
-import { AiSdkCodingAgent } from "../ai-sdk-agent.js";
+import { AiSdkCodingAgent, mcpModelToolName } from "../ai-sdk-agent.js";
 
 const connectMcpServerMock = vi.mocked(connectMcpServer);
 
@@ -275,6 +275,99 @@ describe("AiSdkCodingAgent", () => {
       { "_plugins/acme__mail/README.md": "# Mail" },
       "/workspace/project",
     );
+  });
+
+  it("names dotted MCP tools the way model APIs accept, calling them by their own names", async () => {
+    const callToolRaw = vi.fn(async () => ({
+      content: [{ type: "text", text: "{}" }],
+      structuredContent: { ok: true },
+    }));
+    connectMcpServerMock.mockResolvedValueOnce({
+      tools: [
+        {
+          name: "conversations.replies",
+          description: "Read a thread",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+      callTool: vi.fn(async () => "unused"),
+      callToolRaw,
+      readResource: vi.fn(),
+      close: vi.fn(async () => {}),
+    });
+    const model = new MockLanguageModelV4({
+      doStream: [
+        toolCallStream("mcp__slack__conversations_replies", {}),
+        textStream("Read it."),
+      ],
+    });
+    const agent = new AiSdkCodingAgent({
+      model,
+      sandboxProvider: createProvider(),
+      mcpServers: {
+        slack: { transport: "http", url: "https://work.test/connection-mcp" },
+      },
+    });
+    await collect(agent, await start(agent), "Read the thread");
+    expect(callToolRaw).toHaveBeenCalledWith("conversations.replies", {});
+  });
+
+  it("names colliding and long MCP tools apart, within model API limits", async () => {
+    const valid = /^[A-Za-z0-9_-]{1,64}$/;
+    expect(
+      mcpModelToolName({ server: "slack", tool: "chat.post", taken: {} }),
+    ).toBe("mcp__slack__chat_post");
+    const clash = mcpModelToolName({
+      server: "slack",
+      tool: "chat_post",
+      taken: { mcp__slack__chat_post: true },
+    });
+    expect(clash).not.toBe("mcp__slack__chat_post");
+    expect(clash).toMatch(valid);
+    const long = mcpModelToolName({
+      server: "acme-internal-knowledge-base",
+      tool: "list_repository_pull_request_review_comments_for_team",
+      taken: {},
+    });
+    expect(long).toMatch(valid);
+    expect(long).toHaveLength(64);
+
+    const callToolRaw = vi.fn(async () => ({
+      content: [{ type: "text", text: "{}" }],
+    }));
+    connectMcpServerMock.mockResolvedValueOnce({
+      tools: ["chat.post", "chat_post"].map((name) => ({
+        name,
+        description: name,
+        inputSchema: { type: "object", properties: {} },
+      })),
+      callTool: vi.fn(async () => "unused"),
+      callToolRaw,
+      readResource: vi.fn(),
+      close: vi.fn(async () => {}),
+    });
+    const model = new MockLanguageModelV4({
+      doStream: [
+        toolCallStream(
+          mcpModelToolName({
+            server: "slack",
+            tool: "chat_post",
+            taken: { mcp__slack__chat_post: true },
+          }),
+          {},
+        ),
+        textStream("Posted."),
+      ],
+    });
+    const agent = new AiSdkCodingAgent({
+      model,
+      sandboxProvider: createProvider(),
+      mcpServers: {
+        slack: { transport: "http", url: "https://work.test/connection-mcp" },
+      },
+    });
+    await collect(agent, await start(agent), "Post it");
+    expect(callToolRaw).toHaveBeenCalledWith("chat_post", {});
   });
 
   it("mounts MCP server tools beside the built-ins and maps their calls", async () => {
@@ -599,6 +692,49 @@ describe("AiSdkCodingAgent", () => {
       content: "edit",
       filePath: "src/value.ts",
     });
+  });
+
+  it("reads files in the host's read-only roots, and never writes there", async () => {
+    const pasted = "/host/attachments/project-1/9f2-notes.txt";
+    const provider = createProvider({
+      [pasted]: "pasted notes",
+      "/host/attachments/project-2/secret.txt": "another project's paste",
+    });
+    const model = new MockLanguageModelV4({
+      doStream: [
+        toolCallStream("read", { path: pasted }),
+        toolCallStream("read", {
+          path: "/host/attachments/project-2/secret.txt",
+        }),
+        toolCallStream("write", { path: pasted, content: "overwritten" }),
+        textStream("Read the notes."),
+      ],
+    });
+    const readableRoots = vi.fn(({ projectId }: { projectId: string }) => [
+      `/host/attachments/${projectId}`,
+    ]);
+    const agent = new AiSdkCodingAgent({
+      model,
+      sandboxProvider: provider,
+      readableRoots,
+    });
+    const session = await start(agent);
+
+    const events = await collect(agent, session, "Summarize my paste");
+
+    expect(readableRoots).toHaveBeenCalledWith({ projectId: "project-1" });
+    expect(provider.downloadFile).toHaveBeenCalledTimes(1);
+    expect(provider.downloadFile).toHaveBeenCalledWith("sandbox-1", pasted);
+    expect(events).toContainEqual({
+      type: "diagnostic",
+      content:
+        "Tool read failed: Path escapes the project working directory: /host/attachments/project-2/secret.txt",
+    });
+    expect(events).toContainEqual({
+      type: "diagnostic",
+      content: `Tool write failed: Path escapes the project working directory: ${pasted}`,
+    });
+    expect(provider.uploadFiles).not.toHaveBeenCalled();
   });
 
   it("runs bash in the project folder with the requested timeout", async () => {

@@ -56,7 +56,7 @@ it("does not expose settings-specific tools to agents", async () => {
     harness: "ai-sdk",
     provider: "openai",
     model: "mock-model",
-    mode: "read-only",
+    sandboxing: "contained",
   };
   const deps = {
     profiles: { list: () => ({ profiles: [{ id: "profile" }] }) },

@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { type FileReadOptions, readFileSnapshot } from "./file-reads.js";
 import {
-  hasLocalGit,
-  INTERNAL_REMOTE_PREFIX,
-  nativeGit,
-  nativeGitBytes,
-} from "./native-git.js";
+  PROJECT_APP_DATA_DIR,
+  PROJECT_PERSONAL_DIR,
+  publishedRef,
+} from "@catamorphic/workflow/project-layout";
+import { type FileReadOptions, readFileSnapshot } from "./file-reads.js";
+import { hasLocalGit, nativeGit, nativeGitBytes } from "./native-git.js";
 import {
   ensurePersonalFilesExcluded,
   isPersonalFile,
@@ -16,62 +16,11 @@ import {
   ProjectRepoImpl,
   walkDirectory,
 } from "./project-repo.js";
-import type {
-  BranchInfo,
-  CommitInfo,
-  DiffEntry,
-  GitCredentials,
-  RepoStatus,
-} from "./types.js";
+import type { BranchInfo, CommitInfo, DiffEntry, RepoStatus } from "./types.js";
 
 /** Local-checkout adapter. File IO stays shared; Git honors the user's repository format and tools. */
 export class NativeProjectRepo extends ProjectRepoImpl {
   protected override readonly followsSymlinks = true;
-
-  private nativeRemote:
-    | { url: string; credentials?: GitCredentials }
-    | undefined;
-
-  override async setRemote(
-    url: string,
-    credentials?: GitCredentials,
-  ): Promise<void> {
-    const exists = await nativeGit(this.repoPath, [
-      "remote",
-      "get-url",
-      "origin",
-    ]).then(
-      () => true,
-      () => false,
-    );
-    await nativeGit(this.repoPath, [
-      "remote",
-      exists ? "set-url" : "add",
-      "origin",
-      url,
-    ]);
-    this.nativeRemote = { url, credentials };
-  }
-  override async fetch(): Promise<void> {
-    const remote = this.nativeRemote;
-    await nativeGit(
-      this.repoPath,
-      ["fetch", "origin"],
-      remote?.credentials
-        ? { ...remote.credentials, url: remote.url }
-        : undefined,
-    );
-  }
-  override async push(): Promise<void> {
-    const remote = this.nativeRemote;
-    await nativeGit(
-      this.repoPath,
-      ["push"],
-      remote?.credentials
-        ? { ...remote.credentials, url: remote.url }
-        : undefined,
-    );
-  }
 
   override async readFileBytes(filePath: string): Promise<Uint8Array | null> {
     assertSafePath(filePath);
@@ -253,9 +202,7 @@ export class NativeProjectRepo extends ProjectRepoImpl {
       }
     }
     const baseCommit = await this.resolveRef().catch(() => null);
-    const remoteHead = await this.resolveRef(
-      `${INTERNAL_REMOTE_PREFIX}/main`,
-    ).catch(() => null);
+    const remoteHead = await this.resolveRef(publishedRef()).catch(() => null);
     const counts =
       baseCommit && remoteHead
         ? (
@@ -385,15 +332,15 @@ export class NativeProjectRepo extends ProjectRepoImpl {
       "--worktree",
       "--",
       ".",
-      ":!.catamorphic/personal/",
+      `:!${PROJECT_PERSONAL_DIR}/`,
     ]);
     await nativeGit(this.repoPath, [
       "clean",
       "-fd",
       "-e",
-      ".catamorphic/app-data/",
+      `${PROJECT_APP_DATA_DIR}/`,
       "-e",
-      ".catamorphic/personal/",
+      `${PROJECT_PERSONAL_DIR}/`,
       "--",
       ".",
     ]);

@@ -217,3 +217,49 @@ export function isTokenStale(
 ): boolean {
   return tokens.expiresAt !== null && tokens.expiresAt - skewMs <= now;
 }
+
+/**
+ * Revoke a user access token (and its refresh token). Needs the app's client
+ * secret: GitHub authenticates this call with the OAuth client itself.
+ */
+export async function revokeUserToken(args: {
+  app: GithubAppConfig;
+  accessToken: string;
+  fetch?: FetchLike;
+  /** REST API base; GitHub Enterprise Server uses `https://HOST/api/v3`. */
+  apiBaseUrl?: string;
+}): Promise<void> {
+  if (!args.app.clientSecret) {
+    throw new GithubAuthError(
+      "missing_client_secret",
+      "Revoking a user token requires the app's client secret",
+    );
+  }
+  const base = (args.apiBaseUrl ?? "https://api.github.com").replace(
+    /\/+$/,
+    "",
+  );
+  const basic = Buffer.from(
+    `${args.app.clientId}:${args.app.clientSecret}`,
+  ).toString("base64");
+  const response = await (args.fetch ?? fetch)(
+    `${base}/applications/${encodeURIComponent(args.app.clientId)}/token`,
+    {
+      method: "DELETE",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Basic ${basic}`,
+        "Content-Type": "application/json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      body: JSON.stringify({ access_token: args.accessToken }),
+    },
+  );
+  // 404: the token was already revoked or had expired.
+  if (!response.ok && response.status !== 404) {
+    throw new GithubAuthError(
+      "http_error",
+      `GitHub token revocation returned ${response.status}`,
+    );
+  }
+}

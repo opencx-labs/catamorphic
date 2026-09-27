@@ -6,6 +6,21 @@ export {
   repoFullNameFromUrl,
 } from "./api.js";
 export {
+  createGithubAppJwt,
+  GithubAppAuth,
+  type GithubAppAuthOptions,
+  parseGithubAppPrivateKey,
+} from "./app-auth.js";
+export {
+  buildGithubAppManifest,
+  convertGithubAppManifest,
+  DEFAULT_GITHUB_APP_EVENTS,
+  DEFAULT_GITHUB_APP_PERMISSIONS,
+  type GithubAppManifest,
+  type GithubAppManifestOptions,
+  githubAppManifestForm,
+} from "./manifest.js";
+export {
   buildAuthorizeUrl,
   buildInstallationUrl,
   exchangeCode,
@@ -13,19 +28,38 @@ export {
   pollDeviceToken,
   refreshAccessToken,
   requestDeviceCode,
+  revokeUserToken,
 } from "./oauth.js";
+export {
+  type GithubRestMethod,
+  type GithubRestRequest,
+  type GithubRestResponse,
+  githubRestRequest,
+  githubRestUrl,
+  repositoryFromRestPath,
+} from "./rest.js";
 export {
   type DeviceCodeGrant,
   type FetchLike,
   GithubApiError,
   type GithubAppConfig,
+  type GithubAppCredentials,
+  type GithubAppRegistration,
   GithubAuthError,
+  type GithubCheckRun,
+  type GithubCheckRunAnnotation,
+  type GithubCheckRunFields,
+  type GithubInstallation,
+  type GithubInstallationToken,
+  type GithubJson,
+  type GithubPermissionLevel,
+  type GithubPermissions,
   type GithubPullRequest,
   type GithubPullRequestFile,
   type GithubRepo,
   type GithubRepositoryEvent,
+  type GithubReviewComment,
+  type GithubReviewEvent,
   type GithubTokenSet,
-  type GithubTokenStore,
   type GithubUser,
-  type StoredGithubConnection,
 } from "./types.js";

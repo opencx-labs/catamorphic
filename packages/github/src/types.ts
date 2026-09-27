@@ -93,6 +93,63 @@ export interface GithubPullRequestFile {
   previousPath?: string;
 }
 
+export type GithubReviewEvent = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
+
+/**
+ * An inline review comment. `line` is the line in the diff's file (on the
+ * `side` given, `RIGHT` for the new version by default); `startLine` makes
+ * it a multi-line comment.
+ */
+export interface GithubReviewComment {
+  path: string;
+  body: string;
+  line?: number;
+  side?: "LEFT" | "RIGHT";
+  startLine?: number;
+  startSide?: "LEFT" | "RIGHT";
+}
+
+export interface GithubCheckRunAnnotation {
+  path: string;
+  startLine: number;
+  endLine: number;
+  level: "notice" | "warning" | "failure";
+  message: string;
+  title?: string;
+}
+
+/** Fields shared by creating and updating a check run. */
+export interface GithubCheckRunFields {
+  status?: "queued" | "in_progress" | "completed";
+  conclusion?:
+    | "action_required"
+    | "cancelled"
+    | "failure"
+    | "neutral"
+    | "success"
+    | "skipped"
+    | "timed_out";
+  detailsUrl?: string;
+  externalId?: string;
+  /** ISO timestamps. */
+  startedAt?: string;
+  completedAt?: string;
+  output?: {
+    title: string;
+    summary: string;
+    text?: string;
+    /** At most 50 per request (GitHub's limit). */
+    annotations?: readonly GithubCheckRunAnnotation[];
+  };
+}
+
+export interface GithubCheckRun {
+  id: number;
+  url: string | null;
+  status: string;
+  conclusion: string | null;
+}
+
 export interface GithubRepositoryEvent {
   id: string;
   /** GitHub's event class, for example PullRequestEvent. */
@@ -104,35 +161,71 @@ export interface GithubRepositoryEvent {
 }
 
 /**
- * A stored connection: the token set plus the GitHub identity it belongs to.
- * The login is denormalized so hosts can render "connected as X" without an
- * API round-trip.
+ * Server-side credentials of a GitHub App: what signs app JWTs. Distinct from
+ * {@link GithubAppConfig}, which only identifies the app's OAuth client.
  */
-export interface StoredGithubConnection {
-  tokens: GithubTokenSet;
-  githubLogin: string;
-  githubUserId: number;
+export interface GithubAppCredentials {
+  /** Numeric app ID, or the app's client ID; GitHub accepts both as issuer. */
+  appId: string;
+  /** PEM private key from the app's settings page (PKCS#1 or PKCS#8). */
+  privateKey: string;
+}
+
+export type GithubPermissionLevel = "read" | "write" | "admin";
+
+/** GitHub App permission names (`contents`, `pull_requests`, ...) to levels. */
+export type GithubPermissions = Readonly<Record<string, GithubPermissionLevel>>;
+
+/**
+ * A short-lived installation access token (one hour). `repositories` lists
+ * the full names it is limited to when the installation or the request
+ * selected repositories; absent means every repository of the installation.
+ */
+export interface GithubInstallationToken {
+  token: string;
+  /** Epoch ms when the token stops working. */
+  expiresAt: number;
+  permissions: Record<string, string>;
+  repositorySelection: "all" | "selected";
+  repositories?: string[];
+}
+
+export interface GithubInstallation {
+  id: number;
+  /** The user or organization the app is installed on. */
+  account: { login: string; id: number; type: string } | null;
+  repositorySelection: "all" | "selected";
+  permissions: Record<string, string>;
+  events: string[];
+  appSlug: string;
+  suspendedAt: string | null;
 }
 
 /**
- * Host-owned persistence for GitHub connections. Catamorphic never stores
- * tokens itself — token custody follows the same rule as identity: the host
- * owns auth. Encryption at rest is the implementation's concern. Server
- * embedders typically back this with their own user table or secret manager;
- * the desktop app uses its OS-keychain-encrypted settings file.
+ * The app GitHub created at the end of the manifest flow. `privateKey`,
+ * `clientSecret`, and `webhookSecret` are returned exactly once: store them
+ * in the host's vault immediately.
  */
-export interface GithubTokenStore {
-  get(
-    tenantId: string,
-    externalUserId: string,
-  ): Promise<StoredGithubConnection | null>;
-  set(
-    tenantId: string,
-    externalUserId: string,
-    connection: StoredGithubConnection,
-  ): Promise<void>;
-  delete(tenantId: string, externalUserId: string): Promise<void>;
+export interface GithubAppRegistration {
+  appId: string;
+  slug: string;
+  name: string;
+  owner: string | null;
+  htmlUrl: string;
+  clientId: string;
+  clientSecret: string;
+  webhookSecret: string | null;
+  privateKey: string;
 }
+
+/** Any JSON value; structurally identical to hosts' JSON column types. */
+export type GithubJson =
+  | null
+  | boolean
+  | number
+  | string
+  | GithubJson[]
+  | { [key: string]: GithubJson };
 
 export class GithubAuthError extends Error {
   constructor(

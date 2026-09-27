@@ -560,12 +560,12 @@ export function buildWorkspaceToolkit(
     {
       name: "build_app",
       description:
-        "Build a project app preview from .catamorphic/apps/<name>/. Set publish: true only when publication is requested. Preview is the default and can be opened with open_surface target app:<name>. Load building-apps for authoring.",
+        "Build a project app preview from .work/apps/<name>/. Set publish: true only when publication is requested. Preview is the default and can be opened with open_surface target app:<name>. Load building-apps for authoring.",
       parameters: {
         name: z
           .string()
           .regex(/^[a-z0-9][a-z0-9-]*$/)
-          .describe("The app's directory name under .catamorphic/apps/"),
+          .describe("The app's directory name under .work/apps/"),
         publish: z
           .boolean()
           .optional()
@@ -878,7 +878,7 @@ export function buildWorkspaceToolkit(
     {
       name: "read_background_output",
       description:
-        "Read a background command's output since your last read, with its status (running, finished, stopped) and exit code. Pass wait_seconds to block until it prints something new or finishes, when you have nothing else to do meanwhile.",
+        "Read a background command's output since your last read, with its status (running, finished, stopped) and exit code. wait_seconds blocks until it prints something new or finishes; with wait_for, until a line matches.",
       parameters: {
         id: z.string().describe("The id run_background_command returned"),
         wait_seconds: z
@@ -887,7 +887,8 @@ export function buildWorkspaceToolkit(
           .min(0)
           .max(600)
           .optional()
-          .describe("Block up to this long for new output or the end"),
+          .describe("Seconds to wait"),
+        wait_for: z.string().optional().describe("Regex of a line to wait for"),
       },
       execute: (input, ctx) =>
         bridge.readBackgroundCommand({
@@ -895,6 +896,9 @@ export function buildWorkspaceToolkit(
           id: String(input.id),
           ...(typeof input.wait_seconds === "number"
             ? { waitMs: input.wait_seconds * 1000 }
+            : {}),
+          ...(typeof input.wait_for === "string" && input.wait_for
+            ? { waitFor: input.wait_for }
             : {}),
         }),
     },
@@ -1001,7 +1005,7 @@ export function buildWorkspaceToolkit(
     {
       name: "sync_project",
       description:
-        "Sync this project with its linked remote repository now. On the primary checkout this applies the safe pull/push policy. An isolated worktree never pushes main implicitly; use create_pull_request to share that branch. Call this when the user asks to sync, push, pull, or share changes. Never run raw git push or pull in a terminal for a linked project.",
+        "Sync this project with its linked remote repository now. On the primary checkout this fetches and fast-forwards over a clean tree. Work pushes only to a repository it created; in a repository that existed before Work, local commits are never pushed, the result reports `ahead` or `diverged`, and you share them with create_pull_request. An isolated worktree is never synced; use create_pull_request to share that branch. Call this when the user asks to sync, pull, or share changes. Never run raw git push or pull in a terminal for a linked project.",
       parameters: {},
       execute: async (_input, ctx) => {
         if (!ctx.sessionId) throw new Error("This turn has no chat session.");
@@ -1012,7 +1016,7 @@ export function buildWorkspaceToolkit(
     {
       name: "create_pull_request",
       description:
-        "Propose the project's current changes for review: commits any pending edits, pushes them to a new branch on the linked remote (e.g. GitHub), and opens a pull request. Use this instead of syncing straight to the main branch when the change is risky, collaborators are active on this project, or the user asks for review. Returns the PR URL — share it with the user (open_surface can open it).",
+        "Propose the project's current changes for review: pushes the recorded commits to a new work/ branch on the linked remote (e.g. GitHub) and opens a pull request. This is how local work reaches a repository that existed before Work, and the right choice whenever sync_project reports `ahead` or `diverged`, the change is risky, collaborators are active, or the user asks for review. Returns the PR URL; share it with the user (open_surface can open it).",
       parameters: {
         title: z
           .string()
@@ -1073,7 +1077,7 @@ export function buildWorkspaceToolkit(
     {
       name: "read_skill",
       description:
-        "Load a skill (a reusable playbook) by its declared name and return its SKILL.md content. Covers both tiers: project skills (files under .catamorphic/skills/ in this project) and app skills shipped by the app. Use it when the user invokes a skill by name ('use the X skill', a palette or / command) or a task matches a skill's description from your skill listing — then follow the returned instructions.",
+        "Load a skill (a reusable playbook) by its declared name and return its SKILL.md content. Covers both tiers: project skills (files under .work/skills/ in this project) and app skills shipped by the app. Use it when the user invokes a skill by name ('use the X skill', a palette or / command) or a task matches a skill's description from your skill listing — then follow the returned instructions.",
       parameters: {
         name: z
           .string()

@@ -5,6 +5,7 @@ import type {
   GitCredentials,
   ProjectManager,
   ProjectRepo,
+  RemoteOwnership,
 } from "@catamorphic/git";
 import { discoverLocalFolder } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
@@ -36,6 +37,17 @@ export interface Project {
   name: string;
   storageType: "managed" | "remote";
   remoteUrl: string | null;
+  /**
+   * Who created the linked remote (ADR 0170): an `attached` repository only
+   * receives `work/*` branches and pull requests. `null` when unlinked.
+   */
+  remoteOwnership: RemoteOwnership | null;
+  /**
+   * Since when this project's main has not been a fast-forward of its code
+   * host's default branch (ADR 0170): accepted changes stop arriving until
+   * the two are reconciled. `null` while they converge.
+   */
+  remoteDivergedAt: string | null;
   defaultBranch: string;
   createdAt: string;
   updatedAt: string;
@@ -63,7 +75,7 @@ export interface CreateProjectInput {
   /**
    * Populate the project by cloning a network git remote instead of
    * scaffolding. Library-direct only (like `rootPath`) — HTTP callers go
-   * through the GitHub surface, which resolves credentials server-side.
+   * through the code-host surface, which resolves credentials server-side.
    */
   cloneFrom?: {
     url: string;
@@ -269,6 +281,8 @@ export class ProjectsService {
         ...(checkout
           ? {
               remote_url: checkout.remoteUrl,
+              // An opened folder's origin existed before Work did.
+              remote_ownership: checkout.remoteUrl ? "attached" : null,
               remote_branch: checkout.remoteBranch ?? checkout.branch ?? "main",
               default_branch:
                 checkout.defaultBranch ?? checkout.branch ?? "main",
@@ -281,7 +295,7 @@ export class ProjectsService {
       // New projects get the resolved seed skills (hidden reference
       // material — the agent knows the conventions from its first session)
       // but NO visible workspace scaffold; the workspace arrives on demand
-      // via the catamorphic-projects skill (ADR 0043).
+      // via the work-projects skill (ADR 0043).
       const repo = await this.projectManager.create(tenantId, projectId, {
         name: input.name,
         initialFiles: this.seedFiles,
@@ -764,8 +778,19 @@ function mapProject(row: ProjectRow): Project {
     name: row.name,
     storageType: row.storage_type as "managed" | "remote",
     remoteUrl: row.remote_url,
+    remoteOwnership: remoteOwnership(row.remote_ownership),
+    remoteDivergedAt: row.remote_diverged_at?.toISOString() ?? null,
     defaultBranch: row.default_branch,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+/**
+ * A stored ownership as the type sync decides by. Anything but `owned` reads
+ * as `attached`, so an unexpected value can only make Work push less.
+ */
+export function remoteOwnership(value: string | null): RemoteOwnership | null {
+  if (value === null) return null;
+  return value === "owned" ? "owned" : "attached";
 }

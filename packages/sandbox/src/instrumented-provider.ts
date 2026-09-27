@@ -1,4 +1,5 @@
 import { getTracer, markSpanError, withSpan } from "@catamorphic/otel";
+import type { SandboxProcess, SandboxProcessProvider } from "./processes.js";
 import type {
   CancelRuntimeInvocationArgs,
   CreateSandboxOpts,
@@ -49,9 +50,16 @@ export function instrumentSandboxProvider(
     workspaceRoot: provider.workspaceRoot,
     resourceLimits: provider.resourceLimits,
     isolation: provider.isolation,
+    capabilities: provider.capabilities,
     deploymentRuntime: provider.deploymentRuntime
       ? instrumentDeploymentRuntimeProvider({
           provider: provider.deploymentRuntime,
+          providerName,
+        })
+      : undefined,
+    processes: provider.processes
+      ? instrumentProcessProvider({
+          provider: provider.processes,
           providerName,
         })
       : undefined,
@@ -208,6 +216,103 @@ export function instrumentSandboxProvider(
   }
 
   return instrumented;
+}
+
+function instrumentProcessProvider(args: {
+  provider: SandboxProcessProvider;
+  providerName: string;
+}): SandboxProcessProvider {
+  const base = { "catamorphic.sandbox.provider": args.providerName };
+  const record = (
+    span: { setAttribute(key: string, value: string | number): unknown },
+    process: SandboxProcess,
+  ) => {
+    span.setAttribute("catamorphic.process.id", process.processId);
+    span.setAttribute("catamorphic.process.status", process.status);
+    if (process.exitCode !== null)
+      span.setAttribute("catamorphic.process.exit_code", process.exitCode);
+  };
+  return {
+    startProcess: (options) =>
+      withSpan(
+        {
+          tracer,
+          name: "sandbox.process.start",
+          attributes: { ...base, "catamorphic.sandbox.id": options.sandboxId },
+        },
+        async (span) => {
+          const process = await args.provider.startProcess(options);
+          record(span, process);
+          return process;
+        },
+      ),
+    readProcessOutput: (options) =>
+      withSpan(
+        {
+          tracer,
+          name: "sandbox.process.read",
+          attributes: {
+            ...base,
+            "catamorphic.sandbox.id": options.sandboxId,
+            "catamorphic.process.id": options.processId,
+          },
+        },
+        async (span) => {
+          const output = await args.provider.readProcessOutput(options);
+          span.setAttribute(
+            "catamorphic.process.bytes",
+            output.nextCursor - output.cursor,
+          );
+          span.setAttribute("catamorphic.process.status", output.status);
+          return output;
+        },
+      ),
+    signalProcess: (options) =>
+      withSpan(
+        {
+          tracer,
+          name: "sandbox.process.signal",
+          attributes: {
+            ...base,
+            "catamorphic.sandbox.id": options.sandboxId,
+            "catamorphic.process.id": options.processId,
+            "catamorphic.process.signal": options.signal,
+          },
+        },
+        async (span) => {
+          const process = await args.provider.signalProcess(options);
+          record(span, process);
+          return process;
+        },
+      ),
+    writeProcessInput: (options) =>
+      withSpan(
+        {
+          tracer,
+          name: "sandbox.process.write",
+          attributes: {
+            ...base,
+            "catamorphic.sandbox.id": options.sandboxId,
+            "catamorphic.process.id": options.processId,
+            "catamorphic.process.bytes": Buffer.byteLength(options.data),
+          },
+        },
+        () => args.provider.writeProcessInput(options),
+      ),
+    listProcesses: (options) =>
+      withSpan(
+        {
+          tracer,
+          name: "sandbox.process.list",
+          attributes: { ...base, "catamorphic.sandbox.id": options.sandboxId },
+        },
+        async (span) => {
+          const processes = await args.provider.listProcesses(options);
+          span.setAttribute("catamorphic.process.count", processes.length);
+          return processes;
+        },
+      ),
+  };
 }
 
 function instrumentDeploymentRuntimeProvider(args: {

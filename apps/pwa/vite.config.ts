@@ -15,6 +15,7 @@ export default defineConfig({
       "@catamorphic/api-client",
       "@catamorphic/react",
       "@catamorphic/ui",
+      "@catamorphic/workflow",
     ],
   },
   server: {

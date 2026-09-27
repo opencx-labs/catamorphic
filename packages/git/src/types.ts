@@ -39,11 +39,27 @@ export interface StorageBackend {
     opts?: InitProjectOptions,
   ): Promise<string>;
   deleteProject(tenantId: string, projectId: string): Promise<void>;
+  /**
+   * Remove one user's internal working copy (a session's `session-<id>`
+   * copy). A copy that is a user-visible project folder is never removed.
+   * Missing is a no-op.
+   */
+  deleteCopy(
+    tenantId: string,
+    projectId: string,
+    externalUserId: string,
+  ): Promise<void>;
   exists(
     tenantId: string,
     projectId: string,
     externalUserId?: string,
   ): Promise<boolean>;
+  /**
+   * Where this host keeps its bare mirror of the project's linked remote
+   * (ADR 0178): a cache sessions are seeded from. Backends without local
+   * disk omit it, and workspaces at a ref are then unavailable.
+   */
+  mirrorPath?(tenantId: string, projectId: string): string;
 }
 
 export type FileChange =
@@ -108,7 +124,7 @@ export interface ProjectRepo {
     options?: FileReadOptions,
   ): Promise<Record<string, string>>;
   /**
-   * The files under one directory prefix at a ref (e.g. `.catamorphic/roles/`), without
+   * The files under one directory prefix at a ref (e.g. `.work/roles/`), without
    * materializing the whole tree. `prefix` is a directory path with its
    * trailing slash; results are keyed by full path.
    */
@@ -141,10 +157,6 @@ export interface ProjectRepo {
   ): Promise<string>;
   log(options?: { maxCount?: number; ref?: string }): Promise<CommitInfo[]>;
   resolveRef(ref?: string): Promise<string>;
-
-  setRemote(url: string, credentials?: GitCredentials): Promise<void>;
-  fetch(): Promise<void>;
-  push(): Promise<void>;
 
   checkout(ref?: string): Promise<void>;
 

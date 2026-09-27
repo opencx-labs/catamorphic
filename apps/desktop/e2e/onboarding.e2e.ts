@@ -131,10 +131,7 @@ describe("agent-first onboarding", () => {
 
     const createdDir = path.join(projectsDir, "default-project-2");
     const manifest = JSON.parse(
-      fs.readFileSync(
-        path.join(createdDir, ".catamorphic/project.json"),
-        "utf-8",
-      ),
+      fs.readFileSync(path.join(createdDir, ".work/project.json"), "utf-8"),
     ) as { name: string };
     expect(manifest.name).toBe("Default Project");
     expect(fs.readFileSync(path.join(occupiedDir, "KEEP.txt"), "utf-8")).toBe(
@@ -238,17 +235,14 @@ describe("blank project onboarding", () => {
 
     // The manifest names the project (ADR 0043).
     const manifest = JSON.parse(
-      fs.readFileSync(
-        path.join(projectDir, ".catamorphic/project.json"),
-        "utf-8",
-      ),
+      fs.readFileSync(path.join(projectDir, ".work/project.json"), "utf-8"),
     ) as { name: string };
     expect(manifest.name).toBe("onboard-blank");
 
     // Seed skills: reference material plus the scaffold's support files.
     for (const file of [
-      ".catamorphic/skills/catamorphic-projects/SKILL.md",
-      ".catamorphic/skills/catamorphic-projects/files/package.json",
+      ".work/skills/work-projects/SKILL.md",
+      ".work/skills/work-projects/files/package.json",
     ]) {
       expect(fs.existsSync(path.join(projectDir, file)), file).toBe(true);
     }
@@ -260,7 +254,7 @@ describe("blank project onboarding", () => {
     }
 
     // One commit, and everything (dot-dirs included) is IN it — a dirty
-    // status here would mean the .catamorphic/.agents allowlist regressed.
+    // status here would mean the .work/.agents allowlist regressed.
     await until(
       () => git(projectDir, "status", "--porcelain") === "",
       10_000,
@@ -291,11 +285,9 @@ describe("blank project onboarding", () => {
       () =>
         git(projectDir, "log", "--format=%an|%s")
           .split("\n")
-          .some((line) =>
-            line.startsWith("Catamorphic Agent|Agent: edit a file"),
-          ),
+          .some((line) => line.startsWith("Work Agent|Agent: edit a file")),
       15_000,
-      "checkpoint commit by Catamorphic Agent",
+      "checkpoint commit by Work Agent",
     );
     await until(
       () => git(projectDir, "status", "--porcelain") === "",
@@ -399,9 +391,9 @@ describe.each([false, true])(
         fs.readFileSync(path.join(importDir, "nested", "data.txt"), "utf-8"),
       ).toBe(DATA);
 
-      expect(
-        fs.existsSync(path.join(importDir, ".catamorphic/project.json")),
-      ).toBe(false);
+      expect(fs.existsSync(path.join(importDir, ".work/project.json"))).toBe(
+        false,
+      );
       if (versioned) {
         expect(git(importDir, "log", "--format=%s")).toBe("Existing history");
         expect(git(importDir, "branch", "--show-current")).toBe("feature");
@@ -437,14 +429,14 @@ describe.each([false, true])(
         fs.readFileSync(path.join(importDir, "HELLO.md"), "utf8"),
       ).toContain("hello from the fake agent");
       expect(fs.existsSync(path.join(importDir, ".agents"))).toBe(false);
-      expect(
-        fs.existsSync(path.join(importDir, ".catamorphic/project.json")),
-      ).toBe(false);
+      expect(fs.existsSync(path.join(importDir, ".work/project.json"))).toBe(
+        false,
+      );
       if (versioned)
         expect(git(importDir, "log", "--format=%s")).toBe("Existing history");
       else expect(fs.existsSync(path.join(importDir, ".git"))).toBe(false);
     });
-    it("adds capabilities inside .catamorphic while keeping the imported root and Git unchanged", async () => {
+    it("adds capabilities inside .work while keeping the imported root and Git unchanged", async () => {
       const before = fs.readdirSync(importDir).sort();
       const existingPackage =
         '{"name":"existing","packageManager":"pnpm@10.0.0"}\n';
@@ -462,7 +454,7 @@ describe.each([false, true])(
       await until(
         () =>
           fs.existsSync(
-            path.join(importDir, ".catamorphic/app-data/catalog/items.json"),
+            path.join(importDir, ".work/app-data/catalog/items.json"),
           ),
         15_000,
         "contained app data",
@@ -473,18 +465,14 @@ describe.each([false, true])(
       expect(
         fs
           .readdirSync(importDir)
-          .filter((name) => name !== ".catamorphic" && name !== "package.json")
+          .filter((name) => name !== ".work" && name !== "package.json")
           .sort(),
       ).toEqual(before);
       expect(
-        fs.existsSync(
-          path.join(importDir, ".catamorphic/workflows/src/catalog.ts"),
-        ),
+        fs.existsSync(path.join(importDir, ".work/workflows/src/catalog.ts")),
       ).toBe(true);
       expect(
-        fs.existsSync(
-          path.join(importDir, ".catamorphic/apps/catalog/package.json"),
-        ),
+        fs.existsSync(path.join(importDir, ".work/apps/catalog/package.json")),
       ).toBe(true);
       await runWait(
         `const button = document.querySelector('[role="tree"][aria-label="Apps"] button'); if (!button) return false; button.click(); return true;`,
@@ -497,12 +485,8 @@ describe.each([false, true])(
       if (versioned) {
         expect(git(importDir, "log", "--format=%s")).toBe("Existing history");
         expect(
-          git(
-            importDir,
-            "check-ignore",
-            ".catamorphic/app-data/catalog/items.json",
-          ),
-        ).toBe(".catamorphic/app-data/catalog/items.json");
+          git(importDir, "check-ignore", ".work/app-data/catalog/items.json"),
+        ).toBe(".work/app-data/catalog/items.json");
       } else expect(fs.existsSync(path.join(importDir, ".git"))).toBe(false);
     });
     it("builds contained apps and persists workflow data across runs", async () => {
@@ -552,7 +536,7 @@ describe.each([false, true])(
         await until(
           () =>
             fs.readFileSync(
-              path.join(importDir, ".catamorphic/app-data/catalog/runs.txt"),
+              path.join(importDir, ".work/app-data/catalog/runs.txt"),
               "utf8",
             ) === String(count),
           60_000,

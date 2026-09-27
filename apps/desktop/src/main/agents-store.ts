@@ -7,8 +7,17 @@ import type {
   AgentEnvironmentPolicy,
 } from "@catamorphic/core";
 import { AgentDelegationPolicySchema } from "@catamorphic/core";
-import type { McpToolPolicy } from "@catamorphic/sandbox";
+import {
+  harnessPermissionIssues,
+  type McpToolPolicy,
+} from "@catamorphic/sandbox";
 import { safeStorage } from "electron";
+import {
+  DESKTOP_DEFAULT_SANDBOXING,
+  effectiveHarnessPermissions,
+  type HarnessPermissions,
+  type Sandboxing,
+} from "../shared/agent-permissions.js";
 
 /**
  * Per-profile AI agent roster: `<userData>/profiles/<id>/agents.json`.
@@ -30,14 +39,6 @@ import { safeStorage } from "electron";
  */
 export type AgentHarness = "ai-sdk" | "claude-code" | "codex";
 export type AgentEffortSetting = "low" | "medium" | "high" | "xhigh" | "max";
-
-/**
- * Normalized operating mode (ADR 0056), mapped per harness — Claude Code
- * permission modes (plan / acceptEdits / bypassPermissions), Codex sandbox
- * modes (read-only / workspace-write / danger-full-access). The built-in
- * agent is sandboxed with draft sync-back; mode does not apply to it.
- */
-export type AgentModeSetting = "read-only" | "edit" | "full-access";
 
 /**
  * Which skills an agent is offered (any tier — project, user, host, by
@@ -85,11 +86,20 @@ export interface AgentConfig {
   /**
    * The agent's own main prompt (its persona) — prepended at the provider
    * boundary so it leads and the host playbooks follow, exactly like a
-   * project agent's `.catamorphic/agents/<slug>.md` (ADR 0056). Harness-neutral.
+   * project agent's `.work/agents/<slug>.md` (ADR 0056). Harness-neutral.
    */
   instructions?: string;
-  /** Operating mode; absent means "full-access". */
-  mode?: AgentModeSetting;
+  /**
+   * What may leave the agent's sandbox (ADR 0182); absent means "publish",
+   * the local default (ADR 0140).
+   */
+  sandboxing?: Sandboxing;
+  /**
+   * The harness's own permission mode in its native values (ADR 0182):
+   * Claude Code `permissionMode`, Codex `sandbox` and `approvals`. Absent
+   * fields take the local defaults; the built-in agent has none.
+   */
+  harnessPermissions?: HarnessPermissions;
   /** Checkout doctrine; absent means "shared-first". */
   coordination?: AgentCoordinationStrategy;
   /** Logical Environment preferences and compatibility requirements. */
@@ -151,8 +161,13 @@ export interface PublicAgentConfig {
   accepts: AgentAttachmentKind[];
   /** The agent's own main prompt ("" when none). */
   instructions: string;
-  /** Operating mode (always materialized; default "full-access"). */
-  mode: AgentModeSetting;
+  /** What may leave the agent's sandbox (always materialized). */
+  sandboxing: Sandboxing;
+  /**
+   * The harness's permission settings in effect (always materialized, only
+   * the fields this harness has; empty for the built-in agent).
+   */
+  harnessPermissions: HarnessPermissions;
   /** Checkout-coordination doctrine (always materialized). */
   coordination: AgentCoordinationStrategy;
   environment?: AgentEnvironmentPolicy;
@@ -207,7 +222,8 @@ export interface CreateAgentInput {
   auth?: AgentAuthMode;
   apiKey?: string | null;
   instructions?: string;
-  mode?: AgentModeSetting;
+  sandboxing?: Sandboxing;
+  harnessPermissions?: HarnessPermissions;
   coordination?: AgentCoordinationStrategy;
   environment?: AgentEnvironmentPolicy;
   memory?: boolean;
@@ -227,7 +243,12 @@ export interface UpdateAgentInput {
   apiKey?: string | null;
   /** New instructions; "" clears them. */
   instructions?: string;
-  mode?: AgentModeSetting;
+  sandboxing?: Sandboxing;
+  /**
+   * Replace the harness's permission settings; `{}` returns to the local
+   * defaults. Fields the harness does not have are refused.
+   */
+  harnessPermissions?: HarnessPermissions;
   coordination?: AgentCoordinationStrategy;
   environment?: AgentEnvironmentPolicy;
   memory?: boolean;
@@ -342,6 +363,10 @@ export class AgentsStore {
   }
 
   create(input: CreateAgentInput): AgentConfig {
+    const harnessPermissions = checkedHarnessPermissions({
+      harness: input.harness,
+      permissions: input.harnessPermissions,
+    });
     const stored: StoredAgent = {
       id: randomUUID(),
       name: input.name?.trim() || DEFAULT_AGENT_NAMES[input.harness],
@@ -363,7 +388,8 @@ export class AgentsStore {
       ...(input.instructions?.trim()
         ? { instructions: input.instructions.trim() }
         : {}),
-      ...(input.mode ? { mode: input.mode } : {}),
+      ...(input.sandboxing ? { sandboxing: input.sandboxing } : {}),
+      ...(harnessPermissions ? { harnessPermissions } : {}),
       ...(input.coordination && input.coordination !== "shared-first"
         ? { coordination: input.coordination }
         : {}),
@@ -399,8 +425,16 @@ export class AgentsStore {
       if (instructions) stored.instructions = instructions;
       else delete stored.instructions;
     }
-    if (patch.mode !== undefined) {
-      stored.mode = patch.mode;
+    if (patch.sandboxing !== undefined) {
+      stored.sandboxing = patch.sandboxing;
+    }
+    if (patch.harnessPermissions !== undefined) {
+      const harnessPermissions = checkedHarnessPermissions({
+        harness: stored.harness,
+        permissions: patch.harnessPermissions,
+      });
+      if (harnessPermissions) stored.harnessPermissions = harnessPermissions;
+      else delete stored.harnessPermissions;
     }
     if (patch.coordination !== undefined) {
       if (patch.coordination === "shared-first") delete stored.coordination;
@@ -485,6 +519,29 @@ export class AgentsStore {
   }
 }
 
+/**
+ * Permission settings this harness has, without unset fields; undefined when
+ * none are set. Throws on a field another harness owns.
+ */
+function checkedHarnessPermissions(args: {
+  harness: AgentHarness;
+  permissions: HarnessPermissions | undefined;
+}): HarnessPermissions | undefined {
+  if (!args.permissions) return undefined;
+  const issue = harnessPermissionIssues({
+    kind: args.harness === "ai-sdk" ? "builtin" : args.harness,
+    permissions: args.permissions,
+  })[0];
+  if (issue) throw new Error(issue.message);
+  const { permissionMode, sandbox, approvals } = args.permissions;
+  const kept: HarnessPermissions = {
+    ...(permissionMode ? { permissionMode } : {}),
+    ...(sandbox ? { sandbox } : {}),
+    ...(approvals ? { approvals } : {}),
+  };
+  return Object.keys(kept).length > 0 ? kept : undefined;
+}
+
 export function toPublicAgent(agent: AgentConfig): PublicAgentConfig {
   const { apiKey, ...rest } = agent;
   return {
@@ -493,7 +550,11 @@ export function toPublicAgent(agent: AgentConfig): PublicAgentConfig {
     apiKeyMasked: apiKey ? `${apiKey.slice(0, 7)}…${apiKey.slice(-4)}` : null,
     accepts: agentAccepts(agent),
     instructions: agent.instructions ?? "",
-    mode: agent.mode ?? "full-access",
+    sandboxing: agent.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
+    harnessPermissions: effectiveHarnessPermissions({
+      harness: agent.harness,
+      permissions: agent.harnessPermissions,
+    }),
     coordination: agent.coordination ?? "shared-first",
     memory: agent.memory === true,
     connections: agent.connections ?? { mode: "all" },

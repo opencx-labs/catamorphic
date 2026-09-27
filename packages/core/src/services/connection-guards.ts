@@ -26,8 +26,10 @@ export type ConnectionGuardVerdict =
 
 /**
  * A host-injected check on brokered connection actions: a SQL policy, a model
- * classifier, a rate limit. Guards run in order; any deny wins, any escalation
- * requires human approval, and an error or timeout fails closed.
+ * classifier, a rate limit. Guards are host code (ADR 0183): the framework
+ * ships the contract, never a policy. Guards run in order; any deny wins, any
+ * escalation requires human approval, a throwing guard denies, and a guard
+ * that does not answer in time escalates.
  */
 export interface ConnectionActionGuard {
   readonly name: string;
@@ -47,7 +49,8 @@ export type ConnectionReviewOutcome =
   | { verdict: "deny"; reason: string; records: ConnectionGuardRecord[] }
   | { verdict: "escalate"; reason: string; records: ConnectionGuardRecord[] };
 
-const DEFAULT_GUARD_TIMEOUT_MS = 30_000;
+/** How long one guard may take before its action goes to a person. */
+export const DEFAULT_GUARD_TIMEOUT_MS = 30_000;
 
 export async function reviewConnectionAction(args: {
   guards: readonly ConnectionActionGuard[];

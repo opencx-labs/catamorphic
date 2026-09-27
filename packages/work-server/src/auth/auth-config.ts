@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import path from "node:path";
 import { z } from "zod";
+import type { GoogleDirectoryCredentials } from "../identity/google-directory.js";
 
 const Domain = z
   .string()
@@ -38,6 +38,17 @@ const GoogleWorkspaceProviderSchema = z.strictObject({
     .strictObject({
       credentials: z.union([
         z.strictObject({ keyFile: z.string().min(1) }),
+        /** The key itself, for hosts that hold it in a secret manager. */
+        z.strictObject({
+          key: z.union([
+            z.string().min(1),
+            z.looseObject({
+              client_email: z.string().min(1),
+              private_key: z.string().min(1),
+              token_uri: z.url().optional(),
+            }),
+          ]),
+        }),
         z.strictObject({ metadataServer: z.literal(true) }),
       ]),
       requiredGroups: z
@@ -47,7 +58,12 @@ const GoogleWorkspaceProviderSchema = z.strictObject({
     .optional(),
 });
 
-const ConfigSchema = z
+/**
+ * Sign-in configuration (ADRs 0059, 0161): typed, serializable data a custom
+ * server passes as `config.auth`; the image reads the same shape from
+ * `WORK_AUTH_CONFIG` (ADR 0183).
+ */
+export const WorkAuthConfigSchema = z
   .strictObject({
     local: z.strictObject({ enabled: z.boolean() }).default({ enabled: true }),
     providers: z
@@ -98,6 +114,9 @@ const ConfigSchema = z
     }
   });
 
+/** Sign-in configuration as a custom server writes it. */
+export type WorkAuthConfig = z.input<typeof WorkAuthConfigSchema>;
+
 const GOOGLE_DISCOVERY =
   "https://accounts.google.com/.well-known/openid-configuration";
 
@@ -117,7 +136,7 @@ export interface WorkSignInProvider {
   hostedDomains: string[];
   authorizationParams: Record<string, string>;
   directory?: {
-    credentials: { keyFile: string } | { metadataServer: true };
+    credentials: GoogleDirectoryCredentials;
     requiredGroups: string[];
   };
 }
@@ -133,7 +152,8 @@ export interface WorkDirectoryPolicy {
   graceMs: number;
 }
 
-export interface WorkAuthConfig {
+/** Validated sign-in configuration, normalized for Better Auth. */
+export interface ResolvedWorkAuthConfig {
   local: { enabled: boolean };
   providers: WorkSignInProvider[];
   sessions: WorkSessionPolicy;
@@ -147,12 +167,11 @@ export interface WorkAuthConfig {
   guestProviderIds(): Set<string>;
 }
 
-export function loadWorkAuthConfig(options: {
-  dataDir: string;
-  configuredPath?: string;
-}): WorkAuthConfig {
-  const file =
-    options.configuredPath ?? path.join(options.dataDir, "auth-config.json");
+/**
+ * Read a sign-in configuration file for the image's environment layer. A
+ * missing file configures nothing: local sign-in with default policies.
+ */
+export function workAuthConfigFromFile(file: string): WorkAuthConfig {
   let raw: unknown = {};
   try {
     raw = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -163,21 +182,18 @@ export function loadWorkAuthConfig(options: {
       });
     }
   }
-  return parseWorkAuthConfig(raw, file);
+  const parsed = WorkAuthConfigSchema.safeParse(raw);
+  if (!parsed.success) throw invalid(file, parsed.error);
+  return parsed.data;
 }
 
+/** Validate sign-in configuration with the file's rules. */
 export function parseWorkAuthConfig(
-  raw: unknown,
-  source = "sign-in configuration",
-): WorkAuthConfig {
-  const parsed = ConfigSchema.safeParse(raw);
-  if (!parsed.success) {
-    throw new Error(
-      `Invalid sign-in configuration at ${source}: ${parsed.error.issues
-        .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
-        .join("; ")}`,
-    );
-  }
+  input: WorkAuthConfig,
+  source = "config.auth",
+): ResolvedWorkAuthConfig {
+  const parsed = WorkAuthConfigSchema.safeParse(input);
+  if (!parsed.success) throw invalid(source, parsed.error);
   const data = parsed.data;
   const providers = data.providers.map(
     (provider): WorkSignInProvider =>
@@ -251,6 +267,14 @@ export function parseWorkAuthConfig(
           .map((provider) => provider.id),
       ),
   };
+}
+
+function invalid(source: string, error: z.ZodError): Error {
+  return new Error(
+    `Invalid sign-in configuration at ${source}: ${error.issues
+      .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+      .join("; ")}`,
+  );
 }
 
 function isLoopback(hostname: string): boolean {

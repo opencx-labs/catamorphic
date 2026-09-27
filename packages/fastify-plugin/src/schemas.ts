@@ -3,6 +3,12 @@ import {
   RoleDefinitionSchema as CoreRoleDefinitionSchema,
   PROJECT_PERMISSION_PATTERN,
 } from "@catamorphic/core";
+import {
+  CLAUDE_CODE_PERMISSION_MODES,
+  CODEX_APPROVAL_POLICIES,
+  CODEX_SANDBOX_MODES,
+  SANDBOXING_LEVELS,
+} from "@catamorphic/sandbox";
 import { z } from "zod";
 
 // --- Params ---
@@ -159,12 +165,15 @@ export const TriggerKindDisplaySchema = z.object({
 export const NodeTriggerBindingSchema = z.object({
   kind: z.string(),
   config: JsonOutSchema,
+  where: JsonOutSchema.optional(),
   display: TriggerKindDisplaySchema.optional(),
 });
 
+/** A binding as written: a host kind or a project trigger kind (ADR 0171). */
 export const WorkflowTriggerBindingSchema = z.object({
   kind: z.string(),
   config: JsonOutSchema,
+  where: JsonOutSchema.optional(),
   sourceRange: SourceRangeSchema,
 });
 
@@ -180,8 +189,13 @@ export const TriggerKindInfoSchema = z.object({
 
 export const TriggerBindingInfoSchema = z.object({
   workflowName: z.string(),
+  /** The host kind that fires the binding. */
   kind: z.string(),
   config: JsonOutSchema,
+  /** Filters the payload must satisfy, all of them (ADR 0171). */
+  where: z.array(JsonOutSchema),
+  /** The project trigger kind the workflow bound. */
+  projectKind: z.string().optional(),
   canSuspend: z.boolean(),
   inputParameters: z.array(ParameterInfoSchema),
   inputSchema: JsonOutSchema,
@@ -195,7 +209,6 @@ export const WorkflowEnablementOwnerSchema = z.discriminatedUnion("type", [
 
 export const WorkflowEnablementConnectionSchema = z.object({
   alias: z.string(),
-  bindingId: z.string().uuid(),
   connectionId: z.string().uuid(),
   providerKind: z.string(),
   principalKind: z.enum(["member", "project_service", "tenant_service"]),
@@ -207,6 +220,7 @@ export const WorkflowEnablementTriggerSchema = z.object({
   definitionId: z.string().uuid(),
   kind: z.string(),
   config: JsonOutSchema,
+  projectKind: z.string().optional(),
   status: z.enum(["active", "paused"]),
 });
 
@@ -229,7 +243,13 @@ export const WorkflowEnablementPreviewSchema =
   WorkflowEnablementTargetSchema.extend({
     deploymentArtifactDigest: z.string(),
     triggerCount: z.number().int().nonnegative(),
-    triggers: z.array(z.object({ kind: z.string(), config: JsonOutSchema })),
+    triggers: z.array(
+      z.object({
+        kind: z.string(),
+        config: JsonOutSchema,
+        projectKind: z.string().optional(),
+      }),
+    ),
     connectionLabels: z.record(z.string(), z.string()),
   });
 
@@ -263,6 +283,18 @@ export const ProjectSchema = z.object({
   name: z.string(),
   storageType: z.enum(["managed", "remote"]),
   remoteUrl: z.string().nullable(),
+  /**
+   * Who created the linked remote (ADR 0170). `attached`: Work only pushes
+   * `work/*` branches there and shares changes as pull requests. `owned`:
+   * Work created it and sync keeps it converged. `null` when unlinked.
+   */
+  remoteOwnership: z.enum(["owned", "attached"]).nullable(),
+  /**
+   * Since when the project's main has not been a fast-forward of its code
+   * host's default branch (ADR 0170): accepted changes stop arriving until
+   * the two are reconciled. `null` while they converge.
+   */
+  remoteDivergedAt: z.string().datetime().nullable(),
   defaultBranch: z.string(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -615,6 +647,8 @@ export const ConnectionRecordSchema = z.object({
   projectId: z.string().uuid().nullable(),
   providerKind: z.string(),
   principalKind: z.enum(["member", "project_service", "tenant_service"]),
+  /** A service connection's name; Environment bindings refer to it. */
+  name: z.string().nullable(),
   ownerExternalUserId: z.string().nullable(),
   label: z.string(),
   status: z.enum(["pending", "ready", "expired", "revoked"]),
@@ -636,21 +670,17 @@ const ConnectionBindingPrincipalStatusSchema = z.object({
   scopes: z.array(z.string()),
 });
 
+/** One alias an Environment commits in `.work/project.json` (ADR 0172). */
 export const ConnectionBindingSchema = z.object({
-  id: z.string().uuid(),
-  projectId: z.string().uuid(),
   environment: z.string(),
   alias: z.string(),
-  providerKind: z.string(),
-  principalKinds: z.array(
-    z.enum(["member", "project_service", "tenant_service"]),
-  ),
-  serviceConnectionId: z.string().uuid().nullable(),
-  capabilities: z.array(z.string()),
+  provider: z.string(),
+  principal: z.enum(["member", "service", "either"]),
+  /** The service connection's name; shown to connection administrators. */
+  service: z.string().nullable(),
+  capabilities: z.array(z.string()).nullable(),
   memberConnection: ConnectionBindingPrincipalStatusSchema.nullable(),
   serviceConnection: ConnectionBindingPrincipalStatusSchema.nullable(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
 });
 
 export const AuthorizationChallengeSchema = z.discriminatedUnion("kind", [
@@ -673,6 +703,7 @@ export const AuthorizationChallengeSchema = z.discriminatedUnion("kind", [
         label: z.string(),
         secret: z.boolean(),
         required: z.boolean(),
+        multiline: z.boolean().optional(),
       }),
     ),
   }),
@@ -1008,6 +1039,52 @@ export const AgentSessionsQuerySchema = PaginationQuerySchema.extend({
   message: "Choose rootsOnly or parentSessionId, not both.",
 });
 
+/**
+ * A chat named by the project's key (ADR 0173): the caller's own, the
+ * project chat with `audience=project`, or a member's with `member=<id>`.
+ */
+export const KeyedChatParamsSchema = ProjectIdParamsSchema.extend({
+  key: z.string().trim().min(1).max(200),
+});
+export const KeyedChatQuerySchema = z
+  .object({
+    audience: z.literal("project").optional(),
+    member: z.string().min(1).optional(),
+  })
+  .refine((value) => !(value.audience && value.member), {
+    message: "Choose audience=project or member, not both.",
+  });
+export const ClosedKeyedChatSchema = z.object({
+  sessionId: z.string().uuid().nullable(),
+  closed: z.boolean(),
+});
+
+/**
+ * Where a chat's workspace starts, or moves to (ADR 0178): a branch, tag,
+ * commit, or full ref (`refs/pull/42/head`) of the project's linked remote.
+ */
+export const SessionWorkspaceRequestBodySchema = z.strictObject({
+  ref: z.string().trim().min(1).max(255),
+  update: z.enum(["reset", "rebase"]).optional(),
+});
+
+/** The base a chat's workspace stands on (ADR 0178). */
+export const SessionWorkspaceSchema = z.object({
+  ref: z.string(),
+  commit: z.string(),
+});
+
+export const AgentSessionPlacementSchema = z.object({
+  environment: z.string(),
+  reason: z.enum([
+    "requested",
+    "agent_preferred",
+    "project_default",
+    "available",
+  ]),
+  machine: z.object({ id: z.string(), label: z.string() }),
+});
+
 export const AgentSessionSchema = z.object({
   workStatus: z.enum(["open", "completed"]),
   stateRevision: z.number().int().nonnegative(),
@@ -1049,6 +1126,14 @@ export const AgentSessionSchema = z.object({
   attentionMessage: z
     .object({ id: z.string().uuid(), content: z.string() })
     .optional(),
+  /** The project's key for this chat (ADR 0173); closing frees it. */
+  key: z.string().nullable(),
+  /** Workflows that delivered to the chat by its key. */
+  keyWorkflows: z.array(z.string()),
+  /** Where the chat runs and why (ADR 0173). */
+  placement: AgentSessionPlacementSchema.nullable(),
+  /** The base the chat's workspace stands on (ADR 0178). */
+  workspace: SessionWorkspaceSchema.nullable(),
   baseCommitSha: z.string().length(40).nullable(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -1088,6 +1173,8 @@ export const CreateAgentSessionSchema = z.object({
   source: AgentSessionSourceSchema.optional(),
   parentSessionId: z.string().uuid().optional(),
   title: z.string().min(1).max(500).optional(),
+  /** Start the workspace at a ref of the project's linked remote. */
+  workspace: SessionWorkspaceRequestBodySchema.optional(),
 });
 
 export const CreateAgentSubsessionSchema = z.object({
@@ -1397,6 +1484,8 @@ export const PendingToolPermissionSchema = z.object({
   }),
   createdAt: z.string(),
   expiresAt: z.string(),
+  /** An unattended chat's approvers, who may answer it (ADR 0176). */
+  approvers: z.array(z.string()).optional(),
 });
 export const PendingToolPermissionsSchema = z.object({
   permissions: z.array(PendingToolPermissionSchema),
@@ -1460,6 +1549,8 @@ export const SendMessageSchema = z
     idempotencyKey: z.string().min(1).max(200).optional(),
     attachments: z.array(AgentAttachmentSchema).max(32).optional(),
     deliveryMode: z.enum(["next_turn", "interrupt"]).optional(),
+    /** Move the chat's workspace to a ref before this turn (ADR 0178). */
+    workspace: SessionWorkspaceRequestBodySchema.optional(),
   })
   .refine(
     (body) =>
@@ -1527,8 +1618,15 @@ export const SkillSchema = z.object({
   source: z.enum(["project", "user", "host"]),
 });
 
+/** A harness's own permission settings, in its native values (ADR 0182). */
+export const HarnessPermissionsSchema = z.object({
+  permissionMode: z.enum(CLAUDE_CODE_PERMISSION_MODES).optional(),
+  sandbox: z.enum(CODEX_SANDBOX_MODES).optional(),
+  approvals: z.enum(CODEX_APPROVAL_POLICIES).optional(),
+});
+
 // --- Project agent definitions (ADR 0050) ---
-// Committed `.catamorphic/agents/<slug>.json` files, parsed and validated by core's
+// Committed `.work/agents/<slug>.json` files, parsed and validated by core's
 // AgentDefinitionsService. Broken files come back as invalid entries with
 // the error — never a failed request.
 export const ProjectAgentDefinitionSchema = z.object({
@@ -1537,13 +1635,18 @@ export const ProjectAgentDefinitionSchema = z.object({
   kind: z.string(),
   model: z.string().optional(),
   effort: AgentEffortSchema.optional(),
-  mode: z.enum(["read-only", "edit", "full-access"]).optional(),
+  /** What may leave the agent's sandbox (ADR 0182). */
+  sandboxing: z.enum(SANDBOXING_LEVELS).optional(),
+  /** The harness's own permission mode, in its native values (ADR 0182). */
+  harnessPermissions: HarnessPermissionsSchema.optional(),
   memory: z.boolean().optional(),
   description: z.string().optional(),
   credentials: z
     .object({
-      source: z.enum(["profile", "secret", "local"]),
+      source: z.enum(["profile", "secret", "local", "connection"]),
       secret: z.string().optional(),
+      /** The Environment alias of the agent's model connection (ADR 0180). */
+      connection: z.string().optional(),
     })
     .optional(),
   connections: z
@@ -1571,7 +1674,7 @@ export const ProjectAgentDefinitionSchema = z.object({
 export const ProjectAgentEntrySchema = z.object({
   slug: z.string(),
   definition: ProjectAgentDefinitionSchema.optional(),
-  /** Content of the sibling `.catamorphic/agents/<slug>.md` persona file. */
+  /** Content of the sibling `.work/agents/<slug>.md` persona file. */
   promptFile: z.string().optional(),
   invalid: z.object({ error: z.string() }).optional(),
 });
@@ -1766,7 +1869,17 @@ export const PublicationParamsSchema = ProjectIdParamsSchema.extend({
 // --- Introspection (ADR 0055) ---
 export const MeSchema = z.object({
   version: z.literal(1),
-  identity: z.object({ externalUserId: z.string(), root: z.boolean() }),
+  identity: z.object({
+    externalUserId: z.string(),
+    root: z.boolean(),
+    /**
+     * Host-issued permissions over the organization's shared resources
+     * (ADR 0172), expanded: `connections:write` also lists `connections:read`.
+     */
+    controlPlanePermissions: z.array(
+      z.enum(["connections:read", "connections:write"]),
+    ),
+  }),
   projects: z.array(
     z.object({
       projectId: z.string(),
@@ -1801,7 +1914,7 @@ export const MeSchema = z.object({
   features: z.object({
     publications: z.union([z.enum(["public", "members"]), z.literal(false)]),
     proposals: z.boolean(),
-    /** True when a proposalBot is configured: proposals open pull requests. */
+    /** True when a code host is configured: proposals open pull requests through the service connection. */
     proposalsOpenPullRequests: z.boolean(),
     mcp: z.boolean(),
     agentSessions: z.boolean(),
@@ -1886,33 +1999,43 @@ export const SecretNameParamsSchema = ProjectIdParamsSchema.extend({
   name: z.string().min(1),
 });
 
-// --- GitHub ---
-export const GithubStatusSchema = z.object({
-  connected: z.boolean(),
-  login: z.string().optional(),
+// --- Code hosts (ADR 0177) ---
+export const CodeHostParamsSchema = z.object({
+  provider: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/),
 });
 
-export const GithubConnectSchema = z.object({
-  /** Authorization code from the GitHub web-flow callback. */
-  code: z.string().min(1),
-  /** Must match the redirect_uri sent to /login/oauth/authorize, if any. */
-  redirectUri: z.string().optional(),
-});
-
-export const GithubRepoSchema = z.object({
-  id: z.number(),
+export const CodeHostRepositorySchema = z.object({
   fullName: z.string(),
   name: z.string(),
   owner: z.string(),
   private: z.boolean(),
   defaultBranch: z.string(),
+  cloneUrl: z.string(),
   description: z.string().nullable(),
   pushedAt: z.string().nullable(),
 });
 
-export const GithubImportSchema = z.object({
-  fullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "Expected owner/repo"),
+export const CodeHostImportSchema = z.object({
+  /** Host-specific repository path, e.g. `owner/name` on GitHub. */
+  fullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "Expected owner/name"),
   name: z.string().min(1).optional(),
+});
+
+/** Publish an unlinked project to a new repository Work creates (ADR 0170). */
+export const CodeHostPublishSchema = z.object({
+  provider: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/),
+  name: z.string().regex(/^[\w.-]+$/, "Expected a repository name"),
+  /** Organization; the connected account when omitted. */
+  organization: z
+    .string()
+    .regex(/^[\w.-]+$/, "Expected an organization login")
+    .optional(),
+  visibility: z.enum(["private", "public"]).optional(),
+});
+
+export const CodeHostPublishResultSchema = z.object({
+  fullName: z.string(),
+  remoteUrl: z.string(),
 });
 
 // --- Generic ---
@@ -1941,6 +2064,10 @@ export const AgentCatalogSchema = z.object({
       available: z.boolean(),
       reason: z.string().nullable(),
       environments: EnvironmentListSchema,
+      /** What may leave the agent's sandbox, when declared (ADR 0182). */
+      sandboxing: z.enum(SANDBOXING_LEVELS).optional(),
+      /** The harness's own permission settings, as declared (ADR 0182). */
+      harnessPermissions: HarnessPermissionsSchema.optional(),
     }),
   ),
   defaultAgentId: z.string().optional(),

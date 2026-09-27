@@ -115,7 +115,7 @@ Members see deployed workflows, not program source. Compose `ProjectWorkflows`
 and `WorkflowReview` from `@catamorphic/ui`; they render the scoped deployed
 graph and never fetch source files. `AgentEnvironmentControl` picks an agent's
 execution Environment. Use `useAgentCatalog` and `useEnvironments` for
-permitted agents and Environments rather than reading `.catamorphic/agents/`
+permitted agents and Environments rather than reading `.work/agents/`
 or guessing from `/me`.
 
 Access to a workflow is not consent to run it unattended. An automation is an

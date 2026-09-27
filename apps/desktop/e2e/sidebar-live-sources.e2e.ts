@@ -59,13 +59,13 @@ beforeAll(async () => {
   await app.eval(
     `window.catamorphicDesktop.createProject({name:'Live sources',rootPath:${JSON.stringify(projectRoot)}})`,
   );
-  fs.mkdirSync(path.join(projectRoot, ".catamorphic"), { recursive: true });
+  fs.mkdirSync(path.join(projectRoot, ".work"), { recursive: true });
   fs.writeFileSync(
     path.join(projectRoot, "todos.json"),
     JSON.stringify([{ id: "todo", text: "Plan the week", done: false }]),
   );
   fs.writeFileSync(
-    path.join(projectRoot, ".catamorphic/todos.ts"),
+    path.join(projectRoot, ".work/todos.ts"),
     `
     import {watch} from 'node:fs'; import {readFile,writeFile,rename} from 'node:fs/promises';
     export default {
@@ -75,12 +75,12 @@ beforeAll(async () => {
     };`,
   );
   fs.writeFileSync(
-    path.join(projectRoot, ".catamorphic/http.ts"),
+    path.join(projectRoot, ".work/http.ts"),
     `export default {async load({signal}){const r=await fetch('http://127.0.0.1:${address.port}',{signal});if(!r.ok)throw Error('Service unavailable: '+r.status);return r.json()}}`,
   );
   fs.writeFileSync(
-    path.join(projectRoot, ".catamorphic/sidebar.js"),
-    `module.exports={left:[{id:'live',title:'Sources',icon:'ListTodo',sections:[{id:'todos',type:'custom',title:'My todos',source:{type:'custom',module:'.catamorphic/todos.ts'},height:180},{id:'http',type:'custom',title:'Service',source:{type:'custom',module:'.catamorphic/http.ts'},height:120,headerActions:[{label:'Refresh Service',action:'refresh',icon:'RefreshCw'}]}]},{id:'other',title:'Other',icon:'Folder',sections:[{id:'files',type:'files'}]}],right:[]};`,
+    path.join(projectRoot, ".work/sidebar.js"),
+    `module.exports={left:[{id:'live',title:'Sources',icon:'ListTodo',sections:[{id:'todos',type:'custom',title:'My todos',source:{type:'custom',module:'.work/todos.ts'},height:180},{id:'http',type:'custom',title:'Service',source:{type:'custom',module:'.work/http.ts'},height:120,headerActions:[{label:'Refresh Service',action:'refresh',icon:'RefreshCw'}]}]},{id:'other',title:'Other',icon:'Folder',sections:[{id:'files',type:'files'}]}],right:[]};`,
   );
   await app.reload();
   await app.waitFor(

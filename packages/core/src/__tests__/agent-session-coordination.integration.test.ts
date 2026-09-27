@@ -18,12 +18,16 @@ import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
+import { projectChatIdentity } from "../services/chat-delivery.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
-import { SessionActionsService } from "../services/session-actions-service.js";
+import {
+  type SessionActionOperation,
+  SessionActionsService,
+} from "../services/session-actions-service.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 class DeferredProvider implements CodingAgentProvider {
@@ -204,7 +208,7 @@ describe("agent session coordination", () => {
     provider = new DeferredProvider();
     const registeredAgent = (
       id: string,
-      input: Pick<RegisteredCodingAgent, "privilege" | "delegation"> = {},
+      input: Pick<RegisteredCodingAgent, "sandboxing" | "delegation"> = {},
     ): RegisteredCodingAgent => ({
       id,
       provider,
@@ -214,10 +218,10 @@ describe("agent session coordination", () => {
     const agents = new Map(
       [
         registeredAgent("worker"),
-        registeredAgent("small", { privilege: "read-only" }),
-        registeredAgent("builder", { privilege: "full-access" }),
+        registeredAgent("small", { sandboxing: "contained" }),
+        registeredAgent("builder", { sandboxing: "publish" }),
         registeredAgent("orchestrator", {
-          privilege: "edit",
+          sandboxing: "propose",
           delegation: {
             enabled: true,
             maxConcurrentChildren: 1,
@@ -268,8 +272,11 @@ describe("agent session coordination", () => {
         list: () => [...agents.values()],
       },
       nativeAgentCheckout: {
-        resolve: ({ projectId, sessionId }) =>
-          checkoutBySession.get(sessionId) ?? path.join(tmpDir, projectId),
+        resolve: ({ projectId, sessionId }) => ({
+          path:
+            checkoutBySession.get(sessionId) ?? path.join(tmpDir, projectId),
+          owned: checkoutBySession.has(sessionId),
+        }),
         checkpoint: ({ sessionId, workingDirectory }) => {
           checkpointedSessions.push(sessionId);
           checkpointedTurns.push({ sessionId, workingDirectory });
@@ -601,6 +608,44 @@ describe("agent session coordination", () => {
         expect(
           detail.messages.filter((message) => message.role === "user"),
         ).toHaveLength(1);
+        expect(
+          await sessions.turns.listPending({ sessionId: session.id }),
+        ).toEqual([]);
+      });
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it("recovers a project chat's queued turn although nobody is its member", async () => {
+    const project = await projects.create(identity, {
+      name: "Project chat recovery",
+    });
+    const projectChat = projectChatIdentity({
+      tenantId: identity.tenantId,
+      projectId: project.id,
+    });
+    const session = await sessions.create(projectChat, project.id);
+    await sessions.sendMessage(
+      projectChat,
+      project.id,
+      session.id,
+      "Reconnect durable turn",
+    );
+    await db
+      .updateTable("agent_turns")
+      .set({ available_at: new Date(0) })
+      .where("session_id", "=", session.id)
+      .execute();
+    // The host's member lookup knows nobody for the project principal.
+    const worker = sessions.startWorker({
+      resolveIdentity: async () => null,
+      pollIntervalMs: 10,
+    });
+    try {
+      await vi.waitFor(async () => {
+        const detail = await sessions.get(projectChat, project.id, session.id);
+        expect(detail.messages.at(-1)?.content).toBe("Connection restored");
         expect(
           await sessions.turns.listPending({ sessionId: session.id }),
         ).toEqual([]);
@@ -1170,7 +1215,7 @@ describe("agent session coordination", () => {
     expect(child.agentId).toBe("small");
   });
 
-  it("enforces delegation routes, concurrency, onward grants, and privilege ceilings", async () => {
+  it("enforces delegation routes, concurrency, onward grants, and sandboxing ceilings", async () => {
     const project = await projects.create(identity, {
       name: "Delegation policy",
     });
@@ -1216,7 +1261,7 @@ describe("agent session coordination", () => {
         agentId: "builder",
         task: "Escalate through wildcard",
       }),
-    ).rejects.toThrow(/cannot grant a more privileged agent/);
+    ).rejects.toThrow(/cannot grant an agent with wider sandboxing/);
 
     provider.release();
     await vi.waitFor(async () => {
@@ -1431,8 +1476,8 @@ describe("agent session coordination", () => {
           externalUserId: identity.externalUserId,
         },
         workflow_name: "pausedWatcher",
-        source_path: ".catamorphic/workflows/src/watchers/paused.ts",
-        remote_branch: "catamorphic/watchers/paused",
+        source_path: ".work/workflows/src/watchers/paused.ts",
+        remote_branch: "work/watchers/paused",
         commit_sha: "a".repeat(40),
         deployment_artifact_id: artifact.id,
         status: "paused",
@@ -1524,7 +1569,7 @@ describe("agent session coordination", () => {
 
   it("reuses the chat for a workflow key and requests attention when its turn settles", async () => {
     const project = await projects.create(identity, { name: "Daily brief" });
-    const chatKey = '["gmail-summary","daily"]';
+    const chatKey = "daily";
     // What catamorphic.sessions.deliver does for a chat named by key.
     const deliverToKey = async (input: {
       content: string;
@@ -1532,7 +1577,8 @@ describe("agent session coordination", () => {
       notification?: { title?: string; body?: string };
     }) => {
       const chat = await sessions.chatForKey(identity, project.id, {
-        chatKey,
+        key: chatKey,
+        workflowName: "gmail-summary",
         ...(input.title ? { title: input.title } : {}),
       });
       const runId = crypto.randomUUID();
@@ -1596,6 +1642,235 @@ describe("agent session coordination", () => {
       });
     });
   });
+  it("keys belong to the project: two workflows reach one chat and are recorded on it", async () => {
+    const project = await projects.create(identity, { name: "Project keys" });
+    const opened = await sessions.chatForKey(identity, project.id, {
+      key: "pr-42",
+      workflowName: "reviewOnOpen",
+      title: "Review: pull request 42",
+    });
+    const merged = await sessions.chatForKey(identity, project.id, {
+      key: "pr-42",
+      workflowName: "cleanupOnMerge",
+    });
+    const again = await sessions.chatForKey(identity, project.id, {
+      key: "pr-42",
+      workflowName: "reviewOnOpen",
+    });
+    expect(opened.sessionCreated).toBe(true);
+    expect(merged).toEqual({
+      sessionId: opened.sessionId,
+      sessionCreated: false,
+    });
+    expect(again.sessionId).toBe(opened.sessionId);
+    const chat = await sessions.get(identity, project.id, opened.sessionId);
+    expect(chat).toMatchObject({
+      key: "pr-42",
+      keyWorkflows: ["reviewOnOpen", "cleanupOnMerge"],
+      placement: {
+        environment: "default",
+        reason: "project_default",
+        machine: { id: "local", label: "Test Environment" },
+      },
+    });
+    // Another project's `pr-42` is a different chat.
+    const other = await projects.create(identity, { name: "Other keys" });
+    const elsewhere = await sessions.chatForKey(identity, other.id, {
+      key: "pr-42",
+      workflowName: "reviewOnOpen",
+    });
+    expect(elsewhere.sessionId).not.toBe(opened.sessionId);
+  });
+
+  it("finds by key without creating, closes by key to free it, and keeps the transcript", async () => {
+    const project = await projects.create(identity, { name: "Close by key" });
+    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const author = {
+      kind: "workflow" as const,
+      runId: crypto.randomUUID(),
+      workflowName: "cleanupOnMerge",
+    };
+    const act = (operation: SessionActionOperation, args: unknown) =>
+      actions.execute({
+        identity,
+        projectId: project.id,
+        operation,
+        args,
+        author,
+      });
+
+    expect(await act("find", { key: "pr-7" })).toBeNull();
+    // Closing a key nobody opened has nothing to do.
+    expect(
+      await act("close", { key: "pr-7", idempotencyKey: "early" }),
+    ).toEqual({ sessionId: null, closed: false });
+    expect(
+      await sessions.keyedChatId({
+        projectId: project.id,
+        ownerId: identity.externalUserId,
+        key: "pr-7",
+      }),
+    ).toBeUndefined();
+
+    const first = await sessions.chatForKey(identity, project.id, {
+      key: "pr-7",
+      workflowName: "reviewOnOpen",
+    });
+    await sessions.deliver(identity, project.id, first.sessionId, {
+      content: "Review pull request 7",
+      author: { ...author, workflowName: "reviewOnOpen" },
+      mode: "message_only",
+      idempotencyKey: "review-7",
+    });
+    expect(await act("find", { key: "pr-7" })).toMatchObject({
+      id: first.sessionId,
+      key: "pr-7",
+      status: "active",
+    });
+    expect(await act("inspect", { key: "pr-7" })).toMatchObject({
+      id: first.sessionId,
+    });
+    await act("complete", {
+      key: "pr-7",
+      content: "Reviewed",
+      idempotencyKey: "done-7",
+    });
+    expect(await act("inspect", { key: "pr-7" })).toMatchObject({
+      workStatus: "completed",
+    });
+    await act("reopen", { key: "pr-7", idempotencyKey: "again-7" });
+    expect(await act("inspect", { key: "pr-7" })).toMatchObject({
+      workStatus: "open",
+    });
+    await expect(
+      act("inspect", { key: "pr-7", sessionId: first.sessionId }),
+    ).rejects.toThrow("exactly one of sessionId or key");
+    await expect(act("inspect", { key: "pr-8" })).rejects.toThrow(
+      "No open chat has the key pr-8",
+    );
+
+    const closed = { sessionId: first.sessionId, closed: true };
+    expect(
+      await act("close", { key: "pr-7", idempotencyKey: "merged-7" }),
+    ).toEqual(closed);
+    // A retry after the chat is gone answers with the recorded result.
+    expect(
+      await act("close", { key: "pr-7", idempotencyKey: "merged-7" }),
+    ).toEqual(closed);
+    expect(await act("find", { key: "pr-7" })).toBeNull();
+    const transcript = await sessions.get(
+      identity,
+      project.id,
+      first.sessionId,
+    );
+    expect(transcript.status).toBe("closed");
+    expect(transcript.messages.map((message) => message.content)).toEqual(
+      expect.arrayContaining(["Review pull request 7", "Closed this chat"]),
+    );
+    const allocation = await db
+      .selectFrom("execution_allocations")
+      .select(["status", "release_reason"])
+      .where("id", "=", transcript.allocationId ?? "")
+      .executeTakeFirstOrThrow();
+    expect(allocation).toEqual({
+      status: "released",
+      release_reason: "retired",
+    });
+    await expect(
+      sessions.deliver(identity, project.id, first.sessionId, {
+        content: "Too late",
+        author,
+        mode: "next_turn",
+      }),
+    ).rejects.toThrow();
+
+    // Every event of a keyed chat carries its key, closing included, so a
+    // workflow selects a key namespace with `where` (ADR 0181).
+    const events = await sessions.exportEvents({
+      identity,
+      projectId: project.id,
+      sessionId: first.sessionId,
+    });
+    expect(events.map((event) => event.kind)).toContain(
+      "session.state-changed",
+    );
+    for (const event of events)
+      expect(event.payload).toMatchObject({ session: { key: "pr-7" } });
+
+    // The pull request reopened: the key starts a fresh chat.
+    const reopened = await sessions.chatForKey(identity, project.id, {
+      key: "pr-7",
+      workflowName: "reviewOnOpen",
+    });
+    expect(reopened.sessionCreated).toBe(true);
+    expect(reopened.sessionId).not.toBe(first.sessionId);
+  });
+
+  it("delivering to an archived keyed chat brings it back and runs the turn", async () => {
+    const project = await projects.create(identity, { name: "Archived key" });
+    const chat = await sessions.chatForKey(identity, project.id, {
+      key: "incident-9",
+      workflowName: "pageOnCall",
+    });
+    await sessions.archive(identity, project.id, chat.sessionId, {
+      confirmStop: true,
+    });
+    expect(
+      (await sessions.get(identity, project.id, chat.sessionId)).visibility,
+    ).toBe("archived");
+    const again = await sessions.chatForKey(identity, project.id, {
+      key: "incident-9",
+      workflowName: "pageOnCall",
+    });
+    expect(again).toEqual({ sessionId: chat.sessionId, sessionCreated: false });
+    expect(
+      (await sessions.get(identity, project.id, chat.sessionId)).visibility,
+    ).toBe("promoted");
+    const receipt = await sessions.deliver(
+      identity,
+      project.id,
+      chat.sessionId,
+      {
+        content: "The incident fired again",
+        author: {
+          kind: "workflow",
+          runId: crypto.randomUUID(),
+          workflowName: "pageOnCall",
+        },
+        mode: "next_turn",
+      },
+    );
+    await vi.waitFor(async () => {
+      const turn = await db
+        .selectFrom("agent_turns")
+        .select("status")
+        .where("id", "=", receipt.turnId ?? "")
+        .executeTakeFirstOrThrow();
+      expect(turn.status).toBe("completed");
+    });
+
+    // Work delivered by id to an archived chat runs too, never held silently.
+    await sessions.archive(identity, project.id, chat.sessionId, {
+      confirmStop: true,
+    });
+    const byId = await sessions.deliver(identity, project.id, chat.sessionId, {
+      content: "Still firing",
+      author: { kind: "system", code: "test" },
+      mode: "next_turn",
+    });
+    await vi.waitFor(async () => {
+      const turn = await db
+        .selectFrom("agent_turns")
+        .select("status")
+        .where("id", "=", byId.turnId ?? "")
+        .executeTakeFirstOrThrow();
+      expect(turn.status).toBe("completed");
+    });
+    expect(
+      (await sessions.get(identity, project.id, chat.sessionId)).visibility,
+    ).toBe("promoted");
+  });
+
   it("publishes durable lifecycle events atomically and distinguishes work from turns", async () => {
     const project = await projects.create(identity, {
       name: "Lifecycle events",
@@ -1656,7 +1931,7 @@ describe("agent session coordination", () => {
     expect(events.at(-1)?.payload).toMatchObject({
       actor: author,
       causation: ["activation-1"],
-      session: { workStatus: "open" },
+      session: { key: null, workStatus: "open" },
     });
     await sessions.sendMessage(
       identity,
@@ -2204,6 +2479,60 @@ describe("agent session coordination", () => {
         (message) => message.content === "Historical message",
       ),
     ).toBe(true);
+  });
+
+  it("reads a chat's history through one message and names the chat's key (ADR 0179)", async () => {
+    const project = await projects.create(identity, { name: "History" });
+    const session = await sessions.create(identity, project.id);
+    await db
+      .updateTable("agent_sessions")
+      .set({ chat_key: "slack:C1:1.2" })
+      .where("id", "=", session.id)
+      .execute();
+    const ids: string[] = [];
+    for (const content of ["first", "second", "third"]) {
+      const delivered = await sessions.deliver(
+        identity,
+        project.id,
+        session.id,
+        {
+          content,
+          author: { kind: "user", externalUserId: identity.externalUserId },
+          mode: "message_only",
+          idempotencyKey: content,
+        },
+      );
+      ids.push(delivered.messageId);
+    }
+    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const history = (args: Record<string, unknown>) =>
+      actions.execute({
+        identity,
+        projectId: project.id,
+        operation: "history",
+        args: { sessionId: session.id, ...args },
+        author: { kind: "user", externalUserId: identity.externalUserId },
+      });
+    const contents = (result: unknown) =>
+      JSON.stringify(result).match(/"content":"(first|second|third)"/g);
+    expect(await history({ limit: 2 })).toMatchObject({
+      sessionId: session.id,
+      key: "slack:C1:1.2",
+    });
+    expect(contents(await history({ limit: 2 }))).toEqual([
+      '"content":"second"',
+      '"content":"third"',
+    ]);
+    expect(contents(await history({ through: ids[1], limit: 1 }))).toEqual([
+      '"content":"second"',
+    ]);
+    expect(contents(await history({ through: ids[1] }))).toEqual([
+      '"content":"first"',
+      '"content":"second"',
+    ]);
+    await expect(history({ through: crypto.randomUUID() })).rejects.toThrow(
+      "No message in this chat has that id",
+    );
   });
 
   it("retries workflow child creation without duplicating a delegated session", async () => {

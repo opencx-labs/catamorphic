@@ -13,16 +13,19 @@ export { migrateWorkflowToProject } from "./migrate-workflow.js";
 export {
   discoverLocalFolder,
   hasLocalGit,
-  INTERNAL_REMOTE_PREFIX,
   type LocalFolder,
   nativeGit,
 } from "./native-git.js";
 export { NativeProjectRepo } from "./native-project-repo.js";
 export {
+  assertPushAllowed,
   type CloneFromRemoteOptions,
   cloneFromRemote,
   fetchFromRemote,
+  isManagedBranch,
   pushToRemote,
+  type RemoteOwnership,
+  RemotePushRefusedError,
 } from "./network.js";
 export {
   type NetworkSyncResult,
@@ -39,14 +42,11 @@ export { PreconditionFailedError } from "./object-store.js";
 export {
   ensurePersonalFilesExcluded,
   isPersonalFile,
-  PERSONAL_FILES_ROOT,
 } from "./personal-files.js";
 export {
   generateWorkBranchName,
   PROJECT_GITIGNORE,
-  PROJECT_MANIFEST_PATH,
   ProjectManager,
-  WORK_BRANCH_PREFIX,
 } from "./project-manager.js";
 export { ProjectRepoImpl } from "./project-repo.js";
 export type {
@@ -66,3 +66,17 @@ export type {
   RepoStatus,
   StorageBackend,
 } from "./types.js";
+export {
+  type BaseMoveOutcome,
+  buildSeedPack,
+  copyFromMirror,
+  fetchIntoMirror,
+  isCommitId,
+  mirrorChangedFiles,
+  moveCheckoutBase,
+  parseWorkspaceRef,
+  seedPackInstallScript,
+  shellQuote,
+  unpinMirrorRef,
+  type WorkspaceBase,
+} from "./workspace-mirror.js";

@@ -13,18 +13,26 @@ import type {
   ConnectionProviderRegistry,
 } from "./connection-providers.js";
 import type {
+  ConnectionBindingSource,
   ConnectionPrincipalKind,
   ConnectionRecord,
   ConnectionRequirementPrincipal,
+  ConnectionStatus,
   EnvironmentConnectionBinding,
   ResolvedConnectionBinding,
 } from "./connection-types.js";
-import { assertConnectionAlias } from "./connection-types.js";
+import {
+  bindingPrincipalKinds,
+  CONNECTION_NAME_PATTERN,
+  GIT_CAPABILITIES,
+} from "./connection-types.js";
 import type { CredentialVault } from "./credential-vault.js";
 import { requireTenantProject } from "./projects-service.js";
 import { toJson } from "./run-coordinator.js";
 
 const tracer = getTracer("@catamorphic/core");
+
+type ConnectionRow = Selectable<DB["connections"]>;
 
 export class ConnectionNotFoundError extends Error {
   constructor() {
@@ -37,6 +45,14 @@ export class ConnectionPermissionDeniedError extends Error {
   constructor() {
     super("Connection permission denied");
     this.name = "ConnectionPermissionDeniedError";
+  }
+}
+
+/** Another live service connection in the same scope has this name. */
+export class ConnectionNameTakenError extends Error {
+  constructor(readonly connectionName: string) {
+    super(`A service connection named '${connectionName}' already exists`);
+    this.name = "ConnectionNameTakenError";
   }
 }
 
@@ -79,19 +95,63 @@ export interface ConnectionAuditEvent {
   createdAt: string;
 }
 
+export interface ConnectionBindingPrincipalStatus {
+  connectionId: string | null;
+  principalKind: ConnectionPrincipalKind;
+  label: string;
+  status: ConnectionStatus;
+  account: Json;
+  scopes: string[];
+}
+
+/**
+ * One alias an Environment declares, as its caller sees it: the committed
+ * binding plus whether the caller's own and the service authority are ready.
+ */
+export interface EnvironmentConnectionStatus {
+  environment: string;
+  alias: string;
+  provider: string;
+  principal: ConnectionRequirementPrincipal;
+  /** The service connection's name; shown to connection administrators. */
+  service: string | null;
+  capabilities: string[] | null;
+  memberConnection: ConnectionBindingPrincipalStatus | null;
+  serviceConnection: ConnectionBindingPrincipalStatus | null;
+}
+
 export class ConnectionsService {
-  constructor(
-    private readonly db: Kysely<DB>,
-    private readonly vault: CredentialVault,
-    private readonly providers: ConnectionProviderRegistry,
-    private readonly onMemberConnectionReady?: (
-      identity: Identity,
-    ) => Promise<void>,
-    private readonly onConnectionUnavailable?: (input: {
+  private readonly db: Kysely<DB>;
+  private readonly vault: CredentialVault;
+  private readonly providers: ConnectionProviderRegistry;
+  private readonly bindings: ConnectionBindingSource;
+  private readonly onMemberConnectionReady?: (
+    identity: Identity,
+  ) => Promise<void>;
+  private readonly onConnectionUnavailable?: (input: {
+    identity: Identity;
+    connectionId: string;
+  }) => Promise<void>;
+
+  constructor(args: {
+    db: Kysely<DB>;
+    vault: CredentialVault;
+    providers: ConnectionProviderRegistry;
+    /** The committed (and host-supplied) bindings of an Environment. */
+    bindings: ConnectionBindingSource;
+    onMemberConnectionReady?: (identity: Identity) => Promise<void>;
+    onConnectionUnavailable?: (input: {
       identity: Identity;
       connectionId: string;
-    }) => Promise<void>,
-  ) {}
+    }) => Promise<void>;
+  }) {
+    this.db = args.db;
+    this.vault = args.vault;
+    this.providers = args.providers;
+    this.bindings = args.bindings;
+    this.onMemberConnectionReady = args.onMemberConnectionReady;
+    this.onConnectionUnavailable = args.onConnectionUnavailable;
+  }
 
   providerCatalog(): Array<{ kind: string; displayName: string }> {
     return this.providers.list().map((provider) => ({
@@ -100,6 +160,7 @@ export class ConnectionsService {
     }));
   }
 
+  /** Start a member's authorization of one Environment alias. */
   async beginAuthorization(args: {
     identity: Identity;
     projectId: string;
@@ -117,58 +178,13 @@ export class ConnectionsService {
     ) {
       throw new ConnectionPermissionDeniedError();
     }
-    const binding = await this.db
-      .selectFrom("environment_connection_bindings")
-      .where("tenant_id", "=", args.identity.tenantId)
-      .where("project_id", "=", args.projectId)
-      .where("environment_name", "=", args.environment)
-      .where("alias", "=", args.alias)
-      .selectAll()
-      .executeTakeFirst();
-    if (!binding)
-      throw new ConnectionUnavailableError(args.alias, "No binding");
-    if (!stringArray(binding.principal_kinds).includes("member")) {
+    const binding = await this.requireBinding(args);
+    if (!bindingPrincipalKinds(binding.principal).includes("member")) {
       throw new ConnectionUnavailableError(
         args.alias,
         "This binding does not accept member authorization",
       );
     }
-    const provider = this.providers.get(binding.provider_kind);
-    if (!provider?.beginAuthorization) {
-      throw new ConnectionUnavailableError(
-        args.alias,
-        "Authorization is unsupported",
-      );
-    }
-    const state = randomBearer();
-    const started = await withSpan(
-      {
-        tracer,
-        name: "connection.authorization.begin",
-        attributes: {
-          "catamorphic.tenant.id": args.identity.tenantId,
-          "user.id": args.identity.externalUserId,
-          "catamorphic.project.id": args.projectId,
-          "catamorphic.connection.environment": args.environment,
-          "catamorphic.connection.alias": args.alias,
-          "catamorphic.connection.provider": binding.provider_kind,
-        },
-      },
-      () =>
-        provider.beginAuthorization!({
-          tenantId: args.identity.tenantId,
-          projectId: args.projectId,
-          externalUserId: args.identity.externalUserId,
-          redirectUri: args.redirectUri,
-          state,
-        }),
-    );
-    const privateRef = started.privateState
-      ? await this.vault.put({
-          tenantId: args.identity.tenantId,
-          material: started.privateState,
-        })
-      : undefined;
     const current = await this.db
       .selectFrom("member_connection_attachments as attachment")
       .innerJoin(
@@ -181,27 +197,228 @@ export class ConnectionsService {
       .where("attachment.environment_name", "=", args.environment)
       .where("attachment.alias", "=", args.alias)
       .where("attachment.external_user_id", "=", args.identity.externalUserId)
-      .where("connection.provider_kind", "=", binding.provider_kind)
+      .where("connection.provider_kind", "=", binding.provider)
       .where("connection.principal_kind", "=", "member")
       .where("connection.status", "!=", "revoked")
       .select("connection.id")
       .executeTakeFirst();
-    await this.db
-      .insertInto("connection_authorization_attempts")
-      .values({
-        tenant_id: args.identity.tenantId,
-        project_id: args.projectId,
-        environment_name: args.environment,
+    return this.startAttempt({
+      identity: args.identity,
+      providerKind: binding.provider,
+      projectId: args.projectId,
+      redirectUri: args.redirectUri,
+      target: {
+        environment: args.environment,
         alias: args.alias,
-        provider_kind: binding.provider_kind,
-        external_user_id: args.identity.externalUserId,
-        reauthorize_connection_id: current?.id ?? null,
-        state_hash: hashBearer(state),
-        private_state_ref: privateRef?.id ?? null,
-        expires_at: new Date(Date.now() + 10 * 60 * 1000),
-      })
+        reauthorizeConnectionId: current?.id ?? null,
+      },
+    });
+  }
+
+  /**
+   * An administrator authorizes (or re-authorizes, which rotates) a named
+   * service connection through its provider's ordinary challenge.
+   */
+  async beginServiceAuthorization(args: {
+    identity: Identity;
+    connectionId: string;
+    redirectUri: string;
+  }): Promise<{ authorizationId: string; challenge: AuthorizationChallenge }> {
+    if (!hasControlPlanePermission(args.identity, "connections:write")) {
+      throw new ConnectionPermissionDeniedError();
+    }
+    const connection = await this.requireConnection(
+      args.identity,
+      args.connectionId,
+    );
+    if (
+      connection.principal_kind === "member" ||
+      connection.status === "revoked"
+    ) {
+      throw new ConnectionPermissionDeniedError();
+    }
+    return this.startAttempt({
+      identity: args.identity,
+      providerKind: connection.provider_kind,
+      projectId: connection.project_id ?? undefined,
+      redirectUri: args.redirectUri,
+      target: { serviceConnectionId: connection.id },
+    });
+  }
+
+  /**
+   * Start authorizing (or re-authorizing) the caller's personal connection
+   * to a provider (ADR 0177): their own account, used for repository import,
+   * sync, and pull requests in every project they work in.
+   */
+  async beginPersonalAuthorization(args: {
+    identity: Identity;
+    providerKind: string;
+    redirectUri: string;
+  }): Promise<{ authorizationId: string; challenge: AuthorizationChallenge }> {
+    if (!this.providers.get(args.providerKind)) {
+      throw new Error(`Unknown connection provider '${args.providerKind}'`);
+    }
+    const current = await this.personal(args);
+    return this.startAttempt({
+      identity: args.identity,
+      providerKind: args.providerKind,
+      redirectUri: args.redirectUri,
+      target: { personal: true, reauthorizeConnectionId: current?.id ?? null },
+    });
+  }
+
+  /**
+   * Store a personal connection from authorization completed by the host
+   * (or by a personal attempt), replacing the caller's current one.
+   */
+  async savePersonal(args: {
+    identity: Identity;
+    providerKind: string;
+    authorized: ConnectionAuthorizationResult;
+    label?: string;
+  }): Promise<ConnectionRecord> {
+    const provider = this.providers.get(args.providerKind);
+    if (!provider) {
+      throw new Error(`Unknown connection provider '${args.providerKind}'`);
+    }
+    const current = await this.db
+      .selectFrom("connections")
+      .selectAll()
+      .where("tenant_id", "=", args.identity.tenantId)
+      .where("principal_kind", "=", "member")
+      .where("owner_external_user_id", "=", args.identity.externalUserId)
+      .where("provider_kind", "=", args.providerKind)
+      .where("project_id", "is", null)
+      .where("status", "!=", "revoked")
+      .executeTakeFirst();
+    if (current) {
+      const row = await this.replaceCredential({
+        identity: args.identity,
+        current,
+        authorized: args.authorized,
+      });
+      await this.audit({
+        identity: args.identity,
+        connectionId: current.id,
+        eventType: "connection.rotated",
+        outcome: "allowed",
+      });
+      return row;
+    }
+    const ref = await this.vault.put({
+      tenantId: args.identity.tenantId,
+      material: args.authorized.material,
+    });
+    try {
+      const row = await this.db
+        .insertInto("connections")
+        .values({
+          tenant_id: args.identity.tenantId,
+          project_id: null,
+          provider_kind: args.providerKind,
+          principal_kind: "member",
+          owner_external_user_id: args.identity.externalUserId,
+          label: args.label ?? provider.displayName,
+          status: "ready",
+          credential_ref: ref.id,
+          account_summary: toJson(args.authorized.account ?? {}),
+          scopes: toJson(args.authorized.scopes ?? []),
+          capabilities: toJson(args.authorized.capabilities ?? []),
+          expires_at: args.authorized.expiresAt ?? null,
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      await this.audit({
+        identity: args.identity,
+        connectionId: row.id,
+        eventType: "connection.created",
+        outcome: "allowed",
+        metadata: { personal: true },
+      });
+      return mapConnection(row);
+    } catch (cause) {
+      await this.vault.delete({ tenantId: args.identity.tenantId, ref });
+      throw cause;
+    }
+  }
+
+  /** The caller's live personal connection to a provider, ready or not. */
+  async personal(args: {
+    identity: Identity;
+    providerKind: string;
+  }): Promise<ConnectionRecord | undefined> {
+    const row = await this.db
+      .selectFrom("connections")
+      .selectAll()
+      .where("tenant_id", "=", args.identity.tenantId)
+      .where("principal_kind", "=", "member")
+      .where("owner_external_user_id", "=", args.identity.externalUserId)
+      .where("provider_kind", "=", args.providerKind)
+      .where("project_id", "is", null)
+      .where("status", "!=", "revoked")
+      .executeTakeFirst();
+    return row ? mapConnection(row) : undefined;
+  }
+
+  /**
+   * The caller's own ready connection to a provider for one project: one
+   * they authorized in the project, else their personal one. A lapsed
+   * access token still counts; the caller refreshes it before use.
+   */
+  async ownConnection(args: {
+    identity: Identity;
+    projectId?: string;
+    providerKind: string;
+  }): Promise<ConnectionRecord | undefined> {
+    const rows = await this.db
+      .selectFrom("connections")
+      .selectAll()
+      .where("tenant_id", "=", args.identity.tenantId)
+      .where("principal_kind", "=", "member")
+      .where("owner_external_user_id", "=", args.identity.externalUserId)
+      .where("provider_kind", "=", args.providerKind)
+      .where("status", "=", "ready")
+      .where((eb) =>
+        args.projectId
+          ? eb.or([
+              eb("project_id", "=", args.projectId),
+              eb("project_id", "is", null),
+            ])
+          : eb("project_id", "is", null),
+      )
+      .orderBy("updated_at", "desc")
       .execute();
-    return { authorizationId: state, challenge: started.challenge };
+    const chosen =
+      rows.find((row) => row.project_id !== null) ??
+      rows.find((row) => row.project_id === null);
+    return chosen ? mapConnection(chosen) : undefined;
+  }
+
+  /**
+   * A live service connection by name: the project's own first, then the
+   * tenant's (ADR 0172). Without a project, only the tenant's.
+   */
+  async serviceConnection(args: {
+    tenantId: string;
+    projectId?: string;
+    name: string;
+  }): Promise<ConnectionRecord | undefined> {
+    const row = args.projectId
+      ? await this.findService({
+          tenantId: args.tenantId,
+          projectId: args.projectId,
+          name: args.name,
+        })
+      : await this.db
+          .selectFrom("connections")
+          .selectAll()
+          .where("tenant_id", "=", args.tenantId)
+          .where("name", "=", args.name)
+          .where("principal_kind", "=", "tenant_service")
+          .where("status", "!=", "revoked")
+          .executeTakeFirst();
+    return row ? mapConnection(row) : undefined;
   }
 
   async authorizationStatus(args: {
@@ -246,19 +463,33 @@ export class ConnectionsService {
       .executeTakeFirst();
     if (!attempt)
       throw new ConnectionUnavailableError("authorization", "Attempt expired");
+    const subject =
+      attempt.alias ?? attempt.service_connection_id ?? attempt.provider_kind;
     const provider = this.providers.get(attempt.provider_kind);
-    if (!provider?.completeAuthorization) {
-      throw new ConnectionUnavailableError(
-        attempt.alias,
-        "Authorization is unsupported",
-      );
+    const completeAuthorization = provider?.completeAuthorization;
+    if (
+      !completeAuthorization ||
+      (attempt.service_connection_id &&
+        !hasControlPlanePermission(args.identity, "connections:write"))
+    ) {
+      await this.finishAttempt({
+        identity: args.identity,
+        attempt,
+        status: "canceled",
+      });
+      throw completeAuthorization
+        ? new ConnectionPermissionDeniedError()
+        : new ConnectionUnavailableError(
+            subject,
+            "Authorization is unsupported",
+          );
     }
-    const completeAuthorization = provider.completeAuthorization;
     const complete = (privateState?: Uint8Array) =>
       completeAuthorization({
         tenantId: args.identity.tenantId,
-        projectId: attempt.project_id,
+        ...(attempt.project_id ? { projectId: attempt.project_id } : {}),
         externalUserId: args.identity.externalUserId,
+        principal: attempt.service_connection_id ? "service" : "member",
         callback: args.callback,
         ...(privateState ? { privateState } : {}),
       });
@@ -271,9 +502,11 @@ export class ConnectionsService {
           attributes: {
             "catamorphic.tenant.id": args.identity.tenantId,
             "user.id": args.identity.externalUserId,
-            "catamorphic.project.id": attempt.project_id,
-            "catamorphic.connection.environment": attempt.environment_name,
-            "catamorphic.connection.alias": attempt.alias,
+            "catamorphic.project.id": attempt.project_id ?? "",
+            "catamorphic.connection.environment":
+              attempt.environment_name ?? "",
+            "catamorphic.connection.alias": attempt.alias ?? "",
+            "catamorphic.connection.id": attempt.service_connection_id ?? "",
             "catamorphic.connection.provider": attempt.provider_kind,
           },
         },
@@ -287,21 +520,58 @@ export class ConnectionsService {
             : complete(),
       );
     } catch {
-      await this.db
-        .updateTable("connection_authorization_attempts")
-        .set({ status: "canceled", completed_at: new Date() })
+      await this.finishAttempt({
+        identity: args.identity,
+        attempt,
+        status: "canceled",
+      });
+      throw new ConnectionUnavailableError(subject, "Authorization failed");
+    }
+    if (attempt.service_connection_id) {
+      const connection = await this.storeServiceCredential({
+        identity: args.identity,
+        connectionId: attempt.service_connection_id,
+        authorized,
+      });
+      await this.finishAttempt({
+        identity: args.identity,
+        attempt,
+        status: "completed",
+      });
+      return connection;
+    }
+    if (attempt.personal) {
+      const still = await this.db
+        .selectFrom("connection_authorization_attempts")
+        .select("status")
         .where("id", "=", attempt.id)
-        .execute();
-      if (attempt.private_state_ref) {
-        await this.vault.delete({
-          tenantId: args.identity.tenantId,
-          ref: { id: attempt.private_state_ref },
+        .executeTakeFirst();
+      if (still?.status !== "completing")
+        throw new ConnectionUnavailableError(
+          attempt.provider_kind,
+          "Authorization was cancelled",
+        );
+      const connection = await this.savePersonal({
+        identity: args.identity,
+        providerKind: attempt.provider_kind,
+        authorized,
+      });
+      // Cancelled while the person was still authorizing: what was saved
+      // is taken back, so a disconnect is never undone by a late sign-in.
+      if (!(await this.completeAttempt({ identity: args.identity, attempt }))) {
+        await this.revoke({
+          identity: args.identity,
+          connectionId: connection.id,
         });
+        throw new ConnectionUnavailableError(
+          attempt.provider_kind,
+          "Authorization was cancelled",
+        );
       }
-      throw new ConnectionUnavailableError(
-        attempt.alias,
-        "Authorization failed",
-      );
+      return connection;
+    }
+    if (!attempt.project_id || !attempt.environment_name || !attempt.alias) {
+      throw new ConnectionUnavailableError(subject, "Attempt is malformed");
     }
     const connection = attempt.reauthorize_connection_id
       ? await this.reauthorizeMember({
@@ -314,8 +584,7 @@ export class ConnectionsService {
           identity: args.identity,
           projectId: attempt.project_id,
           providerKind: attempt.provider_kind,
-          principalKind: "member",
-          label: `${provider.displayName} (${attempt.alias})`,
+          label: `${provider?.displayName ?? attempt.provider_kind} (${attempt.alias})`,
           material: authorized.material,
           account: authorized.account,
           scopes: authorized.scopes,
@@ -329,17 +598,11 @@ export class ConnectionsService {
       alias: attempt.alias,
       connectionId: connection.id,
     });
-    await this.db
-      .updateTable("connection_authorization_attempts")
-      .set({ status: "completed", completed_at: new Date() })
-      .where("id", "=", attempt.id)
-      .execute();
-    if (attempt.private_state_ref) {
-      await this.vault.delete({
-        tenantId: args.identity.tenantId,
-        ref: { id: attempt.private_state_ref },
-      });
-    }
+    await this.finishAttempt({
+      identity: args.identity,
+      attempt,
+      status: "completed",
+    });
     await this.onMemberConnectionReady?.(args.identity);
     return connection;
   }
@@ -358,6 +621,8 @@ export class ConnectionsService {
     if (!attempt) {
       throw new ConnectionUnavailableError("authorization", "Attempt expired");
     }
+    // The state is the bearer: it was issued to this person, who held the
+    // authority to start the attempt, and it expires in ten minutes.
     return this.completeAuthorization({
       identity: {
         tenantId: attempt.tenant_id,
@@ -368,11 +633,11 @@ export class ConnectionsService {
     });
   }
 
+  /** A member's own connection, created with material already in hand. */
   async create(args: {
     identity: Identity;
     projectId: string;
     providerKind: string;
-    principalKind: ConnectionPrincipalKind;
     label: string;
     material: Uint8Array;
     account?: Json;
@@ -384,12 +649,6 @@ export class ConnectionsService {
       throw new Error(`Unknown connection provider '${args.providerKind}'`);
     }
     await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
-    if (
-      args.principalKind !== "member" &&
-      !hasControlPlanePermission(args.identity, "connections:write")
-    ) {
-      throw new ConnectionPermissionDeniedError();
-    }
     const ref = await this.vault.put({
       tenantId: args.identity.tenantId,
       material: args.material,
@@ -399,14 +658,10 @@ export class ConnectionsService {
         .insertInto("connections")
         .values({
           tenant_id: args.identity.tenantId,
-          project_id:
-            args.principalKind === "tenant_service" ? null : args.projectId,
+          project_id: args.projectId,
           provider_kind: args.providerKind,
-          principal_kind: args.principalKind,
-          owner_external_user_id:
-            args.principalKind === "member"
-              ? args.identity.externalUserId
-              : null,
+          principal_kind: "member",
+          owner_external_user_id: args.identity.externalUserId,
           label: args.label,
           status: "ready",
           credential_ref: ref.id,
@@ -429,6 +684,86 @@ export class ConnectionsService {
       await this.vault.delete({ tenantId: args.identity.tenantId, ref });
       throw cause;
     }
+  }
+
+  /**
+   * Create a named service connection, pending until an administrator
+   * authorizes it. `tenant_service` connections serve every project whose
+   * Environments bind the name; `project_service` ones serve one project.
+   */
+  async createService(args: {
+    identity: Identity;
+    name: string;
+    providerKind: string;
+    principalKind: "tenant_service" | "project_service";
+    projectId?: string;
+    label?: string;
+  }): Promise<ConnectionRecord> {
+    if (!hasControlPlanePermission(args.identity, "connections:write")) {
+      throw new ConnectionPermissionDeniedError();
+    }
+    if (!CONNECTION_NAME_PATTERN.test(args.name)) {
+      throw new Error(
+        `Invalid service connection name '${args.name}': use lowercase letters, numbers, dots, underscores, and hyphens`,
+      );
+    }
+    const provider = this.providers.get(args.providerKind);
+    if (!provider) {
+      throw new Error(`Unknown connection provider '${args.providerKind}'`);
+    }
+    if (args.principalKind === "project_service") {
+      if (!args.projectId) {
+        throw new Error("A project service connection names its project");
+      }
+      await requireTenantProject(
+        this.db,
+        args.identity.tenantId,
+        args.projectId,
+      );
+    }
+    const projectId =
+      args.principalKind === "project_service" ? args.projectId : undefined;
+    const existing = await this.db
+      .selectFrom("connections")
+      .select("id")
+      .where("tenant_id", "=", args.identity.tenantId)
+      .where("principal_kind", "=", args.principalKind)
+      .where("name", "=", args.name)
+      .where("status", "!=", "revoked")
+      .$if(projectId !== undefined, (query) =>
+        query.where("project_id", "=", projectId ?? ""),
+      )
+      .executeTakeFirst();
+    if (existing) throw new ConnectionNameTakenError(args.name);
+    const row = await this.db
+      .insertInto("connections")
+      .values({
+        tenant_id: args.identity.tenantId,
+        project_id: projectId ?? null,
+        provider_kind: args.providerKind,
+        principal_kind: args.principalKind,
+        name: args.name,
+        owner_external_user_id: null,
+        label: args.label ?? `${provider.displayName} (${args.name})`,
+        status: "pending",
+        credential_ref: null,
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow()
+      .catch((error: unknown) => {
+        throw isUniqueViolation(error)
+          ? new ConnectionNameTakenError(args.name)
+          : error;
+      });
+    await this.audit({
+      identity: args.identity,
+      projectId,
+      connectionId: row.id,
+      eventType: "connection.created",
+      outcome: "allowed",
+      metadata: { name: args.name, principalKind: args.principalKind },
+    });
+    return mapConnection(row);
   }
 
   async list(args: {
@@ -456,64 +791,31 @@ export class ConnectionsService {
     ).map(mapConnection);
   }
 
-  async rotateServiceCredential(args: {
+  /** The organization's live service connections, by name. */
+  async listServices(args: {
     identity: Identity;
-    connectionId: string;
-    material: Uint8Array;
-  }): Promise<ConnectionRecord> {
-    if (!hasControlPlanePermission(args.identity, "connections:write")) {
+    projectId?: string;
+  }): Promise<ConnectionRecord[]> {
+    if (!hasControlPlanePermission(args.identity, "connections:read")) {
       throw new ConnectionPermissionDeniedError();
     }
-    const current = await this.requireConnection(
-      args.identity,
-      args.connectionId,
-    );
-    if (current.principal_kind === "member" || current.status === "revoked") {
-      throw new ConnectionPermissionDeniedError();
-    }
-    const nextRef = await this.vault.put({
-      tenantId: args.identity.tenantId,
-      material: args.material,
-    });
-    const row = await this.db
-      .updateTable("connections")
-      .set({
-        credential_ref: nextRef.id,
-        status: "ready",
-        expires_at: null,
-        revision: current.revision + 1,
-        updated_at: new Date(),
-      })
+    const rows = await this.db
+      .selectFrom("connections")
       .where("tenant_id", "=", args.identity.tenantId)
-      .where("id", "=", current.id)
-      .where("revision", "=", current.revision)
-      .returningAll()
-      .executeTakeFirst();
-    if (!row) {
-      await this.vault.delete({
-        tenantId: args.identity.tenantId,
-        ref: nextRef,
-      });
-      throw new ConnectionUnavailableError(current.id, "Rotation raced");
-    }
-    if (current.credential_ref) {
-      await this.vault.delete({
-        tenantId: args.identity.tenantId,
-        ref: { id: current.credential_ref },
-      });
-    }
-    await this.resolveWorkflowRequirementsForConnection({
-      tenantId: args.identity.tenantId,
-      connectionId: current.id,
-    });
-    await this.audit({
-      identity: args.identity,
-      projectId: current.project_id ?? undefined,
-      connectionId: current.id,
-      eventType: "connection.rotated",
-      outcome: "allowed",
-    });
-    return mapConnection(row);
+      .where("principal_kind", "!=", "member")
+      .where("status", "!=", "revoked")
+      .$if(args.projectId !== undefined, (query) =>
+        query.where((eb) =>
+          eb.or([
+            eb("project_id", "=", args.projectId ?? ""),
+            eb("project_id", "is", null),
+          ]),
+        ),
+      )
+      .selectAll()
+      .orderBy("name")
+      .execute();
+    return rows.map(mapConnection);
   }
 
   /** Host-side adoption/refresh of an already authenticated member account. */
@@ -536,141 +838,55 @@ export class ConnectionsService {
     ) {
       throw new ConnectionPermissionDeniedError();
     }
-    const nextRef = await this.vault.put({
-      tenantId: args.identity.tenantId,
-      material: args.material,
+    const row = await this.replaceCredential({
+      identity: args.identity,
+      current,
+      authorized: {
+        material: args.material,
+        account: args.account,
+        scopes: args.scopes,
+        capabilities: args.capabilities,
+        expiresAt: args.expiresAt,
+      },
     });
-    const row = await this.db
-      .updateTable("connections")
-      .set({
-        credential_ref: nextRef.id,
-        account_summary: toJson(args.account ?? {}),
-        scopes: toJson(args.scopes ?? []),
-        capabilities: toJson(args.capabilities ?? []),
-        expires_at: args.expiresAt ?? null,
-        status: "ready",
-        revision: current.revision + 1,
-        updated_at: new Date(),
-      })
-      .where("id", "=", current.id)
-      .where("revision", "=", current.revision)
-      .returningAll()
-      .executeTakeFirst();
-    if (!row) {
-      await this.vault.delete({
-        tenantId: args.identity.tenantId,
-        ref: nextRef,
-      });
-      throw new ConnectionUnavailableError(
-        current.id,
-        "Credential update raced",
-      );
-    }
-    if (current.credential_ref) {
-      await this.vault.delete({
-        tenantId: args.identity.tenantId,
-        ref: { id: current.credential_ref },
-      });
-    }
     await this.resolveWorkflowRequirementsForConnection({
       tenantId: args.identity.tenantId,
       connectionId: current.id,
     });
     await this.onMemberConnectionReady?.(args.identity);
-    return mapConnection(row);
+    return row;
   }
 
-  async bind(args: {
-    identity: Identity;
-    projectId: string;
-    environment: string;
-    alias: string;
-    providerKind: string;
-    principalKinds: readonly ConnectionPrincipalKind[];
-    serviceConnectionId?: string;
-    capabilities?: readonly string[];
-  }): Promise<EnvironmentConnectionBinding> {
-    if (!hasControlPlanePermission(args.identity, "connections:write")) {
-      throw new ConnectionPermissionDeniedError();
-    }
-    assertConnectionAlias(args.alias);
-    await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
-    if (!this.providers.get(args.providerKind)) {
-      throw new ConnectionUnavailableError(args.alias, "Unknown provider");
-    }
-    if (args.serviceConnectionId) {
-      const service = await this.requireConnection(
-        args.identity,
-        args.serviceConnectionId,
-      );
-      if (
-        service.principal_kind === "member" ||
-        service.provider_kind !== args.providerKind ||
-        !args.principalKinds.includes(
-          service.principal_kind as ConnectionPrincipalKind,
-        ) ||
-        (service.principal_kind === "project_service" &&
-          service.project_id !== args.projectId)
-      ) {
-        throw new ConnectionPermissionDeniedError();
-      }
-    }
-    const row = await this.db
-      .insertInto("environment_connection_bindings")
-      .values({
-        tenant_id: args.identity.tenantId,
-        project_id: args.projectId,
-        environment_name: args.environment,
-        alias: args.alias,
-        provider_kind: args.providerKind,
-        principal_kinds: toJson(args.principalKinds),
-        service_connection_id: args.serviceConnectionId ?? null,
-        capabilities: toJson(args.capabilities ?? []),
-      })
-      .onConflict((oc) =>
-        oc.columns(["project_id", "environment_name", "alias"]).doUpdateSet({
-          provider_kind: args.providerKind,
-          principal_kinds: toJson(args.principalKinds),
-          service_connection_id: args.serviceConnectionId ?? null,
-          capabilities: toJson(args.capabilities ?? []),
-          updated_at: new Date(),
-        }),
-      )
-      .returningAll()
-      .executeTakeFirstOrThrow();
-    return mapBinding(row);
-  }
-
+  /**
+   * Each alias an Environment declares, with the caller's own and the
+   * service authority behind it. Connection administrators see every alias
+   * and the service names; others only aliases they may use.
+   */
   async listBindings(args: {
     identity: Identity;
     projectId: string;
-    environment?: string;
-  }): Promise<EnvironmentConnectionBinding[]> {
+    environment: string;
+  }): Promise<EnvironmentConnectionStatus[]> {
     await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
-    let query = this.db
-      .selectFrom("environment_connection_bindings")
-      .where("tenant_id", "=", args.identity.tenantId)
-      .where("project_id", "=", args.projectId);
-    if (args.environment) {
-      query = query.where("environment_name", "=", args.environment);
-    }
-    const rows = await query.orderBy("alias").selectAll().execute();
+    const bindings = await this.bindings(args);
     const mayManage = hasControlPlanePermission(
       args.identity,
       "connections:read",
     );
-    const visible = rows.filter(
-      (row) =>
-        mayManage ||
-        identityMayUseConnection(
-          args.identity,
-          args.projectId,
-          row.environment_name,
-          row.alias,
-        ),
-    );
+    const visible = Object.entries(bindings)
+      .filter(
+        ([alias]) =>
+          mayManage ||
+          identityMayUseConnection(
+            args.identity,
+            args.projectId,
+            args.environment,
+            alias,
+          ),
+      )
+      .sort(([a], [b]) => a.localeCompare(b));
     return Promise.all(
-      visible.map(async (row) => {
+      visible.map(async ([alias, binding]) => {
         const [memberConnection, serviceConnection] = await Promise.all([
           this.db
             .selectFrom("member_connection_attachments as attachment")
@@ -681,8 +897,8 @@ export class ConnectionsService {
             )
             .where("attachment.tenant_id", "=", args.identity.tenantId)
             .where("attachment.project_id", "=", args.projectId)
-            .where("attachment.environment_name", "=", row.environment_name)
-            .where("attachment.alias", "=", row.alias)
+            .where("attachment.environment_name", "=", args.environment)
+            .where("attachment.alias", "=", alias)
             .where(
               "attachment.external_user_id",
               "=",
@@ -690,18 +906,21 @@ export class ConnectionsService {
             )
             .selectAll("connection")
             .executeTakeFirst(),
-          row.service_connection_id
-            ? this.db
-                .selectFrom("connections")
-                .where("tenant_id", "=", args.identity.tenantId)
-                .where("id", "=", row.service_connection_id)
-                .selectAll()
-                .executeTakeFirst()
+          binding.service
+            ? this.findService({
+                tenantId: args.identity.tenantId,
+                projectId: args.projectId,
+                name: binding.service,
+              })
             : undefined,
         ]);
         return {
-          ...mapBinding(row),
-          serviceConnectionId: mayManage ? row.service_connection_id : null,
+          environment: args.environment,
+          alias,
+          provider: binding.provider,
+          principal: binding.principal,
+          service: mayManage ? (binding.service ?? null) : null,
+          capabilities: binding.capabilities ? [...binding.capabilities] : null,
           memberConnection: memberConnection
             ? mapBindingPrincipal(memberConnection, true)
             : null,
@@ -730,18 +949,11 @@ export class ConnectionsService {
     ) {
       throw new ConnectionPermissionDeniedError();
     }
-    const binding = await this.db
-      .selectFrom("environment_connection_bindings")
-      .where("tenant_id", "=", args.identity.tenantId)
-      .where("project_id", "=", args.projectId)
-      .where("environment_name", "=", args.environment)
-      .where("alias", "=", args.alias)
-      .select(["provider_kind", "principal_kinds"])
-      .executeTakeFirst();
+    const binding = (await this.bindings(args))[args.alias];
     if (
       !binding ||
-      binding.provider_kind !== connection.provider_kind ||
-      !stringArray(binding.principal_kinds).includes("member")
+      binding.provider !== connection.provider_kind ||
+      !bindingPrincipalKinds(binding.principal).includes("member")
     ) {
       throw new ConnectionPermissionDeniedError();
     }
@@ -828,14 +1040,7 @@ export class ConnectionsService {
     >;
     unattended?: boolean;
   }): Promise<ResolvedConnectionBinding[]> {
-    const bindings = await this.db
-      .selectFrom("environment_connection_bindings")
-      .where("tenant_id", "=", args.identity.tenantId)
-      .where("project_id", "=", args.projectId)
-      .where("environment_name", "=", args.environment)
-      .where("alias", "in", [...args.aliases])
-      .selectAll()
-      .execute();
+    const bindings = await this.bindings(args);
     const resolved: ResolvedConnectionBinding[] = [];
     const missing: Array<{
       alias: string;
@@ -843,98 +1048,80 @@ export class ConnectionsService {
       principalKinds: ConnectionPrincipalKind[];
     }> = [];
     for (const alias of args.aliases) {
-      const binding = bindings.find((candidate) => candidate.alias === alias);
+      const binding = bindings[alias];
       if (!binding) throw new ConnectionUnavailableError(alias, "No binding");
-      if (
-        !identityMayUseConnection(
-          args.identity,
-          args.projectId,
-          args.environment,
-          alias,
-        )
-      ) {
-        throw new ConnectionPermissionDeniedError();
-      }
-      const principals = stringArray(
-        binding.principal_kinds,
-      ) as ConnectionPrincipalKind[];
+      const use = identityMayUseConnection(
+        args.identity,
+        args.projectId,
+        args.environment,
+        alias,
+      );
+      if (!use) throw new ConnectionPermissionDeniedError();
       const requiredPrincipal = args.principalsByAlias?.[alias];
       const accepts = (principal: ConnectionPrincipalKind) =>
-        principals.includes(principal) &&
         (!requiredPrincipal ||
           requiredPrincipal === "either" ||
           (requiredPrincipal === "member"
             ? principal === "member"
             : principal !== "member")) &&
         (!args.unattended || principal !== "member");
-      const acceptablePrincipals = principals.filter(accepts);
+      const acceptablePrincipals = bindingPrincipalKinds(
+        binding.principal,
+      ).filter(accepts);
       if (acceptablePrincipals.length === 0) {
         throw new ConnectionUnavailableError(
           alias,
           "No permitted principal kind is configured",
         );
       }
-      let connectionId: string | null = null;
-      if (binding.service_connection_id) {
-        const service = await this.requireConnection(
-          args.identity,
-          binding.service_connection_id,
-        );
-        if (accepts(service.principal_kind as ConnectionPrincipalKind)) {
-          connectionId = service.id;
-        }
-      }
-      if (!connectionId && accepts("member")) {
-        const attachment = await this.db
-          .selectFrom("member_connection_attachments")
-          .where("tenant_id", "=", args.identity.tenantId)
-          .where("project_id", "=", args.projectId)
-          .where("environment_name", "=", args.environment)
-          .where("alias", "=", alias)
-          .where("external_user_id", "=", args.identity.externalUserId)
-          .select("connection_id")
-          .executeTakeFirst();
-        connectionId = attachment?.connection_id ?? null;
-      }
-      if (!connectionId) {
+      const accepted = (connection: ConnectionRow | undefined) =>
+        connection &&
+        connection.provider_kind === binding.provider &&
+        acceptablePrincipals.includes(
+          connection.principal_kind as ConnectionPrincipalKind,
+        )
+          ? connection
+          : undefined;
+      const connection =
+        (binding.service
+          ? accepted(
+              await this.findService({
+                tenantId: args.identity.tenantId,
+                projectId: args.projectId,
+                name: binding.service,
+              }),
+            )
+          : undefined) ??
+        (acceptablePrincipals.includes("member")
+          ? accepted(
+              await this.attachedMemberConnection({
+                identity: args.identity,
+                projectId: args.projectId,
+                environment: args.environment,
+                alias,
+              }),
+            )
+          : undefined);
+      if (!connection || !isReady(connection)) {
         missing.push({
           alias,
-          providerKind: binding.provider_kind,
-          principalKinds: acceptablePrincipals,
-        });
-        continue;
-      }
-      const connection = await this.requireConnection(
-        args.identity,
-        connectionId,
-      );
-      if (
-        connection.status !== "ready" ||
-        (connection.expires_at && connection.expires_at <= new Date())
-      ) {
-        missing.push({
-          alias,
-          providerKind: binding.provider_kind,
+          providerKind: binding.provider,
           principalKinds: acceptablePrincipals,
         });
         continue;
       }
       resolved.push({
-        bindingId: binding.id,
-        connectionId,
+        connectionId: connection.id,
         alias,
-        providerKind: binding.provider_kind,
+        providerKind: binding.provider,
         principalKind: connection.principal_kind as ConnectionPrincipalKind,
         capabilities: intersectCapabilities(
-          stringArray(binding.capabilities),
-          stringArray(connection.capabilities),
-          identityMayUseConnection(
-            args.identity,
-            args.projectId,
-            args.environment,
-            alias,
-          )?.capabilities,
+          this.connectionCapabilities(connection),
+          binding.capabilities,
+          use.capabilities,
         ),
+        ...(binding.git ? { git: binding.git } : {}),
+        ...(binding.model ? { model: binding.model } : {}),
       });
     }
     if (missing.length > 0) {
@@ -950,29 +1137,24 @@ export class ConnectionsService {
     environment: string;
     snapshot: readonly ResolvedConnectionBinding[];
   }): Promise<ResolvedConnectionBinding[]> {
+    const bindings = await this.bindings(args);
     const resolved: ResolvedConnectionBinding[] = [];
     for (const selected of args.snapshot) {
+      const use = identityMayUseConnection(
+        args.identity,
+        args.projectId,
+        args.environment,
+        selected.alias,
+      );
+      if (!use) throw new ConnectionPermissionDeniedError();
+      const binding = bindings[selected.alias];
       if (
-        !identityMayUseConnection(
-          args.identity,
-          args.projectId,
-          args.environment,
-          selected.alias,
+        !binding ||
+        binding.provider !== selected.providerKind ||
+        !bindingPrincipalKinds(binding.principal).includes(
+          selected.principalKind,
         )
       ) {
-        throw new ConnectionPermissionDeniedError();
-      }
-      const binding = await this.db
-        .selectFrom("environment_connection_bindings")
-        .where("tenant_id", "=", args.identity.tenantId)
-        .where("project_id", "=", args.projectId)
-        .where("environment_name", "=", args.environment)
-        .where("id", "=", selected.bindingId)
-        .where("alias", "=", selected.alias)
-        .where("provider_kind", "=", selected.providerKind)
-        .selectAll()
-        .executeTakeFirst();
-      if (!binding) {
         throw new ConnectionUnavailableError(
           selected.alias,
           "Trigger connection binding changed",
@@ -983,33 +1165,27 @@ export class ConnectionsService {
         args.identity,
         selected.connectionId,
       );
-      const ready =
-        connection.status === "ready" &&
-        (!connection.expires_at || connection.expires_at > new Date());
-      if (!ready || connection.provider_kind !== selected.providerKind) {
+      if (
+        !isReady(connection) ||
+        connection.provider_kind !== selected.providerKind
+      ) {
         throw new AuthenticationRequiredError(args.environment, [
           {
             alias: selected.alias,
             providerKind: selected.providerKind,
-            principalKinds: stringArray(
-              binding.principal_kinds,
-            ) as ConnectionPrincipalKind[],
+            principalKinds: bindingPrincipalKinds(binding.principal),
           },
         ]);
       }
       if (selected.principalKind === "member") {
-        const attachment = await this.db
-          .selectFrom("member_connection_attachments")
-          .where("tenant_id", "=", args.identity.tenantId)
-          .where("project_id", "=", args.projectId)
-          .where("environment_name", "=", args.environment)
-          .where("alias", "=", selected.alias)
-          .where("external_user_id", "=", args.identity.externalUserId)
-          .where("connection_id", "=", selected.connectionId)
-          .select("id")
-          .executeTakeFirst();
+        const attached = await this.attachedMemberConnection({
+          identity: args.identity,
+          projectId: args.projectId,
+          environment: args.environment,
+          alias: selected.alias,
+        });
         if (
-          !attachment ||
+          attached?.id !== selected.connectionId ||
           connection.principal_kind !== "member" ||
           connection.owner_external_user_id !== args.identity.externalUserId
         ) {
@@ -1019,29 +1195,52 @@ export class ConnectionsService {
             selected.connectionId,
           );
         }
-      } else if (binding.service_connection_id !== selected.connectionId) {
-        throw new ConnectionUnavailableError(
-          selected.alias,
-          "Assigned service connection changed",
-          selected.connectionId,
-        );
+      } else {
+        const service = binding.service
+          ? await this.findService({
+              tenantId: args.identity.tenantId,
+              projectId: args.projectId,
+              name: binding.service,
+            })
+          : undefined;
+        if (service?.id !== selected.connectionId) {
+          throw new ConnectionUnavailableError(
+            selected.alias,
+            "Assigned service connection changed",
+            selected.connectionId,
+          );
+        }
       }
+      const {
+        git: _snapshotGit,
+        model: _snapshotModel,
+        ...snapshot
+      } = selected;
       resolved.push({
-        ...selected,
+        ...snapshot,
         capabilities: intersectCapabilities(
           selected.capabilities,
-          stringArray(binding.capabilities),
-          stringArray(connection.capabilities),
-          identityMayUseConnection(
-            args.identity,
-            args.projectId,
-            args.environment,
-            selected.alias,
-          )?.capabilities,
+          binding.capabilities,
+          this.connectionCapabilities(connection),
+          use.capabilities,
         ),
+        ...(binding.git ? { git: binding.git } : {}),
+        ...(binding.model ? { model: binding.model } : {}),
       });
     }
     return resolved;
+  }
+
+  /**
+   * What a connection itself may do: the capabilities its authorization
+   * recorded, and Git reads and writes when its provider serves Git through
+   * the gateway (ADR 0175). Bindings and roles narrow them.
+   */
+  private connectionCapabilities(connection: ConnectionRow): string[] {
+    const own = stringArray(connection.capabilities);
+    return this.providers.get(connection.provider_kind)?.git
+      ? [...own, ...GIT_CAPABILITIES.filter((git) => !own.includes(git))]
+      : own;
   }
 
   async revoke(args: {
@@ -1080,6 +1279,7 @@ export class ConnectionsService {
         .where("tenant_id", "=", args.identity.tenantId)
         .execute();
     });
+    await this.release(connection);
     await this.onConnectionUnavailable?.({
       identity: args.identity,
       connectionId: args.connectionId,
@@ -1087,7 +1287,8 @@ export class ConnectionsService {
     let revokeFailed = false;
     const provider = this.providers.get(connection.provider_kind);
     const revokeProvider = provider?.revoke;
-    if (connection.credential_ref && revokeProvider) {
+    const credentialRef = connection.credential_ref;
+    if (credentialRef && revokeProvider) {
       try {
         await withSpan(
           {
@@ -1103,7 +1304,7 @@ export class ConnectionsService {
           () =>
             this.vault.withMaterial({
               tenantId: args.identity.tenantId,
-              ref: { id: connection.credential_ref! },
+              ref: { id: credentialRef },
               use: (material) => revokeProvider({ material }),
             }),
         );
@@ -1111,10 +1312,10 @@ export class ConnectionsService {
         revokeFailed = true;
       }
     }
-    if (connection.credential_ref) {
+    if (credentialRef) {
       await this.vault.delete({
         tenantId: args.identity.tenantId,
-        ref: { id: connection.credential_ref },
+        ref: { id: credentialRef },
       });
     }
     await this.audit({
@@ -1132,25 +1333,19 @@ export class ConnectionsService {
   async withCredential<T>(args: {
     identity: Identity;
     connectionId: string;
-    use: (
-      material: Uint8Array,
-      connection: Selectable<DB["connections"]>,
-    ) => Promise<T>;
+    use: (material: Uint8Array, connection: ConnectionRow) => Promise<T>;
   }): Promise<T> {
     const connection = await this.requireConnection(
       args.identity,
       args.connectionId,
     );
-    if (
-      connection.status !== "ready" ||
-      !connection.credential_ref ||
-      (connection.expires_at && connection.expires_at <= new Date())
-    ) {
+    const credentialRef = connection.credential_ref;
+    if (!isReady(connection) || !credentialRef) {
       throw new ConnectionUnavailableError(connection.id);
     }
     return this.vault.withMaterial({
       tenantId: args.identity.tenantId,
-      ref: { id: connection.credential_ref },
+      ref: { id: credentialRef },
       use: (material) => args.use(material, connection),
     });
   }
@@ -1170,14 +1365,10 @@ export class ConnectionsService {
     if (!connection.expires_at || connection.expires_at > threshold) return;
     const provider = this.providers.get(connection.provider_kind);
     const refresh = provider?.refresh;
-    if (!connection.credential_ref || !refresh) {
+    const credentialRef = connection.credential_ref;
+    if (!credentialRef || !refresh) {
       if (connection.expires_at <= new Date()) {
-        await this.db
-          .updateTable("connections")
-          .set({ status: "expired", updated_at: new Date() })
-          .where("id", "=", connection.id)
-          .where("revision", "=", connection.revision)
-          .execute();
+        await this.markExpired(connection);
       }
       return;
     }
@@ -1197,18 +1388,13 @@ export class ConnectionsService {
         () =>
           this.vault.withMaterial({
             tenantId: args.identity.tenantId,
-            ref: { id: connection.credential_ref! },
+            ref: { id: credentialRef },
             use: (material) => refresh({ material }),
           }),
       );
     } catch {
       if (connection.expires_at <= new Date()) {
-        await this.db
-          .updateTable("connections")
-          .set({ status: "expired", updated_at: new Date() })
-          .where("id", "=", connection.id)
-          .where("revision", "=", connection.revision)
-          .execute();
+        await this.markExpired(connection);
       }
       throw new ConnectionUnavailableError(connection.id, "Refresh failed");
     }
@@ -1247,8 +1433,9 @@ export class ConnectionsService {
     }
     await this.vault.delete({
       tenantId: args.identity.tenantId,
-      ref: { id: connection.credential_ref },
+      ref: { id: credentialRef },
     });
+    await this.release(connection);
   }
 
   async audit(args: {
@@ -1361,6 +1548,322 @@ export class ConnectionsService {
     return row.id;
   }
 
+  private async requireBinding(args: {
+    identity: Identity;
+    projectId: string;
+    environment: string;
+    alias: string;
+  }): Promise<EnvironmentConnectionBinding> {
+    const binding = (await this.bindings(args))[args.alias];
+    if (!binding) {
+      throw new ConnectionUnavailableError(args.alias, "No binding");
+    }
+    return binding;
+  }
+
+  private async startAttempt(args: {
+    identity: Identity;
+    providerKind: string;
+    projectId?: string;
+    redirectUri: string;
+    target:
+      | {
+          environment: string;
+          alias: string;
+          reauthorizeConnectionId: string | null;
+        }
+      | { serviceConnectionId: string }
+      | { personal: true; reauthorizeConnectionId: string | null };
+  }): Promise<{ authorizationId: string; challenge: AuthorizationChallenge }> {
+    const subject =
+      "alias" in args.target
+        ? args.target.alias
+        : "serviceConnectionId" in args.target
+          ? args.target.serviceConnectionId
+          : args.providerKind;
+    const provider = this.providers.get(args.providerKind);
+    const beginAuthorization = provider?.beginAuthorization;
+    if (!beginAuthorization) {
+      throw new ConnectionUnavailableError(
+        subject,
+        "Authorization is unsupported",
+      );
+    }
+    const state = randomBearer();
+    const started = await withSpan(
+      {
+        tracer,
+        name: "connection.authorization.begin",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+          "catamorphic.project.id": args.projectId ?? "",
+          "catamorphic.connection.provider": args.providerKind,
+          ...("alias" in args.target
+            ? {
+                "catamorphic.connection.environment": args.target.environment,
+                "catamorphic.connection.alias": args.target.alias,
+              }
+            : "serviceConnectionId" in args.target
+              ? { "catamorphic.connection.id": args.target.serviceConnectionId }
+              : { "catamorphic.connection.personal": true }),
+        },
+      },
+      () =>
+        beginAuthorization({
+          tenantId: args.identity.tenantId,
+          ...(args.projectId ? { projectId: args.projectId } : {}),
+          externalUserId: args.identity.externalUserId,
+          principal:
+            "serviceConnectionId" in args.target ? "service" : "member",
+          redirectUri: args.redirectUri,
+          state,
+        }),
+    );
+    const privateRef = started.privateState
+      ? await this.vault.put({
+          tenantId: args.identity.tenantId,
+          material: started.privateState,
+        })
+      : undefined;
+    await this.db
+      .insertInto("connection_authorization_attempts")
+      .values({
+        tenant_id: args.identity.tenantId,
+        project_id: args.projectId ?? null,
+        provider_kind: args.providerKind,
+        external_user_id: args.identity.externalUserId,
+        state_hash: hashBearer(state),
+        private_state_ref: privateRef?.id ?? null,
+        expires_at: new Date(Date.now() + 10 * 60 * 1000),
+        ...("alias" in args.target
+          ? {
+              environment_name: args.target.environment,
+              alias: args.target.alias,
+              reauthorize_connection_id: args.target.reauthorizeConnectionId,
+            }
+          : "serviceConnectionId" in args.target
+            ? { service_connection_id: args.target.serviceConnectionId }
+            : {
+                personal: true,
+                reauthorize_connection_id: args.target.reauthorizeConnectionId,
+              }),
+      })
+      .execute();
+    return { authorizationId: state, challenge: started.challenge };
+  }
+
+  /**
+   * End an authorization the person walked away from (ADR 0177): a device
+   * code still being polled or a callback not yet received never completes.
+   * Returns whether an attempt was still open.
+   */
+  async cancelAuthorization(args: {
+    identity: Identity;
+    state: string;
+  }): Promise<boolean> {
+    const cancelled = await this.db
+      .updateTable("connection_authorization_attempts")
+      .set({ status: "canceled", completed_at: new Date() })
+      .where("tenant_id", "=", args.identity.tenantId)
+      .where("external_user_id", "=", args.identity.externalUserId)
+      .where("state_hash", "=", hashBearer(args.state))
+      .where("status", "in", ["pending", "completing"])
+      .executeTakeFirst();
+    return Boolean(cancelled.numUpdatedRows);
+  }
+
+  /** Mark a completing attempt done, unless it was cancelled meanwhile. */
+  private async completeAttempt(args: {
+    identity: Identity;
+    attempt: Selectable<DB["connection_authorization_attempts"]>;
+  }): Promise<boolean> {
+    const completed = await this.db
+      .updateTable("connection_authorization_attempts")
+      .set({ status: "completed", completed_at: new Date() })
+      .where("id", "=", args.attempt.id)
+      .where("status", "=", "completing")
+      .executeTakeFirst();
+    if (args.attempt.private_state_ref)
+      await this.vault.delete({
+        tenantId: args.identity.tenantId,
+        ref: { id: args.attempt.private_state_ref },
+      });
+    return Boolean(completed.numUpdatedRows);
+  }
+
+  private async finishAttempt(args: {
+    identity: Identity;
+    attempt: Selectable<DB["connection_authorization_attempts"]>;
+    status: "completed" | "canceled";
+  }): Promise<void> {
+    await this.db
+      .updateTable("connection_authorization_attempts")
+      .set({ status: args.status, completed_at: new Date() })
+      .where("id", "=", args.attempt.id)
+      .execute();
+    if (args.attempt.private_state_ref) {
+      await this.vault.delete({
+        tenantId: args.identity.tenantId,
+        ref: { id: args.attempt.private_state_ref },
+      });
+    }
+  }
+
+  /** A completed service authorization becomes the connection's credential. */
+  private async storeServiceCredential(args: {
+    identity: Identity;
+    connectionId: string;
+    authorized: ConnectionAuthorizationResult;
+  }): Promise<ConnectionRecord> {
+    const current = await this.requireConnection(
+      args.identity,
+      args.connectionId,
+    );
+    if (current.principal_kind === "member" || current.status === "revoked") {
+      throw new ConnectionPermissionDeniedError();
+    }
+    const row = await this.replaceCredential({
+      identity: args.identity,
+      current,
+      authorized: args.authorized,
+    });
+    await this.resolveWorkflowRequirementsForConnection({
+      tenantId: args.identity.tenantId,
+      connectionId: current.id,
+    });
+    await this.audit({
+      identity: args.identity,
+      projectId: current.project_id ?? undefined,
+      connectionId: current.id,
+      eventType:
+        current.credential_ref === null
+          ? "connection.authorized"
+          : "connection.rotated",
+      outcome: "allowed",
+    });
+    return row;
+  }
+
+  /**
+   * Seal new material, point the connection at it, and drop the old
+   * credential and anything a provider held for it.
+   */
+  private async replaceCredential(args: {
+    identity: Identity;
+    current: ConnectionRow;
+    authorized: ConnectionAuthorizationResult;
+  }): Promise<ConnectionRecord> {
+    const { current } = args;
+    const nextRef = await this.vault.put({
+      tenantId: args.identity.tenantId,
+      material: args.authorized.material,
+    });
+    const row = await this.db
+      .updateTable("connections")
+      .set({
+        credential_ref: nextRef.id,
+        status: "ready",
+        account_summary: toJson(args.authorized.account ?? {}),
+        scopes: toJson(args.authorized.scopes ?? []),
+        capabilities: toJson(args.authorized.capabilities ?? []),
+        expires_at: args.authorized.expiresAt ?? null,
+        revision: current.revision + 1,
+        updated_at: new Date(),
+      })
+      .where("id", "=", current.id)
+      .where("tenant_id", "=", args.identity.tenantId)
+      .where("revision", "=", current.revision)
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      await this.vault.delete({
+        tenantId: args.identity.tenantId,
+        ref: nextRef,
+      });
+      throw new ConnectionUnavailableError(
+        current.id,
+        "Credential update raced",
+      );
+    }
+    if (current.credential_ref) {
+      await this.vault.delete({
+        tenantId: args.identity.tenantId,
+        ref: { id: current.credential_ref },
+      });
+    }
+    await this.release(current);
+    return mapConnection(row);
+  }
+
+  private async release(connection: ConnectionRow): Promise<void> {
+    await this.providers
+      .get(connection.provider_kind)
+      ?.release?.({ connectionId: connection.id })
+      .catch(() => {});
+  }
+
+  private async markExpired(connection: ConnectionRow): Promise<void> {
+    await this.db
+      .updateTable("connections")
+      .set({ status: "expired", updated_at: new Date() })
+      .where("id", "=", connection.id)
+      .where("revision", "=", connection.revision)
+      .execute();
+  }
+
+  /**
+   * The live service connection a binding names: the project's own first,
+   * then the tenant's.
+   */
+  private async findService(args: {
+    tenantId: string;
+    projectId: string;
+    name: string;
+  }): Promise<ConnectionRow | undefined> {
+    const rows = await this.db
+      .selectFrom("connections")
+      .where("tenant_id", "=", args.tenantId)
+      .where("name", "=", args.name)
+      .where("status", "!=", "revoked")
+      .where((eb) =>
+        eb.or([
+          eb.and([
+            eb("principal_kind", "=", "project_service"),
+            eb("project_id", "=", args.projectId),
+          ]),
+          eb("principal_kind", "=", "tenant_service"),
+        ]),
+      )
+      .selectAll()
+      .execute();
+    return (
+      rows.find((row) => row.principal_kind === "project_service") ?? rows[0]
+    );
+  }
+
+  private async attachedMemberConnection(args: {
+    identity: Identity;
+    projectId: string;
+    environment: string;
+    alias: string;
+  }): Promise<ConnectionRow | undefined> {
+    return this.db
+      .selectFrom("member_connection_attachments as attachment")
+      .innerJoin(
+        "connections as connection",
+        "connection.id",
+        "attachment.connection_id",
+      )
+      .where("attachment.tenant_id", "=", args.identity.tenantId)
+      .where("attachment.project_id", "=", args.projectId)
+      .where("attachment.environment_name", "=", args.environment)
+      .where("attachment.alias", "=", args.alias)
+      .where("attachment.external_user_id", "=", args.identity.externalUserId)
+      .selectAll("connection")
+      .executeTakeFirst();
+  }
+
   private async resolveWorkflowRequirements(args: {
     tenantId: string;
     projectId: string;
@@ -1442,41 +1945,11 @@ export class ConnectionsService {
     ) {
       throw new ConnectionPermissionDeniedError();
     }
-    const nextRef = await this.vault.put({
-      tenantId: args.identity.tenantId,
-      material: args.authorized.material,
+    return this.replaceCredential({
+      identity: args.identity,
+      current,
+      authorized: args.authorized,
     });
-    const row = await this.db
-      .updateTable("connections")
-      .set({
-        credential_ref: nextRef.id,
-        status: "ready",
-        account_summary: toJson(args.authorized.account ?? {}),
-        scopes: toJson(args.authorized.scopes ?? []),
-        capabilities: toJson(args.authorized.capabilities ?? []),
-        expires_at: args.authorized.expiresAt ?? null,
-        revision: current.revision + 1,
-        updated_at: new Date(),
-      })
-      .where("id", "=", current.id)
-      .where("tenant_id", "=", args.identity.tenantId)
-      .where("revision", "=", current.revision)
-      .returningAll()
-      .executeTakeFirst();
-    if (!row) {
-      await this.vault.delete({
-        tenantId: args.identity.tenantId,
-        ref: nextRef,
-      });
-      throw new ConnectionUnavailableError(current.id, "Authorization raced");
-    }
-    if (current.credential_ref) {
-      await this.vault.delete({
-        tenantId: args.identity.tenantId,
-        ref: { id: current.credential_ref },
-      });
-    }
-    return mapConnection(row);
   }
 
   private async requireConnection(identity: Identity, id: string) {
@@ -1499,12 +1972,29 @@ export function randomBearer(): string {
   return randomBytes(32).toString("base64url");
 }
 
+function isReady(connection: ConnectionRow): boolean {
+  return (
+    connection.status === "ready" &&
+    (!connection.expires_at || connection.expires_at > new Date())
+  );
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "23505"
+  );
+}
+
 function stringArray(value: Json): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
 }
 
+/** Capabilities every given layer allows; an absent layer does not narrow. */
 function intersectCapabilities(
   ...layers: Array<readonly string[] | undefined>
 ): string[] {
@@ -1519,12 +2009,13 @@ function intersectCapabilities(
   );
 }
 
-function mapConnection(row: Selectable<DB["connections"]>): ConnectionRecord {
+function mapConnection(row: ConnectionRow): ConnectionRecord {
   return {
     id: row.id,
     projectId: row.project_id,
     providerKind: row.provider_kind,
     principalKind: row.principal_kind as ConnectionPrincipalKind,
+    name: row.name,
     ownerExternalUserId: row.owner_external_user_id,
     label: row.label,
     status: row.status as ConnectionRecord["status"],
@@ -1538,31 +2029,10 @@ function mapConnection(row: Selectable<DB["connections"]>): ConnectionRecord {
   };
 }
 
-function mapBinding(
-  row: Selectable<DB["environment_connection_bindings"]>,
-): EnvironmentConnectionBinding {
-  return {
-    id: row.id,
-    projectId: row.project_id,
-    environment: row.environment_name,
-    alias: row.alias,
-    providerKind: row.provider_kind,
-    principalKinds: stringArray(
-      row.principal_kinds,
-    ) as ConnectionPrincipalKind[],
-    serviceConnectionId: row.service_connection_id,
-    capabilities: stringArray(row.capabilities),
-    memberConnection: null,
-    serviceConnection: null,
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
-  };
-}
-
 function mapBindingPrincipal(
-  row: Selectable<DB["connections"]>,
+  row: ConnectionRow,
   revealId: boolean,
-) {
+): ConnectionBindingPrincipalStatus {
   return {
     connectionId: revealId ? row.id : null,
     principalKind: row.principal_kind as ConnectionPrincipalKind,

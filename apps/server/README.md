@@ -14,16 +14,19 @@ The server is the `@catamorphic/work-server` package
 process. A company that needs custom code extends the image with a small
 server file that calls `createWorkServer` with its own hooks.
 
-For GitHub-backed company proposals, configure `WORK_GITHUB_CLIENT_ID`
-and `WORK_GITHUB_TOKEN` on the server. Use a service account with access
-only to the company repositories, separate from the people who review its
-PRs. Members never receive this token. The stock host validates the account at
-boot and supplies the existing `GithubService` and proposal bot identity.
-Tokens that need rotation are replaced in the deployment environment.
+GitHub is an ordinary connection (ADR 0177). An organization administrator
+connects a GitHub App installation as the `github` service connection, or the
+operator registers a new App from a manifest
+(`POST /_work/operator/github/app` on the loopback listener, then a one-time
+browser link on the public URL). Sync, proposals, and agents' GitHub actions
+use that connection with tokens minted per call; members never receive one.
+See the setup skill's
+[Connect GitHub](../../skills/setup-work-server/references/connect-github.md).
 
-The machine-local project setup operation accepts `githubRepository` as
-`owner/repository` alongside the explicit roles and admission policy. It imports
-that repository and publishes the requested role definitions. Ongoing source
+The machine-local project setup operation accepts `repository` as
+`owner/repository` alongside the explicit roles and admission policy. It
+attaches that repository through the `github` service connection and
+proposes the requested role definitions when the repository has none. Ongoing source
 changes use ordinary proposals and repository review. Members can list and read
 proposals through their company sign-in only when their document scope permits
 every changed path, including the old path of renamed files.
@@ -74,10 +77,12 @@ The owner-only operational credential under `WORK_DATA_DIR` is machine
 authority, not a Catamorphic identity or super-admin account.
 
 After initial provisioning, the company brain is configured through its
-ordinary reviewed project files. `.catamorphic/roles/*.json` grants artifacts,
+ordinary reviewed project files. `.work/roles/*.json` grants artifacts,
 Environments, connection aliases, document paths, and namespaced permissions;
-`.catamorphic/agents/*` defines the project agents; `.catamorphic/sidebar.js` and
-`.catamorphic/project.json` can shape the desktop sidebar and starting actions
+`.work/agents/*` defines the project agents (the built-in agent, or Claude
+Code and Codex running in their sandbox with a model connection, ADR 0180);
+`.work/sidebar.js` and
+`.work/project.json` can shape the desktop sidebar and starting actions
 from resolved permissions. There is no parallel stock-server
 bootstrap config.
 
@@ -104,21 +109,37 @@ connections and project secrets unrecoverable. Project secrets are sealed in
 the same vault; their database rows hold only references.
 
 Agents and workflows reach company systems through the connection gateway:
-`WORK_GATEWAY_CONFIG` declares MCP endpoints, HTTP APIs, and read-only database
-connections, plus guards (a model classifier or a required approval) that
-review every action. See
+`WORK_GATEWAY_CONFIG` declares MCP endpoints, HTTP APIs, Git hosts, model APIs,
+and read-only database connections. The image ships no guards: a company that
+wants each action reviewed (a model classifier, a required approval) adds a
+guard in a small custom server with `@catamorphic/work-server` (ADR 0183). See
 [secrets and the gateway](../../skills/setup-work-server/references/secrets-and-gateway.md).
 
-Rotate a service credential with the authenticated
-`PUT /connections/:connectionId/credential` endpoint. Rotation writes a new
-encrypted record, atomically advances the connection revision, deletes the old
-record, and wakes workflow calls parked on that connection. Keep old vault
-wrapping keys available until all stored records have been re-encrypted.
+Service connections are named and administered (ADR 0172). Organization
+administrators (made by the operator with `POST /_work/operator/users`
+`"administrator": true` or `POST /_work/operator/administrators`, then by each
+other from the app) create them with `POST /api/service-connections`,
+authorize them through the provider's own challenge with
+`POST /api/service-connections/:id/authorize` (form fields complete with
+`POST /api/connection-authorizations/complete`; OAuth returns to
+`/api/connection-authorizations/callback`), rotate them by authorizing again,
+and revoke them with `DELETE /api/connections/:id`. The loopback operator
+listener offers the same operations under `/_work/operator/service-connections`.
+Rotation writes a new encrypted record, advances the connection revision,
+closes pooled sessions of the old credential, deletes the old record, and
+wakes workflow calls parked on that connection. Keep old vault wrapping keys
+available until all stored records have been re-encrypted.
+
+Projects commit which Environment may use which named connection in
+`.work/project.json` (`environments.<name>.connections`); there is no binding
+API. Members see an Environment's aliases and authorize their own accounts at
+`/api/projects/:id/environments/:environment/connections`.
 
 Provider drivers and OAuth application details are deployment configuration.
 The stock image does not ship a shared Slack or Google OAuth identity. Register
-your own provider applications, configure their HTTPS callback URLs, and inject
-their connection providers when embedding `buildStockServer`. Service accounts
+your own provider applications (an `mcp` gateway entry takes a pre-registered
+`oauth.client`), configure their HTTPS callback URLs, and inject further
+connection providers with the `connectionProviders` hook. Service accounts
 are explicit project or tenant service connections and are never inferred from
 a member login. Unattended workflows use the connections authorized by their
 explicit enablement, including member connections for member-owned enablements.
@@ -127,7 +148,11 @@ Project enablements use only project and tenant service connections.
 Workflows can start from webhooks: `trigger("webhook", { name })` gives each
 name a public URL under `WORK_PUBLIC_URL` (`/api/hooks/...`), shown to
 holders of `webhooks:read` in the workflow's **Automatic** view, with a replace
-control for holders of `webhooks:write`.
+control for holders of `webhooks:write`. The binding declares how senders are
+checked (`verify`: a signature scheme or shared token) and which handshakes are
+answered (`respond`); projects usually declare an integration's webhook once as
+a trigger kind in `.work/triggers/` (ADR 0171). Bodies are capped at 1 MiB per
+endpoint unless a binding asks for more, up to `WORK_WEBHOOK_MAX_BYTES`.
 
 ## Sharing with customers
 

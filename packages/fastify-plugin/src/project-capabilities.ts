@@ -14,6 +14,18 @@ import {
   toolDefinition,
 } from "./routes/project-mcp.js";
 
+/**
+ * Project tools that make something live for everyone (ADR 0182): only an
+ * agent whose sandboxing is `publish` may call them. Output shown in the
+ * agent's own chat suits any sandboxing.
+ */
+const PUBLISHING_TOOLS = new Set([
+  "program_deploy",
+  "publish_document",
+  "revoke_publication",
+]);
+const OWN_CHAT_TOOLS = new Set(["session_artifact", "set_app_presentation"]);
+
 const Definition = z.object({
   name: z.string(),
   description: z.string().default(""),
@@ -82,6 +94,11 @@ export async function projectToolCapabilities(args: {
         name: `project.${definition.name}`,
         description: definition.description,
         effect,
+        ...(PUBLISHING_TOOLS.has(definition.name)
+          ? { sandboxing: "publish" as const }
+          : OWN_CHAT_TOOLS.has(definition.name)
+            ? { sandboxing: "contained" as const }
+            : {}),
         inputSchema: z.fromJSONSchema(definition.inputSchema),
         outputSchema: z.unknown(),
         authorize: () => true,
@@ -104,7 +121,6 @@ export async function projectToolCapabilities(args: {
               "create_watcher",
               "list_watchers",
               "stop_watcher",
-              "create_github_watcher",
             ].includes(definition.name);
           const result = await tool.call(
             owned ? { ...values, sessionId: context.sessionId } : values,

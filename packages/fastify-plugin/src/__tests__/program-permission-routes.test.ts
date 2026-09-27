@@ -24,7 +24,15 @@ function member(...permissions: string[]): Identity {
 /** A core whose services record calls; project existence is not the test. */
 function fakeCore() {
   return {
-    projects: { get: vi.fn(async () => ({ id: PROJECT_ID })) },
+    projects: {
+      get: vi.fn(
+        async (): Promise<{
+          id: string;
+          remoteUrl?: string;
+          remoteOwnership?: string;
+        }> => ({ id: PROJECT_ID }),
+      ),
+    },
     plugins: {
       listAttached: vi.fn(async () => []),
       attach: vi.fn(async () => ({
@@ -137,7 +145,7 @@ describe("program permissions on project routes (ADR 0158)", () => {
     const guard = core.deployment.deploy.mock.calls[0]?.[3].guardPublishedPaths;
     expect(guard).toBeDefined();
     expect(() => guard?.(["docs/a.md"])).not.toThrow();
-    expect(() => guard?.([".catamorphic/roles/admin.json"])).toThrow();
+    expect(() => guard?.([".work/roles/admin.json"])).toThrow();
   });
 
   it("answers 409 when publishing is blocked by unrecorded changes", async () => {
@@ -154,5 +162,39 @@ describe("program permissions on project routes (ADR 0158)", () => {
     });
     expect(response.statusCode).toBe(409);
     expect(response.json().error).toContain("Record the changes");
+  });
+
+  it("routes a server project attached to a code host to pull requests (ADR 0170)", async () => {
+    const attached = (localPath: string | null) => {
+      const core = fakeCore();
+      core.projects.get.mockResolvedValue({
+        id: PROJECT_ID,
+        remoteUrl: "https://github.com/acme/company.git",
+        remoteOwnership: "attached",
+      });
+      return {
+        ...core,
+        projectManager: { localPath: vi.fn(async () => localPath) },
+      };
+    };
+    const onServer = attached(null);
+    const refused = await appFor(member("program:publish"), onServer).inject({
+      method: "POST",
+      url: `/api/projects/${PROJECT_ID}/deploy`,
+      payload: {},
+    });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toContain("pull request");
+    expect(onServer.deployment.deploy).not.toHaveBeenCalled();
+    // A person's own checkout of the repository publishes locally.
+    const onDesktop = attached("/Users/me/company");
+    const published = await appFor(member("program:publish"), onDesktop).inject(
+      {
+        method: "POST",
+        url: `/api/projects/${PROJECT_ID}/deploy`,
+        payload: {},
+      },
+    );
+    expect(published.statusCode).toBe(200);
   });
 });

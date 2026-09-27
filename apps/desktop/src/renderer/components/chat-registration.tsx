@@ -125,6 +125,9 @@ export function ChatRegistration(
         case "editEffort":
           p.onEditEffort?.();
           break;
+        case "editPermissionMode":
+          p.onEditPermissionMode?.();
+          break;
         case "fork":
           p.onFork?.(event.messageId);
           break;

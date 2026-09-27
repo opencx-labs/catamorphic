@@ -116,7 +116,7 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
         : undefined;
     this.environments.set(id, {
       ...opts.envVars,
-      ...(data ? { CATAMORPHIC_APP_DATA_DIR: data } : {}),
+      ...(data ? { WORK_APP_DATA_DIR: data } : {}),
     });
     return { id, providerId: id, sandboxType: "dev", status: "started" };
   }
@@ -836,16 +836,16 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
         {
           ...workspaceFiles({ name: "contained-capabilities" }),
           ...appScaffold({ name: "catalog" }),
-          ".catamorphic/apps/catalog/src/app.tsx":
+          ".work/apps/catalog/src/app.tsx":
             "export function App() { return <main><h1>Catalog</h1><p>The contained workspace is ready.</p></main>; }\n",
-          ".catamorphic/workflows/src/catalog.ts": `import { defineWorkflow } from "@catamorphic/workflow";
+          ".work/workflows/src/catalog.ts": `import { defineWorkflow } from "@catamorphic/workflow";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 /** @displayname Save catalog
  * @param name - @displayname Catalog name
  */
 async function saveCatalog({ name }: { name: string }) {
   "use step";
-  const root = process.env.CATAMORPHIC_APP_DATA_DIR;
+  const root = process.env.WORK_APP_DATA_DIR;
   if (!root) throw new Error("Persistent project data is unavailable");
   const directory = root + "/" + name;
   await mkdir(directory, { recursive: true });
@@ -867,7 +867,7 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
       yield {
         type: "text",
         content:
-          "Created the workflow, app, and local data inside .catamorphic/. [Open catalog](catamorphic://workflow/catalog).",
+          "Created the workflow, app, and local data inside .work/. [Open catalog](catamorphic://workflow/catalog).",
       };
       yield { type: "done" };
       return;
@@ -880,9 +880,9 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
           "# Linked notes\n\nAn artifact opened from an agent reply.\n",
         "linked-source.ts":
           "// Linked source\nexport const first = 1;\nexport const second = 2;\n",
-        ".catamorphic/workflows/linked-workflow.ts":
+        ".work/workflows/linked-workflow.ts":
           'import { defineWorkflow } from "@catamorphic/workflow";\n/** @displayname Make greeting\n * @param name - @displayname Name\n */\nasync function greet({ name }: { name: string }) { "use step"; return { greeting: "Hello " + name }; }\n/** @displayname Linked workflow */\nexport const linkedWorkflow = defineWorkflow(({ defineBoundary }) => ({ steps: [defineBoundary({ run: async () => greet({ name: "World" }) })] }));\n',
-        ".catamorphic/apps/linked-app/package.json":
+        ".work/apps/linked-app/package.json":
           '{"name":"linked-app","catamorphic":{"displayName":"Linked app"}}',
       };
       await this.sandboxProvider.uploadFiles(
@@ -1425,7 +1425,7 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
       await this.sandboxProvider.uploadFiles(
         state.sandboxId,
         {
-          ".catamorphic/desktop/layout.json": JSON.stringify({
+          ".work/desktop/layout.json": JSON.stringify({
             tabPlacement: "sidebar",
             pinnedBookmarks: "list",
             headerPlacement: "sidebar",

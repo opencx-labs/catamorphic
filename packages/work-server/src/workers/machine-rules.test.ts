@@ -136,7 +136,7 @@ describe("machine rules", () => {
         name: aliceMachine.name,
         placement: {
           labels: { class: "standard-4" },
-          access: { people: ["alice@example.com"], groups: [] },
+          access: { people: ["alice@example.com"], groups: [], projects: [] },
           trusted: false,
         },
         machine: { rule: "desk", ref: `vm-${aliceMachine.name}` },

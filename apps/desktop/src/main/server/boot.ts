@@ -21,6 +21,8 @@ import {
   createCatamorphic,
   defineStaticEnvironments,
   FsBundleStore,
+  type GithubConnectionProvider,
+  githubCodeHost,
 } from "@catamorphic/server-sdk";
 import { createPushTransport } from "@catamorphic/server-sdk/web-push";
 import { PGlite } from "@electric-sql/pglite";
@@ -46,14 +48,18 @@ import { RemoteClientRunners } from "../remote-client-runner.js";
 import { RemoteSessionMirror } from "../remote-mirror.js";
 import { shutdownDesktopServices } from "../shutdown.js";
 import { userSkillFiles, userSkillInfos } from "../user-skills.js";
-import { syncProfileMcpWorkflowConnections } from "../workflow-mcp-connections.js";
+import {
+  profileMcpConnectionBindings,
+  syncProfileMcpWorkflowConnections,
+} from "../workflow-mcp-connections.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
 import { componentRegistryCapability } from "./component-registry.js";
 import { validateDatabaseFiles } from "./database-files.js";
 import { desktopCapabilitySource } from "./desktop-capabilities.js";
 import { DESKTOP_SETTINGS_SKILL } from "./desktop-settings-skill.js";
 import { E2eLocalSandboxProvider } from "./e2e-fakes.js";
-import { FileGithubTokenStore, GITHUB_APP } from "./github.js";
+import { desktopGithubProvider } from "./github.js";
+import { githubPollingEventSource } from "./github-events.js";
 import {
   type HostSkillsRuntime,
   materializeHostSkills,
@@ -61,6 +67,7 @@ import {
 import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
 import { SessionCheckouts } from "./session-checkouts.js";
+import { syncReport } from "./sync-report.js";
 import {
   DESKTOP_MCP_TOOL_KINDS,
   DESKTOP_TRIGGER_KINDS,
@@ -87,6 +94,11 @@ export interface EmbeddedServer {
   url: string;
   clientRunners: RemoteClientRunners;
   catamorphic: Catamorphic;
+  /**
+   * The person's GitHub connection provider (ADR 0177): device-flow sign-in
+   * and the `gh` CLI credential become their personal `github` connection.
+   */
+  github: GithubConnectionProvider;
   projectRoots: ProjectRootsStore;
   /** Desktop-local checkout assignment and Git worktree lifecycle. */
   sessionCheckouts: SessionCheckouts;
@@ -354,6 +366,7 @@ export async function startEmbeddedServer(
     sandboxProvider,
     agentHomesDir: paths.agentHomesDir,
     harnessComponentsDir: paths.harnessComponentsDir,
+    attachmentsDir: paths.attachmentsDir,
     e2eFake: e2eFakeAgent,
     workspaceBridge,
     toolPermissions,
@@ -398,6 +411,9 @@ export async function startEmbeddedServer(
     }
   }
 
+  // GitHub is an ordinary connection (ADR 0177): the person signs in once
+  // and it backs import, sync, pull requests, and the event poller.
+  const github = desktopGithubProvider();
   const catamorphic = createCatamorphic({
     hostSkills: (defaults) => ({
       ...defaults,
@@ -419,47 +435,41 @@ export async function startEmbeddedServer(
     credentialVault: new DesktopCredentialVault(
       path.join(paths.root, "credentials.json"),
     ),
-    connectionProviders,
+    connectionProviders: [...(connectionProviders ?? []), github],
+    codeHosts: [githubCodeHost(github)],
+    // No public webhook URL here: watchers poll GitHub instead, recording
+    // the events the project's `github` webhook would have received.
+    projectEventSources: [
+      githubPollingEventSource({
+        core: () => catamorphic.core,
+        provider: github,
+      }),
+    ],
+    connectionBindings: async ({ projectId, environment }) =>
+      profileMcpConnectionBindings({
+        profiles,
+        profileConfig,
+        projectId,
+        environment,
+      }),
     connectionMcpUrl: () =>
       apiBaseUrl ? `${apiBaseUrl}/api/connection-mcp` : undefined,
+    // Sandboxes on this machine reach the Git gateway on loopback (ADR 0175).
+    gatewayUrl: () => (apiBaseUrl ? `${apiBaseUrl}/api/gateway` : undefined),
     codingAgent: agentRegistry,
     // Native agents (Claude Code, Codex) run in the project's user-visible
     // WorkerNode folder.
     nativeAgentCheckout: {
-      resolve: async (input) => {
-        const current = await sessionCheckouts.describe(input);
-        if (
-          await requiresIsolatedCheckout(
-            input.projectId,
-            input.sessionId,
-            current.path,
-          )
-        ) {
-          if (current.kind !== "primary") {
-            throw new Error(
-              "Isolation policy prevents sharing this assigned worktree with another running session. Choose another worktree or wait for that session to finish.",
-            );
-          }
-          const created = await sessionCheckouts.createManaged({
-            ...input,
-            ensureAvailable: async (checkoutPath) => {
-              if (
-                await requiresIsolatedCheckout(
-                  input.projectId,
-                  input.sessionId,
-                  checkoutPath,
-                )
-              ) {
-                throw new Error(
-                  "Isolation policy prevents sharing the new worktree with another running session.",
-                );
-              }
-            },
-          });
-          return created.path;
-        }
-        return current.path;
-      },
+      resolve: (input) =>
+        sessionCheckouts.resolveForAgent({
+          ...input,
+          requiresIsolation: (checkoutPath) =>
+            requiresIsolatedCheckout(
+              input.projectId,
+              input.sessionId,
+              checkoutPath,
+            ),
+        }),
       checkpoint: async (input) => {
         const checkout = await sessionCheckouts.describe(input);
         if (
@@ -479,10 +489,6 @@ export async function startEmbeddedServer(
     // Local projects: the folder IS the store; remote projects sync their
     // store/ explicitly (Ship). No per-turn pull/ship into the local store.
     storeSyncAroundTurns: false,
-    github: {
-      app: GITHUB_APP,
-      tokenStore: new FileGithubTokenStore(paths.githubFile),
-    },
     triggerKinds: DESKTOP_TRIGGER_KINDS,
     mcpToolKinds: DESKTOP_MCP_TOOL_KINDS,
     agentCapabilities: {
@@ -955,16 +961,14 @@ export async function startEmbeddedServer(
           note: "This session is isolated, so main was not synced. Use create_pull_request to share this worktree's changes.",
         };
       }
-      const outcome = await catamorphic.core.remoteSync.sync(
-        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
-        projectId,
+      // Core decides by the project's remote ownership (ADR 0170): an
+      // attached repository is only fetched and fast-forwarded.
+      return syncReport(
+        await catamorphic.core.remoteSync.sync(
+          { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+          projectId,
+        ),
       );
-      return {
-        status: outcome.status,
-        ...("rescueBranch" in outcome && outcome.rescueBranch
-          ? { rescueBranch: outcome.rescueBranch }
-          : {}),
-      };
     },
     createPullRequest: async (projectId, sessionId, input) => {
       const checkout = await sessionCheckouts.describe({
@@ -1222,7 +1226,7 @@ export async function startEmbeddedServer(
   };
 
   // Project workspaces type-check `trigger()` against a generated
-  // catamorphic-triggers.d.ts; refresh it everywhere in the background so
+  // work-triggers.d.ts; refresh it everywhere in the background so
   // the coding agent always sees the host's current kinds.
   void triggers
     .syncAllProjectTypes((projectId) =>
@@ -1329,6 +1333,7 @@ export async function startEmbeddedServer(
     url,
     clientRunners,
     catamorphic,
+    github,
     projectRoots,
     sessionCheckouts,
     returnSessionToProjectFolder,

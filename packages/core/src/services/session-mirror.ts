@@ -12,7 +12,10 @@ import type {
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ConnectionAdmissionService } from "./connection-admission.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
-import type { ExecutionEnvironmentsService } from "./execution-environments-service.js";
+import {
+  admissionPolicy,
+  type ExecutionEnvironmentsService,
+} from "./execution-environments-service.js";
 
 /**
  * A mirror push found messages here the mirroring side doesn't know —
@@ -135,11 +138,10 @@ export async function writeSessionMirror({
             workloadKind: "agent",
             rootWorkloadId: sessionId,
             workerNodeId: mirrorAdmission.runtime.workerNodeId,
-            policy: {
-              binding: mirrorAdmission.binding,
-              requirements: mirrorAdmission.effectiveRequirements,
-              connections: mirrorConnections,
-            },
+            policy: admissionPolicy({
+              admission: mirrorAdmission,
+              connections: mirrorConnections ?? [],
+            }),
             transaction: trx,
           })
         : undefined;

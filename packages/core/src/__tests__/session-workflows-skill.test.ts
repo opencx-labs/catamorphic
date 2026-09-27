@@ -84,7 +84,7 @@ it("the reusable completion recipe is quiet for unrelated sessions and reacts on
       path.join(directory, "verify.ts"),
       `
       import { childCompletion } from "./recipe.ts";
-      const host = { "catamorphic.sessions": { deliver: args => ({ operation: "deliver", args }) } };
+      const host = { "catamorphic.sessions": Object.fromEntries(["deliver", "close"].map(operation => [operation, args => ({ operation, args })])) };
       const run = parentSessionId => childCompletion.steps[0].run({ host, input: { id: "event-1", payload: { sessionId: "child", session: { parentSessionId, workStatus: "completed" } } } });
       console.log(JSON.stringify([await run("unrelated"), await run("REPLACE_WITH_PARENT_SESSION_ID")]));
     `,
@@ -173,13 +173,17 @@ it("the reminder alerts without a model turn and keeps its original deadline and
   }
 });
 
-it("the shipped pull-request recipe delivers to one keyed chat per pull request", async () => {
+/** Runs one exported recipe's first boundary under bun with a fake host. */
+async function runRecipe(input: {
+  exportName: string;
+  events: unknown[];
+}): Promise<unknown> {
   const recipe = [
     ...SESSION_WORKFLOWS_SKILL.matchAll(/```typescript\n([\s\S]*?)```/g),
   ]
     .map((match) => match[1] ?? "")
-    .find((source) => source.includes("reviewPullRequests"));
-  if (!recipe) throw new Error("Missing pull-request example");
+    .find((source) => source.includes(`export const ${input.exportName}`));
+  if (!recipe) throw new Error(`Missing ${input.exportName} example`);
   expect(parseWorkflow(recipe).nodes.length).toBeGreaterThan(1);
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "session-recipe-"));
   try {
@@ -194,34 +198,81 @@ it("the shipped pull-request recipe delivers to one keyed chat per pull request"
     await fs.writeFile(
       path.join(directory, "verify.ts"),
       `
-      import { reviewPullRequests } from "./recipe.ts";
-      const host = { "catamorphic.sessions": { deliver: args => ({ operation: "deliver", args }) } };
-      const [read, review] = reviewPullRequests.steps;
-      const event = { payload: { number: 7, pull_request: { title: "Fix login", html_url: "https://github.test/pr/7" } } };
-      const read1 = await read.run({ input: event, host });
-      const call = await review.run({ input: read1, host });
-      const skipped = await review.run({ input: await read.run({ input: { payload: { action: "updated" } }, host }), host });
-      console.log(JSON.stringify([call, skipped]));
+      import { ${input.exportName} as workflow } from "./recipe.ts";
+      const host = { "catamorphic.sessions": Object.fromEntries(["deliver", "close"].map(operation => [operation, args => ({ operation, args })])) };
+      const events = ${JSON.stringify(input.events)};
+      const calls = [];
+      for (const event of events) calls.push(await workflow.steps[0].run({ input: event, host }));
+      console.log(JSON.stringify(calls));
     `,
     );
     const result = await promisify(execFile)("bun", ["run", "verify.ts"], {
       cwd: directory,
       timeout: 10000,
     });
-    expect(JSON.parse(result.stdout)).toEqual([
-      {
-        operation: "deliver",
-        args: {
-          key: "pr-7",
-          title: "Review: Fix login",
-          content:
-            "Review the changes in https://github.test/pr/7 and summarize risks.",
-          notification: { title: "Review ready", body: "Fix login" },
-        },
-      },
-      { skipped: true },
-    ]);
+    return JSON.parse(result.stdout);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
+}
+
+it("the shipped pull-request recipe delivers to one keyed chat per pull request", async () => {
+  const pullRequest = {
+    payload: {
+      body: {
+        action: "opened",
+        number: 7,
+        repository: { full_name: "acme/web" },
+        pull_request: {
+          title: "Fix login",
+          html_url: "https://github.test/pr/7",
+          merged: false,
+          draft: false,
+        },
+      },
+    },
+  };
+  expect(
+    await runRecipe({
+      exportName: "reviewPullRequests",
+      events: [pullRequest],
+    }),
+  ).toEqual([
+    {
+      operation: "deliver",
+      args: {
+        key: "pr-acme/web-7",
+        workspace: { ref: "refs/pull/7/head", update: "reset" },
+        title: "Review: Fix login",
+        content:
+          "Review the changes in https://github.test/pr/7 and summarize risks.",
+        notification: { title: "Review ready", body: "Fix login" },
+      },
+    },
+  ]);
+});
+
+it("the shipped close recipe closes the same project-keyed chat when a pull request closes", async () => {
+  expect(
+    await runRecipe({
+      exportName: "closePullRequestChats",
+      events: [
+        {
+          payload: {
+            body: {
+              action: "closed",
+              number: 7,
+              repository: { full_name: "acme/web" },
+              pull_request: { merged: true },
+            },
+          },
+        },
+      ],
+    }),
+  ).toEqual([
+    {
+      operation: "close",
+      args: { key: "pr-acme/web-7", idempotencyKey: "closed:pr-acme/web-7" },
+    },
+  ]);
 });

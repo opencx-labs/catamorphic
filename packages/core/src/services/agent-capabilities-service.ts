@@ -7,6 +7,10 @@ import {
   DiscoverCapabilitiesSchema,
   extraToolResult,
   InvokeCapabilitySchema,
+  SANDBOXING_LEVELS,
+  type Sandboxing,
+  sandboxingAllows,
+  sandboxingRefusal,
   type TurnContextFragment,
 } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
@@ -18,6 +22,7 @@ import {
   identityMayUseEnvironment,
   intersectProjectPermissions,
   intersectScope,
+  isProjectPrincipal,
 } from "../identity.js";
 import { requireRuntimeSession } from "./agent-runtime-events-service.js";
 import { AccessDeniedError } from "./artifact-scope.js";
@@ -32,7 +37,7 @@ const ResourceSchema = z.object({
   memoryMb: z.number().optional(),
   storageMb: z.number().optional(),
   gpu: z.boolean().optional(),
-  timeoutSeconds: z.number().optional(),
+  commandTimeoutSeconds: z.number().optional(),
   maxConcurrency: z.number().optional(),
 });
 const AssignmentSchema = z.object({
@@ -88,6 +93,8 @@ const ContextSchema = z.object({
   allocationId: z.string(),
   environment: z.string(),
   agentLoopHost: z.string().nullable(),
+  /** What may leave the agent's sandbox (ADR 0182). */
+  sandboxing: z.enum(SANDBOXING_LEVELS).optional(),
   execution: z.object({
     bindingId: z.string(),
     workerNodeId: z.string().nullable(),
@@ -123,6 +130,12 @@ export interface AgentCapability {
   consent?: string;
   description: string;
   effect: "read" | "write";
+  /**
+   * The narrowest sandboxing that may invoke it (ADR 0182). Default:
+   * `contained` for read effects, `propose` for writes. Publishing asks
+   * `publish`.
+   */
+  sandboxing?: Sandboxing;
   inputSchema: z.ZodType;
   outputSchema: z.ZodType;
   authorize(context: AgentCapabilityContext): boolean | Promise<boolean>;
@@ -144,6 +157,8 @@ export function defineAgentCapability<
   consent?: string;
   description: string;
   effect: "read" | "write";
+  /** The narrowest sandboxing that may invoke it (ADR 0182). */
+  sandboxing?: Sandboxing;
   inputSchema: I;
   outputSchema: O;
   authorize(context: AgentCapabilityContext): boolean | Promise<boolean>;
@@ -223,6 +238,14 @@ export class AgentCapabilitiesService {
       allocations: ExecutionAllocationsService;
       environments: ExecutionEnvironmentsService;
       options?: AgentCapabilityOptions;
+      /**
+       * The session agent's sandboxing (ADR 0182). Capabilities above it
+       * are refused with a reason the agent can read.
+       */
+      sessionSandboxing?: (args: {
+        projectId: string;
+        sessionId: string;
+      }) => Promise<Sandboxing | undefined>;
       /** The stock membership's described roles; `null` for non-members. */
       memberRoles?: (args: {
         tenantId: string;
@@ -297,6 +320,14 @@ export class AgentCapabilitiesService {
         ).get(command.name);
         if (!capability || !(await capability.authorize(context)))
           throw new AccessDeniedError();
+        const sandboxing = await this.deps.sessionSandboxing?.(args);
+        const required =
+          capability.sandboxing ??
+          (capability.effect === "read" ? "contained" : "propose");
+        if (sandboxing && !sandboxingAllows({ sandboxing, required }))
+          throw new AccessDeniedError(
+            sandboxingRefusal({ sandboxing, action: `use ${command.name}` }),
+          );
         const prepared = capability.prepare(command.input);
         const approvalDefinition = (entry: AgentCapability) =>
           JSON.stringify({
@@ -474,8 +505,13 @@ export class AgentCapabilitiesService {
     };
     const original = await check(args.identity);
     // An absent artifact scope is the host's explicit root identity (ADR 0055).
-    // Membership resolution can only refresh identities issued as members.
-    if (args.identity.scope === undefined || !this.deps.resolveMemberIdentity)
+    // Membership resolution can only refresh identities issued as members;
+    // the project principal (project chats, ADR 0156) is nobody's member.
+    if (
+      args.identity.scope === undefined ||
+      isProjectPrincipal(args.identity.externalUserId) ||
+      !this.deps.resolveMemberIdentity
+    )
       return original;
     const identity = await this.deps.resolveMemberIdentity({
       tenantId: args.identity.tenantId,
@@ -534,25 +570,34 @@ export class AgentCapabilitiesService {
     workingDirectory?: string;
     agentLoopHost?: string;
     allocationId?: string;
+    sandboxing?: Sandboxing;
   }) {
     const context = await this.context(args);
     const allocation = await this.deps.allocations.get(context);
     if (!allocation) throw new AccessDeniedError();
+    // A project chat works for the project, not for a person to look up.
+    const projectChat = isProjectPrincipal(context.identity.externalUserId);
     const profile = z
       .object({
         displayName: z.string().max(200).optional(),
         timeZone: z.string().max(100).optional(),
         roles: z.array(RoleSummarySchema).max(20).optional(),
       })
-      .parse((await this.deps.options?.currentUser?.(context)) ?? {});
+      .parse(
+        (projectChat
+          ? { displayName: "the project" }
+          : await this.deps.options?.currentUser?.(context)) ?? {},
+      );
     const access = context.identity.scope === undefined ? "full" : "member";
     const roles =
       profile.roles ??
-      (await this.deps.memberRoles?.({
-        tenantId: context.identity.tenantId,
-        projectId: context.projectId,
-        externalUserId: context.identity.externalUserId,
-      })) ??
+      (projectChat
+        ? undefined
+        : await this.deps.memberRoles?.({
+            tenantId: context.identity.tenantId,
+            projectId: context.projectId,
+            externalUserId: context.identity.externalUserId,
+          })) ??
       [];
     const project = await this.deps.db
       .selectFrom("projects")
@@ -576,6 +621,7 @@ export class AgentCapabilitiesService {
       allocationId: context.allocationId,
       environment: allocation.environmentName,
       agentLoopHost: args.agentLoopHost ?? null,
+      ...(args.sandboxing ? { sandboxing: args.sandboxing } : {}),
       execution: {
         bindingId: allocation.bindingId,
         workerNodeId,
@@ -715,6 +761,14 @@ export function formatSessionContext(
       ? `Commands and file edits run directly in the project folder${where}.`
       : `Commands and file edits run in an isolated sandbox copy of the project${where}; localhost there is the sandbox, not the person's computer.`,
   );
+  if (snapshot.sandboxing === "contained")
+    lines.push(
+      "Sandboxing: contained. Run and change anything inside your sandbox to investigate; none of it is saved, proposed, or published, and connections answer reads only. Report what you found.",
+    );
+  else if (snapshot.sandboxing === "propose")
+    lines.push(
+      "Sandboxing: propose. Your changes are saved and you may propose them; publishing and deploying are for someone else.",
+    );
   lines.push(`Now: ${snapshot.observedAt}`);
   return lines.join("\n");
 }

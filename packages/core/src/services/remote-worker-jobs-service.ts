@@ -7,7 +7,12 @@ import {
   ClientRunnerOperationSchema,
   forwardingSandboxProvider,
 } from "./client-runners-service.js";
-import { jsonColumn, toJson } from "./run-coordinator.js";
+import {
+  jsonColumn,
+  storableJson,
+  toJson,
+  withoutNul,
+} from "./run-coordinator.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -39,10 +44,13 @@ export class RemoteWorkerJobsService {
      */
     leaseToken: string | (() => string | undefined);
     workspaceRoot: string;
+    /** The worker's provider runs background processes (ADR 0174). */
+    processes: boolean;
     timeoutMs?: number;
   }): SandboxProvider {
     return forwardingSandboxProvider({
       workspaceRoot: args.workspaceRoot,
+      processes: args.processes,
       call: (operation) =>
         withSpan(
           {
@@ -171,8 +179,8 @@ export class RemoteWorkerJobsService {
       .set({
         status: args.error ? "failed" : "completed",
         // A bare string result must reach jsonb as JSON, not raw text.
-        response: jsonColumn(toJson(args.response ?? null)),
-        error: args.error ?? null,
+        response: jsonColumn(storableJson(args.response)),
+        error: args.error === undefined ? null : withoutNul(args.error),
       })
       .where("id", "=", args.jobId)
       .where("node_id", "=", args.nodeId)

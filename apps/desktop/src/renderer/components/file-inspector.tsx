@@ -1,3 +1,4 @@
+import { PROJECT_PERSONAL_DIR } from "@catamorphic/workflow/project-layout";
 import { useQuery } from "@tanstack/react-query";
 import { CircleDot, FileText, FolderOpen, LoaderCircle } from "lucide-react";
 import { useState } from "react";
@@ -31,8 +32,8 @@ export function FileInspector({
     queryFn: () => localEditorPath(projectId, filePath),
   });
   const personal =
-    filePath.startsWith(".catamorphic/personal/") ||
-    filePath.includes("/.catamorphic/personal/");
+    filePath.startsWith(`${PROJECT_PERSONAL_DIR}/`) ||
+    filePath.includes(`/${PROJECT_PERSONAL_DIR}/`);
   const status = saving
     ? "Saving"
     : dirty

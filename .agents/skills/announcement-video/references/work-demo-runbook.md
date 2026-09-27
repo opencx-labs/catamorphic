@@ -27,7 +27,7 @@ Known script quirks:
    line it prints, and note its `Desktop data:` directory.
 3. Start the local registry from `infra/local-registry` with
    `bunx --bun verdaccio --config config.yaml --listen http://0.0.0.0:4873`.
-   Point the demo project's `.catamorphic/bunfig.toml` at the Mac's current LAN
+   Point the demo project's `.work/bunfig.toml` at the Mac's current LAN
    address (`ipconfig getifaddr en0`) and commit that file in the demo project.
 4. Sign Claude Code in on the dev desktop (`agentAuthHealth` reports `ok`), set the
    profile theme to Work Dark, and install the work bookmark set.
@@ -40,7 +40,7 @@ Known script quirks:
    `apps/desktop/`, see above) deletes every chat in the project except the
    seeded ones and lists app rows. Delete app rows too; no app may be listed yet.
 3. Demo project: `git reset --hard <base>`, then remove
-   `.catamorphic/{node_modules,apps,workflows,contracts,scripts,package.json,bun.lock,personal,app-data}`
+   `.work/{node_modules,apps,workflows,contracts,scripts,package.json,bun.lock,personal,app-data}`
    so only `bunfig.toml`, `project.json` and `skills/` remain.
 4. Profile: delete `<Desktop data>/profiles/<profile id>/sidebar-projects/<project id>.js`
    and `settings-projects/<project id>.json` (the agent's layers from the last take).

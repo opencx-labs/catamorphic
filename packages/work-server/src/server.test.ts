@@ -227,9 +227,7 @@ describe("Work server", () => {
     const kinds = server.catamorphic.core.triggers
       .listKinds()
       .map((kind) => kind.name);
-    expect(kinds).toEqual(
-      expect.arrayContaining(["webhook", "schedule", "github.pull_request"]),
-    );
+    expect(kinds).toEqual(expect.arrayContaining(["webhook", "schedule"]));
     // The intake is public: a sender has no account, only the URL.
     const unknown = await server.app.inject({
       method: "POST",
@@ -381,6 +379,8 @@ describe("Work server", () => {
     expect(me.identity).toEqual({
       externalUserId: memberUserId,
       root: false,
+      // A member is not an organization administrator (ADR 0172).
+      controlPlanePermissions: [],
     });
     expect(me.projects).toHaveLength(1);
     expect(me.projects[0].projectId).toBe(projectId);

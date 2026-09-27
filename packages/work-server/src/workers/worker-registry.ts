@@ -11,7 +11,7 @@ import type { EnvironmentBinding, SandboxProvider } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
 import {
-  servesOnePerson,
+  servesOneOwner,
   storedPlacement,
   type WorkerPlacement,
   WorkerPlacementSchema,
@@ -30,6 +30,15 @@ export const WorkerOfferSchema = z.strictObject({
     .array(z.enum(["cpuMillis", "memoryMb", "storageMb", "gpu"]))
     .default([]),
   workspaceRoot: z.string().startsWith("/"),
+  /** The worker's provider runs background processes (ADR 0174). */
+  processes: z.boolean().default(false),
+  /**
+   * What its sandboxes can be given (ADR 0176): images, image builds,
+   * containers, an enforced egress policy.
+   */
+  capabilities: z
+    .array(z.enum(["images", "images.build", "containers", "network.policy"]))
+    .default([]),
   capacity: z.strictObject({
     workspaces: z.number().int().positive().max(1_000),
     cpuMillis: z.number().int().positive().optional(),
@@ -228,7 +237,7 @@ export class WorkWorkerRegistry {
     const policy = await this.placement(args.nodeId);
     if (
       args.offer.isolation === "process" &&
-      !servesOnePerson(policy.access) &&
+      !servesOneOwner(policy.access) &&
       !policy.trusted
     ) {
       throw new WorkerIsolationError(args.name);
@@ -247,7 +256,7 @@ export class WorkWorkerRegistry {
       // Workflow runs carry project secrets; they stay on the control plane.
       workloads: ["agent"],
       agentTopologies: ["controller"],
-      capabilities: ["network.egress"],
+      capabilities: ["network.egress", ...args.offer.capabilities],
       resources: {
         ...(args.offer.capacity.cpuMillis
           ? { cpuMillis: args.offer.capacity.cpuMillis }
@@ -275,7 +284,7 @@ export class WorkWorkerRegistry {
     }
     this.held.set(args.nodeId, {
       lease,
-      provider: this.providerFor(args.nodeId, args.offer.workspaceRoot),
+      provider: this.providerFor(args.nodeId, args.offer),
     });
     await this.touch(args.nodeId);
     this.deps.log?.(`Worker ${args.name} connected`);
@@ -289,13 +298,19 @@ export class WorkWorkerRegistry {
    * each operation with whatever lease this instance holds at that moment,
    * so sessions survive the worker reconnecting.
    */
-  private providerFor(nodeId: string, workspaceRoot: string): SandboxProvider {
+  private providerFor(
+    nodeId: string,
+    offer: Pick<WorkerOffer, "workspaceRoot" | "processes">,
+  ): SandboxProvider {
     const existing = this.providers.get(nodeId);
-    if (existing) return existing;
+    // An upgraded worker may offer more than it did; its sessions follow.
+    if (existing && Boolean(existing.processes) === offer.processes)
+      return existing;
     const provider = this.jobs.sandboxProvider({
       nodeId,
       leaseToken: () => this.held.get(nodeId)?.lease.token,
-      workspaceRoot,
+      workspaceRoot: offer.workspaceRoot,
+      processes: offer.processes,
     });
     this.providers.set(nodeId, provider);
     return provider;

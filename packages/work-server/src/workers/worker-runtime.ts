@@ -62,6 +62,8 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     isolation: execution.isolation,
     resourceLimits: [...(provider.resourceLimits ?? [])],
     workspaceRoot: provider.workspaceRoot ?? "/workspace",
+    processes: Boolean(provider.processes),
+    capabilities: [...(provider.capabilities ?? [])],
     capacity: execution.capacity,
     defaults: execution.defaults,
     ...(options.version ? { version: options.version } : {}),
@@ -152,6 +154,8 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         keepSandboxes: true,
         maxSandboxes: execution.capacity.workspaces,
         idleDelayMs: 0,
+        // One operation per lane: the lanes are the concurrency.
+        concurrency: 1,
         onError: (error) => {
           if (!(error instanceof SessionEndedError)) {
             log(

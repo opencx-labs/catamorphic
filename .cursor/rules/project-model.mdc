@@ -1,5 +1,5 @@
 ---
-description: Project model, tenancy, git storage backends, the .catamorphic workspace, and database type conventions
+description: Project model, tenancy, git storage backends, the .work workspace, and database type conventions
 globs: packages/git/**/*.ts,packages/fastify-plugin/src/routes/projects.ts,packages/core/src/services/project*.ts,packages/db/**/*.ts,packages/db/migrations/*.sql
 alwaysApply: false
 ---
@@ -17,17 +17,17 @@ alwaysApply: false
 - The hierarchy is tenant, then project, then workflow. There is **no default tenant or user**. `tenantId` is the host's org id from its auth context on every request; the tenant row is upserted on first project create.
 - Permissions follow ADR 0158: `thing:action` grants (`program:write`, `runs:read`, and so on) from role files, with no `builder` flag. Clients read effective permissions from `GET /me`.
 
-## The `.catamorphic/` workspace (ADR 0142)
+## The `.work/` workspace (ADR 0142)
 
-- Workflows, apps, contracts, scripts, project agents, roles, and skills live in `.catamorphic/`, an independent Bun workspace created on first capability use. Paths come from constants in `packages/parser/src/types.ts` (`PROJECT_WORKSPACE_ROOT`, `WORKFLOW_SOURCE_ROOT`, `APP_SOURCE_ROOT`, `CONTRACTS_SOURCE_ROOT`).
+- Workflows, apps, contracts, scripts, project agents, roles, and skills live in `.work/`, an independent Bun workspace created on first capability use. Code builds every workspace path, the published ref (`refs/work/published`), the managed branch prefix (`work/`), the checkpoint author, and the app-data env and mount from `@catamorphic/workflow/project-layout`; never repeat those literals. `scripts/project-layout-names.test.ts` keeps the retired project names out.
 - Never write framework dependencies into the project's root manifest, and preserve root files and owner instructions.
-- Project-owned mutable data lives in `.catamorphic/app-data/`, ignored by `.catamorphic/.gitignore`. Logical `store/...` document addresses map to `app-data/store/...`; a root `store/` is ordinary user content. Preserve owner edits to ignore rules.
+- Project-owned mutable data lives in `.work/app-data/`, ignored by `.work/.gitignore`. Logical `store/...` document addresses map to `app-data/store/...`; a root `store/` is ordinary user content. Preserve owner edits to ignore rules.
 - Profiles, credentials, caches, staging, and managed worktrees stay in host storage, never in the project.
 
 ## Git behavior
 
 - **Opening an existing folder is inert** (ADR 0141): no Git init, manifest writes, seeds, installs, or copied history. Initialize Git only for an operation that needs history.
-- New managed projects start with `.catamorphic/project.json`, scoped ignore rules, and host-selected seeds, with no root package manifest. GitHub import clones once and keeps history and the real default branch. New repositories default to `main`.
+- New managed projects start with `.work/project.json`, scoped ignore rules, and host-selected seeds, with no root package manifest. GitHub import clones once and keeps history and the real default branch. New repositories default to `main`.
 - Adopted local checkouts use native Git; portable managed working copies use isomorphic-git.
 - Imported local work is committed and shared explicitly (ADR 0104). A settled agent turn alone never authorizes publishing imported work.
 - Every Run executes an immutable deployment artifact or session artifact; `workflow_runs` records which. There is no run mode.

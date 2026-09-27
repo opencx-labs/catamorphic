@@ -64,7 +64,11 @@ const r = await fetch("http://127.0.0.1:4701/_work/operator/projects", {
 console.log(r.status, await r.text());'
 ```
 
-The response carries the project id. Then the first person, the owner, bound
+The response carries the project id. To start from an existing GitHub
+repository instead, connect GitHub first ([Connect GitHub](connect-github.md))
+and add `repository: "owner/name"`; Work then proposes the roles as a
+pull request rather than writing to the repository
+([Work server](stock-server.md#github-backed-projects)). Then the first person, the owner, bound
 to `admin` (local username and password; offer a configured OAuth provider
 first when one exists):
 
@@ -114,7 +118,7 @@ the admin:
 1. `ask_agent` with `agent: "assistant"` and a short message; the reply
    proves agents run (on a worker when the server runs agents only there).
 2. Ask the client to add a small workflow with an `ai.tool-call` trigger,
-   following the project's `catamorphic-projects` and `writing-workflows`
+   following the project's `work-projects` and `writing-workflows`
    skills, then `program_check`, `program_deploy`, and `workflow_run` it.
    The workflow then appears as its own tool.
 
@@ -128,7 +132,7 @@ more people are created by a signed-in member holding `memberships:write`
 through `POST /api/projects/PROJECT_ID/admission/invitations`; they are
 credential-free locators that desktop, PWA and MCP clients redeem after
 signing in. Ongoing configuration (roles, agents, sidebar, starting actions)
-is project code under `.catamorphic/`, changed through ordinary review.
+is project code under `.work/`, changed through ordinary review.
 
 ## Gotchas
 

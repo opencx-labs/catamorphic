@@ -63,6 +63,18 @@ describe("PGlite migrations", () => {
       "023_sealed_project_secrets.sql",
       "024_remote_workers.sql",
       "025_work_shares.sql",
+      "026_remote_ownership.sql",
+      "027_committed_connection_bindings.sql",
+      "028_keyed_chat_lifecycle.sql",
+      "029_trigger_filters.sql",
+      "030_client_runner_processes.sql",
+      "031_session_approvers.sql",
+      "032_personal_connections.sql",
+      "033_session_workspaces_and_sandbox_grants.sql",
+      "034_session_event_keys.sql",
+      "035_model_usage.sql",
+      "036_project_remote_divergence.sql",
+      "037_work_github_app_registrations.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
@@ -88,7 +100,7 @@ describe("PGlite migrations", () => {
       WHERE table_schema = ${DEFAULT_SCHEMA}
         AND table_type = 'BASE TABLE'
     `.execute(db);
-    expect(tables.rows[0]?.count).toBe(87);
+    expect(tables.rows[0]?.count).toBe(88);
   });
 
   it("supports the runtime primitives core relies on", {

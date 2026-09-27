@@ -22,7 +22,7 @@ export type TriggerValidationResult =
  * `defineTriggerKind`; hosts may also hand-roll one.
  *
  * The JSON Schemas serve double duty: runtime metadata for HTTP surfaces,
- * and the source for the generated `catamorphic-triggers.d.ts` that project
+ * and the source for the generated `work-triggers.d.ts` that project
  * workspaces type-check `trigger()` calls against.
  */
 export interface TriggerKindRuntime {

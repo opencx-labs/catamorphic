@@ -1,6 +1,6 @@
 ---
 name: setup-work-server
-description: Use when installing or operating a Work server (the prebuilt server image), provisioning its first project and user, company sign-in and deprovisioning, credentials and the connection gateway, enrolling workers or replicas, sharing with customers, embedding Catamorphic in an existing application, mapping host authentication to Catamorphic identity, or configuring Postgres or PGlite.
+description: Use when installing or operating a Work server (the prebuilt server image), provisioning its first project and user, company sign-in and deprovisioning, credentials and the connection gateway, connecting Slack, reviewing pull requests on a review pool, enrolling workers or replicas, sharing with customers, embedding Catamorphic in an existing application, mapping host authentication to Catamorphic identity, or configuring Postgres or PGlite.
 ---
 
 # Setting up a Work server or a Catamorphic host
@@ -34,8 +34,12 @@ Start small and add only what the situation needs:
   configured sign-in provider (or local sign-in), and invitations.
 - **A company brain:** Google Workspace sign-in with directory
   deprovisioning and groups as roles ([company identity](references/company-identity.md));
-  credentials only through the gateway, with guards on anything touching
-  production ([secrets and the gateway](references/secrets-and-gateway.md));
+  credentials only through the gateway, with guards in a small custom server
+  on anything touching production
+  ([secrets and the gateway](references/secrets-and-gateway.md));
+  the company's GitHub App as the `github` service connection
+  ([Connect GitHub](references/connect-github.md)), with pull request reviews
+  on a review pool ([Review pull requests](references/review-pull-requests.md));
   agent sandboxes on enrolled workers with `WORK_CONTROL_PLANE_WORKLOADS=workflow`
   on the control plane ([machines](references/cluster-deployment.md)); and
   shares for customer material ([sharing](references/sharing.md)). Members
@@ -52,9 +56,13 @@ Start small and add only what the situation needs:
 | Work server image or `apps/server` | [Work server](references/stock-server.md) |
 | Company sign-in through Google Workspace, deprovisioning, groups as roles | [Company identity](references/company-identity.md) |
 | Credentials, API keys, a production database, query review, vault keys | [Secrets and the gateway](references/secrets-and-gateway.md) |
+| GitHub: a GitHub App, company repositories, pull requests, webhooks | [Connect GitHub](references/connect-github.md) |
+| Slack: a project answering mentions in threads, reading and searching Slack | [Connect Slack](references/connect-slack.md) |
+| Code and security review of every pull request on a dedicated review pool | [Review pull requests with Work](references/review-pull-requests.md) |
 | More execution capacity, workers, replicas for availability | [Machines: control plane, replicas, and workers](references/cluster-deployment.md) |
 | Sharing documents, folders, or apps with customers behind a sign-in | [Sharing outside the company](references/sharing.md) |
 | Members working from Claude Code, Codex, or another MCP client | [Working from your own agent](references/members-over-mcp.md) |
+| Project agents that are Claude Code or Codex, running on the server with a model key the gateway holds | [Harnesses on the server](references/harnesses.md) |
 | Work server plus company code (a guard or classifier, a directory, a connection provider, seeds, or a route) | [`@catamorphic/work-server`](../../packages/work-server/README.md): extend the published image with hooks; never fork the server |
 | Existing or custom application | [Custom host](references/custom-host.md) |
 | Sign-in, OIDC, invitations, roles, permissions | [Auth and identity](references/auth-and-identity.md) |
@@ -70,16 +78,17 @@ disagree with the installed source, the source wins.
   request and have no default user, organization, or auth provider. The stock
   server's auth choices are not framework contracts.
 - **Sign-in identifies; project roles authorize.** Roles are committed files
-  in `.catamorphic/roles/*.json` granting agents, workflows, apps,
+  in `.work/roles/*.json` granting agents, workflows, apps,
   Environments, connection aliases, documents, and `thing:action` permissions
   such as `program:write`, `sessions:read`, and `memberships:write`
   (ADR 0158). An admin role grants `"*"`. Login alone grants no project, and
   there is no silent default role.
 - **No super-admin.** The operator credential is machine access, not a user.
   A setup agent provisions the first ordinary user and membership through the
-  server's own operations.
+  server's own operations. Organization administrators manage only the named
+  service connections (ADR 0172); they gain nothing inside projects.
 - **After setup, configuration is project code.** Roles, agents,
-  `.catamorphic/sidebar.js`, and `.catamorphic/project.json` change through
+  `.work/sidebar.js`, and `.work/project.json` change through
   ordinary review. Do not create a parallel bootstrap config.
 - **Unattended work needs explicit consent.** Each member reviews and enables
   a deployed workflow and authorizes its connections. Project automations
@@ -96,12 +105,19 @@ disagree with the installed source, the source wins.
   execution uses their project connection, never database credentials.
 - **Credentials reach systems only through the gateway** (ADR 0162): agents
   and workflows get reviewed actions, never keys. Workflow runs, which receive
-  project secrets, stay on the control plane.
+  project secrets, stay on the control plane. An administrator enters each
+  service credential once; projects bind it by name to an Environment in
+  `.work/project.json` (ADR 0172).
 - **Isolation matches trust.** Local-process execution is for trusted
   single-tenant use. For remote development use microsandbox with explicit
   budgets; a live heartbeat is not spare capacity.
-- **One code path after credentials.** A GitHub CLI token may feed the regular
-  GitHub service; it does not justify a second clone or API implementation.
+- **Model keys are connections too.** Claude Code and Codex agents run in
+  their sandbox and reach their model through the gateway with the chat's
+  grant (ADR 0180); the server's own model variables never reach them.
+- **GitHub is a connection.** The organization's GitHub App installation is
+  the `github` service connection; sync, proposals, and agents' GitHub
+  actions all go through it (ADR 0177). There is no GitHub token variable
+  and no second clone or API implementation.
 
 ## Common mistakes
 

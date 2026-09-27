@@ -6,7 +6,7 @@ alwaysApply: false
 
 # Parser: Graph Structure Conventions
 
-`packages/parser/src/parser.ts` turns an exported `defineWorkflow(...)` into a `WorkflowGraph` (types in `types.ts`). Supporting a new language construct is a deliberate change: add it here, render it in `packages/ui/src/nodes/`, and cover it in `src/__tests__/`. The same package also produces the execution transform (`execution-transform.ts`) and powers each project's `.catamorphic/scripts/check.ts` (`check.ts`).
+`packages/parser/src/parser.ts` turns an exported `defineWorkflow(...)` into a `WorkflowGraph` (types in `types.ts`). Supporting a new language construct is a deliberate change: add it here, render it in `packages/ui/src/nodes/`, and cover it in `src/__tests__/`. The same package also produces the execution transform (`execution-transform.ts`) and powers each project's `.work/scripts/check.ts` (`check.ts`).
 
 ## What the parser accepts
 

@@ -49,7 +49,7 @@ describe("defineTriggerKind", () => {
   });
 
   it("produces JSON schemas that render usable generated types", () => {
-    const content = renderTriggerTypesModule([ticketCreated]);
+    const content = renderTriggerTypesModule({ kinds: [ticketCreated] });
     expect(content).toContain('"ticket.created"');
     expect(content).toContain("ticketId: string;");
     expect(content).toContain('priority: "low" | "high";');

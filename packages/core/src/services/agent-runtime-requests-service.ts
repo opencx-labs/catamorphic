@@ -11,6 +11,7 @@ import {
   canonicalRuntimeJson,
   sameCanonicalRuntimeJson,
 } from "./agent-runtime-json.js";
+import { AccessDeniedError } from "./artifact-scope.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -110,13 +111,44 @@ export class AgentRuntimeRequestsService {
       },
       async (span) => {
         const respond = async (trx: Transaction<DB>) => {
-          const session = await requireRuntimeSession({
-            db: trx,
-            identity: args.identity,
-            sessionId: args.sessionId,
-            lock: true,
-            intent: "change",
-          });
+          // An approval that names approvers is theirs to answer, and only
+          // theirs, whether or not they otherwise hold the chat (ADR 0176).
+          // Anything else is answered by whoever may change the chat.
+          const named = await trx
+            .selectFrom("agent_runtime_requests")
+            .innerJoin(
+              "agent_sessions",
+              "agent_sessions.id",
+              "agent_runtime_requests.session_id",
+            )
+            .innerJoin("projects", "projects.id", "agent_sessions.project_id")
+            .select([
+              "agent_runtime_requests.payload",
+              "agent_sessions.project_id",
+            ])
+            .where("agent_runtime_requests.session_id", "=", args.sessionId)
+            .where("agent_runtime_requests.request_id", "=", args.requestId)
+            .where("projects.tenant_id", "=", args.identity.tenantId)
+            .executeTakeFirst();
+          const approvers = named
+            ? requestApprovers(requestFromPayload(named.payload))
+            : [];
+          if (
+            named &&
+            approvers.length > 0 &&
+            !approvers.includes(args.identity.externalUserId)
+          )
+            throw new AccessDeniedError();
+          const session =
+            named && approvers.length > 0
+              ? { projectId: named.project_id }
+              : await requireRuntimeSession({
+                  db: trx,
+                  identity: args.identity,
+                  sessionId: args.sessionId,
+                  lock: true,
+                  intent: "change",
+                });
           setSpanCorrelation({
             span,
             attributes: { "catamorphic.project.id": session.projectId },
@@ -241,4 +273,9 @@ async function selectRequestForUpdate(args: {
 
 function requestFromPayload(payload: unknown): AgentRuntimeRequest {
   return JSON.parse(JSON.stringify(payload));
+}
+
+/** Who an approval names to answer it; empty when it names nobody. */
+function requestApprovers(request: AgentRuntimeRequest): readonly string[] {
+  return request.kind === "approval" ? (request.approvers ?? []) : [];
 }

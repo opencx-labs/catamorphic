@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  MANAGED_BRANCH_PREFIX,
+  PROJECT_GITIGNORE_PATH,
+  PROJECT_MANIFEST_PATH,
+} from "@catamorphic/workflow/project-layout";
 import { FsBackend } from "./fs-backend.js";
 import { push } from "./git-sync.js";
 import { discoverLocalFolder } from "./native-git.js";
@@ -14,15 +19,11 @@ import type {
   RemoteBackend,
   StorageBackend,
 } from "./types.js";
-
-/**
- * Where the project manifest lives. `.catamorphic/` is the project-owned
- * metadata directory (ADR 0043): the manifest marks a folder as a
- * Catamorphic project and is the future home of project-scoped config.
- * Deliberately NOT written when cloning a network remote — imported history
- * stays pristine until project-scoped config is actually needed.
- */
-export const PROJECT_MANIFEST_PATH = ".catamorphic/project.json";
+import {
+  type BaseMoveOutcome,
+  copyFromMirror,
+  moveCheckoutBase,
+} from "./workspace-mirror.js";
 
 /**
  * Seeded into every new project (unless one exists): mirrors the
@@ -37,15 +38,9 @@ dist/
 `;
 
 const SYSTEM_AUTHOR = {
-  name: "Catamorphic",
-  email: "system@catamorphic.dev",
+  name: "Work",
+  email: "system@work.software",
 };
-
-/**
- * Pattern used for auto-generated draft branches. Format is
- * `work/YYYY-MM-DD_HH-mm[-N]` where `-N` suffix is appended on collision.
- */
-export const WORK_BRANCH_PREFIX = "work/";
 
 export class ProjectManager {
   constructor(
@@ -200,6 +195,133 @@ export class ProjectManager {
     }
   }
 
+  /**
+   * The host's bare mirror of the project's linked remote, or null when
+   * this storage keeps none (ADR 0178).
+   */
+  mirrorPath(args: { tenantId: string; projectId: string }): string | null {
+    return this.storage.mirrorPath?.(args.tenantId, args.projectId) ?? null;
+  }
+
+  /**
+   * Put a session's copy at a commit pinned in the project mirror and
+   * publish it as the session's branch (ADR 0178). Whatever the copy held is
+   * replaced: callers move the base only between turns, after the last
+   * checkpoint, or on purpose (`reset`).
+   */
+  async setSessionBase(args: {
+    tenantId: string;
+    projectId: string;
+    sessionId: string;
+    pin: string;
+    commit: string;
+  }): Promise<void> {
+    const mirrorPath = this.mirrorPath(args);
+    if (!mirrorPath) throw new Error("This host keeps no project mirror");
+    const repo = await this.openSession({
+      tenantId: args.tenantId,
+      projectId: args.projectId,
+      sessionId: args.sessionId,
+      refresh: true,
+    });
+    try {
+      await copyFromMirror({
+        mirrorPath,
+        pin: args.pin,
+        repoPath: repo.repoPath,
+        into: "refs/work/base",
+      });
+      await repo.moveBranch("main", args.commit);
+      await repo.checkout("main");
+      await repo.resetWorkingTree();
+      await this.publishSession({ ...args, repo, head: args.commit });
+    } finally {
+      await repo.dispose();
+    }
+  }
+
+  /**
+   * Move a session's copy to a new base pinned in the mirror (ADR 0178):
+   * `reset` replaces its checkpoints, `rebase` replays them onto the new
+   * base. A conflicting rebase leaves the copy as it was.
+   */
+  async moveSessionBase(args: {
+    tenantId: string;
+    projectId: string;
+    sessionId: string;
+    pin: string;
+    from: string;
+    to: string;
+    update: "reset" | "rebase";
+  }): Promise<BaseMoveOutcome> {
+    const mirrorPath = this.mirrorPath(args);
+    if (!mirrorPath) throw new Error("This host keeps no project mirror");
+    const repo = await this.openSession({
+      tenantId: args.tenantId,
+      projectId: args.projectId,
+      sessionId: args.sessionId,
+      refresh: true,
+    });
+    try {
+      const outcome = await moveCheckoutBase({
+        repoPath: repo.repoPath,
+        mirrorPath,
+        pin: args.pin,
+        from: args.from,
+        to: args.to,
+        update: args.update,
+      });
+      if (outcome.status === "moved")
+        await this.publishSession({ ...args, repo, head: outcome.head });
+      return outcome;
+    } finally {
+      await repo.dispose();
+    }
+  }
+
+  private async publishSession(args: {
+    tenantId: string;
+    projectId: string;
+    sessionId: string;
+    repo: ProjectRepo;
+    head: string;
+  }): Promise<void> {
+    if (!this.remote) return;
+    await push({
+      dev: args.repo,
+      remote: this.remote,
+      tenantId: args.tenantId,
+      projectId: args.projectId,
+      remoteBranch: `sessions/${args.sessionId}`,
+      localSha: args.head,
+      force: true,
+    });
+  }
+
+  /**
+   * Forget a closed session's workspace: its `sessions/<id>` branch on the
+   * origin and its `session-<id>` copy on this machine. Commits already
+   * reachable elsewhere stay; missing pieces are no-ops.
+   */
+  async deleteSession(args: {
+    tenantId: string;
+    projectId: string;
+    sessionId: string;
+  }): Promise<void> {
+    if (
+      this.remote &&
+      (await this.remote.exists(args.tenantId, args.projectId))
+    )
+      await this.remote.withOrigin(args.tenantId, args.projectId, (origin) =>
+        origin.deleteRef({ ref: `refs/heads/sessions/${args.sessionId}` }),
+      );
+    await this.storage.deleteCopy(
+      args.tenantId,
+      args.projectId,
+      `session-${args.sessionId}`,
+    );
+  }
+
   async localPath(input: {
     tenantId: string;
     projectId: string;
@@ -314,7 +436,7 @@ export class ProjectManager {
     // Every project gets ignore rules from birth: without them the first
     // `bun install` floods git status (and every changes UI) with the
     // whole node_modules tree. Never overwrite one the user already has.
-    const gitignorePath = path.join(repoPath, ".catamorphic", ".gitignore");
+    const gitignorePath = path.join(repoPath, PROJECT_GITIGNORE_PATH);
     const gitignoreExists = await fs.access(gitignorePath).then(
       () => true,
       () => false,
@@ -424,7 +546,7 @@ export async function generateWorkBranchName(opts: {
 }): Promise<string> {
   const now = opts.now ?? new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
-  const base = `${WORK_BRANCH_PREFIX}${now.getUTCFullYear()}-${pad(
+  const base = `${MANAGED_BRANCH_PREFIX}${now.getUTCFullYear()}-${pad(
     now.getUTCMonth() + 1,
   )}-${pad(now.getUTCDate())}_${pad(now.getUTCHours())}-${pad(
     now.getUTCMinutes(),

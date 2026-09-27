@@ -18,13 +18,11 @@ describe("workspace scaffold", () => {
     const parsed = parseProject(files);
     expect(parsed.errors).toEqual([]);
 
-    const root = JSON.parse(files[".catamorphic/package.json"] ?? "{}");
+    const root = JSON.parse(files[".work/package.json"] ?? "{}");
     expect(root.workspaces).toEqual(["contracts", "workflows", "apps/*"]);
-    expect(files[".catamorphic/apps/dashboard/vite.config.ts"]).toContain(
-      "iife",
-    );
+    expect(files[".work/apps/dashboard/vite.config.ts"]).toContain("iife");
     // Apps must never depend on the workflows package.
-    expect(files[".catamorphic/apps/dashboard/package.json"]).not.toContain(
+    expect(files[".work/apps/dashboard/package.json"]).not.toContain(
       "@project/workflows",
     );
   });
@@ -33,27 +31,24 @@ describe("workspace scaffold", () => {
 describe("seed skill support files", () => {
   const supportFiles = (skill: string) =>
     Object.keys(SEED_SKILLS).filter((path) =>
-      path.startsWith(`.catamorphic/skills/${skill}/files/`),
+      path.startsWith(`.work/skills/${skill}/files/`),
     );
 
-  it("ships every file the catamorphic-projects skill says to copy", () => {
-    const skill =
-      SEED_SKILLS[".catamorphic/skills/catamorphic-projects/SKILL.md"];
+  it("ships every file the work-projects skill says to copy", () => {
+    const skill = SEED_SKILLS[".work/skills/work-projects/SKILL.md"];
     expect(skill).toBeDefined();
-    for (const path of supportFiles("catamorphic-projects")) {
+    for (const path of supportFiles("work-projects")) {
       const name = path.split("/").at(-1);
       expect(skill).toContain(`files/${name}`);
     }
     // The copyable workspace scaffold matches the canonical one.
-    expect(
-      SEED_SKILLS[".catamorphic/skills/catamorphic-projects/files/check.ts"],
-    ).toBe(
-      workspaceFiles({ name: "my-project" })[".catamorphic/scripts/check.ts"],
+    expect(SEED_SKILLS[".work/skills/work-projects/files/check.ts"]).toBe(
+      workspaceFiles({ name: "my-project" })[".work/scripts/check.ts"],
     );
   });
 
   it("ships every file the building-apps skill says to copy", () => {
-    const skill = SEED_SKILLS[".catamorphic/skills/building-apps/SKILL.md"];
+    const skill = SEED_SKILLS[".work/skills/building-apps/SKILL.md"];
     expect(skill).toBeDefined();
     const files = supportFiles("building-apps");
     expect(files.length).toBeGreaterThan(0);
@@ -62,12 +57,8 @@ describe("seed skill support files", () => {
       expect(skill).toContain(`files/${name}`);
     }
     // The copyable app scaffold matches the canonical one.
-    expect(
-      SEED_SKILLS[".catamorphic/skills/building-apps/files/vite.config.ts"],
-    ).toBe(
-      appScaffold({ name: "my-app" })[
-        ".catamorphic/apps/my-app/vite.config.ts"
-      ],
+    expect(SEED_SKILLS[".work/skills/building-apps/files/vite.config.ts"]).toBe(
+      appScaffold({ name: "my-app" })[".work/apps/my-app/vite.config.ts"],
     );
   });
 });

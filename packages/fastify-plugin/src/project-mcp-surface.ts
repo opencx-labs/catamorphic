@@ -3,6 +3,7 @@ import {
   AccessDeniedError,
   EVERY_ARTIFACT,
   mayUseProject,
+  parseWorkspaceRequest,
   projectAgentId,
   resolveScope,
   SESSION_ACTION_SCHEMAS,
@@ -515,7 +516,7 @@ export function surfaceTools(
       .map((ref) => (ref as { name: string }).name);
     const hint =
       agentNames.includes(EVERY_ARTIFACT) || identity.scope === undefined
-        ? "any committed project agent (.catamorphic/agents/<slug>.json)"
+        ? "any committed project agent (.work/agents/<slug>.json)"
         : agentNames.length > 0
           ? `one of: ${agentNames.join(", ")}`
           : "none available to you";
@@ -582,6 +583,17 @@ export function surfaceTools(
             },
             attention: { type: "string", enum: ["none", "required"] },
             idempotencyKey: { type: "string" },
+            workspace: {
+              type: "object",
+              description:
+                "Move the receiving session's workspace to a ref of the project's linked remote before its next turn (a branch, tag, commit, or refs/pull/<n>/head). update: rebase (default) keeps its commits, reset discards them.",
+              properties: {
+                ref: { type: "string" },
+                update: { type: "string", enum: ["reset", "rebase"] },
+              },
+              required: ["ref"],
+              additionalProperties: false,
+            },
           },
           required: ["toSessionId", "message", "mode"],
         },
@@ -622,6 +634,9 @@ export function surfaceTools(
           ...(str(args.idempotencyKey)
             ? { idempotencyKey: str(args.idempotencyKey) }
             : {}),
+          ...(args.workspace === undefined
+            ? {}
+            : { workspace: parseWorkspaceRequest(args.workspace) }),
         });
       }),
     });
@@ -634,7 +649,7 @@ export function surfaceTools(
         tools.push({
           definition: {
             name: `session_${operation}`,
-            description: `Session ${operation}. Uses the same authorized operation as workflows. Mutations require a stable idempotencyKey; retries return the existing result. Load the session-workflows skill for examples.`,
+            description: `Session ${operation}. Uses the same authorized operation as workflows. Name the chat by sessionId, or by the project's key for it (key, with audience "project" for the project chat). Mutations require a stable idempotencyKey; retries return the existing result. Load the session-workflows skill for examples.`,
             inputSchema: z.toJSONSchema(SESSION_ACTION_SCHEMAS[operation]),
           },
           call: guarded(async (args) => {
@@ -668,12 +683,18 @@ export function surfaceTools(
 
     if (core.watchers) {
       const watchers = core.watchers;
+      const eventSources = core.projectEventSources.map(
+        (source) => source.kind,
+      );
       tools.push(
         {
           definition: {
             name: "create_watcher",
-            description:
-              'Temporarily enable an ordinary TypeScript workflow owned by this session. To repeat a shell check (a URL, a file, a CLI), use the host\'s watch_command when it is offered: it runs where your commands run. For periodic monitoring with workflow IO, declare a normal schedule trigger. For event-driven work, use normalized Project Events already supplied by this host. Stop, expiry, or session close/archive disables future invocations. The source must export the named defineWorkflow and declare one or more inline triggers, for example triggers: [trigger("issue.changed")]. Event triggers receive the normalized Project Event envelope; schedule triggers receive their normal scheduled payload. To notify or wake a session, return context.host["catamorphic.sessions"].deliver({ sessionId, content, mode, idempotencyKey }) from a boundary. Pass source directly; do not write it to the user working tree. The host places it at .catamorphic/workflows/src/artifacts/<id>.ts in an isolated committed-origin checkout, so imports must already exist in that origin. workflowName must be exported by this source. The workflow is committed to an isolated catamorphic/artifacts/<id> ref, pinned, and never merged into project main. This is temporary execution, not private storage. Call stop_watcher when the task is complete. Load the workflow-lifecycle skill for lifetime and publishing guidance.',
+            description: `Temporarily enable an ordinary TypeScript workflow owned by this session. To repeat a shell check (a URL, a file, a CLI), use the host's watch_command when it is offered: it runs where your commands run. For periodic monitoring with workflow IO, declare a normal schedule trigger. For event-driven work, use normalized Project Events already supplied by this host. Stop, expiry, or session close/archive disables future invocations. The source must export the named defineWorkflow and declare one or more inline triggers, for example triggers: [trigger("issue.changed")]. Event triggers receive the normalized Project Event envelope; schedule triggers receive their normal scheduled payload. To notify or wake a session, return context.host["catamorphic.sessions"].deliver({ sessionId, content, mode, idempotencyKey }) from a boundary. Pass source directly; do not write it to the user working tree. The host places it at .work/workflows/src/artifacts/<id>.ts in an isolated committed-origin checkout, so imports must already exist in that origin. workflowName must be exported by this source. The workflow is committed to an isolated work/artifacts/<id> ref, pinned, and never merged into project main. This is temporary execution, not private storage. Call stop_watcher when the task is complete. Load the workflow-lifecycle skill for lifetime and publishing guidance.${
+              eventSources.length
+                ? ` This host can also observe outside systems that cannot reach it with a webhook: pass eventSource (${eventSources.join(", ")}) and the host polls for new events from now on and records them as Project Events shaped like the webhook deliveries the source replaces, so bind the project's trigger kinds for that webhook (for example from .work/triggers/).`
+                : ""
+            }`,
             inputSchema: {
               type: "object",
               properties: {
@@ -682,7 +703,7 @@ export function surfaceTools(
                 source: {
                   type: "string",
                   description:
-                    "TypeScript source exporting workflowName; no Markdown fences. It runs from .catamorphic/workflows/src/artifacts/<id>.ts against the committed project origin.",
+                    "TypeScript source exporting workflowName; no Markdown fences. It runs from .work/workflows/src/artifacts/<id>.ts against the committed project origin.",
                 },
                 environment: { type: "string" },
                 expiresInSeconds: {
@@ -691,6 +712,17 @@ export function surfaceTools(
                   description:
                     "Optional expiry in seconds. Omit for reminders that must survive offline time. Defaults to no expiry; completion, stop, or archive ends execution.",
                 },
+                ...(eventSources.length
+                  ? {
+                      eventSource: {
+                        type: "string",
+                        enum: eventSources,
+                        description:
+                          "A host event source to poll for this watcher, from now on.",
+                      },
+                      pollIntervalSeconds: { type: "integer", minimum: 5 },
+                    }
+                  : {}),
               },
               required: ["workflowName", "source"],
             },
@@ -704,6 +736,8 @@ export function surfaceTools(
                 "sessionId, workflowName, and source are required",
               );
             }
+            const eventSource = str(args.eventSource);
+            const pollIntervalSeconds = int(args.pollIntervalSeconds);
             return watchers.create({
               identity,
               projectId,
@@ -715,6 +749,16 @@ export function surfaceTools(
                 : {}),
               ...(int(args.expiresInSeconds) !== undefined
                 ? { expiresInSeconds: int(args.expiresInSeconds) }
+                : {}),
+              ...(eventSource
+                ? {
+                    eventSource: {
+                      kind: eventSource,
+                      ...(pollIntervalSeconds !== undefined
+                        ? { pollIntervalSeconds }
+                        : {}),
+                    },
+                  }
                 : {}),
             });
           }),
@@ -770,72 +814,6 @@ export function surfaceTools(
           }),
         },
       );
-
-      if (core.github) {
-        tools.push({
-          definition: {
-            name: "create_github_watcher",
-            description:
-              'Temporarily enable an ordinary TypeScript workflow for future GitHub repository events. Catamorphic verifies the current user\'s repository access and starts the appropriate local or remote GitHub monitor. Declare GitHub subscriptions inline with trigger(), such as triggers: [trigger("github.pull_request")]. Supported kinds are github.pull_request, github.pull_request_review, github.check_run, github.check_suite, and github.workflow_run.',
-            inputSchema: {
-              type: "object",
-              properties: {
-                sessionId: { type: "string" },
-                workflowName: { type: "string" },
-                source: {
-                  type: "string",
-                  description:
-                    "TypeScript source exporting workflowName; no Markdown fences. It runs from .catamorphic/workflows/src/artifacts/<id>.ts against the committed project origin.",
-                },
-                environment: { type: "string" },
-                placement: {
-                  type: "string",
-                  enum: ["local", "remote", "any"],
-                },
-                expiresInSeconds: {
-                  type: "integer",
-                  minimum: 1,
-                  description:
-                    "Optional expiry in seconds. Omit for reminders that must survive offline time. Defaults to no expiry; completion, stop, or archive ends execution.",
-                },
-                pollIntervalSeconds: { type: "integer", minimum: 5 },
-              },
-              required: ["workflowName", "source"],
-            },
-          },
-          call: guarded(async (args) => {
-            const sessionId = str(args.sessionId) ?? currentSessionId;
-            const workflowName = str(args.workflowName);
-            const source = str(args.source);
-            if (!sessionId || !workflowName || !source) {
-              throw new Error(
-                "sessionId, workflowName, and source are required",
-              );
-            }
-            return watchers.createGithub({
-              identity,
-              projectId,
-              sessionId,
-              workflowName,
-              source,
-              ...(str(args.environment)
-                ? { environment: str(args.environment) }
-                : {}),
-              ...(args.placement === "local" ||
-              args.placement === "remote" ||
-              args.placement === "any"
-                ? { placement: args.placement }
-                : {}),
-              ...(int(args.expiresInSeconds) !== undefined
-                ? { expiresInSeconds: int(args.expiresInSeconds) }
-                : {}),
-              ...(int(args.pollIntervalSeconds) !== undefined
-                ? { pollIntervalSeconds: int(args.pollIntervalSeconds) }
-                : {}),
-            });
-          }),
-        });
-      }
     }
   }
 

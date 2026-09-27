@@ -1,13 +1,11 @@
-/**
- * Workspace roots inside a user project. A project is a bun workspace holding
- * backend workflows and frontend apps in one repo; `contracts` carries only
- * types and is the sole package both sides may depend on.
- */
-export const PROJECT_WORKSPACE_ROOT = ".catamorphic";
-export const PROJECT_PACKAGE_PATH = `${PROJECT_WORKSPACE_ROOT}/package.json`;
-export const WORKFLOW_SOURCE_ROOT = `${PROJECT_WORKSPACE_ROOT}/workflows`;
-export const CONTRACTS_SOURCE_ROOT = `${PROJECT_WORKSPACE_ROOT}/contracts`;
-export const APP_SOURCE_ROOT = `${PROJECT_WORKSPACE_ROOT}/apps`;
+import {
+  hasProjectLockfile,
+  isProjectPathWithin,
+  isProjectSourcePath,
+  PROJECT_APPS_DIR,
+  PROJECT_PACKAGE_PATH,
+  PROJECT_WORKFLOWS_DIR,
+} from "@catamorphic/workflow/project-layout";
 
 /** Guest runtime package; frontend-only, never resolvable in execution installs. */
 export const APP_RUNTIME_PACKAGE = "@catamorphic/app";
@@ -25,6 +23,20 @@ export const SANDBOX_STRIPPED_PACKAGES: readonly string[] = [
   PROJECT_TOOLING_PACKAGE,
 ];
 
+/** The workflow authoring package, which no public registry serves yet. */
+const WORKFLOW_AUTHORING_PACKAGE = "@catamorphic/workflow";
+
+/**
+ * Also stripped from the workspace root manifest, which declares the workflow
+ * package only so `.work/triggers/` resolves it for types. The workflows
+ * package keeps its declaration: that is what selects the host's local copy,
+ * uploaded into the execution's node_modules.
+ */
+const WORKSPACE_ROOT_STRIPPED_PACKAGES: readonly string[] = [
+  ...SANDBOX_STRIPPED_PACKAGES,
+  WORKFLOW_AUTHORING_PACKAGE,
+];
+
 /**
  * Drops frontend app sources from a project file set, and strips the
  * frontend-only `@catamorphic/app` dependency from remaining manifests
@@ -39,33 +51,38 @@ export const SANDBOX_STRIPPED_PACKAGES: readonly string[] = [
 export function executionFiles(
   files: Record<string, string>,
 ): Record<string, string> {
-  const locked =
-    `${PROJECT_WORKSPACE_ROOT}/bun.lock` in files ||
-    `${PROJECT_WORKSPACE_ROOT}/bun.lockb` in files;
+  const locked = hasProjectLockfile(files);
   return Object.fromEntries(
     Object.entries(files)
       .filter(
         ([filePath]) =>
-          filePath
-            .replace(/^\/+/, "")
-            .startsWith(`${PROJECT_WORKSPACE_ROOT}/`) &&
-          !filePath
-            .replace(/^\/+/, "")
-            .startsWith(`${PROJECT_WORKSPACE_ROOT}/app-data/`) &&
-          (!filePath.replace(/^\/+/, "").startsWith(`${APP_SOURCE_ROOT}/`) ||
+          isProjectSourcePath(filePath) &&
+          (!isProjectPathWithin(filePath, PROJECT_APPS_DIR) ||
             (locked && filePath.endsWith("/package.json"))),
       )
       .map(([filePath, content]) => [
         filePath,
         !locked && filePath.endsWith("package.json")
-          ? stripSandboxUnresolvableDependencies(content)
+          ? stripSandboxUnresolvableDependencies({
+              packageJson: content,
+              packageNames:
+                filePath === PROJECT_PACKAGE_PATH
+                  ? WORKSPACE_ROOT_STRIPPED_PACKAGES
+                  : SANDBOX_STRIPPED_PACKAGES,
+            })
           : content,
       ]),
   );
 }
 
-function stripSandboxUnresolvableDependencies(packageJson: string): string {
-  if (!SANDBOX_STRIPPED_PACKAGES.some((name) => packageJson.includes(name))) {
+function stripSandboxUnresolvableDependencies({
+  packageJson,
+  packageNames,
+}: {
+  packageJson: string;
+  packageNames: readonly string[];
+}): string {
+  if (!packageNames.some((name) => packageJson.includes(name))) {
     return packageJson;
   }
   let parsed: unknown;
@@ -83,7 +100,7 @@ function stripSandboxUnresolvableDependencies(packageJson: string): string {
   ]) {
     const deps = manifest[section];
     if (typeof deps === "object" && deps !== null) {
-      for (const name of SANDBOX_STRIPPED_PACKAGES) {
+      for (const name of packageNames) {
         delete (deps as Record<string, unknown>)[name];
       }
     }
@@ -164,6 +181,7 @@ export interface WorkflowNode {
     kind: string;
     /** Always a JsonConstant; see {@link WorkflowTriggerBinding.config}. */
     config: unknown;
+    where?: unknown;
     display?: TriggerKindDisplay;
   }>;
   parameters?: ParameterInfo[];
@@ -294,9 +312,43 @@ export type JsonConstant =
  * `unknown` so the OpenAPI-derived response types stay assignable.
  */
 export interface WorkflowTriggerBinding {
+  /** The kind as written: a host kind or a project trigger kind. */
+  kind: string;
+  /** The config as written, without `where`. */
+  config: unknown;
+  /** The binding's own filter (ADR 0171), when it declares one. */
+  where?: unknown;
+  sourceRange: SourceRange;
+}
+
+/**
+ * A trigger kind the project defines (ADR 0171): an exported
+ * `defineTrigger({ name, from: trigger(...), where })` in `.work/triggers/`.
+ * Read statically, like workflow bindings; nothing about it runs.
+ */
+export interface ProjectTriggerKind {
+  name: string;
+  description?: string;
+  /** The exported constant holding the kind, for generated types. */
+  exportName: string;
+  filePath: string;
+  /** The kind it builds on, as written in `from: trigger(...)`. */
+  from: { kind: string; config: unknown; where?: unknown };
+  where?: unknown;
+  sourceRange: SourceRange;
+}
+
+/**
+ * A binding as the host stores it: the host kind at the root of any chain
+ * of project kinds, that kind's config, and every filter along the way,
+ * all of which must match.
+ */
+export interface ResolvedTriggerBinding {
   kind: string;
   config: unknown;
-  sourceRange: SourceRange;
+  where: unknown[];
+  /** The project kind the workflow bound, kept for display. */
+  projectKind?: string;
 }
 
 export interface WorkflowGraph {
@@ -359,16 +411,18 @@ export interface ProjectParseResult {
   workflows: DiscoveredWorkflow[];
   secrets: DeclaredSecret[];
   /**
-   * The app-facing contract surface, when `.catamorphic/workflows/src/app-api.ts` exists.
+   * The app-facing contract surface, when `.work/workflows/src/app-api.ts` exists.
    * Property names on the exported contract object become the callable set
    * apps are authorized against.
    */
   appApi: AppApiSurface | null;
+  /** Project trigger kinds from `.work/triggers/`, sorted by name. */
+  triggerKinds: ProjectTriggerKind[];
   errors: ParseError[];
 }
 
 /** Conventional location of the app contract surface inside a project. */
-export const APP_API_SOURCE_PATH = `${WORKFLOW_SOURCE_ROOT}/src/app-api.ts`;
+export const APP_API_SOURCE_PATH = `${PROJECT_WORKFLOWS_DIR}/src/app-api.ts`;
 
 export interface AppApiSurface {
   filePath: string;
@@ -394,5 +448,7 @@ export interface DeclaredSecret {
   description?: string;
   required: boolean;
   default?: string;
+  /** `webhook`: verifies incoming webhooks only and never reaches a run. */
+  use: "run" | "webhook";
   filePath: string;
 }

@@ -62,6 +62,43 @@ describe("GithubApi", () => {
     expect(repos[1]?.cloneUrl).toBe("https://github.com/octo/hello.git");
   });
 
+  it("creates an empty repository for the user or an organization", async () => {
+    const calls: Array<{ path: string; method?: string; body: unknown }> = [];
+    const api = new GithubApi("tok", {
+      fetch: (async (url: unknown, init?: RequestInit) => {
+        calls.push({
+          path: new URL(String(url)).pathname,
+          method: init?.method,
+          body: JSON.parse(String(init?.body)),
+        });
+        return Response.json(REPO({ full_name: "acme/notes", name: "notes" }));
+      }) as typeof fetch,
+    });
+    expect(
+      (await api.createRepo({ name: "notes", private: true })).fullName,
+    ).toBe("acme/notes");
+    await api.createRepo({
+      name: "notes",
+      organization: "acme",
+      private: false,
+    });
+    expect(calls).toEqual([
+      {
+        path: "/user/repos",
+        method: "POST",
+        body: { name: "notes", private: true, auto_init: false },
+      },
+      {
+        path: "/orgs/acme/repos",
+        method: "POST",
+        body: { name: "notes", private: false, auto_init: false },
+      },
+    ]);
+    await expect(
+      api.createRepo({ name: "../etc", private: true }),
+    ).rejects.toThrow(GithubApiError);
+  });
+
   it("throws GithubApiError with status on failures", async () => {
     const api = new GithubApi("tok", { fetch: fetchRouting({}) });
     await expect(api.getUser()).rejects.toMatchObject({ status: 404 });

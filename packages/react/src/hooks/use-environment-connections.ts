@@ -8,19 +8,22 @@ import {
 } from "../lib/errors.js";
 import { useCatamorphic } from "../provider.js";
 
+/**
+ * One connection alias an Environment commits in `.work/project.json` (ADR
+ * 0172), with the caller's own and the service authority behind it.
+ */
 export interface EnvironmentConnectionBinding {
-  id: string;
-  projectId: string;
   environment: string;
   alias: string;
-  providerKind: string;
-  principalKinds: Array<"member" | "project_service" | "tenant_service">;
-  serviceConnectionId: string | null;
-  capabilities: string[];
+  provider: string;
+  /** Whose authority the alias accepts. */
+  principal: "member" | "service" | "either";
+  /** The service connection's name; shown to connection administrators. */
+  service: string | null;
+  /** What the binding narrows the alias to; null keeps the connection's own. */
+  capabilities: string[] | null;
   memberConnection: ConnectionPrincipalStatus | null;
   serviceConnection: ConnectionPrincipalStatus | null;
-  createdAt: string;
-  updatedAt: string;
 }
 
 export interface ConnectionPrincipalStatus {

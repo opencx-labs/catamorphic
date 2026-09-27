@@ -12,6 +12,8 @@ export const ProvisionWorkUserInputSchema = z.strictObject({
   name: z.string().trim().min(1).max(200),
   password: z.string().min(8).max(128),
   email: z.email().optional(),
+  /** An organization administrator (ADR 0172): manages service connections. */
+  administrator: z.boolean().optional(),
   memberships: z
     .array(
       z.strictObject({
@@ -130,7 +132,7 @@ async function assertCommittedRoles(args: {
       );
       if (!valid) {
         throw new Error(
-          `Project ${assignment.projectId} has no valid committed role "${role}". Add .catamorphic/roles/${role}.json before provisioning this membership.`,
+          `Project ${assignment.projectId} has no valid committed role "${role}". Add .work/roles/${role}.json before provisioning this membership.`,
         );
       }
     }

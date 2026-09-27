@@ -185,7 +185,7 @@ describe("git-sync over ObjectRemoteBackend", () => {
       const log = await origin.log("refs/heads/main");
       expect(log).toHaveLength(1);
       expect(log[0]?.message.trim()).toBe("Initial commit");
-      expect(log[0]?.author.name).toBe("Catamorphic");
+      expect(log[0]?.author.name).toBe("Work");
     });
   });
 
@@ -214,7 +214,7 @@ describe("git-sync over ObjectRemoteBackend", () => {
     try {
       const files = await repoB.readAllFiles();
       expect(files["src/feature.ts"]).toBe("export const feature = true;");
-      expect(files[".catamorphic/project.json"]).toContain("s3-sync-test");
+      expect(files[".work/project.json"]).toContain("s3-sync-test");
     } finally {
       await repoB.dispose();
     }
@@ -251,9 +251,7 @@ describe("git-sync over ObjectRemoteBackend", () => {
         projectId: PROJECT,
       });
       expect(result.sha).toBe(bSha);
-      expect(await repoA.resolveRef("refs/catamorphic/published/main")).toBe(
-        bSha,
-      );
+      expect(await repoA.resolveRef("refs/work/published/main")).toBe(bSha);
     } finally {
       await repoB.dispose();
     }

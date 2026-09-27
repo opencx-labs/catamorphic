@@ -238,7 +238,7 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     await core.projects.writeFile(
       root,
       projectId,
-      ".catamorphic/workflows/src/brain.ts",
+      ".work/workflows/src/brain.ts",
       {
         content: WORKFLOWS,
         commitMessage: "Add workflows",

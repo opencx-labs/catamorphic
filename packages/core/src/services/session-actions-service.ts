@@ -6,30 +6,73 @@ import { z } from "zod";
 import type { Identity } from "../identity.js";
 import type { AgentSessionsService } from "./agent-sessions-service.js";
 import type { SessionMessageAuthor } from "./agent-turns-service.js";
+import { AccessDeniedError } from "./artifact-scope.js";
+import {
+  ChatAudienceSchema,
+  ChatKeySchema,
+  keyedChatOwnerId,
+} from "./chat-delivery.js";
+import { SessionWorkspaceRequestSchema } from "./session-workspaces.js";
 import type { WatchersService } from "./watchers-service.js";
 
+/**
+ * A chat by `sessionId`, or by the project's `key` for it (ADR 0173):
+ * the caller's own keyed chat, the project chat with `audience: "project"`
+ * (the default for a project automation), or a member's.
+ */
 const target = {
-  sessionId: z.string().uuid(),
+  sessionId: z.string().uuid().optional(),
+  key: ChatKeySchema.optional(),
+  audience: ChatAudienceSchema.optional(),
   expectedStateRevision: z.number().int().nonnegative().optional(),
 };
 const mutation = { ...target, idempotencyKey: z.string().min(1).max(300) };
+function namesOneChat(value: object, context: z.RefinementCtx): void {
+  const given = (field: string) =>
+    field in value && Reflect.get(value, field) !== undefined;
+  if (Number(given("sessionId")) + Number(given("key")) !== 1)
+    context.addIssue({
+      code: "custom",
+      message: "Name the chat with exactly one of sessionId or key",
+    });
+  if (given("audience") && !given("key"))
+    context.addIssue({
+      code: "custom",
+      message: "audience applies only to a chat named by key",
+    });
+}
+function chat<Shape extends typeof target>(shape: Shape) {
+  return z.strictObject(shape).superRefine(namesOneChat);
+}
 export const SESSION_ACTION_SCHEMAS = {
-  inspect: z.strictObject(target),
+  inspect: chat(target),
   list: z.strictObject({ limit: z.number().int().min(1).max(100).optional() }),
-  history: z.strictObject({
+  /** The open chat for a key, or null. Never starts one. */
+  find: z.strictObject({
+    key: ChatKeySchema,
+    audience: ChatAudienceSchema.optional(),
+  }),
+  history: chat({
     ...target,
     limit: z.number().int().min(1).max(100).optional(),
+    /**
+     * End at this message instead of the newest: the transcript as of an
+     * event, such as a settled turn's `resultMessageId`.
+     */
+    through: z.string().uuid().optional(),
   }),
-  create: z.strictObject({
+  create: chat({
     ...mutation,
     agentId: z.string().optional(),
     title: z.string().max(500).optional(),
+    /** Start at a ref of the project's linked remote (ADR 0178). */
+    workspace: SessionWorkspaceRequestSchema.optional(),
   }),
-  fork: z.strictObject({
+  fork: chat({
     ...mutation,
     messageId: z.string().uuid().optional(),
   }),
-  spawn: z.strictObject({
+  spawn: chat({
     ...mutation,
     task: z.string().min(1),
     routeId: z.string().optional(),
@@ -37,14 +80,23 @@ export const SESSION_ACTION_SCHEMAS = {
     title: z.string().max(500).optional(),
     contextMode: z.enum(["fresh", "inherit"]).optional(),
   }),
-  archive: z.strictObject({ ...mutation, confirmStop: z.boolean().optional() }),
-  unarchive: z.strictObject(mutation),
-  interrupt: z.strictObject(mutation),
-  complete: z.strictObject({ ...mutation, content: z.string().min(1) }),
-  reopen: z.strictObject(mutation),
-  stopWatcher: z.strictObject({ ...mutation, watcherId: z.string().uuid() }),
+  archive: chat({ ...mutation, confirmStop: z.boolean().optional() }),
+  unarchive: chat(mutation),
+  /** The end of a chat's life: its work, workspace and key are released. */
+  close: chat(mutation),
+  interrupt: chat(mutation),
+  complete: chat({ ...mutation, content: z.string().min(1) }),
+  reopen: chat(mutation),
+  stopWatcher: chat({ ...mutation, watcherId: z.string().uuid() }),
 };
 export type SessionActionOperation = keyof typeof SESSION_ACTION_SCHEMAS;
+
+export class SessionKeyNotFoundError extends Error {
+  constructor(readonly key: string) {
+    super(`No open chat has the key ${key}`);
+    this.name = "SessionKeyNotFoundError";
+  }
+}
 const tracer = getTracer("@catamorphic/core");
 
 /** Shared host operations. Transport adapters attach identity and actor, never author code. */
@@ -74,28 +126,122 @@ export class SessionActionsService {
         },
       },
       async () => {
-        const args = SESSION_ACTION_SCHEMAS[input.operation].parse(input.args);
+        const parsed = SESSION_ACTION_SCHEMAS[input.operation].parse(
+          input.args,
+        );
         if (input.operation === "list")
           return json(
             await this.sessions.list(input.identity, input.projectId, {
-              limit: "limit" in args ? args.limit : 100,
+              limit: "limit" in parsed ? parsed.limit : 100,
             }),
           );
-        if (!("sessionId" in args)) throw new Error("sessionId is required");
-        const detail = await this.sessions.get(
-          input.identity,
-          input.projectId,
-          args.sessionId,
-        );
+        const keyed =
+          "key" in parsed && parsed.key !== undefined
+            ? {
+                key: parsed.key,
+                ownerId: keyedChatOwnerId({
+                  caller: input.identity,
+                  audience: "audience" in parsed ? parsed.audience : undefined,
+                }),
+              }
+            : undefined;
+        const open = keyed
+          ? await this.sessions.keyedChatId({
+              projectId: input.projectId,
+              ...keyed,
+            })
+          : "sessionId" in parsed
+            ? parsed.sessionId
+            : undefined;
+        // A key names a chat only to those who may see it: a chat the
+        // caller cannot reach answers exactly like no chat at all.
+        const read = async (sessionId: string) =>
+          this.sessions
+            .get(input.identity, input.projectId, sessionId)
+            .catch((error: unknown) => {
+              if (keyed && error instanceof AccessDeniedError) return null;
+              throw error;
+            });
+        if (input.operation === "find") {
+          const detail = open ? await read(open) : null;
+          return detail ? json(detail) : null;
+        }
+        // A retried mutation whose chat is gone (closed) still answers
+        // with its recorded result.
+        const earlier =
+          !open && "idempotencyKey" in parsed
+            ? await this.db
+                .selectFrom("session_actions")
+                .select([
+                  "operation",
+                  "input",
+                  "result",
+                  "status",
+                  "session_id",
+                ])
+                .where("project_id", "=", input.projectId)
+                .where(
+                  "idempotency_key",
+                  "=",
+                  JSON.stringify([input.author, parsed.idempotencyKey]),
+                )
+                .executeTakeFirst()
+            : undefined;
+        const retried =
+          earlier?.operation === input.operation &&
+          canonical(earlier.input) === canonical(json(parsed));
+        if (retried && earlier?.status === "completed") return earlier.result;
+        // A close that stopped after closing its chat finishes the cleanup
+        // when retried, though the key no longer names the chat.
+        const found =
+          open ??
+          (retried && input.operation === "close"
+            ? (earlier?.session_id ?? undefined)
+            : undefined);
+        // Closing a chat that is not open has nothing left to do.
+        if (!found && input.operation === "close")
+          return json({ sessionId: null, closed: false });
+        if (!found) throw new SessionKeyNotFoundError(keyed?.key ?? "");
+        // The chat as the operation sees it: named by id from here on. The
+        // action records what the caller asked for (`parsed`).
+        const {
+          key: _key,
+          audience: _audience,
+          ...rest
+        } = {
+          key: undefined,
+          audience: undefined,
+          ...parsed,
+        };
+        const args = { ...rest, sessionId: found };
+        const detail = await read(args.sessionId);
+        if (!detail) {
+          if (input.operation === "close")
+            return json({ sessionId: null, closed: false });
+          throw new SessionKeyNotFoundError(keyed?.key ?? "");
+        }
         const session = detail;
         if (input.operation === "inspect") return json(session);
-        if (input.operation === "history")
+        if (input.operation === "history") {
+          const through =
+            "through" in args && args.through !== undefined
+              ? args.through
+              : undefined;
+          const end =
+            through === undefined
+              ? session.messages.length
+              : session.messages.findIndex(
+                  (message) => message.id === through,
+                ) + 1;
+          if (end === 0 && through !== undefined)
+            throw new Error("No message in this chat has that id");
+          const limit = "limit" in args ? (args.limit ?? 30) : 30;
           return json({
             sessionId: session.id,
-            messages: session.messages.slice(
-              -("limit" in args ? (args.limit ?? 30) : 30),
-            ),
+            key: session.key,
+            messages: session.messages.slice(Math.max(0, end - limit), end),
           });
+        }
         if (!("idempotencyKey" in args))
           throw new Error("idempotencyKey is required");
         // Everything past this point changes the session: settle access
@@ -127,7 +273,7 @@ export class SessionActionsService {
               causation: input.causation ?? [],
               provenance: input.provenance ?? {},
             }),
-            input: json(args),
+            input: json(parsed),
             idempotency_key: key,
           })
           .onConflict((conflict) =>
@@ -145,12 +291,12 @@ export class SessionActionsService {
             .executeTakeFirstOrThrow());
         if (
           action.operation !== input.operation ||
-          JSON.stringify(action.input) !== JSON.stringify(json(args))
+          JSON.stringify(action.input) !== JSON.stringify(json(parsed))
         ) {
           // Compare JSON semantically below: jsonb property order is not source order.
           if (
             action.operation !== input.operation ||
-            canonical(action.input) !== canonical(json(args))
+            canonical(action.input) !== canonical(json(parsed))
           )
             throw new Error(
               "This idempotency key was already used for another action",
@@ -279,6 +425,20 @@ export class SessionActionsService {
                 { origin: input },
               );
               break;
+            case "close":
+              // Repeating a close finishes what an interrupted one left;
+              // only closing an open chat, or retrying that, reports it.
+              await this.sessions.close(
+                input.identity,
+                input.projectId,
+                args.sessionId,
+                { origin: input },
+              );
+              result = {
+                sessionId: args.sessionId,
+                closed: session.status !== "closed" || !accepted,
+              };
+              break;
             case "interrupt":
               if (action.target_turn_id)
                 await this.sessions.interrupt(
@@ -332,6 +492,7 @@ export class SessionActionsService {
                 .forUpdate()
                 .executeTakeFirstOrThrow();
               if (
+                "expectedStateRevision" in args &&
                 args.expectedStateRevision !== undefined &&
                 Number(current.state_revision) !== args.expectedStateRevision
               )
@@ -430,12 +591,14 @@ function actionLabel(operation: SessionActionOperation): string {
   return {
     inspect: "Inspected this session",
     list: "Listed sessions",
+    find: "Found a session by key",
     history: "Read session history",
     create: "Created a session",
     fork: "Forked this session",
     spawn: "Created a child session",
     archive: "Archived this session",
     unarchive: "Unarchived this session",
+    close: "Closed this chat",
     interrupt: "Interrupted this session",
     complete: "Marked work finished",
     reopen: "Reopened the work",

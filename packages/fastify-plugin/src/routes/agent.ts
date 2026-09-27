@@ -1,4 +1,5 @@
 import {
+  AccessDeniedError,
   AgentDelegationDeniedError,
   AgentNotConfiguredError,
   AgentRequestAlreadyResolvedError,
@@ -15,8 +16,10 @@ import {
   EnvironmentCapacityError,
   EnvironmentIncompatibleError,
   EnvironmentNotFoundError,
+  keyedChatOwnerId,
   NoCompatibleEnvironmentError,
   ProjectNotFoundError,
+  parseChatKey,
   SessionMirrorDivergedError,
   UnsupportedAgentTopologyError,
 } from "@catamorphic/core";
@@ -42,12 +45,15 @@ import {
   AnswerAgentQuestionSchema,
   ArchiveAgentSessionSchema,
   AuthenticationRequiredSchema,
+  ClosedKeyedChatSchema,
   CreateAgentSessionSchema,
   CreateAgentSubsessionSchema,
   EnvironmentAccessErrorSchema,
   EnvironmentErrorSchema,
   ErrorSchema,
   ForkAgentSessionSchema,
+  KeyedChatParamsSchema,
+  KeyedChatQuerySchema,
   ListSchema,
   MirrorAgentSessionSchema,
   MirrorConflictSchema,
@@ -149,6 +155,9 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
             source: request.body.source,
             parentSessionId: request.body.parentSessionId,
             title: request.body.title,
+            ...(request.body.workspace
+              ? { workspace: request.body.workspace }
+              : {}),
           },
         );
         return reply.status(201).send(session);
@@ -873,6 +882,9 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
             idempotencyKey: request.body.idempotencyKey
               ? `user:${identity.externalUserId}:${request.body.idempotencyKey}`
               : undefined,
+            ...(request.body.workspace
+              ? { workspace: request.body.workspace }
+              : {}),
           },
         );
         return reply.status(202).send(receipt);
@@ -925,23 +937,39 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           .status(503)
           .send({ error: "Tool permissions are not configured" });
       }
-      try {
-        await agentSessions.assertSession(
-          resolveIdentity(request),
+      const identity = resolveIdentity(request);
+      const approverOnly = await agentSessions
+        .assertSession(
+          identity,
           request.params.projectId,
           request.params.sessionId,
-        );
-      } catch (err) {
-        if (
-          err instanceof ProjectNotFoundError ||
-          err instanceof AgentSessionNotFoundError
-        ) {
-          return reply.status(404).send({ error: "Session not found" });
-        }
-        throw err;
-      }
+        )
+        .then(() => false)
+        .catch((err: unknown) => {
+          // An unattended chat's approvers see the asks they may answer
+          // (ADR 0176), and nothing else of the chat.
+          if (err instanceof AccessDeniedError) return true;
+          throw err;
+        })
+        .catch((err: unknown) => {
+          if (
+            err instanceof ProjectNotFoundError ||
+            err instanceof AgentSessionNotFoundError
+          )
+            return undefined;
+          throw err;
+        });
+      if (approverOnly === undefined)
+        return reply.status(404).send({ error: "Session not found" });
+      const permissions = await broker.list(request.params.sessionId);
+      // An ask that names approvers is shown to them alone; the rest to
+      // whoever holds the chat.
       return reply.send({
-        permissions: await broker.list(request.params.sessionId),
+        permissions: permissions.filter((permission) =>
+          permission.approvers?.length
+            ? permission.approvers.includes(identity.externalUserId)
+            : !approverOnly,
+        ),
       });
     },
   });
@@ -962,9 +990,11 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           .status(503)
           .send({ error: "Tool permissions are not configured" });
       }
+      const identity = resolveIdentity(request);
+      const pending = await broker.get(request.params.permissionId);
       try {
         await agentSessions.assertSession(
-          resolveIdentity(request),
+          identity,
           request.params.projectId,
           request.params.sessionId,
         );
@@ -975,9 +1005,19 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         ) {
           return reply.status(404).send({ error: "Session not found" });
         }
-        throw err;
+        // A named approver answers without otherwise holding the chat.
+        if (
+          !(err instanceof AccessDeniedError) ||
+          !pending?.approvers?.includes(identity.externalUserId)
+        )
+          throw err;
       }
-      const pending = await broker.get(request.params.permissionId);
+      // Named approvers answer it, and nobody else (ADR 0176).
+      if (
+        pending?.approvers?.length &&
+        !pending.approvers.includes(identity.externalUserId)
+      )
+        throw new AccessDeniedError();
       // An ask belongs to the session it was raised in — answering it from
       // another session's URL is a 404, not a hijack.
       if (!pending || pending.sessionId !== request.params.sessionId) {
@@ -1270,6 +1310,98 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
     },
   });
 
+  // A chat by the project's key (ADR 0173). Finding never starts a chat.
+  typed.get(
+    "/projects/:projectId/agent/chats/:key",
+    {
+      schema: {
+        params: KeyedChatParamsSchema,
+        querystring: KeyedChatQuerySchema,
+        response: {
+          200: AgentSessionSchema,
+          404: ErrorSchema,
+          503: ErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      const identity = resolveIdentity(request);
+      const { projectId } = request.params;
+      const sessionId = await agentSessions.keyedChatId({
+        projectId,
+        key: parseChatKey(request.params.key),
+        ownerId: keyedChatOwnerId({
+          caller: identity,
+          audience: keyedAudience(request.query),
+        }),
+      });
+      if (!sessionId) return reply.status(404).send({ error: "No open chat" });
+      try {
+        return reply.send(
+          await agentSessions.get(identity, projectId, sessionId),
+        );
+      } catch (err) {
+        // A chat the caller may not see answers like no chat at all.
+        if (
+          err instanceof ProjectNotFoundError ||
+          err instanceof AgentSessionNotFoundError ||
+          err instanceof AccessDeniedError
+        )
+          return reply.status(404).send({ error: "No open chat" });
+        throw err;
+      }
+    },
+  );
+
+  // Close a keyed chat: its work, workspace and key are released; the
+  // transcript stays readable. Closing a key with no open chat is a no-op.
+  typed.route({
+    method: "DELETE",
+    url: "/projects/:projectId/agent/chats/:key",
+    schema: {
+      params: KeyedChatParamsSchema,
+      querystring: KeyedChatQuerySchema,
+      response: {
+        200: ClosedKeyedChatSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      const identity = resolveIdentity(request);
+      const { projectId } = request.params;
+      const sessionId = await agentSessions.keyedChatId({
+        projectId,
+        key: parseChatKey(request.params.key),
+        ownerId: keyedChatOwnerId({
+          caller: identity,
+          audience: keyedAudience(request.query),
+        }),
+      });
+      if (!sessionId) return reply.send({ sessionId: null, closed: false });
+      try {
+        await agentSessions.close(identity, projectId, sessionId);
+        return reply.send({ sessionId, closed: true });
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError)
+          return reply.status(404).send({ error: "No open chat" });
+        // A chat the caller may not reach answers like no open chat.
+        if (
+          err instanceof AgentSessionNotFoundError ||
+          err instanceof AccessDeniedError
+        )
+          return reply.send({ sessionId: null, closed: false });
+        throw err;
+      }
+    },
+  });
+
   typed.get(
     "/projects/:projectId/agent/sessions/:sessionId/archive-impact",
     {
@@ -1461,7 +1593,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
     },
   });
 
-  // Committed project agent definitions (`.catamorphic/agents/*.json`, ADR 0050) —
+  // Committed project agent definitions (`.work/agents/*.json`, ADR 0050) —
   // parsed and validated; unusable files are reported per entry.
   typed.route({
     method: "GET",
@@ -1492,4 +1624,12 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
       }
     },
   });
+}
+
+function keyedAudience(query: {
+  audience?: "project";
+  member?: string;
+}): "project" | { member: string } | undefined {
+  if (query.audience) return query.audience;
+  return query.member ? { member: query.member } : undefined;
 }

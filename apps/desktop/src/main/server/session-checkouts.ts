@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { ensurePersonalFilesExcluded, hasLocalGit } from "@catamorphic/git";
+import {
+  AGENT_COMMIT_AUTHOR,
+  MANAGED_BRANCH_PREFIX,
+  PROJECT_PERSONAL_DIR,
+} from "@catamorphic/workflow/project-layout";
 import type { PGlite } from "@electric-sql/pglite";
 
 const execFileAsync = promisify(execFile);
@@ -159,6 +164,55 @@ export class SessionCheckouts {
     }
   }
 
+  /**
+   * The folder a native agent works in, and whether it is the chat's own.
+   * A chat at a ref of the project's remote, or asked to move to one (ADR
+   * 0178), always works in its own worktree, started at that commit from the
+   * host's mirror. Only a managed worktree is the chat's own: base moves
+   * never touch the project folder or a worktree the person assigned.
+   */
+  async resolveForAgent(input: {
+    projectId: string;
+    sessionId: string;
+    workspace?: { repository: string; pin: string; commit: string };
+    /** Whether the isolation policy keeps this chat out of `checkoutPath`. */
+    requiresIsolation(checkoutPath: string): Promise<boolean>;
+  }): Promise<{ path: string; owned: boolean }> {
+    const current = await this.describe(input);
+    if (input.workspace && current.kind === "primary") {
+      const created = await this.createManaged({
+        projectId: input.projectId,
+        sessionId: input.sessionId,
+        start: {
+          repository: input.workspace.repository,
+          ref: input.workspace.pin,
+          commit: input.workspace.commit,
+        },
+      });
+      return { path: created.path, owned: true };
+    }
+    if (await input.requiresIsolation(current.path)) {
+      if (current.kind !== "primary") {
+        throw new Error(
+          "Isolation policy prevents sharing this assigned worktree with another running session. Choose another worktree or wait for that session to finish.",
+        );
+      }
+      const created = await this.createManaged({
+        projectId: input.projectId,
+        sessionId: input.sessionId,
+        ensureAvailable: async (checkoutPath) => {
+          if (await input.requiresIsolation(checkoutPath)) {
+            throw new Error(
+              "Isolation policy prevents sharing the new worktree with another running session.",
+            );
+          }
+        },
+      });
+      return { path: created.path, owned: true };
+    }
+    return { path: current.path, owned: current.kind === "managed" };
+  }
+
   async describe(input: {
     projectId: string;
     sessionId: string;
@@ -254,6 +308,12 @@ export class SessionCheckouts {
     projectId: string;
     sessionId: string;
     ensureAvailable?(path: string): Promise<void>;
+    /**
+     * Start the worktree at `commit`, fetched from `ref` of the repository
+     * at `repository` (the host's mirror of the project's remote, ADR 0178),
+     * instead of the primary checkout's HEAD.
+     */
+    start?: { repository: string; ref: string; commit: string };
   }): Promise<SessionCheckoutBinding> {
     const root = this.requireRoot(input.projectId);
     const commonDir = await canonicalCommonDir(root);
@@ -296,10 +356,25 @@ export class SessionCheckouts {
       const prefix = input.sessionId.replace(/[^A-Za-z0-9]/g, "").slice(0, 8);
       const branch = await this.availableBranch(
         root,
-        `catamorphic/${prefix || "session"}`,
+        `${MANAGED_BRANCH_PREFIX}${prefix || "session"}`,
       );
       try {
-        await git(root, ["worktree", "add", "-b", branch, worktreePath]);
+        if (input.start)
+          await git(root, [
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            input.start.repository,
+            input.start.ref,
+          ]);
+        await git(root, [
+          "worktree",
+          "add",
+          "-b",
+          branch,
+          worktreePath,
+          ...(input.start ? [input.start.commit] : []),
+        ]);
         const binding: SessionCheckoutBinding = {
           sessionId: input.sessionId,
           projectId: input.projectId,
@@ -401,7 +476,7 @@ export class SessionCheckouts {
       const prefix = input.sessionId.replace(/[^A-Za-z0-9]/g, "").slice(0, 8);
       branch = await this.availableBranch(
         this.requireRoot(input.projectId),
-        `catamorphic/${prefix || "session"}-review`,
+        `${MANAGED_BRANCH_PREFIX}${prefix || "session"}-review`,
       );
       await git(description.path, ["switch", "-c", branch]);
     }
@@ -426,7 +501,7 @@ export class SessionCheckouts {
       const personalFiles = await git(input.workingDirectory, [
         "ls-files",
         "--",
-        ".catamorphic/personal",
+        PROJECT_PERSONAL_DIR,
       ]);
       if (personalFiles.trim()) {
         throw new Error(
@@ -443,9 +518,9 @@ export class SessionCheckouts {
       await git(input.workingDirectory, ["add", "-A"]);
       await git(input.workingDirectory, [
         "-c",
-        "user.name=Catamorphic Agent",
+        `user.name=${AGENT_COMMIT_AUTHOR.name}`,
         "-c",
-        "user.email=agent@catamorphic.dev",
+        `user.email=${AGENT_COMMIT_AUTHOR.email}`,
         "commit",
         "-m",
         input.message,

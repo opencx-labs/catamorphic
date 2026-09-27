@@ -6,7 +6,10 @@ import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Identity } from "../identity.js";
 import { MemoryCredentialVault } from "../services/credential-vault.js";
-import { SecretsService } from "../services/secrets-service.js";
+import {
+  SecretDeclarationConflictError,
+  SecretsService,
+} from "../services/secrets-service.js";
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
 const db = new Kysely<DB>({
@@ -25,6 +28,7 @@ describe("sealed project secrets (ADR 0162)", () => {
     async () => [
       { name: "API_KEY", required: true },
       { name: "WEBHOOK_SECRET", required: false },
+      { name: "SIGNING_SECRET", required: true, use: "webhook" as const },
     ],
     vault,
   );
@@ -72,6 +76,21 @@ describe("sealed project secrets (ADR 0162)", () => {
       values: { API_KEY: "sk-live-123" },
       missingRequired: [],
     });
+  });
+
+  it("keeps webhook signing secrets out of runs but readable for verification", async () => {
+    await secrets.upsert({
+      identity: owner,
+      projectId,
+      name: "SIGNING_SECRET",
+      value: "whsec-456",
+    });
+    const loaded = await secrets.loadForRun({ identity: owner, projectId });
+    expect(loaded.values).not.toHaveProperty("SIGNING_SECRET");
+    expect(loaded.missingRequired).not.toContain("SIGNING_SECRET");
+    await expect(
+      secrets.value({ tenantId, projectId, name: "SIGNING_SECRET" }),
+    ).resolves.toBe("whsec-456");
   });
 
   it("drops the replaced vault record on overwrite and delete", async () => {
@@ -125,5 +144,43 @@ describe("sealed project secrets (ADR 0162)", () => {
     const sealed = await row("WEBHOOK_SECRET");
     expect(sealed?.value).toBeNull();
     expect(sealed?.credential_ref).toBeTruthy();
+  });
+
+  describe("a plugin secret named like a project webhook secret", () => {
+    const plugin = (name: string) => ({
+      getDeclaredSecrets: async () =>
+        new Map([
+          [name, { name, label: name, description: "", required: true }],
+        ]),
+    });
+    const project = async () => [
+      { name: "SIGNING_SECRET", required: true, use: "webhook" as const },
+      { name: "API_KEY", required: false },
+    ];
+
+    it("is refused a value and refuses runs instead of reaching them", async () => {
+      const secrets = new SecretsService(db, plugin("SIGNING_SECRET"), project);
+      await expect(
+        secrets.upsert({
+          identity: owner,
+          projectId,
+          name: "SIGNING_SECRET",
+          value: "whsec-new",
+        }),
+      ).rejects.toBeInstanceOf(SecretDeclarationConflictError);
+      await expect(
+        secrets.loadForRun({ identity: owner, projectId }),
+      ).rejects.toThrow(
+        "Secret 'SIGNING_SECRET' is declared webhook-only by the project and also by an attached plugin; rename one of them",
+      );
+    });
+
+    it("still wins over a project run secret of the same name", async () => {
+      const secrets = new SecretsService(db, plugin("API_KEY"), project);
+      const [status] = (
+        await secrets.list({ identity: owner, projectId })
+      ).filter((secret) => secret.name === "API_KEY");
+      expect(status?.source).toBe("plugin");
+    });
   });
 });

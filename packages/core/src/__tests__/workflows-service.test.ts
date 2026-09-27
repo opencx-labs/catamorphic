@@ -69,7 +69,7 @@ describe("WorkflowsService", () => {
 
 describe("WorkflowsService.listDeclaredSecrets", () => {
   const secretFiles = (description: string) => ({
-    ".catamorphic/workflows/src/secrets.ts": `
+    ".work/workflows/src/secrets.ts": `
       import { defineSecrets } from "@catamorphic/workflow";
       export const secrets = defineSecrets({
         STRIPE_API_KEY: { description: "${description}" },

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { PROJECT_MANIFEST_PATH } from "@catamorphic/git";
+import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import {
   matchesProjectExperience,
   type ProjectExperienceContext,
@@ -8,7 +8,7 @@ import {
 } from "../shared/project-experience.js";
 
 /**
- * The project manifest (`.catamorphic/project.json`) is the committed home
+ * The project manifest (`.work/project.json`) is the committed home
  * of project-scoped config (ADR 0043). This module reads and writes the
  * `defaultAgent` key (ADR 0056): the slug of the committed project agent
  * that answers new chats for every collaborator, unless a user's own

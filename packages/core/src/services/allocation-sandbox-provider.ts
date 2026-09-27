@@ -82,8 +82,14 @@ export function allocationSandboxProvider(args: {
       );
     // Keep the reservation on an uncertain create. Lease expiry does not prove
     // that the provider failed to allocate a machine.
+    // The Environment's image, containers and egress were fixed when the
+    // Allocation was admitted; no caller can widen them (ADR 0176).
+    const sandbox = allocation.policy.sandbox;
     const handle = await provider.createSandbox({
       ...opts,
+      ...(sandbox?.image ? { image: sandbox.image } : {}),
+      ...(sandbox?.containers ? { containers: true } : {}),
+      ...(sandbox?.egress ? { egress: sandbox.egress } : {}),
       resources,
       labels: {
         ...opts.labels,
@@ -104,10 +110,12 @@ export function allocationSandboxProvider(args: {
     return action();
   };
   const runtime = provider.deploymentRuntime;
+  const processes = provider.processes;
   return {
     workspaceRoot: provider.workspaceRoot,
     resourceLimits: provider.resourceLimits,
     isolation: provider.isolation,
+    capabilities: provider.capabilities,
     createSandbox: create,
     startSandbox: (id) => guard(id, () => provider.startSandbox(id)),
     stopSandbox: (id) => guard(id, () => provider.stopSandbox(id)),
@@ -118,11 +126,11 @@ export function allocationSandboxProvider(args: {
       guard(id, () =>
         provider.executeCommand(id, command, {
           ...opts,
-          ...(limits?.timeoutSeconds
+          ...(limits?.commandTimeoutSeconds
             ? {
                 timeout: Math.min(
-                  opts?.timeout ?? limits.timeoutSeconds,
-                  limits.timeoutSeconds,
+                  opts?.timeout ?? limits.commandTimeoutSeconds,
+                  limits.commandTimeoutSeconds,
                 ),
               }
             : {}),
@@ -136,6 +144,24 @@ export function allocationSandboxProvider(args: {
       guard(id, () => provider.gitClone(id, url, path, opts)),
     gitCheckout: (id, path, ref) =>
       guard(id, () => provider.gitCheckout(id, path, ref)),
+    // Background processes live in the Allocation's sandbox and end with
+    // it; each operation proves the Allocation still owns that sandbox.
+    ...(processes
+      ? {
+          processes: {
+            startProcess: (opts) =>
+              guard(opts.sandboxId, () => processes.startProcess(opts)),
+            readProcessOutput: (opts) =>
+              guard(opts.sandboxId, () => processes.readProcessOutput(opts)),
+            signalProcess: (opts) =>
+              guard(opts.sandboxId, () => processes.signalProcess(opts)),
+            listProcesses: (opts) =>
+              guard(opts.sandboxId, () => processes.listProcesses(opts)),
+            writeProcessInput: (opts) =>
+              guard(opts.sandboxId, () => processes.writeProcessInput(opts)),
+          },
+        }
+      : {}),
     ...(runtime
       ? {
           deploymentRuntime: {

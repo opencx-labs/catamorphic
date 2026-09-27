@@ -36,7 +36,7 @@ todos/delegation/monitors stay disabled when the host owns those functions.
 ## Inventory and disposition
 
 Names below omit `workspace.` or `project.` prefixes for readability.
-Availability also depends on identity, services, agent mode and topology.
+Availability also depends on identity, services, agent sandboxing and topology.
 
 | Operations | Projection and purpose |
 |---|---|
@@ -57,7 +57,7 @@ Availability also depends on identity, services, agent mode and topology.
 | `documents_storage`, `documents_list`, `documents_read`, `documents_search`, `documents_write`, `documents_delete`, `documents_history` | Deferred shared document/store services; ordinary checkout files use native tools |
 | `publish_document`, `revoke_publication`, `list_publications`, `propose_change` | Deferred sharing and proposal state |
 | `ask_agent` | Deferred project-agent entry, distinct from peer delivery; host routes control delegation |
-| `create_watcher`, `list_watchers`, `stop_watcher`, `create_github_watcher` | Deferred durable workflows with session-owned lifetime |
+| `create_watcher`, `list_watchers`, `stop_watcher` | Deferred durable workflows with session-owned lifetime; `eventSource: "github"` polls the project's repository as github webhook deliveries (ADR 0177) |
 | `session_artifact`, `set_app_presentation` | Deferred temporary artifacts and app metadata; title/icon can be supplied at creation |
 | Project-defined workflow tools, `catamorphic_poll_run` | Deferred live deployed workflow bindings and continuation; identical execution service to public MCP |
 | `components.read` | Existing deferred, installable component packs; composition and evidence remain code and skills |

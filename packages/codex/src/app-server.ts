@@ -1,9 +1,12 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
-import type { ToolPermissionHandler } from "@catamorphic/sandbox";
+import type {
+  SandboxStdioProcess,
+  ToolPermissionHandler,
+} from "@catamorphic/sandbox";
 import {
   agentQuestionDescription,
   agentQuestionInputSchema,
@@ -35,6 +38,23 @@ export type CodexElicitationResult = {
 const object = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
+/** The app server as the client drives it: a local child or a sandbox's. */
+type AppServerProcess = Pick<
+  SandboxStdioProcess,
+  "stdin" | "stdout" | "stderr" | "exitCode" | "kill" | "on" | "once"
+>;
+
+/**
+ * Starts the app server elsewhere (ADR 0180: inside a session's sandbox).
+ * `env` is its whole environment beyond the sandbox's own: nothing from
+ * this host's environment is added.
+ */
+export type CodexAppServerSpawn = (args: {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}) => AppServerProcess;
+
 /** Native bidirectional Codex protocol. Owns MCP children for the session lifetime. */
 export class CodexAppServer {
   private context?: string;
@@ -50,7 +70,7 @@ export class CodexAppServer {
   setContext(context: string | undefined) {
     this.context = context;
   }
-  private child?: ChildProcessWithoutNullStreams;
+  private child?: AppServerProcess;
   private pending = new Map<
     number,
     {
@@ -71,6 +91,7 @@ export class CodexAppServer {
     ) => Promise<CodexElicitationResult>,
     private approve?: ToolPermissionHandler,
     private hostSessionId?: string,
+    private spawnElsewhere?: CodexAppServerSpawn,
   ) {}
 
   private async ready() {
@@ -84,6 +105,7 @@ export class CodexAppServer {
   private async initialize() {
     const command =
       this.options.codexPathOverride ??
+      (this.spawnElsewhere ? "codex" : undefined) ??
       path.join(
         path.dirname(
           createRequire(import.meta.resolve("@openai/codex-sdk")).resolve(
@@ -119,17 +141,19 @@ export class CodexAppServer {
         `model_providers.${provider}.requires_openai_auth=false`,
       );
     }
-    this.child = spawn(command, args, {
-      env: {
-        ...process.env,
-        ...this.options.env,
-        ...(this.options.apiKey ? { CODEX_API_KEY: this.options.apiKey } : {}),
-        ...(this.options.baseUrl
-          ? { OPENAI_BASE_URL: this.options.baseUrl }
-          : {}),
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const env = {
+      ...this.options.env,
+      ...(this.options.apiKey ? { CODEX_API_KEY: this.options.apiKey } : {}),
+      ...(this.options.baseUrl
+        ? { OPENAI_BASE_URL: this.options.baseUrl }
+        : {}),
+    };
+    this.child = this.spawnElsewhere
+      ? this.spawnElsewhere({ command, args, env })
+      : spawn(command, args, {
+          env: { ...process.env, ...env },
+          stdio: ["pipe", "pipe", "pipe"],
+        });
     // Drain diagnostics without leaking credentials or duplicating model output.
     this.child.stderr.resume();
     this.child.on("error", (error) => this.fail(error));

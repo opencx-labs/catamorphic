@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
- * Project agents (ADR 0050): committed `.catamorphic/agents/<slug>.json` definitions
+ * Project agents (ADR 0050): committed `.work/agents/<slug>.json` definitions
  * surface in the palette's agent pickers under a "Project agents" group,
  * run through the registry (`project:<projectId>:<slug>` ids), and gate
  * personal credentials behind the consent dialog.
@@ -147,7 +147,7 @@ describe("project agents", () => {
 
     // The work-product shape: a definition, its persona, a second
     // definition that needs consent, and one broken file.
-    const agentsDir = path.join(projectRoot, ".catamorphic", "agents");
+    const agentsDir = path.join(projectRoot, ".work", "agents");
     fs.mkdirSync(agentsDir, { recursive: true });
     fs.writeFileSync(
       path.join(agentsDir, "helper.json"),
@@ -265,7 +265,7 @@ describe("project agents", () => {
   it("re-requires consent after the persona file changes", async () => {
     // A persona edit changes the definition hash → stored consent stale.
     fs.appendFileSync(
-      path.join(projectRoot, ".catamorphic", "agents", "reviewer.md"),
+      path.join(projectRoot, ".work", "agents", "reviewer.md"),
       "Now with different instructions.\n",
     );
     // The default-agent picker (always available) shows the same consent

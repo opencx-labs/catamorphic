@@ -112,6 +112,13 @@ root identities do not pass through membership resolution; hosts remain
 responsible for their authority. The stock server resolves memberships live. Identity refresh cannot change the tenant or acting user, or expand the grants
 carried by the original caller. A fresh turn can bind a newly authorized identity.
 
+Before any host hook, core compares the capability with the session agent's
+sandboxing (ADR 0182): `read` effects need `contained`, `write` effects need
+`propose`, and a capability may ask more with `sandboxing: "publish"`
+(deploying or publishing). Refusals tell the agent what its sandboxing allows
+instead. A harness's own permission mode (Claude Code's `permissionMode`,
+Codex's sandbox and approvals) is a separate setting and never widens this.
+
 `beforeInvoke` receives the validated input, current identity, session,
 Allocation, effect, operation ID, cancellation signal, and progress callback.
 Hosts can reject an operation or await their existing approval mechanism there.

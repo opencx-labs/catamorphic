@@ -31,7 +31,7 @@ shared surface is a process bug, not a win. See the [historical log](DESIGN-HIST
 
 ## Contained project workspace
 
-Catamorphic capabilities live in `.catamorphic/`, including the independent Bun
+Project capabilities live in `.work/`, including the independent Bun
 workspace, workflows, apps, agent definitions, skills, and shared settings
 (ADR 0142). Persistent project data lives in its ignored `app-data/` directory.
 Opening an existing folder creates nothing. Desktop-wide state and temporary
@@ -874,7 +874,7 @@ name (`MessageCircleQuestion`) resolves through one shared resolver
 that accepts only members of the icon table, so an unknown name or a
 non-icon export such as `Icon` falls back to a dot, never text and never a
 crash; and hiding an item hides its
-subtree, since hiding only the `.catamorphic` row hoisted the workspace's
+subtree, since hiding only the `.work` row hoisted the workspace's
 folders into a project files section. Agents also finish an app with the
 host's `build_app` and an `app:<name>` link; a local `bun run build` alone
 leaves "no successful build yet" on the app's screen.
@@ -1249,3 +1249,38 @@ watch the graph while the agent works.
 The canvas follows the app's language: neutral nodes on raised surfaces,
 the accent only on the selection, solid still edges instead of marching
 dashes, icons instead of emoji, and a start node labeled Start.
+
+### 2026-09-27: GitHub is one of your connections
+
+Signing in to GitHub used to fill a GitHub-only token file beside the
+connections everything else used, and an agent watching pull requests
+bound GitHub-only trigger kinds that a server never fired. Now the sign-in
+is your personal `github` connection, kept in the same vault as every other
+connection (ADR 0177). It clones repositories, syncs, opens pull requests,
+and shows the PRs panel, with the GitHub CLI as the fallback it always was.
+
+The desktop has no public address for GitHub to call, so a watcher asks the
+desktop to poll: new repository activity arrives as the same deliveries the
+project's `github` webhook receives on a server, marked as fetched by the
+host rather than signed. One trigger library, and the same filters, work in
+both places.
+
+### 2026-09-27: Permission mode and sandboxing are two settings
+
+One word, "mode", had come to mean two things: the harness's own permission
+setting (Claude Code's plan or bypass permissions, Codex's sandbox) and
+Work's rule for what may leave an agent's sandbox. Choosing a harness's
+native mode had quietly disappeared (ADR 0182). Now the configure-agent modal
+shows "Permission mode" in the harness's own words (Claude Code: Default,
+Accept edits, Plan, Auto, Don't ask, Bypass permissions; Codex: its sandbox
+and its approvals) only for harnesses that have one, and "Sandboxing"
+(Contained, Propose, Publish) apart, each with a one-line explanation.
+
+The permission mode is visible where you work: the chat inspector shows it
+beside model and reasoning, the agent pickers name it in each row, and
+"Change permission mode" opens a palette picker in the style of the effort
+picker. It changes the agent, not one chat, because the mode belongs to the
+agent and is part of what a committed definition's consent covers; a
+committed or server definition shows its setting read only and says where it
+is set. Local agents keep ADR 0140's defaults: Publish, Bypass permissions,
+and Codex with full access and approvals on request.

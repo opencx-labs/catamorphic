@@ -7,8 +7,15 @@ import type {
   EnvironmentResourcePolicy,
   EnvironmentRuntimeBinding,
   EnvironmentTrust,
+  SandboxCapability,
 } from "@catamorphic/sandbox";
-import { environmentSatisfies } from "@catamorphic/sandbox";
+import {
+  dockerfileDigest,
+  environmentSatisfies,
+  resolveEgress,
+  SANDBOX_CAPABILITIES,
+} from "@catamorphic/sandbox";
+import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import type { Identity } from "../identity.js";
 import {
   hasProjectPermission,
@@ -17,16 +24,89 @@ import {
   mayUseProject,
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
-import type { ProjectEnvironmentsService } from "./project-environments-service.js";
+import type { ResolvedConnectionBinding } from "./connection-types.js";
+import type {
+  EnvironmentAllocationPolicy,
+  EnvironmentSandbox,
+} from "./execution-allocations-service.js";
+import {
+  DEFAULT_IDLE_RELEASE_MINUTES,
+  type ProjectEnvironmentDefinition,
+  type ProjectEnvironmentsService,
+} from "./project-environments-service.js";
 import { EnvironmentCapacityError } from "./worker-capacity.js";
 
 const tracer = getTracer("@catamorphic/core");
 
+/**
+ * Why admission chose an Environment (ADR 0173): the caller named it, the
+ * agent prefers it, it is the project default, or it was the first that fit.
+ */
+export type PlacementReason =
+  | "requested"
+  | "agent_preferred"
+  | "project_default"
+  | "available";
+
 export interface EnvironmentAdmission {
   environmentName: string;
+  reason: PlacementReason;
   runtime: EnvironmentRuntimeBinding;
   binding: EnvironmentBinding;
   effectiveRequirements: EnvironmentRequirements;
+  /** What the sandbox is given: image, containers, egress (ADR 0176). */
+  sandbox: EnvironmentSandbox;
+  /** How long unattended escalations wait for a person (ADR 0176). */
+  approvals?: { waitMinutes: number };
+}
+
+/**
+ * The policy an Allocation keeps from its admission: binding, requirements,
+ * connections, the sandbox's image, containers and egress, and the approval
+ * wait (ADR 0176). Every admission path builds it here, so a workload admitted
+ * again (readmission after idle release, reallocation, a mirrored session)
+ * keeps what its Environment gives it.
+ */
+export function admissionPolicy(input: {
+  admission: EnvironmentAdmission;
+  connections: readonly ResolvedConnectionBinding[];
+  workflowEnablementId?: string;
+}): EnvironmentAllocationPolicy {
+  const { admission } = input;
+  return {
+    binding: admission.binding,
+    requirements: admission.effectiveRequirements,
+    connections: input.connections,
+    sandbox: admission.sandbox,
+    ...(admission.approvals ? { approvals: admission.approvals } : {}),
+    ...(input.workflowEnablementId
+      ? { workflowEnablementId: input.workflowEnablementId }
+      : {}),
+  };
+}
+
+/** The largest Dockerfile an Environment may name. */
+const MAX_DOCKERFILE_BYTES = 64 * 1024;
+
+/**
+ * Machine capabilities an Environment's sandbox needs (ADR 0176), so
+ * placement only picks machines that provide them.
+ */
+export function sandboxCapabilitiesFor(
+  definition: ProjectEnvironmentDefinition,
+): SandboxCapability[] {
+  return [
+    ...(definition.image ? [SANDBOX_CAPABILITIES.images] : []),
+    ...(definition.image?.kind === "dockerfile"
+      ? [SANDBOX_CAPABILITIES.imageBuild]
+      : []),
+    ...(definition.requirements?.containers
+      ? [SANDBOX_CAPABILITIES.containers]
+      : []),
+    ...(definition.network && definition.network.egress !== "open"
+      ? [SANDBOX_CAPABILITIES.egressPolicy]
+      : []),
+  ];
 }
 
 export interface EnvironmentDiscoveryItem {
@@ -116,6 +196,13 @@ export class ExecutionEnvironmentsService {
     private readonly provider: EnvironmentProvider,
     /** A member's own connected computer, for `device: "member"` (ADR 0098). */
     private readonly memberDevices?: EnvironmentProvider,
+    private readonly options: {
+      /**
+       * Hosts a sandbox reaches the control plane at (its public URL's
+       * host). Restricted egress always allows them (ADR 0176).
+       */
+      gatewayHosts?: readonly string[];
+    } = {},
   ) {}
 
   /** Resolve the host-only runtime realization recorded by an Allocation. */
@@ -312,6 +399,7 @@ export class ExecutionEnvironmentsService {
           const evaluated = await this.evaluate({
             ...args,
             name: args.environment,
+            reason: "requested",
           });
           if ("admission" in evaluated) return evaluated.admission;
           if (evaluated.bindingUnavailable) {
@@ -339,16 +427,23 @@ export class ExecutionEnvironmentsService {
             reasons[name] = ["Identity is not granted this Environment"];
             continue;
           }
-          const evaluated = await this.evaluate({ ...args, name }).catch(
-            (error) => {
-              if (error instanceof EnvironmentCapacityError)
-                return {
-                  bindingUnavailable: false as const,
-                  reasons: [error.message],
-                };
-              throw error;
-            },
-          );
+          const reason: PlacementReason = args.preferred?.includes(name)
+            ? "agent_preferred"
+            : name === policy.defaultEnvironment
+              ? "project_default"
+              : "available";
+          const evaluated = await this.evaluate({
+            ...args,
+            name,
+            reason,
+          }).catch((error) => {
+            if (error instanceof EnvironmentCapacityError)
+              return {
+                bindingUnavailable: false as const,
+                reasons: [error.message],
+              };
+            throw error;
+          });
           if ("admission" in evaluated) return evaluated.admission;
           reasons[name] = evaluated.bindingUnavailable
             ? ["No machine for it is online and open to this work"]
@@ -357,7 +452,7 @@ export class ExecutionEnvironmentsService {
         for (const entry of policy.entries) {
           if (entry.invalid)
             reasons[entry.name] = [
-              `invalid in .catamorphic/project.json: ${entry.invalid.error}`,
+              `invalid in ${PROJECT_MANIFEST_PATH}: ${entry.invalid.error}`,
             ];
         }
         throw new NoCompatibleEnvironmentError(reasons);
@@ -365,11 +460,29 @@ export class ExecutionEnvironmentsService {
     );
   }
 
+  /**
+   * Minutes a chat in this Environment may wait without a turn before its
+   * workspace is released (ADR 0173); 0 never releases it.
+   */
+  async idleReleaseMinutes(args: {
+    identity: Identity;
+    projectId: string;
+    environment: string;
+  }): Promise<number> {
+    const definition = await this.projects.get({
+      identity: args.identity,
+      projectId: args.projectId,
+      name: args.environment,
+    });
+    return definition?.idleReleaseMinutes ?? DEFAULT_IDLE_RELEASE_MINUTES;
+  }
+
   private async evaluate(args: {
     identity: Identity;
     projectId: string;
     owner?: PlacementOwner;
     name: string;
+    reason?: PlacementReason;
     workerNodeId?: string;
     allocationBindingId?: string;
     requirements: EnvironmentRequirements;
@@ -387,10 +500,13 @@ export class ExecutionEnvironmentsService {
         reasons: [`Workload '${args.requirements.workload}' is not declared`],
       };
     }
-    const effectiveRequirements = mergeRequirements(
-      args.requirements,
-      definition.requirements,
-    );
+    const effectiveRequirements = mergeRequirements(args.requirements, {
+      ...definition.requirements,
+      capabilities: [
+        ...(definition.requirements?.capabilities ?? []),
+        ...sandboxCapabilitiesFor(definition),
+      ],
+    });
     const source =
       definition.device === "member" ? this.memberDevices : this.provider;
     const owner =
@@ -416,12 +532,57 @@ export class ExecutionEnvironmentsService {
     if (!compatibility.compatible) {
       return { bindingUnavailable: false, reasons: compatibility.reasons };
     }
+    const sandbox = await this.sandboxFor({ ...args, definition });
+    if ("reason" in sandbox)
+      return { bindingUnavailable: false, reasons: [sandbox.reason] };
     return {
       admission: {
         environmentName: args.name,
+        reason: args.reason ?? "requested",
         runtime,
         binding: runtime.descriptor,
         effectiveRequirements,
+        sandbox,
+        ...(definition.approvals ? { approvals: definition.approvals } : {}),
+      },
+    };
+  }
+
+  /** Resolve the image, containers and egress one Allocation's sandbox gets. */
+  private async sandboxFor(args: {
+    identity: Identity;
+    projectId: string;
+    definition: ProjectEnvironmentDefinition;
+  }): Promise<EnvironmentSandbox | { reason: string }> {
+    const { definition } = args;
+    const egress = resolveEgress({
+      policy: definition.network,
+      gatewayHosts: this.options.gatewayHosts ?? [],
+    });
+    const common: EnvironmentSandbox = {
+      ...(definition.requirements?.containers ? { containers: true } : {}),
+      ...(egress.mode === "open" ? {} : { egress }),
+    };
+    const image = definition.image;
+    if (!image) return common;
+    if (image.kind === "oci")
+      return { ...common, image: { kind: "oci", reference: image.reference } };
+    const content = await this.projects.readProgramFile({
+      identity: args.identity,
+      projectId: args.projectId,
+      path: image.path,
+    });
+    if (content === null)
+      return { reason: `Image Dockerfile ${image.path} does not exist` };
+    if (Buffer.byteLength(content) > MAX_DOCKERFILE_BYTES)
+      return { reason: `Image Dockerfile ${image.path} exceeds 64 KiB` };
+    return {
+      ...common,
+      image: {
+        kind: "dockerfile",
+        path: image.path,
+        content,
+        digest: dockerfileDigest(content),
       },
     };
   }
@@ -491,8 +652,8 @@ function mergeResources(
       ? { storageMb: numeric("storageMb") }
       : {}),
     ...(left?.gpu || right?.gpu ? { gpu: true } : {}),
-    ...(numeric("timeoutSeconds") !== undefined
-      ? { timeoutSeconds: numeric("timeoutSeconds") }
+    ...(numeric("commandTimeoutSeconds") !== undefined
+      ? { commandTimeoutSeconds: numeric("commandTimeoutSeconds") }
       : {}),
     ...(numeric("maxConcurrency") !== undefined
       ? { maxConcurrency: numeric("maxConcurrency") }

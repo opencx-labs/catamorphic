@@ -22,16 +22,20 @@ import {
   instrumentHttpServer,
   serveSpaDist,
 } from "@catamorphic/fastify-plugin";
+import { gatewayHostOf } from "@catamorphic/sandbox";
 import {
   aiToolCall,
   aiToolKind,
+  builtinModelConnectionProviders,
   type Catamorphic,
   connectionAuthorizationPage,
   createCatamorphic,
+  defineGithubConnectionProvider,
   EncryptedCredentialVault,
   FsBackend,
   FsBundleStore,
-  GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
+  type GithubConnectionOptions,
+  githubCodeHost,
   ObjectRemoteBackend,
   PostgresObjectStore,
   ProjectManager,
@@ -40,6 +44,7 @@ import {
   webhook,
 } from "@catamorphic/server-sdk";
 import { createPushTransport } from "@catamorphic/server-sdk/web-push";
+import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -49,7 +54,7 @@ import { WorkAdmissionService } from "./admission/admission-service.js";
 import { registerWorkAdmissionRoutes } from "./admission/routes.js";
 import { workAgentCapabilities } from "./agent-capabilities.js";
 import { buildAgentRegistry } from "./agents.js";
-import { loadWorkAuthConfig } from "./auth/auth-config.js";
+import { parseWorkAuthConfig } from "./auth/auth-config.js";
 import { openWorkAuthDatabase } from "./auth/auth-database.js";
 import { registerWorkAuthRoutes } from "./auth/fastify-auth.js";
 import {
@@ -66,11 +71,17 @@ import {
 import type { WorkServerConfig } from "./config.js";
 import { EncryptedFileCredentialVault } from "./credential-vault.js";
 import { workExecution } from "./execution-config.js";
-import { gatewayGuards, gatewayProviders } from "./gateway/gateway-config.js";
-import { workGithub } from "./github-config.js";
+import {
+  gatewayProviders,
+  parseGatewayConfig,
+} from "./gateway/gateway-config.js";
 import { AccountLifecycle } from "./identity/account-lifecycle.js";
+import { registerAdministratorRoutes } from "./identity/administrator-routes.js";
+import { WorkAdministrators } from "./identity/administrators.js";
 import type { DirectoryProvider } from "./identity/directory.js";
 import { GoogleWorkspaceDirectory } from "./identity/google-directory.js";
+import { registerConnectionSetup } from "./setup/connections.js";
+import { registerGithubAppSetup } from "./setup/github-app.js";
 import { registerMachineSetup } from "./setup/machines.js";
 import {
   loadWorkOperatorSecret,
@@ -117,13 +128,23 @@ export interface WorkServerHooks {
   agentCapabilities?: AgentCapabilityOptions;
   /** Added to the connections declared in `config.gateway`. */
   connectionProviders?: readonly ConnectionProvider[];
+  /**
+   * The built-in `github` connection provider (ADR 0177): an Enterprise
+   * Server's URLs, the App's OAuth client for members' own connections, or
+   * a `fetch` for tests. GitHub is always available as a connection; its
+   * App installation is the `github` service connection an administrator
+   * connects.
+   */
+  github?: GithubConnectionOptions;
   /** Replace or extend the files seeded into new projects (ADR 0049). */
   projectSeeds?: (
     defaults: Readonly<Record<string, string>>,
   ) => Record<string, string>;
   /**
    * Checks on every brokered connection action from agents and workflows
-   * (ADR 0162): a query policy, a model classifier, a rate limit.
+   * (ADR 0162): a query policy, a model classifier, a rate limit. Guards
+   * are host code; Work ships none (ADR 0183). A throwing guard denies; one
+   * slower than `config.connectionGuardTimeoutMs` escalates to a person.
    */
   connectionGuards?: readonly ConnectionActionGuard[];
   /**
@@ -203,6 +224,21 @@ async function createWorkServerInner(
   const log = options.log ?? (() => {});
   const data = config.dataDir;
   const publicBase = config.publicBases[0] ?? "http://127.0.0.1:4700";
+  // Config is data, validated by the schemas the image's files use; only
+  // the image's environment layer reads files for it (ADR 0183).
+  const workAuthConfig = parseWorkAuthConfig(config.auth ?? {});
+  const gateway = config.gateway ? parseGatewayConfig(config.gateway) : null;
+  if (
+    config.connectionGuardTimeoutMs !== undefined &&
+    !(
+      Number.isSafeInteger(config.connectionGuardTimeoutMs) &&
+      config.connectionGuardTimeoutMs > 0
+    )
+  ) {
+    throw new Error(
+      "config.connectionGuardTimeoutMs must be a positive whole number of milliseconds",
+    );
+  }
   if (config.databaseUrl && !config.secret) {
     throw new Error(
       "Postgres deployments require the same WORK_SECRET on every instance",
@@ -281,10 +317,6 @@ async function createWorkServerInner(
   const objectStore = config.databaseUrl
     ? new PostgresObjectStore(ownDb)
     : undefined;
-  const workAuthConfig = loadWorkAuthConfig({
-    dataDir: data,
-    ...(config.authConfigPath ? { configuredPath: config.authConfigPath } : {}),
-  });
   // The credential vault key is its own secret (ADR 0162): never derived
   // from the sign-in secret, and supplied by a key service through a hook
   // when the deployment has one.
@@ -415,13 +447,17 @@ async function createWorkServerInner(
     toolPermissions,
     settings: config.agent,
   });
-  const github = workGithub({
-    settings: config.github,
-    tenantId: SERVER_TENANT_ID,
-  });
+  // GitHub is an ordinary connection (ADR 0177): built in, always offered,
+  // backed by the `github` service connection an administrator connects.
+  const github = defineGithubConnectionProvider(hooks.github);
 
+  const gatewayConnectionProviders = gateway ? gatewayProviders(gateway) : [];
+  disposers.push(() =>
+    Promise.all(
+      gatewayConnectionProviders.map((provider) => provider.close?.()),
+    ),
+  );
   const catamorphic = createCatamorphic({
-    ...(github ? { github: github.config, proposalBot: github.identity } : {}),
     hostId,
     agentCapabilities: workAgentCapabilities({
       core: () => catamorphic.core,
@@ -458,35 +494,47 @@ async function createWorkServerInner(
     sandboxProvider,
     environmentProvider,
     credentialVault,
-    connectionGuards: [
-      ...(config.gateway ? gatewayGuards(config.gateway) : []),
-      ...(hooks.connectionGuards ?? []),
-    ],
+    ...(hooks.connectionGuards
+      ? { connectionGuards: hooks.connectionGuards }
+      : {}),
+    ...(config.connectionGuardTimeoutMs
+      ? { connectionGuardTimeoutMs: config.connectionGuardTimeoutMs }
+      : {}),
     connectionProviders: [
-      ...(config.gateway ? gatewayProviders(config.gateway) : []),
+      github,
+      // Model keys are connections too (ADR 0180): harnesses in sandboxes
+      // reach them through the gateway's model routes.
+      ...builtinModelConnectionProviders().filter(
+        (provider) =>
+          !gatewayConnectionProviders.some(
+            (configured) => configured.kind === provider.kind,
+          ),
+      ),
+      ...gatewayConnectionProviders,
       ...(hooks.connectionProviders ?? []),
     ],
+    codeHosts: [githubCodeHost(github)],
     connectionMcpUrl: () => `${publicBase}/api/connection-mcp`,
+    // Sandboxes with restricted egress still reach the gateway (ADR 0176).
+    gatewayHosts: config.publicBases.map((base) => gatewayHostOf(base)),
+    gatewayUrl: () => `${publicBase}/api/gateway`,
     ...(agents.registry ? { codingAgent: agents.registry } : {}),
     appBundleStore:
       objectStore ?? new FsBundleStore(path.join(data, "app-bundles")),
     documentBlobStore:
       objectStore ?? new FsBundleStore(path.join(data, "document-blobs")),
     toolPermissions,
-    triggerKinds: [
-      aiToolCall,
-      schedule,
-      webhook,
-      ...SESSION_TRIGGER_KINDS,
-      ...GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
-    ],
+    triggerKinds: [aiToolCall, schedule, webhook, ...SESSION_TRIGGER_KINDS],
     // Workflows bound to `ai.tool-call` are tools on the project MCP, for
     // project agents and members' own MCP clients alike.
     mcpToolKinds: [aiToolKind],
+    ...(config.webhookMaxBodyBytes
+      ? { webhooks: { maxBodyBytes: config.webhookMaxBodyBytes } }
+      : {}),
     projectSeeds: (defaults) => {
       const seeds = {
         ...defaults,
-        ".catamorphic/agents/assistant.json": JSON.stringify({
+        [`${PROJECT_AGENTS_DIR}/assistant.json`]: JSON.stringify({
           version: 1,
           name: "Assistant",
           kind: "builtin",
@@ -520,6 +568,12 @@ async function createWorkServerInner(
     signInGate: (account) => accountLifecycle.admitSignIn(account),
   });
   await workAuth.migrate();
+  // Organization administrators hold the host-issued connections
+  // permissions on the API they call (ADR 0172); roles never grant them.
+  const administrators = new WorkAdministrators({
+    db: ownDb,
+    auth: workAuth,
+  });
 
   // PGlite is a single serialized connection: one worker lane there;
   // real Postgres gets a few.
@@ -529,24 +583,22 @@ async function createWorkServerInner(
   });
   disposers.push(() => worker.stop());
   const core = catamorphic.core;
-  // Webhooks, chat and GitHub events start workflows whether or not
+  // Webhooks, chat and polled events start workflows whether or not
   // coding agents are configured.
   const eventDispatcher = startEventDispatcher({ core });
   disposers.push(() => eventDispatcher.stop());
-  if (github && core.github) {
-    await core.github.connect(github.identity, {
-      accessToken: github.accessToken,
-      expiresAt: null,
-      refreshToken: null,
-      refreshTokenExpiresAt: null,
-    });
-  }
-  if (github) {
+  // Company projects attached to a code host receive what their default
+  // branch accepts, through the organization's service connection.
+  const rootIdentity: Identity = {
+    tenantId: SERVER_TENANT_ID,
+    externalUserId: SETUP_AGENT_USER,
+  };
+  {
     let stopped = false;
     let activeSync: Promise<void> | undefined;
     const syncProjects = async () => {
       for (let offset = 0; !stopped; offset += 50) {
-        const page = await core.projects.list(github.identity, {
+        const page = await core.projects.list(rootIdentity, {
           limit: 50,
           offset,
         });
@@ -555,7 +607,7 @@ async function createWorkServerInner(
           if (!project.remoteUrl) continue;
           try {
             const result = await core.remoteSync.syncPublished({
-              identity: github.identity,
+              identity: rootIdentity,
               projectId: project.id,
             });
             if (result.status === "pulled" || result.status === "merged") {
@@ -564,6 +616,13 @@ async function createWorkServerInner(
                 `Company project ${project.id} received published updates`,
               );
             }
+            // Accepted changes (a merged roles pull request, say) stop
+            // arriving until someone reconciles the two histories. Said once,
+            // when it starts; the project carries it as remoteDivergedAt.
+            if (result.status === "diverged" && !project.remoteDivergedAt)
+              console.warn(
+                `Company project ${project.id} no longer receives updates from ${project.remoteUrl}: its main (${result.localSha?.slice(0, 12)}) has diverged from the code host's (${result.remoteSha?.slice(0, 12)}). Share its own changes as a pull request and reconcile the two.`,
+              );
           } catch (error) {
             console.warn(
               `Company project sync failed for ${project.id}:`,
@@ -591,10 +650,6 @@ async function createWorkServerInner(
     });
     tick();
   }
-  const rootIdentity: Identity = {
-    tenantId: SERVER_TENANT_ID,
-    externalUserId: SETUP_AGENT_USER,
-  };
   const admission = new WorkAdmissionService({
     db: core.db,
     membershipWriterIdentity: rootIdentity,
@@ -794,20 +849,25 @@ async function createWorkServerInner(
       : {}),
   });
   // --- HTTP: the standard API app + the server's own routes -----------
-  const app = createApp({
-    core,
-    identity: identityFromBearer(async (token) => {
-      const authenticated = await workAuth.resolveAccessToken({
-        authorization: `Bearer ${token}`,
-      });
-      if (!authenticated) return null;
-      if (!(await accountLifecycle.isActive(authenticated.userId))) return null;
-      if (await shares.isGuest(authenticated.userId)) return null;
-      return core.memberships.identityForUser({
+  // A signed-in member's identity: their roles, plus the administrator's
+  // connections permissions when they hold that flag.
+  const memberIdentity = async (
+    authorization: string,
+  ): Promise<Identity | null> => {
+    const authenticated = await workAuth.resolveAccessToken({ authorization });
+    if (!authenticated) return null;
+    if (!(await accountLifecycle.isActive(authenticated.userId))) return null;
+    if (await shares.isGuest(authenticated.userId)) return null;
+    return administrators.withPermissions(
+      await core.memberships.identityForUser({
         tenantId: SERVER_TENANT_ID,
         externalUserId: authenticated.userId,
-      });
-    }),
+      }),
+    );
+  };
+  const app = createApp({
+    core,
+    identity: identityFromBearer((token) => memberIdentity(`Bearer ${token}`)),
     features: { publications: "members" },
     projectMcp: {
       serverInfo: { name: "work", title: "Work" },
@@ -843,7 +903,13 @@ async function createWorkServerInner(
   });
   instrumentHttpServer(app);
   app.addHook("onSend", (request, reply, payload, done) => {
-    if (reply.statusCode !== 401 || !request.url.startsWith("/api/")) {
+    // The Git gateway answers its own challenge (Basic, for Git's
+    // credential helpers, ADR 0175).
+    if (
+      reply.statusCode !== 401 ||
+      !request.url.startsWith("/api/") ||
+      request.url.startsWith("/api/gateway/")
+    ) {
       done(null, payload);
       return;
     }
@@ -895,6 +961,14 @@ async function createWorkServerInner(
       });
     },
   });
+  registerAdministratorRoutes(app, {
+    administrators,
+    caller: async (request) => {
+      const header = request.headers.authorization;
+      const authorization = Array.isArray(header) ? header[0] : header;
+      return authorization ? memberIdentity(authorization) : null;
+    },
+  });
   registerWorkAdmissionRoutes(app, {
     publicBases: config.publicBases,
     auth: workAuth,
@@ -940,6 +1014,25 @@ async function createWorkServerInner(
     publicBase,
     ...(machineReconciler ? { machines: machineReconciler } : {}),
   });
+  registerConnectionSetup({
+    app: operatorApp,
+    operatorSecret,
+    operatorIdentity: rootIdentity,
+    connections: () => core.connections,
+    administrators,
+    publicBase,
+  });
+  registerGithubAppSetup({
+    operatorApp,
+    publicApp: app,
+    operatorSecret,
+    operatorIdentity: rootIdentity,
+    core: () => core,
+    provider: github,
+    publicBase,
+    db: ownDb,
+    vault: credentialVault,
+  });
   operatorApp.post("/_work/operator/projects", async (request, reply) => {
     const authorization = Array.isArray(request.headers.authorization)
       ? request.headers.authorization[0]
@@ -957,14 +1050,14 @@ async function createWorkServerInner(
     try {
       const result = await provisionWorkProject({
         services: {
-          ...(core.github ? { github: core.github } : {}),
+          codeHosts: core.codeHosts,
           projects: core.projects,
           deployment: core.deployment,
           roles: core.roles,
+          proposals: core.proposals,
           admission,
         },
         operatorIdentity: rootIdentity,
-        githubIdentity: github?.identity,
         input: parsed.data,
       });
       return reply.status(201).send(result);
@@ -996,7 +1089,16 @@ async function createWorkServerInner(
         operatorIdentity: rootIdentity,
         input: parsed.data,
       });
-      return reply.status(201).send(result);
+      if (parsed.data.administrator) {
+        await administrators.set({
+          userId: result.user.id,
+          administrator: true,
+        });
+      }
+      return reply.status(201).send({
+        ...result,
+        administrator: parsed.data.administrator ?? false,
+      });
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Provision failed";

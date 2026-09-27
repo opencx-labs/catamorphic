@@ -1,4 +1,5 @@
 import type { Json } from "@catamorphic/db";
+import type { Identity } from "../identity.js";
 
 export type ConnectionPrincipalKind =
   | "member"
@@ -24,11 +25,16 @@ export interface ConnectionRequirement {
   optional?: boolean;
 }
 
+/** Names of service connections, like provider kinds. */
+export const CONNECTION_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]{0,62}$/;
+
 export interface ConnectionRecord {
   id: string;
   projectId: string | null;
   providerKind: string;
   principalKind: ConnectionPrincipalKind;
+  /** A service connection's name, which Environment bindings refer to. */
+  name: string | null;
   ownerExternalUserId: string | null;
   label: string;
   status: ConnectionStatus;
@@ -41,37 +47,87 @@ export interface ConnectionRecord {
   updatedAt: string;
 }
 
+/**
+ * One connection alias an Environment declares in `.work/project.json`
+ * (ADR 0172): the provider that backs it, whose authority it accepts, the
+ * named service connection that supplies service authority, and the
+ * capabilities it narrows to. Committed, so access changes are reviewed
+ * like code.
+ */
 export interface EnvironmentConnectionBinding {
-  id: string;
-  projectId: string;
-  environment: string;
-  alias: string;
-  providerKind: string;
-  principalKinds: ConnectionPrincipalKind[];
-  serviceConnectionId: string | null;
-  capabilities: string[];
-  memberConnection: ConnectionBindingPrincipalStatus | null;
-  serviceConnection: ConnectionBindingPrincipalStatus | null;
-  createdAt: string;
-  updatedAt: string;
+  provider: string;
+  principal: ConnectionRequirementPrincipal;
+  /** A service connection's name; required when `principal` is `service`. */
+  service?: string;
+  /** Narrows what the alias may do; absent keeps the connection's own. */
+  capabilities?: readonly string[];
+  /** What Git through the gateway may reach with this alias (ADR 0175). */
+  git?: ConnectionGitPolicy;
+  /** Which models, and how much, this alias serves sandboxes (ADR 0180). */
+  model?: ConnectionModelPolicy;
 }
 
-export interface ConnectionBindingPrincipalStatus {
-  connectionId: string | null;
-  principalKind: ConnectionPrincipalKind;
-  label: string;
-  status: ConnectionStatus;
-  account: Json;
-  scopes: string[];
+/**
+ * Git policy of one alias, enforced by the gateway (ADR 0175).
+ * `repositories` are remote paths below the provider's base URL
+ * (`org/repo`); absent allows only the project's linked remote. `push`
+ * lists branch patterns a push may update (`work/*`, or a full ref such as
+ * `refs/tags/v*`); absent allows `work/*`. A remote's default branch and
+ * deletions are never allowed, and nothing is pushed without `git:write`.
+ */
+export interface ConnectionGitPolicy {
+  repositories?: readonly string[];
+  push?: readonly string[];
+}
+
+/** Capabilities of every connection whose provider serves Git (ADR 0175). */
+export const GIT_CAPABILITIES = ["git:read", "git:write"] as const;
+
+/**
+ * Model policy of one alias, enforced by the gateway's model routes (ADR
+ * 0180). `allow` lists model id patterns (`claude-*`); absent allows any
+ * model the key reaches. Spending rules are guards (ADR 0183).
+ */
+export interface ConnectionModelPolicy {
+  allow?: readonly string[];
+}
+
+/** The capability of a connection whose provider is a model API (ADR 0180). */
+export const MODEL_CAPABILITY = "model";
+
+/**
+ * Capabilities the gateway serves as protocols (Git, model APIs) rather
+ * than as MCP tools: an alias holding only these is not offered to agents
+ * as a connection MCP server.
+ */
+export function isProtocolCapability(capability: string): boolean {
+  return capability.startsWith("git:") || capability === MODEL_CAPABILITY;
+}
+
+/** Resolves the bindings of one project Environment, alias to binding. */
+export type ConnectionBindingSource = (args: {
+  identity: Identity;
+  projectId: string;
+  environment: string;
+}) => Promise<Readonly<Record<string, EnvironmentConnectionBinding>>>;
+
+/** The connection principals a binding's `principal` accepts. */
+export function bindingPrincipalKinds(
+  principal: ConnectionRequirementPrincipal,
+): ConnectionPrincipalKind[] {
+  if (principal === "member") return ["member"];
+  if (principal === "service") return ["project_service", "tenant_service"];
+  return ["member", "project_service", "tenant_service"];
 }
 
 export interface ResolvedConnectionBinding {
-  bindingId: string;
   connectionId: string;
   alias: string;
   providerKind: string;
   principalKind: ConnectionPrincipalKind;
   capabilities: readonly string[];
+  git?: ConnectionGitPolicy;
+  model?: ConnectionModelPolicy;
 }
 
 export function normalizeConnectionRequirement(

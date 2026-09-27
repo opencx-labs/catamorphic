@@ -102,7 +102,7 @@ describe("document paths (pure)", () => {
       true,
     );
     expect(
-      documentAccessAllowed(csm, p, ".catamorphic/workflows/src/x.ts", "read"),
+      documentAccessAllowed(csm, p, ".work/workflows/src/x.ts", "read"),
     ).toBe(false);
     expect(
       documentAccessAllowed(csm, p, "store/customers/acme/notes.md", "write"),
@@ -171,7 +171,7 @@ describeIf("DocumentsService (ADR 0055)", () => {
         "# Pricing\n\nEnterprise refunds are custom.\n",
       );
       await repo.writeFile(
-        ".catamorphic/workflows/src/secret.ts",
+        ".work/workflows/src/secret.ts",
         "export const key = 'refunds-internal';\n",
       );
       await repo.commit("program", { name: "root", email: "root@example.com" });
@@ -221,14 +221,12 @@ describeIf("DocumentsService (ADR 0055)", () => {
       ifVersion: 0,
     });
     expect(
-      await fs.readFile(
-        path.join(directory, ".catamorphic/app-data", args.path),
-      ),
+      await fs.readFile(path.join(directory, ".work/app-data", args.path)),
     ).toEqual(Buffer.from(bytes));
     expect((await local.documents.readBytes(args)).bytes).toEqual(bytes);
     const localFiles = await local.projects.listFiles(identity, project.id);
     expect(localFiles.map((file) => file.path)).toContain(
-      ".catamorphic/app-data/store/report.pdf",
+      ".work/app-data/store/report.pdf",
     );
     expect(localFiles.map((file) => file.path)).not.toContain(
       "store/report.pdf",
@@ -239,12 +237,12 @@ describeIf("DocumentsService (ADR 0055)", () => {
           "status",
           "--porcelain",
           "--",
-          ".catamorphic/app-data",
+          ".work/app-data",
         ])
       ).trim(),
     ).toBe("");
     await fs.writeFile(
-      path.join(directory, ".catamorphic/app-data", args.path),
+      path.join(directory, ".work/app-data", args.path),
       new Uint8Array([1, 2, 3]),
     );
     await expect(
@@ -262,7 +260,7 @@ describeIf("DocumentsService (ADR 0055)", () => {
         .bytes,
     ).toEqual(bytes);
     await fs.writeFile(
-      path.join(directory, ".catamorphic/app-data/store/notes.md"),
+      path.join(directory, ".work/app-data/store/notes.md"),
       "Private research notes",
     );
     expect(
@@ -275,7 +273,7 @@ describeIf("DocumentsService (ADR 0055)", () => {
         })
       ).map((entry) => entry.path),
     ).toEqual(["store/notes.md"]);
-    await fs.rm(path.join(directory, ".catamorphic/app-data/store/notes.md"));
+    await fs.rm(path.join(directory, ".work/app-data/store/notes.md"));
     const history = await local.documents.history({
       identity,
       projectId: project.id,
@@ -308,11 +306,11 @@ describeIf("DocumentsService (ADR 0055)", () => {
       }),
     ).toEqual([]);
     await fs.writeFile(path.join(directory, "notes.md"), "committed only here");
-    await fs.mkdir(path.join(directory, ".catamorphic/workflows"), {
+    await fs.mkdir(path.join(directory, ".work/workflows"), {
       recursive: true,
     });
     await fs.writeFile(
-      path.join(directory, ".catamorphic/workflows/flow.ts"),
+      path.join(directory, ".work/workflows/flow.ts"),
       `
       import { defineWorkflow } from "@catamorphic/workflow";
       export const importedFlow = defineWorkflow(({ defineBoundary }) => ({
@@ -320,11 +318,7 @@ describeIf("DocumentsService (ADR 0055)", () => {
       }));
     `,
     );
-    await nativeGit(directory, [
-      "add",
-      "notes.md",
-      ".catamorphic/workflows/flow.ts",
-    ]);
+    await nativeGit(directory, ["add", "notes.md", ".work/workflows/flow.ts"]);
     await nativeGit(directory, [
       "-c",
       "user.name=Test",
@@ -364,11 +358,11 @@ describeIf("DocumentsService (ADR 0055)", () => {
     ).toEqual([]);
     await nativeGit(directory, [
       "update-ref",
-      "refs/catamorphic/published/main",
+      "refs/work/published/main",
       "HEAD",
     ]);
     await fs.writeFile(
-      path.join(directory, ".catamorphic/workflows/flow.ts"),
+      path.join(directory, ".work/workflows/flow.ts"),
       "private incomplete draft",
     );
     expect(
@@ -404,7 +398,7 @@ describeIf("DocumentsService (ADR 0055)", () => {
     ).toBe("private working edit");
     await fs.symlink(
       tmpDir,
-      path.join(directory, ".catamorphic/app-data/store/outside"),
+      path.join(directory, ".work/app-data/store/outside"),
     );
     await expect(
       local.documents.write({
@@ -483,8 +477,8 @@ describeIf("DocumentsService (ADR 0055)", () => {
       expect.arrayContaining([
         "docs/handbook.md",
         "docs/pricing.md",
-        ".catamorphic/workflows/src/secret.ts",
-        ".catamorphic/project.json",
+        ".work/workflows/src/secret.ts",
+        ".work/project.json",
       ]),
     );
     expect(all.every((e) => e.source === "program")).toBe(true);
@@ -513,7 +507,7 @@ describeIf("DocumentsService (ADR 0055)", () => {
       core.documents.read({
         identity: csm,
         projectId,
-        path: ".catamorphic/workflows/src/secret.ts",
+        path: ".work/workflows/src/secret.ts",
       }),
     ).rejects.toThrow(AccessDeniedError);
     // The program is read-only through this surface, even for builders.
@@ -696,9 +690,7 @@ describeIf("DocumentsService (ADR 0055)", () => {
       "store:store/customers/acme/notes.md",
     ]);
     // The workflow file mentions refunds too — invisible to the CSM…
-    expect(grep.some((m) => m.path.startsWith(".catamorphic/workflows/"))).toBe(
-      false,
-    );
+    expect(grep.some((m) => m.path.startsWith(".work/workflows/"))).toBe(false);
     // …visible to a builder, whose search never reaches the store.
     const adminGrep = await core.documents.search({
       identity: admin,
@@ -706,7 +698,7 @@ describeIf("DocumentsService (ADR 0055)", () => {
       query: "refunds",
     });
     expect(adminGrep.map((m) => m.path)).toContain(
-      ".catamorphic/workflows/src/secret.ts",
+      ".work/workflows/src/secret.ts",
     );
     expect(adminGrep.some((m) => m.source === "store")).toBe(false);
     // Full text: words in any order; lines carry the hits.

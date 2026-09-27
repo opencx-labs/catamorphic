@@ -40,11 +40,18 @@ createCatamorphic({ sandboxProvider, environmentProvider, /* ... */ });
 - `CatamorphicCore` wraps every provider with `instrumentSandboxProvider`
   (`sandbox.create`, `sandbox.exec`, `sandbox.runtime.*`, ...). Never wrap it
   yourself. The wrapper forwards `workspaceRoot`, `isolation`,
-  `resourceLimits`, `deploymentRuntime`, and the optional `hydrateWorkspace`
+  `resourceLimits`, `deploymentRuntime`, `processes`, and the optional `hydrateWorkspace`
   (Cloudflare tar upload); forward any new optional member the same way.
 - `deploymentRuntime` is the warm-runtime capability. Cloudflare and Daytona
   use `CommandDeploymentRuntimeProvider`; local-process and microsandbox use
   `StdioDeploymentRuntimeProvider`.
+- `processes` is the background-process capability (ADR 0174, `src/processes.ts`):
+  start, read by byte cursor (optionally blocking up to 20s), signal the
+  process group, list. Output stays in the sandbox and processes die with it.
+  local-process implements it natively; microsandbox uses `shellSandboxProcesses`
+  over `executeCommand`; the worker and member-runner forwarders carry it as
+  `process.*` operations. Cloudflare and Daytona omit it. Follow a process with
+  `followProcess`, never a long-held request.
 - A new provider reports its real `isolation` (`none | process | sandbox`) and
   lists enforceable `resourceLimits`. It must reject `CreateSandboxOpts.resources`
   it cannot enforce rather than ignore them.
@@ -55,7 +62,7 @@ createCatamorphic({ sandboxProvider, environmentProvider, /* ... */ });
 
 - Every Run executes an immutable deployed commit. There is no mutable-source
   or test mode.
-- The deployment runtime materializes the verified `.catamorphic/` capability
+- The deployment runtime materializes the verified `.work/` capability
   snapshot (ADR 0142), installs its workspace dependencies, and applies the
   parser transform to that copy only. Plugin payloads land under
   `node_modules/<packageName>/` via `uploadPluginPayloads`.
@@ -66,7 +73,7 @@ createCatamorphic({ sandboxProvider, environmentProvider, /* ... */ });
 - The supervisor forks one Bun child per invocation (`bun-worker.ts`) with
   `CATAMORPHIC_RUN_ID`, `CATAMORPHIC_WORKFLOW_NAME`, `CATAMORPHIC_WORKFLOW_FILE`,
   and `CATAMORPHIC_TRIGGER_DATA`. Providers that support persistent local data
-  set `CATAMORPHIC_APP_DATA_DIR`; it is absent otherwise.
+  set `WORK_APP_DATA_DIR`; it is absent otherwise.
 - Tables: `workflow_runs` (one per invocation), `workflow_run_states`,
   `workflow_step_attempts`, `workflow_pauses`, `workflow_run_steps`,
   `workflow_run_events`, `execution_jobs`, plus batch item/sink tables.
@@ -114,10 +121,10 @@ Rules that hold across harnesses:
   concurrency limit; core creates ordinary child sessions (hierarchy separate
   from fork lineage). A native subagent is only an optimization when it keeps
   that contract.
-- **Skills** live in `.catamorphic/skills/<name>/SKILL.md`; agents read them
+- **Skills** live in `.work/skills/<name>/SKILL.md`; agents read them
   from their checkout. `GET /api/projects/:projectId/skills` lists them.
 - **Connections**: project agents declare aliases in
-  `.catamorphic/agents/<slug>.json`. A workflow that delivers to that agent
+  `.work/agents/<slug>.json`. A workflow that delivers to that agent
   declares the same aliases in its `connections` so the member authorizes them
   before enabling it.
 - **Reaching a chat from a workflow** is `catamorphic.sessions.deliver`, by
@@ -129,6 +136,12 @@ Rules that hold across harnesses:
   (app-server `model/list`). Never hardcode a catalog or call
   `codex debug models`. Bound process lifetime, follow pagination, filter
   hidden models, and report errors without starting a turn.
+- **Shell budget.** The built-in harness runs a foreground command as a
+  process it waits on when the sandbox has `processes`, bounded by the
+  Allocation's `commandTimeoutSeconds` (`StartSessionOpts`), and offers
+  `run_background_command` / `read_background_output` / `stop_background_command`
+  there. Disposing a session kills its background commands. Desktop host
+  background commands (ADR 0155) stay host terminals for every harness.
 - **Codex** keeps its app-server process and MCP children alive for the
   session and closes them on disposal, transport failure, or an abandoned
   stream. Pending approvals are cancelled when their turn ends (ADR 0112).

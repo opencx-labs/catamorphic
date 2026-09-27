@@ -1,5 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  PROJECT_PERSONAL_DIR,
+  PROJECT_WORKSPACE_ROOT,
+} from "@catamorphic/workflow/project-layout";
 
 /** Local discovery is scoped to the active desktop profile, never shared APIs. */
 export async function listPersonalFiles({
@@ -10,11 +14,11 @@ export async function listPersonalFiles({
   profileId: string;
 }): Promise<Array<{ path: string }>> {
   if (!/^[A-Za-z0-9_-]+$/.test(profileId)) throw new Error("Invalid profile");
-  const directory = path.join(root, ".catamorphic", "personal", profileId);
+  const directory = path.join(root, PROJECT_PERSONAL_DIR, profileId);
   for (const relative of [
-    ".catamorphic",
-    ".catamorphic/personal",
-    `.catamorphic/personal/${profileId}`,
+    PROJECT_WORKSPACE_ROOT,
+    PROJECT_PERSONAL_DIR,
+    `${PROJECT_PERSONAL_DIR}/${profileId}`,
   ]) {
     const entry = await fs
       .lstat(path.join(root, relative))

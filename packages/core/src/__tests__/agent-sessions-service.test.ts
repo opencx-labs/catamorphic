@@ -137,8 +137,8 @@ describe("parsePorcelain", () => {
 describe("seed skill set", () => {
   // Workflow authoring is exercised in workflow-skill-recipes.test.ts.
   it("splits app mechanics from app doctrine (ADR 0049)", () => {
-    const mechanics = SEED_SKILLS[".catamorphic/skills/building-apps/SKILL.md"];
-    const doctrine = SEED_SKILLS[".catamorphic/skills/designing-apps/SKILL.md"];
+    const mechanics = SEED_SKILLS[".work/skills/building-apps/SKILL.md"];
+    const doctrine = SEED_SKILLS[".work/skills/designing-apps/SKILL.md"];
     expect(mechanics).toBeDefined();
     expect(doctrine).toBeDefined();
 

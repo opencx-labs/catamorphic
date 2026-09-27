@@ -231,7 +231,7 @@ describe("project MCP for members' own agents", () => {
     await tool(engineer, "program_write", {
       changes: [
         {
-          path: ".catamorphic/workflows/greet.ts",
+          path: ".work/workflows/greet.ts",
           content: GREET.replace('"ai.tool-call"', '"ai.tool-cal"'),
         },
       ],
@@ -243,12 +243,12 @@ describe("project MCP for members' own agents", () => {
     expect(JSON.stringify(blocked.value.findings)).toContain("ai.tool-cal");
 
     await tool(engineer, "program_write", {
-      changes: [{ path: ".catamorphic/workflows/greet.ts", content: GREET }],
+      changes: [{ path: ".work/workflows/greet.ts", content: GREET }],
     });
     const check = await tool(engineer, "program_check");
     expect(check.value).toMatchObject({ ok: true });
     const draft = await tool(engineer, "program_files");
-    expect(draft.value.changed).toContain(".catamorphic/workflows/greet.ts");
+    expect(draft.value.changed).toContain(".work/workflows/greet.ts");
 
     const deployed = await tool(engineer, "program_deploy", {
       message: "Add greet",
@@ -302,7 +302,7 @@ describe("project MCP for members' own agents", () => {
     expect(names).not.toContain("program_deploy");
 
     const outside = await tool(csm, "documents_read", {
-      path: ".catamorphic/workflows/greet.ts",
+      path: ".work/workflows/greet.ts",
     });
     expect(outside.isError).toBe(true);
     const folder = await tool(csm, "share_create", {

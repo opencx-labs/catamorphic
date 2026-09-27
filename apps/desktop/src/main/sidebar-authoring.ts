@@ -105,7 +105,7 @@ do not invent undocumented section types or fields.
 
 For a live JSON/file/API list, keep the native sidebar UI and use:
 { id: "todos", type: "custom", title: "My todos",
-  source: { type: "custom", module: ".catamorphic/todos.ts" }, height: 280 }
+  source: { type: "custom", module: ".work/todos.ts" }, height: 280 }
 The module path is project-root-relative (absolute paths also work). Its default
 export is {load, subscribe?, action?, move?, drop?}. This runs in a lazy Bun process with full
 filesystem, fetch, subprocess and npm access, not inside the static layout VM.

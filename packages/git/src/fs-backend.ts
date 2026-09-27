@@ -118,12 +118,39 @@ export class FsBackend implements StorageBackend {
     return projectPath;
   }
 
+  mirrorPath(tenantId: string, projectId: string): string {
+    assertUuid(tenantId);
+    assertUuid(projectId);
+    return path.join(this.basePath, ".mirrors", tenantId, `${projectId}.git`);
+  }
+
   async deleteProject(tenantId: string, projectId: string): Promise<void> {
     // Only internal storage is removed. Explicitly-rooted folders belong to
     // the user; the host decides separately whether to trash them.
     const projectRoot = path.join(this.basePath, tenantId, projectId);
     await fs.rm(projectRoot, { recursive: true, force: true });
+    await fs.rm(this.mirrorPath(tenantId, projectId), {
+      recursive: true,
+      force: true,
+    });
     this.initializedRoots.delete(`${tenantId}:${projectId}`);
+  }
+
+  async deleteCopy(
+    tenantId: string,
+    projectId: string,
+    externalUserId: string,
+  ): Promise<void> {
+    // A mapped project folder is every user's copy; it belongs to the user.
+    if (
+      (await this.pathResolver?.(tenantId, projectId)) ||
+      this.initializedRoots.has(`${tenantId}:${projectId}`)
+    )
+      return;
+    await fs.rm(this.resolveInternalPath(tenantId, projectId, externalUserId), {
+      recursive: true,
+      force: true,
+    });
   }
 
   async exists(
@@ -145,9 +172,20 @@ export class FsBackend implements StorageBackend {
   }
 }
 
+/**
+ * One directory name per identity. Principals such as the project's own
+ * (`catamorphic:project`, ADR 0156) carry characters that are not safe in
+ * every filesystem, so anything outside `[A-Za-z0-9._-]` is percent-encoded;
+ * plain ids keep their existing directory.
+ */
 function sanitizeUserId(value: string): string {
-  if (!/^[A-Za-z0-9._-]+$/.test(value)) {
+  const encoded = encodeURIComponent(value);
+  if (
+    !/^[A-Za-z0-9._%-]+$/.test(encoded) ||
+    encoded === "." ||
+    encoded === ".."
+  ) {
     throw new Error(`Invalid externalUserId: ${value}`);
   }
-  return value;
+  return encoded;
 }

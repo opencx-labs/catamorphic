@@ -12,6 +12,11 @@ import {
   workflowKeys,
 } from "@catamorphic/react";
 import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
+import {
+  PROJECT_APP_DATA_DIR,
+  PROJECT_SIDEBAR_PATH,
+  PROJECT_STORE_DIR,
+} from "@catamorphic/workflow/project-layout";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Check,
@@ -42,6 +47,10 @@ import {
   BUILTIN_ACTIONS,
   KEYBINDING_ACTIONS,
 } from "../shared/actions.js";
+import {
+  type HarnessPermissions,
+  hasPermissionMode,
+} from "../shared/agent-permissions.js";
 import {
   chatBookmarkUrl,
   parseChatBookmarkUrl,
@@ -684,7 +693,7 @@ export function App({
   } | null>(null);
 
   // User-customizable sidebar layout (sidebar.js, file-watched). Resolved
-  // per project (project-local override → project .catamorphic/sidebar.js
+  // per project (project-local override → project .work/sidebar.js
   // → profile sidebar.js), so the fetch is keyed on the active project —
   // see the effect below projectId — and the changed event is a refetch
   // signal, not a payload.
@@ -2907,6 +2916,7 @@ export function App({
       | "switch-agent"
       | "configure-agent"
       | "effort"
+      | "permission-mode"
       | "model";
     nonce: string;
   } | null>(null);
@@ -2916,6 +2926,7 @@ export function App({
       | "switch-agent"
       | "configure-agent"
       | "effort"
+      | "permission-mode"
       | "model",
   ) => {
     setPaletteOpen(true);
@@ -2940,7 +2951,7 @@ export function App({
   };
 
   // Layered default agent (ADR 0056): this user's per-project override,
-  // then the project's committed default (.catamorphic/project.json), then
+  // then the project's committed default (.work/project.json), then
   // the profile default. `agentsData` is the refetch trigger — setting the
   // committed default broadcasts an agents-changed like any other layer.
   const [projectDefaultSlug, setProjectDefaultSlug] = useState<string | null>(
@@ -3103,6 +3114,23 @@ export function App({
     ) {
       void desktopApi.agentsUpdate(targetId, { effort });
     }
+  };
+
+  /**
+   * Change a profile agent's harness permission mode (ADR 0182). It is the
+   * agent's setting, so every chat with that agent runs its next turn so.
+   */
+  const pickHarnessPermissions = (
+    agentId: string,
+    patch: HarnessPermissions,
+  ) => {
+    const agent = agentsData?.agents.find(
+      (candidate) => candidate.id === agentId,
+    );
+    if (!agent) return;
+    void desktopApi.agentsUpdate(agentId, {
+      harnessPermissions: { ...agent.harnessPermissions, ...patch },
+    });
   };
 
   // One handler per registry action (shared/actions.ts). Consumed by the
@@ -3643,6 +3671,7 @@ export function App({
     "switch-agent": () => openPalettePicker("switch-agent"),
     "configure-agent": () => openPalettePicker("configure-agent"),
     "change-effort": () => openPalettePicker("effort"),
+    "change-permission-mode": () => openPalettePicker("permission-mode"),
     "switch-model": () => openPalettePicker("model"),
     "manage-connectors": () => setConnectorsModalOpen(true),
     "connect-remote-project": () =>
@@ -5089,6 +5118,12 @@ export function App({
       agentsData?.agents.some((agent) => agent.id === paletteTargetAgentId) ===
       true,
     "change-effort": paletteTargetAgentId != null,
+    // Profile agents only: a definition's permission mode lives in its file.
+    "change-permission-mode":
+      agentsData?.agents.some(
+        (agent) =>
+          agent.id === paletteTargetAgentId && hasPermissionMode(agent.harness),
+      ) === true,
   };
   const paletteProps = {
     projectId,
@@ -5162,6 +5197,7 @@ export function App({
     },
     onPickEffort: pickEffort,
     onPickModel: pickModel,
+    onPickHarnessPermissions: pickHarnessPermissions,
     onHighlightTarget: setPaletteTarget,
   };
 
@@ -5213,7 +5249,7 @@ export function App({
       .then(([resolved, profileFile, root]) => {
         const file =
           resolved.layer === "project" && root
-            ? `${root}/.catamorphic/sidebar.js`
+            ? `${root}/${PROJECT_SIDEBAR_PATH}`
             : resolved.layer === "project-local" && projectId
               ? `${profileFile.slice(0, profileFile.lastIndexOf("/"))}/sidebar-projects/${projectId}.js`
               : profileFile;
@@ -6221,18 +6257,17 @@ export function App({
                         onEditorState(editor.localId, { dirty })
                       }
                       onShare={
-                        editor.filePath?.startsWith(
-                          ".catamorphic/app-data/store/",
-                        ) &&
+                        editor.filePath?.startsWith(`${PROJECT_STORE_DIR}/`) &&
                         remoteSurfaceStatus &&
                         remoteSurfaceStatus.capabilities?.features
                           .publications !== false
                           ? (path) =>
                               setRemotePublish({
-                                path: path.replace(
-                                  /^\.catamorphic\/app-data\//,
-                                  "",
-                                ),
+                                path: path.startsWith(
+                                  `${PROJECT_APP_DATA_DIR}/`,
+                                )
+                                  ? path.slice(PROJECT_APP_DATA_DIR.length + 1)
+                                  : path,
                                 features:
                                   remoteSurfaceStatus.capabilities?.features,
                               })
@@ -6242,9 +6277,7 @@ export function App({
                         remoteSurfaceStatus &&
                         remoteSurfaceStatus.capabilities?.features.proposals !==
                           false &&
-                        !editor.filePath?.startsWith(
-                          ".catamorphic/app-data/store/",
-                        )
+                        !editor.filePath?.startsWith(`${PROJECT_STORE_DIR}/`)
                           ? (path) =>
                               setRemotePropose({
                                 files: [path],
@@ -6430,6 +6463,10 @@ export function App({
                 onEditEffort={() => {
                   revealChat(entry.localId);
                   openPalettePicker("effort");
+                }}
+                onEditPermissionMode={() => {
+                  revealChat(entry.localId);
+                  openPalettePicker("permission-mode");
                 }}
                 pullSelectionNonce={selectionPulls[entry.localId] ?? 0}
                 onFocusRequest={

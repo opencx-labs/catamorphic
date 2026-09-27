@@ -1,3 +1,8 @@
+import path from "node:path";
+import {
+  type WorkAuthConfig,
+  workAuthConfigFromFile,
+} from "./auth/auth-config.js";
 import {
   executionSettingsFromEnv,
   type WorkExecutionSettings,
@@ -24,9 +29,12 @@ export interface WorkAgentSettings {
 }
 
 /**
- * Everything a Work server needs to boot (ADR 0160). The image derives it from
- * `WORK_*` variables with {@link workServerConfigFromEnv}; a custom server may
- * construct it in code.
+ * Everything a Work server needs to boot (ADR 0160): typed, serializable data,
+ * validated at boot by the same schemas as the image's files (ADR 0183). The
+ * image derives it from `WORK_*` variables and files with
+ * {@link workServerConfigFromEnv}, the only code that knows either; a custom
+ * server may construct it in code. Code, such as connection guards, goes in
+ * `hooks`.
  */
 export interface WorkServerConfig {
   /** Owner-only directory for local state (PGlite, origins, credentials). */
@@ -46,8 +54,12 @@ export interface WorkServerConfig {
   vaultKeys?: Uint8Array[];
   /** Network Postgres. Absent means PGlite under `dataDir`. */
   databaseUrl?: string;
-  /** Sign-in configuration file (default `<dataDir>/auth-config.json`). */
-  authConfigPath?: string;
+  /**
+   * Sign-in providers and session policy. Absent means local sign-in only,
+   * with default policies. The image reads it from `WORK_AUTH_CONFIG`
+   * (default `<WORK_DATA_DIR>/auth-config.json`).
+   */
+  auth?: WorkAuthConfig;
   /** Label of this machine in inventory and Environment pickers. */
   machineName: string;
   /**
@@ -57,18 +69,27 @@ export interface WorkServerConfig {
   machineLabels: Record<string, string>;
   execution: WorkExecutionSettings;
   agent: WorkAgentSettings;
-  /** Service account for GitHub-backed projects and proposals. */
-  github?: { clientId: string; token: string };
   /**
-   * Connections the gateway brokers (MCP endpoints, HTTP APIs, databases) and
-   * the guards that review their actions (ADRs 0162, 0163).
+   * Connections the gateway brokers (MCP endpoints, HTTP APIs, databases,
+   * Git hosts, model APIs) with their secrets resolved (ADRs 0162, 0163).
+   * The image reads it from `WORK_GATEWAY_CONFIG`.
    */
   gateway?: GatewayConfig;
+  /**
+   * How long one of `hooks.connectionGuards` may take before its action
+   * goes to a person (default 30 seconds, ADR 0183).
+   */
+  connectionGuardTimeoutMs?: number;
   webPushSubject?: string;
   /** Loopback operator credential. Generated under `dataDir` when absent. */
   operatorSecret?: string;
   /** Built PWA served at the root. */
   pwaDist?: string;
+  /**
+   * Largest webhook body any endpoint may accept, from
+   * `WORK_WEBHOOK_MAX_BYTES` (default 1 MiB, at most 64 MiB).
+   */
+  webhookMaxBodyBytes?: number;
 }
 
 export function workServerConfigFromEnv(
@@ -82,14 +103,9 @@ export function workServerConfigFromEnv(
     );
   }
   const loopbackBase = `http://127.0.0.1:${port}`;
-  const github = env.WORK_GITHUB_TOKEN || env.WORK_GITHUB_CLIENT_ID;
-  if (github && (!env.WORK_GITHUB_TOKEN || !env.WORK_GITHUB_CLIENT_ID)) {
-    throw new Error(
-      "Configure both WORK_GITHUB_TOKEN and WORK_GITHUB_CLIENT_ID for the server's GitHub connection",
-    );
-  }
+  const dataDir = env.WORK_DATA_DIR ?? "/data";
   return {
-    dataDir: env.WORK_DATA_DIR ?? "/data",
+    dataDir,
     // OAuth discovery and invitation links publish only a secure public
     // origin or exact loopback. LAN HTTP never carries bearer credentials.
     publicBases: [...(publicUrl ? [publicUrl] : []), loopbackBase].filter(
@@ -108,19 +124,13 @@ export function workServerConfigFromEnv(
         }
       : {}),
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
-    ...(env.WORK_AUTH_CONFIG ? { authConfigPath: env.WORK_AUTH_CONFIG } : {}),
+    auth: workAuthConfigFromFile(
+      env.WORK_AUTH_CONFIG ?? path.join(dataDir, "auth-config.json"),
+    ),
     machineName: env.WORK_MACHINE_NAME ?? "Work server",
     machineLabels: parseMachineLabels(env.WORK_MACHINE_LABELS),
     execution: executionSettingsFromEnv(env),
     agent: agentSettingsFromEnv(env),
-    ...(env.WORK_GITHUB_TOKEN && env.WORK_GITHUB_CLIENT_ID
-      ? {
-          github: {
-            clientId: env.WORK_GITHUB_CLIENT_ID,
-            token: env.WORK_GITHUB_TOKEN,
-          },
-        }
-      : {}),
     ...(env.WORK_GATEWAY_CONFIG
       ? {
           gateway: gatewayConfigFromFile({
@@ -136,7 +146,19 @@ export function workServerConfigFromEnv(
       ? { operatorSecret: env.WORK_OPERATOR_SECRET }
       : {}),
     ...(env.WORK_PWA_DIST ? { pwaDist: env.WORK_PWA_DIST } : {}),
+    ...(env.WORK_WEBHOOK_MAX_BYTES
+      ? { webhookMaxBodyBytes: webhookMaxBytes(env.WORK_WEBHOOK_MAX_BYTES) }
+      : {}),
   };
+}
+
+function webhookMaxBytes(value: string): number {
+  const bytes = Number(value);
+  if (!Number.isSafeInteger(bytes) || bytes <= 0 || bytes > 64 * 1024 * 1024)
+    throw new Error(
+      "WORK_WEBHOOK_MAX_BYTES must be a whole number of bytes up to 67108864 (64 MiB)",
+    );
+  return bytes;
 }
 
 function agentSettingsFromEnv(

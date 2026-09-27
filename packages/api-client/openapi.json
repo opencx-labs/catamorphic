@@ -62,9 +62,20 @@
                         },
                         "root": {
                           "type": "boolean"
+                        },
+                        "controlPlanePermissions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": ["connections:read", "connections:write"]
+                          }
                         }
                       },
-                      "required": ["externalUserId", "root"],
+                      "required": [
+                        "externalUserId",
+                        "root",
+                        "controlPlanePermissions"
+                      ],
                       "additionalProperties": false
                     },
                     "projects": {
@@ -259,6 +270,17 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "remoteOwnership": {
+                      "nullable": true,
+                      "type": "string",
+                      "enum": ["owned", "attached"]
+                    },
+                    "remoteDivergedAt": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
                     "defaultBranch": {
                       "type": "string"
                     },
@@ -278,6 +300,8 @@
                     "name",
                     "storageType",
                     "remoteUrl",
+                    "remoteOwnership",
+                    "remoteDivergedAt",
                     "defaultBranch",
                     "createdAt",
                     "updatedAt"
@@ -377,6 +401,17 @@
                             "nullable": true,
                             "type": "string"
                           },
+                          "remoteOwnership": {
+                            "nullable": true,
+                            "type": "string",
+                            "enum": ["owned", "attached"]
+                          },
+                          "remoteDivergedAt": {
+                            "nullable": true,
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                          },
                           "defaultBranch": {
                             "type": "string"
                           },
@@ -396,6 +431,8 @@
                           "name",
                           "storageType",
                           "remoteUrl",
+                          "remoteOwnership",
+                          "remoteDivergedAt",
                           "defaultBranch",
                           "createdAt",
                           "updatedAt"
@@ -454,6 +491,17 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "remoteOwnership": {
+                      "nullable": true,
+                      "type": "string",
+                      "enum": ["owned", "attached"]
+                    },
+                    "remoteDivergedAt": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
                     "defaultBranch": {
                       "type": "string"
                     },
@@ -511,6 +559,7 @@
                                   "type": "string"
                                 },
                                 "config": {},
+                                "where": {},
                                 "sourceRange": {
                                   "type": "object",
                                   "properties": {
@@ -580,6 +629,8 @@
                     "name",
                     "storageType",
                     "remoteUrl",
+                    "remoteOwnership",
+                    "remoteDivergedAt",
                     "defaultBranch",
                     "createdAt",
                     "updatedAt",
@@ -680,6 +731,17 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "remoteOwnership": {
+                      "nullable": true,
+                      "type": "string",
+                      "enum": ["owned", "attached"]
+                    },
+                    "remoteDivergedAt": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
                     "defaultBranch": {
                       "type": "string"
                     },
@@ -699,6 +761,8 @@
                     "name",
                     "storageType",
                     "remoteUrl",
+                    "remoteOwnership",
+                    "remoteDivergedAt",
                     "defaultBranch",
                     "createdAt",
                     "updatedAt"
@@ -2696,6 +2760,10 @@
                         "type": "string",
                         "enum": ["member", "project_service", "tenant_service"]
                       },
+                      "name": {
+                        "nullable": true,
+                        "type": "string"
+                      },
                       "ownerExternalUserId": {
                         "nullable": true,
                         "type": "string"
@@ -2747,6 +2815,7 @@
                       "projectId",
                       "providerKind",
                       "principalKind",
+                      "name",
                       "ownerExternalUserId",
                       "label",
                       "status",
@@ -2782,6 +2851,158 @@
             }
           }
         }
+      }
+    },
+    "/api/service-connections": {
+      "get": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "query",
+            "name": "projectId",
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "projectId": {
+                        "nullable": true,
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "providerKind": {
+                        "type": "string"
+                      },
+                      "principalKind": {
+                        "type": "string",
+                        "enum": ["member", "project_service", "tenant_service"]
+                      },
+                      "name": {
+                        "nullable": true,
+                        "type": "string"
+                      },
+                      "ownerExternalUserId": {
+                        "nullable": true,
+                        "type": "string"
+                      },
+                      "label": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": ["pending", "ready", "expired", "revoked"]
+                      },
+                      "account": {},
+                      "scopes": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "capabilities": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "expiresAt": {
+                        "nullable": true,
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                      },
+                      "revision": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                      },
+                      "updatedAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "projectId",
+                      "providerKind",
+                      "principalKind",
+                      "name",
+                      "ownerExternalUserId",
+                      "label",
+                      "status",
+                      "account",
+                      "scopes",
+                      "capabilities",
+                      "expiresAt",
+                      "revision",
+                      "createdAt",
+                      "updatedAt"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
       },
       "post": {
         "requestBody": {
@@ -2791,51 +3012,34 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$"
+                  },
                   "providerKind": {
                     "type": "string",
                     "minLength": 1
                   },
                   "principalKind": {
                     "type": "string",
-                    "enum": ["project_service", "tenant_service"]
+                    "enum": ["tenant_service", "project_service"]
+                  },
+                  "projectId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "label": {
                     "type": "string",
-                    "minLength": 1
-                  },
-                  "credential": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "capabilities": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
+                    "minLength": 1,
+                    "maxLength": 200
                   }
                 },
-                "required": [
-                  "providerKind",
-                  "principalKind",
-                  "label",
-                  "credential"
-                ]
+                "required": ["name", "providerKind", "principalKind"]
               }
             }
           }
         },
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-            },
-            "in": "path",
-            "name": "projectId",
-            "required": true
-          }
-        ],
         "responses": {
           "201": {
             "description": "Default Response",
@@ -2861,6 +3065,10 @@
                     "principalKind": {
                       "type": "string",
                       "enum": ["member", "project_service", "tenant_service"]
+                    },
+                    "name": {
+                      "nullable": true,
+                      "type": "string"
                     },
                     "ownerExternalUserId": {
                       "nullable": true,
@@ -2913,6 +3121,7 @@
                     "projectId",
                     "providerKind",
                     "principalKind",
+                    "name",
                     "ownerExternalUserId",
                     "label",
                     "status",
@@ -2929,7 +3138,229 @@
               }
             }
           },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
           "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/service-connections/{connectionId}/authorize": {
+      "post": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "connectionId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "authorizationId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "challenge": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["url"]
+                            },
+                            "url": {
+                              "type": "string",
+                              "format": "uri"
+                            },
+                            "expiresAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind", "url"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["device"]
+                            },
+                            "verificationUrl": {
+                              "type": "string",
+                              "format": "uri"
+                            },
+                            "userCode": {
+                              "type": "string"
+                            },
+                            "expiresAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind", "verificationUrl", "userCode"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["form"]
+                            },
+                            "fields": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "label": {
+                                    "type": "string"
+                                  },
+                                  "secret": {
+                                    "type": "boolean"
+                                  },
+                                  "required": {
+                                    "type": "boolean"
+                                  },
+                                  "multiline": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "label",
+                                  "secret",
+                                  "required"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": ["kind", "fields"],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["authorizationId", "challenge"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -3012,201 +3443,6 @@
             }
           },
           "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/connections/{connectionId}/credential": {
-      "put": {
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "credential": {
-                    "type": "string",
-                    "minLength": 1
-                  }
-                },
-                "required": ["credential"]
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-            },
-            "in": "path",
-            "name": "connectionId",
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "format": "uuid",
-                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                    },
-                    "projectId": {
-                      "nullable": true,
-                      "type": "string",
-                      "format": "uuid",
-                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                    },
-                    "providerKind": {
-                      "type": "string"
-                    },
-                    "principalKind": {
-                      "type": "string",
-                      "enum": ["member", "project_service", "tenant_service"]
-                    },
-                    "ownerExternalUserId": {
-                      "nullable": true,
-                      "type": "string"
-                    },
-                    "label": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "string",
-                      "enum": ["pending", "ready", "expired", "revoked"]
-                    },
-                    "account": {},
-                    "scopes": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
-                    },
-                    "capabilities": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
-                    },
-                    "expiresAt": {
-                      "nullable": true,
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
-                    },
-                    "revision": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
-                    },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "projectId",
-                    "providerKind",
-                    "principalKind",
-                    "ownerExternalUserId",
-                    "label",
-                    "status",
-                    "account",
-                    "scopes",
-                    "capabilities",
-                    "expiresAt",
-                    "revision",
-                    "createdAt",
-                    "updatedAt"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "409": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -3412,43 +3648,25 @@
                   "items": {
                     "type": "object",
                     "properties": {
-                      "id": {
-                        "type": "string",
-                        "format": "uuid",
-                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                      },
-                      "projectId": {
-                        "type": "string",
-                        "format": "uuid",
-                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                      },
                       "environment": {
                         "type": "string"
                       },
                       "alias": {
                         "type": "string"
                       },
-                      "providerKind": {
+                      "provider": {
                         "type": "string"
                       },
-                      "principalKinds": {
-                        "type": "array",
-                        "items": {
-                          "type": "string",
-                          "enum": [
-                            "member",
-                            "project_service",
-                            "tenant_service"
-                          ]
-                        }
-                      },
-                      "serviceConnectionId": {
-                        "nullable": true,
+                      "principal": {
                         "type": "string",
-                        "format": "uuid",
-                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        "enum": ["member", "service", "either"]
+                      },
+                      "service": {
+                        "nullable": true,
+                        "type": "string"
                       },
                       "capabilities": {
+                        "nullable": true,
                         "type": "array",
                         "items": {
                           "type": "string"
@@ -3539,301 +3757,20 @@
                           "scopes"
                         ],
                         "additionalProperties": false
-                      },
-                      "createdAt": {
-                        "type": "string",
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
-                      },
-                      "updatedAt": {
-                        "type": "string",
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
                       }
                     },
                     "required": [
-                      "id",
-                      "projectId",
                       "environment",
                       "alias",
-                      "providerKind",
-                      "principalKinds",
-                      "serviceConnectionId",
+                      "provider",
+                      "principal",
+                      "service",
                       "capabilities",
                       "memberConnection",
-                      "serviceConnection",
-                      "createdAt",
-                      "updatedAt"
+                      "serviceConnection"
                     ],
                     "additionalProperties": false
                   }
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/projects/{projectId}/environments/{environment}/connections/{alias}": {
-      "put": {
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "providerKind": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "principalKinds": {
-                    "minItems": 1,
-                    "type": "array",
-                    "items": {
-                      "type": "string",
-                      "enum": ["member", "project_service", "tenant_service"]
-                    }
-                  },
-                  "serviceConnectionId": {
-                    "type": "string",
-                    "format": "uuid",
-                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                  },
-                  "capabilities": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  }
-                },
-                "required": ["providerKind", "principalKinds"]
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-            },
-            "in": "path",
-            "name": "projectId",
-            "required": true
-          },
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 1
-            },
-            "in": "path",
-            "name": "environment",
-            "required": true
-          },
-          {
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
-            },
-            "in": "path",
-            "name": "alias",
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "format": "uuid",
-                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                    },
-                    "projectId": {
-                      "type": "string",
-                      "format": "uuid",
-                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                    },
-                    "environment": {
-                      "type": "string"
-                    },
-                    "alias": {
-                      "type": "string"
-                    },
-                    "providerKind": {
-                      "type": "string"
-                    },
-                    "principalKinds": {
-                      "type": "array",
-                      "items": {
-                        "type": "string",
-                        "enum": ["member", "project_service", "tenant_service"]
-                      }
-                    },
-                    "serviceConnectionId": {
-                      "nullable": true,
-                      "type": "string",
-                      "format": "uuid",
-                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                    },
-                    "capabilities": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
-                    },
-                    "memberConnection": {
-                      "nullable": true,
-                      "type": "object",
-                      "properties": {
-                        "connectionId": {
-                          "nullable": true,
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "principalKind": {
-                          "type": "string",
-                          "enum": [
-                            "member",
-                            "project_service",
-                            "tenant_service"
-                          ]
-                        },
-                        "label": {
-                          "type": "string"
-                        },
-                        "status": {
-                          "type": "string",
-                          "enum": ["pending", "ready", "expired", "revoked"]
-                        },
-                        "account": {},
-                        "scopes": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        }
-                      },
-                      "required": [
-                        "connectionId",
-                        "principalKind",
-                        "label",
-                        "status",
-                        "account",
-                        "scopes"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "serviceConnection": {
-                      "nullable": true,
-                      "type": "object",
-                      "properties": {
-                        "connectionId": {
-                          "nullable": true,
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "principalKind": {
-                          "type": "string",
-                          "enum": [
-                            "member",
-                            "project_service",
-                            "tenant_service"
-                          ]
-                        },
-                        "label": {
-                          "type": "string"
-                        },
-                        "status": {
-                          "type": "string",
-                          "enum": ["pending", "ready", "expired", "revoked"]
-                        },
-                        "account": {},
-                        "scopes": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        }
-                      },
-                      "required": [
-                        "connectionId",
-                        "principalKind",
-                        "label",
-                        "status",
-                        "account",
-                        "scopes"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
-                    },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "projectId",
-                    "environment",
-                    "alias",
-                    "providerKind",
-                    "principalKinds",
-                    "serviceConnectionId",
-                    "capabilities",
-                    "memberConnection",
-                    "serviceConnection",
-                    "createdAt",
-                    "updatedAt"
-                  ],
-                  "additionalProperties": false
                 }
               }
             }
@@ -4000,6 +3937,9 @@
                                   },
                                   "required": {
                                     "type": "boolean"
+                                  },
+                                  "multiline": {
+                                    "type": "boolean"
                                   }
                                 },
                                 "required": [
@@ -4129,6 +4069,10 @@
                       "type": "string",
                       "enum": ["member", "project_service", "tenant_service"]
                     },
+                    "name": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "ownerExternalUserId": {
                       "nullable": true,
                       "type": "string"
@@ -4180,6 +4124,7 @@
                     "projectId",
                     "providerKind",
                     "principalKind",
+                    "name",
                     "ownerExternalUserId",
                     "label",
                     "status",
@@ -4395,6 +4340,10 @@
                       "type": "string",
                       "enum": ["member", "project_service", "tenant_service"]
                     },
+                    "name": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "ownerExternalUserId": {
                       "nullable": true,
                       "type": "string"
@@ -4446,6 +4395,7 @@
                     "projectId",
                     "providerKind",
                     "principalKind",
+                    "name",
                     "ownerExternalUserId",
                     "label",
                     "status",
@@ -4660,6 +4610,7 @@
                               "type": "string"
                             },
                             "config": {},
+                            "where": {},
                             "sourceRange": {
                               "type": "object",
                               "properties": {
@@ -4878,6 +4829,7 @@
                             "type": "string"
                           },
                           "config": {},
+                          "where": {},
                           "sourceRange": {
                             "type": "object",
                             "properties": {
@@ -5133,6 +5085,7 @@
                                   "type": "string"
                                 },
                                 "config": {},
+                                "where": {},
                                 "display": {
                                   "type": "object",
                                   "properties": {
@@ -7601,11 +7554,6 @@
                                 "alias": {
                                   "type": "string"
                                 },
-                                "bindingId": {
-                                  "type": "string",
-                                  "format": "uuid",
-                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                },
                                 "connectionId": {
                                   "type": "string",
                                   "format": "uuid",
@@ -7631,7 +7579,6 @@
                               },
                               "required": [
                                 "alias",
-                                "bindingId",
                                 "connectionId",
                                 "providerKind",
                                 "principalKind",
@@ -7707,6 +7654,9 @@
                                   "type": "string"
                                 },
                                 "config": {},
+                                "projectKind": {
+                                  "type": "string"
+                                },
                                 "status": {
                                   "type": "string",
                                   "enum": ["active", "paused"]
@@ -7931,11 +7881,6 @@
                           "alias": {
                             "type": "string"
                           },
-                          "bindingId": {
-                            "type": "string",
-                            "format": "uuid",
-                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                          },
                           "connectionId": {
                             "type": "string",
                             "format": "uuid",
@@ -7961,7 +7906,6 @@
                         },
                         "required": [
                           "alias",
-                          "bindingId",
                           "connectionId",
                           "providerKind",
                           "principalKind",
@@ -8037,6 +7981,9 @@
                             "type": "string"
                           },
                           "config": {},
+                          "projectKind": {
+                            "type": "string"
+                          },
                           "status": {
                             "type": "string",
                             "enum": ["active", "paused"]
@@ -8353,11 +8300,6 @@
                           "alias": {
                             "type": "string"
                           },
-                          "bindingId": {
-                            "type": "string",
-                            "format": "uuid",
-                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                          },
                           "connectionId": {
                             "type": "string",
                             "format": "uuid",
@@ -8383,7 +8325,6 @@
                         },
                         "required": [
                           "alias",
-                          "bindingId",
                           "connectionId",
                           "providerKind",
                           "principalKind",
@@ -8425,7 +8366,10 @@
                           "kind": {
                             "type": "string"
                           },
-                          "config": {}
+                          "config": {},
+                          "projectKind": {
+                            "type": "string"
+                          }
                         },
                         "required": ["kind", "config"],
                         "additionalProperties": false
@@ -8675,11 +8619,6 @@
                           "alias": {
                             "type": "string"
                           },
-                          "bindingId": {
-                            "type": "string",
-                            "format": "uuid",
-                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                          },
                           "connectionId": {
                             "type": "string",
                             "format": "uuid",
@@ -8705,7 +8644,6 @@
                         },
                         "required": [
                           "alias",
-                          "bindingId",
                           "connectionId",
                           "providerKind",
                           "principalKind",
@@ -8781,6 +8719,9 @@
                             "type": "string"
                           },
                           "config": {},
+                          "projectKind": {
+                            "type": "string"
+                          },
                           "status": {
                             "type": "string",
                             "enum": ["active", "paused"]
@@ -8964,11 +8905,6 @@
                           "alias": {
                             "type": "string"
                           },
-                          "bindingId": {
-                            "type": "string",
-                            "format": "uuid",
-                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                          },
                           "connectionId": {
                             "type": "string",
                             "format": "uuid",
@@ -8994,7 +8930,6 @@
                         },
                         "required": [
                           "alias",
-                          "bindingId",
                           "connectionId",
                           "providerKind",
                           "principalKind",
@@ -9070,6 +9005,9 @@
                             "type": "string"
                           },
                           "config": {},
+                          "projectKind": {
+                            "type": "string"
+                          },
                           "status": {
                             "type": "string",
                             "enum": ["active", "paused"]
@@ -9288,11 +9226,6 @@
                           "alias": {
                             "type": "string"
                           },
-                          "bindingId": {
-                            "type": "string",
-                            "format": "uuid",
-                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                          },
                           "connectionId": {
                             "type": "string",
                             "format": "uuid",
@@ -9318,7 +9251,6 @@
                         },
                         "required": [
                           "alias",
-                          "bindingId",
                           "connectionId",
                           "providerKind",
                           "principalKind",
@@ -9394,6 +9326,9 @@
                             "type": "string"
                           },
                           "config": {},
+                          "projectKind": {
+                            "type": "string"
+                          },
                           "status": {
                             "type": "string",
                             "enum": ["active", "paused"]
@@ -9630,11 +9565,6 @@
                           "alias": {
                             "type": "string"
                           },
-                          "bindingId": {
-                            "type": "string",
-                            "format": "uuid",
-                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                          },
                           "connectionId": {
                             "type": "string",
                             "format": "uuid",
@@ -9660,7 +9590,6 @@
                         },
                         "required": [
                           "alias",
-                          "bindingId",
                           "connectionId",
                           "providerKind",
                           "principalKind",
@@ -9736,6 +9665,9 @@
                             "type": "string"
                           },
                           "config": {},
+                          "projectKind": {
+                            "type": "string"
+                          },
                           "status": {
                             "type": "string",
                             "enum": ["active", "paused"]
@@ -10026,6 +9958,13 @@
                         "type": "string"
                       },
                       "config": {},
+                      "where": {
+                        "type": "array",
+                        "items": {}
+                      },
+                      "projectKind": {
+                        "type": "string"
+                      },
                       "canSuspend": {
                         "type": "boolean"
                       },
@@ -10065,6 +10004,7 @@
                       "workflowName",
                       "kind",
                       "config",
+                      "where",
                       "canSuspend",
                       "inputParameters",
                       "inputSchema",
@@ -13331,6 +13271,22 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 500
+                  },
+                  "workspace": {
+                    "type": "object",
+                    "properties": {
+                      "ref": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255
+                      },
+                      "update": {
+                        "type": "string",
+                        "enum": ["reset", "rebase"]
+                      }
+                    },
+                    "required": ["ref"],
+                    "additionalProperties": false
                   }
                 }
               }
@@ -13572,6 +13528,63 @@
                       "required": ["id", "content"],
                       "additionalProperties": false
                     },
+                    "key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "keyWorkflows": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "placement": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "environment": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "requested",
+                            "agent_preferred",
+                            "project_default",
+                            "available"
+                          ]
+                        },
+                        "machine": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "label": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["id", "label"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["environment", "reason", "machine"],
+                      "additionalProperties": false
+                    },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -13626,6 +13639,10 @@
                     "attentionRevision",
                     "attentionSeenRevision",
                     "attentionRequired",
+                    "key",
+                    "keyWorkflows",
+                    "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -14131,6 +14148,63 @@
                             "required": ["id", "content"],
                             "additionalProperties": false
                           },
+                          "key": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "keyWorkflows": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "placement": {
+                            "nullable": true,
+                            "type": "object",
+                            "properties": {
+                              "environment": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string",
+                                "enum": [
+                                  "requested",
+                                  "agent_preferred",
+                                  "project_default",
+                                  "available"
+                                ]
+                              },
+                              "machine": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "label": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["id", "label"],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": ["environment", "reason", "machine"],
+                            "additionalProperties": false
+                          },
+                          "workspace": {
+                            "nullable": true,
+                            "type": "object",
+                            "properties": {
+                              "ref": {
+                                "type": "string"
+                              },
+                              "commit": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["ref", "commit"],
+                            "additionalProperties": false
+                          },
                           "baseCommitSha": {
                             "nullable": true,
                             "type": "string",
@@ -14185,6 +14259,10 @@
                           "attentionRevision",
                           "attentionSeenRevision",
                           "attentionRequired",
+                          "key",
+                          "keyWorkflows",
+                          "placement",
+                          "workspace",
                           "baseCommitSha",
                           "createdAt",
                           "updatedAt"
@@ -14743,6 +14821,63 @@
                       "required": ["id", "content"],
                       "additionalProperties": false
                     },
+                    "key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "keyWorkflows": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "placement": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "environment": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "requested",
+                            "agent_preferred",
+                            "project_default",
+                            "available"
+                          ]
+                        },
+                        "machine": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "label": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["id", "label"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["environment", "reason", "machine"],
+                      "additionalProperties": false
+                    },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -14797,6 +14932,10 @@
                     "attentionRevision",
                     "attentionSeenRevision",
                     "attentionRequired",
+                    "key",
+                    "keyWorkflows",
+                    "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -15269,6 +15408,63 @@
                       "required": ["id", "content"],
                       "additionalProperties": false
                     },
+                    "key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "keyWorkflows": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "placement": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "environment": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "requested",
+                            "agent_preferred",
+                            "project_default",
+                            "available"
+                          ]
+                        },
+                        "machine": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "label": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["id", "label"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["environment", "reason", "machine"],
+                      "additionalProperties": false
+                    },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -15323,6 +15519,10 @@
                     "attentionRevision",
                     "attentionSeenRevision",
                     "attentionRequired",
+                    "key",
+                    "keyWorkflows",
+                    "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -15663,6 +15863,63 @@
                       "required": ["id", "content"],
                       "additionalProperties": false
                     },
+                    "key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "keyWorkflows": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "placement": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "environment": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "requested",
+                            "agent_preferred",
+                            "project_default",
+                            "available"
+                          ]
+                        },
+                        "machine": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "label": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["id", "label"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["environment", "reason", "machine"],
+                      "additionalProperties": false
+                    },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -15717,6 +15974,10 @@
                     "attentionRevision",
                     "attentionSeenRevision",
                     "attentionRequired",
+                    "key",
+                    "keyWorkflows",
+                    "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -16159,6 +16420,63 @@
                       "required": ["id", "content"],
                       "additionalProperties": false
                     },
+                    "key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "keyWorkflows": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "placement": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "environment": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "requested",
+                            "agent_preferred",
+                            "project_default",
+                            "available"
+                          ]
+                        },
+                        "machine": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "label": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["id", "label"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["environment", "reason", "machine"],
+                      "additionalProperties": false
+                    },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -16537,6 +16855,10 @@
                     "attentionRevision",
                     "attentionSeenRevision",
                     "attentionRequired",
+                    "key",
+                    "keyWorkflows",
+                    "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt",
@@ -16831,6 +17153,63 @@
                       "required": ["id", "content"],
                       "additionalProperties": false
                     },
+                    "key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "keyWorkflows": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "placement": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "environment": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "requested",
+                            "agent_preferred",
+                            "project_default",
+                            "available"
+                          ]
+                        },
+                        "machine": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "label": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["id", "label"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["environment", "reason", "machine"],
+                      "additionalProperties": false
+                    },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -16885,6 +17264,10 @@
                     "attentionRevision",
                     "attentionSeenRevision",
                     "attentionRequired",
+                    "key",
+                    "keyWorkflows",
+                    "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -17196,6 +17579,63 @@
                       "required": ["id", "content"],
                       "additionalProperties": false
                     },
+                    "key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "keyWorkflows": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "placement": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "environment": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "requested",
+                            "agent_preferred",
+                            "project_default",
+                            "available"
+                          ]
+                        },
+                        "machine": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "label": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["id", "label"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["environment", "reason", "machine"],
+                      "additionalProperties": false
+                    },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -17250,6 +17690,10 @@
                     "attentionRevision",
                     "attentionSeenRevision",
                     "attentionRequired",
+                    "key",
+                    "keyWorkflows",
+                    "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -17763,6 +18207,63 @@
                           "required": ["id", "content"],
                           "additionalProperties": false
                         },
+                        "key": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "keyWorkflows": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "placement": {
+                          "nullable": true,
+                          "type": "object",
+                          "properties": {
+                            "environment": {
+                              "type": "string"
+                            },
+                            "reason": {
+                              "type": "string",
+                              "enum": [
+                                "requested",
+                                "agent_preferred",
+                                "project_default",
+                                "available"
+                              ]
+                            },
+                            "machine": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "label": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["id", "label"],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": ["environment", "reason", "machine"],
+                          "additionalProperties": false
+                        },
+                        "workspace": {
+                          "nullable": true,
+                          "type": "object",
+                          "properties": {
+                            "ref": {
+                              "type": "string"
+                            },
+                            "commit": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["ref", "commit"],
+                          "additionalProperties": false
+                        },
                         "baseCommitSha": {
                           "nullable": true,
                           "type": "string",
@@ -17817,6 +18318,10 @@
                         "attentionRevision",
                         "attentionSeenRevision",
                         "attentionRequired",
+                        "key",
+                        "keyWorkflows",
+                        "placement",
+                        "workspace",
                         "baseCommitSha",
                         "createdAt",
                         "updatedAt"
@@ -18213,6 +18718,63 @@
                             "required": ["id", "content"],
                             "additionalProperties": false
                           },
+                          "key": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "keyWorkflows": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "placement": {
+                            "nullable": true,
+                            "type": "object",
+                            "properties": {
+                              "environment": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string",
+                                "enum": [
+                                  "requested",
+                                  "agent_preferred",
+                                  "project_default",
+                                  "available"
+                                ]
+                              },
+                              "machine": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "label": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["id", "label"],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": ["environment", "reason", "machine"],
+                            "additionalProperties": false
+                          },
+                          "workspace": {
+                            "nullable": true,
+                            "type": "object",
+                            "properties": {
+                              "ref": {
+                                "type": "string"
+                              },
+                              "commit": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["ref", "commit"],
+                            "additionalProperties": false
+                          },
                           "baseCommitSha": {
                             "nullable": true,
                             "type": "string",
@@ -18267,6 +18829,10 @@
                           "attentionRevision",
                           "attentionSeenRevision",
                           "attentionRequired",
+                          "key",
+                          "keyWorkflows",
+                          "placement",
+                          "workspace",
                           "baseCommitSha",
                           "createdAt",
                           "updatedAt"
@@ -18641,6 +19207,63 @@
                             "required": ["id", "content"],
                             "additionalProperties": false
                           },
+                          "key": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "keyWorkflows": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "placement": {
+                            "nullable": true,
+                            "type": "object",
+                            "properties": {
+                              "environment": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string",
+                                "enum": [
+                                  "requested",
+                                  "agent_preferred",
+                                  "project_default",
+                                  "available"
+                                ]
+                              },
+                              "machine": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "label": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["id", "label"],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": ["environment", "reason", "machine"],
+                            "additionalProperties": false
+                          },
+                          "workspace": {
+                            "nullable": true,
+                            "type": "object",
+                            "properties": {
+                              "ref": {
+                                "type": "string"
+                              },
+                              "commit": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["ref", "commit"],
+                            "additionalProperties": false
+                          },
                           "baseCommitSha": {
                             "nullable": true,
                             "type": "string",
@@ -18695,6 +19318,10 @@
                           "attentionRevision",
                           "attentionSeenRevision",
                           "attentionRequired",
+                          "key",
+                          "keyWorkflows",
+                          "placement",
+                          "workspace",
                           "baseCommitSha",
                           "createdAt",
                           "updatedAt"
@@ -19108,6 +19735,63 @@
                       "required": ["id", "content"],
                       "additionalProperties": false
                     },
+                    "key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "keyWorkflows": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "placement": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "environment": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "requested",
+                            "agent_preferred",
+                            "project_default",
+                            "available"
+                          ]
+                        },
+                        "machine": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "label": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["id", "label"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["environment", "reason", "machine"],
+                      "additionalProperties": false
+                    },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -19162,6 +19846,10 @@
                     "attentionRevision",
                     "attentionSeenRevision",
                     "attentionRequired",
+                    "key",
+                    "keyWorkflows",
+                    "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -19490,6 +20178,22 @@
                   "deliveryMode": {
                     "type": "string",
                     "enum": ["next_turn", "interrupt"]
+                  },
+                  "workspace": {
+                    "type": "object",
+                    "properties": {
+                      "ref": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255
+                      },
+                      "update": {
+                        "type": "string",
+                        "enum": ["reset", "rebase"]
+                      }
+                    },
+                    "required": ["ref"],
+                    "additionalProperties": false
                   }
                 },
                 "required": ["message"]
@@ -19718,6 +20422,12 @@
                           },
                           "expiresAt": {
                             "type": "string"
+                          },
+                          "approvers": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
                           }
                         },
                         "required": ["id", "request", "createdAt", "expiresAt"],
@@ -20268,6 +20978,63 @@
                       "required": ["id", "content"],
                       "additionalProperties": false
                     },
+                    "key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "keyWorkflows": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "placement": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "environment": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "requested",
+                            "agent_preferred",
+                            "project_default",
+                            "available"
+                          ]
+                        },
+                        "machine": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "label": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["id", "label"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["environment", "reason", "machine"],
+                      "additionalProperties": false
+                    },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -20322,6 +21089,10 @@
                     "attentionRevision",
                     "attentionSeenRevision",
                     "attentionRequired",
+                    "key",
+                    "keyWorkflows",
+                    "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -20749,6 +21520,533 @@
                     }
                   },
                   "required": ["ok"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{projectId}/agent/chats/{key}": {
+      "get": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["project"]
+            },
+            "in": "query",
+            "name": "audience",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "query",
+            "name": "member",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "in": "path",
+            "name": "key",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "workStatus": {
+                      "type": "string",
+                      "enum": ["open", "completed"]
+                    },
+                    "stateRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "childCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "id": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "externalUserId": {
+                      "type": "string"
+                    },
+                    "owner": {
+                      "type": "string",
+                      "enum": ["member", "project"]
+                    },
+                    "provider": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "desktop",
+                        "mobile",
+                        "slack",
+                        "claude",
+                        "mcp",
+                        "api"
+                      ]
+                    },
+                    "providerSessionId": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "sandboxId": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "environment": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "allocationId": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "agentId": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "model": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "modelEffort": {
+                      "nullable": true,
+                      "type": "string",
+                      "enum": ["low", "medium", "high", "xhigh", "max"]
+                    },
+                    "title": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "icon": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "forkedFromSessionId": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "parentSessionId": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "visibility": {
+                      "type": "string",
+                      "enum": ["latent", "promoted", "archived"]
+                    },
+                    "archivedAt": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["active", "closed"]
+                    },
+                    "activity": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "todos": {
+                      "maxItems": 50,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4000
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["pending", "in_progress", "completed"]
+                          }
+                        },
+                        "required": ["id", "title", "description", "status"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "authorityHostId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "authorityRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true,
+                      "maximum": 9007199254740991
+                    },
+                    "authoritySeenAt": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "mirrorMessageCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "handoffStatus": {
+                      "type": "string",
+                      "enum": ["none", "pending"]
+                    },
+                    "handoffDestinationHostId": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "resumable": {
+                      "type": "boolean"
+                    },
+                    "pausedAt": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "running": {
+                      "type": "boolean"
+                    },
+                    "attentionRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionSeenRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionRequired": {
+                      "type": "boolean"
+                    },
+                    "attentionMessage": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "content": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["id", "content"],
+                      "additionalProperties": false
+                    },
+                    "key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "keyWorkflows": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "placement": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "environment": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "requested",
+                            "agent_preferred",
+                            "project_default",
+                            "available"
+                          ]
+                        },
+                        "machine": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "label": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["id", "label"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["environment", "reason", "machine"],
+                      "additionalProperties": false
+                    },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
+                    "baseCommitSha": {
+                      "nullable": true,
+                      "type": "string",
+                      "minLength": 40,
+                      "maxLength": 40
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    }
+                  },
+                  "required": [
+                    "workStatus",
+                    "stateRevision",
+                    "id",
+                    "projectId",
+                    "externalUserId",
+                    "owner",
+                    "provider",
+                    "source",
+                    "providerSessionId",
+                    "sandboxId",
+                    "environment",
+                    "allocationId",
+                    "agentId",
+                    "model",
+                    "modelEffort",
+                    "title",
+                    "icon",
+                    "forkedFromSessionId",
+                    "parentSessionId",
+                    "visibility",
+                    "archivedAt",
+                    "status",
+                    "activity",
+                    "todos",
+                    "authorityHostId",
+                    "authorityRevision",
+                    "authoritySeenAt",
+                    "mirrorMessageCount",
+                    "handoffStatus",
+                    "handoffDestinationHostId",
+                    "resumable",
+                    "pausedAt",
+                    "running",
+                    "attentionRevision",
+                    "attentionSeenRevision",
+                    "attentionRequired",
+                    "key",
+                    "keyWorkflows",
+                    "placement",
+                    "workspace",
+                    "baseCommitSha",
+                    "createdAt",
+                    "updatedAt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["project"]
+            },
+            "in": "query",
+            "name": "audience",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "query",
+            "name": "member",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "in": "path",
+            "name": "key",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sessionId": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "closed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["sessionId", "closed"],
                   "additionalProperties": false
                 }
               }
@@ -21296,6 +22594,63 @@
                             "required": ["id", "content"],
                             "additionalProperties": false
                           },
+                          "key": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "keyWorkflows": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "placement": {
+                            "nullable": true,
+                            "type": "object",
+                            "properties": {
+                              "environment": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string",
+                                "enum": [
+                                  "requested",
+                                  "agent_preferred",
+                                  "project_default",
+                                  "available"
+                                ]
+                              },
+                              "machine": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "label": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["id", "label"],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": ["environment", "reason", "machine"],
+                            "additionalProperties": false
+                          },
+                          "workspace": {
+                            "nullable": true,
+                            "type": "object",
+                            "properties": {
+                              "ref": {
+                                "type": "string"
+                              },
+                              "commit": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["ref", "commit"],
+                            "additionalProperties": false
+                          },
                           "baseCommitSha": {
                             "nullable": true,
                             "type": "string",
@@ -21350,6 +22705,10 @@
                           "attentionRevision",
                           "attentionSeenRevision",
                           "attentionRequired",
+                          "key",
+                          "keyWorkflows",
+                          "placement",
+                          "workspace",
                           "baseCommitSha",
                           "createdAt",
                           "updatedAt"
@@ -21751,6 +23110,63 @@
                         "required": ["id", "content"],
                         "additionalProperties": false
                       },
+                      "key": {
+                        "nullable": true,
+                        "type": "string"
+                      },
+                      "keyWorkflows": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "placement": {
+                        "nullable": true,
+                        "type": "object",
+                        "properties": {
+                          "environment": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "enum": [
+                              "requested",
+                              "agent_preferred",
+                              "project_default",
+                              "available"
+                            ]
+                          },
+                          "machine": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id", "label"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": ["environment", "reason", "machine"],
+                        "additionalProperties": false
+                      },
+                      "workspace": {
+                        "nullable": true,
+                        "type": "object",
+                        "properties": {
+                          "ref": {
+                            "type": "string"
+                          },
+                          "commit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["ref", "commit"],
+                        "additionalProperties": false
+                      },
                       "baseCommitSha": {
                         "nullable": true,
                         "type": "string",
@@ -21805,6 +23221,10 @@
                       "attentionRevision",
                       "attentionSeenRevision",
                       "attentionRequired",
+                      "key",
+                      "keyWorkflows",
+                      "placement",
+                      "workspace",
                       "baseCommitSha",
                       "createdAt",
                       "updatedAt"
@@ -22184,6 +23604,44 @@
                             },
                             "required": ["items"],
                             "additionalProperties": false
+                          },
+                          "sandboxing": {
+                            "type": "string",
+                            "enum": ["contained", "propose", "publish"]
+                          },
+                          "harnessPermissions": {
+                            "type": "object",
+                            "properties": {
+                              "permissionMode": {
+                                "type": "string",
+                                "enum": [
+                                  "default",
+                                  "acceptEdits",
+                                  "plan",
+                                  "auto",
+                                  "dontAsk",
+                                  "bypassPermissions"
+                                ]
+                              },
+                              "sandbox": {
+                                "type": "string",
+                                "enum": [
+                                  "read-only",
+                                  "workspace-write",
+                                  "danger-full-access"
+                                ]
+                              },
+                              "approvals": {
+                                "type": "string",
+                                "enum": [
+                                  "untrusted",
+                                  "on-failure",
+                                  "on-request",
+                                  "never"
+                                ]
+                              }
+                            },
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -22308,9 +23766,43 @@
                             "type": "string",
                             "enum": ["low", "medium", "high", "xhigh", "max"]
                           },
-                          "mode": {
+                          "sandboxing": {
                             "type": "string",
-                            "enum": ["read-only", "edit", "full-access"]
+                            "enum": ["contained", "propose", "publish"]
+                          },
+                          "harnessPermissions": {
+                            "type": "object",
+                            "properties": {
+                              "permissionMode": {
+                                "type": "string",
+                                "enum": [
+                                  "default",
+                                  "acceptEdits",
+                                  "plan",
+                                  "auto",
+                                  "dontAsk",
+                                  "bypassPermissions"
+                                ]
+                              },
+                              "sandbox": {
+                                "type": "string",
+                                "enum": [
+                                  "read-only",
+                                  "workspace-write",
+                                  "danger-full-access"
+                                ]
+                              },
+                              "approvals": {
+                                "type": "string",
+                                "enum": [
+                                  "untrusted",
+                                  "on-failure",
+                                  "on-request",
+                                  "never"
+                                ]
+                              }
+                            },
+                            "additionalProperties": false
                           },
                           "memory": {
                             "type": "boolean"
@@ -22323,9 +23815,17 @@
                             "properties": {
                               "source": {
                                 "type": "string",
-                                "enum": ["profile", "secret", "local"]
+                                "enum": [
+                                  "profile",
+                                  "secret",
+                                  "local",
+                                  "connection"
+                                ]
                               },
                               "secret": {
+                                "type": "string"
+                              },
+                              "connection": {
                                 "type": "string"
                               }
                             },
@@ -22486,6 +23986,9 @@
                   "isolation": {
                     "type": "string",
                     "enum": ["none", "process", "sandbox"]
+                  },
+                  "processes": {
+                    "type": "boolean"
                   }
                 },
                 "required": ["id", "environment", "label", "workspaceRoot"]
@@ -22665,6 +24168,86 @@
                                 "snapshotName": {
                                   "type": "string"
                                 },
+                                "image": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["oci"]
+                                        },
+                                        "reference": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["kind", "reference"],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["dockerfile"]
+                                        },
+                                        "path": {
+                                          "type": "string"
+                                        },
+                                        "content": {
+                                          "type": "string",
+                                          "maxLength": 65536
+                                        },
+                                        "digest": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "path",
+                                        "content",
+                                        "digest"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "containers": {
+                                  "type": "boolean"
+                                },
+                                "egress": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "mode": {
+                                          "type": "string",
+                                          "enum": ["open"]
+                                        }
+                                      },
+                                      "required": ["mode"],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "mode": {
+                                          "type": "string",
+                                          "enum": ["allowlist"]
+                                        },
+                                        "allow": {
+                                          "readOnly": true,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": ["mode", "allow"],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
                                 "language": {
                                   "type": "string"
                                 },
@@ -22840,6 +24423,139 @@
                             }
                           },
                           "required": ["kind", "sandboxId", "path", "ref"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["process.start"]
+                            },
+                            "sandboxId": {
+                              "type": "string"
+                            },
+                            "command": {
+                              "type": "string"
+                            },
+                            "cwd": {
+                              "type": "string"
+                            },
+                            "env": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "string"
+                              }
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "stdin": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["kind", "sandboxId", "command"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["process.write"]
+                            },
+                            "sandboxId": {
+                              "type": "string"
+                            },
+                            "processId": {
+                              "type": "string"
+                            },
+                            "data": {
+                              "type": "string"
+                            },
+                            "end": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "sandboxId",
+                            "processId",
+                            "data"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["process.read"]
+                            },
+                            "sandboxId": {
+                              "type": "string"
+                            },
+                            "processId": {
+                              "type": "string"
+                            },
+                            "cursor": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "maxBytes": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "exclusiveMinimum": true,
+                              "maximum": 9007199254740991
+                            },
+                            "waitMs": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["kind", "sandboxId", "processId"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["process.signal"]
+                            },
+                            "sandboxId": {
+                              "type": "string"
+                            },
+                            "processId": {
+                              "type": "string"
+                            },
+                            "signal": {
+                              "type": "string",
+                              "enum": ["SIGINT", "SIGTERM", "SIGKILL", "SIGHUP"]
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "sandboxId",
+                            "processId",
+                            "signal"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["process.list"]
+                            },
+                            "sandboxId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind", "sandboxId"],
                           "additionalProperties": false
                         }
                       ]
@@ -23039,6 +24755,166 @@
                           }
                         },
                         "required": ["exitCode", "result"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "processId": {
+                            "type": "string"
+                          },
+                          "sandboxId": {
+                            "type": "string"
+                          },
+                          "command": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "cwd": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["running", "exited"]
+                          },
+                          "exitCode": {
+                            "nullable": true,
+                            "type": "number"
+                          },
+                          "signal": {
+                            "nullable": true,
+                            "type": "string",
+                            "enum": ["SIGINT", "SIGTERM", "SIGKILL", "SIGHUP"]
+                          },
+                          "startedAt": {
+                            "type": "string"
+                          },
+                          "endedAt": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "outputBytes": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "processId",
+                          "sandboxId",
+                          "command",
+                          "cwd",
+                          "status",
+                          "exitCode",
+                          "signal",
+                          "startedAt",
+                          "endedAt",
+                          "outputBytes"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "processId": {
+                            "type": "string"
+                          },
+                          "chunk": {
+                            "type": "string"
+                          },
+                          "cursor": {
+                            "type": "number"
+                          },
+                          "nextCursor": {
+                            "type": "number"
+                          },
+                          "more": {
+                            "type": "boolean"
+                          },
+                          "outputBytes": {
+                            "type": "number"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["running", "exited"]
+                          },
+                          "exitCode": {
+                            "nullable": true,
+                            "type": "number"
+                          },
+                          "signal": {
+                            "nullable": true,
+                            "type": "string",
+                            "enum": ["SIGINT", "SIGTERM", "SIGKILL", "SIGHUP"]
+                          }
+                        },
+                        "required": [
+                          "processId",
+                          "chunk",
+                          "cursor",
+                          "nextCursor",
+                          "more",
+                          "outputBytes",
+                          "status",
+                          "exitCode",
+                          "signal"
+                        ]
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "processId": {
+                              "type": "string"
+                            },
+                            "sandboxId": {
+                              "type": "string"
+                            },
+                            "command": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "cwd": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": ["running", "exited"]
+                            },
+                            "exitCode": {
+                              "nullable": true,
+                              "type": "number"
+                            },
+                            "signal": {
+                              "nullable": true,
+                              "type": "string",
+                              "enum": ["SIGINT", "SIGTERM", "SIGKILL", "SIGHUP"]
+                            },
+                            "startedAt": {
+                              "type": "string"
+                            },
+                            "endedAt": {
+                              "nullable": true,
+                              "type": "string"
+                            },
+                            "outputBytes": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "processId",
+                            "sandboxId",
+                            "command",
+                            "cwd",
+                            "status",
+                            "exitCode",
+                            "signal",
+                            "startedAt",
+                            "endedAt",
+                            "outputBytes"
+                          ]
+                        }
                       }
                     ],
                     "nullable": true
@@ -23771,6 +25647,63 @@
                         "required": ["id", "content"],
                         "additionalProperties": false
                       },
+                      "key": {
+                        "nullable": true,
+                        "type": "string"
+                      },
+                      "keyWorkflows": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "placement": {
+                        "nullable": true,
+                        "type": "object",
+                        "properties": {
+                          "environment": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "enum": [
+                              "requested",
+                              "agent_preferred",
+                              "project_default",
+                              "available"
+                            ]
+                          },
+                          "machine": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id", "label"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": ["environment", "reason", "machine"],
+                        "additionalProperties": false
+                      },
+                      "workspace": {
+                        "nullable": true,
+                        "type": "object",
+                        "properties": {
+                          "ref": {
+                            "type": "string"
+                          },
+                          "commit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["ref", "commit"],
+                        "additionalProperties": false
+                      },
                       "baseCommitSha": {
                         "nullable": true,
                         "type": "string",
@@ -23825,6 +25758,10 @@
                       "attentionRevision",
                       "attentionSeenRevision",
                       "attentionRequired",
+                      "key",
+                      "keyWorkflows",
+                      "placement",
+                      "workspace",
                       "baseCommitSha",
                       "createdAt",
                       "updatedAt"
@@ -32169,165 +34106,7 @@
         }
       }
     },
-    "/api/github/status": {
-      "get": {
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "connected": {
-                      "type": "boolean"
-                    },
-                    "login": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["connected"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/github/connect": {
-      "post": {
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "code": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "redirectUri": {
-                    "type": "string"
-                  }
-                },
-                "required": ["code"]
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "connected": {
-                      "type": "boolean"
-                    },
-                    "login": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["connected"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/github/connection": {
-      "delete": {
-        "responses": {
-          "204": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "string",
-                  "nullable": true,
-                  "enum": [null]
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/github/repos": {
+    "/api/code-hosts": {
       "get": {
         "responses": {
           "200": {
@@ -32339,9 +34118,328 @@
                   "items": {
                     "type": "object",
                     "properties": {
-                      "id": {
-                        "type": "number"
+                      "provider": {
+                        "type": "string"
                       },
+                      "displayName": {
+                        "type": "string"
+                      },
+                      "connection": {
+                        "nullable": true,
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "projectId": {
+                            "nullable": true,
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "providerKind": {
+                            "type": "string"
+                          },
+                          "principalKind": {
+                            "type": "string",
+                            "enum": [
+                              "member",
+                              "project_service",
+                              "tenant_service"
+                            ]
+                          },
+                          "name": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "ownerExternalUserId": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["pending", "ready", "expired", "revoked"]
+                          },
+                          "account": {},
+                          "scopes": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "capabilities": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "expiresAt": {
+                            "nullable": true,
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                          },
+                          "revision": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                          },
+                          "updatedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "projectId",
+                          "providerKind",
+                          "principalKind",
+                          "name",
+                          "ownerExternalUserId",
+                          "label",
+                          "status",
+                          "account",
+                          "scopes",
+                          "capabilities",
+                          "expiresAt",
+                          "revision",
+                          "createdAt",
+                          "updatedAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": ["provider", "displayName", "connection"],
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/code-hosts/{provider}/connection/authorize": {
+      "post": {
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "redirectUri": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "required": ["redirectUri"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._-]*$"
+            },
+            "in": "path",
+            "name": "provider",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "authorizationId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "challenge": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["url"]
+                            },
+                            "url": {
+                              "type": "string",
+                              "format": "uri"
+                            },
+                            "expiresAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind", "url"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["device"]
+                            },
+                            "verificationUrl": {
+                              "type": "string",
+                              "format": "uri"
+                            },
+                            "userCode": {
+                              "type": "string"
+                            },
+                            "expiresAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind", "verificationUrl", "userCode"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["form"]
+                            },
+                            "fields": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "label": {
+                                    "type": "string"
+                                  },
+                                  "secret": {
+                                    "type": "boolean"
+                                  },
+                                  "required": {
+                                    "type": "boolean"
+                                  },
+                                  "multiline": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "label",
+                                  "secret",
+                                  "required"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": ["kind", "fields"],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["authorizationId", "challenge"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/code-hosts/{provider}/repositories": {
+      "get": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._-]*$"
+            },
+            "in": "path",
+            "name": "provider",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
                       "fullName": {
                         "type": "string"
                       },
@@ -32357,6 +34455,9 @@
                       "defaultBranch": {
                         "type": "string"
                       },
+                      "cloneUrl": {
+                        "type": "string"
+                      },
                       "description": {
                         "nullable": true,
                         "type": "string"
@@ -32367,129 +34468,17 @@
                       }
                     },
                     "required": [
-                      "id",
                       "fullName",
                       "name",
                       "owner",
                       "private",
                       "defaultBranch",
+                      "cloneUrl",
                       "description",
                       "pushedAt"
                     ],
                     "additionalProperties": false
                   }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/github/import": {
-      "post": {
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "fullName": {
-                    "type": "string",
-                    "pattern": "^[\\w.-]+\\/[\\w.-]+$"
-                  },
-                  "name": {
-                    "type": "string",
-                    "minLength": 1
-                  }
-                },
-                "required": ["fullName"]
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "format": "uuid",
-                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                    },
-                    "name": {
-                      "type": "string"
-                    },
-                    "storageType": {
-                      "type": "string",
-                      "enum": ["managed", "remote"]
-                    },
-                    "remoteUrl": {
-                      "nullable": true,
-                      "type": "string"
-                    },
-                    "defaultBranch": {
-                      "type": "string"
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
-                    },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "name",
-                    "storageType",
-                    "remoteUrl",
-                    "defaultBranch",
-                    "createdAt",
-                    "updatedAt"
-                  ],
-                  "additionalProperties": false
                 }
               }
             }
@@ -32548,34 +34537,106 @@
         }
       }
     },
-    "/api/projects/{projectId}/github/push": {
+    "/api/code-hosts/{provider}/import": {
       "post": {
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fullName": {
+                    "type": "string",
+                    "pattern": "^[\\w.-]+\\/[\\w.-]+$"
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["fullName"]
+              }
+            }
+          }
+        },
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "format": "uuid",
-              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              "pattern": "^[a-z0-9][a-z0-9._-]*$"
             },
             "in": "path",
-            "name": "projectId",
+            "name": "provider",
             "required": true
           }
         ],
         "responses": {
-          "204": {
+          "201": {
             "description": "Default Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "string",
-                  "nullable": true,
-                  "enum": [null]
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "storageType": {
+                      "type": "string",
+                      "enum": ["managed", "remote"]
+                    },
+                    "remoteUrl": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "remoteOwnership": {
+                      "nullable": true,
+                      "type": "string",
+                      "enum": ["owned", "attached"]
+                    },
+                    "remoteDivergedAt": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "defaultBranch": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "storageType",
+                    "remoteUrl",
+                    "remoteOwnership",
+                    "remoteDivergedAt",
+                    "defaultBranch",
+                    "createdAt",
+                    "updatedAt"
+                  ],
+                  "additionalProperties": false
                 }
               }
             }
           },
-          "400": {
+          "401": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -32592,7 +34653,176 @@
               }
             }
           },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{projectId}/code-host/publish": {
+      "post": {
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                  },
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[\\w.-]+$"
+                  },
+                  "organization": {
+                    "type": "string",
+                    "pattern": "^[\\w.-]+$"
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": ["private", "public"]
+                  }
+                },
+                "required": ["provider", "name"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "fullName": {
+                      "type": "string"
+                    },
+                    "remoteUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["fullName", "remoteUrl"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
           "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -33636,6 +35866,7 @@
                             "type": "string"
                           },
                           "config": {},
+                          "where": {},
                           "sourceRange": {
                             "type": "object",
                             "properties": {
@@ -33891,6 +36122,7 @@
                                   "type": "string"
                                 },
                                 "config": {},
+                                "where": {},
                                 "display": {
                                   "type": "object",
                                   "properties": {
@@ -34013,6 +36245,16 @@
           }
         ],
         "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "202": {
             "description": "Default Response",
             "content": {
@@ -34051,6 +36293,191 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 63
+            },
+            "in": "path",
+            "name": "name",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "in": "path",
+            "name": "token",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "duplicate": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["id", "duplicate"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "413": {
             "description": "Default Response",
             "content": {
               "application/json": {

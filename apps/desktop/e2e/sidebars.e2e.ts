@@ -255,7 +255,7 @@ describe("tabbed sidebars", () => {
       `window.catamorphicDesktop.createProject({name:'Empty sidebar project',rootPath:${JSON.stringify(root)}})`,
     );
     fs.writeFileSync(
-      `${root}/.catamorphic/sidebar.js`,
+      `${root}/.work/sidebar.js`,
       `module.exports = ${JSON.stringify({ ...DEFAULT_SIDEBAR_CONFIG, right: [] })};\n`,
     );
     // Navigate the live workspace before checking persisted sidebar state.

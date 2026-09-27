@@ -14,7 +14,7 @@ alwaysApply: false
 - **Code is the source of truth.** Workflows and apps are TypeScript. Never invent a JSON format or DSL for workflow logic.
 - **One Workflow model (ADR 0040).** Every workflow is an exported `defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`. IO lives in `"use step"` functions called from boundary bodies. Every run executes a deployed commit or session artifact. Do not add a public `stage`, a workflow category, or a separate Run family.
 - **Step functions** take one destructured object parameter and carry JSDoc `@displayname` (plus `@icon`, `@description`, per-`@param` metadata).
-- **Project capabilities live in `.catamorphic/` (ADR 0142).** Never write framework files or dependencies into a user project's root.
+- **Project capabilities live in `.work/` (ADR 0142).** Never write framework files or dependencies into a user project's root.
 - **API types come from Zod.** After route or DTO changes run `(cd packages/fastify-plugin && bun run generate-spec)` then `(cd packages/api-client && bun run generate)`. After migrations run `bun run db:migrate && bun run db:codegen`.
 - **Instrument hot paths** with `@catamorphic/otel` (`getTracer`, `withSpan`, `catamorphic.*` attributes). The host owns the OTel SDK.
 - **Record settled design decisions** as ADRs in `docs/decisions/`.

@@ -216,7 +216,9 @@ function TechnicalDetails({ node }: { node: WorkflowNode }) {
             </div>
           ))}
           {node.triggerBindings?.map((binding) => (
-            <div key={`${binding.kind}:${JSON.stringify(binding.config)}`}>
+            <div
+              key={`${binding.kind}:${JSON.stringify(binding.config)}:${JSON.stringify(binding.where ?? null)}`}
+            >
               <p>{binding.display?.label ?? binding.kind}</p>
               <pre>{JSON.stringify(binding.config, null, 2)}</pre>
             </div>
@@ -303,7 +305,7 @@ export function WorkflowStepDetails({
           {node.triggerBindings?.map((binding) => (
             <p
               className="mt-2"
-              key={`${binding.kind}:${JSON.stringify(binding.config)}`}
+              key={`${binding.kind}:${JSON.stringify(binding.config)}:${JSON.stringify(binding.where ?? null)}`}
             >
               {triggerSummary(binding)}
             </p>

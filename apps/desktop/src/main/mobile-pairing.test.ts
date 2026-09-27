@@ -46,12 +46,12 @@ function makeService({
     projects: path.join(dataRoot, "projects"),
     remotes: path.join(dataRoot, "remotes"),
     appBundles: path.join(dataRoot, "app-bundles"),
-    githubFile: path.join(root, "github.json"),
     profilesFile: path.join(root, "profiles.json"),
     profilesDir: path.join(root, "profiles"),
     agentHomesDir: path.join(root, "agent-homes"),
     harnessComponentsDir: path.join(root, "harness-components"),
     hostSkillsDir: path.join(root, "host-skills"),
+    attachmentsDir: path.join(root, "attachments"),
   };
   const profileConfig = new ProfileConfigManager(
     paths,

@@ -118,7 +118,7 @@ a superseded one). New chat operations also need a canvas label in the parser's
 
 Seeded guidance is assembled in [seeds.ts](../../../packages/core/src/seeds.ts).
 `writing-workflows`, `durable-workflows`, and `batch-workflows` are project seeds
-written under `.catamorphic/skills/`. `workflow-lifecycle` and `session-workflows`
+written under `.work/skills/`. `workflow-lifecycle` and `session-workflows`
 are `HOST_SKILLS`, so they reach existing projects without rewriting files.
 Skills shadow by name, project over user over host; never overwrite a project's
 customized copy to refresh a default. Host discovery serves only `SKILL.md`, so

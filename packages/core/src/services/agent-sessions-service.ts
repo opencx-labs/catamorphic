@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { DB, Json, JsonObject } from "@catamorphic/db";
-import type { ProjectManager } from "@catamorphic/git";
+import { moveCheckoutBase, type ProjectManager } from "@catamorphic/git";
 import {
   getTracer,
   markSpanError,
@@ -16,18 +16,27 @@ import {
   type AgentMcpServerConfig,
   type AgentQuestionRequest,
   type AgentRuntimeRequestResponse,
+  type AgentTurnUsage,
   type AttachedPluginForAgent,
   capabilityEventPresenter,
+  type HarnessPermissions,
   type McpToolPolicyLayers,
   messageWithAttachmentNames,
   narrowingLayer,
   PROJECT_TOOLS_SERVER_KEY,
   type ProviderSession,
+  SANDBOXING_LEVELS,
+  type Sandboxing,
+  type SandboxModelGateway,
   type SandboxProvider,
   serverKeyOf,
   type ToolPermission,
   type TurnOptions,
 } from "@catamorphic/sandbox";
+import {
+  AGENT_COMMIT_AUTHOR,
+  PROJECT_MANIFEST_PATH,
+} from "@catamorphic/workflow/project-layout";
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import {
@@ -41,6 +50,7 @@ import {
 } from "../identity.js";
 import type { AgentCapabilitiesService } from "./agent-capabilities-service.js";
 import {
+  type AgentDefinition,
   AgentDefinitionsService,
   type AgentDelegationPolicy,
   formatProjectAgentId,
@@ -65,19 +75,28 @@ import {
 import { allocationSandboxProvider } from "./allocation-sandbox-provider.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import { AccessDeniedError, resolveScope } from "./artifact-scope.js";
+import { projectChatIdentity } from "./chat-delivery.js";
 import type {
   CodingAgentRegistry,
   RegisteredCodingAgent,
 } from "./coding-agent-registry.js";
 import type { ConnectionAdmissionService } from "./connection-admission.js";
 import type { ConnectionCapabilityGrantsService } from "./connection-capability-grants.js";
-import { connectionMcpServerName } from "./connection-types.js";
+import type { ModelApi } from "./connection-providers.js";
+import {
+  connectionMcpServerName,
+  isProtocolCapability,
+  MODEL_CAPABILITY,
+} from "./connection-types.js";
 import { DbSandboxStore } from "./db-sandbox-store.js";
 import { DevSandboxService } from "./dev-sandbox-service.js";
 import type { DocumentsService } from "./documents-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
 import {
+  admissionPolicy,
+  type EnvironmentAdmission,
   type ExecutionEnvironmentsService,
+  type PlacementReason,
   placementOwner,
 } from "./execution-environments-service.js";
 import type { PluginsService } from "./plugins-service.js";
@@ -87,7 +106,18 @@ import {
   withProgram,
 } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
-import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
+import {
+  configureSandboxGateway,
+  ensureSandboxBaseline,
+  SESSION_DIRECTORY,
+  sandboxGrantFile,
+  seedSandboxRepository,
+} from "./sandbox-git.js";
+import {
+  SandboxSyncError,
+  type SyncedFileChange,
+  syncSandboxChanges,
+} from "./sandbox-sync.js";
 import { nextScheduledTime } from "./schedules-service.js";
 import {
   SessionMailboxesService,
@@ -99,16 +129,33 @@ import {
   writeSessionMirror,
 } from "./session-mirror.js";
 import {
+  basePin,
+  movePin,
+  parseWorkspaceBase,
+  parseWorkspaceMove,
+  type SessionWorkspaceBase,
+  type SessionWorkspaceMove,
+  type SessionWorkspaceRequest,
+  type SessionWorkspaces,
+  workspaceJson,
+  workspaceMoveJson,
+  workspaceMoveNote,
+  workspaceMoveRefusedNote,
+} from "./session-workspaces.js";
+import {
   documentsClientFor,
   shipRemoteProject,
   syncRemoteProject,
 } from "./store-sync.js";
+import { EnvironmentCapacityError } from "./worker-capacity.js";
 
 interface AgentExecutionRuntime {
   bindingId: string;
   environmentName: string;
   provider?: SandboxProvider;
   devSandboxes?: DevSandboxService;
+  /** The Allocation's budget for one foreground command (ADR 0174). */
+  commandTimeoutSeconds?: number;
 }
 
 type SessionRow = Selectable<DB["agent_sessions"]>;
@@ -206,9 +253,35 @@ export interface AgentSession {
   /** Most recent message explicitly requesting attention. */
   attentionMessage?: { id: string; content: string };
   status: "active" | "closed";
+  /**
+   * The project-scoped key automations reach this chat by (ADR 0173), or
+   * null. Closing the chat frees the key.
+   */
+  key: string | null;
+  /** Workflows that delivered to this chat by its key, first first. */
+  keyWorkflows: string[];
+  /** Where this chat runs and why (ADR 0173); null for chats from before. */
+  placement: SessionPlacement | null;
+  /**
+   * The base this chat's workspace stands on (ADR 0178): the ref of the
+   * project's linked remote it was asked to start at and the commit that
+   * ref named, so a review cites exactly what it reviewed. Null for a chat
+   * started from the project itself.
+   */
+  workspace: SessionWorkspaceBase | null;
   baseCommitSha: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * A chat's placement: its Environment, the rule that chose it, and the
+ * machine holding its workspace when the chat was last admitted.
+ */
+export interface SessionPlacement {
+  environment: string;
+  reason: PlacementReason;
+  machine: { id: string; label: string };
 }
 
 export type AgentTodoStatus = "pending" | "in_progress" | "completed";
@@ -393,10 +466,7 @@ export const INTERRUPTED_TURN_MESSAGE =
  * Author on turn-checkpoint commits — distinct from human commits and from
  * the system author used for generated-file syncs, so history reads honestly.
  */
-const CHECKPOINT_AUTHOR = {
-  name: "Catamorphic Agent",
-  email: "agent@catamorphic.dev",
-};
+const CHECKPOINT_AUTHOR = AGENT_COMMIT_AUTHOR;
 
 const SESSION_TASK_SUMMARY_LIMIT = 240;
 
@@ -438,13 +508,13 @@ Every turn comes with fresh session context beside the person's message: who the
 
 ## Talk to the person you are working with
 
-Infer how technical they are from their role, how they write, and what the project holds. For non-technical people, speak in outcomes and plain words: what you made, where to find it, what happens next. Leave out file paths, internal folders such as .catamorphic, Git, commits, branches, deployments, environments, schemas, and the names of tools or skills, unless they ask. For engineers, be precise and keep the technical substance.
+Infer how technical they are from their role, how they write, and what the project holds. For non-technical people, speak in outcomes and plain words: what you made, where to find it, what happens next. Leave out file paths, internal folders such as .work, Git, commits, branches, deployments, environments, schemas, and the names of tools or skills, unless they ask. For engineers, be precise and keep the technical substance.
 
 Answer what was asked first. Reveal complexity only when it helps the person decide or act. Files you create only to test, check, or run something are yours to clean up; do not mention them. When a tool takes a short description, write one in plain words: the person sees it as what you are doing right now.
 
 ## Build what the work needs
 
-When something should happen repeatedly, on a schedule, or when an event occurs, offer to automate it with a workflow; for a one-off, just do the task. When the person needs a tool with a screen, build an app. Before writing a workflow or an app, load the matching skill (writing-workflows, workflow-lifecycle, building-apps, or catamorphic-projects for project structure and roles) and follow it. Describe the result in the person's terms: what it does, when it runs, and where they can see it.
+When something should happen repeatedly, on a schedule, or when an event occurs, offer to automate it with a workflow; for a one-off, just do the task. When the person needs a tool with a screen, build an app. Before writing a workflow or an app, load the matching skill (writing-workflows, workflow-lifecycle, building-apps, or work-projects for project structure and roles) and follow it. Describe the result in the person's terms: what it does, when it runs, and where they can see it.
 
 Saving, sharing, publishing, and turning on an automation are separate outcomes. Report only the ones that actually succeeded.`;
 
@@ -483,13 +553,38 @@ export interface AgentTurnSettledEvent {
   workingDirectory: string;
 }
 
+/** The folder a native agent works in, as the host resolved it. */
+export interface NativeCheckout {
+  path: string;
+  /**
+   * The checkout belongs to this session alone: a worktree the host made
+   * for it. The framework moves a workspace base (ADR 0178) only in such a
+   * checkout; a person's own project folder, or a worktree they assigned,
+   * is never reset or rebased.
+   */
+  owned: boolean;
+}
+
 export interface NativeAgentCheckout {
   resolve(input: {
     bindingId?: string;
     environmentName?: string;
     projectId: string;
     sessionId: string;
-  }): Promise<string | undefined> | string | undefined;
+    /**
+     * The base the session stands on, or the one a pending delivery asked
+     * it to move to (ADR 0178). A session without its own checkout gets a
+     * new one started at `commit`, which the host's mirror at `repository`
+     * holds under `pin`; an owned checkout is left as it is (base moves are
+     * applied by the framework in the checkout it returns).
+     */
+    workspace?: {
+      ref: string;
+      commit: string;
+      repository: string;
+      pin: string;
+    };
+  }): Promise<NativeCheckout | undefined> | NativeCheckout | undefined;
   checkpoint?(input: {
     projectId: string;
     sessionId: string;
@@ -523,6 +618,24 @@ interface AgentSessionsDeps {
     sessionId: string;
     alias: string;
   }) => string | undefined;
+  /** Workspaces at a ref of the project's linked remote (ADR 0178). */
+  workspaces?: SessionWorkspaces;
+  /**
+   * The gateway as sandboxes reach it (ADRs 0175, 0180): its base URL
+   * (`…/gateway`, serving `git/<alias>/…` and `model/<alias>/…`), the
+   * remote base URLs a connection provider serves with Git, and the API a
+   * model provider speaks (undefined when it serves neither).
+   */
+  sandboxGateway?: {
+    url: (args: { projectId: string; sessionId: string }) => string | undefined;
+    remoteBaseUrls: (providerKind: string) => readonly string[] | undefined;
+    modelApi: (providerKind: string) => ModelApi | undefined;
+    /** What a turn's model calls through the gateway used (ADR 0180). */
+    turnUsage?: (args: {
+      sessionId: string;
+      turnId: string;
+    }) => Promise<AgentTurnUsage | undefined>;
+  };
   plugins?: PluginsService;
   pluginResolver?: PluginResolver;
   /**
@@ -548,9 +661,9 @@ interface AgentSessionsDeps {
   /** Tenant app policy, for scope resolution (app refs). */
   appPolicies?: AppPoliciesService;
   /**
-   * The documents surface. When present, `.catamorphic/app-data/store/` in the caller's working
+   * The documents surface. When present, `.work/app-data/store/` in the caller's working
    * copy is pulled before each turn and shipped after it AS THE CALLER
-   * (ADR 0055): a member's agent writing `.catamorphic/app-data/store/customers/acme/notes.md`
+   * (ADR 0055): a member's agent writing `.work/app-data/store/customers/acme/notes.md`
    * lands it in the store with the right author, and never anything the
    * member may not write. Hosts whose working copies are the truth (the
    * desktop's local projects) leave it unset.
@@ -609,6 +722,10 @@ export class AgentSessionsService {
   private readonly connectionAdmission?: ConnectionAdmissionService;
   private readonly connectionGrants?: ConnectionCapabilityGrantsService;
   private readonly connectionMcpUrl?: AgentSessionsDeps["connectionMcpUrl"];
+  private readonly workspaces?: SessionWorkspaces;
+  private readonly sandboxGateway?: AgentSessionsDeps["sandboxGateway"];
+  /** Sandbox grant renewals of the turns running in this process. */
+  private readonly grantRenewals = new Map<string, NodeJS.Timeout>();
   private readonly plugins?: PluginsService;
   private readonly pluginResolver?: PluginResolver;
   private readonly onTurnSettled?: AgentSessionsDeps["onTurnSettled"];
@@ -629,6 +746,12 @@ export class AgentSessionsService {
   private readonly drainers = new Map<string, Promise<void>>();
   private readonly turnWorkerId = `agent-sessions:${randomUUID()}`;
   private archiveResources?: ArchiveSessionResourcesHandler;
+  /** The host's identity resolver, from {@link startWorker}. */
+  private resolveOwner?: (args: {
+    tenantId: string;
+    projectId: string;
+    externalUserId: string;
+  }) => Promise<Identity | null>;
 
   /** Hosts start this alongside their workflow worker, after migrations. */
   startWorker(input: {
@@ -638,8 +761,12 @@ export class AgentSessionsService {
       externalUserId: string;
     }) => Promise<Identity | null>;
     pollIntervalMs?: number;
+    /** How often idle chats' workspaces are checked (ADR 0173). */
+    idleReleaseIntervalMs?: number;
   }): { stop(): Promise<void> } {
+    this.resolveOwner = input.resolveIdentity;
     let stopped = false;
+    let nextIdleSweep = 0;
     let polling: Promise<void> | undefined;
     const poll = async () => {
       const candidates = await this.db
@@ -652,16 +779,25 @@ export class AgentSessionsService {
           "projects.tenant_id",
         ])
         .where("agent_sessions.authority_host_id", "=", this.hostId)
+        // Work on a node this instance holds, and chats whose workspace was
+        // released (idle, archive): they are admitted again wherever they
+        // fit, even when the machine they left is gone (ADR 0173). The
+        // authority check above keeps each chat to one host.
         .$if(this.workerNode !== undefined, (query) =>
           query.where(({ exists, selectFrom }) =>
             exists(
               selectFrom("execution_allocations")
                 .select("id")
                 .whereRef("id", "=", "agent_sessions.allocation_id")
-                .where("worker_node_id", "in", [
-                  "",
-                  ...this.heldWorkerNodes().map((node) => node.id),
-                ]),
+                .where((allocation) =>
+                  allocation.or([
+                    allocation("worker_node_id", "in", [
+                      "",
+                      ...this.heldWorkerNodes().map((node) => node.id),
+                    ]),
+                    allocation("status", "=", "released"),
+                  ]),
+                ),
             ),
           ),
         )
@@ -689,11 +825,18 @@ export class AgentSessionsService {
       for (const candidate of candidates) {
         if (stopped) return;
         try {
-          const identity = await input.resolveIdentity({
-            tenantId: candidate.tenant_id,
-            projectId: candidate.project_id,
-            externalUserId: candidate.external_user_id,
-          });
+          // A project chat belongs to the project principal, which is
+          // nobody's member: rebuild its identity instead of resolving one.
+          const identity = isProjectPrincipal(candidate.external_user_id)
+            ? projectChatIdentity({
+                tenantId: candidate.tenant_id,
+                projectId: candidate.project_id,
+              })
+            : await input.resolveIdentity({
+                tenantId: candidate.tenant_id,
+                projectId: candidate.project_id,
+                externalUserId: candidate.external_user_id,
+              });
           if (!identity) continue;
           // Recovery belongs to the worker, never to a client's GET request.
           const pending = await this.turns.listPending({
@@ -727,6 +870,12 @@ export class AgentSessionsService {
         }
       }
       if (!stopped) await this.reconcileDelegations(input.resolveIdentity);
+      if (!stopped && Date.now() >= nextIdleSweep) {
+        nextIdleSweep = Date.now() + (input.idleReleaseIntervalMs ?? 60_000);
+        await this.releaseIdleWorkspaces().catch((error) =>
+          console.warn("[catamorphic] Idle workspace release failed", error),
+        );
+      }
     };
     const tick = () => {
       if (stopped || polling) return;
@@ -770,6 +919,8 @@ export class AgentSessionsService {
     this.connectionAdmission = deps.connectionAdmission;
     this.connectionGrants = deps.connectionGrants;
     this.connectionMcpUrl = deps.connectionMcpUrl;
+    this.workspaces = deps.workspaces;
+    this.sandboxGateway = deps.sandboxGateway;
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
     this.onTurnSettled = deps.onTurnSettled;
@@ -1633,6 +1784,8 @@ export class AgentSessionsService {
       source?: AgentSessionSource;
       parentSessionId?: string;
       title?: string;
+      /** Start the workspace at a ref of the project's linked remote. */
+      workspace?: SessionWorkspaceRequest;
     } = {},
   ): Promise<AgentSession> {
     return withSpan(
@@ -1663,6 +1816,8 @@ export class AgentSessionsService {
       environment?: string;
       title?: string;
       chatKey?: string;
+      /** The workflow that started a keyed chat. */
+      chatWorkflow?: string;
       source?: AgentSessionSource;
       parentSessionId?: string;
       forkedFromSessionId?: string;
@@ -1670,6 +1825,7 @@ export class AgentSessionsService {
       allowFurtherDelegation?: boolean;
       transaction?: Transaction<DB>;
       prepared?: PreparedSessionCreate;
+      workspace?: SessionWorkspaceRequest;
     },
   ): Promise<AgentSession> {
     if (input.sourceActionId && !input.transaction) {
@@ -1713,11 +1869,14 @@ export class AgentSessionsService {
       environment?: string;
       title?: string;
       chatKey?: string;
+      /** The workflow that started a keyed chat. */
+      chatWorkflow?: string;
       source?: AgentSessionSource;
       parentSessionId?: string;
       forkedFromSessionId?: string;
       visibility?: Exclude<SessionVisibility, "archived">;
       allowFurtherDelegation?: boolean;
+      workspace?: SessionWorkspaceRequest;
     },
   ): Promise<PreparedSessionCreate> {
     await this.requireProject(identity, projectId);
@@ -1801,8 +1960,31 @@ export class AgentSessionsService {
             projectId,
             environment: admitted.environmentName,
             requirements,
+            // A project chat is unattended: service connections only (ADR 0181).
+            unattended: isProjectPrincipal(identity.externalUserId),
           })
         : [];
+    // A workspace at a ref starts from that commit (ADR 0178): fetched into
+    // the host's mirror and, for sandbox agents, published as the session's
+    // branch before the first turn seeds its sandbox from it.
+    const workspace = input.workspace
+      ? await this.requireWorkspaces().fetch({
+          identity,
+          projectId,
+          sessionId,
+          ref: input.workspace.ref,
+          pin: basePin(sessionId),
+          bindings: connections,
+        })
+      : null;
+    if (workspace && agent.topology !== "native")
+      await this.projectManager.setSessionBase({
+        tenantId: identity.tenantId,
+        projectId,
+        sessionId,
+        pin: basePin(sessionId),
+        commit: workspace.commit,
+      });
 
     const visibility = input.visibility ?? "promoted";
     return {
@@ -1815,11 +1997,7 @@ export class AgentSessionsService {
           workloadKind: "agent",
           rootWorkloadId: sessionId,
           workerNodeId: admitted.runtime.workerNodeId,
-          policy: {
-            binding: admitted.binding,
-            requirements: admitted.effectiveRequirements,
-            connections,
-          },
+          policy: admissionPolicy({ admission: admitted, connections }),
           transaction,
         });
         const session = await transaction
@@ -1839,12 +2017,15 @@ export class AgentSessionsService {
             sandbox_id: null,
             allocation_id: allocation.id,
             environment_name: admitted.environmentName,
+            placement: toPlacementJson(placementOf(admitted)),
             status: "active",
             title: input.title ?? null,
             chat_key: input.chatKey ?? null,
+            chat_workflows: input.chatWorkflow ? [input.chatWorkflow] : [],
             parent_session_id: input.parentSessionId ?? null,
             forked_from_session_id: input.forkedFromSessionId ?? null,
             base_commit_sha: null,
+            workspace: workspace ? workspaceJson(workspace) : null,
             authority_host_id: this.hostId,
             authority_revision: 1,
           })
@@ -1866,19 +2047,400 @@ export class AgentSessionsService {
   }
 
   /**
-   * The chat a workflow keeps for a key: the active one with that key, or a
-   * new one started for it. Concurrent first deliveries converge on one chat
-   * through the partial unique index on `chat_key`.
+   * Ask an open chat's workspace to move to a ref of the project's linked
+   * remote (ADR 0178). The ref is fetched now, so the move names the commit
+   * it pointed at when delivered; the move itself happens before the chat's
+   * next turn, and the agent is told what changed. Asking for the base the
+   * chat already stands on changes nothing.
+   */
+  async requestWorkspace(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    workspace: SessionWorkspaceRequest,
+  ): Promise<void> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    if (session.status !== "active")
+      throw new AgentSessionClosedError(sessionId);
+    const target = await this.requireWorkspaces().fetch({
+      identity,
+      projectId,
+      sessionId,
+      ref: workspace.ref,
+      pin: movePin(sessionId),
+      bindings: await this.sessionBindings(identity, session),
+    });
+    const current = parseWorkspaceBase(session.workspace);
+    const move: SessionWorkspaceMove = {
+      ...target,
+      update: workspace.update ?? "rebase",
+    };
+    await this.db
+      .updateTable("agent_sessions")
+      .set({
+        workspace_move:
+          current?.commit === target.commit && current.ref === target.ref
+            ? null
+            : workspaceMoveJson(move),
+        updated_at: new Date(),
+      })
+      .where("id", "=", sessionId)
+      .execute();
+  }
+
+  /** The connection bindings of the session's current Allocation. */
+  private async sessionBindings(
+    identity: Identity,
+    session: Pick<SessionRow, "allocation_id">,
+  ) {
+    if (!session.allocation_id) return [];
+    const allocation = await this.executionAllocations.get({
+      identity,
+      allocationId: session.allocation_id,
+    });
+    return allocation?.policy.connections ?? [];
+  }
+
+  private requireWorkspaces(): SessionWorkspaces {
+    if (!this.workspaces)
+      throw new Error(
+        "This host does not start workspaces at a ref of the project's remote",
+      );
+    return this.workspaces;
+  }
+
+  /**
+   * Whether this session works in its own copy (`session-<id>`) rather than
+   * its member's dev copy: every session on a worker host, and a session
+   * whose workspace stands on a ref (ADR 0178).
+   */
+  private usesSessionCopy(session: Pick<SessionRow, "workspace">): boolean {
+    return (
+      Boolean(this.workerNode) || parseWorkspaceBase(session.workspace) !== null
+    );
+  }
+
+  /**
+   * Move the workspace to the base a delivery asked for (ADR 0178), in the
+   * session's copy (sandbox agents) or in the checkout the agent works in
+   * (native agents). Only a checkout the session owns moves: a person's own
+   * folder is never reset or rebased. Returns what the agent is told.
+   */
+  private async applyWorkspaceMove(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    move: SessionWorkspaceMove;
+    /** Present for native agents: the checkout they work in. */
+    native?: { checkout: NativeCheckout | undefined };
+  }): Promise<string> {
+    const { identity, projectId, session, move } = input;
+    const workspaces = this.requireWorkspaces();
+    // Settle only the move this call applies: a delivery that asked for
+    // another base meanwhile keeps its move for the next turn.
+    const settleMove = (workspace?: SessionWorkspaceBase): Promise<unknown> =>
+      this.db
+        .updateTable("agent_sessions")
+        .set({
+          ...(workspace ? { workspace: workspaceJson(workspace) } : {}),
+          workspace_move: sql<Json>`case when workspace_move = ${JSON.stringify(
+            workspaceMoveJson(move),
+          )}::jsonb then null else workspace_move end`,
+        })
+        .where("id", "=", session.id)
+        .execute();
+    if (input.native && !input.native.checkout?.owned) {
+      await settleMove();
+      return workspaceMoveRefusedNote({ to: move });
+    }
+    const checkout = input.native?.checkout?.path;
+    const pin = movePin(session.id);
+    const bindings = await this.sessionBindings(identity, session);
+    // Another replica may have fetched the move; make sure this mirror has it.
+    const target = await workspaces
+      .fetch({
+        identity,
+        projectId,
+        sessionId: session.id,
+        ref: move.commit,
+        pin,
+        bindings,
+      })
+      .catch(() =>
+        workspaces.fetch({
+          identity,
+          projectId,
+          sessionId: session.id,
+          ref: move.ref,
+          pin,
+          bindings,
+        }),
+      );
+    const to: SessionWorkspaceBase = { ref: move.ref, commit: target.commit };
+    const current = parseWorkspaceBase(session.workspace);
+    const fromCommit = current?.commit ?? session.base_commit_sha;
+    const update = fromCommit ? move.update : "reset";
+    const outcome = checkout
+      ? await moveCheckoutBase({
+          repoPath: checkout,
+          mirrorPath: workspaces.mirrorPath({
+            tenantId: identity.tenantId,
+            projectId,
+          }),
+          pin,
+          from: fromCommit ?? to.commit,
+          to: to.commit,
+          update,
+        })
+      : await this.projectManager.moveSessionBase({
+          tenantId: identity.tenantId,
+          projectId,
+          sessionId: session.id,
+          pin,
+          from: fromCommit ?? to.commit,
+          to: to.commit,
+          update,
+        });
+    if (outcome.status === "moved")
+      await workspaces.fetch({
+        identity,
+        projectId,
+        sessionId: session.id,
+        ref: to.commit,
+        pin: basePin(session.id),
+      });
+    await settleMove(outcome.status === "moved" ? to : undefined);
+    return workspaceMoveNote({
+      from: current,
+      to,
+      update,
+      outcome,
+      changed: fromCommit
+        ? await workspaces
+            .changedFiles({
+              tenantId: identity.tenantId,
+              projectId,
+              from: fromCommit,
+              to: to.commit,
+            })
+            .catch(() => null)
+        : null,
+    });
+  }
+
+  /**
+   * Git in a sandbox turn (ADRs 0175, 0178): seed the repository at the
+   * workspace base when it is not there yet, and write the session's
+   * gateway grants and Git configuration.
+   */
+  private async prepareSandboxGit(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+  }): Promise<readonly SandboxModelGateway[]> {
+    const row = await this.db
+      .selectFrom("agent_sessions")
+      .select(["workspace", "allocation_id"])
+      .where("id", "=", input.sessionId)
+      .executeTakeFirstOrThrow();
+    const base = parseWorkspaceBase(row.workspace);
+    if (base) {
+      const copy = await this.projectManager.openSession({
+        tenantId: input.identity.tenantId,
+        projectId: input.projectId,
+        sessionId: input.sessionId,
+      });
+      try {
+        await seedSandboxRepository({
+          provider: input.provider,
+          sandboxId: input.sandboxProviderId,
+          projectDir: this.projectDir(input.provider),
+          sessionCopyPath: copy.repoPath,
+          head: await copy.resolveRef("HEAD"),
+          base: base.commit,
+          branch: `work/${input.sessionId.replaceAll("-", "").slice(0, 8)}`,
+          originUrl: await this.linkedRemoteUrl(
+            input.identity,
+            input.projectId,
+          ),
+        });
+      } finally {
+        await copy.dispose();
+      }
+    }
+    // Git through the gateway is a convenience of the turn, not a condition
+    // of it: the agent still works in its checkout if it cannot be set up.
+    // A harness that needs its model says so when it cannot reach it.
+    if (!row.allocation_id) return [];
+    return this.configureSandboxGateway({
+      identity: input.identity,
+      projectId: input.projectId,
+      sessionId: input.sessionId,
+      allocationId: row.allocation_id,
+      provider: input.provider,
+      sandboxProviderId: input.sandboxProviderId,
+      renewOnly: false,
+    }).catch((error: unknown) => {
+      console.warn(
+        `[catamorphic] Could not configure the gateway for session ${input.sessionId}`,
+        error,
+      );
+      return [];
+    });
+  }
+
+  /**
+   * Issue the session's sandbox grants (ADRs 0175, 0180) for its aliases
+   * served as protocols, Git and models, and write them (with the Git
+   * configuration unless renewing) into the sandbox. Returns how the
+   * sandbox reaches each model alias.
+   */
+  private async configureSandboxGateway(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    allocationId: string;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+    renewOnly: boolean;
+  }): Promise<SandboxModelGateway[]> {
+    const grants = this.connectionGrants;
+    const gateway = this.sandboxGateway;
+    if (!grants || !gateway) return [];
+    const allocation = await this.executionAllocations.get({
+      identity: input.identity,
+      allocationId: input.allocationId,
+    });
+    if (allocation?.status !== "active") return [];
+    const bindings = (allocation.policy.connections ?? []).flatMap(
+      (binding) => {
+        const remoteBaseUrls = gateway.remoteBaseUrls(binding.providerKind);
+        const git =
+          remoteBaseUrls?.length &&
+          binding.capabilities.some((capability) =>
+            capability.startsWith("git:"),
+          )
+            ? remoteBaseUrls
+            : undefined;
+        const api = binding.capabilities.includes(MODEL_CAPABILITY)
+          ? gateway.modelApi(binding.providerKind)
+          : undefined;
+        return git || api ? [{ alias: binding.alias, git, api }] : [];
+      },
+    );
+    if (bindings.length === 0) return [];
+    const url = gateway
+      .url({ projectId: input.projectId, sessionId: input.sessionId })
+      ?.replace(/\/+$/, "");
+    if (!url) {
+      console.warn(
+        "[catamorphic] The gateway is not reachable from sandboxes; Git and model aliases are unavailable",
+      );
+      return [];
+    }
+    const issued = [];
+    for (const binding of bindings) {
+      const grant = await grants.issue({
+        identity: input.identity,
+        allocationId: input.allocationId,
+        agentSessionId: input.sessionId,
+        alias: binding.alias,
+        ttlSeconds: 3600,
+        channel: "sandbox",
+      });
+      issued.push({ alias: binding.alias, grant: grant.token });
+    }
+    await configureSandboxGateway({
+      provider: input.provider,
+      sandboxId: input.sandboxProviderId,
+      gatewayGitUrl: `${url}/git`,
+      grants: issued,
+      gitAliases: bindings.flatMap((binding) =>
+        binding.git
+          ? [{ alias: binding.alias, remoteBaseUrls: binding.git }]
+          : [],
+      ),
+      renewOnly: input.renewOnly,
+    });
+    return bindings.flatMap((binding) =>
+      binding.api
+        ? [
+            {
+              alias: binding.alias,
+              api: binding.api,
+              baseUrl: `${url}/model/${binding.alias}`,
+              keyFile: sandboxGrantFile({
+                provider: input.provider,
+                alias: binding.alias,
+              }),
+            },
+          ]
+        : [],
+    );
+  }
+
+  /** Keep a running turn's sandbox grants fresh (ADRs 0175, 0180). */
+  private startGrantRenewal(
+    input: Parameters<AgentSessionsService["configureSandboxGateway"]>[0],
+  ): void {
+    this.stopGrantRenewal(input.sessionId);
+    const timer = setInterval(() => {
+      void this.configureSandboxGateway({ ...input, renewOnly: true }).catch(
+        (error: unknown) =>
+          console.warn(
+            `[catamorphic] Could not renew the sandbox grants of session ${input.sessionId}`,
+            error,
+          ),
+      );
+    }, GRANT_RENEWAL_MS);
+    timer.unref?.();
+    this.grantRenewals.set(input.sessionId, timer);
+  }
+
+  private stopGrantRenewal(sessionId: string): void {
+    const timer = this.grantRenewals.get(sessionId);
+    if (timer) clearInterval(timer);
+    this.grantRenewals.delete(sessionId);
+  }
+
+  private async linkedRemoteUrl(
+    identity: Identity,
+    projectId: string,
+  ): Promise<string | null> {
+    const row = await this.db
+      .selectFrom("projects")
+      .select("remote_url")
+      .where("id", "=", projectId)
+      .where("tenant_id", "=", identity.tenantId)
+      .executeTakeFirst();
+    return row?.remote_url ?? null;
+  }
+
+  /**
+   * The project's open chat for a key (ADR 0173): the active chat `identity`
+   * keeps for it, or a new one started for it. Keys belong to the project,
+   * not to one workflow, so every automation reaches the same chat for
+   * `pr-42`; each delivering workflow is recorded on the chat. A chat that
+   * someone archived is restored for everyone who archived it, so the
+   * delivery runs and is seen; a closed chat freed its key, so the next
+   * delivery starts a new chat. Concurrent first deliveries converge on one
+   * chat through the partial unique index on `chat_key`.
    */
   async chatForKey(
     identity: Identity,
     projectId: string,
     input: {
-      chatKey: string;
+      key: string;
+      /** The workflow delivering, recorded on the chat. */
+      workflowName?: string;
       origin?: SessionOperationOrigin;
       agentSlug?: string;
       environment?: string;
       title?: string;
+      /** Where the chat's workspace starts, or moves to (ADR 0178). */
+      workspace?: SessionWorkspaceRequest;
     },
   ): Promise<{ sessionId: string; sessionCreated: boolean }> {
     await this.requireProject(identity, projectId);
@@ -1891,7 +2453,7 @@ export class AgentSessionsService {
         .selectAll()
         .where("project_id", "=", projectId)
         .where("external_user_id", "=", identity.externalUserId)
-        .where("chat_key", "=", input.chatKey)
+        .where("chat_key", "=", input.key)
         .where("status", "=", "active")
         .executeTakeFirst();
 
@@ -1903,7 +2465,9 @@ export class AgentSessionsService {
           ...(agentId ? { agentId } : {}),
           ...(input.environment ? { environment: input.environment } : {}),
           ...(input.title ? { title: input.title } : {}),
-          chatKey: input.chatKey,
+          chatKey: input.key,
+          ...(input.workflowName ? { chatWorkflow: input.workflowName } : {}),
+          ...(input.workspace ? { workspace: input.workspace } : {}),
           origin: input.origin,
         });
         row = await this.db
@@ -1923,10 +2487,63 @@ export class AgentSessionsService {
     await this.requireSession(identity, projectId, row.id);
     if (agentId && row.agent_id !== agentId) {
       throw new Error(
-        `The chat for key ${input.chatKey} already belongs to a different agent`,
+        `The chat for key ${input.key} already belongs to a different agent`,
       );
     }
+    if (input.workspace && !sessionCreated)
+      await this.requestWorkspace(identity, projectId, row.id, input.workspace);
+    if (input.workflowName)
+      await this.db
+        .updateTable("agent_sessions")
+        .set({
+          chat_workflows: sql`chat_workflows || jsonb_build_array(${input.workflowName}::text)`,
+        })
+        .where("id", "=", row.id)
+        .where(
+          sql<boolean>`NOT (chat_workflows @> jsonb_build_array(${input.workflowName}::text))`,
+        )
+        .execute();
+    await this.restoreArchived([row.id]);
     return { sessionId: row.id, sessionCreated };
+  }
+
+  /**
+   * The open chat `ownerId` keeps for a key in this project, if any (ADR
+   * 0173). Never creates one; access is checked by whoever reads it.
+   */
+  async keyedChatId(input: {
+    projectId: string;
+    ownerId: string;
+    key: string;
+  }): Promise<string | undefined> {
+    const row = await this.db
+      .selectFrom("agent_sessions")
+      .select("id")
+      .where("project_id", "=", input.projectId)
+      .where("external_user_id", "=", input.ownerId)
+      .where("chat_key", "=", input.key)
+      .where("status", "=", "active")
+      .executeTakeFirst();
+    return row?.id;
+  }
+
+  /**
+   * Undo archive for everyone who archived these chats: work delivered to
+   * a chat runs and is seen, never silently held (ADR 0173). A released
+   * workspace is admitted again when the chat's next turn is claimed.
+   */
+  private async restoreArchived(sessionIds: readonly string[]): Promise<void> {
+    if (sessionIds.length === 0) return;
+    await this.db
+      .updateTable("agent_session_views")
+      .set(({ ref }) => ({
+        visibility: ref("previous_visibility"),
+        archived_at: null,
+        updated_at: new Date(),
+      }))
+      .where("session_id", "in", [...sessionIds])
+      .where("visibility", "=", "archived")
+      .execute();
   }
 
   /** Acknowledgement-by-interaction shared by desktop and PWA clients. */
@@ -2164,6 +2781,7 @@ export class AgentSessionsService {
       model_effort: string | null;
       allocation_id: string;
       environment_name: string;
+      placement: Json;
       sandbox_id: null;
     }> = {};
     let reallocatedRow: SessionRow | undefined;
@@ -2232,6 +2850,7 @@ export class AgentSessionsService {
               projectId,
               environment: admission.environmentName,
               requirements,
+              unattended: isProjectPrincipal(session.external_user_id),
             })
           : [];
       reallocatedRow = await this.db
@@ -2249,15 +2868,12 @@ export class AgentSessionsService {
             workloadKind: "agent",
             rootWorkloadId: sessionId,
             workerNodeId: admission.runtime.workerNodeId,
-            policy: {
-              binding: admission.binding,
-              requirements: admission.effectiveRequirements,
-              connections,
-            },
+            policy: admissionPolicy({ admission, connections }),
             transaction,
           });
           updates.allocation_id = allocation.id;
           updates.environment_name = admission.environmentName;
+          updates.placement = toPlacementJson(placementOf(admission));
           updates.provider_session_id = null;
           updates.sandbox_id = null;
           return transaction
@@ -2571,11 +3187,11 @@ export class AgentSessionsService {
     const targetAgent = await this.resolveAgent(targetAgentId, projectId);
     if (
       route.target === "*" &&
-      privilegeRank(targetAgent.privilege) >
-        privilegeRank(sourceAgent.privilege)
+      sandboxingRank(targetAgent.sandboxing) >
+        sandboxingRank(sourceAgent.sandboxing)
     ) {
       throw new AgentDelegationDeniedError(
-        "A wildcard delegation route cannot grant a more privileged agent",
+        "A wildcard delegation route cannot grant an agent with wider sandboxing",
       );
     }
 
@@ -2913,8 +3529,17 @@ export class AgentSessionsService {
       attachments?: AgentAttachment[];
       deliveryMode?: Exclude<SessionDeliveryMode, "message_only">;
       idempotencyKey?: string;
+      /** Move the chat's workspace to a ref before this turn (ADR 0178). */
+      workspace?: SessionWorkspaceRequest;
     } = {},
   ): Promise<SessionDeliveryReceipt> {
+    if (input.workspace)
+      await this.requestWorkspace(
+        identity,
+        projectId,
+        sessionId,
+        input.workspace,
+      );
     return withSpan(
       {
         tracer,
@@ -3069,8 +3694,20 @@ export class AgentSessionsService {
       attention?: "required" | "none";
       idempotencyKey?: string;
       metadata?: JsonObject;
+      /** Move the chat's workspace to a ref before its next turn (ADR 0178). */
+      workspace?: SessionWorkspaceRequest;
     },
   ): Promise<SessionDeliveryReceipt> {
+    if (input.workspace) {
+      await this.requestWorkspace(
+        identity,
+        projectId,
+        sessionId,
+        input.workspace,
+      );
+      const { workspace: _workspace, ...rest } = input;
+      input = rest;
+    }
     if (input.attention)
       input = {
         ...input,
@@ -3114,6 +3751,9 @@ export class AgentSessionsService {
         expectedTurnId: activeTurn.id,
       });
     }
+    // Work delivered to an archived chat runs; the chat comes back into view.
+    if (receipt.created && receipt.turnId)
+      await this.restoreArchived([sessionId]);
     if (receipt.turnId) {
       void this.scheduleDrain(identity, projectId, sessionId).catch(() => {
         // The durable row remains queued or failed and is visible to operators.
@@ -3470,11 +4110,49 @@ export class AgentSessionsService {
     return current;
   }
 
+  /**
+   * A chat's work runs as its owner, never as whoever delivered it (ADR
+   * 0173): the deliverer's access was checked when they delivered, and the
+   * owner is who must be allowed the Environment and whose connections the
+   * workspace binds. A project chat runs as the project; a member's chat as
+   * that member, resolved by the host. Null while the owner cannot be
+   * resolved; the agent worker drains the chat once they can.
+   */
+  private async ownerIdentity(input: {
+    identity: Identity;
+    projectId: string;
+    session: Pick<SessionRow, "external_user_id">;
+  }): Promise<Identity | null> {
+    const { identity, projectId, session } = input;
+    if (isProjectPrincipal(session.external_user_id))
+      return projectChatIdentity({ tenantId: identity.tenantId, projectId });
+    if (session.external_user_id === identity.externalUserId) return identity;
+    return (
+      (await this.resolveOwner?.({
+        tenantId: identity.tenantId,
+        projectId,
+        externalUserId: session.external_user_id,
+      })) ?? null
+    );
+  }
+
   private async drainSession(
-    identity: Identity,
+    deliverer: Identity,
     projectId: string,
     sessionId: string,
   ): Promise<void> {
+    const delivered = await this.requireSession(
+      deliverer,
+      projectId,
+      sessionId,
+      "read",
+    );
+    const identity = await this.ownerIdentity({
+      identity: deliverer,
+      projectId,
+      session: delivered,
+    });
+    if (!identity) return;
     while (true) {
       const session = await this.requireSession(identity, projectId, sessionId);
       if (
@@ -3483,16 +4161,29 @@ export class AgentSessionsService {
         session.authority_host_id !== this.hostId
       )
         return;
-      const presentation = (
-        await this.presentations(identity, [sessionId])
-      ).get(sessionId);
-      if (presentation?.visibility === "archived") return;
       const allocation = session.allocation_id
         ? await this.executionAllocations.get({
             identity,
             allocationId: session.allocation_id,
           })
         : undefined;
+      // A chat whose workspace was released (idle, or archived) gets a fresh
+      // one when work arrives; the turn rehydrates it from the session branch.
+      if (
+        allocation?.status === "released" &&
+        (await this.turns.listPending({ sessionId })).some(
+          (turn) => turn.status === "queued",
+        )
+      ) {
+        try {
+          await this.readmit(identity, projectId, session);
+        } catch (error) {
+          // Full machines retry on the next poll; the turn stays queued.
+          if (error instanceof EnvironmentCapacityError) return;
+          throw error;
+        }
+        continue;
+      }
       // The controller loop runs where the allocation's node lease is held:
       // this instance's own node or a remote worker it serves (ADR 0164).
       const nodeLease = this.workerNode
@@ -3628,7 +4319,324 @@ export class AgentSessionsService {
         heartbeat.stop();
         this.runningTurns.delete(sessionId);
       }
+      // Closed while this turn ran: its checkpoint may have pushed again.
+      const after = await this.db
+        .selectFrom("agent_sessions")
+        .select(["id", "status", "agent_id", "allocation_id", "workspace"])
+        .where("id", "=", sessionId)
+        .executeTakeFirst();
+      if (after?.status === "closed") {
+        await this.releaseClosedResources({
+          identity,
+          projectId,
+          session: after,
+        });
+        return;
+      }
     }
+  }
+
+  /**
+   * Admit a fresh workspace for a chat whose last one was released, while
+   * it waited (ADR 0173) or by archive: its own Environment, placed again by
+   * owner and pool. The next turn's sandbox rehydrates from the session
+   * branch. A concurrent readmission by another instance wins quietly.
+   */
+  private async readmit(
+    identity: Identity,
+    projectId: string,
+    session: SessionRow,
+  ): Promise<void> {
+    const agent = await this.resolveAgent(session.agent_id, projectId);
+    const admission = await this.executionEnvironments.admit({
+      identity,
+      projectId,
+      owner: placementOwner(session.external_user_id),
+      ...(session.environment_name
+        ? { environment: session.environment_name }
+        : {}),
+      allowed: agent.environment?.allowed,
+      preferred: agent.environment?.preferred,
+      requirements: {
+        ...agent.environment?.requirements,
+        workload: "agent",
+        topology: agent.topology,
+      },
+    });
+    const requirements = agent.connectionRequirements ?? [];
+    const connectionAdmission = this.connectionAdmission;
+    if (requirements.length > 0 && !connectionAdmission) {
+      throw new Error("Connection providers are not configured");
+    }
+    const connections =
+      requirements.length > 0 && connectionAdmission
+        ? await connectionAdmission.admit({
+            identity,
+            projectId,
+            environment: admission.environmentName,
+            requirements,
+            unattended: isProjectPrincipal(session.external_user_id),
+          })
+        : [];
+    const previous = parsePlacement(session.placement);
+    await this.db.transaction().execute(async (transaction) => {
+      const current = await transaction
+        .selectFrom("agent_sessions")
+        .select(["status", "allocation_id"])
+        .where("id", "=", session.id)
+        .forUpdate()
+        .executeTakeFirst();
+      if (
+        current?.status !== "active" ||
+        current.allocation_id !== session.allocation_id
+      )
+        return;
+      const allocation = await this.executionAllocations.create({
+        identity,
+        projectId,
+        environmentName: admission.environmentName,
+        workloadKind: "agent",
+        rootWorkloadId: session.id,
+        workerNodeId: admission.runtime.workerNodeId,
+        policy: admissionPolicy({ admission, connections }),
+        transaction,
+      });
+      await transaction
+        .updateTable("agent_sessions")
+        .set({
+          allocation_id: allocation.id,
+          environment_name: admission.environmentName,
+          sandbox_id: null,
+          provider_session_id: null,
+          placement: toPlacementJson({
+            ...placementOf(admission),
+            reason: previous?.reason ?? admission.reason,
+          }),
+        })
+        .where("id", "=", session.id)
+        .execute();
+    });
+  }
+
+  /**
+   * Give back the workspaces of chats that have waited without a turn for
+   * their Environment's `idleReleaseMinutes` (ADR 0173). The sandbox's
+   * changes are saved to the session branch first; then the Allocation is
+   * released, and the node destroys the sandbox and frees its slot and
+   * reservation. The chat's next turn admits a fresh workspace and
+   * rehydrates it from the branch, so capacity follows activity rather than
+   * open chats. Runs on the instance holding each node's lease.
+   */
+  async releaseIdleWorkspaces(
+    input: { now?: Date; limit?: number } = {},
+  ): Promise<number> {
+    const held = this.heldWorkerNodes().map((node) => node.id);
+    if (held.length === 0) return 0;
+    const now = input.now ?? new Date();
+    const rows = await this.db
+      .selectFrom("agent_sessions as session")
+      .innerJoin(
+        "execution_allocations as allocation",
+        "allocation.id",
+        "session.allocation_id",
+      )
+      .innerJoin("projects", "projects.id", "session.project_id")
+      .select([
+        "session.id",
+        "session.project_id",
+        "session.environment_name",
+        "session.agent_id",
+        "session.provider_session_id",
+        "projects.tenant_id",
+        "allocation.id as allocation_id",
+        "allocation.created_at as allocated_at",
+        "allocation.sandbox_provider_id",
+      ])
+      .select((eb) =>
+        eb
+          .selectFrom("agent_turns")
+          .select((turn) => turn.fn.max("agent_turns.updated_at").as("at"))
+          .whereRef("agent_turns.session_id", "=", "session.id")
+          .as("last_turn_at"),
+      )
+      .where("session.status", "=", "active")
+      .where("allocation.status", "=", "active")
+      .where("allocation.worker_node_id", "in", held)
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("agent_turns")
+              .select("agent_turns.id")
+              .whereRef("agent_turns.session_id", "=", "session.id")
+              .where("agent_turns.status", "in", ["queued", "held", "running"]),
+          ),
+        ),
+      )
+      .orderBy("allocation.created_at")
+      .limit(input.limit ?? 100)
+      .execute();
+    const limits = new Map<string, number>();
+    const released: string[] = [];
+    for (const row of rows) {
+      if (this.runningTurns.has(row.id) || this.drainers.has(row.id)) continue;
+      const identity: Identity = {
+        tenantId: row.tenant_id,
+        externalUserId: PROJECT_PRINCIPAL_ID,
+        scope: [],
+      };
+      const environment = row.environment_name;
+      if (!environment) continue;
+      const policyKey = `${row.project_id}:${environment}`;
+      const minutes =
+        limits.get(policyKey) ??
+        (await this.executionEnvironments
+          .idleReleaseMinutes({
+            identity,
+            projectId: row.project_id,
+            environment,
+          })
+          .catch(() => 0));
+      limits.set(policyKey, minutes);
+      if (minutes <= 0) continue;
+      const lastTurnAt = row.last_turn_at
+        ? new Date(row.last_turn_at).getTime()
+        : 0;
+      const idleSince = Math.max(row.allocated_at.getTime(), lastTurnAt);
+      if (now.getTime() - idleSince < minutes * 60_000) continue;
+      try {
+        if (
+          await this.releaseIdleWorkspace({
+            identity,
+            projectId: row.project_id,
+            sessionId: row.id,
+            agentId: row.agent_id,
+            providerSessionId: row.provider_session_id,
+            allocationId: row.allocation_id,
+            sandboxProviderId: row.sandbox_provider_id,
+          })
+        )
+          released.push(row.id);
+      } catch (error) {
+        // Nothing is released when the workspace could not be saved first.
+        console.warn(
+          `[catamorphic] Idle workspace of session ${row.id} kept`,
+          error,
+        );
+      }
+    }
+    return released.length;
+  }
+
+  private async releaseIdleWorkspace(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    agentId: string | null;
+    providerSessionId: string | null;
+    allocationId: string;
+    sandboxProviderId: string | null;
+  }): Promise<boolean> {
+    const { identity, projectId, sessionId } = input;
+    const allocation = await this.executionAllocations.get({
+      identity,
+      allocationId: input.allocationId,
+    });
+    if (allocation?.status !== "active") return false;
+    const agent = await this.resolveAgent(input.agentId, projectId).catch(
+      () => undefined,
+    );
+    // A contained agent's changes never leave its sandbox (ADR 0182), so
+    // its workspace is given back without saving them.
+    if (input.sandboxProviderId && agent?.sandboxing !== "contained") {
+      const runtime = await this.executionEnvironments.getRuntimeBinding({
+        identity,
+        bindingId: allocation.bindingId,
+        ...(allocation.workerNodeId
+          ? { workerNodeId: allocation.workerNodeId }
+          : {}),
+      });
+      const selected = runtime?.sandboxProvider;
+      // Only the instance that reaches the machine can save its workspace.
+      if (!selected) return false;
+      const provider = allocationSandboxProvider({
+        db: this.db,
+        allocation,
+        provider: selected,
+        workerLeaseToken: () =>
+          this.heldWorkerNodes().find(
+            (node) => node.id === allocation.workerNodeId,
+          )?.token,
+      });
+      const status = await provider.getSandboxStatus(input.sandboxProviderId);
+      if (status === "stopped" || status === "archived")
+        await provider.startSandbox(input.sandboxProviderId);
+      // Throws when the changes cannot be read: the workspace is kept.
+      await syncSandboxChanges({
+        provider,
+        projectManager: this.projectManager,
+        identity,
+        projectId,
+        sessionId,
+        sandboxProviderId: input.sandboxProviderId,
+        projectDir: this.projectDir(provider),
+      });
+      await this.projectManager.checkpointSession({
+        tenantId: identity.tenantId,
+        projectId,
+        sessionId,
+        message: "Save the workspace before releasing it while idle",
+        author: CHECKPOINT_AUTHOR,
+      });
+    }
+    const released = await this.db.transaction().execute(async (trx) => {
+      const current = await trx
+        .selectFrom("agent_sessions")
+        .select(["status", "allocation_id"])
+        .where("id", "=", sessionId)
+        .forUpdate()
+        .executeTakeFirst();
+      if (
+        current?.status !== "active" ||
+        current.allocation_id !== allocation.id ||
+        this.runningTurns.has(sessionId)
+      )
+        return false;
+      const busy = await trx
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("session_id", "=", sessionId)
+        .where("status", "in", ["queued", "held", "running"])
+        .executeTakeFirst();
+      if (busy) return false;
+      await this.executionAllocations.release({
+        identity,
+        allocationId: allocation.id,
+        reason: "idle",
+        transaction: trx,
+      });
+      await trx
+        .updateTable("agent_sessions")
+        .set({ provider_session_id: null, sandbox_id: null })
+        .where("id", "=", sessionId)
+        .execute();
+      return true;
+    });
+    if (!released) return false;
+    if (input.providerSessionId) {
+      await agent?.provider
+        .dispose({
+          providerSessionId: input.providerSessionId,
+          sessionId,
+          projectId,
+          sandboxId: input.sandboxProviderId ?? "",
+          workingDirectory: "",
+        })
+        .catch(() => {});
+    }
+    await this.connectionGrants
+      ?.revokeAllocation({ allocationId: allocation.id })
+      .catch(() => {});
+    return true;
   }
 
   /**
@@ -4057,10 +5065,13 @@ export class AgentSessionsService {
             session,
             agent,
           );
-          const callerLayers = await this.callerToolPolicies(
-            identity,
-            projectId,
-            session.agent_id,
+          const callerLayers = withAgentLayers(
+            await this.callerToolPolicies(
+              identity,
+              projectId,
+              session.agent_id,
+            ),
+            agent,
           );
           const turnOptions: TurnOptions = {
             ...agent.defaults,
@@ -4209,6 +5220,19 @@ export class AgentSessionsService {
             );
           };
 
+          // A base a delivery asked for moves before the agent runs (ADR
+          // 0178): in the session's copy for sandbox agents (the sandbox is
+          // re-seeded from it below), in the checkout for native agents.
+          const workspaceMove = parseWorkspaceMove(session.workspace_move);
+          const copyMoveNote =
+            workspaceMove && agent.topology !== "native"
+              ? await this.applyWorkspaceMove({
+                  identity,
+                  projectId,
+                  session,
+                  move: workspaceMove,
+                })
+              : undefined;
           const anchor = await this.ensureAnchor(
             identity,
             projectId,
@@ -4216,6 +5240,51 @@ export class AgentSessionsService {
             agent,
             runtime,
           );
+          const workspaceNote =
+            copyMoveNote ??
+            (workspaceMove && agent.topology === "native"
+              ? await this.applyWorkspaceMove({
+                  identity,
+                  projectId,
+                  session,
+                  move: workspaceMove,
+                  native: { checkout: anchor.checkout },
+                })
+              : undefined);
+          if (anchor.sandboxProviderId && runtime.provider) {
+            const models = await this.prepareSandboxGit({
+              identity,
+              projectId,
+              sessionId,
+              provider: runtime.provider,
+              sandboxProviderId: anchor.sandboxProviderId,
+            });
+            // Harnesses that run their own process in the sandbox (ADR
+            // 0180) start it there and reach their model through the
+            // gateway with the grant written above.
+            turnOptions.sandbox = {
+              provider: runtime.provider,
+              sandboxId: anchor.sandboxProviderId,
+              stateDirectory: `${runtime.provider.workspaceRoot}/${SESSION_DIRECTORY}`,
+            };
+            const modelGateway = agent.modelConnection
+              ? models.find((model) => model.alias === agent.modelConnection)
+              : undefined;
+            if (modelGateway) turnOptions.modelGateway = modelGateway;
+            if (session.allocation_id)
+              this.startGrantRenewal({
+                identity,
+                projectId,
+                sessionId,
+                allocationId: session.allocation_id,
+                provider: runtime.provider,
+                sandboxProviderId: anchor.sandboxProviderId,
+                renewOnly: true,
+              });
+          }
+          const turnMessage = workspaceNote
+            ? `${workspaceNote}\n\n${message}`
+            : message;
           if (this.agentCapabilities) {
             turnOptions.context = [
               await this.agentCapabilities.prompt({
@@ -4224,6 +5293,7 @@ export class AgentSessionsService {
                 projectId,
                 sessionId,
                 workingDirectory: anchor.providerSession.workingDirectory,
+                ...(agent.sandboxing ? { sandboxing: agent.sandboxing } : {}),
               }),
             ];
             turnOptions.capabilities = this.agentCapabilities.forSession({
@@ -4235,12 +5305,17 @@ export class AgentSessionsService {
           }
           // The caller's view of the store, in the folder the agent works in
           // (ADR 0055): pulled before the turn, shipped after it.
-          const storeDir = await this.storeSyncDir(
-            identity,
-            projectId,
-            anchor,
-            sessionId,
-          );
+          // A workspace at a ref is the remote's tree, not the project's:
+          // its agent reaches the store through the documents tools.
+          const storeDir = parseWorkspaceBase(session.workspace)
+            ? null
+            : await this.storeSyncDir(
+                identity,
+                projectId,
+                anchor,
+                sessionId,
+                this.usesSessionCopy(session),
+              );
           if (storeDir) {
             await syncRemoteProject(
               storeDir,
@@ -4303,7 +5378,7 @@ export class AgentSessionsService {
                 })
               : agent.provider.sendMessage(
                   anchor.providerSession,
-                  message,
+                  turnMessage,
                   turnOptions,
                 );
           const presentCapability = capabilityEventPresenter();
@@ -4427,30 +5502,49 @@ export class AgentSessionsService {
 
           const settledWorkingDirectory =
             agent.topology === "native" && this.nativeAgentCheckout
-              ? ((await this.nativeAgentCheckout.resolve({
-                  projectId,
-                  sessionId,
-                  bindingId: runtime.bindingId,
-                  environmentName: runtime.environmentName,
-                })) ?? anchor.providerSession.workingDirectory)
+              ? ((
+                  await this.nativeAgentCheckout.resolve({
+                    projectId,
+                    sessionId,
+                    bindingId: runtime.bindingId,
+                    environmentName: runtime.environmentName,
+                  })
+                )?.path ?? anchor.providerSession.workingDirectory)
               : anchor.providerSession.workingDirectory;
           anchor.providerSession.workingDirectory = settledWorkingDirectory;
 
-          const changedFiles =
-            anchor.sandboxProviderId && runtime.provider
+          // A contained agent may change anything inside its own sandbox;
+          // none of it leaves: no sync back, store ship, or checkpoint to
+          // the origin (ADR 0182).
+          const keepsChangesInSandbox = Boolean(
+            anchor.sandboxProviderId && agent.sandboxing === "contained",
+          );
+          // A sandbox whose changes cannot be read keeps them; the reply
+          // says so instead of reporting an unchanged workspace.
+          let workspaceSyncError: string | undefined;
+          const changedFiles = keepsChangesInSandbox
+            ? []
+            : anchor.sandboxProviderId && runtime.provider
               ? await this.syncBackChanges(
                   runtime.provider,
                   identity,
                   projectId,
                   anchor.sandboxProviderId,
-                  this.workerNode ? sessionId : undefined,
-                )
+                  this.usesSessionCopy(session) ? sessionId : undefined,
+                ).catch((error: unknown) => {
+                  if (!(error instanceof SandboxSyncError)) throw error;
+                  console.warn(
+                    `[catamorphic] Session ${sessionId}: ${error.message}`,
+                  );
+                  workspaceSyncError = error.message;
+                  return [];
+                })
               : hostChangedFiles(events, settledWorkingDirectory);
 
           // Ship the turn's `store/` writes as the caller (ADR 0055) before the
           // checkpoint: store paths are gitignored, so they never enter git.
           let storeSync: JsonObject | undefined;
-          if (storeDir) {
+          if (storeDir && !keepsChangesInSandbox) {
             try {
               const report = await shipRemoteProject(
                 storeDir,
@@ -4485,11 +5579,13 @@ export class AgentSessionsService {
           // Sweeps ALL dirty state (host harnesses under-report changed files);
           // failures log and never break the turn.
           const commitSha =
-            agent.topology === "native" || changedFiles.length > 0
+            !keepsChangesInSandbox &&
+            (agent.topology === "native" || changedFiles.length > 0)
               ? await this.checkpointTurn(identity, projectId, message, {
                   sessionId,
                   workingDirectory: settledWorkingDirectory,
                   nativeExecution: agent.topology === "native",
+                  sessionCopy: this.usesSessionCopy(session),
                 })
               : null;
 
@@ -4545,6 +5641,14 @@ export class AgentSessionsService {
           const usageEvent = [...events]
             .reverse()
             .find((event) => event.type === "usage" && event.usage);
+          // A harness that reports no usage still used its model through
+          // the gateway, which counted every call of this turn (ADR 0180).
+          const gatewayUsage =
+            usageEvent?.usage || !agent.modelConnection
+              ? undefined
+              : await this.sandboxGateway
+                  ?.turnUsage?.({ sessionId, turnId: extras.turnId })
+                  .catch(() => undefined);
           const metadata: JsonObject = {
             status: failed
               ? "failed"
@@ -4557,16 +5661,19 @@ export class AgentSessionsService {
               ) && !events.some((event) => continuesTurn(event)),
             events: stepLogEvents(segmentEvents),
             changedFiles: changedFiles.map((change) => ({ ...change })),
-            ...(usageEvent?.usage
+            ...(usageEvent?.usage || gatewayUsage
               ? {
                   usage: JSON.parse(
-                    JSON.stringify(usageEvent.usage),
+                    JSON.stringify(usageEvent?.usage ?? gatewayUsage),
                   ) as JsonObject,
                 }
               : {}),
             // What the turn's store/ writes became (ADR 0055): shipped, refused,
             // conflicted, or outside store/. Hosts render it beside the reply.
             ...(storeSync ? { storeSync } : {}),
+            ...(workspaceSyncError
+              ? { workspaceSync: { error: workspaceSyncError } }
+              : {}),
             ...(errorKind ? { errorKind } : {}),
             ...(interrupted && failed ? { interrupted: true } : {}),
             ...(failed && !interrupted && heldText
@@ -4767,15 +5874,26 @@ export class AgentSessionsService {
               errorType: error instanceof Error ? error.name : "_OTHER",
             });
           return mapMessage(row);
+        } finally {
+          this.stopGrantRenewal(sessionId);
         }
       },
     );
   }
 
+  /**
+   * The end of a chat's life (ADR 0173), for it and its subsessions: queued
+   * work is cancelled and running work interrupted, watchers stop, the
+   * workspace Allocation is released (its node destroys the sandbox), the
+   * session branch and its repository copy are deleted, connection grants
+   * are revoked, and the chat's key is free for a new chat. The transcript
+   * stays readable.
+   */
   async close(
     identity: Identity,
     projectId: string,
     sessionId: string,
+    input: { origin?: SessionOperationOrigin } = {},
   ): Promise<AgentSession> {
     return withSpan(
       {
@@ -4789,70 +5907,168 @@ export class AgentSessionsService {
         },
       },
       async () => {
-        const session = await this.requireSession(
-          identity,
+        await this.requireSession(identity, projectId, sessionId);
+        const sessionIds = await this.descendantSessionIds(
           projectId,
           sessionId,
         );
-        await this.cancelAutoRetry(sessionId);
-
+        const cancelOpenTurns = (executor: Kysely<DB> | Transaction<DB>) =>
+          executor
+            .updateTable("agent_turns")
+            .set({
+              status: "cancelled",
+              error: "Chat closed",
+              completed_at: new Date(),
+              lease_owner: null,
+              lease_token: null,
+              lease_expires_at: null,
+              updated_at: new Date(),
+            })
+            .where("session_id", "in", sessionIds)
+            .where("status", "in", ["queued", "held"])
+            .execute();
+        await cancelOpenTurns(this.db);
+        for (const id of sessionIds) {
+          await this.cancelAutoRetry(id);
+          await this.interrupt(identity, projectId, id, {
+            notifyParent: false,
+          }).catch(() => {});
+        }
         await this.archiveResources?.stop({
           identity,
           projectId,
-          sessionIds: [sessionId],
+          sessionIds,
         });
+        // A chat closing itself from its own turn cannot wait for that turn.
+        const caller =
+          input.origin?.author.kind === "agent"
+            ? input.origin.author.sessionId
+            : undefined;
+        await this.waitForTurnsToStop(
+          sessionIds.filter((id) => id !== caller),
+          { timeoutMs: 30_000 },
+        );
 
-        if (session.provider_session_id) {
-          const agent = await this.resolveAgent(
-            session.agent_id,
-            projectId,
-          ).catch(() => undefined);
-          await agent?.provider
-            .dispose({
-              providerSessionId: session.provider_session_id,
-              sessionId: session.id,
-              projectId,
-              sandboxId: "",
-              workingDirectory: "",
-            })
-            .catch(() => {});
-        }
-
-        if (!session.allocation_id) {
-          throw new Error("Agent session has no Environment Allocation");
-        }
-        const allocationId = session.allocation_id;
-
-        const row = await this.db.transaction().execute(async (transaction) => {
-          const closed = await transaction
+        const closed = await this.db.transaction().execute(async (trx) => {
+          if (input.origin)
+            await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
+              trx,
+            );
+          // The provider session stays recorded until it is disposed below,
+          // so a close retried after a crash still finds it.
+          const rows = await trx
             .updateTable("agent_sessions")
-            .set({ status: "closed", updated_at: new Date() })
-            .where("id", "=", sessionId)
+            .set({
+              status: "closed",
+              sandbox_id: null,
+              activity: null,
+              updated_at: new Date(),
+            })
+            .where("id", "in", sessionIds)
             .returningAll()
-            .executeTakeFirstOrThrow();
-          await this.executionAllocations.release({
-            identity,
-            allocationId,
-            transaction,
-          });
-          return closed;
+            .execute();
+          // Work delivered while the running turns stopped would wait on a
+          // closed chat forever: cancel it with the closing, under the lock.
+          await cancelOpenTurns(trx);
+          for (const row of rows) {
+            if (row.allocation_id)
+              await this.executionAllocations.release({
+                identity,
+                allocationId: row.allocation_id,
+                transaction: trx,
+              });
+          }
+          return rows;
         });
-
         // Admission rechecks status under this session's row lock. Sweep any
         // watcher that committed before closure, after further admission is barred.
         await this.archiveResources?.stop({
           identity,
           projectId,
-          sessionIds: [sessionId],
+          sessionIds,
         });
-
-        await this.connectionGrants?.revokeAllocation({
-          allocationId,
-        });
-
-        return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+        for (const row of closed) {
+          await this.releaseClosedResources({
+            identity,
+            projectId,
+            session: row,
+            providerSessionId: row.provider_session_id,
+          });
+          if (row.provider_session_id)
+            await this.db
+              .updateTable("agent_sessions")
+              .set({ provider_session_id: null })
+              .where("id", "=", row.id)
+              .where("provider_session_id", "=", row.provider_session_id)
+              .execute();
+        }
+        const sessions = await this.db
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "in", sessionIds)
+          .execute();
+        const root = sessions.find((row) => row.id === sessionId);
+        if (!root) throw new AgentSessionNotFoundError(sessionId);
+        return mapSession(root, false, this.hostId, this.authorityLeaseMs);
       },
     );
+  }
+
+  /**
+   * What a closed chat still holds outside its row: its provider session,
+   * connection grants, and on hosts that keep session workspaces, the
+   * `sessions/<id>` branch and `session-<id>` copy. Safe to repeat.
+   */
+  private async releaseClosedResources(input: {
+    identity: Identity;
+    projectId: string;
+    session: Pick<
+      SessionRow,
+      "id" | "agent_id" | "allocation_id" | "workspace"
+    >;
+    providerSessionId?: string | null;
+  }): Promise<void> {
+    const { session } = input;
+    if (input.providerSessionId) {
+      const agent = await this.resolveAgent(
+        session.agent_id,
+        input.projectId,
+      ).catch(() => undefined);
+      await agent?.provider
+        .dispose({
+          providerSessionId: input.providerSessionId,
+          sessionId: session.id,
+          projectId: input.projectId,
+          sandboxId: "",
+          workingDirectory: "",
+        })
+        .catch(() => {});
+    }
+    if (session.allocation_id)
+      await this.connectionGrants
+        ?.revokeAllocation({ allocationId: session.allocation_id })
+        .catch(() => {});
+    this.stopGrantRenewal(session.id);
+    await this.workspaces
+      ?.release({
+        tenantId: input.identity.tenantId,
+        projectId: input.projectId,
+        sessionId: session.id,
+      })
+      .catch(() => {});
+    if (this.usesSessionCopy(session))
+      await this.projectManager
+        .deleteSession({
+          tenantId: input.identity.tenantId,
+          projectId: input.projectId,
+          sessionId: session.id,
+        })
+        .catch((error) =>
+          console.warn(
+            `[catamorphic] Could not delete the workspace of closed session ${session.id}`,
+            error,
+          ),
+        );
   }
 
   async archiveImpact(
@@ -5092,8 +6308,16 @@ export class AgentSessionsService {
 
   private async waitForTurnsToStop(
     sessionIds: readonly string[],
+    options: { timeoutMs?: number } = {},
   ): Promise<void> {
-    while (sessionIds.some((id) => this.runningTurns.has(id))) {
+    const deadline =
+      options.timeoutMs === undefined
+        ? Number.POSITIVE_INFINITY
+        : Date.now() + options.timeoutMs;
+    while (
+      sessionIds.some((id) => this.runningTurns.has(id)) &&
+      Date.now() < deadline
+    ) {
       // Do not attach another reaction to each still-pending drainer on
       // every tick. Polling the running set already supplies the wake-up.
       await new Promise<void>((resolve) => setTimeout(resolve, 25));
@@ -5240,6 +6464,10 @@ export class AgentSessionsService {
       available: boolean;
       reason: string | null;
       environments: import("./execution-environments-service.js").EnvironmentDiscovery;
+      /** What may leave its sandbox, when the host or definition says (ADR 0182). */
+      sandboxing?: Sandboxing;
+      /** Its harness's own permission settings, as declared. */
+      harnessPermissions?: HarnessPermissions;
     }> = [];
     for (const candidate of candidates.values()) {
       try {
@@ -5266,6 +6494,10 @@ export class AgentSessionsService {
           ),
           environments,
           reason: null,
+          ...(agent.sandboxing ? { sandboxing: agent.sandboxing } : {}),
+          ...(agent.defaults?.harnessPermissions
+            ? { harnessPermissions: agent.defaults.harnessPermissions }
+            : {}),
         });
       } catch (error) {
         items.push({
@@ -5282,11 +6514,7 @@ export class AgentSessionsService {
       args.identity.tenantId,
       args.projectId,
       async (repo, ref) => {
-        const text = await readProgramFile(
-          repo,
-          ref,
-          ".catamorphic/project.json",
-        );
+        const text = await readProgramFile(repo, ref, PROJECT_MANIFEST_PATH);
         try {
           return text ? JSON.parse(text) : {};
         } catch {
@@ -5404,7 +6632,7 @@ export class AgentSessionsService {
       if (!entry?.definition) throw new AgentNotConfiguredError(id);
       const resolved = await this.codingAgents.projectAgent({ id, entry });
       if (!resolved) throw new AgentNotConfiguredError(id);
-      return resolved;
+      return withDefinitionPolicy(resolved, entry.definition);
     }
     const agent = this.codingAgents.get(id);
     if (!agent) throw new AgentNotConfiguredError(id);
@@ -5440,8 +6668,8 @@ export class AgentSessionsService {
         const allowed = accessibleAgents
           .filter(
             (candidate) =>
-              privilegeRank(candidate.privilege) <=
-              privilegeRank(sourceAgent.privilege),
+              sandboxingRank(candidate.sandboxing) <=
+              sandboxingRank(sourceAgent.sandboxing),
           )
           .map((candidate) => candidate.id);
         target =
@@ -5535,16 +6763,19 @@ export class AgentSessionsService {
         : selectedProvider;
     if (!provider)
       throw new Error("The selected Environment has no execution provider");
+    const commandTimeoutSeconds =
+      allocation.policy.requirements.resources?.commandTimeoutSeconds;
     return {
       provider,
       bindingId: allocation.bindingId,
       environmentName: allocation.environmentName,
+      ...(commandTimeoutSeconds ? { commandTimeoutSeconds } : {}),
       devSandboxes: new DevSandboxService({
         projectManager: this.projectManager,
         provider,
         store: new DbSandboxStore(this.db, allocation.id),
         resources: allocation.policy.requirements.resources,
-        ...(this.workerNode ? { sessionId: session.id } : {}),
+        ...(this.usesSessionCopy(session) ? { sessionId: session.id } : {}),
       }),
     };
   }
@@ -5558,6 +6789,8 @@ export class AgentSessionsService {
   ): Promise<{
     providerSession: ProviderSession;
     sandboxProviderId?: string;
+    /** The checkout a native agent works in. */
+    checkout?: NativeCheckout;
     /**
      * The provider session was created just now from the persisted
      * transcript (host restart, credential/config rebuild) instead of
@@ -5580,11 +6813,13 @@ export class AgentSessionsService {
       (agent.provider.hasSession?.(session.provider_session_id) ?? true);
 
     if (agent.topology === "native") {
-      const workingDirectory = await this.resolveNativePath(
+      const checkout = await this.resolveNativePath(
         projectId,
-        session.id,
+        session,
         runtime,
+        identity,
       );
+      const workingDirectory = checkout.path;
       if (anchored && session.provider_session_id) {
         return {
           providerSession: {
@@ -5594,6 +6829,7 @@ export class AgentSessionsService {
             sandboxId: "",
             workingDirectory,
           },
+          checkout,
           reanchored: false,
         };
       }
@@ -5623,7 +6859,7 @@ export class AgentSessionsService {
         })
         .where("id", "=", session.id)
         .execute();
-      return { providerSession, reanchored: true };
+      return { providerSession, checkout, reanchored: true };
     }
 
     if (!runtime.provider || !runtime.devSandboxes) {
@@ -5654,6 +6890,7 @@ export class AgentSessionsService {
       { provider: runtime.provider, devSandboxes: runtime.devSandboxes },
       identity,
       projectId,
+      session,
     );
     const providerSession = await agent.provider.startSession({
       sandboxProvider: runtime.provider,
@@ -5661,6 +6898,9 @@ export class AgentSessionsService {
       userId: identity.externalUserId,
       sandboxId: handle.providerId,
       workingDirectory: this.projectDir(runtime.provider),
+      ...(runtime.commandTimeoutSeconds
+        ? { commandTimeoutSeconds: runtime.commandTimeoutSeconds }
+        : {}),
       sessionId: session.id,
       systemPrompt: buildAgentSystemPrompt({
         systemPrompt:
@@ -5703,7 +6943,13 @@ export class AgentSessionsService {
       identity,
       allocationId: session.allocation_id,
     });
-    const bindings = allocation?.policy.connections ?? [];
+    // An alias that only serves Git or a model is reached from the
+    // sandbox through the gateway, not as tools (ADRs 0175, 0180).
+    const bindings = (allocation?.policy.connections ?? []).filter((binding) =>
+      binding.capabilities.some(
+        (capability) => !isProtocolCapability(capability),
+      ),
+    );
     if (bindings.length === 0) return {};
     if (!this.connectionMcpUrl) {
       throw new Error(
@@ -5789,21 +7035,43 @@ export class AgentSessionsService {
 
   private async resolveNativePath(
     projectId: string,
-    sessionId: string,
+    session: SessionRow,
     runtime: AgentExecutionRuntime,
-  ): Promise<string> {
-    const path = await this.nativeAgentCheckout?.resolve({
+    identity: Identity,
+  ): Promise<NativeCheckout> {
+    // A pending move chooses the checkout (ADR 0178): a chat still in the
+    // person's own folder first gets its own worktree at the new base, so
+    // the move never touches that folder.
+    const move = parseWorkspaceMove(session.workspace_move);
+    const base = parseWorkspaceBase(session.workspace);
+    const start = base
+      ? { ref: base.ref, commit: base.commit, pin: basePin(session.id) }
+      : move
+        ? { ref: move.ref, commit: move.commit, pin: movePin(session.id) }
+        : undefined;
+    const checkout = await this.nativeAgentCheckout?.resolve({
       projectId,
-      sessionId,
+      sessionId: session.id,
       bindingId: runtime.bindingId,
       environmentName: runtime.environmentName,
+      ...(start && this.workspaces
+        ? {
+            workspace: {
+              ...start,
+              repository: this.workspaces.mirrorPath({
+                tenantId: identity.tenantId,
+                projectId,
+              }),
+            },
+          }
+        : {}),
     });
-    if (!path) {
+    if (!checkout) {
       throw new Error(
         "This agent uses native execution, but the Environment has no WorkerNode directory",
       );
     }
-    return path;
+    return checkout;
   }
 
   // --- Dev sandbox lifecycle ---
@@ -5823,6 +7091,7 @@ export class AgentSessionsService {
     runtime: { provider: SandboxProvider; devSandboxes: DevSandboxService },
     identity: Identity,
     projectId: string,
+    session: SessionRow,
   ): Promise<{
     handle: { id: string; providerId: string };
     baseCommitSha: string | null;
@@ -5832,36 +7101,19 @@ export class AgentSessionsService {
       projectId,
       refresh: true,
     });
-    await this.ensureGitBaseline(runtime.provider, prepared.providerId);
+    // A workspace at a ref is seeded with its real history before the turn
+    // (prepareSandboxGit); any other sandbox gets a local baseline.
+    if (!parseWorkspaceBase(session.workspace))
+      await ensureSandboxBaseline({
+        provider: runtime.provider,
+        sandboxId: prepared.providerId,
+        projectDir: this.projectDir(runtime.provider),
+        originUrl: await this.linkedRemoteUrl(identity, projectId),
+      });
     return {
       handle: { id: prepared.id, providerId: prepared.providerId },
       baseCommitSha: prepared.baseCommitSha,
     };
-  }
-
-  /**
-   * Make sure the sandbox project dir is a git repo with a committed
-   * baseline, so post-turn change detection (`git status --porcelain`) sees
-   * exactly what the agent modified.
-   */
-  private async ensureGitBaseline(
-    provider: SandboxProvider,
-    sandboxProviderId: string,
-  ): Promise<void> {
-    const dir = this.projectDir(provider);
-    const command = [
-      "(git rev-parse --git-dir >/dev/null 2>&1 || git init -b main >/dev/null)",
-      "git add -A",
-      `(git -c user.name=catamorphic -c user.email=agent@catamorphic.dev commit -m baseline --quiet || true)`,
-    ].join(" && ");
-    const result = await provider.executeCommand(sandboxProviderId, command, {
-      cwd: dir,
-    });
-    if (result.exitCode !== 0) {
-      throw new Error(
-        `Failed to prepare sandbox git baseline: ${result.result}`,
-      );
-    }
   }
 
   private async resolveSandboxProviderId(
@@ -5916,7 +7168,7 @@ export class AgentSessionsService {
    * clean or the commit failed — a checkpoint must never break a turn.
    */
   /**
-   * The folder whose `.catamorphic/app-data/store/` mirrors the caller's store view: the caller's
+   * The folder whose `.work/app-data/store/` mirrors the caller's store view: the caller's
    * own dev copy, which sandbox agents' edits sync back into. Host-execution
    * agents work in ONE folder per project shared by every caller, so their
    * store/ is never synced (one member's pulled files would be readable by
@@ -5929,10 +7181,11 @@ export class AgentSessionsService {
     projectId: string,
     anchor: { providerSession: ProviderSession; sandboxProviderId?: string },
     sessionId: string,
+    sessionCopy: boolean,
   ): Promise<string | null> {
     if (!this.storeSync) return null;
     if (!anchor.sandboxProviderId) return null;
-    const repo = this.workerNode
+    const repo = sessionCopy
       ? await this.projectManager.openSession({
           tenantId: identity.tenantId,
           projectId,
@@ -5958,6 +7211,7 @@ export class AgentSessionsService {
       sessionId: string;
       workingDirectory: string;
       nativeExecution: boolean;
+      sessionCopy: boolean;
     },
   ): Promise<string | null> {
     return withSpan(
@@ -5983,7 +7237,7 @@ export class AgentSessionsService {
               message: checkpointMessage(userMessage),
             });
           }
-          if (this.workerNode)
+          if (execution.sessionCopy)
             return await this.projectManager.checkpointSession({
               tenantId: identity.tenantId,
               projectId,
@@ -6016,7 +7270,7 @@ export class AgentSessionsService {
               error instanceof Error ? error.message : String(error)
             }`,
           );
-          if (this.workerNode)
+          if (execution.sessionCopy)
             throw new Error(
               "Session checkpoint could not be saved. Recover the workspace before retrying.",
               { cause: error },
@@ -6253,12 +7507,58 @@ export class AgentSessionsService {
     );
     return {
       agentId: session.agent_id,
-      toolPolicies: await this.callerToolPolicies(
-        args.identity,
-        args.projectId,
-        session.agent_id,
+      toolPolicies: withAgentLayers(
+        await this.callerToolPolicies(
+          args.identity,
+          args.projectId,
+          session.agent_id,
+        ),
+        await this.resolveAgent(session.agent_id, args.projectId).catch(
+          () => undefined,
+        ),
       ),
     };
+  }
+
+  /**
+   * Name who answers this chat's escalations while no one watches it (ADR
+   * 0176). The latest delivery that names approvers replaces them.
+   */
+  async setApprovers(args: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    approvers: { members?: string[]; roles?: string[] };
+  }): Promise<void> {
+    await this.requireSession(args.identity, args.projectId, args.sessionId);
+    await this.db
+      .updateTable("agent_sessions")
+      .set({ approvers: JSON.stringify(args.approvers) })
+      .where("id", "=", args.sessionId)
+      .execute();
+  }
+
+  /**
+   * What may leave the session agent's sandbox (ADR 0182): its
+   * sandboxing, or undefined when the host declared none.
+   */
+  async agentSandboxing(args: {
+    projectId: string;
+    sessionId: string;
+  }): Promise<Sandboxing | undefined> {
+    const session = await this.db
+      .selectFrom("agent_sessions")
+      .select("agent_id")
+      .where("id", "=", args.sessionId)
+      .where("project_id", "=", args.projectId)
+      .executeTakeFirst();
+    if (!session) return undefined;
+    // An agent that no longer resolves cannot act; the narrowest level holds.
+    const agent = await this.resolveAgent(
+      session.agent_id,
+      args.projectId,
+    ).catch(() => undefined);
+    return agent ? agent.sandboxing : "contained";
   }
 
   /** `caller` + `toolPolicies` for {@link StartSessionOpts}. */
@@ -6270,10 +7570,9 @@ export class AgentSessionsService {
     caller: Identity;
     toolPolicies?: Record<string, McpToolPolicyLayers>;
   }> {
-    const toolPolicies = await this.callerToolPolicies(
-      identity,
-      projectId,
-      agentId,
+    const toolPolicies = withAgentLayers(
+      await this.callerToolPolicies(identity, projectId, agentId),
+      await this.resolveAgent(agentId, projectId).catch(() => undefined),
     );
     // The root identity sends an EMPTY map, not none: a turn's layers replace the
     // session's, so the root continuing a viewer's session sheds the
@@ -6842,9 +8141,55 @@ function mapSession(
     attentionRequired:
       Number(row.attention_revision) > Number(row.attention_seen_revision),
     status: row.status as "active" | "closed",
+    key: row.chat_key,
+    keyWorkflows: stringList(row.chat_workflows),
+    placement: parsePlacement(row.placement),
+    workspace: parseWorkspaceBase(row.workspace),
     baseCommitSha: row.base_commit_sha,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+function toPlacementJson(placement: SessionPlacement): Json {
+  return {
+    environment: placement.environment,
+    reason: placement.reason,
+    machine: { id: placement.machine.id, label: placement.machine.label },
+  };
+}
+
+function stringList(value: Json): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+const PLACEMENT_REASONS: readonly PlacementReason[] = [
+  "requested",
+  "agent_preferred",
+  "project_default",
+  "available",
+];
+
+function parsePlacement(value: Json | null): SessionPlacement | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const { environment, reason, machine } = value;
+  const known = PLACEMENT_REASONS.find((candidate) => candidate === reason);
+  if (typeof environment !== "string" || !known) return null;
+  if (!machine || typeof machine !== "object" || Array.isArray(machine))
+    return null;
+  const { id, label } = machine;
+  if (typeof id !== "string" || typeof label !== "string") return null;
+  return { environment, reason: known, machine: { id, label } };
+}
+
+/** The placement an admission records on its chat. */
+function placementOf(admission: EnvironmentAdmission): SessionPlacement {
+  return {
+    environment: admission.environmentName,
+    reason: admission.reason,
+    machine: { id: admission.binding.id, label: admission.binding.label },
   };
 }
 
@@ -6854,6 +8199,9 @@ function sessionVisibility(value: string): SessionVisibility {
   }
   throw new Error(`Invalid session visibility '${value}'`);
 }
+
+/** How often a running turn renews its sandbox grants (they live an hour). */
+const GRANT_RENEWAL_MS = 20 * 60_000;
 
 const DEFAULT_DELEGATION_POLICY: AgentDelegationPolicy = {
   enabled: true,
@@ -6873,12 +8221,60 @@ function delegationPolicy(
   return policy ?? DEFAULT_DELEGATION_POLICY;
 }
 
-function privilegeRank(
-  privilege: "read-only" | "edit" | "full-access" | undefined,
-): number {
-  if (privilege === "full-access") return 2;
-  if (privilege === "edit") return 1;
-  return 0;
+/**
+ * A committed definition's own narrowing (ADR 0054 agent scope), sandboxing
+ * and harness permission mode, applied by core whatever harness the host
+ * built, so they hold on every host (ADR 0176, ADR 0182). The permission
+ * mode travels as a turn default the harness reads. Aliases name the
+ * Environment's connection servers.
+ */
+function withDefinitionPolicy(
+  agent: RegisteredCodingAgent,
+  definition: AgentDefinition,
+): RegisteredCodingAgent {
+  const layers = Object.fromEntries(
+    Object.entries(definition.toolPolicies ?? {}).map(([alias, policy]) => [
+      alias === PROJECT_TOOLS_SERVER_KEY
+        ? alias
+        : connectionMcpServerName(alias),
+      [
+        narrowingLayer({
+          ...(policy.default ? { default: policy.default } : {}),
+          ...(policy.tools ? { tools: { ...policy.tools } } : {}),
+        }),
+      ],
+    ]),
+  );
+  const sandboxing = agent.sandboxing ?? definition.sandboxing;
+  const harnessPermissions =
+    agent.defaults?.harnessPermissions ?? definition.harnessPermissions;
+  return {
+    ...agent,
+    ...(sandboxing ? { sandboxing } : {}),
+    ...(harnessPermissions
+      ? { defaults: { ...agent.defaults, harnessPermissions } }
+      : {}),
+    ...(Object.keys(layers).length > 0
+      ? { toolPolicies: { ...agent.toolPolicies, ...layers } }
+      : {}),
+  };
+}
+
+/** The caller's layers and the agent's own, intersected per server. */
+function withAgentLayers(
+  caller: Record<string, McpToolPolicyLayers> | undefined,
+  agent: RegisteredCodingAgent | undefined,
+): Record<string, McpToolPolicyLayers> | undefined {
+  const own = agent?.toolPolicies;
+  if (!own || Object.keys(own).length === 0) return caller;
+  const merged: Record<string, McpToolPolicyLayers> = { ...caller };
+  for (const [server, layers] of Object.entries(own))
+    merged[server] = [...(merged[server] ?? []), ...layers];
+  return merged;
+}
+
+function sandboxingRank(sandboxing: Sandboxing | undefined): number {
+  return sandboxing ? SANDBOXING_LEVELS.indexOf(sandboxing) : 0;
 }
 
 function resolveDelegationTarget(input: {

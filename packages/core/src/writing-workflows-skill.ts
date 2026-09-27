@@ -1,3 +1,5 @@
+import { GITHUB_TRIGGER_LIBRARY } from "./github-trigger-library.js";
+
 /** Agent guidance; shipped through the existing skill discovery surfaces. */
 export const WRITING_WORKFLOWS_SKILL = `---
 name: writing-workflows
@@ -82,8 +84,10 @@ Labels describe real behavior: a formatting example must not claim to send mail.
 Declare \`triggers: [trigger("literal-kind", { constant: "config" })]\` alongside
 \`steps\`, with \`trigger\` imported from \`@catamorphic/workflow\` (it is not a
 builder argument). Kind names and config/payload shapes come from the host-generated
-\`.catamorphic/workflows/src/catamorphic-triggers.d.ts\`. Config is inline constant data, not an
-expression evaluated at runtime. Conditions belong in ordinary workflow code.
+\`.work/workflows/src/work-triggers.d.ts\`: the host's kinds and the project's own
+(see Project trigger kinds). Config is inline constant data, not an expression
+evaluated at runtime. Which events start a run belongs in \`where\`; what a run
+does with one belongs in ordinary workflow code.
 
 The trigger payload is the first scope's input. Multiple triggers require an
 input accepting every payload. A generated \`Hole<"Name">\` asks this workflow's
@@ -92,15 +96,59 @@ concrete input type to define that part of the schema; do not use \`any\` or
 If every kind is rejected as \`never\`, refresh types through the host rather than
 fabricating a registry or editing generated declarations.
 
+Every binding may add \`where\`, a filter the host checks before a run starts:
+\`trigger("schedule", { cron: "0 8 * * 1-5", timezone: "UTC", where: { ... } })\`.
+It mirrors the payload; a leaf is a value (equal), a list of values (one of),
+\`{ $exists: true | false }\`, or \`{ $prefix: "slack:" }\` (a string that starts
+with it, such as a namespace of chat keys). Keys starting with \`$\` are
+operators, so a payload field named \`exists\` or \`prefix\` matches by value.
+Header names match in any case.
+Filter in \`where\` rather than in code, so unrelated events never start runs.
+
 Webhooks use \`trigger("webhook", { name: "github" })\`: a lowercase name that
 becomes the project's URL segment. The server stores each request durably and
 answers 202 before the workflow runs, so a redelivery (same delivery id header) runs
-once. The payload's \`payload\` holds \`{ name, headers, contentType, body }\`,
-with JSON and form bodies parsed. Add \`verify: { secret: "GITHUB_WEBHOOK_SECRET",
-header: "x-hub-signature-256", prefix: "sha256=" }\` for senders that sign with
-HMAC-SHA256; the secret is a project secret, and unsigned requests are rejected.
-Every workflow on one webhook name must declare the same verify. People who manage
-the project copy the URL from the workflow's **Automatic** view after enabling it.
+once. The payload's \`payload\` holds \`{ name, headers, query, contentType, body }\`,
+with JSON and form bodies parsed, and \`hostVerified: true\` when the host fetched
+the event itself instead of receiving a signed request (the desktop's GitHub
+poller). The config declares how the endpoint checks senders, always with a
+project secret's name:
+
+- \`verify: { scheme: "hmac", secret, header, prefix?, encoding?: "hex" | "base64",
+  algorithm?: "sha1" | "sha256" | "sha512", content?, timestamp?, separator?,
+  secretEncoding?, secretPrefix? }\` signs \`content\` (default \`"{body}"\`; also
+  \`{timestamp}\` and \`{header:<name>}\`). \`timestamp: { header, prefix?,
+  separator?, toleranceSeconds? }\` rejects replays (default 300 seconds) and
+  requires \`{timestamp}\` in \`content\`, since an unsigned timestamp can be
+  rewritten. A composite header is split on \`separator\` and its parts that
+  start with \`prefix\` are the values: Stripe is \`separator: ",", prefix: "v1="\`
+  with \`timestamp: { header: "stripe-signature", separator: ",", prefix: "t=" }\`;
+  Standard Webhooks is \`separator: " ", prefix: "v1,"\` with keys in
+  \`secretEncoding: "base64", secretPrefix: "whsec_"\`. Signing keys shorter than
+  16 bytes are rejected.
+- \`verify: { scheme: "token", secret, header | query, prefix? }\` compares a
+  shared token (GitLab's \`x-gitlab-token\`); the token is never stored.
+- \`respond: [{ when, echo, token? }]\` answers a handshake with 200 and the
+  echoed value instead of starting runs: \`{ when: { body: { type:
+  "url_verification" } }, echo: "body.challenge" }\` for Slack, or for GET
+  subscriptions \`{ when: { method: "GET", query: { "hub.mode": "subscribe" } },
+  echo: "query.hub.challenge", token: { secret, query: "hub.verify_token" } }\`.
+  A rule without \`token\` answers only requests that pass \`verify\`.
+- \`deliveryId\` names where a sender repeats its own event id when it sends
+  no delivery-id header (\`"body.event_id"\` for Slack, \`"body.id"\` for
+  Stripe), so a retried event is stored and run once.
+- \`maxBodyBytes\` raises the 1 MiB body limit up to the server's maximum.
+
+Every binding of one webhook name in a commit must declare identical settings,
+so declare an integration's webhook once, in a project trigger kind. While
+enablements sit on different commits (one workflow updated, another not yet),
+the URL checks requests by the most recently deployed commit's settings and
+every listening workflow still receives the events; expired enablements do not
+count. Declare the secret
+it names with \`defineSecrets\` in the same file and mark it
+\`use: "webhook"\`, so the project can store its value while runs never
+receive it: signing secrets are checked on the server only. People who manage the
+project copy the URL from the workflow's **Automatic** view after enabling it.
 Webhooks reach servers that are online, so enable them on a brain server.
 
 Schedules use either \`{ at: "an absolute ISO timestamp with offset" }\` or
@@ -131,9 +179,67 @@ holds every permission can turn it on. A member's automation keeps them only
 while that member does; a project automation keeps what was consented to.
 Declare the fewest that work; see \`workflow-lifecycle\`.
 
+## Project trigger kinds
+
+A project names the events it cares about in \`.work/triggers/<name>.ts\`: each
+export is \`defineTrigger({ name, description?, from: trigger(...), where? })\`,
+another kind narrowed by a filter. Workflows bind it by name like a host kind,
+with their own \`where\` on top; every filter along the chain must match. Write
+\`name\` and \`from\` literally (no variables) and pick names the host does not
+already register. A type argument states the payload the filtered events carry;
+\`Narrow<Base, Patch>\` types part of it, such as a webhook's body. The host
+regenerates \`work-triggers.d.ts\` with these kinds; \`bun run --cwd .work check\`
+checks them.
+
+A GitHub library, for a repository or GitHub App webhook sending JSON to the
+project's \`github\` URL with the secret stored as \`GITHUB_WEBHOOK_SECRET\`. The
+desktop has no public URL; its session watchers receive the same events by
+polling (see \`session-workflows\`), so this library works there too:
+
+\`\`\`typescript
+${GITHUB_TRIGGER_LIBRARY}\`\`\`
+
+The Slack library (\`slack.event\`, \`slack.mention\`, \`slack.message\`), with
+the workflows that keep a chat per thread, is in the \`slack\` skill; the pull
+request review automation built on this library is in \`reviewing-pull-requests\`.
+
+A workflow that runs only for merged pull requests:
+
+\`\`\`typescript
+import { type BoundaryContext, defineWorkflow, type TriggerPayload, trigger } from "@catamorphic/workflow";
+
+/**
+ * @displayname Summarize a merged pull request
+ * @param title - @displayname Title | @description The pull request's title
+ * @param url - @displayname Link | @description Where the pull request lives
+ */
+async function summarizeMerge({ title, url }: { title: string; url: string }) {
+  "use step";
+  return \`Merged: \${title} (\${url})\`;
+}
+
+/** @displayname Note merged pull requests */
+export const noteMergedPullRequests = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [
+    trigger("github.pull_request", {
+      where: { payload: { body: { action: "closed", pull_request: { merged: true } } } },
+    }),
+  ],
+  steps: [
+    /** @displayname Summarize */
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<TriggerPayload<"github.pull_request">>) => {
+        const pull = input.payload.body.pull_request;
+        return { summary: await summarizeMerge({ title: pull.title, url: pull.html_url }) };
+      },
+    }),
+  ],
+}));
+\`\`\`
+
 ## App contracts and secrets
 
-Expose only intended workflows from \`.catamorphic/workflows/src/app-api.ts\`; use \`building-apps\`
+Expose only intended workflows from \`.work/workflows/src/app-api.ts\`; use \`building-apps\`
 for the app contract and client. App inputs are untrusted: validate identifiers,
 clamp numbers, and bound arrays before acting. Inputs and outputs must survive
 JSON: use ISO strings and plain data, not dates, maps, streams, or functions.
@@ -149,12 +255,12 @@ cannot start with \`CATAMORPHIC_\`. Configure values through the host; an unset
 required secret throws. Secrets stay in backend execution, never app bundles or
 returned results. Prefer declared connections for member accounts and brokered access.
 
-The host-provided non-secret \`process.env.CATAMORPHIC_APP_DATA_DIR\` is the location
-for persistent local data. Follow \`catamorphic-projects\` for its storage contract.
+The host-provided non-secret \`process.env.WORK_APP_DATA_DIR\` is the location
+for persistent local data. Follow \`work-projects\` for its storage contract.
 
 ## Verify the result
 
-Run \`bun run --cwd .catamorphic check\` after structural changes. It checks parsing,
+Run \`bun run --cwd .work check\` after structural changes. It checks parsing,
 trigger bindings, and app contracts; \`--write\` refreshes generated app types.
 Fix the earliest boundary type mismatch instead of adding assertions or ignoring
 errors. Check the actual workflow through the host at the intended revision and

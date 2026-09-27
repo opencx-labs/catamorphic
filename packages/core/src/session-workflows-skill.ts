@@ -46,7 +46,18 @@ session.turn-changed, session.state-changed, session.work-changed, and
 session.authority-changed. Config may select sessionId, agentId, statuses, and
 workStatus. Omitting sessionId observes authorized matching sessions in the
 project. Example: trigger("session.turn-changed", { sessionId: "actual-id",
-statuses: ["completed", "failed"] }). Never guess an id.
+statuses: ["completed", "failed"] }). Never guess an id. Keyed chats carry their
+key in payload.session.key (null otherwise), so where selects a family of chats
+without starting runs for the rest: where: { payload: { session: { key: {
+$prefix: "pr-" } } } }.
+
+A watcher may bind the project's own trigger kinds too, such as the GitHub
+library in writing-workflows. A host without a public webhook URL (the desktop)
+can observe for it instead: pass the host's event source to create_watcher
+(eventSource: "github"). The host polls the repository with your GitHub
+connection from the watcher's start and records events shaped like the webhook's
+deliveries, with payload.hostVerified true in place of a signature, so the same
+trigger kinds and where filters match on every host.
 
 Events are normalized Project Events. input.payload.session is the snapshot at
 the transition; input.payload.detail contains the message/turn/visibility change.
@@ -187,59 +198,76 @@ export const remindUser = defineWorkflow(({ defineBoundary }) => ({
 ### A chat per pull request
 
 A project automation that reviews each pull request in its own chat, shared with
-everyone in the project. Enable it for the project; the key reuses the chat when
-the same pull request changes again. GitHub events arrive as untyped JSON, so
-read the fields you need and skip events without them.
+everyone in the project. It binds \`github.pull_request\` from the GitHub trigger
+library in \`writing-workflows\` (\`.work/triggers/github.ts\`), and its \`where\`
+lets only opened and updated, non-draft pull requests start a run. Enable it for
+the project; the key reuses the chat when the same pull request changes again.
+\`workspace\` starts the chat's checkout at the pull request's head, fetched from
+the project's remote by the host; each later push moves the same chat to the new
+head (the agent is told the old and new heads and what changed), and the chat's
+\`workspace\` records the exact commit it reviewed.
+Keys belong to the project, so a second automation closes the same chat when
+the pull request merges or closes: its workspace, branches, and grants are
+released, the transcript stays readable, and a reopened pull request starts a
+fresh chat.
 
 \`\`\`typescript
-import { type BoundaryContext, defineWorkflow, trigger } from "@catamorphic/workflow";
-type PullRequest = { number: number; title: string; url: string };
-
-/**
- * @displayname Read the pull request
- * @param payload - @displayname Event | @description The event GitHub sent
- */
-async function readPullRequest({ payload }: { payload: unknown }): Promise<PullRequest | null> {
-  "use step";
-  if (!payload || typeof payload !== "object" || !("number" in payload) || !("pull_request" in payload)) return null;
-  const pull = payload.pull_request;
-  if (typeof payload.number !== "number" || !pull || typeof pull !== "object") return null;
-  const title = "title" in pull && typeof pull.title === "string" ? pull.title : "Pull request " + payload.number;
-  const url = "html_url" in pull && typeof pull.html_url === "string" ? pull.html_url : "";
-  return { number: payload.number, title, url };
-}
+import { type BoundaryContext, defineWorkflow, type TriggerPayload, trigger } from "@catamorphic/workflow";
 
 /** @displayname Review pull requests */
 export const reviewPullRequests = defineWorkflow(({ defineBoundary }) => ({
-  triggers: [trigger("github.pull_request")],
-  steps: [
-    /** @displayname Read the pull request */
-    defineBoundary({
-      run: async ({ input }: BoundaryContext<{ payload: unknown }>) => ({
-        pull: await readPullRequest({ payload: input.payload }),
-      }),
+  triggers: [
+    trigger("github.pull_request", {
+      where: { payload: { body: { action: ["opened", "synchronize", "reopened"], pull_request: { draft: false } } } },
     }),
+  ],
+  steps: [
     /** @displayname Ask for a review */
     defineBoundary({
-      run: ({ input, host }: BoundaryContext<{ pull: PullRequest | null }>) => {
-        const pull = input.pull;
-        if (!pull) return { skipped: true };
+      run: ({ input, host }: BoundaryContext<TriggerPayload<"github.pull_request">>) => {
+        const event = input.payload.body;
         return host["catamorphic.sessions"].deliver({
-          key: "pr-" + pull.number,
-          title: "Review: " + pull.title,
-          content: "Review the changes in " + pull.url + " and summarize risks.",
-          notification: { title: "Review ready", body: pull.title },
+          key: "pr-" + event.repository.full_name + "-" + event.number,
+          workspace: { ref: "refs/pull/" + event.number + "/head", update: "reset" },
+          title: "Review: " + event.pull_request.title,
+          content: "Review the changes in " + event.pull_request.html_url + " and summarize risks.",
+          notification: { title: "Review ready", body: event.pull_request.title },
         });
+      },
+    }),
+  ],
+}));
+
+/** @displayname Close pull request chats */
+export const closePullRequestChats = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("github.pull_request", { where: { payload: { body: { action: "closed" } } } })],
+  steps: [
+    /** @displayname Close the review chat */
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<TriggerPayload<"github.pull_request">>) => {
+        const event = input.payload.body;
+        const key = "pr-" + event.repository.full_name + "-" + event.number;
+        return host["catamorphic.sessions"].close({ key, idempotencyKey: "closed:" + key });
       },
     }),
   ],
 }));
 \`\`\`
 
+### A chat per Slack thread
+
+Mentions of the Slack app become one project chat per thread, keyed
+\`slack:<channel>:<thread_ts>\`, and the agent's settled reply is posted back
+to the thread by a second automation reacting to \`session.turn-changed\`.
+Both recipes, with the trigger library they bind, are in the \`slack\` skill.
+
 ## Session actions and delivery
 
 - inspect/list/history are authorized reads. history is bounded; increase its
-  limit only when needed. Read a child as an ordinary session.
+  limit only when needed. Read a child as an ordinary session. history also
+  returns the chat's key, and through: "<messageId>" ends it at that message,
+  so a workflow on session.turn-changed reads exactly the reply the event's
+  detail.resultMessageId names, even after later turns.
 - deliver message_only records context without a model turn; next_turn starts
   work when idle or queues behind the active turn; interrupt requests a course
   change. The host preserves origin in model input and in visible history.
@@ -255,12 +283,35 @@ export const reviewPullRequests = defineWorkflow(({ defineBoundary }) => ({
   project chat that everyone whose role reaches the agent can read and continue,
   or one member's chat with audience: { member: "<id>" } (a current member; use
   an id from an event or a lookup, never a guess). A project chat runs as the
-  project, with the enablement's connections, not as any person. Grant the
-  project agent and its required connections/Environment. Reaching a chat that
+  project, not as any person: it runs in its agent's Environment and uses that
+  Environment's committed service bindings (never a member's connection), so
+  the agent definition names the aliases it needs. Reaching a chat that
   is not the run's own (another member's by sessionId or audience) needs
   \`sessions:write\` in the workflow's \`permissions\`; the project chat from a
   member's automation needs \`automations:write\`. Listing everyone's chats
   needs \`sessions:read\`.
+- No one watches a project chat, so name who approves for it: approvers
+  { members: ["<id>"], roles: ["<role>"] } on deliver (a pull request's author
+  and reviewers, an on-call role). When its agent needs approval (a query a
+  server guard escalates, a tool set to ask) they are notified and answer from the chat, and
+  only they can; the agent waits for the Environment's approvals.waitMinutes
+  (30 by default), then continues without it. Without approvers such an
+  action is refused at once.
+- workspace on deliver (and create) starts a chat's checkout at a ref of the
+  project's linked remote: a branch, tag, commit, or full ref such as
+  refs/pull/42/head. The host fetches it with the remote's own credentials; the
+  sandbox never holds them. Delivered again to an open chat it moves the
+  checkout before the next turn: update "rebase" (default) keeps the agent's
+  work on top of the new base, "reset" discards it. The agent is told what
+  changed, and a conflicting rebase changes nothing and says so. A chat
+  working in a person's own project folder first gets its own worktree; that
+  folder is never reset.
+- Git inside a chat's sandbox reaches remotes through the gateway when the
+  chat's Environment binds a Git connection (a binding with git.repositories
+  and git.push rules): plain git fetch and git push origin work, with the
+  session's grant, never the remote's credential. Pushes go to work/* branches
+  (or the binding's push rules); the default branch, deletes, and anything
+  without git:write are refused with a readable Git error.
 - spawn respects the source agent's configured delegation routes. Fresh context
   is the default. fork explicitly copies transcript history; create makes an
   independent conversation. Do not simulate children as untracked shell agents.

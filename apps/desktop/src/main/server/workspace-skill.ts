@@ -70,8 +70,9 @@ wait on. Each runs in its own terminal, shown as a chip on your chat that the pe
 can open to watch. It survives the turn, and this chat receives a message when it
 finishes. Add wake_on_output (a regular expression) to also hear about a line, such
 as a server's "ready" or an "error". Keep working meanwhile. Never loop on sleep.
-read_background_output returns new output since your last read, and wait_seconds
-blocks for news when you have nothing else to do. stop_background_command ends it.
+read_background_output returns new output since your last read; wait_seconds
+blocks for news when you have nothing else to do, and wait_for waits for a
+matching line, such as a server's "ready". stop_background_command ends it.
 Stop what you no longer need, and leave a dev server running when the person will
 use it. Open its terminal with open_surface and its key when output is worth their
 attention.
@@ -132,8 +133,10 @@ host preview. Publishing requires publish: true and is separate from preview.
 Attached checkouts follow the user's/project's commit instructions. Managed
 projects may checkpoint and sync automatically. Do not commit just to save work.
 Discover sync_project and create_pull_request for managed linked-remote operations;
-they preserve the host's sync, checkout and conflict policies. Do not substitute
-raw push/pull for managed sync. Unrelated repository tasks may use ordinary git.
+they preserve the host's sync, checkout and conflict policies. Work never pushes
+to a repository it did not create: sync only pulls there, and local commits are
+shared as a work/ branch with create_pull_request. Do not substitute raw push/pull
+for managed sync. Unrelated repository tasks may use ordinary git.
 
 Discover the required connection by service name, then its tools. Authentication
 stays in the host UI. Discover request_connection for a missing service; never ask

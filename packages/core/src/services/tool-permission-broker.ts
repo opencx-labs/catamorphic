@@ -28,6 +28,12 @@ export interface PendingToolPermission {
   request: ToolPermissionRequest;
   createdAt: string;
   expiresAt: string;
+  /**
+   * The people who answer this ask, an unattended chat's approvers (ADR
+   * 0176): only they see and answer it. Absent, whoever may change the
+   * chat does.
+   */
+  approvers?: string[];
 }
 
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   type ConnectedMcpServer,
@@ -50,17 +51,17 @@ import {
 } from "ai";
 import { z } from "zod";
 import {
-  runShell,
-  SHELL_DEFAULT_TIMEOUT_MS,
-  SHELL_MAX_TIMEOUT_MS,
+  type ShellProvider,
   type ShellState,
+  shellTools,
+  stopBackgroundCommands,
 } from "./shell.js";
 import { agentTelemetry } from "./telemetry.js";
 import { turnContextMessages } from "./turn-context.js";
 
 const DEFAULT_INSTRUCTIONS = `You are an agent working with a person in their project folder, which can hold any kind of work: documents, notes, data, code, automations, apps.
 Use the provided tools to inspect and edit the project in your working directory.
-Read AGENTS.md and relevant .catamorphic/skills/*/SKILL.md and .agents/skills/*/SKILL.md files, when they exist, before making substantial changes.
+Read AGENTS.md and relevant .work/skills/*/SKILL.md and .agents/skills/*/SKILL.md files, when they exist, before making substantial changes.
 Keep changes focused, run relevant checks, and do not commit changes.
 At the start of a new conversation, once the topic is clear from the first user message, call set_title with a concise conversation title; update it whenever the current title no longer fits the conversation, but not for minor detours.`;
 const MAX_TOOL_OUTPUT_LENGTH = 100_000;
@@ -71,15 +72,24 @@ const WEBFETCH_TIMEOUT_MS = 30_000;
 export interface AiSdkCodingAgentOpts {
   /** AI SDK model supplied and configured by the host application. */
   model: LanguageModel;
-  /** Provider for the remote development sandbox that contains the project. */
-  sandboxProvider: Pick<
-    SandboxProvider,
-    "executeCommand" | "uploadFiles" | "downloadFile"
-  >;
+  /**
+   * Provider for the remote development sandbox that contains the project.
+   * With `processes`, the agent gets background commands and foreground
+   * commands bounded by the Environment's budget (ADR 0174).
+   */
+  sandboxProvider: ShellProvider &
+    Pick<SandboxProvider, "uploadFiles" | "downloadFile">;
   /** Optional host-owned staging directory for plugin docs, outside a native checkout. */
   pluginDirectory?: string;
   /** Host-level instructions prepended to every session. */
   instructions?: string;
+  /**
+   * Directories outside the working directory that the `read` tool may read
+   * (never write or edit), resolved per session from its project: e.g. the
+   * host's store of files pasted into the chat. Paths are in the sandbox
+   * provider's filesystem, as the working directory is.
+   */
+  readableRoots?: (context: { projectId: string }) => readonly string[];
   /**
    * Default reasoning effort, mapped onto the provider's native knob
    * (Anthropic thinking budgets, OpenAI reasoning effort). Overridable per
@@ -159,6 +169,8 @@ interface AiSdkSessionState {
   projectId: string;
   instructions: string;
   tools: ReturnType<typeof createTools>;
+  /** The shell the tools share; its background commands end with the chat. */
+  toolContext: ToolContext;
   messages: ModelMessage[];
   sandboxId: string;
   workingDirectory: string;
@@ -329,18 +341,25 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       );
     }
 
+    const toolContext: ToolContext = {
+      provider: sandboxProvider,
+      sandboxId: opts.sandboxId,
+      workingDirectory: opts.workingDirectory,
+      readableRoots:
+        this.opts.readableRoots?.({ projectId: opts.projectId }) ?? [],
+      shell: {},
+      ...(opts.commandTimeoutSeconds
+        ? { budgetSeconds: opts.commandTimeoutSeconds }
+        : {}),
+    };
     this.sessions.set(providerSessionId, {
       sessionId: opts.sessionId,
       userId: opts.userId,
       projectId: opts.projectId,
       instructions,
+      toolContext,
       tools: createTools(
-        {
-          provider: sandboxProvider,
-          sandboxId: opts.sandboxId,
-          workingDirectory: opts.workingDirectory,
-          shell: {},
-        },
+        toolContext,
         this.opts.extraTools ?? [],
         {
           projectId: opts.projectId,
@@ -701,9 +720,15 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     this.sessions.delete(session.providerSessionId);
     if (state) {
       state.abort?.abort();
-      await Promise.all(
-        state.scopedMcp.map((server) => server.close().catch(() => {})),
-      );
+      await Promise.all([
+        ...state.scopedMcp.map((server) => server.close().catch(() => {})),
+        // A closed chat leaves nothing running (ADR 0174).
+        stopBackgroundCommands({
+          provider: state.toolContext.provider,
+          sandboxId: state.toolContext.sandboxId,
+          state: state.toolContext.shell,
+        }),
+      ]);
       state.scopedMcp = [];
     }
   }
@@ -794,14 +819,16 @@ function effortProviderOptions(effort: AgentEffort) {
 }
 
 interface ToolContext {
-  provider: Pick<
-    SandboxProvider,
-    "executeCommand" | "uploadFiles" | "downloadFile"
-  >;
+  provider: ShellProvider &
+    Pick<SandboxProvider, "uploadFiles" | "downloadFile">;
   sandboxId: string;
   workingDirectory: string;
-  /** Where the next shell command starts; `cd` persists between calls. */
+  /** Read-only directories beside the working directory. */
+  readableRoots: readonly string[];
+  /** Where the next shell command starts and this chat's background commands. */
   shell: ShellState;
+  /** The Environment's budget for one foreground command (ADR 0174). */
+  budgetSeconds?: number;
 }
 
 /**
@@ -876,11 +903,32 @@ class McpPool {
   }
 }
 
+/** Model APIs take tool names of at most 64 letters, digits, `_` and `-`. */
+const MODEL_TOOL_NAME_MAX = 64;
+
 /**
- * MCP server tools → ai-sdk dynamic tools named `mcp__<server>__<tool>`
- * (the same namespacing Claude Code uses, so events read alike across
- * harnesses). Results are flattened text; errors surface as tool errors.
+ * The name the model calls an MCP tool by: `mcp__<server>__<tool>`, with
+ * what model APIs refuse (MCP allows dots, `chat.postMessage`) as `_`. A
+ * name that is too long, or already names another tool (`a.b` beside
+ * `a_b`), ends in a short hash of the server and tool instead.
  */
+export function mcpModelToolName(args: {
+  server: string;
+  tool: string;
+  taken: Readonly<Record<string, unknown>>;
+}): string {
+  const safeServer = args.server.replace(/[^A-Za-z0-9-]+/g, "_");
+  const safeTool = args.tool.replace(/[^A-Za-z0-9_-]+/g, "_");
+  const name = `mcp__${safeServer}__${safeTool}`;
+  if (name.length <= MODEL_TOOL_NAME_MAX && !Object.hasOwn(args.taken, name))
+    return name;
+  const hash = createHash("sha256")
+    .update(`${args.server}\0${args.tool}`)
+    .digest("hex")
+    .slice(0, 8);
+  return `${name.slice(0, MODEL_TOOL_NAME_MAX - hash.length - 1)}_${hash}`;
+}
+
 /** Resolves (tool may run) or throws (refused/declined) before a call. */
 type McpToolGate = (
   server: string,
@@ -890,6 +938,11 @@ type McpToolGate = (
   abortSignal?: AbortSignal,
 ) => Promise<void>;
 
+/**
+ * MCP server tools → ai-sdk dynamic tools named `mcp__<server>__<tool>`
+ * (the same namespacing Claude Code uses, so events read alike across
+ * harnesses). Results are flattened text; errors surface as tool errors.
+ */
 function buildMcpTools(
   /** The roster to declare tools from. */
   connections: Map<string, ConnectedMcpServer>,
@@ -901,9 +954,14 @@ function buildMcpTools(
 ): Record<string, Tool> {
   const tools: Record<string, Tool> = {};
   for (const [serverName, roster] of connections) {
-    const safeServer = serverName.replace(/[^A-Za-z0-9-]+/g, "_");
     for (const info of roster.tools) {
-      tools[`mcp__${safeServer}__${info.name}`] = dynamicTool({
+      // Calls use `info.name`; the model sees a name its API accepts.
+      const name = mcpModelToolName({
+        server: serverName,
+        tool: info.name,
+        taken: tools,
+      });
+      tools[name] = dynamicTool({
         description: info.description,
         inputSchema: jsonSchema<Record<string, unknown>>(
           info.inputSchema as Parameters<typeof jsonSchema>[0],
@@ -1089,18 +1147,29 @@ function createTools(
     );
     return result;
   };
+  const within = (resolved: string, directory: string) => {
+    const root = path.posix.resolve(directory);
+    return resolved === root || resolved.startsWith(`${root}/`);
+  };
   const resolvePath = (filePath: string): string => {
     const workingDirectory = path.posix.resolve(context.workingDirectory);
     const resolved = path.posix.resolve(workingDirectory, filePath);
-    if (
-      resolved !== workingDirectory &&
-      !resolved.startsWith(`${workingDirectory}/`)
-    ) {
+    if (!within(resolved, workingDirectory)) {
       throw new Error(
         `Path escapes the project working directory: ${filePath}`,
       );
     }
     return resolved;
+  };
+  /** The working directory, or a read-only root the host shares. */
+  const resolveReadablePath = (filePath: string): string => {
+    const resolved = path.posix.resolve(
+      path.posix.resolve(context.workingDirectory),
+      filePath,
+    );
+    if (context.readableRoots.some((root) => within(resolved, root)))
+      return resolved;
+    return resolvePath(filePath);
   };
 
   return {
@@ -1130,7 +1199,8 @@ function createTools(
       ]),
     ),
     read: tool({
-      description: "Read a UTF-8 text file from the project.",
+      description:
+        "Read a UTF-8 text file from the project, or a file the user attached by its absolute path.",
       inputSchema: z.object({
         path: z.string().describe("Project-relative or absolute file path"),
       }),
@@ -1138,7 +1208,7 @@ function createTools(
         truncateToolOutput(
           await context.provider.downloadFile(
             context.sandboxId,
-            resolvePath(filePath),
+            resolveReadablePath(filePath),
           ),
         ),
     }),
@@ -1241,34 +1311,14 @@ function createTools(
         blocking: z.literal(true).default(true),
       }),
     }),
-    bash: tool({
-      description: `Run a shell command and wait for it to finish. The working directory persists between calls (a \`cd\` carries over); it starts in the project folder. Output combines stdout and stderr; long output keeps its start and end. Default timeout ${SHELL_DEFAULT_TIMEOUT_MS / 1000}s, at most ${SHELL_MAX_TIMEOUT_MS / 1000}s. For servers, watchers and anything long-lived, use run_background_command instead when it is available. Quote paths with spaces. Prefer read/edit/write for files.`,
-      inputSchema: z.object({
-        command: z.string().describe("The command to run"),
-        description: z
-          .string()
-          .optional()
-          .describe(
-            "What this command does in 5-10 plain words, e.g. 'Run the test suite'. Shown to the person as what you're doing.",
-          ),
-        timeout: z
-          .number()
-          .int()
-          .positive()
-          .max(SHELL_MAX_TIMEOUT_MS)
-          .optional()
-          .describe(`Milliseconds (max ${SHELL_MAX_TIMEOUT_MS})`),
-      }),
-      execute: async ({ command, timeout }, { abortSignal }) =>
-        runShell({
-          provider: context.provider,
-          sandboxId: context.sandboxId,
-          root: context.workingDirectory,
-          state: context.shell,
-          command,
-          ...(timeout !== undefined ? { timeoutMs: timeout } : {}),
-          ...(abortSignal ? { signal: abortSignal } : {}),
-        }),
+    ...shellTools({
+      provider: context.provider,
+      sandboxId: context.sandboxId,
+      root: () => context.workingDirectory,
+      state: context.shell,
+      ...(context.budgetSeconds
+        ? { budgetSeconds: context.budgetSeconds }
+        : {}),
     }),
   };
 }

@@ -673,6 +673,9 @@ export function DockHost({
                 onArchive={() => invoke(chat, { kind: "archive" })}
                 onEditModel={() => invoke(chat, { kind: "editModel" })}
                 onEditEffort={() => invoke(chat, { kind: "editEffort" })}
+                onEditPermissionMode={() =>
+                  invoke(chat, { kind: "editPermissionMode" })
+                }
                 onOpenParent={
                   chat.fork ? () => invoke(chat, { kind: "parent" }) : undefined
                 }

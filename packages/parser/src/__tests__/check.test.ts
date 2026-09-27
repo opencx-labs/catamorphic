@@ -30,9 +30,9 @@ const APP_MANIFEST = JSON.stringify({ name: "dashboard", private: true });
 
 function projectFiles(extra: Record<string, string> = {}) {
   return {
-    ".catamorphic/workflows/src/orders.ts": WORKFLOW,
-    ".catamorphic/workflows/src/app-api.ts": APP_API,
-    ".catamorphic/apps/dashboard/package.json": APP_MANIFEST,
+    ".work/workflows/src/orders.ts": WORKFLOW,
+    ".work/workflows/src/app-api.ts": APP_API,
+    ".work/apps/dashboard/package.json": APP_MANIFEST,
     ...extra,
   };
 }
@@ -74,7 +74,7 @@ describe("checkProject", () => {
 
   it("fails on parse errors, including non-constant trigger config", () => {
     const result = checkProject({
-      ".catamorphic/workflows/src/bad.ts": `
+      ".work/workflows/src/bad.ts": `
 const description = "computed";
 export const bad = defineWorkflow(({ defineBoundary }) => ({
   triggers: [trigger("ai.tool-call", { description })],
@@ -126,6 +126,61 @@ export const bad = defineWorkflow(({ defineBoundary }) => ({
     expect(badConfig.findings[0]?.message).toContain("onlyPriority");
   });
 
+  it("applies the host's webhook settings rules without a host", () => {
+    const hook = (name: string, config: string) => `
+export const ${name} = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("webhook", ${config})],
+  steps: [defineBoundary({ run: async ({ input }: BoundaryContext<{ id: string }>) => input })],
+}));
+`;
+    const result = checkProject({
+      ".work/triggers/github.ts": `
+import { defineTrigger, trigger } from "@catamorphic/workflow";
+export const github = defineTrigger({
+  name: "github",
+  from: trigger("webhook", {
+    name: "github",
+    verify: { scheme: "hmac", secret: "GITHUB_SECRET", header: "x-hub-signature-256", prefix: "sha256=" },
+  }),
+});
+`,
+      ".work/workflows/src/hooks.ts": [
+        `import { type BoundaryContext, defineWorkflow, trigger } from "@catamorphic/workflow";`,
+        hook(
+          "placeholder",
+          `{ name: "a", verify: { scheme: "hmac", secret: "S", header: "h", content: "{nope}" } }`,
+        ),
+        hook(
+          "unsignedTimestamp",
+          `{ name: "b", verify: { scheme: "hmac", secret: "S", header: "h", timestamp: { header: "t" } } }`,
+        ),
+        hook(
+          "bothLocations",
+          `{ name: "c", verify: { scheme: "token", secret: "S", header: "h", query: "q" } }`,
+        ),
+        hook(
+          "badHandshake",
+          `{ name: "d", respond: [{ when: { body: { type: { $exist: true } } }, echo: "body.challenge" }] }`,
+        ),
+        hook("viaKind", `{ name: "github" }`),
+        `
+export const viaProjectKind = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("github")],
+  steps: [defineBoundary({ run: async ({ input }: BoundaryContext<{ id: string }>) => input })],
+}));
+`,
+      ].join("\n"),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.findings.map((finding) => finding.message)).toEqual([
+      "Workflow 'placeholder' trigger 'webhook': config.verify.content: Unknown placeholder {nope}; use {body}, {timestamp} or {header:<name>}",
+      "Workflow 'unsignedTimestamp' trigger 'webhook': config.verify.timestamp: A timestamp only rejects replays when the signed content includes {timestamp}",
+      "Workflow 'bothLocations' trigger 'webhook': config.verify: Name exactly one of header or query",
+      "Workflow 'badHandshake' trigger 'webhook': config.respond.0.when: when.body.type.$exist is not an operator; use $exists or $prefix",
+      "Workflows 'viaKind' and 'viaProjectKind' bind webhook 'github' with different settings (verify, respond, deliveryId, maxBodyBytes); declare the webhook once in a project trigger kind",
+    ]);
+  });
+
   it("validates template holes against the derived input schema", () => {
     const toolKind = {
       name: "ai.tool-call",
@@ -137,7 +192,7 @@ export const bad = defineWorkflow(({ defineBoundary }) => ({
       payloadJsonSchema: { "x-catamorphic-hole": "Args" },
     };
     const files = (input: string) => ({
-      ".catamorphic/workflows/src/tool.ts": `
+      ".work/workflows/src/tool.ts": `
 import { type BoundaryContext, defineWorkflow, trigger } from "@catamorphic/workflow";
 
 export const searchTool = defineWorkflow(({ defineBoundary }) => ({

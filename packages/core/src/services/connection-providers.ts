@@ -15,6 +15,8 @@ export type AuthorizationChallenge =
         label: string;
         secret: boolean;
         required: boolean;
+        /** Keeps line breaks, as a PEM key or a JSON document needs. */
+        multiline?: boolean;
       }[];
     };
 
@@ -57,20 +59,87 @@ export function isConnectionAuthorizationExpiredError(
   );
 }
 
+/** HTTP Basic credentials for one Git remote, used once by the gateway. */
+export interface GitRemoteCredentials {
+  username: string;
+  password: string;
+  /** When the password stops working, for minted credentials. */
+  expiresAt?: Date;
+}
+
+/**
+ * A provider that can serve Git smart HTTP through the gateway (ADR 0175).
+ * The gateway, never the sandbox, asks for credentials per remote and per
+ * access level, and forwards Git traffic with them. Host-neutral: a code
+ * host provider mints repository-scoped tokens, a plain Git provider may
+ * return a stored password.
+ */
+export interface ConnectionGitRemotes {
+  /** HTTPS URL prefixes of the remotes served, e.g. `https://github.com/`. */
+  readonly remoteBaseUrls: readonly string[];
+  credentials(args: {
+    material: Uint8Array;
+    /** HTTPS remote URL under one of `remoteBaseUrls`. */
+    remoteUrl: string;
+    access: "read" | "write";
+  }): Promise<GitRemoteCredentials>;
+}
+
+/** The HTTP API family a model connection speaks (ADR 0180). */
+export type ModelApi = "anthropic" | "openai";
+
+/**
+ * A provider whose connection holds a model provider's key (ADR 0180).
+ * Harnesses in sandboxes reach its HTTP API through the gateway's model
+ * routes with their session grant; the gateway adds the stored key.
+ */
+export interface ConnectionModelEndpoint {
+  /**
+   * The API family behind `baseUrl`: the shape of the gateway's refusals
+   * and how it reads usage from answers. `anthropic`: Messages. `openai`:
+   * Responses and Chat Completions. The gateway forwards any path below
+   * `baseUrl` either way.
+   */
+  readonly api: ModelApi;
+  /**
+   * Where the API's paths go, e.g. `https://api.anthropic.com` or
+   * `https://api.openai.com/v1` (an OpenAI-compatible server's base).
+   */
+  readonly baseUrl: string;
+  /** The headers that carry the stored key on one upstream request. */
+  headers(args: { material: Uint8Array }): Record<string, string>;
+}
+
 export interface ConnectionProvider {
   readonly kind: string;
   readonly displayName: string;
+  /** Present when the gateway may forward Git traffic for this connection. */
+  readonly git?: ConnectionGitRemotes;
+  /** Present when the connection is a model API the gateway forwards to. */
+  readonly model?: ConnectionModelEndpoint;
+  /**
+   * Start authorizing a member's or a service connection. `projectId` is
+   * absent for a tenant service connection; `externalUserId` is whoever
+   * authorizes (the member, or the administrator for a service).
+   */
   beginAuthorization?(args: {
     tenantId: string;
-    projectId: string;
+    projectId?: string;
     externalUserId: string;
+    /**
+     * Whose authority is being authorized: a member's own account or a
+     * service connection (ADR 0177). A provider may challenge differently,
+     * e.g. GitHub asks a person to sign in but an administrator for an App.
+     */
+    principal: "member" | "service";
     redirectUri: string;
     state: string;
   }): Promise<{ challenge: AuthorizationChallenge; privateState?: Uint8Array }>;
   completeAuthorization?(args: {
     tenantId: string;
-    projectId: string;
+    projectId?: string;
     externalUserId: string;
+    principal: "member" | "service";
     callback: Readonly<Record<string, string>>;
     privateState?: Uint8Array;
   }): Promise<ConnectionAuthorizationResult>;
@@ -79,15 +148,45 @@ export interface ConnectionProvider {
     action: string;
     input: Json;
     capabilities: readonly string[];
+    /**
+     * The connection and credential revision the material belongs to, so a
+     * provider can reuse upstream sessions per credential (ADR 0172).
+     */
+    connection: ConnectionCredentialVersion;
+    /**
+     * For a provider that serves Git: the repositories the binding reaches,
+     * as paths below its remote bases (`org/repo`), the same set the Git
+     * gateway enforces (the binding's `git.repositories`, else the project's
+     * linked remote). A provider whose API addresses repositories refuses
+     * any other; absent reaches none.
+     */
+    repositories?: readonly string[];
   }): Promise<Json>;
   listActions?(args: {
     material: Uint8Array;
     capabilities: readonly string[];
   }): Promise<readonly ConnectionActionDefinition[]>;
+  /**
+   * Whether an action only reads (ADR 0182): a contained agent may call
+   * nothing else. Without it, an action's `readOnlyHint` annotation from
+   * `listActions` decides, and an action without one counts as a write.
+   */
+  readOnly?(action: string): boolean;
   refresh?(args: {
     material: Uint8Array;
   }): Promise<ConnectionAuthorizationResult>;
   revoke?(args: { material: Uint8Array }): Promise<void>;
+  /**
+   * Drop anything held for a connection's earlier credentials (pooled
+   * sessions). Called after rotation, refresh, and revocation.
+   */
+  release?(args: { connectionId: string }): Promise<void>;
+}
+
+export interface ConnectionCredentialVersion {
+  id: string;
+  /** Increments whenever the stored credential changes. */
+  revision: number;
 }
 
 export class ConnectionProviderRegistry {

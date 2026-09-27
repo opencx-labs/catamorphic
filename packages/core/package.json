@@ -22,7 +22,6 @@
     "@catamorphic/app": "workspace:*",
     "@catamorphic/db": "workspace:*",
     "@catamorphic/git": "workspace:*",
-    "@catamorphic/github": "workspace:*",
     "@catamorphic/otel": "workspace:*",
     "@catamorphic/parser": "workspace:*",
     "@catamorphic/plugins": "workspace:*",

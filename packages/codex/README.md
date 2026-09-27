@@ -37,7 +37,7 @@ fallback after a denied write. A host with project-editing tools can handle
 an authorized skill edit through that existing surface.
 
 The owner's `.agents/skills` are discovered natively by Codex. Catamorphic
-project skills live in `.catamorphic/skills`; the host exposes them through
+project skills live in `.work/skills`; the host exposes them through
 the same skill listing and `read_skill` surfaces as host skills. Text attachments retain their context;
 images use SDK `local_image` inputs, and documents are staged as readable local
 files. All staged bytes are removed when the turn ends or startup fails.

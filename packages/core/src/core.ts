@@ -7,6 +7,7 @@ import type {
   SandboxProvider,
 } from "@catamorphic/sandbox";
 import { instrumentSandboxProvider } from "@catamorphic/sandbox";
+import { PROJECT_SKILLS_DIR } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import type { Identity } from "./identity.js";
 import { HOST_SKILLS, SEED_SKILLS } from "./seeds.js";
@@ -38,6 +39,8 @@ import {
   parseChatDelivery,
 } from "./services/chat-delivery.js";
 import { ClientRunnersService } from "./services/client-runners-service.js";
+import type { CodeHost } from "./services/code-host.js";
+import { CodeHostsService } from "./services/code-hosts-service.js";
 import {
   type CodingAgentRegistry,
   isCodingAgentRegistry,
@@ -51,6 +54,7 @@ import {
   type ConnectionProvider,
   ConnectionProviderRegistry,
 } from "./services/connection-providers.js";
+import type { EnvironmentConnectionBinding } from "./services/connection-types.js";
 import { ConnectionsService } from "./services/connections-service.js";
 import type { CredentialVault } from "./services/credential-vault.js";
 import { DbSandboxStore } from "./services/db-sandbox-store.js";
@@ -67,13 +71,13 @@ import { ExecutionAllocationsService } from "./services/execution-allocations-se
 import { ExecutionEnvironmentsService } from "./services/execution-environments-service.js";
 import { ExecutionJobsService } from "./services/execution-jobs-service.js";
 import { ExecutionWorkerService } from "./services/execution-worker-service.js";
-import { GithubProjectEventSource } from "./services/github-event-source.js";
-import {
-  GithubService,
-  type GithubServiceConfig,
-} from "./services/github-service.js";
+import { GitGatewayService } from "./services/git-gateway.js";
 import { executeHostCall } from "./services/host-calls.js";
 import { MembershipsService } from "./services/memberships-service.js";
+import {
+  dbModelGatewayStore,
+  ModelGatewayService,
+} from "./services/model-gateway.js";
 import { PluginsService } from "./services/plugins-service.js";
 import { ProjectEnvironmentsService } from "./services/project-environments-service.js";
 import { ProjectEventDispatcher } from "./services/project-event-dispatcher.js";
@@ -106,6 +110,7 @@ import {
 import { SessionArtifactsService } from "./services/session-artifacts-service.js";
 import type { SessionMailboxesService } from "./services/session-mailboxes-service.js";
 import { SessionSyncService } from "./services/session-sync-service.js";
+import { SessionWorkspaces } from "./services/session-workspaces.js";
 import { SkillsService } from "./services/skills-service.js";
 import { TenantPoliciesService } from "./services/tenant-policies-service.js";
 import type { ToolPermissionChannel } from "./services/tool-permission-broker.js";
@@ -136,7 +141,7 @@ export interface CatamorphicCoreConfig {
    */
   heldWorkerNodes?: () => readonly { id: string; token: string }[];
   /**
-   * How long a project's parsed `.catamorphic/roles/*.json` set is trusted before it is
+   * How long a project's parsed `.work/roles/*.json` set is trusted before it is
    * re-read from the shared origin (ADR 0055). Role *definitions* may lag
    * by this much; membership is read fresh on every resolve. Default 10s.
    */
@@ -148,13 +153,6 @@ export interface CatamorphicCoreConfig {
    * text and the search index always stay in the database.
    */
   documentBlobStore?: DocumentBlobStore;
-  /**
-   * The identity whose code-host connection opens pull requests for members'
-   * proposals (ADR 0055) — the organisation's bot account, connected to
-   * GitHub like any user. Absent = proposals land as branches on the
-   * project origin only.
-   */
-  proposalBot?: Identity;
   /**
    * Pull the caller's `store/` view into the agent's folder before each
    * turn and ship its writes after (ADR 0055). Default on. Hosts whose
@@ -174,21 +172,56 @@ export interface CatamorphicCoreConfig {
   /** Host-side external-system drivers. Requires `credentialVault`. */
   connectionProviders?: readonly ConnectionProvider[];
   /**
+   * Connection aliases the host offers in an Environment beside the ones
+   * committed in `.work/project.json` (ADR 0172), such as a desktop's own
+   * profile MCP servers (ADR 0086). A committed alias of the same name wins.
+   */
+  connectionBindings?: (args: {
+    tenantId: string;
+    projectId: string;
+    environment: string;
+  }) => Promise<Readonly<Record<string, EnvironmentConnectionBinding>>>;
+  /**
    * Checks every brokered connection action from agents and workflows (ADR
    * 0162). Escalations ask the agent session's person via `toolPermissions`.
+   * Guards are host code (ADR 0183).
    */
   connectionGuards?: readonly ConnectionActionGuard[];
+  /**
+   * How long one connection guard may take before its action escalates to a
+   * person (default 30 seconds). A throwing guard always denies.
+   */
+  connectionGuardTimeoutMs?: number;
   /** Re-resolve current member authority for workflow dispatch and agent capabilities. */
   resolveMemberIdentity?: (args: {
     tenantId: string;
     projectId: string;
     externalUserId: string;
   }) => Promise<Identity | null>;
+  /**
+   * Where sandboxes reach the control plane: its public URL's host and port
+   * (`work.acme.com:443`, see `gatewayHostOf`; a bare host allows every
+   * port). An Environment with restricted egress always reaches them, and
+   * `egress: "gateway"` reaches nothing else (ADR 0176).
+   */
+  gatewayHosts?: readonly string[];
   /** Reachable control-plane endpoint for allocation-bound agent MCP grants. */
   connectionMcpUrl?: (args: {
     projectId: string;
     sessionId: string;
     alias: string;
+  }) => string | undefined;
+  /**
+   * The gateway's base URL as a session's sandbox reaches it (ADRs 0175,
+   * 0180), e.g. `https://work.example.com/api/gateway`, where the host
+   * mounts the plugin's gateway routes. Sandboxes get Git configured for
+   * `<gatewayUrl>/git/<alias>/` and harnesses reach models at
+   * `<gatewayUrl>/model/<alias>/`. Absent, Git and model aliases are not
+   * offered to sandboxes.
+   */
+  gatewayUrl?: (args: {
+    projectId: string;
+    sessionId: string;
   }) => string | undefined;
   pluginResolver?: PluginResolver;
   /**
@@ -246,11 +279,13 @@ export interface CatamorphicCoreConfig {
   /** Hard cap on a built app bundle (js + css). Defaults to 5 MiB. */
   maxAppBundleBytes?: number;
   /**
-   * GitHub App registration for repo import + push-back. Hosts bring their
-   * own app (client id, and the secret when using the server web flow).
-   * Without it, the GitHub surfaces are unavailable.
+   * Code hosts over connections (ADRs 0044, 0177): pull requests and
+   * repositories for remotes a connection provider serves with Git. Each
+   * names a registered `connectionProviders` kind. Sync, pull requests,
+   * proposals, import, and publishing act through the caller's own
+   * connection to that provider, else the service connection named like it.
    */
-  github?: GithubServiceConfig;
+  codeHosts?: readonly CodeHost[];
   /**
    * Host-defined trigger kinds. Workflows subscribe with
    * `triggers: [trigger("kind", config)]`; the host fires a kind with a
@@ -267,6 +302,12 @@ export interface CatamorphicCoreConfig {
    * kind named here. Every named kind must appear in `triggerKinds`.
    */
   mcpToolKinds?: readonly McpToolKindSpec[];
+  /**
+   * Project webhook intake (ADRs 0156, 0171). `maxBodyBytes` is the largest
+   * body any endpoint may accept (default 1 MiB, at most 64 MiB); a
+   * workflow's `trigger("webhook", { maxBodyBytes })` may ask for up to it.
+   */
+  webhooks?: { maxBodyBytes?: number };
   /**
    * Fires after a coding-agent chat turn settles (completed, failed, or
    * awaiting input). Host-owned; a natural place to fire a chat trigger
@@ -298,7 +339,7 @@ export interface CatamorphicCoreConfig {
   projectSeeds?: (defaults: Record<string, string>) => Record<string, string>;
   /**
    * Transform the default host-tier skills (ADR 0049): playbooks the host
-   * ships, listed alongside a project's own `.catamorphic/skills/` without being
+   * ships, listed alongside a project's own `.work/skills/` without being
    * written into the project repo. Receives the framework defaults keyed by
    * `<name>/SKILL.md`; return the final map. Replacing or removing entries
    * is legitimate. A project skill with the same name shadows a host skill.
@@ -362,7 +403,13 @@ export class CatamorphicCore {
   readonly connectionAdmission?: ConnectionAdmissionService;
   readonly connectionBroker?: ConnectionBroker;
   readonly connectionGrants?: ConnectionCapabilityGrantsService;
-  /** Committed `.catamorphic/roles/*.json` and their expansion into identities (ADR 0055). */
+  /** Git smart HTTP for sandboxes, authorized by session grants (ADR 0175). */
+  readonly gitGateway?: GitGatewayService;
+  /** Models through the gateway for sandbox harnesses (ADR 0180). */
+  readonly modelGateway?: ModelGatewayService;
+  /** Workspaces at a ref of a project's linked remote (ADR 0178). */
+  readonly sessionWorkspaces: SessionWorkspaces;
+  /** Committed `.work/roles/*.json` and their expansion into identities (ADR 0055). */
   readonly roles: RolesService;
   /** Stock `user → roles + grants` per project (ADR 0055). */
   readonly memberships: MembershipsService;
@@ -370,7 +417,7 @@ export class CatamorphicCore {
   readonly documents: DocumentsService;
   /** Propose-a-change: member edits as branches/PRs on their behalf (ADR 0055). */
   readonly proposals: ProposalsService;
-  /** Whether proposals open pull requests (a proposalBot is configured). */
+  /** Whether proposals can open pull requests (a code host is configured). */
   readonly proposalsOpenPullRequests: boolean;
   /** Publications: documents served to an audience at a stable URL (ADR 0055). */
   readonly publications: PublicationsService;
@@ -379,6 +426,7 @@ export class CatamorphicCore {
   readonly plugins?: PluginsService;
   readonly secrets?: SecretsService;
   readonly runPluginsLoader: RunPluginsLoader;
+  private connectionProviderRegistry?: ConnectionProviderRegistry;
   /** A project member's current identity: the host's resolver, else stock memberships. */
   private readonly resolveMember: (args: {
     tenantId: string;
@@ -401,7 +449,8 @@ export class CatamorphicCore {
   readonly apps?: AppsService;
   readonly sessionArtifacts: SessionArtifactsService;
   readonly appPolicies: AppPoliciesService;
-  readonly github?: GithubService;
+  /** Pull requests and repositories through connections (ADR 0177). */
+  readonly codeHosts: CodeHostsService;
   readonly remoteSync: RemoteSyncService;
   readonly notifications: UserNotificationsService;
   readonly appStorage: AppStorageService;
@@ -427,7 +476,7 @@ export class CatamorphicCore {
     this.seedFiles = config.projectSeeds?.({ ...SEED_SKILLS }) ?? SEED_SKILLS;
     // Imported repositories stay untouched. Offer their missing framework
     // skills through the existing host tier; project/user skills still win.
-    const skillPrefix = ".catamorphic/skills/";
+    const skillPrefix = `${PROJECT_SKILLS_DIR}/`;
     const defaultHostSkills = {
       ...Object.fromEntries(
         Object.entries(this.seedFiles)
@@ -549,12 +598,37 @@ export class CatamorphicCore {
                 : {}),
             },
           };
+          const nameApprovers = async (owner: Identity, sessionId: string) => {
+            const approvers = input.approvers;
+            if (!approvers || !this.agentSessions) return;
+            for (const member of approvers.members ?? [])
+              if (
+                !(await this.resolveMember({
+                  tenantId: owner.tenantId,
+                  projectId: context.projectId,
+                  externalUserId: member,
+                }))
+              )
+                throw new Error(
+                  `Approver ${member} is not a member of this project`,
+                );
+            await this.agentSessions.setApprovers({
+              identity: owner,
+              projectId: context.projectId,
+              sessionId,
+              approvers,
+            });
+          };
           if ("sessionId" in input) {
+            await nameApprovers(context.caller, input.sessionId);
             const receipt = await this.agentSessions.deliver(
               context.caller,
               context.projectId,
               input.sessionId,
-              message,
+              {
+                ...message,
+                ...(input.workspace ? { workspace: input.workspace } : {}),
+              },
             );
             return {
               ...receipt,
@@ -562,47 +636,45 @@ export class CatamorphicCore {
               sessionCreated: false,
             };
           }
-          // A chat named by key belongs to whoever the automation serves.
+          // A chat named by key belongs to whoever the automation serves;
+          // the key belongs to the project, so every automation in it
+          // reaches the same chat (ADR 0173).
           const run = await this.db
             .selectFrom("workflow_runs")
-            .select(["workflow_enablement_id", "environment_name"])
+            .select("workflow_enablement_id")
             .where("id", "=", context.runId)
             .executeTakeFirst();
           const enablement = run?.workflow_enablement_id
             ? await this.db
                 .selectFrom("workflow_enablements")
-                .select([
-                  "owner_kind",
-                  "owner_external_user_id",
-                  "environment_name",
-                ])
+                .select(["owner_kind", "owner_external_user_id"])
                 .where("id", "=", run.workflow_enablement_id)
                 .executeTakeFirstOrThrow()
             : undefined;
-          const environment =
-            enablement?.environment_name ??
-            input.environment ??
-            run?.environment_name ??
-            undefined;
           const owner = await chatOwner({
             caller: context.caller,
             projectId: context.projectId,
             audience: input.audience,
             enablement,
-            environment,
             resolveMember: this.resolveMember,
           });
+          // Placed by its own Environment, never the run's: the one this
+          // delivery names, else the agent's preferred, else the project
+          // default.
           const chat = await this.agentSessions.chatForKey(
             owner,
             context.projectId,
             {
-              chatKey: JSON.stringify([context.workflowName, input.key]),
+              key: input.key,
+              workflowName: context.workflowName,
               ...(input.agentSlug ? { agentSlug: input.agentSlug } : {}),
-              ...(environment ? { environment } : {}),
+              ...(input.environment ? { environment: input.environment } : {}),
               ...(input.title ? { title: input.title } : {}),
+              ...(input.workspace ? { workspace: input.workspace } : {}),
               origin,
             },
           );
+          await nameApprovers(owner, chat.sessionId);
           const receipt = await this.agentSessions.deliver(
             owner,
             context.projectId,
@@ -626,6 +698,9 @@ export class CatamorphicCore {
     this.projectEvents = new ProjectEventsService(this.db);
     this.webhooks = new WebhooksService(this.db, {
       events: this.projectEvents,
+      ...(config.webhooks?.maxBodyBytes !== undefined
+        ? { maxBodyBytes: config.webhooks.maxBodyBytes }
+        : {}),
       secretValue: async ({ projectId, name }) => {
         const project = await this.db
           .selectFrom("projects")
@@ -645,26 +720,7 @@ export class CatamorphicCore {
     this.appStorage = new AppStorageService(this.db);
     this.agentRuntimeEvents = new AgentRuntimeEventsService(this.db);
     this.agentRuntimeRequests = new AgentRuntimeRequestsService(this.db);
-    this.github = config.github
-      ? new GithubService(
-          this.db,
-          this.projectManager,
-          this.projects,
-          config.github,
-          this.projectEvents,
-        )
-      : undefined;
-    this.projectEventSources = [
-      ...(this.github ? [new GithubProjectEventSource(this.github)] : []),
-      ...(config.projectEventSources ?? []),
-    ];
-    // Provider-agnostic remote sync (ADR 0044); code hosts contribute
-    // credentials/capabilities through the CodeHost seam.
-    this.remoteSync = new RemoteSyncService(
-      this.db,
-      this.projectManager,
-      this.github ? [this.github.codeHost] : [],
-    );
+    this.projectEventSources = config.projectEventSources ?? [];
     this.workflows = new WorkflowsService(this.projectManager, this.projects);
     this.projectEnvironments = new ProjectEnvironmentsService(
       this.db,
@@ -687,6 +743,7 @@ export class CatamorphicCore {
               }),
           }
         : undefined,
+      { gatewayHosts: config.gatewayHosts ?? [] },
     );
     this.agentCapabilities = new AgentCapabilitiesService({
       db: this.db,
@@ -697,6 +754,8 @@ export class CatamorphicCore {
       resolveMemberIdentity: config.resolveMemberIdentity,
       // Constructed below; read at call time.
       memberRoles: (args) => this.memberships.describeMember(args),
+      sessionSandboxing: async (args) =>
+        this.agentSessions?.agentSandboxing(args),
     });
     const connectionProviders = config.connectionProviders ?? [];
     const credentialVault = config.credentialVault;
@@ -705,20 +764,39 @@ export class CatamorphicCore {
         "credentialVault is required when connectionProviders are configured",
       );
     }
+    const providers = new ConnectionProviderRegistry(connectionProviders);
     if (connectionProviders.length > 0 && credentialVault) {
-      const providers = new ConnectionProviderRegistry(connectionProviders);
-      this.connections = new ConnectionsService(
-        this.db,
-        credentialVault,
+      const hostBindings = config.connectionBindings;
+      this.connections = new ConnectionsService({
+        db: this.db,
+        vault: credentialVault,
         providers,
-        async (identity) => {
+        // Committed bindings are read with the Environment they belong to
+        // (ADR 0172); a host may add its own aliases beside them, and a
+        // committed alias wins over a host one of the same name.
+        bindings: async ({ identity, projectId, environment }) => {
+          const [definition, host] = await Promise.all([
+            this.projectEnvironments.get({
+              identity,
+              projectId,
+              name: environment,
+            }),
+            hostBindings?.({
+              tenantId: identity.tenantId,
+              projectId,
+              environment,
+            }),
+          ]);
+          return { ...host, ...definition?.connections };
+        },
+        onMemberConnectionReady: async (identity) => {
           if (this.workflowEnablements) {
             await this.workflowEnablements.reenableEligibleForMember({
               identity,
             });
           }
         },
-        async ({ identity, connectionId }) => {
+        onConnectionUnavailable: async ({ identity, connectionId }) => {
           if (this.workflowEnablements) {
             await this.workflowEnablements.suspendForConnection({
               identity,
@@ -726,7 +804,7 @@ export class CatamorphicCore {
             });
           }
         },
-      );
+      });
       this.connectionAdmission = new ConnectionAdmissionService(
         this.connections,
       );
@@ -737,6 +815,9 @@ export class CatamorphicCore {
         () => this.workflowEnablements,
         {
           guards: config.connectionGuards ?? [],
+          ...(config.connectionGuardTimeoutMs
+            ? { guardTimeoutMs: config.connectionGuardTimeoutMs }
+            : {}),
           ...(config.toolPermissions
             ? { approvals: config.toolPermissions }
             : {}),
@@ -748,13 +829,71 @@ export class CatamorphicCore {
                 .where("id", "=", sessionId)
                 .executeTakeFirst()
             )?.external_user_id,
+          sessionSandboxing: async (sessionId) => {
+            const session = await this.db
+              .selectFrom("agent_sessions")
+              .select("project_id")
+              .where("id", "=", sessionId)
+              .executeTakeFirst();
+            return session
+              ? this.agentSessions?.agentSandboxing({
+                  projectId: session.project_id,
+                  sessionId,
+                })
+              : undefined;
+          },
+          projectRemote: async ({ tenantId, projectId }) =>
+            (
+              await this.db
+                .selectFrom("projects")
+                .select("remote_url")
+                .where("id", "=", projectId)
+                .where("tenant_id", "=", tenantId)
+                .executeTakeFirst()
+            )?.remote_url,
         },
       );
       this.connectionGrants = new ConnectionCapabilityGrantsService(
         this.db,
         this.executionAllocations,
       );
+      this.connectionProviderRegistry = providers;
+      this.gitGateway = new GitGatewayService({
+        db: this.db,
+        grants: this.connectionGrants,
+        allocations: this.executionAllocations,
+        broker: this.connectionBroker,
+        providers,
+        connections: this.connections,
+      });
+      this.modelGateway = new ModelGatewayService({
+        store: dbModelGatewayStore(this.db),
+        broker: this.connectionBroker,
+      });
     }
+    this.codeHosts = new CodeHostsService({
+      db: this.db,
+      projectManager: this.projectManager,
+      projects: this.projects,
+      hosts: config.codeHosts ?? [],
+      providers,
+      ...(this.connections ? { connections: this.connections } : {}),
+    });
+    // Provider-agnostic remote sync (ADR 0044): credentials come from the
+    // connection that backs the origin (ADR 0177).
+    this.remoteSync = new RemoteSyncService(
+      this.db,
+      this.projectManager,
+      this.codeHosts,
+    );
+    this.sessionWorkspaces = new SessionWorkspaces({
+      projectManager: this.projectManager,
+      origin: (input) => this.remoteSync.origin(input),
+      // Constructed later, with the connection providers; read per call.
+      bindingCredentials: (input) =>
+        this.connectionBroker?.mirrorCredentials(input) ??
+        Promise.resolve(undefined),
+    });
     this.deployment = new DeploymentService(this.projectManager, (input) =>
       this.workflowEnablements.markUpdateAvailable(input),
     );
@@ -974,12 +1113,11 @@ export class CatamorphicCore {
         : {}),
     });
     this.publications = new PublicationsService(this.db);
-    this.proposalsOpenPullRequests = Boolean(config.proposalBot);
+    this.proposalsOpenPullRequests = this.codeHosts.available;
     this.proposals = new ProposalsService(
       this.db,
       this.projectManager,
-      this.github ? [this.github.codeHost] : [],
-      config.proposalBot,
+      this.codeHosts,
     );
 
     if (config.codingAgent) {
@@ -1004,6 +1142,25 @@ export class CatamorphicCore {
         connectionAdmission: this.connectionAdmission,
         connectionGrants: this.connectionGrants,
         connectionMcpUrl: config.connectionMcpUrl,
+        workspaces: this.sessionWorkspaces,
+        ...(config.gatewayUrl
+          ? {
+              sandboxGateway: {
+                url: (args: { projectId: string; sessionId: string }) =>
+                  config.gatewayUrl?.(args),
+                remoteBaseUrls: (providerKind: string) =>
+                  this.connectionProviderRegistry?.get(providerKind)?.git
+                    ?.remoteBaseUrls,
+                modelApi: (providerKind: string) =>
+                  this.connectionProviderRegistry?.get(providerKind)?.model
+                    ?.api,
+                turnUsage: async (args: {
+                  sessionId: string;
+                  turnId: string;
+                }) => this.modelGateway?.sessionUsage(args),
+              },
+            }
+          : {}),
         plugins: this.plugins,
         pluginResolver: this.pluginResolver,
         onTurnSettled: async (event) => {
@@ -1069,7 +1226,7 @@ export class CatamorphicCore {
         events: this.projectEvents,
         monitors: this.projectEventMonitors,
         sessions: this.agentSessions,
-        github: this.github,
+        eventSources: this.projectEventSources,
       });
       this.sessionActions = new SessionActionsService(
         this.db,
@@ -1092,7 +1249,7 @@ export class CatamorphicCore {
   /**
    * One pass of durable event delivery (ADR 0138, 0156): retire expired
    * watchers, then run every active workflow bound to new Project Events
-   * (webhooks, chat events, GitHub). Hosts call it on a timer with
+   * (webhooks, chat events, polled sources). Hosts call it on a timer with
    * `startEventDispatcher`, whether or not coding agents are configured.
    */
   async dispatchEvents(input: { limit?: number } = {}): Promise<number> {

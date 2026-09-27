@@ -16,10 +16,7 @@ import { isPersonalFile } from "@catamorphic/git";
 import {
   buildInstallationUrl,
   GithubApi,
-  GithubAuthError,
-  pollDeviceToken,
   repoFullNameFromUrl,
-  requestDeviceCode,
 } from "@catamorphic/github";
 import { probeMcpServer } from "@catamorphic/mcp";
 import type { McpToolPolicy } from "@catamorphic/sandbox";
@@ -35,6 +32,10 @@ import {
 } from "electron";
 import type { AgentCommandsResult } from "../shared/agent-commands.js";
 import type { AgentDefaultModelResult } from "../shared/agent-default-model.js";
+import type {
+  HarnessPermissions,
+  Sandboxing,
+} from "../shared/agent-permissions.js";
 import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
@@ -63,7 +64,8 @@ import {
   continueAuthorizationInBrowser,
   trackAuthorization,
 } from "./authorization-recovery.js";
-import { saveComposerFile } from "./composer-files.js";
+import { throughCodeHost } from "./code-host-fallback.js";
+import { removeComposerFiles, saveComposerFile } from "./composer-files.js";
 import { parseConnectLink } from "./connect-link.js";
 import {
   type CreateConnectionInput,
@@ -179,8 +181,10 @@ export interface ProjectAgentInfo {
   description: string | null;
   model: string | null;
   effort: "low" | "medium" | "high" | "xhigh" | "max" | null;
-  /** Normalized operating mode (ADR 0056); null = the local desktop default (full access). */
-  mode: "read-only" | "edit" | "full-access" | null;
+  /** What may leave its sandbox (ADR 0182); null = the local default (publish). */
+  sandboxing: Sandboxing | null;
+  /** The harness's own permission settings; null = the local defaults. */
+  harnessPermissions: HarnessPermissions | null;
   coordination:
     | "shared-first"
     | "isolate-on-contention"
@@ -188,7 +192,7 @@ export interface ProjectAgentInfo {
     | null;
   /** Claude Code auto-memory; null = the definition doesn't say (off). */
   memory: boolean | null;
-  credentialsSource: "profile" | "secret" | "local";
+  credentialsSource: "profile" | "secret" | "local" | "connection";
   secretName: string | null;
   /** Declared connector names — enforced by name match (ADR 0056). */
   connections: string[];
@@ -211,7 +215,7 @@ export interface ProjectAgentsData {
   agents: ProjectAgentInfo[];
   /**
    * The project's committed default agent slug (`defaultAgent` in
-   * `.catamorphic/project.json`), when it declares one.
+   * `.work/project.json`), when it declares one.
    */
   projectDefaultSlug: string | null;
 }
@@ -725,7 +729,7 @@ export function registerIpcHandlers(
     },
   );
 
-  // --- project agents (committed .catamorphic/agents/<slug>.json definitions, ADR 0050) ---
+  // --- project agents (committed .work/agents/<slug>.json definitions, ADR 0050) ---
 
   const kindHarness = (kind: string): "ai-sdk" | "claude-code" | "codex" =>
     kind === "claude-code"
@@ -742,7 +746,13 @@ export function registerIpcHandlers(
     const definition = entry.definition;
     const source = definition?.credentials?.source ?? "profile";
     let consent: ProjectAgentInfo["consent"] = "not-required";
-    if (definition && definition.kind !== "e2e-fake" && source !== "secret") {
+    // A connection-credentialed agent uses no personal credential (ADR 0180).
+    if (
+      definition &&
+      definition.kind !== "e2e-fake" &&
+      source !== "secret" &&
+      source !== "connection"
+    ) {
       const binding = owning.agentBindings.get(projectId, entry.slug);
       const hash = definitionHash(definition, entry.promptFile);
       consent = !binding
@@ -763,7 +773,8 @@ export function registerIpcHandlers(
       description: definition?.description ?? null,
       model: definition?.model ?? null,
       effort: definition?.effort ?? null,
-      mode: definition?.mode ?? null,
+      sandboxing: definition?.sandboxing ?? null,
+      harnessPermissions: definition?.harnessPermissions ?? null,
       coordination: definition?.coordination ?? null,
       memory: definition?.memory ?? null,
       credentialsSource: source,
@@ -805,7 +816,7 @@ export function registerIpcHandlers(
   );
 
   // The project's committed default (ADR 0056 layer 2): a slug into the
-  // project's own agents/, written to `.catamorphic/project.json` — a
+  // project's own agents/, written to `.work/project.json` — a
   // work product every collaborator receives, not a personal preference.
   ipcMain.handle(
     "catamorphic:project-agents-set-default",
@@ -842,8 +853,9 @@ export function registerIpcHandlers(
       }
       const definition = entry.definition;
       const source = definition.credentials?.source ?? "profile";
-      if (source === "secret") {
-        // Nothing personal to consent to; the secret is the authorization.
+      if (source === "secret" || source === "connection") {
+        // Nothing personal to consent to; the secret or the Environment's
+        // model connection is the authorization.
         return { ok: true };
       }
       const owning = profileConfig.forProject(projectId);
@@ -1873,6 +1885,10 @@ export function registerIpcHandlers(
       agents: project?.agents ?? [],
       documents: project?.documents ?? [],
       roles: project?.roles ?? [],
+      administrator:
+        me.identity.root ||
+        (me.identity.controlPlanePermissions?.includes("connections:write") ??
+          false),
       features: me.features,
     };
   };
@@ -1913,38 +1929,48 @@ export function registerIpcHandlers(
     if (!rootPath) throw new Error("Project folder not found");
     return rootPath;
   };
+  // The person's own GitHub connection reads the exact repository first; a
+  // missing or narrower one gets one chance to adopt the `gh` CLI's
+  // credential as that connection (ADR 0073), checked against the same
+  // repository before it is stored.
   const ensureGithubRepositoryAccess = async (
     server: EmbeddedServer,
     fullName: string,
     allowCli: boolean,
   ) => {
-    const github = server.catamorphic.core.github;
-    if (!github) {
-      throw new Error(`[github-required] Connect GitHub to clone ${fullName}.`);
-    }
+    const core = server.catamorphic.core;
     try {
-      await github.repository(identity, fullName);
+      await core.codeHosts.repository({
+        identity,
+        provider: server.github.kind,
+        fullName,
+      });
       return;
     } catch {
-      // A missing, stale, or narrower stored credential gets one chance to
-      // use the local GitHub CLI as a credential source.
+      // Not connected, expired, or no access to this repository.
     }
     const cliToken = allowCli ? await githubCliToken() : null;
-    if (cliToken) {
+    if (cliToken && core.connections) {
       try {
-        await github.connectForRepository(
+        await new GithubApi(cliToken, {
+          signal: AbortSignal.timeout(30_000),
+        }).getRepo(fullName);
+        await core.connections.savePersonal({
           identity,
-          {
-            accessToken: cliToken,
-            expiresAt: null,
-            refreshToken: null,
-            refreshTokenExpiresAt: null,
-          },
-          fullName,
-        );
+          providerKind: server.github.kind,
+          label: "GitHub (GitHub CLI)",
+          authorized: await server.github.authorizeUser({
+            tokens: {
+              accessToken: cliToken,
+              expiresAt: null,
+              refreshToken: null,
+              refreshTokenExpiresAt: null,
+            },
+          }),
+        });
         return;
       } catch {
-        // The shared GitHub API rejected this credential for the exact repo.
+        // GitHub rejected this credential for the exact repository.
       }
     }
     throw new Error(
@@ -2015,9 +2041,9 @@ export function registerIpcHandlers(
               githubFullName,
               storesFor(event).prefs.load().githubCliEnabled,
             );
-            const github = server.catamorphic.core.github;
-            if (!github) throw new Error("GitHub integration not configured");
-            return github.importRepo(identity, {
+            return server.catamorphic.core.codeHosts.importRepository({
+              identity,
+              provider: server.github.kind,
               id,
               fullName: githubFullName,
               name: capabilities.name ?? input.name,
@@ -2416,6 +2442,96 @@ export function registerIpcHandlers(
     },
   );
 
+  // Organization service connections (ADR 0172), reached through any
+  // project linked to the server; the server refuses non-administrators.
+  ipcMain.handle(
+    "catamorphic:remote-service-connections",
+    async (event, projectId: string) => {
+      const link = requireLink(event, projectId);
+      const client = storedRemoteClient(event, projectId, link);
+      const [providers, connections] = await Promise.all([
+        client.listConnectionProviders(),
+        client.listServiceConnections(),
+      ]);
+      return {
+        providers,
+        connections: connections.filter(
+          (connection) => connection.principalKind === "tenant_service",
+        ),
+      };
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-service-connection-create",
+    async (
+      event,
+      input: { projectId: string; name: string; providerKind: string },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      return storedRemoteClient(
+        event,
+        input.projectId,
+        link,
+      ).createServiceConnection({
+        name: input.name,
+        providerKind: input.providerKind,
+      });
+    },
+  );
+
+  // A url or device challenge opens as a browser tab in the asking window;
+  // the server's own callback finishes a url sign-in.
+  ipcMain.handle(
+    "catamorphic:remote-service-connection-authorize",
+    async (event, input: { projectId: string; connectionId: string }) => {
+      const link = requireLink(event, input.projectId);
+      const result = await storedRemoteClient(
+        event,
+        input.projectId,
+        link,
+      ).authorizeServiceConnection(input.connectionId);
+      if (result.challenge.kind === "url") {
+        openWorkspaceUrl(event.sender, result.challenge.url);
+      } else if (result.challenge.kind === "device") {
+        openWorkspaceUrl(event.sender, result.challenge.verificationUrl);
+      }
+      return result;
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-service-connection-complete",
+    async (
+      event,
+      input: {
+        projectId: string;
+        authorizationId: string;
+        callback: Record<string, string>;
+      },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      return storedRemoteClient(
+        event,
+        input.projectId,
+        link,
+      ).completeConnectionAuthorization({
+        authorizationId: input.authorizationId,
+        callback: input.callback,
+      });
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-service-connection-revoke",
+    async (event, input: { projectId: string; connectionId: string }) => {
+      const link = requireLink(event, input.projectId);
+      await storedRemoteClient(event, input.projectId, link).revokeConnection(
+        input.connectionId,
+      );
+    },
+  );
+
   ipcMain.handle(
     "catamorphic:project-delete",
     async (_event, input: { projectId: string; trashFolder?: boolean }) => {
@@ -2430,6 +2546,10 @@ export function registerIpcHandlers(
       await server.catamorphic.core.projects.delete(identity, input.projectId);
       await server.projectRoots.delete(input.projectId);
       await server.workspaceStates.delete(input.projectId);
+      await removeComposerFiles({
+        attachmentsDir: paths.attachmentsDir,
+        projectId: input.projectId,
+      });
     },
   );
 
@@ -2484,12 +2604,15 @@ export function registerIpcHandlers(
     async (
       _event,
       input: { projectId: string; name: string; bytes: Uint8Array },
-    ) =>
-      saveComposerFile({
-        rootPath: await requireRoot(input.projectId),
+    ) => {
+      await requireRoot(input.projectId);
+      return saveComposerFile({
+        attachmentsDir: paths.attachmentsDir,
+        projectId: input.projectId,
         name: input.name,
         bytes: input.bytes,
-      }),
+      });
+    },
   );
 
   ipcMain.handle(
@@ -2803,6 +2926,40 @@ export function registerIpcHandlers(
       );
     }
   };
+  /**
+   * A local project's pull requests go through the code host with the
+   * person's own GitHub connection (ADR 0177) when it serves the project's
+   * origin; the optional GitHub CLI stays the fallback (ADR 0117).
+   */
+  const connectedCodeHost = async (projectId: string) => {
+    const server = state.current;
+    if (!server) return null;
+    const codeHosts = server.catamorphic.core.codeHosts;
+    return (await codeHosts.originConnected({
+      identity,
+      projectId,
+      principal: "member",
+    }))
+      ? codeHosts
+      : null;
+  };
+  /**
+   * A pull request operation through the person's connection, or `null` for
+   * the CLI path: no connection serves the origin, or it cannot reach this
+   * repository (the App is not installed on its owner) and the CLI is on.
+   */
+  const viaCodeHost = async <T>(
+    event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+    run: (
+      codeHosts: NonNullable<Awaited<ReturnType<typeof connectedCodeHost>>>,
+    ) => Promise<T>,
+  ) =>
+    throughCodeHost({
+      codeHosts: await connectedCodeHost(projectId),
+      cliEnabled: storesFor(event).prefs.load().githubCliEnabled === true,
+      run,
+    });
   ipcMain.handle("catamorphic:github-cli-status", async () => {
     const token = await githubCliToken();
     if (!token)
@@ -2834,6 +2991,16 @@ export function registerIpcHandlers(
       return storedRemoteClient(event, input.projectId, link).proposalComment(
         input,
       );
+    const viaHost = await viaCodeHost(event, input.projectId, (codeHosts) =>
+      codeHosts.commentOnPullRequest({
+        identity,
+        projectId: input.projectId,
+        number: input.number,
+        body: input.body,
+        ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+      }),
+    );
+    if (viaHost) return viaHost.value;
     requireGithubCli(event);
     return githubCliPrComment({
       rootPath: await requireRoot(input.projectId),
@@ -2859,6 +3026,30 @@ export function registerIpcHandlers(
       await storedRemoteClient(event, input.projectId, link).proposalFiles(
         input.number,
       );
+    }
+    const viaHost = link
+      ? null
+      : await viaCodeHost(event, input.projectId, (codeHosts) =>
+          input.decision === "apply"
+            ? codeHosts.mergePullRequest({
+                identity,
+                projectId: input.projectId,
+                number: input.number,
+                headSha: input.headSha,
+              })
+            : codeHosts.reviewPullRequest({
+                identity,
+                projectId: input.projectId,
+                number: input.number,
+                headSha: input.headSha,
+                decision:
+                  input.decision === "approve" ? "approve" : "request_changes",
+                body: input.body,
+              }),
+        );
+    if (viaHost) {
+      notifyGitChanged(input.projectId);
+      return { decision: input.decision };
     }
     requireGithubCli(event);
     const repository = await githubCliRepository(
@@ -2907,6 +3098,10 @@ export function registerIpcHandlers(
         return storedRemoteClient(event, projectId, link).proposalDiscussion(
           number,
         );
+      const viaHost = await viaCodeHost(event, projectId, (codeHosts) =>
+        codeHosts.pullRequestDiscussion({ identity, projectId, number }),
+      );
+      if (viaHost) return viaHost.value;
       requireGithubCli(event);
       return githubCliPrDetails({
         rootPath: await requireRoot(projectId),
@@ -2929,6 +3124,32 @@ export function registerIpcHandlers(
         return storedRemoteClient(event, projectId, link).proposalReview(
           number,
         );
+      const viaHost = await viaCodeHost(event, projectId, async (codeHosts) => {
+        const before = await codeHosts.pullRequest({
+          identity,
+          projectId,
+          number,
+        });
+        const files = await codeHosts.pullRequestFiles({
+          identity,
+          projectId,
+          number,
+        });
+        const proposal = await codeHosts.pullRequest({
+          identity,
+          projectId,
+          number,
+        });
+        return { before, proposal, files };
+      });
+      if (viaHost) {
+        const { before, proposal, files } = viaHost.value;
+        if (before.headSha !== proposal.headSha)
+          throw new Error(
+            "This proposal changed while loading. Refresh to review the latest version.",
+          );
+        return { proposal, files };
+      }
       requireGithubCli(event);
       const cli = await githubCliRepository(await requireRoot(projectId));
       if (!cli)
@@ -2955,6 +3176,14 @@ export function registerIpcHandlers(
     if (fixture) return fixture.prs;
     const link = storesFor(event).remoteProjects.get(projectId);
     if (link) return storedRemoteClient(event, projectId, link).listProposals();
+    const viaHost = await viaCodeHost(event, projectId, (codeHosts) =>
+      codeHosts.listPullRequests({
+        identity,
+        projectId,
+        principal: "member",
+      }),
+    );
+    if (viaHost) return viaHost.value;
     requireGithubCli(event);
     const server = state.current;
     if (!server) return [];
@@ -2980,6 +3209,14 @@ export function registerIpcHandlers(
       const link = storesFor(event).remoteProjects.get(projectId);
       if (link)
         return storedRemoteClient(event, projectId, link).proposalFiles(number);
+      const viaHost = await viaCodeHost(event, projectId, (codeHosts) =>
+        codeHosts.pullRequestFiles({
+          identity,
+          projectId,
+          number: Number(number),
+        }),
+      );
+      if (viaHost) return viaHost.value;
       requireGithubCli(event);
       const server = state.current;
       if (!server) throw new Error("Server not running");
@@ -2992,81 +3229,104 @@ export function registerIpcHandlers(
     },
   );
 
-  // --- GitHub device flow ---
-  // The flow lives in the main process: it opens a workspace browser tab and
-  // polls GitHub, while the renderer only ever sees the short user code and
-  // the final connected/failed state. Tokens go straight into the embedded
-  // server's GithubService (encrypted via safeStorage before touching disk).
+  // --- GitHub sign-in ---
+  // The person's GitHub account is their personal `github` connection
+  // (ADR 0177), authorized with the provider's device flow through core
+  // connections and kept in the credential vault like any connection. The
+  // renderer only ever sees the short user code and the final state.
   let deviceFlowGeneration = 0;
+  /** The device authorization still open, so ending it cancels it for real. */
+  let pendingAuthorization: string | undefined;
+  const cancelDeviceFlow = async () => {
+    deviceFlowGeneration += 1;
+    const authorization = pendingAuthorization;
+    pendingAuthorization = undefined;
+    if (!authorization) return;
+    await state.current?.catamorphic.core.connections
+      ?.cancelAuthorization({ identity, state: authorization })
+      .catch(() => false);
+  };
 
   ipcMain.handle("catamorphic:github-connect-start", async (event) => {
-    const grant = await requestDeviceCode(GITHUB_APP);
+    const server = state.current;
+    const connections = server?.catamorphic.core.connections;
+    if (!server || !connections) throw new Error("Server not running");
+    const started = await connections.beginPersonalAuthorization({
+      identity,
+      providerKind: server.github.kind,
+      redirectUri: `${server.url}/api/connection-authorizations/callback`,
+    });
+    const challenge = started.challenge;
+    if (challenge.kind !== "device")
+      throw new Error("GitHub sign-in did not offer a device code");
     cancelAuthorization(event.sender);
+    // A newer attempt ends the one before it, on GitHub's side too.
+    await cancelDeviceFlow();
+    pendingAuthorization = started.authorizationId;
     const generation = ++deviceFlowGeneration;
+    const expiresAt = challenge.expiresAt
+      ? Date.parse(challenge.expiresAt)
+      : Date.now() + 900_000;
     const dispose = trackAuthorization({
       sender: event.sender,
-      url: grant.verificationUri,
+      url: challenge.verificationUrl,
       label: "Connect GitHub",
-      expiresAt: Date.now() + grant.expiresIn * 1000,
+      expiresAt,
       cancel: () => {
         if (generation !== deviceFlowGeneration) return;
-        deviceFlowGeneration += 1;
+        void cancelDeviceFlow();
         if (!event.sender.isDestroyed())
           event.sender.send("catamorphic:github-connected", {
             error: "GitHub sign-in ended. Connect again when ready.",
           });
-        closeWorkspaceCallback(event.sender, grant.verificationUri);
+        closeWorkspaceCallback(event.sender, challenge.verificationUrl);
       },
     });
-    openWorkspaceUrl(event.sender, grant.verificationUri);
+    openWorkspaceUrl(event.sender, challenge.verificationUrl);
 
-    const poll = async (): Promise<void> => {
-      const started = Date.now();
-      let intervalMs = grant.interval * 1000;
-      while (Date.now() - started < grant.expiresIn * 1000) {
-        // A newer connect attempt or an app shutdown obsoletes this loop.
+    // Completing waits until the person finishes on GitHub or the code
+    // expires; a newer attempt or a cancel only silences this one.
+    void connections
+      .completeAuthorization({
+        identity,
+        state: started.authorizationId,
+        callback: {},
+      })
+      .then((connection) => {
         if (generation !== deviceFlowGeneration) return;
-        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        const account = connection.account;
+        state.broadcast("catamorphic:github-connected", {
+          connected: true,
+          login:
+            account &&
+            typeof account === "object" &&
+            !Array.isArray(account) &&
+            typeof account.login === "string"
+              ? account.login
+              : "",
+        });
+      })
+      .catch(() => {
         if (generation !== deviceFlowGeneration) return;
-        const server = state.current;
-        if (!server) return;
-        try {
-          const result = await pollDeviceToken(GITHUB_APP, grant.deviceCode);
-          if (generation !== deviceFlowGeneration) return;
-          if (result.tokens) {
-            const status = await server.catamorphic.core.github?.connect(
-              identity,
-              result.tokens,
-            );
-            state.broadcast("catamorphic:github-connected", status ?? null);
-            return;
-          }
-          if (result.retryAfter > 0) intervalMs = result.retryAfter * 1000;
-        } catch (cause) {
-          state.broadcast("catamorphic:github-connected", {
-            error:
-              cause instanceof GithubAuthError
-                ? cause.message
-                : "GitHub authorization failed",
-          });
-          return;
-        }
-      }
-      state.broadcast("catamorphic:github-connected", {
-        error: "The GitHub device code expired. Try connecting again",
+        state.broadcast("catamorphic:github-connected", {
+          error: "GitHub sign-in did not finish. Try connecting again",
+        });
+      })
+      .finally(() => {
+        if (pendingAuthorization === started.authorizationId)
+          pendingAuthorization = undefined;
+        dispose();
       });
-    };
-    void poll().finally(dispose);
 
     return {
-      userCode: grant.userCode,
-      verificationUri: grant.verificationUri,
+      userCode: challenge.userCode,
+      verificationUri: challenge.verificationUrl,
     };
   });
 
-  ipcMain.handle("catamorphic:github-connect-cancel", (event) => {
+  ipcMain.handle("catamorphic:github-connect-cancel", async (event) => {
     cancelAuthorization(event.sender);
-    deviceFlowGeneration += 1;
+    await cancelDeviceFlow();
   });
 
   // Repo access is granted by *installing* the GitHub App, not by the OAuth
@@ -3085,10 +3345,17 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle("catamorphic:github-disconnect", async () => {
-    deviceFlowGeneration += 1;
+    // A sign-in still in progress must not reconnect after this.
+    await cancelDeviceFlow();
     const server = state.current;
-    if (!server) return;
-    await server.catamorphic.core.github?.disconnect(identity);
+    const connections = server?.catamorphic.core.connections;
+    if (!server || !connections) return;
+    const personal = await connections.personal({
+      identity,
+      providerKind: server.github.kind,
+    });
+    if (personal)
+      await connections.revoke({ identity, connectionId: personal.id });
   });
 
   // Import runs through IPC (not HTTP) for the same reason project-create
@@ -3101,23 +3368,21 @@ export function registerIpcHandlers(
     ) => {
       const server = state.current;
       if (!server) throw new Error("Server not running");
-      if (!server.catamorphic.core.github) {
-        throw new Error("GitHub integration not configured");
-      }
       if (!path.isAbsolute(input.rootPath)) {
         throw new Error("rootPath must be an absolute path");
       }
-      const github = server.catamorphic.core.github;
       const project = await server.projectRoots.register({
         rootPath: input.rootPath,
         existing: false,
         automaticCheckpoints: false,
         reopen: (id) => server.catamorphic.core.projects.get(identity, id),
         create: (id, rootPath) =>
-          github.importRepo(identity, {
+          server.catamorphic.core.codeHosts.importRepository({
+            identity,
+            provider: server.github.kind,
             id,
             fullName: input.fullName,
-            name: input.name,
+            ...(input.name ? { name: input.name } : {}),
             rootPath,
           }),
       });

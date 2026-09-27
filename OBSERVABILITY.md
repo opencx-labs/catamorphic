@@ -55,7 +55,7 @@ their isolated userData paths. The process environment takes precedence. Only
 
 ## Desktop project defaults and local overrides
 
-A project can commit a `telemetry` section in `.catamorphic/project.json`:
+A project can commit a `telemetry` section in `.work/project.json`:
 
 ```json
 {
