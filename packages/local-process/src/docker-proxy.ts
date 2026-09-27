@@ -382,6 +382,9 @@ export async function startDockerProxy(
             upstreamResponse.statusCode ?? 502,
             upstreamResponse.headers,
           );
+          // Docker answers some long polls (container wait) with headers
+          // first; the CLI waits for them before it starts the container.
+          response.flushHeaders();
           upstreamResponse.pipe(response);
         },
       );

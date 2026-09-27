@@ -364,6 +364,14 @@ describe.skipIf(!hostSocket)("local-process containers on real Docker", () => {
         { timeout: 300 },
       );
       expect(up.exitCode, up.result).toBe(0);
+      // Attached runs and exec hijack the connection through the endpoint.
+      const attached = await provider.executeCommand(
+        sandbox.id,
+        "docker run --rm alpine echo attached-ok && docker compose exec -T web echo exec-ok",
+        { timeout: 300 },
+      );
+      expect(attached.result).toContain("attached-ok");
+      expect(attached.result).toContain("exec-ok");
       const privileged = await provider.executeCommand(
         sandbox.id,
         "docker run --rm --privileged alpine true",
