@@ -13,10 +13,12 @@ import type {
   McpServersSource,
   McpToolPolicyLayers,
   ProviderSession,
+  SandboxModelGateway,
   StartSessionOpts,
   ToolPermissionHandler,
   ToolPolicyAnnotations,
   TurnOptions,
+  TurnSandbox,
 } from "@catamorphic/sandbox";
 import {
   buildPluginsPreamble,
@@ -27,6 +29,8 @@ import {
   renderUserMessage,
   resolveMcpServers,
   resolveToolPermissionAcross,
+  spawnInSandbox,
+  stagedPluginFiles,
   stagePluginDocs,
 } from "@catamorphic/sandbox";
 import type {
@@ -39,6 +43,7 @@ import type {
 
 import {
   CodexAppServer,
+  type CodexAppServerSpawn,
   type CodexElicitation,
   type CodexElicitationResult,
 } from "./app-server.js";
@@ -105,6 +110,24 @@ export interface CodexAgentOpts {
   mcpToolAnnotations?:
     | Record<string, Record<string, ToolPolicyAnnotations>>
     | (() => Record<string, Record<string, ToolPolicyAnnotations>> | undefined);
+  /**
+   * Run the app server inside each turn's sandbox instead of on this host
+   * (ADR 0180). The host passes the sandbox and the model gateway on every
+   * turn; the app server's standard input and output travel over sandbox
+   * process operations. `command` is the CLI in the sandbox image (default
+   * `codex`). Its model provider is the gateway, authenticated by a command
+   * that reads the session's current grant file; no host variable reaches
+   * it. Codex's own OS sandbox is off there: the Work sandbox is the
+   * boundary, and modes are enforced where changes leave it (ADR 0176).
+   */
+  sandbox?: { command?: string };
+}
+
+/** Where a sandbox-resident turn runs and how it reaches its model. */
+interface SandboxRun {
+  sandbox: TurnSandbox;
+  gateway: SandboxModelGateway;
+  command: string;
 }
 
 /**
@@ -146,8 +169,22 @@ export class CodexAgent implements CodingAgentProvider {
 
   private buildClient(
     config: CodexOptions["config"] | undefined,
-    sessionId: string,
+    session: ProviderSession,
+    sandboxRun?: SandboxRun,
   ): CodexAppServer {
+    const sessionId = session.sessionId;
+    if (sandboxRun) {
+      return new CodexAppServer(
+        {
+          codexPathOverride: sandboxRun.command,
+          config: { ...config, ...gatewayProviderConfig(sandboxRun.gateway) },
+        },
+        this.opts.mcpElicitationForSession?.({ sessionId }),
+        this.opts.onToolPermission,
+        sessionId,
+        sandboxSpawn({ run: sandboxRun, cwd: session.workingDirectory }),
+      );
+    }
     return new CodexAppServer(
       {
         apiKey: this.opts.apiKey,
@@ -173,6 +210,7 @@ export class CodexAgent implements CodingAgentProvider {
     session: ProviderSession,
     capabilityServer?: AgentMcpServerConfig,
     contextPrompt?: string,
+    sandboxRun?: SandboxRun,
   ): CodexAppServer {
     const own =
       typeof this.opts.mcpPolicies === "function"
@@ -214,24 +252,44 @@ export class CodexAgent implements CodingAgentProvider {
     };
     const config =
       Object.keys(features).length > 0 ? { ...mcpConfig, features } : mcpConfig;
-    const signature = JSON.stringify(config);
+    // A new sandbox or model endpoint needs a new app server there.
+    const signature = JSON.stringify({
+      config,
+      ...(sandboxRun
+        ? {
+            sandboxId: sandboxRun.sandbox.sandboxId,
+            model: sandboxRun.gateway.baseUrl,
+          }
+        : {}),
+    });
     const existing = this.clients.get(session.sessionId);
     if (existing?.client.available && existing.signature === signature) {
       existing.client.setContext(contextPrompt);
       return existing.client;
     }
     existing?.client.close();
-    const client = this.buildClient(config, session.sessionId);
+    const client = this.buildClient(config, session, sandboxRun);
     client.setContext(contextPrompt);
     this.clients.set(session.sessionId, { signature, client });
     return client;
   }
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
-    await stagePluginDocs(
-      this.opts.pluginDirectory ?? opts.workingDirectory,
-      opts.attachedPlugins,
-    );
+    if (this.opts.sandbox) {
+      // The working directory is the sandbox's: plugin docs go there.
+      const files = stagedPluginFiles(opts.attachedPlugins);
+      if (opts.sandboxProvider && Object.keys(files).length > 0)
+        await opts.sandboxProvider.uploadFiles(
+          opts.sandboxId,
+          files,
+          this.opts.pluginDirectory ?? opts.workingDirectory,
+        );
+    } else {
+      await stagePluginDocs(
+        this.opts.pluginDirectory ?? opts.workingDirectory,
+        opts.attachedPlugins,
+      );
+    }
     const preamble = buildPluginsPreamble(opts.attachedPlugins, {
       directory: this.opts.pluginDirectory,
     });
@@ -276,6 +334,19 @@ export class CodexAgent implements CodingAgentProvider {
     this.runningSessions.add(session.sessionId);
     let entry = this.gateways.get(session.sessionId);
     try {
+      if (this.opts.sandbox) {
+        const run = sandboxRunFor(this.opts.sandbox, opts);
+        if (typeof run === "string") {
+          yield { type: "error", content: run };
+          yield { type: "done" };
+          return;
+        }
+        // The capability listener serves this host's loopback, which a
+        // sandbox cannot reach; capabilities stay with in-process harnesses
+        // until they travel over the app-server protocol.
+        yield* this.sendMessageOnHost(session, message, opts, undefined, run);
+        return;
+      }
       if (opts?.capabilities && !entry) {
         const state: { current?: AgentCapabilityGateway } = {
           current: opts.capabilities,
@@ -321,6 +392,7 @@ export class CodexAgent implements CodingAgentProvider {
     message: string,
     opts?: TurnOptions,
     capabilityServer?: AgentMcpServerConfig,
+    sandboxRun?: SandboxRun,
   ): AsyncIterable<AgentEvent> {
     // Native turn options refresh while MCP processes survive between turns.
     if (opts?.toolPolicies) {
@@ -332,8 +404,13 @@ export class CodexAgent implements CodingAgentProvider {
       session,
       capabilityServer,
       this.sessionInstructions.get(session.sessionId),
+      sandboxRun,
     );
-    const threadOptions = this.threadOptions(session.workingDirectory, opts);
+    const threadOptions = this.threadOptions(
+      session.workingDirectory,
+      opts,
+      sandboxRun !== undefined,
+    );
     const thread = session.providerSessionId
       ? client.resumeThread(session.providerSessionId, threadOptions)
       : client.startThread(threadOptions);
@@ -348,7 +425,11 @@ export class CodexAgent implements CodingAgentProvider {
     let stream: AsyncIterable<ThreadEvent>;
     let staged: Awaited<ReturnType<typeof stageTurnInput>> | undefined;
     try {
-      staged = await stageTurnInput(text, opts?.attachments);
+      // Media files would be written on this host; a sandbox turn sends
+      // the text (attachments are named in it).
+      staged = sandboxRun
+        ? { input: text, cleanup: async () => {} }
+        : await stageTurnInput(text, opts?.attachments);
       stream = (
         await thread.runStreamed(staged.input, {
           signal: abortController.signal,
@@ -426,14 +507,17 @@ export class CodexAgent implements CodingAgentProvider {
 
   private threadOptions(
     workingDirectory: string,
-    turn?: TurnOptions,
+    turn: TurnOptions | undefined,
+    inSandbox: boolean,
   ): ThreadOptions {
     const model = turn?.model ?? this.opts.model;
     const effort = turn?.effort ?? this.opts.effort;
     return {
       ...(workingDirectory ? { workingDirectory } : {}),
       skipGitRepoCheck: true,
-      sandboxMode: this.opts.sandboxMode ?? "workspace-write",
+      sandboxMode:
+        this.opts.sandboxMode ??
+        (inSandbox ? "danger-full-access" : "workspace-write"),
       approvalPolicy:
         this.opts.mcpElicitationForSession || this.opts.onToolPermission
           ? "on-request"
@@ -521,6 +605,86 @@ export function codexToolFilter(
     return disabled.length > 0 ? { disabled_tools: disabled } : {};
   }
   return { enabled_tools: sorted.filter((tool) => resolve(tool) === "allow") };
+}
+
+/** How often Codex re-reads its key: grants are renewed every 20 minutes. */
+const KEY_REFRESH_MS = 5 * 60_000;
+
+/**
+ * The sandbox and model a sandbox-resident turn needs, or why it cannot
+ * run (ADR 0180).
+ */
+function sandboxRunFor(
+  options: { command?: string },
+  turn: TurnOptions | undefined,
+): SandboxRun | string {
+  if (!turn?.sandbox?.provider.processes)
+    return "Codex runs inside this chat's sandbox, and this Environment's sandboxes cannot run it (they do not run processes).";
+  const gateway = turn.modelGateway;
+  if (!gateway)
+    return "Codex reaches its model through the gateway, and this chat has no model connection: bind one in the agent's Environment and name it in the agent's credentials.";
+  if (gateway.api !== "openai")
+    return `Codex speaks the OpenAI API; the connection '${gateway.alias}' is an ${gateway.api} API.`;
+  return {
+    sandbox: turn.sandbox,
+    gateway,
+    command: options.command ?? "codex",
+  };
+}
+
+/**
+ * Codex's model provider for a sandbox turn: the gateway's Responses API,
+ * authenticated by a command that prints the session's current grant.
+ */
+export function gatewayProviderConfig(
+  gateway: SandboxModelGateway,
+): CodexConfigObject {
+  return {
+    model_provider: "work",
+    model_providers: {
+      work: {
+        name: "Work gateway",
+        base_url: gateway.baseUrl,
+        wire_api: "responses",
+        auth: {
+          command: "sh",
+          args: ["-c", 'cat "$WORK_MODEL_KEY_FILE"'],
+          refresh_interval_ms: KEY_REFRESH_MS,
+        },
+      },
+    },
+  };
+}
+
+/** The app server's spawn, carried out in the sandbox over process operations. */
+function sandboxSpawn(input: {
+  run: SandboxRun;
+  cwd: string;
+}): CodexAppServerSpawn {
+  const { run } = input;
+  return ({ command, args, env }) => {
+    const processes = run.sandbox.provider.processes;
+    if (!processes) throw new Error("This sandbox cannot run processes");
+    const stderr = `${run.sandbox.stateDirectory}/codex.stderr`;
+    return spawnInSandbox({
+      processes,
+      sandboxId: run.sandbox.sandboxId,
+      command,
+      args,
+      cwd: input.cwd || run.sandbox.stateDirectory,
+      env,
+      pathEnv: { WORK_MODEL_KEY_FILE: run.gateway.keyFile },
+      stderrPath: stderr,
+      name: "Codex",
+      readStderr: async () =>
+        (
+          await run.sandbox.provider.executeCommand(
+            run.sandbox.sandboxId,
+            `tail -c 4000 ${JSON.stringify(stderr)} 2>/dev/null || true`,
+          )
+        ).result,
+    });
+  };
 }
 
 function mergedEnv(overrides: Record<string, string>): Record<string, string> {

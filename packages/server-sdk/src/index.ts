@@ -219,6 +219,11 @@ export {
   type HttpMethod,
 } from "./http-connection-provider.js";
 export {
+  builtinModelConnectionProviders,
+  defineModelConnectionProvider,
+  type ModelConnectionOptions,
+} from "./model-connection-provider.js";
+export {
   definePostgresConnectionProvider,
   type PostgresConnectionLimits,
   type PostgresConnectionOptions,

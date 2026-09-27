@@ -148,6 +148,7 @@ it.skipIf(!db)(
         readProcessOutput: vi.fn(),
         signalProcess: vi.fn(),
         listProcesses: vi.fn(async () => []),
+        writeProcessInput: vi.fn(),
       },
     };
     const scoped = allocationSandboxProvider({

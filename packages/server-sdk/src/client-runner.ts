@@ -187,6 +187,11 @@ async function executeClientOperation({
       const { kind: _, ...args } = operation;
       return processesOf(provider).signalProcess(args);
     }
+    case "process.write": {
+      const { kind: _, ...args } = operation;
+      await processesOf(provider).writeProcessInput(args);
+      return null;
+    }
     case "process.list":
       return processesOf(provider).listProcesses({
         sandboxId: operation.sandboxId,

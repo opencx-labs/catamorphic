@@ -23709,9 +23709,17 @@
                             "properties": {
                               "source": {
                                 "type": "string",
-                                "enum": ["profile", "secret", "local"]
+                                "enum": [
+                                  "profile",
+                                  "secret",
+                                  "local",
+                                  "connection"
+                                ]
                               },
                               "secret": {
+                                "type": "string"
+                              },
+                              "connection": {
                                 "type": "string"
                               }
                             },
@@ -24335,9 +24343,40 @@
                             },
                             "name": {
                               "type": "string"
+                            },
+                            "stdin": {
+                              "type": "boolean"
                             }
                           },
                           "required": ["kind", "sandboxId", "command"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["process.write"]
+                            },
+                            "sandboxId": {
+                              "type": "string"
+                            },
+                            "processId": {
+                              "type": "string"
+                            },
+                            "data": {
+                              "type": "string"
+                            },
+                            "end": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "sandboxId",
+                            "processId",
+                            "data"
+                          ],
                           "additionalProperties": false
                         },
                         {

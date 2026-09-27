@@ -19,10 +19,12 @@ import type {
   SignalProcessArgs,
   StartProcessArgs,
   SupervisorProcessHandle,
+  WriteProcessInputArgs,
 } from "@catamorphic/sandbox";
 import {
   assertProcessId,
   assertSandboxResources,
+  assertWriteSize,
   decodeUtf8Prefix,
   newProcessId,
   PROCESS_SIGNALS,
@@ -115,6 +117,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     startProcess: (args) => this.startProcess(args),
     readProcessOutput: (args) => this.readProcessOutput(args),
     signalProcess: (args) => this.signalProcess(args),
+    writeProcessInput: (args) => this.writeProcessInput(args),
     listProcesses: async ({ sandboxId }) =>
       [...(this.background.get(sandboxId)?.values() ?? [])].map((entry) =>
         this.snapshot(entry),
@@ -390,7 +393,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
         detached: process.platform !== "win32",
         cwd,
         env: this.envFor(args.sandboxId, args.env),
-        stdio: ["ignore", fd, fd],
+        stdio: [args.stdin ? "pipe" : "ignore", fd, fd],
       });
     } finally {
       fs.closeSync(fd);
@@ -418,6 +421,8 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
       entry.process.endedAt = new Date().toISOString();
     };
     child.once("exit", (code, signal) => ended(code, signal));
+    // Writing to a process that stopped reading is not this host's error.
+    child.stdin?.on("error", () => {});
     child.once("error", (error) => {
       fs.appendFileSync(log, `${error.message}\n`);
       ended(127);
@@ -494,6 +499,23 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
       }
     }
     return this.snapshot(entry);
+  }
+
+  private async writeProcessInput(args: WriteProcessInputArgs): Promise<void> {
+    assertWriteSize(args.data);
+    const entry = this.backgroundProcess(args);
+    const input = entry.child.stdin;
+    if (!input) throw new Error("The process was started without input");
+    if (input.writableEnded) throw new Error("The process input is closed");
+    // A process that already exited drops what it was sent, like a pipe.
+    if (entry.process.status === "exited") return;
+    await new Promise<void>((resolve) => {
+      const done = () => resolve();
+      input.once("error", done);
+      if (args.end) input.end(args.data, done);
+      else if (input.write(args.data)) done();
+      else input.once("drain", done);
+    });
   }
 
   private backgroundProcess(args: { sandboxId: string; processId: string }) {

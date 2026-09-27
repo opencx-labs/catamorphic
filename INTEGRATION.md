@@ -980,6 +980,25 @@ no deletes) before forwarding with the upstream credential; guards see kind
 401 challenge must leave `/gateway/` answering `WWW-Authenticate: Basic` so
 Git's credential helpers run.
 
+Models through the gateway (ADR 0180): a provider whose connection is a model
+key sets `model: { api, baseUrl, headers({ material }) }`
+(`defineModelConnectionProvider` from `@catamorphic/server-sdk`, `api`
+`anthropic` or `openai`; `builtinModelConnectionProviders()` returns the
+`anthropic` and `openai` kinds). Its connections carry the `model`
+capability, and a binding may add `model: { allow?, maxOutputTokensPerTurn? }`.
+The plugin serves `/gateway/model/:alias/*` (public route; the grant is
+`x-api-key` or a bearer): Anthropic Messages and `count_tokens`, OpenAI
+Responses and Chat Completions, streamed, with guards seeing kind `model`
+and the endpoint as action. Usage lands in `model_usage` per session and
+turn. At each sandbox turn core writes the grant of every model alias into
+the sandbox (the same `sandbox`-channel grants as Git) and passes the turn
+`TurnOptions.sandbox` and, for an agent registered with `modelConnection:
+<alias>`, `TurnOptions.modelGateway`. `ClaudeCodeAgent` and `CodexAgent` with
+`sandbox: {}` then run their CLI inside that sandbox over process operations
+(`spawnInSandbox`; providers implement `processes.writeProcessInput` for a
+process started with `stdin: true`), with the gateway as their only model
+endpoint. Harness binaries come from the Environment image.
+
 Workspaces at a ref (ADR 0178): `create` and `deliver` accept
 `workspace: { ref, update? }`. The control plane fetches the ref from the
 project's linked remote (`projects.remote_url`) into a per-project bare mirror

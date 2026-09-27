@@ -935,7 +935,9 @@ function ProjectAgentBody({
               ? `project secret ${agent.secretName ?? ""}`
               : agent.credentialsSource === "local"
                 ? "this machine's login"
-                : "your profile credentials",
+                : agent.credentialsSource === "connection"
+                  ? "a Work server's model connection"
+                  : "your profile credentials",
           )}
           {fact(
             "Connections",

@@ -256,9 +256,11 @@ export {
   type ConnectionAuthorizationResult,
   type ConnectionCredentialVersion,
   type ConnectionGitRemotes,
+  type ConnectionModelEndpoint,
   type ConnectionProvider,
   ConnectionProviderRegistry,
   type GitRemoteCredentials,
+  type ModelApi,
 } from "./services/connection-providers.js";
 export {
   bindingPrincipalKinds,
@@ -266,6 +268,7 @@ export {
   CONNECTION_NAME_PATTERN,
   type ConnectionBindingSource,
   type ConnectionGitPolicy,
+  type ConnectionModelPolicy,
   type ConnectionPrincipalKind,
   type ConnectionRecord,
   type ConnectionRequirement,
@@ -274,6 +277,8 @@ export {
   connectionMcpServerName,
   type EnvironmentConnectionBinding,
   GIT_CAPABILITIES,
+  isProtocolCapability,
+  MODEL_CAPABILITY,
   normalizeConnectionRequirement,
   type ResolvedConnectionBinding,
 } from "./services/connection-types.js";
@@ -401,6 +406,21 @@ export {
   type Membership,
   MembershipsService,
 } from "./services/memberships-service.js";
+export {
+  dbModelGatewayStore,
+  MODEL_REQUEST_MAX_BYTES,
+  type ModelCallUsage,
+  ModelGatewayError,
+  type ModelGatewayRequest,
+  type ModelGatewayResponse,
+  ModelGatewayService,
+  type ModelGatewayStore,
+  type ModelUsageRecord,
+  modelAllowed,
+  modelEndpointAction,
+  SseUsageReader,
+  usageFromJson,
+} from "./services/model-gateway.js";
 export {
   type AttachedPluginInfo,
   type PluginInfo,

@@ -16,6 +16,7 @@ const SOURCE_LABELS: Record<ProjectAgentInfo["credentialsSource"], string> = {
   profile: "Your credentials (this profile's sign-in or API key)",
   local: "This machine's own CLI login",
   secret: "A project secret",
+  connection: "A model connection of a Work server",
 };
 
 /**

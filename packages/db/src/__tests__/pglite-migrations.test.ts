@@ -72,6 +72,7 @@ describe("PGlite migrations", () => {
       "032_personal_connections.sql",
       "033_session_workspaces_and_sandbox_grants.sql",
       "034_session_event_keys.sql",
+      "035_model_usage.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
@@ -97,7 +98,7 @@ describe("PGlite migrations", () => {
       WHERE table_schema = ${DEFAULT_SCHEMA}
         AND table_type = 'BASE TABLE'
     `.execute(db);
-    expect(tables.rows[0]?.count).toBe(86);
+    expect(tables.rows[0]?.count).toBe(87);
   });
 
   it("supports the runtime primitives core relies on", {

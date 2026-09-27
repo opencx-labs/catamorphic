@@ -131,23 +131,32 @@ export async function seedSandboxRepository(input: {
 /** One Git-capable alias as the sandbox configures it. */
 export interface SandboxGitAlias {
   alias: string;
-  grant: string;
   remoteBaseUrls: readonly string[];
 }
 
+/** Where the session's grant for `alias` lives in its sandbox. */
+export function sandboxGrantFile(input: {
+  provider: SandboxProvider;
+  alias: string;
+}): string {
+  return `${input.provider.workspaceRoot}/${SESSION_DIRECTORY}/grants/${input.alias}`;
+}
+
 /**
- * Write the session's grants and a Git configuration that sends every
- * remote under an alias's base URLs to the gateway, answering credential
- * prompts with the current grant (ADR 0175). Idempotent: renewing only
- * rewrites the grant files. The configuration lives in the sandbox's global
- * Git config, so any clone in the sandbox uses it.
+ * Write the session's grants (ADRs 0175, 0180), one file per alias, and a
+ * Git configuration that sends every remote under a Git alias's base URLs
+ * to the gateway, answering credential prompts with the current grant.
+ * Idempotent: renewing only rewrites the grant files. The configuration
+ * lives in the sandbox's global Git config, so any clone uses it. Model
+ * harnesses read their alias's grant file at each use.
  */
 export async function configureSandboxGateway(input: {
   provider: SandboxProvider;
   sandboxId: string;
   /** `<gateway>/git`, as the sandbox reaches it. */
   gatewayGitUrl: string;
-  aliases: readonly SandboxGitAlias[];
+  grants: readonly { alias: string; grant: string }[];
+  gitAliases: readonly SandboxGitAlias[];
   renewOnly?: boolean;
 }): Promise<void> {
   const directory = `${input.provider.workspaceRoot}/${SESSION_DIRECTORY}`;
@@ -155,11 +164,11 @@ export async function configureSandboxGateway(input: {
   await input.provider.uploadFiles(
     input.sandboxId,
     Object.fromEntries(
-      input.aliases.map((alias) => [`grants/${alias.alias}`, alias.grant]),
+      input.grants.map((grant) => [`grants/${grant.alias}`, grant.grant]),
     ),
     directory,
   );
-  if (input.renewOnly) {
+  if (input.renewOnly || input.gitAliases.length === 0) {
     await run({
       ...input,
       cwd: directory,
@@ -183,7 +192,7 @@ export async function configureSandboxGateway(input: {
   const config = [
     `[credential "${originOf(gateway)}"]`,
     "\tuseHttpPath = true",
-    ...input.aliases.flatMap((alias) => [
+    ...input.gitAliases.flatMap((alias) => [
       `[credential "${gateway}/${alias.alias}/"]`,
       // An empty helper first drops system helpers (a keychain) for the
       // gateway, so a grant is never stored outside the sandbox's files.

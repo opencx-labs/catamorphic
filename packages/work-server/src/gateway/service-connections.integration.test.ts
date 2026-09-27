@@ -248,9 +248,12 @@ describe.skipIf(!databaseUrl)("service connections (ADR 0172)", () => {
         .statusCode,
     ).toBe(409);
     const providers = await api("GET", "/api/connection-providers", adaToken);
-    // GitHub is built in (ADR 0177); the gateway adds the replica.
+    // GitHub and the model keys are built in (ADRs 0177, 0180); the
+    // gateway adds the replica.
     expect(providers.json()).toEqual([
       { kind: "github", displayName: "GitHub" },
+      { kind: "anthropic", displayName: "Anthropic" },
+      { kind: "openai", displayName: "OpenAI" },
       { kind: "prod-replica", displayName: "Production replica" },
     ]);
     const created = await api(

@@ -23,6 +23,8 @@
     "@ai-sdk/openai": "^4.0.65",
     "@catamorphic/ai-sdk": "workspace:*",
     "@catamorphic/app": "workspace:*",
+    "@catamorphic/claude-code": "workspace:*",
+    "@catamorphic/codex": "workspace:*",
     "@catamorphic/core": "workspace:*",
     "@catamorphic/db": "workspace:*",
     "@catamorphic/fastify-plugin": "workspace:*",

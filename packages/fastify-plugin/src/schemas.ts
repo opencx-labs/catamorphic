@@ -1620,8 +1620,10 @@ export const ProjectAgentDefinitionSchema = z.object({
   description: z.string().optional(),
   credentials: z
     .object({
-      source: z.enum(["profile", "secret", "local"]),
+      source: z.enum(["profile", "secret", "local", "connection"]),
       secret: z.string().optional(),
+      /** The Environment alias of the agent's model connection (ADR 0180). */
+      connection: z.string().optional(),
     })
     .optional(),
   connections: z

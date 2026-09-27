@@ -285,6 +285,20 @@ function instrumentProcessProvider(args: {
           return process;
         },
       ),
+    writeProcessInput: (options) =>
+      withSpan(
+        {
+          tracer,
+          name: "sandbox.process.write",
+          attributes: {
+            ...base,
+            "catamorphic.sandbox.id": options.sandboxId,
+            "catamorphic.process.id": options.processId,
+            "catamorphic.process.bytes": Buffer.byteLength(options.data),
+          },
+        },
+        () => args.provider.writeProcessInput(options),
+      ),
     listProcesses: (options) =>
       withSpan(
         {

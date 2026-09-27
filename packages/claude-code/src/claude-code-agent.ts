@@ -28,10 +28,12 @@ import type {
   McpServersSource,
   McpToolPolicyLayers,
   ProviderSession,
+  SandboxModelGateway,
   StartSessionOpts,
   ToolPermissionHandler,
   ToolPolicyAnnotations,
   TurnOptions,
+  TurnSandbox,
 } from "@catamorphic/sandbox";
 import {
   agentCapabilityTools,
@@ -45,6 +47,8 @@ import {
   renderTurnContext,
   renderUserMessage,
   resolveMcpServers,
+  spawnInSandbox,
+  stagedPluginFiles,
   stagePluginDocs,
   ToolGate,
 } from "@catamorphic/sandbox";
@@ -151,6 +155,18 @@ export interface ClaudeCodeAgentOpts {
    */
   permissionMode?: "default" | "acceptEdits" | "plan" | "bypassPermissions";
   /**
+   * Run the CLI inside each turn's sandbox instead of on this host (ADR
+   * 0180). The host passes the sandbox and the model gateway on every turn
+   * (`TurnOptions.sandbox`, `TurnOptions.modelGateway`); the CLI's standard
+   * input and output travel over sandbox process operations, so it can run
+   * on a worker. `command` is the CLI in the sandbox image (default
+   * `claude`). The CLI's environment is exactly the gateway's base URL and
+   * the harness switches: no host variable reaches it, and its key is the
+   * session's grant, read from the grant file by `apiKeyHelper` at each use
+   * so renewals apply without a restart.
+   */
+  sandbox?: { command?: string };
+  /**
    * Claude Code auto-memory (the persistent memory directory + MEMORY.md
    * loaded each session). Defaults to on — the CLI's own behavior.
    * `false` spawns every session with CLAUDE_CODE_DISABLE_AUTO_MEMORY=1,
@@ -223,6 +239,16 @@ const denyUnlistedTools: CanUseTool = async () => ({
   behavior: "deny",
   message: "This tool is not available in the Catamorphic desktop harness.",
 });
+
+/** Where a sandbox-resident turn runs and how it reaches its model. */
+interface SandboxRun {
+  sandbox: TurnSandbox;
+  gateway: SandboxModelGateway;
+  command: string;
+}
+
+/** How often the CLI re-reads its key: grants are renewed every 20 minutes. */
+const API_KEY_HELPER_TTL_MS = 5 * 60_000;
 
 interface SessionState {
   systemPrompt?: string;
@@ -347,16 +373,34 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
   }
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
-    await stagePluginDocs(
-      this.opts.pluginDirectory ?? opts.workingDirectory,
-      opts.attachedPlugins,
-    );
+    if (this.opts.sandbox) {
+      // The working directory is the sandbox's: plugin docs go there.
+      const files = stagedPluginFiles(opts.attachedPlugins);
+      if (opts.sandboxProvider && Object.keys(files).length > 0)
+        await opts.sandboxProvider.uploadFiles(
+          opts.sandboxId,
+          files,
+          this.opts.pluginDirectory ?? opts.workingDirectory,
+        );
+    } else {
+      await stagePluginDocs(
+        this.opts.pluginDirectory ?? opts.workingDirectory,
+        opts.attachedPlugins,
+      );
+    }
     const preamble = buildPluginsPreamble(opts.attachedPlugins, {
       directory: this.opts.pluginDirectory,
     });
     const systemPrompt =
-      [preamble, opts.systemPrompt ?? ""].filter(Boolean).join("\n\n") ||
-      undefined;
+      [
+        preamble,
+        opts.systemPrompt ?? "",
+        // A sandbox-resident session re-anchored in a new sandbox has no
+        // transcript there: it continues from the host's.
+        this.opts.sandbox ? historyPreamble(opts.history) : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n") || undefined;
 
     const toolContext: ExtraToolContext = {
       projectId: opts.projectId,
@@ -467,6 +511,14 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       return;
     }
     const cwd = state.workingDirectory || undefined;
+    const sandboxRun = this.opts.sandbox
+      ? sandboxRunFor(this.opts.sandbox, opts)
+      : undefined;
+    if (typeof sandboxRun === "string") {
+      yield { type: "error", content: sandboxRun };
+      yield { type: "done" };
+      return;
+    }
 
     const live = createLiveTurn(state);
     live.turnContext = renderTurnContext(opts?.context) || undefined;
@@ -483,11 +535,14 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         state && !state.transcriptExists
           ? { sessionId: providerSessionId }
           : { resume: providerSessionId };
-      const prompt = await withAttachments(
-        message,
-        opts?.attachments,
-        providerSessionId,
-      );
+      const prompt = sandboxRun
+        ? await withSandboxAttachments(
+            message,
+            opts?.attachments,
+            providerSessionId,
+            sandboxRun.sandbox,
+          )
+        : await withAttachments(message, opts?.attachments, providerSessionId);
       const turn = query({
         prompt:
           live.inputAbort && opts?.readPendingMessages
@@ -506,6 +561,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
             opts,
             live,
             providerSessionId,
+            sandboxRun,
           ),
           ...anchor,
           abortController: live.abort,
@@ -728,6 +784,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     turn: TurnOptions | undefined,
     live: LiveTurn,
     providerSessionId?: string,
+    sandboxRun?: SandboxRun,
   ): Options {
     // Resumed sessions reconstruct this context from ProviderSession before
     // reaching here, so the host's workspace tools survive app restarts.
@@ -836,18 +893,31 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         ...(systemPrompt ? { append: systemPrompt } : {}),
       },
       env: {
-        ...process.env,
+        // In a sandbox the CLI gets exactly what is listed here: no host
+        // variable (and so no host credential) reaches it.
+        ...(sandboxRun ? {} : process.env),
         ...(this.opts.memory === false
           ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" }
           : {}),
         ...(hostOwnsBackground
           ? { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" }
           : {}),
-        ...this.opts.env,
+        ...(sandboxRun ? sandboxEnv(sandboxRun) : this.opts.env),
       },
-      executable: this.opts.executable,
-      executableArgs: this.opts.executableArgs,
-      pathToClaudeCodeExecutable: this.opts.pathToClaudeCodeExecutable,
+      ...(sandboxRun
+        ? {
+            // A native binary: the SDK runs the command itself, which the
+            // sandbox resolves on its own PATH.
+            pathToClaudeCodeExecutable: sandboxRun.command,
+            settings: { apiKeyHelper: 'cat "$WORK_MODEL_KEY_FILE"' },
+            spawnClaudeCodeProcess: (spawn) =>
+              sandboxSpawn({ run: sandboxRun, spawn }),
+          }
+        : {
+            executable: this.opts.executable,
+            executableArgs: this.opts.executableArgs,
+            pathToClaudeCodeExecutable: this.opts.pathToClaudeCodeExecutable,
+          }),
       model: turn?.model ?? this.opts.model,
       effort: turn?.effort ?? this.opts.effort,
       permissionMode: this.opts.permissionMode ?? "acceptEdits",
@@ -933,6 +1003,116 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       settingSources: ["user", "project", "local"],
     };
   }
+}
+
+/**
+ * The sandbox and model a sandbox-resident turn needs, or why it cannot
+ * run (ADR 0180).
+ */
+function sandboxRunFor(
+  options: { command?: string },
+  turn: TurnOptions | undefined,
+): SandboxRun | string {
+  if (!turn?.sandbox?.provider.processes)
+    return "Claude Code runs inside this chat's sandbox, and this Environment's sandboxes cannot run it (they do not run processes).";
+  const gateway = turn.modelGateway;
+  if (!gateway)
+    return "Claude Code reaches its model through the gateway, and this chat has no model connection: bind one in the agent's Environment and name it in the agent's credentials.";
+  if (gateway.api !== "anthropic")
+    return `Claude Code speaks the Anthropic API; the connection '${gateway.alias}' is an ${gateway.api} API.`;
+  return {
+    sandbox: turn.sandbox,
+    gateway,
+    command: options.command ?? "claude",
+  };
+}
+
+/** The CLI's whole environment in the sandbox, beside the SDK's own. */
+function sandboxEnv(run: SandboxRun): Record<string, string> {
+  return {
+    ANTHROPIC_BASE_URL: run.gateway.baseUrl,
+    CLAUDE_CODE_API_KEY_HELPER_TTL_MS: String(API_KEY_HELPER_TTL_MS),
+    DISABLE_AUTOUPDATER: "1",
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+  };
+}
+
+/** The SDK's spawn, carried out in the sandbox over process operations. */
+function sandboxSpawn(input: {
+  run: SandboxRun;
+  spawn: Parameters<NonNullable<Options["spawnClaudeCodeProcess"]>>[0];
+}): ReturnType<NonNullable<Options["spawnClaudeCodeProcess"]>> {
+  const { run, spawn } = input;
+  const processes = run.sandbox.provider.processes;
+  if (!processes) throw new Error("This sandbox cannot run processes");
+  const stderr = `${run.sandbox.stateDirectory}/claude-code.stderr`;
+  return spawnInSandbox({
+    processes,
+    sandboxId: run.sandbox.sandboxId,
+    command: spawn.command,
+    args: spawn.args,
+    cwd: spawn.cwd ?? run.sandbox.stateDirectory,
+    env: spawn.env,
+    pathEnv: { WORK_MODEL_KEY_FILE: run.gateway.keyFile },
+    stderrPath: stderr,
+    name: "Claude Code",
+    signal: spawn.signal,
+    readStderr: async () =>
+      (
+        await run.sandbox.provider.executeCommand(
+          run.sandbox.sandboxId,
+          `tail -c 4000 ${JSON.stringify(stderr)} 2>/dev/null || true`,
+        )
+      ).result,
+  });
+}
+
+/** Earlier turns, for a session that continues in a new sandbox. */
+function historyPreamble(history: StartSessionOpts["history"]): string {
+  if (!history || history.length === 0) return "";
+  const turns = history
+    .map(
+      (turn) =>
+        `${turn.role === "user" ? "User" : "You"}: ${turn.content.slice(0, 4000)}`,
+    )
+    .join("\n\n");
+  return `This conversation continues from earlier turns, which you no longer hold in your transcript:\n\n${turns.slice(-60_000)}`;
+}
+
+/**
+ * Media attachments for a sandbox-resident turn: written into the sandbox
+ * (the CLI reads them there) and referenced by path.
+ */
+async function withSandboxAttachments(
+  message: string,
+  attachments: TurnOptions["attachments"],
+  providerSessionId: string,
+  sandbox: TurnSandbox,
+): Promise<string> {
+  const withText = renderUserMessage(message, attachments);
+  const media = (attachments ?? []).filter(isMediaAttachment);
+  if (media.length === 0) return withText;
+  const directory = `${sandbox.stateDirectory}/attachments/${providerSessionId}`;
+  const lines: string[] = [];
+  for (const attachment of media) {
+    const safeName = `${crypto.randomUUID().slice(0, 8)}-${attachment.name.replace(/[^\w.-]+/g, "_")}`;
+    await sandbox.provider.uploadFiles(
+      sandbox.sandboxId,
+      { [`${safeName}.b64`]: attachment.dataBase64 },
+      directory,
+    );
+    const decoded = await sandbox.provider.executeCommand(
+      sandbox.sandboxId,
+      `base64 -d < ${JSON.stringify(`${safeName}.b64`)} > ${JSON.stringify(safeName)} && rm -f ${JSON.stringify(`${safeName}.b64`)}`,
+      { cwd: directory },
+    );
+    if (decoded.exitCode !== 0)
+      throw new Error(`Could not place ${attachment.name} in the sandbox`);
+    lines.push(
+      `- [attachment ${(attachments ?? []).indexOf(attachment) + 1}: ${attachment.name}] ${directory}/${safeName} (${attachment.mediaType})`,
+    );
+  }
+  return `${withText}\n\n[The user attached ${media.length === 1 ? "a file" : "files"} with this message — use the Read tool to view:\n${lines.join("\n")}]`;
 }
 
 /** Host-neutral MCP configs → the SDK's native `mcpServers` entries. */

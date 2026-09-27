@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-09-27
 - **Refines:** 0065, 0162, 0164
+- **Models implemented by:** [0180](0180-harnesses-run-in-the-sandbox-models-through-the-gateway.md)
 
 ## Context
 

@@ -105,9 +105,11 @@ export type {
   ExtraToolContext,
   McpServersSource,
   ProviderSession,
+  SandboxModelGateway,
   SessionCaller,
   StartSessionOpts,
   TurnOptions,
+  TurnSandbox,
 } from "./coding-agent/types.js";
 export {
   AGENT_EFFORT_LEVELS,
@@ -138,6 +140,7 @@ export {
 } from "./plugin-upload.js";
 export {
   assertProcessId,
+  assertWriteSize,
   decodeUtf8Prefix,
   type FollowProcessResult,
   followProcess,
@@ -147,6 +150,7 @@ export {
   PROCESS_READ_MAX_BYTES,
   PROCESS_READ_MAX_WAIT_MS,
   PROCESS_SIGNALS,
+  PROCESS_WRITE_MAX_BYTES,
   type ProcessOutput,
   type ProcessSignal,
   processReadBounds,
@@ -157,6 +161,7 @@ export {
   type SignalProcessArgs,
   type StartProcessArgs,
   shellSandboxProcesses,
+  type WriteProcessInputArgs,
 } from "./processes.js";
 export {
   AGENT_MODES,
@@ -176,6 +181,14 @@ export {
 } from "./sandbox-environment.js";
 export type { SandboxStore } from "./sandbox-manager.js";
 export { SandboxManagerImpl } from "./sandbox-manager.js";
+export {
+  type SandboxStdioProcess,
+  type SandboxStdioSpawnArgs,
+  sandboxCommandLine,
+  shellWord,
+  spawnInSandbox,
+  splitUtf8,
+} from "./sandbox-stdio.js";
 export type {
   StdioSupervisorTransport,
   SupervisorProcessHandle,

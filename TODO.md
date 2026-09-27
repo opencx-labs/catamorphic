@@ -11,12 +11,19 @@
   integration test (`packages/claude-code/src/__tests__/
   ask-user-core.integration.test.ts` — real AgentSessionsService + real
   Postgres, DATABASE_URL-gated), and the renderer panel via the fake-agent
-  e2e. The one uncovered layer is the SDK↔CLI boundary itself: a fixture
-  "fake claude" executable speaking the SDK's stdio protocol (pointed at
-  via `pathToClaudeCodeExecutable` under an e2e env flag) would let the
-  desktop e2e drive a REAL Claude Code harness end to end — questions,
-  permission round-trips, background tasks — without model calls. Worth
-  building once; every harness regression class lands in it.
+  e2e. The SDK↔CLI boundary now has a fixture CLI
+  (`packages/work-server/src/workers/fake-claude-cli.ts`, ADR 0180) that the
+  Work server e2e drives through a real harness, gateway and worker; it
+  speaks initialize, user turns, Bash tool use and results. Remaining: point
+  the desktop e2e at it (`pathToClaudeCodeExecutable` under an e2e env flag)
+  and grow it for questions, permission round-trips (`can_use_tool`), hook
+  callbacks and background tasks.
+- **Harnesses on the server, follow-ups (ADR 0180).** Codex in a sandbox has
+  no Work capability tools: carry them over the app-server protocol's
+  dynamic tools instead of the loopback listener. Renew connection MCP
+  (`mcp` channel) grants during long sessions. Serve project harness agents
+  when the server has no control-plane model (today `/me` reports chat off).
+  A usage view for gateway usage (`model_usage`) per project and member.
 - **Dev-shell follow-ups (ADR 0045).** PR review depth on the CodeHost
   seam: inline comments, approvals, merge-from-app; a human-facing worktree
   cleanup surface (agents can create and adopt worktrees, but Catamorphic

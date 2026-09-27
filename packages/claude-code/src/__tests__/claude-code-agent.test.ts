@@ -1,4 +1,4 @@
-import type { ProviderSession } from "@catamorphic/sandbox";
+import type { ProviderSession, SandboxProvider } from "@catamorphic/sandbox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -44,6 +44,35 @@ const successResult = {
   is_error: false,
   result: "ok",
 };
+
+/** A sandbox whose operations are never reached in these tests. */
+function fakeSandboxProvider(withProcesses: boolean): SandboxProvider {
+  const never = () => Promise.reject(new Error("not in this test"));
+  return {
+    workspaceRoot: "/workspace",
+    createSandbox: never,
+    startSandbox: never,
+    stopSandbox: never,
+    destroySandbox: never,
+    getSandboxStatus: never,
+    executeCommand: never,
+    uploadFiles: never,
+    downloadFile: never,
+    gitClone: never,
+    gitCheckout: never,
+    ...(withProcesses
+      ? {
+          processes: {
+            startProcess: never,
+            readProcessOutput: never,
+            signalProcess: never,
+            listProcesses: never,
+            writeProcessInput: never,
+          },
+        }
+      : {}),
+  };
+}
 
 const session: ProviderSession = {
   providerSessionId: "sess-1",
@@ -211,6 +240,65 @@ describe("ClaudeCodeAgent", () => {
     await collect(agent, "Quick question");
 
     expect(lastQueryOptions().effort).toBeUndefined();
+  });
+
+  it("runs the CLI in the turn's sandbox with only the gateway's address and a key helper (ADR 0180)", async () => {
+    queryMock.mockReturnValue(scriptedQuery([successResult]));
+    process.env.HOST_ONLY_SECRET = "host-secret";
+    const provider = fakeSandboxProvider(true);
+    const agent = new ClaudeCodeAgent({ sandbox: {} });
+    try {
+      await collect(agent, "hello", {
+        sandbox: {
+          provider,
+          sandboxId: "sandbox-1",
+          stateDirectory: "/workspace/.work-session",
+        },
+        modelGateway: {
+          alias: "anthropic",
+          api: "anthropic",
+          baseUrl: "https://work.example.test/api/gateway/model/anthropic",
+          keyFile: "/workspace/.work-session/grants/anthropic",
+        },
+      });
+    } finally {
+      delete process.env.HOST_ONLY_SECRET;
+    }
+    const options = queryMock.mock.calls[0]?.[0].options;
+    expect(options?.env).toMatchObject({
+      ANTHROPIC_BASE_URL:
+        "https://work.example.test/api/gateway/model/anthropic",
+    });
+    expect(options?.env?.HOST_ONLY_SECRET).toBeUndefined();
+    expect(options?.env?.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(options?.settings).toEqual({
+      apiKeyHelper: 'cat "$WORK_MODEL_KEY_FILE"',
+    });
+    expect(options?.pathToClaudeCodeExecutable).toBe("claude");
+    expect(typeof options?.spawnClaudeCodeProcess).toBe("function");
+  });
+
+  it("refuses a sandbox turn without a model connection it can speak", async () => {
+    const agent = new ClaudeCodeAgent({ sandbox: {} });
+    const sandbox = {
+      provider: fakeSandboxProvider(true),
+      sandboxId: "sandbox-1",
+      stateDirectory: "/workspace/.work-session",
+    };
+    const missing = await collect(agent, "hello", { sandbox });
+    expect(missing[0]).toMatchObject({ type: "error" });
+    expect(String(missing[0]?.content)).toContain("no model connection");
+    const openai = await collect(agent, "hello", {
+      sandbox,
+      modelGateway: {
+        alias: "openai",
+        api: "openai",
+        baseUrl: "https://work.example.test/api/gateway/model/openai",
+        keyFile: "/workspace/.work-session/grants/openai",
+      },
+    });
+    expect(String(openai[0]?.content)).toContain("speaks the Anthropic API");
+    expect(queryMock).not.toHaveBeenCalled();
   });
 
   it("denies tools outside the allowlist via canUseTool", async () => {

@@ -118,14 +118,37 @@ export type AgentCoordinationStrategy =
  *    The mode for shared/remote deployments.
  *  - `local`: the machine's existing CLI login (`claude login` /
  *    `codex login`), no credential overrides. Personal too → consent.
+ *  - `connection`: a model connection the agent's Environment binds under
+ *    the alias `connection` (ADR 0180). The harness runs in the session's
+ *    sandbox and reaches the model through the gateway with its session
+ *    grant; the key stays on the control plane. The mode for servers.
  */
 export const AgentDefinitionCredentialsSchema = z
   .object({
-    source: z.enum(["profile", "secret", "local"]).default("profile"),
+    source: z
+      .enum(["profile", "secret", "local", "connection"])
+      .default("profile"),
     /** Project-secret name holding the API key (source: "secret" only). */
     secret: z.string().min(1).optional(),
+    /** Environment binding alias of the model connection (source: "connection"). */
+    connection: z.string().regex(CONNECTION_ALIAS_PATTERN).optional(),
   })
   .superRefine((value, ctx) => {
+    if (value.source === "connection" && !value.connection) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["connection"],
+        message:
+          'credentials.source "connection" requires a "connection" alias',
+      });
+    }
+    if (value.source !== "connection" && value.connection) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["connection"],
+        message: `"connection" is only valid with credentials.source "connection"`,
+      });
+    }
     if (value.source === "secret" && !value.secret) {
       ctx.addIssue({
         code: "custom",
@@ -416,6 +439,8 @@ export function definitionHash(
     credentials: {
       source: credentials.source,
       secret: credentials.secret ?? null,
+      // Only when named, so existing consent hashes stay valid.
+      ...(credentials.connection ? { connection: credentials.connection } : {}),
     },
     environment: definition.environment ?? null,
     connections: (definition.connections ?? []).map((connection) =>

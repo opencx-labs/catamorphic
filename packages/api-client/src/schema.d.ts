@@ -10290,8 +10290,9 @@ export interface paths {
                                 description?: string;
                                 credentials?: {
                                     /** @enum {string} */
-                                    source: "profile" | "secret" | "local";
+                                    source: "profile" | "secret" | "local" | "connection";
                                     secret?: string;
+                                    connection?: string;
                                 };
                                 connections?: (string | {
                                     alias: string;
@@ -10567,6 +10568,14 @@ export interface paths {
                                     [key: string]: string;
                                 };
                                 name?: string;
+                                stdin?: boolean;
+                            } | {
+                                /** @enum {string} */
+                                kind: "process.write";
+                                sandboxId: string;
+                                processId: string;
+                                data: string;
+                                end?: boolean;
                             } | {
                                 /** @enum {string} */
                                 kind: "process.read";
