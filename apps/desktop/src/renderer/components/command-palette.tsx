@@ -276,7 +276,9 @@ function projectAgentDetail(agent: ProjectAgentInfo): string {
         ? "changed — approve again"
         : agent.credentialsSource === "secret"
           ? "project secret"
-          : "approved";
+          : agent.credentialsSource === "connection"
+            ? "server model connection"
+            : "approved";
   return `${kind} · ${state}`;
 }
 
