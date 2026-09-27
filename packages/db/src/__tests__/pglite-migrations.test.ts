@@ -73,6 +73,7 @@ describe("PGlite migrations", () => {
       "033_session_workspaces_and_sandbox_grants.sql",
       "034_session_event_keys.sql",
       "035_model_usage.sql",
+      "036_project_remote_divergence.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
