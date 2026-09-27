@@ -119,6 +119,7 @@ export { CommandDeploymentRuntimeProvider } from "./command-deployment-runtime.j
 export {
   type SandboxStdioProcess,
   type SandboxStdioSpawnArgs,
+  sandboxCommandLine,
   shellWord,
   spawnInSandbox,
   splitUtf8,

@@ -26,6 +26,7 @@ import { gatewayHostOf } from "@catamorphic/sandbox";
 import {
   aiToolCall,
   aiToolKind,
+  builtinModelConnectionProviders,
   type Catamorphic,
   connectionAuthorizationPage,
   createCatamorphic,
@@ -485,6 +486,14 @@ async function createWorkServerInner(
     ],
     connectionProviders: [
       github,
+      // Model keys are connections too (ADR 0180): harnesses in sandboxes
+      // reach them through the gateway's model routes.
+      ...builtinModelConnectionProviders().filter(
+        (provider) =>
+          !gatewayConnectionProviders.some(
+            (configured) => configured.kind === provider.kind,
+          ),
+      ),
       ...gatewayConnectionProviders,
       ...(hooks.connectionProviders ?? []),
     ],

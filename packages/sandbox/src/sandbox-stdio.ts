@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { PassThrough, type Readable, Writable } from "node:stream";
 import {
   PROCESS_READ_MAX_BYTES,
@@ -21,9 +22,16 @@ export interface SandboxStdioSpawnArgs {
   sandboxId: string;
   command: string;
   args: readonly string[];
-  cwd?: string;
+  /** Absolute sandbox path the process starts in. */
+  cwd: string;
   /** Exactly the process's environment beyond the sandbox's own. */
   env?: Readonly<Record<string, string | undefined>>;
+  /**
+   * Variables naming absolute sandbox paths. A provider may map sandbox
+   * paths onto its own (local-process does), so they are resolved inside
+   * the sandbox, relative to `cwd`, into the path the process sees.
+   */
+  pathEnv?: Readonly<Record<string, string>>;
   name?: string;
   /** Absolute sandbox path standard error is appended to. */
   stderrPath: string;
@@ -103,8 +111,8 @@ class SandboxStdioChild extends EventEmitter implements SandboxStdioProcess {
     this.started = spawn.processes
       .startProcess({
         sandboxId: spawn.sandboxId,
-        command: `exec ${[spawn.command, ...spawn.args].map(shellWord).join(" ")} 2>>${shellWord(spawn.stderrPath)}`,
-        ...(spawn.cwd ? { cwd: spawn.cwd } : {}),
+        command: sandboxCommandLine(spawn),
+        cwd: spawn.cwd,
         env,
         ...(spawn.name ? { name: spawn.name } : {}),
         stdin: true,
@@ -233,6 +241,33 @@ class SandboxStdioChild extends EventEmitter implements SandboxStdioProcess {
 
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+/**
+ * The shell line that starts a stdio command in the sandbox: path
+ * variables resolved from `cwd`, standard error to its file, and `exec`, so
+ * signals reach the command itself.
+ */
+export function sandboxCommandLine(
+  spawn: Pick<
+    SandboxStdioSpawnArgs,
+    "command" | "args" | "cwd" | "pathEnv" | "stderrPath"
+  >,
+): string {
+  const relative = (target: string) =>
+    path.posix.relative(spawn.cwd, target) || ".";
+  const stderr = relative(spawn.stderrPath);
+  const exports = Object.entries(spawn.pathEnv ?? {}).map(([name, target]) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
+      throw new Error(`Invalid environment variable name '${name}'`);
+    const at = relative(target);
+    return `export ${name}="$(cd ${shellWord(path.posix.dirname(at))} && pwd -P)"/${shellWord(path.posix.basename(at))}`;
+  });
+  return [
+    `mkdir -p ${shellWord(path.posix.dirname(stderr))}`,
+    ...exports,
+    `exec ${[spawn.command, ...spawn.args].map(shellWord).join(" ")} 2>>${shellWord(stderr)}`,
+  ].join("\n");
 }
 
 /** Split text into parts of at most `bytes` UTF-8 bytes, on characters. */

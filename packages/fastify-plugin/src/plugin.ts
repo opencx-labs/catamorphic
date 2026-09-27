@@ -28,6 +28,7 @@ import { registerConnectionRoutes } from "./routes/connections.js";
 import { registerDocumentRoutes } from "./routes/documents.js";
 import { registerEnvironmentRoutes } from "./routes/environments.js";
 import { registerGitGatewayRoutes } from "./routes/git-gateway.js";
+import { registerModelGatewayRoutes } from "./routes/model-gateway.js";
 import { registerMeRoutes } from "./routes/me.js";
 import { registerMembershipRoutes } from "./routes/memberships.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
@@ -243,6 +244,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerConnectionRoutes(app, ctx);
   registerConnectionMcpRoutes(app, ctx);
   registerGitGatewayRoutes(app, ctx);
+  registerModelGatewayRoutes(app, ctx);
   registerWorkflowRoutes(app, ctx);
   registerWorkflowEnablementRoutes(app, ctx);
   registerTriggerRoutes(app, ctx);

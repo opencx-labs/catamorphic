@@ -9,6 +9,7 @@ import { defineMcpConnectionProvider } from "@catamorphic/mcp";
 import {
   defineGitConnectionProvider,
   defineHttpApiConnectionProvider,
+  defineModelConnectionProvider,
   definePostgresConnectionProvider,
 } from "@catamorphic/server-sdk";
 import type { LanguageModel } from "ai";
@@ -117,6 +118,22 @@ const GitEntry = z.strictObject({
   baseUrl: z.url(),
 });
 
+/**
+ * A model API reached by harnesses in sandboxes through the gateway (ADR
+ * 0180), beside the built-in `anthropic` and `openai`: an OpenAI-compatible
+ * server such as OpenRouter or a self-hosted model, or a provider at
+ * another base URL. The key is the service connection's; an entry with a
+ * built-in kind replaces it.
+ */
+const ModelEntry = z.strictObject({
+  type: z.literal("model"),
+  kind: Kind,
+  displayName: z.string().min(1),
+  api: z.enum(["anthropic", "openai"]),
+  /** Where the API's paths go, e.g. `https://openrouter.ai/api/v1`. */
+  baseUrl: z.url().optional(),
+});
+
 /** A database reached with a stored read-only credential (ADR 0163). */
 const PostgresEntry = z.strictObject({
   type: z.literal("postgres"),
@@ -170,7 +187,7 @@ const ApprovalGuardEntry = z.strictObject({
 
 const GatewayFile = z.strictObject({
   connections: z
-    .array(z.union([HttpEntry, PostgresEntry, GitEntry, McpEntry]))
+    .array(z.union([HttpEntry, PostgresEntry, GitEntry, ModelEntry, McpEntry]))
     .default([]),
   guards: z.array(z.union([ModelGuardEntry, ApprovalGuardEntry])).default([]),
 });
@@ -304,6 +321,14 @@ export function gatewayProviders(
     if (entry.type === "postgres") {
       const { type: _type, ...options } = entry;
       return definePostgresConnectionProvider(options);
+    }
+    if (entry.type === "model") {
+      return defineModelConnectionProvider({
+        kind: entry.kind,
+        displayName: entry.displayName,
+        api: entry.api,
+        ...(entry.baseUrl ? { baseUrl: entry.baseUrl } : {}),
+      });
     }
     if (entry.type === "git") {
       return defineGitConnectionProvider({
