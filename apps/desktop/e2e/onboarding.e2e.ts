@@ -241,8 +241,8 @@ describe("blank project onboarding", () => {
 
     // Seed skills: reference material plus the scaffold's support files.
     for (const file of [
-      ".work/skills/catamorphic-projects/SKILL.md",
-      ".work/skills/catamorphic-projects/files/package.json",
+      ".work/skills/work-projects/SKILL.md",
+      ".work/skills/work-projects/files/package.json",
     ]) {
       expect(fs.existsSync(path.join(projectDir, file)), file).toBe(true);
     }

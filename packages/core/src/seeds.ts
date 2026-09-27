@@ -110,7 +110,7 @@ const workflowsPkg = (dependencies?: Record<string, string>) =>
  * holds backend workflows and frontend apps, with `contracts` as the only
  * package both sides depend on. Projects don't get it at creation (ADR 0043 —
  * the workspace appears on demand, installed by agents via the
- * `catamorphic-projects` seed skill, whose support files are generated from
+ * `work-projects` seed skill, whose support files are generated from
  * these same constants).
  */
 export const workspaceFiles = ({
@@ -242,7 +242,7 @@ export const PROJECT_CHECK_SCRIPT = `/**
  *   bun run --cwd .work check                # validate (exit 1 on errors), CI-friendly
  *   bun run --cwd .work check -- --write     # also (re)write generated app-api types
  *   bun run --cwd .work check -- --host URL  # validate trigger bindings against a
- *                                # running Catamorphic host (GET /api/trigger-kinds)
+ *                                # running Work server or desktop (GET /api/trigger-kinds)
  */
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -314,12 +314,12 @@ const skillPath = (name: string) => `${PROJECT_SKILLS_DIR}/${name}/SKILL.md`;
 export const BATCH_WORKFLOW_SKILL_PATH = skillPath("batch-workflows");
 export const DURABLE_WORKFLOW_SKILL_PATH = skillPath("durable-workflows");
 
-const SCAFFOLD_SKILL_DIR = `${PROJECT_SKILLS_DIR}/catamorphic-projects`;
+const SCAFFOLD_SKILL_DIR = `${PROJECT_SKILLS_DIR}/work-projects`;
 const APPS_SKILL_DIR = `${PROJECT_SKILLS_DIR}/building-apps`;
 
 /**
  * The workspace scaffold shipped as support files of the
- * `catamorphic-projects` seed skill, so an agent can install the workspace
+ * `work-projects` seed skill, so an agent can install the workspace
  * into a project that has none by copying files instead of reconstructing
  * them from memory. Generated from the same constants as `workspaceFiles` —
  * the two cannot drift.
@@ -367,19 +367,19 @@ const appSupportFiles = (): Record<string, string> => ({
  */
 export const SEED_SKILLS: Record<string, string> = {
   [`${SCAFFOLD_SKILL_DIR}/SKILL.md`]: `---
-name: catamorphic-projects
-description: What a Catamorphic project can hold, including documents, code, automations, apps, committed agents and roles, and the project store, and how to add the automations/apps workspace to a project that has none. Use when the user asks for their first workflow, automation, or app, asks what this project is, asks about who may see or do what (roles, members, the store, sharing), or wants to configure the project's shared sidebar or starting actions.
+name: work-projects
+description: What a Work project can hold, including documents, code, automations, apps, committed agents and roles, and the project store, and how to add the automations/apps workspace to a project that has none. Use when the user asks for their first workflow, automation, or app, asks what this project is, asks about who may see or do what (roles, members, the store, sharing), or wants to configure the project's shared sidebar or starting actions.
 ---
 
-# Catamorphic projects
+# Work projects
 
-A Catamorphic project is a folder that can hold any kind of work — documents, notes, data, plans, code, automations (workflows), and user-facing apps, in any mix. Never assume the project is about code or automations: read what is actually there first.
+A Work project is a folder that can hold any kind of work — documents, notes, data, plans, code, automations (workflows), and user-facing apps, in any mix. Never assume the project is about code or automations: read what is actually there first.
 
 All project capabilities live under \`.work/\`: its own Bun workspace, apps, workflows, trigger kinds (\`triggers/\`), contracts, scripts, agents, roles, skills, and shared settings. Leave existing project files and manifests unchanged. Opening a project or having an ordinary conversation does not create this workspace.
 
 ## Persistent project data
 
-Use \`.work/app-data/<app-or-workflow>/\` for project-owned mutable data. Create \`.work/.gitignore\` on first use with \`/app-data/\`, \`node_modules/\`, and \`dist/\`; preserve existing ignore choices. Users may deliberately track ordinary data by changing these rules. Catamorphic does not manage database exports or replication. Desktop-wide credentials, chats, profiles and caches stay in host-managed storage.
+Use \`.work/app-data/<app-or-workflow>/\` for project-owned mutable data. Create \`.work/.gitignore\` on first use with \`/app-data/\`, \`node_modules/\`, and \`dist/\`; preserve existing ignore choices. Users may deliberately track ordinary data by changing these rules. Work does not manage database exports or replication. Desktop-wide credentials, chats, profiles and caches stay in host-managed storage.
 
 Workflow execution uses an immutable source snapshot. For persistent local data, use \`process.env.WORK_APP_DATA_DIR\` and a subdirectory for your capability. The local host supplies this location when supported; fail clearly if it is absent rather than silently saving durable data into a temporary deployment. Cloud execution does not automatically sync local app data. Frontend apps call workflows for database/filesystem access.
 
@@ -491,7 +491,7 @@ Rules of thumb when authoring roles:
   tools with \`toolPolicies\` (allow / ask / deny per tool, per connector
   server key, or \`catamorphic\` for the project's own workflow tools).
 - \`permissions\` says what a member may do beyond using those artifacts,
-  as \`thing:action\`. Catamorphic enforces these things, each with \`read\`
+  as \`thing:action\`. Work enforces these things, each with \`read\`
   and \`write\`: \`program\` (the project's source; it also has \`publish\`,
   making changes live), \`secrets\`, \`automations\`, \`webhooks\`, \`runs\`
   and \`sessions\` (everyone's, not just the member's own), \`memberships\`,
@@ -549,7 +549,7 @@ uncertain action just because a connection returned.
 
 ## Shape the project experience from capabilities
 
-In the Catamorphic desktop reference host, a project may ship a shared
+In the Work desktop app, a project may ship a shared
 \`.work/sidebar.js\` and up to six New Tab starters in the ordinary
 \`.work/project.json\` manifest. Both may target resolved authority with
 \`when: { permissions }\`; never branch on a role slug. Every declared

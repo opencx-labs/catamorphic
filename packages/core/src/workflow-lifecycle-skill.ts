@@ -58,7 +58,7 @@ privacy boundary; discarding it prevents new use without erasing retained runs.
 ## Reusable project code and access
 
 For a project without a \`.work/\` workspace, use the copyable support files in
-\`catamorphic-projects\` to create it. Preserve existing manifests
+\`work-projects\` to create it. Preserve existing manifests
 inside that workspace; leave the imported repository's root manifests unchanged.
 Put runtime dependencies in \`.work/workflows/package.json\`, shared
 app/workflow types in \`.work/contracts/src/\`, and expose workflows through \`app-api.ts\`

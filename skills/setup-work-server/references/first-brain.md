@@ -118,7 +118,7 @@ the admin:
 1. `ask_agent` with `agent: "assistant"` and a short message; the reply
    proves agents run (on a worker when the server runs agents only there).
 2. Ask the client to add a small workflow with an `ai.tool-call` trigger,
-   following the project's `catamorphic-projects` and `writing-workflows`
+   following the project's `work-projects` and `writing-workflows`
    skills, then `program_check`, `program_deploy`, and `workflow_run` it.
    The workflow then appears as its own tool.
 

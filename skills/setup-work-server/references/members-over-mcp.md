@@ -39,10 +39,10 @@ does not allow:
 
 ## The builder's loop
 
-1. Read `catamorphic-projects`, `writing-workflows`, and `building-apps` with
+1. Read `work-projects`, `writing-workflows`, and `building-apps` with
    `read_skill`. A project with no `.work/workflows/package.json`
    needs the workspace first: copy the support files that
-   `catamorphic-projects` lists with `program_files` and `program_write`.
+   `work-projects` lists with `program_files` and `program_write`.
 2. `program_write` the workflow or app. Nothing reaches others yet.
 3. `program_check` refreshes generated types (the trigger kinds this server
    offers, app API types) and validates the draft: parse errors, trigger

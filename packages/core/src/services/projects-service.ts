@@ -289,7 +289,7 @@ export class ProjectsService {
       // New projects get the resolved seed skills (hidden reference
       // material — the agent knows the conventions from its first session)
       // but NO visible workspace scaffold; the workspace arrives on demand
-      // via the catamorphic-projects skill (ADR 0043).
+      // via the work-projects skill (ADR 0043).
       const repo = await this.projectManager.create(tenantId, projectId, {
         name: input.name,
         initialFiles: this.seedFiles,

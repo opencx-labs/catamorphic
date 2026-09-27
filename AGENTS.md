@@ -154,7 +154,7 @@ How the three connect (setting up / troubleshooting, read in this order):
 - `.agents/skills/using-catamorphic/SKILL.md` — embedding catamorphic in a host app (local dev linking)
 - `.agents/skills/embedding-guide/SKILL.md`, `.agents/skills/api-type-safety/SKILL.md`, `.agents/skills/code-first-architecture/SKILL.md`, `.agents/skills/database-conventions/SKILL.md`, `.agents/skills/sandbox-agent-integration/SKILL.md`, `.agents/skills/workflow-code-conventions/SKILL.md`
 
-`packages/core/src/seeds.ts` assembles `SEED_SKILLS`: `catamorphic-projects`,
+`packages/core/src/seeds.ts` assembles `SEED_SKILLS`: `work-projects`,
 `writing-workflows`, `batch-workflows`, `durable-workflows`, `building-apps`
 (mechanics), and `designing-apps` (replaceable doctrine). Workflow guidance lives
 in the corresponding `packages/core/src/*-skill.ts` modules so each skill can be
