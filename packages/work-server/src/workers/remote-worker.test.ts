@@ -112,6 +112,11 @@ beforeAll(async () => {
               strict: true,
               workloads: ["agent"],
             },
+            compose: {
+              pool: { plane: "worker" },
+              workloads: ["agent"],
+              requirements: { containers: true },
+            },
           },
           defaultEnvironment: "build",
         }),
@@ -296,6 +301,7 @@ describe("placement by owner (ADR 0167)", () => {
     name: string;
     placement: Record<string, unknown>;
     workspaces: string;
+    env?: Record<string, string>;
   }): Promise<string> {
     const enrollment = await operator("POST", "/_work/operator/workers", {
       name: args.name,
@@ -311,6 +317,7 @@ describe("placement by owner (ADR 0167)", () => {
         execution: executionSettingsFromEnv({
           PATH: process.env.PATH,
           WORK_MAX_WORKSPACES: args.workspaces,
+          ...args.env,
         }),
       }),
     );
@@ -360,6 +367,36 @@ describe("placement by owner (ADR 0167)", () => {
     await expect(
       sessions.create(alice, projectId, { environment: "desk" }),
     ).rejects.toThrow();
+  }, 90_000);
+
+  it("places container Environments only on workers that offer containers (ADR 0176)", async () => {
+    const carol = await person("carol");
+    const dockerBox = await startWorker({
+      name: "docker-box",
+      placement: { access: { everyone: true }, trusted: true },
+      workspaces: "2",
+      // The endpoint starts with the sandbox; no daemon is needed to place.
+      env: { WORK_DOCKER_SOCKET: path.join(root, "docker.sock") },
+    });
+    const sessions = server.catamorphic.core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const session = await sessions.create(carol, projectId, {
+      environment: "compose",
+    });
+    const location = await sessions.sendMessage(
+      carol,
+      projectId,
+      session.id,
+      "execution-location",
+    );
+    expect(location.content).toContain(dockerBox);
+    const dockerHost = await sessions.sendMessage(
+      carol,
+      projectId,
+      session.id,
+      "docker-host",
+    );
+    expect(dockerHost.content).toMatch(/^unix:\/\/.*\.sock$/);
   }, 90_000);
 
   it("refuses a process-isolated worker shared by several people", async () => {

@@ -19742,6 +19742,12 @@
                           },
                           "expiresAt": {
                             "type": "string"
+                          },
+                          "approvers": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
                           }
                         },
                         "required": ["id", "request", "createdAt", "expiresAt"],
@@ -22691,6 +22697,86 @@
                                 },
                                 "snapshotName": {
                                   "type": "string"
+                                },
+                                "image": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["oci"]
+                                        },
+                                        "reference": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["kind", "reference"],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["dockerfile"]
+                                        },
+                                        "path": {
+                                          "type": "string"
+                                        },
+                                        "content": {
+                                          "type": "string",
+                                          "maxLength": 65536
+                                        },
+                                        "digest": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "path",
+                                        "content",
+                                        "digest"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "containers": {
+                                  "type": "boolean"
+                                },
+                                "egress": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "mode": {
+                                          "type": "string",
+                                          "enum": ["open"]
+                                        }
+                                      },
+                                      "required": ["mode"],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "mode": {
+                                          "type": "string",
+                                          "enum": ["allowlist"]
+                                        },
+                                        "allow": {
+                                          "readOnly": true,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": ["mode", "allow"],
+                                      "additionalProperties": false
+                                    }
+                                  ]
                                 },
                                 "language": {
                                   "type": "string"

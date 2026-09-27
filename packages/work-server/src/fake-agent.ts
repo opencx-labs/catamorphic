@@ -32,12 +32,12 @@ export class FakeEchoAgent implements CodingAgentProvider {
     session: ProviderSession,
     message: string,
   ): AsyncIterable<AgentEvent> {
-    if (message === "execution-location") {
+    if (message === "execution-location" || message === "docker-host") {
       const opts = this.sessions.get(session.providerSessionId ?? "");
       if (!opts?.sandboxProvider) throw new Error("Allocated provider missing");
       const result = await opts.sandboxProvider.executeCommand(
         session.sandboxId,
-        "pwd",
+        message === "docker-host" ? 'echo "$DOCKER_HOST"' : "pwd",
         { cwd: session.workingDirectory },
       );
       yield { type: "text", content: result.result.trim() };
