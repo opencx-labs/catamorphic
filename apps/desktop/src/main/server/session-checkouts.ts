@@ -164,6 +164,55 @@ export class SessionCheckouts {
     }
   }
 
+  /**
+   * The folder a native agent works in, and whether it is the chat's own.
+   * A chat at a ref of the project's remote, or asked to move to one (ADR
+   * 0178), always works in its own worktree, started at that commit from the
+   * host's mirror. Only a managed worktree is the chat's own: base moves
+   * never touch the project folder or a worktree the person assigned.
+   */
+  async resolveForAgent(input: {
+    projectId: string;
+    sessionId: string;
+    workspace?: { repository: string; pin: string; commit: string };
+    /** Whether the isolation policy keeps this chat out of `checkoutPath`. */
+    requiresIsolation(checkoutPath: string): Promise<boolean>;
+  }): Promise<{ path: string; owned: boolean }> {
+    const current = await this.describe(input);
+    if (input.workspace && current.kind === "primary") {
+      const created = await this.createManaged({
+        projectId: input.projectId,
+        sessionId: input.sessionId,
+        start: {
+          repository: input.workspace.repository,
+          ref: input.workspace.pin,
+          commit: input.workspace.commit,
+        },
+      });
+      return { path: created.path, owned: true };
+    }
+    if (await input.requiresIsolation(current.path)) {
+      if (current.kind !== "primary") {
+        throw new Error(
+          "Isolation policy prevents sharing this assigned worktree with another running session. Choose another worktree or wait for that session to finish.",
+        );
+      }
+      const created = await this.createManaged({
+        projectId: input.projectId,
+        sessionId: input.sessionId,
+        ensureAvailable: async (checkoutPath) => {
+          if (await input.requiresIsolation(checkoutPath)) {
+            throw new Error(
+              "Isolation policy prevents sharing the new worktree with another running session.",
+            );
+          }
+        },
+      });
+      return { path: created.path, owned: true };
+    }
+    return { path: current.path, owned: current.kind === "managed" };
+  }
+
   async describe(input: {
     projectId: string;
     sessionId: string;

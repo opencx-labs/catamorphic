@@ -600,6 +600,13 @@ async function createWorkServerInner(
                 `Company project ${project.id} received published updates`,
               );
             }
+            // Accepted changes (a merged roles pull request, say) stop
+            // arriving until someone reconciles the two histories. Said once,
+            // when it starts; the project carries it as remoteDivergedAt.
+            if (result.status === "diverged" && !project.remoteDivergedAt)
+              console.warn(
+                `Company project ${project.id} no longer receives updates from ${project.remoteUrl}: its main (${result.localSha?.slice(0, 12)}) has diverged from the code host's (${result.remoteSha?.slice(0, 12)}). Share its own changes as a pull request and reconcile the two.`,
+              );
           } catch (error) {
             console.warn(
               `Company project sync failed for ${project.id}:`,

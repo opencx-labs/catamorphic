@@ -541,16 +541,33 @@ export class ConnectionsService {
       return connection;
     }
     if (attempt.personal) {
+      const still = await this.db
+        .selectFrom("connection_authorization_attempts")
+        .select("status")
+        .where("id", "=", attempt.id)
+        .executeTakeFirst();
+      if (still?.status !== "completing")
+        throw new ConnectionUnavailableError(
+          attempt.provider_kind,
+          "Authorization was cancelled",
+        );
       const connection = await this.savePersonal({
         identity: args.identity,
         providerKind: attempt.provider_kind,
         authorized,
       });
-      await this.finishAttempt({
-        identity: args.identity,
-        attempt,
-        status: "completed",
-      });
+      // Cancelled while the person was still authorizing: what was saved
+      // is taken back, so a disconnect is never undone by a late sign-in.
+      if (!(await this.completeAttempt({ identity: args.identity, attempt }))) {
+        await this.revoke({
+          identity: args.identity,
+          connectionId: connection.id,
+        });
+        throw new ConnectionUnavailableError(
+          attempt.provider_kind,
+          "Authorization was cancelled",
+        );
+      }
       return connection;
     }
     if (!attempt.project_id || !attempt.environment_name || !attempt.alias) {
@@ -1634,6 +1651,45 @@ export class ConnectionsService {
       })
       .execute();
     return { authorizationId: state, challenge: started.challenge };
+  }
+
+  /**
+   * End an authorization the person walked away from (ADR 0177): a device
+   * code still being polled or a callback not yet received never completes.
+   * Returns whether an attempt was still open.
+   */
+  async cancelAuthorization(args: {
+    identity: Identity;
+    state: string;
+  }): Promise<boolean> {
+    const cancelled = await this.db
+      .updateTable("connection_authorization_attempts")
+      .set({ status: "canceled", completed_at: new Date() })
+      .where("tenant_id", "=", args.identity.tenantId)
+      .where("external_user_id", "=", args.identity.externalUserId)
+      .where("state_hash", "=", hashBearer(args.state))
+      .where("status", "in", ["pending", "completing"])
+      .executeTakeFirst();
+    return Boolean(cancelled.numUpdatedRows);
+  }
+
+  /** Mark a completing attempt done, unless it was cancelled meanwhile. */
+  private async completeAttempt(args: {
+    identity: Identity;
+    attempt: Selectable<DB["connection_authorization_attempts"]>;
+  }): Promise<boolean> {
+    const completed = await this.db
+      .updateTable("connection_authorization_attempts")
+      .set({ status: "completed", completed_at: new Date() })
+      .where("id", "=", args.attempt.id)
+      .where("status", "=", "completing")
+      .executeTakeFirst();
+    if (args.attempt.private_state_ref)
+      await this.vault.delete({
+        tenantId: args.identity.tenantId,
+        ref: { id: args.attempt.private_state_ref },
+      });
+    return Boolean(completed.numUpdatedRows);
   }
 
   private async finishAttempt(args: {

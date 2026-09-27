@@ -289,6 +289,12 @@ export const ProjectSchema = z.object({
    * Work created it and sync keeps it converged. `null` when unlinked.
    */
   remoteOwnership: z.enum(["owned", "attached"]).nullable(),
+  /**
+   * Since when the project's main has not been a fast-forward of its code
+   * host's default branch (ADR 0170): accepted changes stop arriving until
+   * the two are reconciled. `null` while they converge.
+   */
+  remoteDivergedAt: z.string().datetime().nullable(),
   defaultBranch: z.string(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),

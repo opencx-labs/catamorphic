@@ -962,12 +962,14 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
       if (approverOnly === undefined)
         return reply.status(404).send({ error: "Session not found" });
       const permissions = await broker.list(request.params.sessionId);
+      // An ask that names approvers is shown to them alone; the rest to
+      // whoever holds the chat.
       return reply.send({
-        permissions: approverOnly
-          ? permissions.filter((permission) =>
-              permission.approvers?.includes(identity.externalUserId),
-            )
-          : permissions,
+        permissions: permissions.filter((permission) =>
+          permission.approvers?.length
+            ? permission.approvers.includes(identity.externalUserId)
+            : !approverOnly,
+        ),
       });
     },
   });
@@ -1010,6 +1012,12 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         )
           throw err;
       }
+      // Named approvers answer it, and nobody else (ADR 0176).
+      if (
+        pending?.approvers?.length &&
+        !pending.approvers.includes(identity.externalUserId)
+      )
+        throw new AccessDeniedError();
       // An ask belongs to the session it was raised in — answering it from
       // another session's URL is a 404, not a hijack.
       if (!pending || pending.sessionId !== request.params.sessionId) {
@@ -1336,9 +1344,11 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           await agentSessions.get(identity, projectId, sessionId),
         );
       } catch (err) {
+        // A chat the caller may not see answers like no chat at all.
         if (
           err instanceof ProjectNotFoundError ||
-          err instanceof AgentSessionNotFoundError
+          err instanceof AgentSessionNotFoundError ||
+          err instanceof AccessDeniedError
         )
           return reply.status(404).send({ error: "No open chat" });
         throw err;
@@ -1379,11 +1389,14 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         await agentSessions.close(identity, projectId, sessionId);
         return reply.send({ sessionId, closed: true });
       } catch (err) {
-        if (
-          err instanceof ProjectNotFoundError ||
-          err instanceof AgentSessionNotFoundError
-        )
+        if (err instanceof ProjectNotFoundError)
           return reply.status(404).send({ error: "No open chat" });
+        // A chat the caller may not reach answers like no open chat.
+        if (
+          err instanceof AgentSessionNotFoundError ||
+          err instanceof AccessDeniedError
+        )
+          return reply.send({ sessionId: null, closed: false });
         throw err;
       }
     },

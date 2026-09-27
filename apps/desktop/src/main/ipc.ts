@@ -3235,6 +3235,17 @@ export function registerIpcHandlers(
   // connections and kept in the credential vault like any connection. The
   // renderer only ever sees the short user code and the final state.
   let deviceFlowGeneration = 0;
+  /** The device authorization still open, so ending it cancels it for real. */
+  let pendingAuthorization: string | undefined;
+  const cancelDeviceFlow = async () => {
+    deviceFlowGeneration += 1;
+    const authorization = pendingAuthorization;
+    pendingAuthorization = undefined;
+    if (!authorization) return;
+    await state.current?.catamorphic.core.connections
+      ?.cancelAuthorization({ identity, state: authorization })
+      .catch(() => false);
+  };
 
   ipcMain.handle("catamorphic:github-connect-start", async (event) => {
     const server = state.current;
@@ -3249,6 +3260,9 @@ export function registerIpcHandlers(
     if (challenge.kind !== "device")
       throw new Error("GitHub sign-in did not offer a device code");
     cancelAuthorization(event.sender);
+    // A newer attempt ends the one before it, on GitHub's side too.
+    await cancelDeviceFlow();
+    pendingAuthorization = started.authorizationId;
     const generation = ++deviceFlowGeneration;
     const expiresAt = challenge.expiresAt
       ? Date.parse(challenge.expiresAt)
@@ -3260,7 +3274,7 @@ export function registerIpcHandlers(
       expiresAt,
       cancel: () => {
         if (generation !== deviceFlowGeneration) return;
-        deviceFlowGeneration += 1;
+        void cancelDeviceFlow();
         if (!event.sender.isDestroyed())
           event.sender.send("catamorphic:github-connected", {
             error: "GitHub sign-in ended. Connect again when ready.",
@@ -3298,7 +3312,11 @@ export function registerIpcHandlers(
           error: "GitHub sign-in did not finish. Try connecting again",
         });
       })
-      .finally(dispose);
+      .finally(() => {
+        if (pendingAuthorization === started.authorizationId)
+          pendingAuthorization = undefined;
+        dispose();
+      });
 
     return {
       userCode: challenge.userCode,
@@ -3306,9 +3324,9 @@ export function registerIpcHandlers(
     };
   });
 
-  ipcMain.handle("catamorphic:github-connect-cancel", (event) => {
+  ipcMain.handle("catamorphic:github-connect-cancel", async (event) => {
     cancelAuthorization(event.sender);
-    deviceFlowGeneration += 1;
+    await cancelDeviceFlow();
   });
 
   // Repo access is granted by *installing* the GitHub App, not by the OAuth
@@ -3327,7 +3345,8 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle("catamorphic:github-disconnect", async () => {
-    deviceFlowGeneration += 1;
+    // A sign-in still in progress must not reconnect after this.
+    await cancelDeviceFlow();
     const server = state.current;
     const connections = server?.catamorphic.core.connections;
     if (!server || !connections) return;

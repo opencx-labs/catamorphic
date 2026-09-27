@@ -161,7 +161,9 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
       codingAgents: registry,
       executionEnvironments,
       executionAllocations,
-      nativeAgentCheckout: { resolve: () => rootPath },
+      nativeAgentCheckout: {
+        resolve: () => ({ path: rootPath, owned: false }),
+      },
     });
     const capability = (
       name: string,

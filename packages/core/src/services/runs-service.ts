@@ -52,7 +52,10 @@ import { DeploymentRuntimeService as EnvironmentDeploymentRuntimeService } from 
 import { KyselyDeploymentRuntimeStore } from "./deployment-runtime-store.js";
 import type { DevSandboxService } from "./dev-sandbox-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
-import type { ExecutionEnvironmentsService } from "./execution-environments-service.js";
+import {
+  admissionPolicy,
+  type ExecutionEnvironmentsService,
+} from "./execution-environments-service.js";
 import type { ExecutionJobsService } from "./execution-jobs-service.js";
 import type {
   ExecutionWorkerHandle,
@@ -2006,13 +2009,13 @@ export class RunsService {
             workloadKind: "workflow",
             rootWorkloadId: runId,
             workerNodeId: admission.runtime.workerNodeId,
-            policy: {
-              binding: admission.binding,
-              requirements: admission.effectiveRequirements,
+            policy: admissionPolicy({
+              admission,
               connections,
-              workflowEnablementId: args.workflowEnablementId,
-              sandbox: admission.sandbox,
-            },
+              ...(args.workflowEnablementId
+                ? { workflowEnablementId: args.workflowEnablementId }
+                : {}),
+            }),
             transaction: trx,
           });
           await trx

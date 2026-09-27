@@ -57,6 +57,11 @@ const invokedRevisions: string[] = [];
 const released: string[] = [];
 let refreshes = 0;
 let providerRevokeFails = false;
+/** A `slow` authorization waits here, as a device code being polled does. */
+let slowAuthorization: { started: boolean; finish: Promise<void> } = {
+  started: false,
+  finish: Promise.resolve(),
+};
 const provider: ConnectionProvider = {
   kind: "fake",
   displayName: "Fake Directory",
@@ -67,6 +72,10 @@ const provider: ConnectionProvider = {
   completeAuthorization: async ({ callback, privateState }) => {
     expect(new TextDecoder().decode(privateState)).toBe("pkce-verifier");
     if (callback.code === "refused") throw new Error("upstream refused");
+    if (callback.code === "slow") {
+      slowAuthorization.started = true;
+      await slowAuthorization.finish;
+    }
     return {
       material: new TextEncoder().encode(
         callback.code === "approved" ? "member-token" : `${callback.code}`,
@@ -872,5 +881,45 @@ describe("credential connections", () => {
         metadata: { providerRevocation: "failed_closed" },
       }),
     );
+  });
+
+  it("never saves a personal connection whose authorization was cancelled", async () => {
+    const person: Identity = { tenantId, externalUserId: "walks-away" };
+    let finish = () => {};
+    slowAuthorization = {
+      started: false,
+      finish: new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    };
+    const started = await connections.beginPersonalAuthorization({
+      identity: person,
+      providerKind: "fake",
+      redirectUri: "https://app.test/callback",
+    });
+    const completing = connections.completeAuthorization({
+      identity: person,
+      state: started.authorizationId,
+      callback: { code: "slow" },
+    });
+    await vi.waitFor(() => expect(slowAuthorization.started).toBe(true));
+    expect(
+      await connections.cancelAuthorization({
+        identity: person,
+        state: started.authorizationId,
+      }),
+    ).toBe(true);
+    finish();
+    await expect(completing).rejects.toThrow();
+    expect(
+      await connections.personal({ identity: person, providerKind: "fake" }),
+    ).toBeUndefined();
+    // Nothing is left to cancel.
+    expect(
+      await connections.cancelAuthorization({
+        identity: person,
+        state: started.authorizationId,
+      }),
+    ).toBe(false);
   });
 });

@@ -640,6 +640,7 @@ export interface Projects {
   id: Generated<string>;
   name: string;
   remote_branch: string | null;
+  remote_diverged_at: Timestamp | null;
   remote_ownership: string | null;
   remote_url: string | null;
   storage_type: Generated<string>;

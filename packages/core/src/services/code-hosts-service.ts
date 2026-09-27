@@ -96,6 +96,9 @@ interface ResolvedHost {
  * control plane.
  */
 export class CodeHostsService {
+  /** Publishes in flight in this process, per project. */
+  private readonly publishing = new Map<string, Promise<unknown>>();
+
   constructor(
     private readonly deps: {
       db: Kysely<DB>;
@@ -583,6 +586,29 @@ export class CodeHostsService {
     visibility?: "private" | "public";
   }): Promise<{ fullName: string; remoteUrl: string }> {
     assertProjectPermission(args.identity, args.projectId, "program:publish");
+    // One publish per project at a time here, so a repeated request finds
+    // the project linked instead of creating a second repository.
+    const previous = this.publishing.get(args.projectId);
+    const run = (previous ?? Promise.resolve())
+      .catch(() => {})
+      .then(() => this.publishProjectOnce(args));
+    this.publishing.set(args.projectId, run);
+    const forget = () => {
+      if (this.publishing.get(args.projectId) === run)
+        this.publishing.delete(args.projectId);
+    };
+    void run.then(forget, forget);
+    return run;
+  }
+
+  private publishProjectOnce(args: {
+    identity: Identity;
+    projectId: string;
+    provider: string;
+    name: string;
+    organization?: string;
+    visibility?: "private" | "public";
+  }): Promise<{ fullName: string; remoteUrl: string }> {
     const { identity, projectId } = args;
     return withSpan(
       {
@@ -642,8 +668,10 @@ export class CodeHostsService {
           },
         });
         // Link before pushing: Work created this repository, so a failed
-        // first push is completed by the next sync.
-        await this.deps.db
+        // first push is completed by the next sync. Only an unlinked project
+        // is linked: a publish that raced this one (another replica) keeps
+        // its repository.
+        const linked = await this.deps.db
           .updateTable("projects")
           .set({
             remote_url: repository.cloneUrl,
@@ -654,7 +682,10 @@ export class CodeHostsService {
           })
           .where("id", "=", projectId)
           .where("tenant_id", "=", identity.tenantId)
-          .execute();
+          .where("remote_url", "is", null)
+          .executeTakeFirst();
+        if (!linked.numUpdatedRows)
+          throw new ProjectAlreadyLinkedError(projectId);
         const manager = this.deps.projectManager;
         const dev = await manager.openDev(
           identity.tenantId,

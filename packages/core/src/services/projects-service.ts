@@ -42,6 +42,12 @@ export interface Project {
    * receives `work/*` branches and pull requests. `null` when unlinked.
    */
   remoteOwnership: RemoteOwnership | null;
+  /**
+   * Since when this project's main has not been a fast-forward of its code
+   * host's default branch (ADR 0170): accepted changes stop arriving until
+   * the two are reconciled. `null` while they converge.
+   */
+  remoteDivergedAt: string | null;
   defaultBranch: string;
   createdAt: string;
   updatedAt: string;
@@ -773,6 +779,7 @@ function mapProject(row: ProjectRow): Project {
     storageType: row.storage_type as "managed" | "remote",
     remoteUrl: row.remote_url,
     remoteOwnership: remoteOwnership(row.remote_ownership),
+    remoteDivergedAt: row.remote_diverged_at?.toISOString() ?? null,
     defaultBranch: row.default_branch,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),

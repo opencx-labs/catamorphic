@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { Identity } from "../identity.js";
 import type { AgentSessionsService } from "./agent-sessions-service.js";
 import type { SessionMessageAuthor } from "./agent-turns-service.js";
+import { AccessDeniedError } from "./artifact-scope.js";
 import {
   ChatAudienceSchema,
   ChatKeySchema,
@@ -144,7 +145,7 @@ export class SessionActionsService {
                 }),
               }
             : undefined;
-        const found = keyed
+        const open = keyed
           ? await this.sessions.keyedChatId({
               projectId: input.projectId,
               ...keyed,
@@ -152,38 +153,55 @@ export class SessionActionsService {
           : "sessionId" in parsed
             ? parsed.sessionId
             : undefined;
-        if (input.operation === "find")
-          return found
-            ? json(
-                await this.sessions.get(input.identity, input.projectId, found),
-              )
-            : null;
-        if (!found) {
-          // A retried mutation whose chat is gone (closed) still answers
-          // with its recorded result; otherwise nothing is open for the key.
-          if ("idempotencyKey" in parsed) {
-            const earlier = await this.db
-              .selectFrom("session_actions")
-              .select(["operation", "input", "result", "status"])
-              .where("project_id", "=", input.projectId)
-              .where(
-                "idempotency_key",
-                "=",
-                JSON.stringify([input.author, parsed.idempotencyKey]),
-              )
-              .executeTakeFirst();
-            if (
-              earlier?.status === "completed" &&
-              earlier.operation === input.operation &&
-              canonical(earlier.input) === canonical(json(parsed))
-            )
-              return earlier.result;
-          }
-          // Closing a chat that is not open has nothing left to do.
-          if (input.operation === "close")
-            return json({ sessionId: null, closed: false });
-          throw new SessionKeyNotFoundError(keyed?.key ?? "");
+        // A key names a chat only to those who may see it: a chat the
+        // caller cannot reach answers exactly like no chat at all.
+        const read = async (sessionId: string) =>
+          this.sessions
+            .get(input.identity, input.projectId, sessionId)
+            .catch((error: unknown) => {
+              if (keyed && error instanceof AccessDeniedError) return null;
+              throw error;
+            });
+        if (input.operation === "find") {
+          const detail = open ? await read(open) : null;
+          return detail ? json(detail) : null;
         }
+        // A retried mutation whose chat is gone (closed) still answers
+        // with its recorded result.
+        const earlier =
+          !open && "idempotencyKey" in parsed
+            ? await this.db
+                .selectFrom("session_actions")
+                .select([
+                  "operation",
+                  "input",
+                  "result",
+                  "status",
+                  "session_id",
+                ])
+                .where("project_id", "=", input.projectId)
+                .where(
+                  "idempotency_key",
+                  "=",
+                  JSON.stringify([input.author, parsed.idempotencyKey]),
+                )
+                .executeTakeFirst()
+            : undefined;
+        const retried =
+          earlier?.operation === input.operation &&
+          canonical(earlier.input) === canonical(json(parsed));
+        if (retried && earlier?.status === "completed") return earlier.result;
+        // A close that stopped after closing its chat finishes the cleanup
+        // when retried, though the key no longer names the chat.
+        const found =
+          open ??
+          (retried && input.operation === "close"
+            ? (earlier?.session_id ?? undefined)
+            : undefined);
+        // Closing a chat that is not open has nothing left to do.
+        if (!found && input.operation === "close")
+          return json({ sessionId: null, closed: false });
+        if (!found) throw new SessionKeyNotFoundError(keyed?.key ?? "");
         // The chat as the operation sees it: named by id from here on. The
         // action records what the caller asked for (`parsed`).
         const {
@@ -196,11 +214,12 @@ export class SessionActionsService {
           ...parsed,
         };
         const args = { ...rest, sessionId: found };
-        const detail = await this.sessions.get(
-          input.identity,
-          input.projectId,
-          args.sessionId,
-        );
+        const detail = await read(args.sessionId);
+        if (!detail) {
+          if (input.operation === "close")
+            return json({ sessionId: null, closed: false });
+          throw new SessionKeyNotFoundError(keyed?.key ?? "");
+        }
         const session = detail;
         if (input.operation === "inspect") return json(session);
         if (input.operation === "history") {
@@ -407,13 +426,18 @@ export class SessionActionsService {
               );
               break;
             case "close":
+              // Repeating a close finishes what an interrupted one left;
+              // only closing an open chat, or retrying that, reports it.
               await this.sessions.close(
                 input.identity,
                 input.projectId,
                 args.sessionId,
                 { origin: input },
               );
-              result = { sessionId: args.sessionId, closed: true };
+              result = {
+                sessionId: args.sessionId,
+                closed: session.status !== "closed" || !accepted,
+              };
               break;
             case "interrupt":
               if (action.target_turn_id)

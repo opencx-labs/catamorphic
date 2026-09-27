@@ -9,6 +9,17 @@ export interface SyncedFileChange {
   kind: "modified" | "deleted";
 }
 
+/**
+ * The sandbox's changes could not be read. Nothing was copied, so callers
+ * that would destroy the sandbox next must keep it.
+ */
+export class SandboxSyncError extends Error {
+  constructor(detail: string) {
+    super(`The workspace's changes could not be saved: ${detail}`);
+    this.name = "SandboxSyncError";
+  }
+}
+
 /** Files the agent stages for its own use — never synced back to the repo. */
 const SYNC_IGNORED_PREFIXES = [
   "_plugins/",
@@ -21,7 +32,8 @@ const SYNC_IGNORED_PREFIXES = [
  * Diff a sandbox project dir against what was last synced (`refs/work/synced`,
  * else HEAD) and mirror every change into the dev or session copy (as an
  * uncommitted draft). Commits the agent made count like any other change:
- * the snapshot compares trees, not the agent's status.
+ * the snapshot compares trees, not the agent's status. Throws
+ * {@link SandboxSyncError} when the sandbox's changes cannot be read.
  *
  * Shared by the per-turn sync in AgentSessionsService and the pre-build
  * sync in AppsService — anything that needs the dev tree to reflect what
@@ -47,9 +59,13 @@ export async function syncSandboxChanges(opts: {
     SNAPSHOT_SCRIPT,
     { cwd: dir },
   );
-  if (status.exitCode !== 0) return [];
+  if (status.exitCode !== 0)
+    throw new SandboxSyncError(
+      status.result.trim().split("\n").slice(-3).join(" ") ||
+        `snapshot exited with ${status.exitCode}`,
+    );
   const snapshot = parseSnapshot(status.result);
-  if (!snapshot) return [];
+  if (!snapshot) throw new SandboxSyncError("the snapshot was unreadable");
 
   const changes = snapshot.changes.filter(
     (change) =>

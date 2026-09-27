@@ -45,7 +45,11 @@ shared repository as a `work/*` branch plus a pull request.**
   proposed as a pull request. The admission policy may name proposed roles,
   but admission reads committed roles, so nobody joins with one until it
   merges; the server's published sync picks it up. Projects the server
-  creates keep committing to their own origin.
+  creates keep committing to their own origin. A server project attached to
+  a code host refuses direct deploys; its changes go as pull requests or
+  proposals. When its main still diverges from the code host's, the sync
+  records since when (`remoteDivergedAt`) and the server says so, instead of
+  silently no longer receiving updates.
 - `pushProject` is replaced by `publishProject`, which creates a new
   repository and links it as owned; an already linked project is refused.
 

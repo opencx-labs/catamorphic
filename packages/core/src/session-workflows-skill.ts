@@ -293,16 +293,19 @@ Both recipes, with the trigger library they bind, are in the \`slack\` skill.
 - No one watches a project chat, so name who approves for it: approvers
   { members: ["<id>"], roles: ["<role>"] } on deliver (a pull request's author
   and reviewers, an on-call role). When its agent needs approval (a guarded
-  query, a tool set to ask) they are notified and answer from the chat; the
-  agent waits for the Environment's approvals.waitMinutes (30 by default), then
-  continues without it. Without approvers such an action is refused at once.
+  query, a tool set to ask) they are notified and answer from the chat, and
+  only they can; the agent waits for the Environment's approvals.waitMinutes
+  (30 by default), then continues without it. Without approvers such an
+  action is refused at once.
 - workspace on deliver (and create) starts a chat's checkout at a ref of the
   project's linked remote: a branch, tag, commit, or full ref such as
   refs/pull/42/head. The host fetches it with the remote's own credentials; the
   sandbox never holds them. Delivered again to an open chat it moves the
   checkout before the next turn: update "rebase" (default) keeps the agent's
   work on top of the new base, "reset" discards it. The agent is told what
-  changed, and a conflicting rebase changes nothing and says so.
+  changed, and a conflicting rebase changes nothing and says so. A chat
+  working in a person's own project folder first gets its own worktree; that
+  folder is never reset.
 - Git inside a chat's sandbox reaches remotes through the gateway when the
   chat's Environment binds a Git connection (a binding with git.repositories
   and git.push rules): plain git fetch and git push origin work, with the

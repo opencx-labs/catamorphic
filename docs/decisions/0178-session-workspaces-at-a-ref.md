@@ -41,7 +41,11 @@ not on fetches it at once and applies the move before the chat's next turn:
 `rebase` (default) replays the chat's work since the old base onto the new
 one, `reset` discards it. A conflicting rebase is undone and reported to the
 agent instead of failing the delivery. The agent is told the old and new
-heads and which files changed between them.
+heads and which files changed between them. Only a checkout the chat owns
+moves: a native chat still in the person's project folder first gets its own
+worktree at the new base, and the project folder or a worktree the person
+assigned is never reset or rebased (the agent is told nothing moved). A move
+delivered while another is applied waits for the next turn.
 
 **Sandbox sync compares trees.** The per-turn copy of sandbox changes now
 diffs a snapshot of the working tree against `refs/work/synced` in a private

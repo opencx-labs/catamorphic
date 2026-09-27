@@ -1,6 +1,7 @@
 import {
   assertMayManageRolePolicy,
   assertProjectPermission,
+  DeploymentBlockedError,
   hasProjectPermission,
   type Identity,
   type Project,
@@ -53,6 +54,7 @@ function toDto(project: Project) {
     storageType: project.storageType,
     remoteUrl: project.remoteUrl,
     remoteOwnership: project.remoteOwnership,
+    remoteDivergedAt: project.remoteDivergedAt,
     defaultBranch: project.defaultBranch,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
@@ -563,8 +565,23 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
       const identity = resolveIdentity(request);
       const { projectId } = request.params;
       try {
-        await ctx.core.projects.get(identity, projectId);
+        const project = await ctx.core.projects.get(identity, projectId);
         assertProjectPermission(identity, projectId, "program:publish");
+        // A repository that existed before Work publishes through its own
+        // default branch (ADR 0170): a server project attached to it takes
+        // changes as pull requests, never as direct deploys that would fork
+        // its main from the code host's.
+        if (
+          project.remoteUrl &&
+          project.remoteOwnership !== "owned" &&
+          !(await ctx.core.projectManager.localPath({
+            tenantId: identity.tenantId,
+            projectId,
+          }))
+        )
+          throw new DeploymentBlockedError(
+            `This project's program is published from ${project.remoteUrl}. Open a pull request there, or propose the change.`,
+          );
         const result = await ctx.core.deployment.deploy(
           identity.tenantId,
           projectId,

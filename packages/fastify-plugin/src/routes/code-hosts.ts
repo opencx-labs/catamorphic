@@ -171,6 +171,7 @@ export function registerCodeHostRoutes(
           storageType: project.storageType,
           remoteUrl: project.remoteUrl,
           remoteOwnership: project.remoteOwnership,
+          remoteDivergedAt: project.remoteDivergedAt,
           defaultBranch: project.defaultBranch,
           createdAt: project.createdAt,
           updatedAt: project.updatedAt,

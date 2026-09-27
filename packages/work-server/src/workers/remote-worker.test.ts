@@ -481,6 +481,13 @@ describe("keyed chats on workers (ADR 0173)", () => {
             kind: "builtin",
             environment: { allowed: ["review"], preferred: ["review"] },
           }),
+          ".work/agents/reader.json": JSON.stringify({
+            version: 1,
+            name: "Reader",
+            kind: "builtin",
+            mode: "read-only",
+            environment: { allowed: ["chats"], preferred: ["chats"] },
+          }),
         },
       },
     );
@@ -651,5 +658,91 @@ describe("keyed chats on workers (ADR 0173)", () => {
         (message) => message.content === "kept across release",
       ),
     ).toBe(true);
+  }, 90_000);
+
+  /** Wait until the machine has freed a released workspace's slot. */
+  async function freed(allocationId: string | null) {
+    const core = server.catamorphic.core;
+    await waitFor(async () => {
+      const row = await core.db
+        .selectFrom("execution_allocations")
+        .select("capacity_released_at")
+        .where("id", "=", allocationId ?? "")
+        .executeTakeFirstOrThrow();
+      return row.capacity_released_at !== null;
+    }, "the workspace slot to be freed");
+  }
+
+  async function closeAndFree(sessionId: string) {
+    const sessions = server.catamorphic.core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const chat = await sessions.get(identity, projectId, sessionId);
+    await sessions.close(identity, projectId, sessionId);
+    await freed(chat.allocationId);
+  }
+
+  it("keeps an idle workspace whose changes could not be saved, and says so on the reply", async () => {
+    const core = server.catamorphic.core;
+    const sessions = core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const session = await sessions.create(identity, projectId, {
+      environment: "chats",
+    });
+    const send = (message: string) =>
+      sessions.sendMessage(identity, projectId, session.id, message);
+    // The work of this turn cannot be read back: the checkout lost its Git.
+    const broken = await send(
+      "run printf unsaved > keep.md ;; run mv .git .git-hidden",
+    );
+    expect(broken.metadata?.workspaceSync).toMatchObject({
+      error: expect.stringContaining("could not be saved"),
+    });
+    const later = { now: new Date(Date.now() + 10 * 60_000) };
+    expect(await sessions.releaseIdleWorkspaces(later)).toBe(0);
+    const kept = await sessions.get(identity, projectId, session.id);
+    const allocation = await core.db
+      .selectFrom("execution_allocations")
+      .select("status")
+      .where("id", "=", kept.allocationId ?? "")
+      .executeTakeFirstOrThrow();
+    expect(allocation.status).toBe("active");
+
+    // Once the changes can be read, they are saved and the slot given back.
+    await send("run mv .git-hidden .git");
+    expect(await sessions.releaseIdleWorkspaces(later)).toBe(1);
+    await freed(kept.allocationId);
+    expect((await send("read-file keep.md")).content).toBe("unsaved");
+    await closeAndFree(session.id);
+  }, 90_000);
+
+  it("gives a read-only agent's idle workspace back without saving what it changed", async () => {
+    const core = server.catamorphic.core;
+    const sessions = core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const session = await sessions.create(identity, projectId, {
+      environment: "chats",
+      agentId: `project:${projectId}:reader`,
+    });
+    const say = async (message: string) =>
+      (await sessions.sendMessage(identity, projectId, session.id, message))
+        .content;
+    await say("write-file scratch.md only-in-the-sandbox");
+    expect(await say("read-file scratch.md")).toBe("only-in-the-sandbox");
+    const idle = await sessions.get(identity, projectId, session.id);
+    expect(
+      await sessions.releaseIdleWorkspaces({
+        now: new Date(Date.now() + 10 * 60_000),
+      }),
+    ).toBe(1);
+    await freed(idle.allocationId);
+    const branch = await core.projectManager.remoteBackend?.withOrigin(
+      SERVER_TENANT_ID,
+      projectId,
+      (origin) => origin.resolveRef(`refs/heads/sessions/${session.id}`),
+    );
+    expect(branch ?? null).toBeNull();
+    // The fresh workspace starts from what the chat had saved: nothing.
+    expect(await say("read-file scratch.md")).toBe("missing");
+    await closeAndFree(session.id);
   }, 90_000);
 });

@@ -24,7 +24,11 @@ import {
   mayUseProject,
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
-import type { EnvironmentSandbox } from "./execution-allocations-service.js";
+import type { ResolvedConnectionBinding } from "./connection-types.js";
+import type {
+  EnvironmentAllocationPolicy,
+  EnvironmentSandbox,
+} from "./execution-allocations-service.js";
 import {
   DEFAULT_IDLE_RELEASE_MINUTES,
   type ProjectEnvironmentDefinition,
@@ -54,6 +58,31 @@ export interface EnvironmentAdmission {
   sandbox: EnvironmentSandbox;
   /** How long unattended escalations wait for a person (ADR 0176). */
   approvals?: { waitMinutes: number };
+}
+
+/**
+ * The policy an Allocation keeps from its admission: binding, requirements,
+ * connections, the sandbox's image, containers and egress, and the approval
+ * wait (ADR 0176). Every admission path builds it here, so a workload admitted
+ * again (readmission after idle release, reallocation, a mirrored session)
+ * keeps what its Environment gives it.
+ */
+export function admissionPolicy(input: {
+  admission: EnvironmentAdmission;
+  connections: readonly ResolvedConnectionBinding[];
+  workflowEnablementId?: string;
+}): EnvironmentAllocationPolicy {
+  const { admission } = input;
+  return {
+    binding: admission.binding,
+    requirements: admission.effectiveRequirements,
+    connections: input.connections,
+    sandbox: admission.sandbox,
+    ...(admission.approvals ? { approvals: admission.approvals } : {}),
+    ...(input.workflowEnablementId
+      ? { workflowEnablementId: input.workflowEnablementId }
+      : {}),
+  };
 }
 
 /** The largest Dockerfile an Environment may name. */

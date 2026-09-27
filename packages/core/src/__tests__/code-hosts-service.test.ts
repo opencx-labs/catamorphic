@@ -315,4 +315,90 @@ describe("CodeHostsService", () => {
       }),
     ).rejects.toThrow(ProjectAlreadyLinkedError);
   });
+
+  it("links one repository when publishes race, here or on another replica", async () => {
+    const frank: Identity = { tenantId, externalUserId: "frank" };
+    const replica = async (name: string) => {
+      const forge = fakeCodeHost({
+        db,
+        projectManager: manager,
+        remoteBase: temp,
+      });
+      await forge.connectPersonal(frank, "frank-token");
+      const bare = await bareRepository(name, {});
+      const created: string[] = [];
+      forge.host.createRepository = async ({ name: repo }) => {
+        created.push(repo);
+        return {
+          fullName: `frank/${repo}`,
+          name: repo,
+          owner: "frank",
+          private: true,
+          defaultBranch: "main",
+          cloneUrl: bare,
+          description: null,
+          pushedAt: null,
+        };
+      };
+      return { forge, bare, created };
+    };
+    const project = await db
+      .insertInto("projects")
+      .values({ id: crypto.randomUUID(), tenant_id: tenantId, name: "race" })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const dir = checkout(project.id);
+    await fs.mkdir(dir, { recursive: true });
+    await nativeGit(dir, ["init", "-b", "main"]);
+    await fs.writeFile(path.join(dir, "race.md"), "race");
+    await nativeGit(dir, ["add", "."]);
+    await nativeGit(dir, [...author, "commit", "-m", "race"]);
+    const publish = (forge: Awaited<ReturnType<typeof replica>>["forge"]) =>
+      forge.codeHosts.publishProject({
+        identity: frank,
+        projectId: project.id,
+        provider: "forge",
+        name: "race",
+      });
+
+    // A double submit on one replica creates one repository.
+    const here = await replica("race-here");
+    const [first, second] = await Promise.allSettled([
+      publish(here.forge),
+      publish(here.forge),
+    ]);
+    expect(first.status).toBe("fulfilled");
+    expect(second).toMatchObject({
+      status: "rejected",
+      reason: expect.any(ProjectAlreadyLinkedError),
+    });
+    expect(here.created).toEqual(["race"]);
+
+    // Another replica that got as far as creating one never relinks.
+    await db
+      .updateTable("projects")
+      .set({ remote_url: null, remote_ownership: null })
+      .where("id", "=", project.id)
+      .execute();
+    const there = await replica("race-there");
+    const racing = await replica("race-racing");
+    const original = racing.forge.host.createRepository;
+    racing.forge.host.createRepository = async (input) => {
+      // The other replica links while this one creates its repository.
+      await there.forge.connectPersonal(frank, "frank-token");
+      await publish(there.forge);
+      if (!original) throw new Error("No repository creation");
+      return original(input);
+    };
+    await expect(publish(racing.forge)).rejects.toThrow(
+      ProjectAlreadyLinkedError,
+    );
+    expect(
+      await db
+        .selectFrom("projects")
+        .select("remote_url")
+        .where("id", "=", project.id)
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ remote_url: there.bare });
+  });
 });
