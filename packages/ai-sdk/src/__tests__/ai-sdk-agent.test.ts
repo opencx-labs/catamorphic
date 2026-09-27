@@ -8,7 +8,7 @@ vi.mock("@catamorphic/mcp", () => ({
 }));
 
 import { connectMcpServer } from "@catamorphic/mcp";
-import { AiSdkCodingAgent } from "../ai-sdk-agent.js";
+import { AiSdkCodingAgent, mcpModelToolName } from "../ai-sdk-agent.js";
 
 const connectMcpServerMock = vi.mocked(connectMcpServer);
 
@@ -310,6 +310,64 @@ describe("AiSdkCodingAgent", () => {
     });
     await collect(agent, await start(agent), "Read the thread");
     expect(callToolRaw).toHaveBeenCalledWith("conversations.replies", {});
+  });
+
+  it("names colliding and long MCP tools apart, within model API limits", async () => {
+    const valid = /^[A-Za-z0-9_-]{1,64}$/;
+    expect(
+      mcpModelToolName({ server: "slack", tool: "chat.post", taken: {} }),
+    ).toBe("mcp__slack__chat_post");
+    const clash = mcpModelToolName({
+      server: "slack",
+      tool: "chat_post",
+      taken: { mcp__slack__chat_post: true },
+    });
+    expect(clash).not.toBe("mcp__slack__chat_post");
+    expect(clash).toMatch(valid);
+    const long = mcpModelToolName({
+      server: "acme-internal-knowledge-base",
+      tool: "list_repository_pull_request_review_comments_for_team",
+      taken: {},
+    });
+    expect(long).toMatch(valid);
+    expect(long).toHaveLength(64);
+
+    const callToolRaw = vi.fn(async () => ({
+      content: [{ type: "text", text: "{}" }],
+    }));
+    connectMcpServerMock.mockResolvedValueOnce({
+      tools: ["chat.post", "chat_post"].map((name) => ({
+        name,
+        description: name,
+        inputSchema: { type: "object", properties: {} },
+      })),
+      callTool: vi.fn(async () => "unused"),
+      callToolRaw,
+      readResource: vi.fn(),
+      close: vi.fn(async () => {}),
+    });
+    const model = new MockLanguageModelV4({
+      doStream: [
+        toolCallStream(
+          mcpModelToolName({
+            server: "slack",
+            tool: "chat_post",
+            taken: { mcp__slack__chat_post: true },
+          }),
+          {},
+        ),
+        textStream("Posted."),
+      ],
+    });
+    const agent = new AiSdkCodingAgent({
+      model,
+      sandboxProvider: createProvider(),
+      mcpServers: {
+        slack: { transport: "http", url: "https://work.test/connection-mcp" },
+      },
+    });
+    await collect(agent, await start(agent), "Post it");
+    expect(callToolRaw).toHaveBeenCalledWith("chat_post", {});
   });
 
   it("mounts MCP server tools beside the built-ins and maps their calls", async () => {

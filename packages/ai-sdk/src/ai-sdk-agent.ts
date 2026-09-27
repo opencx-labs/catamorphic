@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   type ConnectedMcpServer,
@@ -891,11 +892,32 @@ class McpPool {
   }
 }
 
+/** Model APIs take tool names of at most 64 letters, digits, `_` and `-`. */
+const MODEL_TOOL_NAME_MAX = 64;
+
 /**
- * MCP server tools → ai-sdk dynamic tools named `mcp__<server>__<tool>`
- * (the same namespacing Claude Code uses, so events read alike across
- * harnesses). Results are flattened text; errors surface as tool errors.
+ * The name the model calls an MCP tool by: `mcp__<server>__<tool>`, with
+ * what model APIs refuse (MCP allows dots, `chat.postMessage`) as `_`. A
+ * name that is too long, or already names another tool (`a.b` beside
+ * `a_b`), ends in a short hash of the server and tool instead.
  */
+export function mcpModelToolName(args: {
+  server: string;
+  tool: string;
+  taken: Readonly<Record<string, unknown>>;
+}): string {
+  const safeServer = args.server.replace(/[^A-Za-z0-9-]+/g, "_");
+  const safeTool = args.tool.replace(/[^A-Za-z0-9_-]+/g, "_");
+  const name = `mcp__${safeServer}__${safeTool}`;
+  if (name.length <= MODEL_TOOL_NAME_MAX && !Object.hasOwn(args.taken, name))
+    return name;
+  const hash = createHash("sha256")
+    .update(`${args.server}\0${args.tool}`)
+    .digest("hex")
+    .slice(0, 8);
+  return `${name.slice(0, MODEL_TOOL_NAME_MAX - hash.length - 1)}_${hash}`;
+}
+
 /** Resolves (tool may run) or throws (refused/declined) before a call. */
 type McpToolGate = (
   server: string,
@@ -905,6 +927,11 @@ type McpToolGate = (
   abortSignal?: AbortSignal,
 ) => Promise<void>;
 
+/**
+ * MCP server tools → ai-sdk dynamic tools named `mcp__<server>__<tool>`
+ * (the same namespacing Claude Code uses, so events read alike across
+ * harnesses). Results are flattened text; errors surface as tool errors.
+ */
 function buildMcpTools(
   /** The roster to declare tools from. */
   connections: Map<string, ConnectedMcpServer>,
@@ -916,12 +943,14 @@ function buildMcpTools(
 ): Record<string, Tool> {
   const tools: Record<string, Tool> = {};
   for (const [serverName, roster] of connections) {
-    const safeServer = serverName.replace(/[^A-Za-z0-9-]+/g, "_");
     for (const info of roster.tools) {
-      // Model APIs allow only letters, digits, `_` and `-` in tool names;
-      // MCP also allows dots (`chat.postMessage`). Calls use `info.name`.
-      const safeTool = info.name.replace(/[^A-Za-z0-9_-]+/g, "_");
-      tools[`mcp__${safeServer}__${safeTool}`] = dynamicTool({
+      // Calls use `info.name`; the model sees a name its API accepts.
+      const name = mcpModelToolName({
+        server: serverName,
+        tool: info.name,
+        taken: tools,
+      });
+      tools[name] = dynamicTool({
         description: info.description,
         inputSchema: jsonSchema<Record<string, unknown>>(
           info.inputSchema as Parameters<typeof jsonSchema>[0],
