@@ -201,11 +201,11 @@ export {
   mcpToolKind,
 } from "./define-trigger-kind.js";
 export { FsBundleStore } from "./fs-bundle-store.js";
-export { githubCodeHost } from "./github-code-host.js";
 export {
   defineGitConnectionProvider,
   type GitConnectionOptions,
 } from "./git-connection-provider.js";
+export { githubCodeHost } from "./github-code-host.js";
 export {
   defineGithubConnectionProvider,
   GITHUB_CONNECTION_ACTIONS,
