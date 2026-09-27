@@ -285,6 +285,11 @@ export interface CatamorphicHostConfig {
    * register one anyway and race the two.
    */
   toolPermissions?: CatamorphicCoreConfig["toolPermissions"];
+  /**
+   * Hosts sandboxes reach this control plane at; restricted egress always
+   * allows them (ADR 0176).
+   */
+  gatewayHosts?: CatamorphicCoreConfig["gatewayHosts"];
 }
 
 function resolveDatabase(config: DatabaseConfig): {
@@ -405,6 +410,7 @@ export class Catamorphic {
       proposalBot: config.proposalBot,
       storeSyncAroundTurns: config.storeSyncAroundTurns,
       toolPermissions: config.toolPermissions,
+      gatewayHosts: config.gatewayHosts,
     });
   }
 

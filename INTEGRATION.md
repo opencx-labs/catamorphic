@@ -551,6 +551,25 @@ supplies two things:
   `agent-chat`) renders the consent. Unanswered asks deny after five minutes.
   Persisting an "always allow" is the host's job — it knows where the
   connection's policy lives.
+- **Unattended chats** (ADR 0176) — `DurableToolPermissionBroker` (durable,
+  any replica answers) routes an ask in a project chat, or one a workflow
+  delivered with `approvers: { members, roles }`, to those people: it
+  publishes an `approval_requested` notification, promotes the chat in their
+  list, and lets them answer the card without otherwise holding the chat
+  (the permission routes filter to what they may answer). It waits the
+  Environment's `approvals.waitMinutes` (options `timeoutMs` and
+  `unattendedTimeoutMs` set the defaults: five and 30 minutes) and denies
+  with a `reason` the agent reads. Role holders come from stock memberships;
+  hosts with their own directory name members.
+
+Core also applies a committed definition's `toolPolicies` (keyed by
+connection alias or `catamorphic`) as the agent's layer on every host, and
+enforces its `mode` at the control plane (ADR 0176): a `read-only` session's
+changes never leave its sandbox and only read connection actions run
+(`ConnectionProvider.readOnly(action)`, else the action's `readOnlyHint`); an
+`edit` session may not invoke capabilities marked `mode: "full-access"`.
+`RegisteredCodingAgent.privilege` and `.toolPolicies` carry the same for
+agents a host defines itself.
 
 ## Ready-made components: `@catamorphic/ui`
 
@@ -954,6 +973,29 @@ Google Cloud OAuth client or a service account with administrator-approved
 domain-wide delegation. Remote deployments need stable HTTPS callback URLs,
 correct proxy headers, a backed-up vault key, and a documented rotation plan.
 
+
+### Images, containers, and egress (ADR 0176)
+
+An Environment may declare `image` (OCI reference or project Dockerfile),
+`requirements.containers`, `network` (`open`, `gateway`, `allowlist`), and
+`approvals.waitMinutes`. Admission turns them into capability requirements
+(`images`, `images.build`, `containers`, `network.policy`) and fixes the
+resolved image (Dockerfile content and digest), containers flag, and egress
+allowlist in the Allocation; `allocationSandboxProvider` passes them to
+`CreateSandboxOpts` (`image`, `containers`, `egress`). A provider lists what
+it enforces in `SandboxProvider.capabilities` and must refuse create options
+it cannot honor; include them in the binding descriptor's `capabilities` so
+placement matches. Pass `gatewayHosts` (the control plane's public host) to
+`createCatamorphic`: restricted egress always reaches it.
+
+`MicrosandboxSandboxProvider` boots the image, runs Docker inside the VM on a
+sandbox-owned disk (`containers`, `containerDiskMib`), builds Dockerfiles
+with an injected `imageBuilder` (`dockerImageBuilder({ command })`), and
+enforces egress with a deny-by-default network policy.
+`LocalProcessSandboxProvider` offers containers on trusted machines through
+`docker: { socketPath }`: a per-sandbox filtering endpoint that labels,
+confines, and removes what the sandbox starts. It cannot enforce egress
+unless the host sets `acceptUnenforcedEgress` knowingly.
 
 ### Managed workspace resources
 

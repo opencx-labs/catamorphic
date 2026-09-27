@@ -1452,6 +1452,8 @@ export const PendingToolPermissionSchema = z.object({
   }),
   createdAt: z.string(),
   expiresAt: z.string(),
+  /** An unattended chat's approvers, who may answer it (ADR 0176). */
+  approvers: z.array(z.string()).optional(),
 });
 export const PendingToolPermissionsSchema = z.object({
   permissions: z.array(PendingToolPermissionSchema),

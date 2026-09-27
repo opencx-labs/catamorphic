@@ -45,6 +45,7 @@ import {
 } from "../identity.js";
 import type { AgentCapabilitiesService } from "./agent-capabilities-service.js";
 import {
+  type AgentDefinition,
   AgentDefinitionsService,
   type AgentDelegationPolicy,
   formatProjectAgentId,
@@ -1857,6 +1858,8 @@ export class AgentSessionsService {
             binding: admitted.binding,
             requirements: admitted.effectiveRequirements,
             connections,
+            sandbox: admitted.sandbox,
+            ...(admitted.approvals ? { approvals: admitted.approvals } : {}),
           },
           transaction,
         });
@@ -2353,6 +2356,10 @@ export class AgentSessionsService {
               binding: admission.binding,
               requirements: admission.effectiveRequirements,
               connections,
+              sandbox: admission.sandbox,
+              ...(admission.approvals
+                ? { approvals: admission.approvals }
+                : {}),
             },
             transaction,
           });
@@ -4491,10 +4498,13 @@ export class AgentSessionsService {
             session,
             agent,
           );
-          const callerLayers = await this.callerToolPolicies(
-            identity,
-            projectId,
-            session.agent_id,
+          const callerLayers = withAgentLayers(
+            await this.callerToolPolicies(
+              identity,
+              projectId,
+              session.agent_id,
+            ),
+            agent,
           );
           const turnOptions: TurnOptions = {
             ...agent.defaults,
@@ -4658,6 +4668,7 @@ export class AgentSessionsService {
                 projectId,
                 sessionId,
                 workingDirectory: anchor.providerSession.workingDirectory,
+                ...(agent.privilege ? { mode: agent.privilege } : {}),
               }),
             ];
             turnOptions.capabilities = this.agentCapabilities.forSession({
@@ -4870,8 +4881,15 @@ export class AgentSessionsService {
               : anchor.providerSession.workingDirectory;
           anchor.providerSession.workingDirectory = settledWorkingDirectory;
 
-          const changedFiles =
-            anchor.sandboxProviderId && runtime.provider
+          // A read-only agent may change anything inside its own sandbox;
+          // none of it leaves: no sync back, store ship, or checkpoint to
+          // the origin (ADR 0176).
+          const keepsChangesInSandbox = Boolean(
+            anchor.sandboxProviderId && agent.privilege === "read-only",
+          );
+          const changedFiles = keepsChangesInSandbox
+            ? []
+            : anchor.sandboxProviderId && runtime.provider
               ? await this.syncBackChanges(
                   runtime.provider,
                   identity,
@@ -4884,7 +4902,7 @@ export class AgentSessionsService {
           // Ship the turn's `store/` writes as the caller (ADR 0055) before the
           // checkpoint: store paths are gitignored, so they never enter git.
           let storeSync: JsonObject | undefined;
-          if (storeDir) {
+          if (storeDir && !keepsChangesInSandbox) {
             try {
               const report = await shipRemoteProject(
                 storeDir,
@@ -4919,7 +4937,8 @@ export class AgentSessionsService {
           // Sweeps ALL dirty state (host harnesses under-report changed files);
           // failures log and never break the turn.
           const commitSha =
-            agent.topology === "native" || changedFiles.length > 0
+            !keepsChangesInSandbox &&
+            (agent.topology === "native" || changedFiles.length > 0)
               ? await this.checkpointTurn(identity, projectId, message, {
                   sessionId,
                   workingDirectory: settledWorkingDirectory,
@@ -5933,7 +5952,7 @@ export class AgentSessionsService {
       if (!entry?.definition) throw new AgentNotConfiguredError(id);
       const resolved = await this.codingAgents.projectAgent({ id, entry });
       if (!resolved) throw new AgentNotConfiguredError(id);
-      return resolved;
+      return withDefinitionPolicy(resolved, entry.definition);
     }
     const agent = this.codingAgents.get(id);
     if (!agent) throw new AgentNotConfiguredError(id);
@@ -6788,12 +6807,58 @@ export class AgentSessionsService {
     );
     return {
       agentId: session.agent_id,
-      toolPolicies: await this.callerToolPolicies(
-        args.identity,
-        args.projectId,
-        session.agent_id,
+      toolPolicies: withAgentLayers(
+        await this.callerToolPolicies(
+          args.identity,
+          args.projectId,
+          session.agent_id,
+        ),
+        await this.resolveAgent(session.agent_id, args.projectId).catch(
+          () => undefined,
+        ),
       ),
     };
+  }
+
+  /**
+   * Name who answers this chat's escalations while no one watches it (ADR
+   * 0176). The latest delivery that names approvers replaces them.
+   */
+  async setApprovers(args: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    approvers: { members?: string[]; roles?: string[] };
+  }): Promise<void> {
+    await this.requireSession(args.identity, args.projectId, args.sessionId);
+    await this.db
+      .updateTable("agent_sessions")
+      .set({ approvers: JSON.stringify(args.approvers) })
+      .where("id", "=", args.sessionId)
+      .execute();
+  }
+
+  /**
+   * What the session's agent may change outside its sandbox (ADR 0176):
+   * its definition's `mode`, or undefined when the host declared none.
+   */
+  async agentMode(args: {
+    projectId: string;
+    sessionId: string;
+  }): Promise<"read-only" | "edit" | "full-access" | undefined> {
+    const session = await this.db
+      .selectFrom("agent_sessions")
+      .select("agent_id")
+      .where("id", "=", args.sessionId)
+      .where("project_id", "=", args.projectId)
+      .executeTakeFirst();
+    if (!session) return undefined;
+    // An agent that no longer resolves cannot act; the strictest mode holds.
+    const agent = await this.resolveAgent(
+      session.agent_id,
+      args.projectId,
+    ).catch(() => undefined);
+    return agent ? agent.privilege : "read-only";
   }
 
   /** `caller` + `toolPolicies` for {@link StartSessionOpts}. */
@@ -6805,10 +6870,9 @@ export class AgentSessionsService {
     caller: Identity;
     toolPolicies?: Record<string, McpToolPolicyLayers>;
   }> {
-    const toolPolicies = await this.callerToolPolicies(
-      identity,
-      projectId,
-      agentId,
+    const toolPolicies = withAgentLayers(
+      await this.callerToolPolicies(identity, projectId, agentId),
+      await this.resolveAgent(agentId, projectId).catch(() => undefined),
     );
     // The root identity sends an EMPTY map, not none: a turn's layers replace the
     // session's, so the root continuing a viewer's session sheds the
@@ -7451,6 +7515,51 @@ function delegationPolicy(
   policy: AgentDelegationPolicy | undefined,
 ): AgentDelegationPolicy {
   return policy ?? DEFAULT_DELEGATION_POLICY;
+}
+
+/**
+ * A committed definition's own narrowing (ADR 0054 agent scope) and mode,
+ * applied by core whatever harness the host built, so they hold on every
+ * host (ADR 0176). Aliases name the Environment's connection servers.
+ */
+function withDefinitionPolicy(
+  agent: RegisteredCodingAgent,
+  definition: AgentDefinition,
+): RegisteredCodingAgent {
+  const layers = Object.fromEntries(
+    Object.entries(definition.toolPolicies ?? {}).map(([alias, policy]) => [
+      alias === PROJECT_TOOLS_SERVER_KEY
+        ? alias
+        : connectionMcpServerName(alias),
+      [
+        narrowingLayer({
+          ...(policy.default ? { default: policy.default } : {}),
+          ...(policy.tools ? { tools: { ...policy.tools } } : {}),
+        }),
+      ],
+    ]),
+  );
+  const mode = agent.privilege ?? definition.mode;
+  return {
+    ...agent,
+    ...(mode ? { privilege: mode } : {}),
+    ...(Object.keys(layers).length > 0
+      ? { toolPolicies: { ...agent.toolPolicies, ...layers } }
+      : {}),
+  };
+}
+
+/** The caller's layers and the agent's own, intersected per server. */
+function withAgentLayers(
+  caller: Record<string, McpToolPolicyLayers> | undefined,
+  agent: RegisteredCodingAgent | undefined,
+): Record<string, McpToolPolicyLayers> | undefined {
+  const own = agent?.toolPolicies;
+  if (!own || Object.keys(own).length === 0) return caller;
+  const merged: Record<string, McpToolPolicyLayers> = { ...caller };
+  for (const [server, layers] of Object.entries(own))
+    merged[server] = [...(merged[server] ?? []), ...layers];
+  return merged;
 }
 
 function privilegeRank(

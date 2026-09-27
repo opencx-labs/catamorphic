@@ -66,7 +66,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0051](0051-no-project-templates.md) | No project templates: agents build from skills | Accepted; paths superseded by 0142 |
 | [0052](0052-skills-as-commands.md) | Skills as commands, and the agent-initiated auth loop | Accepted; paths superseded by 0142 |
 | [0053](0053-identity-scope-and-app-routes.md) | Identity scope: one artifact vocabulary, structural narrowing, synchronous calls | Accepted |
-| [0054](0054-tool-permissions.md) | Tool permissions: layered connection/agent policies that intersect; ask via host prompt | Accepted (enforcement transport refined by 0067) |
+| [0054](0054-tool-permissions.md) | Tool permissions: layered connection/agent policies that intersect; ask via host prompt | Accepted (enforcement transport refined by 0067; server-side definition policies by 0176) |
 | [0055](0055-company-brain-roles-store-and-change-loop.md) | Company brain: program vs. project store, roles as files, scoped agents, the change loop | Accepted; paths superseded by 0142; the builder flag superseded by 0158 |
 | [0056](0056-agent-configuration.md) | Agent configuration: one surface, layered defaults, enforced capabilities | Accepted; paths superseded by 0142 |
 | [0057](0057-agent-usage-and-cost.md) | Agent usage and cost: transcript-scanned page, per-turn usage in metadata | Accepted |
@@ -113,6 +113,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0098](0098-project-authorized-local-and-remote-agents.md) | Project-authorized local and remote agent execution | Accepted (`this-machine` binding is `device: "member"`, 0167) |
 | [0099](0099-shared-postgres-server-environments.md) | Shared-Postgres server instances as managed Environments | Accepted (execution machines superseded by 0164) |
 | [0100](0100-workspace-resource-admission.md) | Workspace reservations and provider-enforced resource limits | Accepted (idle release refined by 0173) |
+| [0100](0100-workspace-resource-admission.md) | Workspace reservations and provider-enforced resource limits | Accepted (container usage refined by 0176) |
 | [0101](0101-harness-capabilities-and-session-monitors.md) | Harness capabilities and session monitors | Accepted |
 | [0102](0102-tabbed-sidebars-and-app-widgets.md) | Tabbed sidebars and compact app widgets | Accepted (refined by 0107) |
 | [0103](0103-agent-context-and-deferred-capabilities.md) | Agent context and deferred capabilities | Accepted |
@@ -193,3 +194,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0173](0173-keyed-chat-lifecycle-and-chat-placement.md) | Keyed chats: project keys, close, idle release, and their own placement | Accepted |
 | [0174](0174-background-processes-as-a-sandbox-capability.md) | Background processes are a sandbox capability | Accepted |
 | [0175](0175-grants-reach-sandboxes.md) | Grants reach sandboxes; credentials never do | Accepted |
+| [0176](0176-environment-images-containers-egress-and-modes.md) | Environments choose images, containers, egress, and what agents may change | Accepted |

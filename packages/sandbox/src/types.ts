@@ -9,6 +9,11 @@ import type {
   RuntimeTerminalResult,
 } from "@catamorphic/runtime";
 import type { SandboxProcessProvider } from "./processes.js";
+import type {
+  SandboxCapability,
+  SandboxEgress,
+  SandboxImage,
+} from "./sandbox-environment.js";
 
 export type SandboxType = "execution" | "dev";
 
@@ -55,6 +60,15 @@ export function assertSandboxResources(
 export interface CreateSandboxOpts {
   resources?: SandboxResources;
   snapshotName?: string;
+  /**
+   * The image the Environment chose (ADR 0176). Needs the `images`
+   * capability, and `images.build` for a Dockerfile.
+   */
+  image?: SandboxImage;
+  /** Give the sandbox its own container runtime; needs `containers`. */
+  containers?: boolean;
+  /** Outbound reach; anything but open needs `network.policy`. */
+  egress?: SandboxEgress;
   language?: string;
   envVars?: Record<string, string>;
   autoStopInterval?: number;
@@ -91,6 +105,12 @@ export interface SandboxProvider {
   readonly workspaceRoot: string;
   readonly isolation?: "none" | "process" | "sandbox";
   readonly resourceLimits?: readonly (keyof SandboxResources)[];
+  /**
+   * What each sandbox can be given beyond commands (ADR 0176): images,
+   * image builds, a container runtime, an enforced egress policy. A provider
+   * refuses create options that need a capability it does not list.
+   */
+  readonly capabilities?: readonly SandboxCapability[];
 
   createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle>;
   startSandbox(sandboxId: string): Promise<void>;

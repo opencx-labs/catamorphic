@@ -69,7 +69,11 @@ export async function registerWorkMachine(args: {
     isolation: args.isolation ?? "process",
     workloads: args.workloads ?? ["agent", "workflow"],
     agentTopologies: ["controller"],
-    capabilities: ["network.egress"],
+    // What this machine's sandboxes can be given (ADR 0176).
+    capabilities: [
+      "network.egress",
+      ...(args.sandboxProvider.capabilities ?? []),
+    ],
     resources: {
       cpuMillis: args.capacity?.cpuMillis,
       memoryMb: args.capacity?.memoryMb,

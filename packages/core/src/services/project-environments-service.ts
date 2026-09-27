@@ -1,8 +1,10 @@
 import type { DB } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
-import type {
-  EnvironmentRequirements,
-  WorkloadKind,
+import {
+  type EnvironmentNetworkPolicy,
+  type EnvironmentRequirements,
+  isEgressPattern,
+  type WorkloadKind,
 } from "@catamorphic/sandbox";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
@@ -50,6 +52,37 @@ const EnvironmentConnectionBindingSchema = z
     path: ["service"],
   });
 
+/** A project file whose name marks it as a Dockerfile. */
+const DOCKERFILE_PATH =
+  /^(?!\/)(?!.*(^|\/)\.\.(\/|$))[A-Za-z0-9._/-]*(^|\/|\.)[Dd]ockerfile$/;
+/** An OCI reference: registry/name[:tag][@digest], no whitespace. */
+const OCI_REFERENCE = /^[a-z0-9][a-z0-9._\-/:]*(@sha256:[a-f0-9]{64})?$/;
+
+const ImageSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .refine((value) => DOCKERFILE_PATH.test(value) || OCI_REFERENCE.test(value), {
+    message:
+      "image must be an OCI reference (e.g. node:22) or a project Dockerfile path (e.g. .work/images/review.Dockerfile)",
+  });
+
+const NetworkSchema = z.discriminatedUnion("egress", [
+  z.strictObject({ egress: z.literal("open") }),
+  z.strictObject({ egress: z.literal("gateway") }),
+  z.strictObject({
+    egress: z.literal("allowlist"),
+    allow: z
+      .array(
+        z.string().toLowerCase().refine(isEgressPattern, {
+          message: "allow entries are domains, *.suffix patterns, or IPv4",
+        }),
+      )
+      .min(1)
+      .max(200),
+  }),
+]);
+
 const ProjectEnvironmentDefinitionSchema = z
   .strictObject({
     description: z.string().optional(),
@@ -78,6 +111,25 @@ const ProjectEnvironmentDefinitionSchema = z
         isolation: z.enum(["none", "process", "sandbox"]).optional(),
         capabilities: z.array(z.string().min(1)).optional(),
         resources: ResourcePolicySchema.optional(),
+        /** An isolated container runtime inside the sandbox (ADR 0176). */
+        containers: z.boolean().optional(),
+      })
+      .optional(),
+    /** The sandbox image: an OCI reference or a project Dockerfile (ADR 0176). */
+    image: ImageSchema.optional(),
+    /** Outbound reach of the sandbox (ADR 0176). Default open. */
+    network: NetworkSchema.optional(),
+    /**
+     * How long an unattended chat's escalation waits for a person before it
+     * is denied (ADR 0176).
+     */
+    approvals: z
+      .strictObject({
+        waitMinutes: z
+          .number()
+          .int()
+          .positive()
+          .max(7 * 24 * 60),
       })
       .optional(),
     /** Connection aliases, keyed by alias (ADR 0172). */
@@ -98,6 +150,11 @@ export const DEFAULT_ENVIRONMENT = "default";
 /** Minutes an idle chat keeps its workspace unless its Environment says otherwise. */
 export const DEFAULT_IDLE_RELEASE_MINUTES = 30;
 
+/** The image an Environment declares, before a Dockerfile is read. */
+export type EnvironmentImage =
+  | { kind: "oci"; reference: string }
+  | { kind: "dockerfile"; path: string };
+
 export interface ProjectEnvironmentDefinition {
   description?: string;
   workloads: readonly WorkloadKind[];
@@ -105,8 +162,20 @@ export interface ProjectEnvironmentDefinition {
   device?: "member";
   strict?: boolean;
   idleReleaseMinutes?: number;
-  requirements?: Omit<EnvironmentRequirements, "workload" | "topology">;
   connections?: Readonly<Record<string, EnvironmentConnectionBinding>>;
+  requirements?: Omit<EnvironmentRequirements, "workload" | "topology"> & {
+    containers?: boolean;
+  };
+  image?: EnvironmentImage;
+  network?: EnvironmentNetworkPolicy;
+  approvals?: { waitMinutes: number };
+}
+
+/** Parse an Environment's `image`: a Dockerfile path or an OCI reference. */
+export function environmentImage(value: string): EnvironmentImage {
+  return DOCKERFILE_PATH.test(value)
+    ? { kind: "dockerfile", path: value }
+    : { kind: "oci", reference: value };
 }
 
 export interface ProjectEnvironmentEntry {
@@ -180,7 +249,11 @@ export function parseProjectEnvironmentPolicy(
           },
         };
       }
-      const definition: ProjectEnvironmentDefinition = parsed.data;
+      const { image, ...rest } = parsed.data;
+      const definition: ProjectEnvironmentDefinition = {
+        ...rest,
+        ...(image ? { image: environmentImage(image) } : {}),
+      };
       return { name, definition };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -266,5 +339,35 @@ export class ProjectEnvironmentsService {
     name: string;
   }): Promise<ProjectEnvironmentDefinition | undefined> {
     return (await this.list(args)).environments[args.name];
+  }
+
+  /**
+   * An Environment's Dockerfile, read from the same program the manifest
+   * came from, so the image is exactly what was reviewed (ADR 0176).
+   */
+  async readProgramFile(args: {
+    identity: Identity;
+    projectId: string;
+    path: string;
+  }): Promise<string | null> {
+    await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
+    const publishedOnly =
+      args.identity.scope !== undefined &&
+      Boolean(
+        await this.projectManager.localPath({
+          tenantId: args.identity.tenantId,
+          projectId: args.projectId,
+        }),
+      );
+    return withProgram(
+      this.projectManager,
+      args.identity.tenantId,
+      args.projectId,
+      (repo, ref) =>
+        publishedOnly && ref === null
+          ? Promise.resolve(null)
+          : readProgramFile(repo, ref, args.path),
+      { workingTree: args.identity.scope === undefined, publishedOnly },
+    );
   }
 }

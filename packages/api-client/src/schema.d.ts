@@ -8731,6 +8731,7 @@ export interface paths {
                                 };
                                 createdAt: string;
                                 expiresAt: string;
+                                approvers?: string[];
                             }[];
                         };
                     };
@@ -10406,6 +10407,26 @@ export interface paths {
                                         gpu?: boolean;
                                     };
                                     snapshotName?: string;
+                                    image?: {
+                                        /** @enum {string} */
+                                        kind: "oci";
+                                        reference: string;
+                                    } | {
+                                        /** @enum {string} */
+                                        kind: "dockerfile";
+                                        path: string;
+                                        content: string;
+                                        digest: string;
+                                    };
+                                    containers?: boolean;
+                                    egress?: {
+                                        /** @enum {string} */
+                                        mode: "open";
+                                    } | {
+                                        /** @enum {string} */
+                                        mode: "allowlist";
+                                        readonly allow: string[];
+                                    };
                                     language?: string;
                                     envVars?: {
                                         [key: string]: string;

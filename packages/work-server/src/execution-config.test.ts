@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { WorkerNodesService } from "@catamorphic/core";
 import { expect, it } from "vitest";
-import { executionSettingsFromEnv } from "./execution-config.js";
+import { executionSettingsFromEnv, workExecution } from "./execution-config.js";
 import { createWorkServer, SERVER_TENANT_ID } from "./server.js";
 import { testServerOptions } from "./test-support.js";
 
@@ -20,6 +20,61 @@ it("rejects invalid budgets and subprocess resource guarantees before boot", () 
       WORK_WORKSPACE_CPU_MILLIS: "500",
     }),
   ).toThrow("whole cores");
+});
+
+it("configures images, containers and unenforced egress per backend (ADR 0176)", () => {
+  const micro = executionSettingsFromEnv({
+    WORK_SANDBOX: "microsandbox",
+    WORK_IMAGE_BUILDER: "podman",
+  });
+  expect(micro).toMatchObject({
+    images: { builder: "podman" },
+    containers: true,
+  });
+  expect(
+    workExecution({ settings: micro, dataDir: os.tmpdir() }).provider
+      .capabilities,
+  ).toEqual(["images", "network.policy", "containers", "images.build"]);
+  expect(
+    executionSettingsFromEnv({
+      WORK_SANDBOX: "microsandbox",
+      WORK_SANDBOX_CONTAINERS: "0",
+    }).containers,
+  ).toBe(false);
+  const local = executionSettingsFromEnv({
+    WORK_DOCKER_SOCKET: "/var/run/docker.sock",
+    WORK_UNENFORCED_EGRESS: "accept",
+  });
+  expect(
+    workExecution({
+      settings: local,
+      dataDir: path.join(os.tmpdir(), "catamorphic-exec-config"),
+    }).provider.capabilities,
+  ).toEqual(["containers", "network.policy"]);
+  // A plain local-process machine offers none of them.
+  expect(
+    workExecution({
+      settings: executionSettingsFromEnv({}),
+      dataDir: path.join(os.tmpdir(), "catamorphic-exec-config"),
+    }).provider.capabilities,
+  ).toEqual([]);
+  for (const [env, message] of [
+    [{ WORK_IMAGE_BUILDER: "docker" }, "requires WORK_SANDBOX=microsandbox"],
+    [
+      { WORK_SANDBOX: "microsandbox", WORK_IMAGE_BUILDER: "kaniko" },
+      "docker or podman",
+    ],
+    [
+      { WORK_SANDBOX: "microsandbox", WORK_DOCKER_SOCKET: "/x.sock" },
+      "microsandbox runs Docker inside each VM",
+    ],
+    [
+      { WORK_SANDBOX: "microsandbox", WORK_UNENFORCED_EGRESS: "accept" },
+      "local-process only",
+    ],
+    [{ WORK_UNENFORCED_EGRESS: "yes" }, "must be accept"],
+  ] as const)
+    expect(() => executionSettingsFromEnv(env)).toThrow(message);
 });
 
 it("a full managed machine preserves existing work and restores an archived session with fresh capacity", async () => {

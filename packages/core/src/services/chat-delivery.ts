@@ -53,12 +53,22 @@ export function keyedChatOwnerId(input: {
   return input.caller.externalUserId;
 }
 
+/**
+ * Who answers the chat's escalations while no one watches it (ADR 0176):
+ * named members and holders of named project roles.
+ */
+export interface ChatApprovers {
+  members?: string[];
+  roles?: string[];
+}
+
 type DeliveryMessage = {
   content: string;
   mode: "message_only" | "next_turn" | "interrupt";
   attention?: "required" | "none";
   notification?: { title?: string; body?: string };
   idempotencyKey?: string;
+  approvers?: ChatApprovers;
 };
 
 /** `catamorphic.sessions.deliver`, validated: a chat by id or by key. */
@@ -106,12 +116,14 @@ export function parseChatDelivery(value: unknown): ChatDelivery {
     throw new Error("attention must be none or required");
   const notification = parseNotification(input.notification);
   const idempotencyKey = text("idempotencyKey", 500);
+  const approvers = parseApprovers(input.approvers);
   const common: DeliveryMessage = {
     content,
     mode,
     ...(attention ? { attention } : {}),
     ...(notification ? { notification } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(approvers ? { approvers } : {}),
   };
 
   const hasSession = input.sessionId !== undefined;
@@ -147,6 +159,36 @@ function parseAudience(value: unknown): ChatAudience | undefined {
   if (!parsed.success)
     throw new Error('audience must be "project" or { member: "<user id>" }');
   return parsed.data;
+}
+
+export function parseApprovers(value: unknown): ChatApprovers | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error(
+      'approvers must be { members?: ["<user id>"], roles?: ["<role>"] }',
+    );
+  const list = (name: "members" | "roles") => {
+    const item = name in value ? Reflect.get(value, name) : undefined;
+    if (item === undefined) return undefined;
+    if (
+      !Array.isArray(item) ||
+      item.length > 50 ||
+      item.some(
+        (entry) =>
+          typeof entry !== "string" || !entry.trim() || entry.length > 200,
+      )
+    )
+      throw new Error(`approvers.${name} must be up to 50 non-empty strings`);
+    return [...new Set(item.map((entry) => String(entry).trim()))];
+  };
+  const members = list("members");
+  const roles = list("roles");
+  if (!members?.length && !roles?.length)
+    throw new Error("approvers must name at least one member or role");
+  return {
+    ...(members?.length ? { members } : {}),
+    ...(roles?.length ? { roles } : {}),
+  };
 }
 
 function parseNotification(

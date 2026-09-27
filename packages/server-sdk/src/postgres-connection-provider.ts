@@ -200,6 +200,8 @@ export function definePostgresConnectionProvider(
     },
     listActions: async ({ capabilities }) =>
       actions.filter((action) => capabilities.includes(action.name)),
+    // A read-only role in a read-only transaction: every action reads.
+    readOnly: () => true,
     invoke: async ({ material, action, input, connection }) => {
       const request = parseInput(input);
       const client = await (await poolFor(material, connection)).connect();

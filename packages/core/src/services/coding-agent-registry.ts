@@ -1,6 +1,7 @@
 import type {
   AgentExecutionTopology,
   CodingAgentProvider,
+  McpToolPolicyLayers,
   TurnOptions,
 } from "@catamorphic/sandbox";
 import type {
@@ -15,8 +16,18 @@ export interface RegisteredCodingAgent {
   id: string;
   provider: CodingAgentProvider;
   topology: AgentExecutionTopology;
-  /** Coarse execution ceiling used to prevent wildcard privilege escalation. */
+  /**
+   * What the agent may change outside its own sandbox (ADR 0176), enforced
+   * by core at every boundary: read-only changes nothing, edit may propose,
+   * full access may publish. Also ranks delegation. Undefined: the host
+   * declared no mode, and nothing is narrowed.
+   */
   privilege?: "read-only" | "edit" | "full-access";
+  /**
+   * The agent's own tool-policy narrowing by server key (ADR 0054 agent
+   * scope), layered with the caller's role policies on every turn.
+   */
+  toolPolicies?: Readonly<Record<string, McpToolPolicyLayers>>;
   /** Additional compatibility requirements for profile-defined agents. */
   environment?: AgentEnvironmentPolicy;
   /** Brokered connection aliases required before this agent can start. */

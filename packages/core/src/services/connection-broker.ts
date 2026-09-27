@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Json } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
+import { type AgentMode, modeRefusal } from "@catamorphic/sandbox";
 import type { Identity } from "../identity.js";
 import { identityMayUseConnection } from "../identity.js";
 import {
@@ -9,6 +10,7 @@ import {
   reviewConnectionAction,
 } from "./connection-guards.js";
 import {
+  type ConnectionProvider,
   type ConnectionProviderRegistry,
   isConnectionAuthorizationExpiredError,
 } from "./connection-providers.js";
@@ -52,6 +54,8 @@ export interface ConnectionGateway {
   approvals?: ToolPermissionChannel;
   /** The member who owns an agent session, for review and audit. */
   sessionOwner?: (sessionId: string) => Promise<string | undefined>;
+  /** The session agent's mode: read-only agents only read (ADR 0176). */
+  sessionMode?: (sessionId: string) => Promise<AgentMode | undefined>;
 }
 
 export class ConnectionBroker {
@@ -145,6 +149,36 @@ export class ConnectionBroker {
         argumentsDigest: digest,
       });
       throw new Error(`Connection action '${args.action}' is not permitted`);
+    }
+    if (
+      args.caller === "agent" &&
+      args.agentSessionId &&
+      (await this.gateway.sessionMode?.(args.agentSessionId)) === "read-only" &&
+      !(await this.readsOnly({
+        identity: args.identity,
+        connectionId: binding.connectionId,
+        capabilities: binding.capabilities,
+        provider,
+        action: args.action,
+      }))
+    ) {
+      await this.connections.audit({
+        identity: args.identity,
+        projectId: allocation.projectId,
+        connectionId: binding.connectionId,
+        allocationId: allocation.id,
+        eventType: "connection.invoked",
+        outcome: "denied",
+        action: args.action,
+        argumentsDigest: digest,
+        metadata: { mode: "read-only" },
+      });
+      throw new ConnectionActionDeniedError(
+        modeRefusal({
+          mode: "read-only",
+          action: `call ${args.alias} ${args.action}, which can change ${args.alias}`,
+        }),
+      );
     }
     const review = await this.review({
       ...args,
@@ -313,6 +347,34 @@ export class ConnectionBroker {
           reason: `not approved (${outcome.reason})`,
           metadata: metadata(outcome.records, "denied"),
         };
+  }
+
+  /** Whether a provider action only reads (ADR 0176). */
+  private async readsOnly(args: {
+    identity: Identity;
+    connectionId: string;
+    capabilities: readonly string[];
+    provider: ConnectionProvider;
+    action: string;
+  }): Promise<boolean> {
+    if (args.provider.readOnly) return args.provider.readOnly(args.action);
+    const listActions = args.provider.listActions;
+    if (!listActions) return false;
+    const actions = await this.connections.withCredential({
+      identity: args.identity,
+      connectionId: args.connectionId,
+      use: (material) =>
+        listActions({ material, capabilities: args.capabilities }),
+    });
+    const annotations = actions.find(
+      (candidate) => candidate.name === args.action,
+    )?.annotations;
+    return (
+      typeof annotations === "object" &&
+      annotations !== null &&
+      !Array.isArray(annotations) &&
+      annotations.readOnlyHint === true
+    );
   }
 
   private async resolveInvocation(args: {

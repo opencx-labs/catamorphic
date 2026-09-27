@@ -117,6 +117,8 @@ export function defineHttpApiConnectionProvider(
     },
     listActions: async ({ capabilities }) =>
       actions.filter((action) => capabilities.includes(action.name)),
+    // Read-only agents may GET, nothing else (ADR 0176).
+    readOnly: (action) => action === "get",
     invoke: async ({ material, action, input }) => {
       if (!isMethod(action)) throw new Error(`Unknown action '${action}'`);
       const request = parseRequest(input);

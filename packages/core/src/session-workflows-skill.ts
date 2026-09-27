@@ -293,6 +293,12 @@ export const answerSlackMentions = defineWorkflow(({ defineBoundary }) => ({
   \`sessions:write\` in the workflow's \`permissions\`; the project chat from a
   member's automation needs \`automations:write\`. Listing everyone's chats
   needs \`sessions:read\`.
+- No one watches a project chat, so name who approves for it: approvers
+  { members: ["<id>"], roles: ["<role>"] } on deliver (a pull request's author
+  and reviewers, an on-call role). When its agent needs approval (a guarded
+  query, a tool set to ask) they are notified and answer from the chat; the
+  agent waits for the Environment's approvals.waitMinutes (30 by default), then
+  continues without it. Without approvers such an action is refused at once.
 - spawn respects the source agent's configured delegation routes. Fresh context
   is the default. fork explicitly copies transcript history; create makes an
   independent conversation. Do not simulate children as untracked shell agents.

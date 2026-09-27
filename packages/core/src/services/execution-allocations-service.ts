@@ -2,6 +2,8 @@ import type { DB } from "@catamorphic/db";
 import type {
   EnvironmentBinding,
   EnvironmentRequirements,
+  SandboxEgress,
+  SandboxImage,
   WorkloadKind,
 } from "@catamorphic/sandbox";
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
@@ -60,13 +62,49 @@ const AllocationPolicySchema = z.object({
     )
     .optional(),
   workflowEnablementId: z.string().uuid().optional(),
+  sandbox: z
+    .object({
+      image: z
+        .discriminatedUnion("kind", [
+          z.object({ kind: z.literal("oci"), reference: z.string() }),
+          z.object({
+            kind: z.literal("dockerfile"),
+            path: z.string(),
+            content: z.string(),
+            digest: z.string(),
+          }),
+        ])
+        .optional(),
+      containers: z.boolean().optional(),
+      egress: z
+        .discriminatedUnion("mode", [
+          z.object({ mode: z.literal("open") }),
+          z.object({
+            mode: z.literal("allowlist"),
+            allow: z.array(z.string()),
+          }),
+        ])
+        .optional(),
+    })
+    .optional(),
+  approvals: z.object({ waitMinutes: z.number() }).optional(),
 });
+
+/** What an Allocation's sandbox is given (ADR 0176), fixed at admission. */
+export interface EnvironmentSandbox {
+  image?: SandboxImage;
+  containers?: boolean;
+  egress?: SandboxEgress;
+}
 
 export interface EnvironmentAllocationPolicy {
   binding: EnvironmentBinding;
   requirements: EnvironmentRequirements;
   connections?: readonly ResolvedConnectionBinding[];
   workflowEnablementId?: string;
+  sandbox?: EnvironmentSandbox;
+  /** How long unattended escalations wait for a person (ADR 0176). */
+  approvals?: { waitMinutes: number };
 }
 
 export interface ExecutionAllocation {

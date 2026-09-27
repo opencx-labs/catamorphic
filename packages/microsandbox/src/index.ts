@@ -1,3 +1,9 @@
+export { microsandboxEgressPolicy } from "./egress-policy.js";
+export {
+  cachedImageBuilder,
+  dockerImageBuilder,
+  type ImageBuilder,
+} from "./image-builder.js";
 export {
   type MicrosandboxProviderConfig,
   MicrosandboxSandboxProvider,

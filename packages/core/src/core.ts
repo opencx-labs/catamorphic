@@ -196,6 +196,12 @@ export interface CatamorphicCoreConfig {
     projectId: string;
     externalUserId: string;
   }) => Promise<Identity | null>;
+  /**
+   * Hosts sandboxes reach the control plane at: its public URL's host. An
+   * Environment with restricted egress always reaches them, and
+   * `egress: "gateway"` reaches nothing else (ADR 0176).
+   */
+  gatewayHosts?: readonly string[];
   /** Reachable control-plane endpoint for allocation-bound agent MCP grants. */
   connectionMcpUrl?: (args: {
     projectId: string;
@@ -567,7 +573,29 @@ export class CatamorphicCore {
                 : {}),
             },
           };
+          const nameApprovers = async (owner: Identity, sessionId: string) => {
+            const approvers = input.approvers;
+            if (!approvers || !this.agentSessions) return;
+            for (const member of approvers.members ?? [])
+              if (
+                !(await this.resolveMember({
+                  tenantId: owner.tenantId,
+                  projectId: context.projectId,
+                  externalUserId: member,
+                }))
+              )
+                throw new Error(
+                  `Approver ${member} is not a member of this project`,
+                );
+            await this.agentSessions.setApprovers({
+              identity: owner,
+              projectId: context.projectId,
+              sessionId,
+              approvers,
+            });
+          };
           if ("sessionId" in input) {
+            await nameApprovers(context.caller, input.sessionId);
             const receipt = await this.agentSessions.deliver(
               context.caller,
               context.projectId,
@@ -617,6 +645,7 @@ export class CatamorphicCore {
               origin,
             },
           );
+          await nameApprovers(owner, chat.sessionId);
           const receipt = await this.agentSessions.deliver(
             owner,
             context.projectId,
@@ -704,6 +733,7 @@ export class CatamorphicCore {
               }),
           }
         : undefined,
+      { gatewayHosts: config.gatewayHosts ?? [] },
     );
     this.agentCapabilities = new AgentCapabilitiesService({
       db: this.db,
@@ -714,6 +744,7 @@ export class CatamorphicCore {
       resolveMemberIdentity: config.resolveMemberIdentity,
       // Constructed below; read at call time.
       memberRoles: (args) => this.memberships.describeMember(args),
+      sessionMode: async (args) => this.agentSessions?.agentMode(args),
     });
     const connectionProviders = config.connectionProviders ?? [];
     const credentialVault = config.credentialVault;
@@ -784,6 +815,19 @@ export class CatamorphicCore {
                 .where("id", "=", sessionId)
                 .executeTakeFirst()
             )?.external_user_id,
+          sessionMode: async (sessionId) => {
+            const session = await this.db
+              .selectFrom("agent_sessions")
+              .select("project_id")
+              .where("id", "=", sessionId)
+              .executeTakeFirst();
+            return session
+              ? this.agentSessions?.agentMode({
+                  projectId: session.project_id,
+                  sessionId,
+                })
+              : undefined;
+          },
         },
       );
       this.connectionGrants = new ConnectionCapabilityGrantsService(

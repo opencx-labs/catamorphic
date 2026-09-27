@@ -319,15 +319,75 @@ member's **This machine** runner); neither receives Postgres, vault, or
 sign-in secrets. A private Environment grant alone does not make unrestricted
 processes safe on a shared worker: use microsandbox for code you do not trust.
 
+## Images, containers, and egress
+
+An Environment chooses its sandbox (ADR 0176) in `.work/project.json`:
+
+```json
+{
+  "environments": {
+    "review": {
+      "workloads": ["agent"],
+      "image": ".work/images/review.Dockerfile",
+      "requirements": { "containers": true },
+      "network": { "egress": "allowlist", "allow": ["github.com", "*.npmjs.org"] },
+      "approvals": { "waitMinutes": 60 }
+    }
+  }
+}
+```
+
+- `image` is an OCI reference (`node:22`) or a project Dockerfile. Only
+  microsandbox machines boot images. A Dockerfile needs a machine with a
+  builder: set `WORK_IMAGE_BUILDER=docker` (or `podman`) and install that CLI
+  and its daemon on the machine. The build context is the Dockerfile alone;
+  each machine builds a digest once and keeps it cached.
+- `requirements.containers` places the work where the sandbox gets its own
+  container runtime. On microsandbox, Docker runs inside the VM (on by
+  default; `WORK_SANDBOX_CONTAINERS=0` turns it off) on a private disk, and
+  the image must ship `dockerd`: use `docker:dind` or a Dockerfile `FROM` it.
+  A trusted local-process machine offers containers with
+  `WORK_DOCKER_SOCKET=/var/run/docker.sock`: each sandbox gets its own
+  filtered endpoint as `DOCKER_HOST`, sees only what it started, cannot run
+  privileged containers or mount host paths outside its workspace, and
+  everything it started is removed with it. Where Compose and Buildx are
+  per-user plugins (Docker Desktop), also set `WORK_DOCKER_CLI_PLUGINS` to
+  that plugin directory.
+- `network.egress` is `open` (default), `gateway` (only this server's public
+  host, from `WORK_PUBLIC_URL`, and DNS), or `allowlist`. Only microsandbox
+  enforces it, containers inside the VM included. A restricted image must
+  already contain git and bash, since the setup step cannot install them.
+  Local-process refuses such Environments unless the operator sets
+  `WORK_UNENFORCED_EGRESS=accept`, which runs them with open egress.
+
+Machines advertise `images`, `images.build`, `containers`, and
+`network.policy`; `GET /_work/operator/machines` shows them. An Environment
+no machine satisfies reports which capability is missing. VM budgets include
+nested containers; the Docker disk has its own size, and local-process
+containers are not budgeted.
+
+## Unattended agents
+
+A committed agent's `mode` decides what leaves its sandbox: `read-only`
+keeps every change in the sandbox and calls only read connection actions,
+`edit` may propose but not deploy or publish, `full-access` may do what its
+roles allow. The Work server defaults project agents to `edit`. Its
+`toolPolicies` narrow tools on the server as on the desktop.
+
+An approval in a project chat goes to the approvers the automation named when
+it delivered (`deliver({ key, audience: "project", approvers: { members: [...],
+roles: ["reviewer"] } })`). They get a notification, the chat appears for
+them, and they may answer its approval card without otherwise holding the chat.
+It waits `approvals.waitMinutes` (30 by default) and then is denied with a
+reason. A chat with no approvers refuses at once.
+
 ## Docker, development services, and private HTTP
 
 Catamorphic does not require a team service manifest or parse Compose files.
-Agents can run `docker compose up`, package scripts, or other ordinary commands
-when their execution provider, harness permission mode, and host policy permit
-those commands. Provision Docker Engine and dependencies on the actual command
-target. Advertising a `docker` capability does not install Docker or grant access
-to its socket. For sandboxed work, verify the selected backend/image supports the
-needed daemon or containers; do not assume a host Docker socket is available.
+Agents run `docker compose up`, package scripts, or other ordinary commands
+in an Environment that asks for `containers` (above). Advertising a custom
+`docker` capability does not install Docker or grant access to a socket, and
+no sandbox receives the host's Docker socket directly.
 Keep database volumes outside disposable checkouts and back them up through the
 host's normal process. Archiving or moving a session can destroy its workspace.
 

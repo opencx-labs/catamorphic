@@ -115,6 +115,43 @@ describe("parseChatDelivery", () => {
   });
 });
 
+describe("delivery approvers (ADR 0176)", () => {
+  it("names members and roles who answer an unattended chat's escalations", () => {
+    expect(
+      parseChatDelivery({
+        key: "pr-42",
+        content: "Review this pull request",
+        audience: "project",
+        approvers: {
+          members: ["alice", "alice", " bob "],
+          roles: ["reviewer"],
+        },
+      }),
+    ).toMatchObject({
+      approvers: { members: ["alice", "bob"], roles: ["reviewer"] },
+    });
+    expect(
+      parseChatDelivery({
+        sessionId: "s1",
+        content: "Again",
+        approvers: { roles: ["oncall"] },
+      }),
+    ).toMatchObject({ approvers: { roles: ["oncall"] } });
+  });
+
+  it.each([
+    [{}, "at least one"],
+    [{ members: [] }, "at least one"],
+    [{ members: "alice" }, "approvers.members"],
+    [{ roles: [""] }, "approvers.roles"],
+    [["alice"], "approvers must be"],
+  ])("rejects %j", (approvers, message) => {
+    expect(() =>
+      parseChatDelivery({ key: "k", content: "c", approvers }),
+    ).toThrow(message);
+  });
+});
+
 describe("chatOwner", () => {
   it("a member's automation reaches that member; others take declared permissions", async () => {
     const enablement = {

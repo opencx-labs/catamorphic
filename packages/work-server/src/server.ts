@@ -22,6 +22,7 @@ import {
   instrumentHttpServer,
   serveSpaDist,
 } from "@catamorphic/fastify-plugin";
+import { gatewayHostOf } from "@catamorphic/sandbox";
 import {
   aiToolCall,
   aiToolKind,
@@ -479,6 +480,8 @@ async function createWorkServerInner(
       ...(hooks.connectionProviders ?? []),
     ],
     connectionMcpUrl: () => `${publicBase}/api/connection-mcp`,
+    // Sandboxes with restricted egress still reach the gateway (ADR 0176).
+    gatewayHosts: config.publicBases.map((base) => gatewayHostOf(base)),
     ...(agents.registry ? { codingAgent: agents.registry } : {}),
     appBundleStore:
       objectStore ?? new FsBundleStore(path.join(data, "app-bundles")),

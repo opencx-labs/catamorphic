@@ -68,6 +68,8 @@ describe("PGlite migrations", () => {
       "028_keyed_chat_lifecycle.sql",
       "029_trigger_filters.sql",
       "030_client_runner_processes.sql",
+      "031_session_approvers.sql",
+      "031_session_approvers.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

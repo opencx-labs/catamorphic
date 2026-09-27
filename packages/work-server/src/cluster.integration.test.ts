@@ -216,14 +216,12 @@ it.skipIf(!process.env.DATABASE_URL)(
           use: (value) => Buffer.from(value).toString(),
         }),
       ).toBe("private credential");
-      const brokerA = new DurableToolPermissionBroker(
-        a.catamorphic.core.db,
-        5000,
-      );
-      const brokerB = new DurableToolPermissionBroker(
-        b.catamorphic.core.db,
-        5000,
-      );
+      const brokerA = new DurableToolPermissionBroker(a.catamorphic.core.db, {
+        timeoutMs: 5000,
+      });
+      const brokerB = new DurableToolPermissionBroker(b.catamorphic.core.db, {
+        timeoutMs: 5000,
+      });
       const permission = brokerA.handlerFor("Researcher")({
         sessionId: session.id,
         server: "crm",

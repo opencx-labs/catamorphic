@@ -32,7 +32,8 @@ export class FakeEchoAgent implements CodingAgentProvider {
     session: ProviderSession,
     message: string,
   ): AsyncIterable<AgentEvent> {
-    // `execution-location`, `write-file <name> <text>` and `read-file <name>`
+    // `execution-location`, `docker-host`, `write-file <name> <text>` and
+    // `read-file <name>`
     // run in the allocated workspace, so tests can see where and what.
     // Workflow deliveries arrive under a provenance header: act on the last line.
     const request = message.trim().split("\n").at(-1) ?? "";
@@ -40,11 +41,13 @@ export class FakeEchoAgent implements CodingAgentProvider {
     const workspaceCommand =
       command === "execution-location"
         ? "pwd"
-        : command === "write-file" && name
-          ? `printf %s '${text.join(" ")}' > '${name}'`
-          : command === "read-file" && name
-            ? `cat '${name}' 2>/dev/null || printf missing`
-            : undefined;
+        : command === "docker-host"
+          ? 'echo "$DOCKER_HOST"'
+          : command === "write-file" && name
+            ? `printf %s '${text.join(" ")}' > '${name}'`
+            : command === "read-file" && name
+              ? `cat '${name}' 2>/dev/null || printf missing`
+              : undefined;
     if (workspaceCommand) {
       const opts = this.sessions.get(session.providerSessionId ?? "");
       if (!opts?.sandboxProvider) throw new Error("Allocated provider missing");

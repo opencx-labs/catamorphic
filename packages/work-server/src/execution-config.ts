@@ -2,7 +2,10 @@ import os from "node:os";
 import path from "node:path";
 import type { WorkerCapacity } from "@catamorphic/core";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
-import { MicrosandboxSandboxProvider } from "@catamorphic/microsandbox";
+import {
+  dockerImageBuilder,
+  MicrosandboxSandboxProvider,
+} from "@catamorphic/microsandbox";
 
 /** How this machine executes agent and workflow sandboxes. */
 export interface WorkExecutionSettings {
@@ -23,6 +26,21 @@ export interface WorkExecutionSettings {
    * plane, where it could read the server's own secrets.
    */
   trustControlPlaneAgents: boolean;
+  /**
+   * Environment images and containers (ADR 0176). `imageBuilder` builds
+   * project Dockerfiles for microsandbox; `containers` turns nested Docker
+   * off for microsandbox; `dockerSocket` gives trusted local-process
+   * sandboxes a filtering Docker endpoint in front of this host daemon.
+   */
+  images?: { builder?: "docker" | "podman" };
+  containers?: boolean;
+  dockerSocket?: string;
+  dockerCliPlugins?: string;
+  /**
+   * The operator runs Environments with restricted egress on local-process
+   * although nothing enforces it (ADR 0176).
+   */
+  acceptUnenforcedEgress?: boolean;
 }
 
 /** Parse and validate the `WORK_SANDBOX` and capacity variables. */
@@ -78,9 +96,52 @@ export function executionSettingsFromEnv(
     path: env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     workloads: workloadsFromEnv(env.WORK_CONTROL_PLANE_WORKLOADS),
     trustControlPlaneAgents: env.WORK_TRUST_CONTROL_PLANE_AGENTS === "1",
+    ...imageAndContainerSettings({ backend, env }),
   };
   validateExecutionSettings(settings);
   return settings;
+}
+
+function imageAndContainerSettings(args: {
+  backend: "local-process" | "microsandbox";
+  env: Record<string, string | undefined>;
+}): Pick<
+  WorkExecutionSettings,
+  | "images"
+  | "containers"
+  | "dockerSocket"
+  | "dockerCliPlugins"
+  | "acceptUnenforcedEgress"
+> {
+  const { backend, env } = args;
+  const builder = env.WORK_IMAGE_BUILDER;
+  if (builder !== undefined && builder !== "docker" && builder !== "podman")
+    throw new Error("WORK_IMAGE_BUILDER must be docker or podman");
+  if (builder && backend !== "microsandbox")
+    throw new Error("WORK_IMAGE_BUILDER requires WORK_SANDBOX=microsandbox");
+  const containers = env.WORK_SANDBOX_CONTAINERS;
+  if (containers !== undefined && containers !== "0" && containers !== "1")
+    throw new Error("WORK_SANDBOX_CONTAINERS must be 0 or 1");
+  if (env.WORK_DOCKER_SOCKET && backend !== "local-process")
+    throw new Error(
+      "WORK_DOCKER_SOCKET is for local-process; microsandbox runs Docker inside each VM",
+    );
+  const egress = env.WORK_UNENFORCED_EGRESS;
+  if (egress !== undefined && egress !== "accept")
+    throw new Error("WORK_UNENFORCED_EGRESS must be accept");
+  if (egress && backend !== "local-process")
+    throw new Error("WORK_UNENFORCED_EGRESS applies to local-process only");
+  return {
+    ...(builder ? { images: { builder } } : {}),
+    ...(backend === "microsandbox"
+      ? { containers: containers !== "0" }
+      : { containers: Boolean(env.WORK_DOCKER_SOCKET) }),
+    ...(env.WORK_DOCKER_SOCKET ? { dockerSocket: env.WORK_DOCKER_SOCKET } : {}),
+    ...(env.WORK_DOCKER_CLI_PLUGINS
+      ? { dockerCliPlugins: env.WORK_DOCKER_CLI_PLUGINS }
+      : {}),
+    ...(egress ? { acceptUnenforcedEgress: true } : {}),
+  };
 }
 
 function workloadsFromEnv(raw: string | undefined): ("agent" | "workflow")[] {
@@ -136,10 +197,31 @@ export function workExecution(args: {
           image: settings.sandboxImage,
           cpus: (settings.defaults.cpuMillis ?? 1000) / 1000,
           memoryMib: settings.defaults.memoryMb,
+          containers: settings.containers ?? true,
+          ...(settings.images?.builder
+            ? {
+                imageBuilder: dockerImageBuilder({
+                  command: settings.images.builder,
+                }),
+              }
+            : {}),
         })
       : new LocalProcessSandboxProvider({
           root: path.join(args.dataDir, "sandboxes"),
           env: { PATH: settings.path, LANG: "C.UTF-8" },
+          ...(settings.dockerSocket
+            ? {
+                docker: {
+                  socketPath: settings.dockerSocket,
+                  ...(settings.dockerCliPlugins
+                    ? { cliPlugins: settings.dockerCliPlugins }
+                    : {}),
+                },
+              }
+            : {}),
+          ...(settings.acceptUnenforcedEgress
+            ? { acceptUnenforcedEgress: true }
+            : {}),
         });
   return {
     provider,

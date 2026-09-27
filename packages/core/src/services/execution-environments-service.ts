@@ -7,8 +7,14 @@ import type {
   EnvironmentResourcePolicy,
   EnvironmentRuntimeBinding,
   EnvironmentTrust,
+  SandboxCapability,
 } from "@catamorphic/sandbox";
-import { environmentSatisfies } from "@catamorphic/sandbox";
+import {
+  dockerfileDigest,
+  environmentSatisfies,
+  resolveEgress,
+  SANDBOX_CAPABILITIES,
+} from "@catamorphic/sandbox";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import type { Identity } from "../identity.js";
 import {
@@ -18,8 +24,10 @@ import {
   mayUseProject,
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
+import type { EnvironmentSandbox } from "./execution-allocations-service.js";
 import {
   DEFAULT_IDLE_RELEASE_MINUTES,
+  type ProjectEnvironmentDefinition,
   type ProjectEnvironmentsService,
 } from "./project-environments-service.js";
 import { EnvironmentCapacityError } from "./worker-capacity.js";
@@ -42,6 +50,34 @@ export interface EnvironmentAdmission {
   runtime: EnvironmentRuntimeBinding;
   binding: EnvironmentBinding;
   effectiveRequirements: EnvironmentRequirements;
+  /** What the sandbox is given: image, containers, egress (ADR 0176). */
+  sandbox: EnvironmentSandbox;
+  /** How long unattended escalations wait for a person (ADR 0176). */
+  approvals?: { waitMinutes: number };
+}
+
+/** The largest Dockerfile an Environment may name. */
+const MAX_DOCKERFILE_BYTES = 64 * 1024;
+
+/**
+ * Machine capabilities an Environment's sandbox needs (ADR 0176), so
+ * placement only picks machines that provide them.
+ */
+export function sandboxCapabilitiesFor(
+  definition: ProjectEnvironmentDefinition,
+): SandboxCapability[] {
+  return [
+    ...(definition.image ? [SANDBOX_CAPABILITIES.images] : []),
+    ...(definition.image?.kind === "dockerfile"
+      ? [SANDBOX_CAPABILITIES.imageBuild]
+      : []),
+    ...(definition.requirements?.containers
+      ? [SANDBOX_CAPABILITIES.containers]
+      : []),
+    ...(definition.network && definition.network.egress !== "open"
+      ? [SANDBOX_CAPABILITIES.egressPolicy]
+      : []),
+  ];
 }
 
 export interface EnvironmentDiscoveryItem {
@@ -131,6 +167,13 @@ export class ExecutionEnvironmentsService {
     private readonly provider: EnvironmentProvider,
     /** A member's own connected computer, for `device: "member"` (ADR 0098). */
     private readonly memberDevices?: EnvironmentProvider,
+    private readonly options: {
+      /**
+       * Hosts a sandbox reaches the control plane at (its public URL's
+       * host). Restricted egress always allows them (ADR 0176).
+       */
+      gatewayHosts?: readonly string[];
+    } = {},
   ) {}
 
   /** Resolve the host-only runtime realization recorded by an Allocation. */
@@ -428,10 +471,13 @@ export class ExecutionEnvironmentsService {
         reasons: [`Workload '${args.requirements.workload}' is not declared`],
       };
     }
-    const effectiveRequirements = mergeRequirements(
-      args.requirements,
-      definition.requirements,
-    );
+    const effectiveRequirements = mergeRequirements(args.requirements, {
+      ...definition.requirements,
+      capabilities: [
+        ...(definition.requirements?.capabilities ?? []),
+        ...sandboxCapabilitiesFor(definition),
+      ],
+    });
     const source =
       definition.device === "member" ? this.memberDevices : this.provider;
     const owner =
@@ -457,6 +503,9 @@ export class ExecutionEnvironmentsService {
     if (!compatibility.compatible) {
       return { bindingUnavailable: false, reasons: compatibility.reasons };
     }
+    const sandbox = await this.sandboxFor({ ...args, definition });
+    if ("reason" in sandbox)
+      return { bindingUnavailable: false, reasons: [sandbox.reason] };
     return {
       admission: {
         environmentName: args.name,
@@ -464,6 +513,47 @@ export class ExecutionEnvironmentsService {
         runtime,
         binding: runtime.descriptor,
         effectiveRequirements,
+        sandbox,
+        ...(definition.approvals ? { approvals: definition.approvals } : {}),
+      },
+    };
+  }
+
+  /** Resolve the image, containers and egress one Allocation's sandbox gets. */
+  private async sandboxFor(args: {
+    identity: Identity;
+    projectId: string;
+    definition: ProjectEnvironmentDefinition;
+  }): Promise<EnvironmentSandbox | { reason: string }> {
+    const { definition } = args;
+    const egress = resolveEgress({
+      policy: definition.network,
+      gatewayHosts: this.options.gatewayHosts ?? [],
+    });
+    const common: EnvironmentSandbox = {
+      ...(definition.requirements?.containers ? { containers: true } : {}),
+      ...(egress.mode === "open" ? {} : { egress }),
+    };
+    const image = definition.image;
+    if (!image) return common;
+    if (image.kind === "oci")
+      return { ...common, image: { kind: "oci", reference: image.reference } };
+    const content = await this.projects.readProgramFile({
+      identity: args.identity,
+      projectId: args.projectId,
+      path: image.path,
+    });
+    if (content === null)
+      return { reason: `Image Dockerfile ${image.path} does not exist` };
+    if (Buffer.byteLength(content) > MAX_DOCKERFILE_BYTES)
+      return { reason: `Image Dockerfile ${image.path} exceeds 64 KiB` };
+    return {
+      ...common,
+      image: {
+        kind: "dockerfile",
+        path: image.path,
+        content,
+        digest: dockerfileDigest(content),
       },
     };
   }
