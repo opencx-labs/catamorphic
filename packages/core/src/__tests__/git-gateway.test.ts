@@ -22,7 +22,7 @@ import {
   configureSandboxGateway,
   ensureSandboxBaseline,
 } from "../services/sandbox-git.js";
-import { parseSnapshot } from "../services/sandbox-sync.js";
+import { parseSnapshot, unquoteCPath } from "../services/sandbox-sync.js";
 import { workspaceMoveNote } from "../services/session-workspaces.js";
 
 const execute = promisify(execFile);
@@ -73,9 +73,19 @@ describe("Git gateway protocol (ADR 0175)", () => {
     expect(readPktSection(body.subarray(0, 20))).toBeNull();
   });
 
-  it("refuses shallow lines, certificates, and anything it cannot read", () => {
+  it("passes a shallow client's shallow lines and refuses certificates", () => {
+    const encode = (text: string) => new TextEncoder().encode(text);
+    expect(
+      parseReceivePackCommands([
+        encode(`shallow ${A}\n`),
+        encode(`${A} ${B} refs/heads/work/x\0report-status\n`),
+      ]),
+    ).toEqual({
+      commands: [{ oldId: A, newId: B, ref: "refs/heads/work/x" }],
+      capabilities: ["report-status"],
+    });
     expect(() =>
-      parseReceivePackCommands([new TextEncoder().encode(`shallow ${A}\n`)]),
+      parseReceivePackCommands([encode("push-cert\0report-status\n")]),
     ).toThrow(/cannot read/);
   });
 
@@ -154,6 +164,25 @@ describe("Git gateway protocol (ADR 0175)", () => {
     expect(
       repositoryBelow("https://gitlab.com/org/repo", "https://github.com/"),
     ).toBeNull();
+  });
+});
+
+describe("sandbox sync snapshots", () => {
+  it("reads name-status lines and unquotes unusual paths", () => {
+    expect(
+      parseSnapshot(
+        `${A}\nM\tapp.ts\nD\t"tab\\there.ts"\nA\t"caf\\303\\251.md"\n`,
+      ),
+    ).toEqual({
+      tree: A,
+      changes: [
+        { path: "app.ts", kind: "modified" },
+        { path: "tab\there.ts", kind: "deleted" },
+        { path: "café.md", kind: "modified" },
+      ],
+    });
+    expect(unquoteCPath("plain.ts")).toBe("plain.ts");
+    expect(parseSnapshot("not a tree")).toBeNull();
   });
 });
 
@@ -279,7 +308,7 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
         "git add -A",
         "tree=$(git write-tree)",
         'printf "%s\\n" "$tree"',
-        'git diff-tree -r -z --no-renames --name-status "$base" "$tree"',
+        'git -c core.quotePath=false diff-tree -r --no-renames --name-status "$base" "$tree"',
       ].join(" && "),
       { cwd: "/workspace/project" },
     );

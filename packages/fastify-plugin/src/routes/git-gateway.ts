@@ -63,6 +63,10 @@ async function serve(
   reply.status(response.status);
   for (const [name, value] of Object.entries(response.headers))
     reply.header(name, value);
+  // A refused upload may still be arriving; closing lets the client see
+  // the answer instead of waiting to finish sending.
+  if (method === "POST" && response.status >= 400)
+    reply.header("connection", "close");
   return reply.send(
     response.body instanceof Uint8Array
       ? Buffer.from(response.body)

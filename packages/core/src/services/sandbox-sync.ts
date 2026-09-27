@@ -110,28 +110,62 @@ const SNAPSHOT_SCRIPT = [
   "git add -A",
   "tree=$(git write-tree)",
   'printf "%s\\n" "$tree"',
-  'git diff-tree -r -z --no-renames --name-status "$base" "$tree"',
+  // Not -z: remote workers carry output as JSON text, and Postgres JSON
+  // cannot hold NUL. Unusual paths come back C-quoted instead.
+  'git -c core.quotePath=false diff-tree -r --no-renames --name-status "$base" "$tree"',
 ].join(" && ");
 
 /** Parse {@link SNAPSHOT_SCRIPT}'s output. */
 export function parseSnapshot(
   output: string,
 ): { tree: string; changes: SyncedFileChange[] } | null {
-  const newline = output.indexOf("\n");
-  const tree = output.slice(0, newline).trim();
+  const [first, ...lines] = output.split("\n");
+  const tree = first?.trim() ?? "";
   if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(tree)) return null;
-  const fields = output.slice(newline + 1).split("\0");
-  const changes: SyncedFileChange[] = [];
-  for (let index = 0; index + 1 < fields.length; index += 2) {
-    const status = fields[index]?.trim();
-    const path = fields[index + 1];
-    if (!status || !path) continue;
-    changes.push({
-      path,
-      kind: status.startsWith("D") ? "deleted" : "modified",
-    });
-  }
+  const changes = lines.flatMap((line): SyncedFileChange[] => {
+    const tab = line.indexOf("\t");
+    if (tab < 0) return [];
+    const status = line.slice(0, tab).trim();
+    const path = unquoteCPath(line.slice(tab + 1));
+    return status && path
+      ? [{ path, kind: status.startsWith("D") ? "deleted" : "modified" }]
+      : [];
+  });
   return { tree, changes };
+}
+
+/** Git's C-style quoting of unusual paths (`"a\tb"`, octal UTF-8 bytes). */
+export function unquoteCPath(value: string): string {
+  if (!value.startsWith('"') || !value.endsWith('"')) return value;
+  const body = value.slice(1, -1);
+  const bytes: number[] = [];
+  const escapes: Record<string, number> = {
+    a: 7,
+    b: 8,
+    t: 9,
+    n: 10,
+    v: 11,
+    f: 12,
+    r: 13,
+    '"': 34,
+    "\\": 92,
+  };
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index] ?? "";
+    if (char !== "\\") {
+      bytes.push(...new TextEncoder().encode(char));
+      continue;
+    }
+    const next = body[index + 1] ?? "";
+    if (/[0-7]/.test(next)) {
+      bytes.push(Number.parseInt(body.slice(index + 1, index + 4), 8));
+      index += 3;
+    } else {
+      bytes.push(escapes[next] ?? next.charCodeAt(0));
+      index += 1;
+    }
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
 }
 
 interface PorcelainChange {

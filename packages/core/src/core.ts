@@ -707,6 +707,10 @@ export class CatamorphicCore {
     this.sessionWorkspaces = new SessionWorkspaces({
       projectManager: this.projectManager,
       origin: (input) => this.remoteSync.origin(input),
+      // Constructed later, with the connection providers; read per call.
+      bindingCredentials: (input) =>
+        this.connectionBroker?.mirrorCredentials(input) ??
+        Promise.resolve(undefined),
     });
     this.workflows = new WorkflowsService(this.projectManager, this.projects);
     this.projectEnvironments = new ProjectEnvironmentsService(

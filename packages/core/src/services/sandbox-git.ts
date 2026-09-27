@@ -71,8 +71,9 @@ export async function ensureSandboxBaseline(input: {
  * Seed (or re-seed after a base move) the sandbox repository from the
  * session's copy on the control plane: its head and history back to the
  * workspace base arrive as one shallow pack, uploaded rather than fetched,
- * so seeding costs no Git traffic and needs no credential. Does nothing when
- * the sandbox already stands on this base.
+ * so seeding costs no Git traffic and needs no credential. The checkout
+ * stands on the base with the session's saved work uncommitted on top.
+ * Does nothing when the sandbox already stands on this base.
  */
 export async function seedSandboxRepository(input: {
   provider: SandboxProvider;
@@ -114,6 +115,10 @@ export async function seedSandboxRepository(input: {
       }),
       `git checkout -q -f -B ${shellQuote(input.branch)} ${input.head}`,
       "git clean -fdq",
+      // The branch stands on the base; the session's saved work (its
+      // checkpoints since the base) is in the working tree, uncommitted, so
+      // Work's own checkpoint commits never reach anything the agent pushes.
+      `git reset -q ${input.base}`,
       `git update-ref refs/work/base ${input.base}`,
       `git update-ref refs/work/synced ${input.head}`,
       originScript(input.originUrl),

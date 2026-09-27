@@ -383,6 +383,62 @@ export class ConnectionBroker {
   }
 
   /**
+   * Read credentials for the control plane's own fetch of a remote through
+   * one of a session's Git-capable bindings (ADR 0178: seeding a workspace
+   * at a ref). Undefined when no binding serves the remote with `git:read`.
+   * Audited as a `mirror` fetch; the credential never leaves the control
+   * plane.
+   */
+  async mirrorCredentials(args: {
+    identity: Identity;
+    projectId: string;
+    bindings: readonly ResolvedConnectionBinding[];
+    remoteUrl: string;
+  }): Promise<GitRemoteCredentials | undefined> {
+    const match = args.bindings.flatMap((binding) => {
+      const git = this.providers.get(binding.providerKind)?.git;
+      return git &&
+        binding.capabilities.includes("git:read") &&
+        git.remoteBaseUrls.some((base) => args.remoteUrl.startsWith(base))
+        ? [{ binding, git }]
+        : [];
+    })[0];
+    if (!match) return undefined;
+    const { binding, git } = match;
+    const audit = (outcome: "allowed" | "error") =>
+      this.connections.audit({
+        identity: args.identity,
+        projectId: args.projectId,
+        connectionId: binding.connectionId,
+        eventType: "connection.git",
+        outcome,
+        action: "mirror",
+        metadata: { alias: binding.alias, remoteUrl: args.remoteUrl },
+      });
+    try {
+      await this.connections.refreshIfNeeded({
+        identity: args.identity,
+        connectionId: binding.connectionId,
+      });
+      const credentials = await this.connections.withCredential({
+        identity: args.identity,
+        connectionId: binding.connectionId,
+        use: (material) =>
+          git.credentials({
+            material,
+            remoteUrl: args.remoteUrl,
+            access: "read",
+          }),
+      });
+      await audit("allowed");
+      return credentials;
+    } catch (error) {
+      await audit("error");
+      throw error;
+    }
+  }
+
+  /**
    * Run the gateway's guards. Escalations ask the agent session's person;
    * a workflow cannot wait on a person mid-step, so it is refused.
    */

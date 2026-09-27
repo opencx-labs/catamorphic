@@ -9,6 +9,7 @@ import {
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
+import type { ResolvedConnectionBinding } from "./connection-types.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -113,7 +114,7 @@ export function workspaceMoveNote(input: {
     );
   } else {
     lines.push(
-      `Your commits were rebased onto it; your checkout is now at ${short(input.outcome.head)}.`,
+      "Your work was rebased onto it and is in your working tree, uncommitted, on top of the new base.",
     );
   }
   if (input.changed && input.changed.total > 0) {
@@ -139,6 +140,16 @@ export class SessionWorkspaces {
         url: string;
         credentials?: GitCredentials;
       } | null>;
+      /**
+       * Credentials from a session's own Git-capable binding for the
+       * remote, preferred over the host's code-host credentials.
+       */
+      bindingCredentials?: (input: {
+        identity: Identity;
+        projectId: string;
+        bindings: readonly ResolvedConnectionBinding[];
+        remoteUrl: string;
+      }) => Promise<GitCredentials | undefined>;
     },
   ) {}
 
@@ -158,6 +169,8 @@ export class SessionWorkspaces {
     sessionId: string;
     ref: string;
     pin: string;
+    /** The session's connection bindings, when it has any. */
+    bindings?: readonly ResolvedConnectionBinding[];
   }): Promise<SessionWorkspaceBase> {
     return withSpan(
       {
@@ -179,13 +192,23 @@ export class SessionWorkspaces {
           throw new Error(
             `This project has no linked remote to fetch '${input.ref}' from`,
           );
+        const viaBinding =
+          input.bindings?.length && this.deps.bindingCredentials
+            ? await this.deps.bindingCredentials({
+                identity: input.identity,
+                projectId: input.projectId,
+                bindings: input.bindings,
+                remoteUrl: origin.url,
+              })
+            : undefined;
+        const credentials = viaBinding ?? origin.credentials;
         const { commit } = await fetchIntoMirror({
           mirrorPath: this.mirrorPath({
             tenantId: input.identity.tenantId,
             projectId: input.projectId,
           }),
           url: origin.url,
-          ...(origin.credentials ? { credentials: origin.credentials } : {}),
+          ...(credentials ? { credentials } : {}),
           ref: input.ref,
           pin: input.pin,
         });

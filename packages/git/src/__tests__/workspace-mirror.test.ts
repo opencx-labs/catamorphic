@@ -96,6 +96,9 @@ describe("workspace refs (ADR 0178)", () => {
     const copy = await manager.openSession(args);
     expect(await copy.resolveRef("HEAD")).toBe(head);
     expect(await copy.readFile("app.ts")).toBe("two\n");
+    // Nothing of the project's own main survives in a copy at another base.
+    expect((await copy.status()).dirty).toBe(false);
+    await expect(copy.readFile(".work/.gitignore")).rejects.toThrow();
     await copy.dispose();
 
     // Another machine's cache rehydrates the same base from the session branch.

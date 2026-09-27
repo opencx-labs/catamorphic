@@ -109,29 +109,33 @@ export function readPktSection(
 
 /**
  * Parse receive-pack's update commands (`<old> <new> <ref>`, the first one
- * carrying capabilities after a NUL). Push certificates and shallow lines
- * are refused: the gateway only forwards what it can read.
+ * carrying capabilities after a NUL). A shallow client first names its
+ * shallow commits (`shallow <id>`); those pass through. Push certificates
+ * and anything else are refused: the gateway only forwards what it can read.
  */
 export function parseReceivePackCommands(lines: readonly Uint8Array[]): {
   commands: RefUpdate[];
   capabilities: string[];
 } {
-  const commands: RefUpdate[] = [];
-  let capabilities: string[] = [];
-  for (const [index, raw] of lines.entries()) {
-    const text = decoder.decode(raw).replace(/\n$/, "");
-    const [command, caps] = text.split("\0", 2);
-    if (index === 0 && caps !== undefined)
-      capabilities = caps.split(" ").filter(Boolean);
+  const texts = lines.map((raw) => decoder.decode(raw).replace(/\n$/, ""));
+  const updates = texts.filter(
+    (text) => !/^shallow ([0-9a-f]{40}|[0-9a-f]{64})$/.test(text),
+  );
+  const [firstCommand, caps] = (updates[0] ?? "").split("\0", 2);
+  const commands = updates.map((text, index) => {
+    const command = index === 0 ? firstCommand : text;
     const match =
       /^([0-9a-f]{40}|[0-9a-f]{64}) ([0-9a-f]{40}|[0-9a-f]{64}) (\S+)$/.exec(
         command ?? "",
       );
     if (!match?.[1] || !match[2] || !match[3])
-      throw new Error("The gateway cannot read this push");
-    commands.push({ oldId: match[1], newId: match[2], ref: match[3] });
-  }
-  return { commands, capabilities };
+      throw new GitGatewayError(400, "The gateway cannot read this push");
+    return { oldId: match[1], newId: match[2], ref: match[3] };
+  });
+  return {
+    commands,
+    capabilities: caps?.split(" ").filter(Boolean) ?? [],
+  };
 }
 
 /** The branch HEAD names in an upload-pack v0 advertisement, if any. */
@@ -701,11 +705,10 @@ export class GitGatewayService {
       );
     }
     await input.audit?.("allowed", { status: response.status });
+    // fetch has already decoded any content-encoding; only the type travels.
     const out: Record<string, string> = { "cache-control": "no-cache" };
-    for (const name of ["content-type", "content-encoding"]) {
-      const value = response.headers.get(name);
-      if (value) out[name] = value;
-    }
+    const contentType = response.headers.get("content-type");
+    if (contentType) out["content-type"] = contentType;
     return {
       status: response.status,
       headers: out,
@@ -787,6 +790,7 @@ function refusalResponse(error: unknown): GitGatewayResponse {
       503,
       `The connection behind this alias is unavailable: ${error.message}`,
     );
+  console.warn("[catamorphic] Git gateway request failed", error);
   return text(502, "The Git gateway could not complete this request");
 }
 

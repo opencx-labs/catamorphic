@@ -1886,26 +1886,6 @@ export class AgentSessionsService {
         topology: agent.topology,
       },
     });
-    // A workspace at a ref starts from that commit (ADR 0178): fetched into
-    // the host's mirror and, for sandbox agents, published as the session's
-    // branch before the first turn seeds its sandbox from it.
-    const workspace = input.workspace
-      ? await this.requireWorkspaces().fetch({
-          identity,
-          projectId,
-          sessionId,
-          ref: input.workspace.ref,
-          pin: basePin(sessionId),
-        })
-      : null;
-    if (workspace && agent.topology !== "native")
-      await this.projectManager.setSessionBase({
-        tenantId: identity.tenantId,
-        projectId,
-        sessionId,
-        pin: basePin(sessionId),
-        commit: workspace.commit,
-      });
     const requirements = agent.connectionRequirements ?? [];
     if (requirements.length > 0 && !this.connectionAdmission) {
       throw new Error("Connection providers are not configured");
@@ -1919,6 +1899,27 @@ export class AgentSessionsService {
             requirements,
           })
         : [];
+    // A workspace at a ref starts from that commit (ADR 0178): fetched into
+    // the host's mirror and, for sandbox agents, published as the session's
+    // branch before the first turn seeds its sandbox from it.
+    const workspace = input.workspace
+      ? await this.requireWorkspaces().fetch({
+          identity,
+          projectId,
+          sessionId,
+          ref: input.workspace.ref,
+          pin: basePin(sessionId),
+          bindings: connections,
+        })
+      : null;
+    if (workspace && agent.topology !== "native")
+      await this.projectManager.setSessionBase({
+        tenantId: identity.tenantId,
+        projectId,
+        sessionId,
+        pin: basePin(sessionId),
+        commit: workspace.commit,
+      });
 
     const visibility = input.visibility ?? "promoted";
     return {
@@ -2006,6 +2007,7 @@ export class AgentSessionsService {
       sessionId,
       ref: workspace.ref,
       pin: movePin(sessionId),
+      bindings: await this.sessionBindings(identity, session),
     });
     const current = parseWorkspaceBase(session.workspace);
     const move: SessionWorkspaceMove = {
@@ -2023,6 +2025,19 @@ export class AgentSessionsService {
       })
       .where("id", "=", sessionId)
       .execute();
+  }
+
+  /** The connection bindings of the session's current Allocation. */
+  private async sessionBindings(
+    identity: Identity,
+    session: Pick<SessionRow, "allocation_id">,
+  ) {
+    if (!session.allocation_id) return [];
+    const allocation = await this.executionAllocations.get({
+      identity,
+      allocationId: session.allocation_id,
+    });
+    return allocation?.policy.connections ?? [];
   }
 
   private requireWorkspaces(): SessionWorkspaces {
@@ -2059,6 +2074,7 @@ export class AgentSessionsService {
     const { identity, projectId, session, move } = input;
     const workspaces = this.requireWorkspaces();
     const pin = movePin(session.id);
+    const bindings = await this.sessionBindings(identity, session);
     // Another replica may have fetched the move; make sure this mirror has it.
     const target = await workspaces
       .fetch({
@@ -2067,6 +2083,7 @@ export class AgentSessionsService {
         sessionId: session.id,
         ref: move.commit,
         pin,
+        bindings,
       })
       .catch(() =>
         workspaces.fetch({
@@ -2075,6 +2092,7 @@ export class AgentSessionsService {
           sessionId: session.id,
           ref: move.ref,
           pin,
+          bindings,
         }),
       );
     const to: SessionWorkspaceBase = { ref: move.ref, commit: target.commit };
@@ -5128,13 +5146,17 @@ export class AgentSessionsService {
           }
           // The caller's view of the store, in the folder the agent works in
           // (ADR 0055): pulled before the turn, shipped after it.
-          const storeDir = await this.storeSyncDir(
-            identity,
-            projectId,
-            anchor,
-            sessionId,
-            this.usesSessionCopy(session),
-          );
+          // A workspace at a ref is the remote's tree, not the project's:
+          // its agent reaches the store through the documents tools.
+          const storeDir = parseWorkspaceBase(session.workspace)
+            ? null
+            : await this.storeSyncDir(
+                identity,
+                projectId,
+                anchor,
+                sessionId,
+                this.usesSessionCopy(session),
+              );
           if (storeDir) {
             await syncRemoteProject(
               storeDir,
