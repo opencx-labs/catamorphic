@@ -1,3 +1,5 @@
+import { GITHUB_TRIGGER_LIBRARY } from "./github-trigger-library.js";
+
 /** Agent guidance; shipped through the existing skill discovery surfaces. */
 export const WRITING_WORKFLOWS_SKILL = `---
 name: writing-workflows
@@ -186,56 +188,11 @@ desktop has no public URL; its session watchers receive the same events by
 polling (see \`session-workflows\`), so this library works there too:
 
 \`\`\`typescript
-// .work/triggers/github.ts
-import { defineSecrets, defineTrigger, type Narrow, type TriggerPayload, trigger } from "@catamorphic/workflow";
-
-/** Verifies deliveries on the control plane; never handed to a run. */
-export const githubSecrets = defineSecrets({
-  GITHUB_WEBHOOK_SECRET: { label: "GitHub webhook secret", use: "webhook" },
-});
-
-type Delivery<Body> = Narrow<TriggerPayload<"webhook">, { payload: { body: Body } }>;
-
-export interface PullRequestEvent {
-  action: string;
-  number: number;
-  pull_request: { title: string; html_url: string; merged: boolean; draft: boolean };
-  repository: { full_name: string };
-}
-
-export interface IssueCommentEvent {
-  action: string;
-  issue: { number: number; title: string; html_url: string; pull_request?: { url: string } };
-  comment: { body: string; html_url: string; user: { login: string } };
-}
-
-/** Every signed delivery from the repository's webhook. */
-export const delivery = defineTrigger({
-  name: "github.delivery",
-  description: "Any delivery from the GitHub webhook",
-  from: trigger("webhook", {
-    name: "github",
-    verify: { scheme: "hmac", secret: "GITHUB_WEBHOOK_SECRET", header: "x-hub-signature-256", prefix: "sha256=" },
-  }),
-});
-
-export const pullRequest = defineTrigger<Delivery<PullRequestEvent>>({
-  name: "github.pull_request",
-  description: "A pull request was opened, updated, or closed",
-  from: trigger("github.delivery"),
-  where: { payload: { headers: { "x-github-event": "pull_request" } } },
-});
-
-export const issueComment = defineTrigger<Delivery<IssueCommentEvent>>({
-  name: "github.issue_comment",
-  description: "Someone commented on an issue or pull request",
-  from: trigger("github.delivery"),
-  where: { payload: { headers: { "x-github-event": "issue_comment" }, body: { action: "created" } } },
-});
-\`\`\`
+${GITHUB_TRIGGER_LIBRARY}\`\`\`
 
 The Slack library (\`slack.event\`, \`slack.mention\`, \`slack.message\`), with
-the workflows that keep a chat per thread, is in the \`slack\` skill.
+the workflows that keep a chat per thread, is in the \`slack\` skill; the pull
+request review automation built on this library is in \`reviewing-pull-requests\`.
 
 A workflow that runs only for merged pull requests:
 

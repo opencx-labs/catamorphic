@@ -139,6 +139,12 @@ export interface SessionHostOperations {
        * chat named by `sessionId`.
        */
       notification?: { title?: string; body?: string };
+      /**
+       * Who answers the chat's approvals while no one watches it (a
+       * project chat): members by id and holders of project roles. The
+       * latest delivery naming approvers replaces them.
+       */
+      approvers?: { members?: string[]; roles?: string[] };
       /** Defaults to one delivery per run, chat and content. */
       idempotencyKey?: string;
       /** Start, or move, the chat's workspace at a ref of the project's remote. */

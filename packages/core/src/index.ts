@@ -50,6 +50,7 @@ export {
   type TenantId,
   type WorkflowRef,
 } from "./identity.js";
+export { REVIEW_AUTOMATION_FILES } from "./reviewing-pull-requests-skill.js";
 export {
   appScaffold,
   HOST_SKILLS,
