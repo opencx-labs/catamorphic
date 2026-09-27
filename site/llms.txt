@@ -61,8 +61,8 @@ embedding architecture.
 
 ## For agents working inside a Catamorphic project
 
-- Project capability skills live under .work/skills/: catamorphic-projects (the project model and the on-demand workflow/app workspace scaffold), writing-workflows, batch-workflows, durable-workflows, building-apps (framework mechanics), designing-apps (design doctrine; embedders may replace it). Read the relevant skill before writing workflows or apps.
-- A project is general-purpose: never assume it is about code. The capability workspace (.work/contracts/, .work/workflows/, .work/apps/*) is installed only when the first automation or app is wanted, following the catamorphic-projects skill.
+- Project capability skills live under .work/skills/: work-projects (the project model and the on-demand workflow/app workspace scaffold), writing-workflows, batch-workflows, durable-workflows, building-apps (framework mechanics), designing-apps (design doctrine; embedders may replace it). Read the relevant skill before writing workflows or apps.
+- A project is general-purpose: never assume it is about code. The capability workspace (.work/contracts/, .work/workflows/, .work/apps/*) is installed only when the first automation or app is wanted, following the work-projects skill.
 - Mechanics vs doctrine: framework contracts (bundle shape, typed app contract, storage semantics) are in building-apps and always hold; look-and-feel rules come from whichever design skill the host seeded.
 - Committed agent definitions live in .work/agents/<slug>.json with an optional .work/agents/<slug>.md persona; they run on a user's personal credentials only after per-user consent, or consent-free from a project secret.
 - Once the workspace exists, `bun run --cwd .work check` validates the project (parse, trigger bindings, generated-type drift); `bun run --cwd .work check -- --write` regenerates the typed app-api projections.

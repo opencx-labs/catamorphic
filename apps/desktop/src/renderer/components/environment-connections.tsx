@@ -7,6 +7,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Loader2, RefreshCw } from "lucide-react";
 import { type FormEvent, useRef, useState } from "react";
+import { ChallengeField } from "./challenge-field.js";
 import { Modal } from "./modal.js";
 
 export function EnvironmentConnections({
@@ -98,10 +99,18 @@ function EnvironmentConnectionRow({
   };
   const finish = async (callback: Record<string, string>) => {
     if (!authorization) return;
-    await complete.mutateAsync({
-      authorizationId: authorization.authorizationId,
-      callback,
-    });
+    try {
+      await complete.mutateAsync({
+        authorizationId: authorization.authorizationId,
+        callback,
+      });
+    } catch {
+      // The server cancels an attempt whose completion failed; a retry
+      // needs a fresh one. The error shows below and the form keeps what
+      // was typed.
+      await start().catch(() => setAuthorization(null));
+      return;
+    }
     setFormValues({});
     setAuthorization(null);
     await refresh();
@@ -176,23 +185,17 @@ function EnvironmentConnectionRow({
             </p>
             <div className="mt-4 space-y-3 text-xs">
               {formChallenge.current?.fields.map((field) => (
-                <label key={field.name} className="block">
-                  <span className="mb-1 block text-fg-muted">
-                    {field.label}
-                  </span>
-                  <input
-                    type={field.secret ? "password" : "text"}
-                    required={field.required}
-                    value={formValues[field.name] ?? ""}
-                    onChange={(event) =>
-                      setFormValues((current) => ({
-                        ...current,
-                        [field.name]: event.target.value,
-                      }))
-                    }
-                    className="field h-8 w-full rounded-md px-2.5 text-[13px]"
-                  />
-                </label>
+                <ChallengeField
+                  key={field.name}
+                  field={field}
+                  value={formValues[field.name] ?? ""}
+                  onChange={(value) =>
+                    setFormValues((current) => ({
+                      ...current,
+                      [field.name]: value,
+                    }))
+                  }
+                />
               ))}
             </div>
           </div>

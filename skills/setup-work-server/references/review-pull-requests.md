@@ -29,6 +29,10 @@ needs checks (write) and pull requests (write), which the manifest requests,
 and subscribes to pull request, pull request review comment, and issue
 comment events.
 
+The App's one webhook feeds this one project, with events from every
+repository the App is installed on. Install it only on this repository;
+the workflows also ignore other repositories' events (step 4).
+
 With an existing App, connect it as the `github` service connection, point
 its webhook at the URL from `GET /api/projects/:id/webhooks` once the
 workflows are on (step 5), and store its webhook secret as the project secret
@@ -103,9 +107,13 @@ Ask an agent in the project to add the review automation from the
 - `.work/workflows/src/reviews.ts`: `reviewPullRequests`,
   `answerReviewComments`, `closePullRequestChats`.
 
-Map GitHub logins to members in `GITHUB_MEMBERS` (they approve the chat's
-escalations) or commit a `reviewers` role. Run `bun run --cwd .work check`,
-then propose the change; it lands through a pull request like any other.
+Replace `acme/web` in each trigger's `where` with the project's repository,
+so events from the App's other repositories start nothing. Map GitHub logins
+to members in `GITHUB_MEMBERS` (they approve the chat's escalations) or
+commit a `reviewers` role. Check it with the project MCP `program_check`
+tool (`bun run --cwd .work check` needs the `@catamorphic/*` packages, which
+are not yet on a public registry), then propose the change; it lands through
+a pull request like any other.
 
 ## 5. Turn it on
 

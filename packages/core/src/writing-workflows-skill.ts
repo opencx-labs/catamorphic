@@ -256,7 +256,7 @@ required secret throws. Secrets stay in backend execution, never app bundles or
 returned results. Prefer declared connections for member accounts and brokered access.
 
 The host-provided non-secret \`process.env.WORK_APP_DATA_DIR\` is the location
-for persistent local data. Follow \`catamorphic-projects\` for its storage contract.
+for persistent local data. Follow \`work-projects\` for its storage contract.
 
 ## Verify the result
 

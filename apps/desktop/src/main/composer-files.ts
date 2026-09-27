@@ -50,7 +50,8 @@ export async function removeComposerFiles({
   });
 }
 
-function projectAttachmentsDirectory({
+/** Where a project's pasted files live. */
+export function projectAttachmentsDirectory({
   attachmentsDir,
   projectId,
 }: {
@@ -60,4 +61,20 @@ function projectAttachmentsDirectory({
   if (typeof projectId !== "string" || !/^[A-Za-z0-9_-]+$/.test(projectId))
     throw new Error("Invalid project");
   return path.join(attachmentsDir, projectId);
+}
+
+/**
+ * What the built-in agent may read beside a project's checkout: its pasted
+ * files, which agents receive by absolute path. A malformed project id
+ * shares nothing.
+ */
+export function readableAttachments({
+  attachmentsDir,
+}: {
+  attachmentsDir: string;
+}): (context: { projectId: string }) => readonly string[] {
+  return ({ projectId }) =>
+    /^[A-Za-z0-9_-]+$/.test(projectId)
+      ? [projectAttachmentsDirectory({ attachmentsDir, projectId })]
+      : [];
 }

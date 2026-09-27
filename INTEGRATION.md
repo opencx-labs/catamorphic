@@ -1098,7 +1098,11 @@ separate reusable mechanics from the desktop reference presentation.
 
 Project capabilities live in an independent `.work/` Bun workspace; code
 builds its paths and Git names from `@catamorphic/workflow/project-layout`.
-Run `bun install --cwd .work` and `bun run --cwd .work check`.
+Hosts check it the way publishing does (the project MCP `program_check`
+tool). `bun install --cwd .work` and `bun run --cwd .work check` do the same
+locally, but the `@catamorphic/*` packages are not yet on a public registry,
+so the install needs a registry that serves them (the repository's dev-only
+`infra/local-registry`).
 Imports and ordinary agent work leave existing repository files untouched.
 The workspace is created when workflows, apps, or other capabilities need it.
 

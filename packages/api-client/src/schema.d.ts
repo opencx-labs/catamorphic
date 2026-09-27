@@ -1949,6 +1949,7 @@ export interface paths {
                                     label: string;
                                     secret: boolean;
                                     required: boolean;
+                                    multiline?: boolean;
                                 }[];
                             };
                         };
@@ -2292,6 +2293,7 @@ export interface paths {
                                     label: string;
                                     secret: boolean;
                                     required: boolean;
+                                    multiline?: boolean;
                                 }[];
                             };
                         };
@@ -15770,6 +15772,7 @@ export interface paths {
                                     label: string;
                                     secret: boolean;
                                     required: boolean;
+                                    multiline?: boolean;
                                 }[];
                             };
                         };

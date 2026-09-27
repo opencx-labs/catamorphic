@@ -35,6 +35,14 @@ const RETIRED: Array<{ name: string; pattern: RegExp }> = [
     name: "checkpoint author `Catamorphic Agent`",
     pattern: /Catamorphic Agent/,
   },
+  {
+    name: "seeded skill `catamorphic-projects` (now `work-projects`)",
+    pattern: /catamorphic-projects/,
+  },
+  {
+    name: "seeded files `Seeded by Catamorphic` (now `Seeded by Work`)",
+    pattern: /Seeded by Catamorphic/,
+  },
 ];
 
 /** Host storage, not a project path: `~/.catamorphic/dev` stays. */

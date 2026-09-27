@@ -147,9 +147,10 @@ From the `slack` skill, commit to the project and publish:
 
 Set the project secret `SLACK_SIGNING_SECRET` to the Signing Secret
 (`PUT /api/projects/:id/secrets/SLACK_SIGNING_SECRET`, or the project's
-secrets page). The trigger library declares it, which is what lets the
-project store it. Declared project secrets are also handed to the project's
-workflow runs; the bot token is not a project secret and never is.
+secrets page). The trigger library declares it with `use: "webhook"`, which
+is what lets the project store it: the control plane verifies deliveries
+with it, and no workflow run or agent ever receives it. The bot token is not
+a project secret either; it stays behind the `slack` connection.
 
 ## 5. Turn it on, then point Slack at it
 

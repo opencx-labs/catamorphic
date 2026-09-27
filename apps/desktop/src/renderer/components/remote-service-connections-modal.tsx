@@ -12,6 +12,7 @@ import {
   type RemoteConnectionProvider,
   type RemoteServiceConnection,
 } from "../lib/desktop-api.js";
+import { ChallengeField } from "./challenge-field.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
 
@@ -150,6 +151,21 @@ export function RemoteServiceConnectionsModal({
     } catch (cause) {
       if (authorization.challenge.kind === "form") setFormError(message(cause));
       else setError(message(cause));
+      // The server cancels an attempt whose completion failed, so a retry
+      // needs a fresh one. The form keeps what was typed.
+      try {
+        const fresh = await desktopApi.remoteServiceConnectionAuthorize({
+          projectId,
+          connectionId: authorization.connectionId,
+        });
+        setAuthorization({
+          connectionId: authorization.connectionId,
+          ...fresh,
+        });
+      } catch (restart) {
+        setAuthorization(null);
+        setError(message(restart));
+      }
     } finally {
       setBusy(null);
     }
@@ -429,24 +445,17 @@ export function RemoteServiceConnectionsModal({
             </p>
             <div className="mt-4 space-y-3 text-xs">
               {formChallenge.current?.challenge.fields.map((field) => (
-                <label key={field.name} className="block">
-                  <span className="mb-1 block text-fg-muted">
-                    {field.label}
-                  </span>
-                  <input
-                    type={field.secret ? "password" : "text"}
-                    required={field.required}
-                    autoComplete="off"
-                    value={formValues[field.name] ?? ""}
-                    onChange={(event) =>
-                      setFormValues((current) => ({
-                        ...current,
-                        [field.name]: event.target.value,
-                      }))
-                    }
-                    className="field h-8 w-full rounded-md px-2.5 text-[13px]"
-                  />
-                </label>
+                <ChallengeField
+                  key={field.name}
+                  field={field}
+                  value={formValues[field.name] ?? ""}
+                  onChange={(value) =>
+                    setFormValues((current) => ({
+                      ...current,
+                      [field.name]: value,
+                    }))
+                  }
+                />
               ))}
             </div>
             <p

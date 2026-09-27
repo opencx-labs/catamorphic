@@ -34,17 +34,17 @@ describe("seed skill support files", () => {
       path.startsWith(`.work/skills/${skill}/files/`),
     );
 
-  it("ships every file the catamorphic-projects skill says to copy", () => {
-    const skill = SEED_SKILLS[".work/skills/catamorphic-projects/SKILL.md"];
+  it("ships every file the work-projects skill says to copy", () => {
+    const skill = SEED_SKILLS[".work/skills/work-projects/SKILL.md"];
     expect(skill).toBeDefined();
-    for (const path of supportFiles("catamorphic-projects")) {
+    for (const path of supportFiles("work-projects")) {
       const name = path.split("/").at(-1);
       expect(skill).toContain(`files/${name}`);
     }
     // The copyable workspace scaffold matches the canonical one.
-    expect(
-      SEED_SKILLS[".work/skills/catamorphic-projects/files/check.ts"],
-    ).toBe(workspaceFiles({ name: "my-project" })[".work/scripts/check.ts"]);
+    expect(SEED_SKILLS[".work/skills/work-projects/files/check.ts"]).toBe(
+      workspaceFiles({ name: "my-project" })[".work/scripts/check.ts"],
+    );
   });
 
   it("ships every file the building-apps skill says to copy", () => {

@@ -52,7 +52,8 @@ finishes it in their browser on the server's public URL
    who will create the App.
 2. The person opens the link, confirms the App on GitHub (an organization
    owner, for an organization App), then installs it and chooses
-   repositories.
+   repositories. With a project, choose that project's repository: the
+   App's one webhook feeds this one project (see below).
 3. GitHub returns to the server, which stores the App's key in the vault and
    connects the installation as the `github` service connection. With a
    project, the webhook secret is stored as that project's
@@ -89,6 +90,13 @@ secret the library declares with `use: "webhook"`: the control plane checks
 deliveries with it, and no run ever receives it. The desktop needs no
 webhook: its watchers poll GitHub with the person's own connection and
 record the same events.
+
+An App has one webhook URL, so it feeds one project, and it delivers events
+from every repository the App is installed on. Install a webhook App only on
+the project's repository, or filter on `repository.full_name` in each
+trigger's `where` as the `reviewing-pull-requests` skill does; a workflow
+that acts on another repository's event works against the wrong code. Give
+each project that needs GitHub events its own App.
 
 ## Bind it in project.json
 

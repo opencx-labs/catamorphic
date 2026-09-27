@@ -83,6 +83,13 @@ export interface AiSdkCodingAgentOpts {
   /** Host-level instructions prepended to every session. */
   instructions?: string;
   /**
+   * Directories outside the working directory that the `read` tool may read
+   * (never write or edit), resolved per session from its project: e.g. the
+   * host's store of files pasted into the chat. Paths are in the sandbox
+   * provider's filesystem, as the working directory is.
+   */
+  readableRoots?: (context: { projectId: string }) => readonly string[];
+  /**
    * Default reasoning effort, mapped onto the provider's native knob
    * (Anthropic thinking budgets, OpenAI reasoning effort). Overridable per
    * turn via {@link TurnOptions}.
@@ -337,6 +344,8 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       provider: sandboxProvider,
       sandboxId: opts.sandboxId,
       workingDirectory: opts.workingDirectory,
+      readableRoots:
+        this.opts.readableRoots?.({ projectId: opts.projectId }) ?? [],
       shell: {},
       ...(opts.commandTimeoutSeconds
         ? { budgetSeconds: opts.commandTimeoutSeconds }
@@ -813,6 +822,8 @@ interface ToolContext {
     Pick<SandboxProvider, "uploadFiles" | "downloadFile">;
   sandboxId: string;
   workingDirectory: string;
+  /** Read-only directories beside the working directory. */
+  readableRoots: readonly string[];
   /** Where the next shell command starts and this chat's background commands. */
   shell: ShellState;
   /** The Environment's budget for one foreground command (ADR 0174). */
@@ -1107,18 +1118,29 @@ function createTools(
     );
     return result;
   };
+  const within = (resolved: string, directory: string) => {
+    const root = path.posix.resolve(directory);
+    return resolved === root || resolved.startsWith(`${root}/`);
+  };
   const resolvePath = (filePath: string): string => {
     const workingDirectory = path.posix.resolve(context.workingDirectory);
     const resolved = path.posix.resolve(workingDirectory, filePath);
-    if (
-      resolved !== workingDirectory &&
-      !resolved.startsWith(`${workingDirectory}/`)
-    ) {
+    if (!within(resolved, workingDirectory)) {
       throw new Error(
         `Path escapes the project working directory: ${filePath}`,
       );
     }
     return resolved;
+  };
+  /** The working directory, or a read-only root the host shares. */
+  const resolveReadablePath = (filePath: string): string => {
+    const resolved = path.posix.resolve(
+      path.posix.resolve(context.workingDirectory),
+      filePath,
+    );
+    if (context.readableRoots.some((root) => within(resolved, root)))
+      return resolved;
+    return resolvePath(filePath);
   };
 
   return {
@@ -1148,7 +1170,8 @@ function createTools(
       ]),
     ),
     read: tool({
-      description: "Read a UTF-8 text file from the project.",
+      description:
+        "Read a UTF-8 text file from the project, or a file the user attached by its absolute path.",
       inputSchema: z.object({
         path: z.string().describe("Project-relative or absolute file path"),
       }),
@@ -1156,7 +1179,7 @@ function createTools(
         truncateToolOutput(
           await context.provider.downloadFile(
             context.sandboxId,
-            resolvePath(filePath),
+            resolveReadablePath(filePath),
           ),
         ),
     }),

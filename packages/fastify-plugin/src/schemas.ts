@@ -691,6 +691,7 @@ export const AuthorizationChallengeSchema = z.discriminatedUnion("kind", [
         label: z.string(),
         secret: z.boolean(),
         required: z.boolean(),
+        multiline: z.boolean().optional(),
       }),
     ),
   }),

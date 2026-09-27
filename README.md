@@ -318,7 +318,7 @@ Also worth knowing, because it's easy to miss from the package list:
 
 - **The product teaches agents from the inside.** Every project is seeded
   with hidden skills (`.work/skills/`): the project model and on-demand
-  workspace scaffold (`catamorphic-projects`), workflow authoring
+  workspace scaffold (`work-projects`), workflow authoring
   (`writing-workflows`, `batch-workflows`, `durable-workflows`), and app
   building split into mechanics (`building-apps`) and replaceable design
   doctrine (`designing-apps`). Coding agents learn Catamorphic's authoring

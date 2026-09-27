@@ -1,6 +1,8 @@
 # 0170: Attached repositories receive pull requests, never pushes
 
-- **Status:** Accepted
+- **Status:** Accepted; refined by 0177 (`GithubService` is gone: publishing
+  is `CodeHostsService.publishProject`, through the caller's or the
+  organization's GitHub connection)
 - **Date:** 2026-09-27
 - **Refines:** 0044, 0104, 0159
 

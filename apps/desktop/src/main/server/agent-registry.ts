@@ -26,6 +26,7 @@ import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { AgentDefaultModelResult } from "../../shared/agent-default-model.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { AgentConfig } from "../agents-store.js";
+import { readableAttachments } from "../composer-files.js";
 import type { ConnectorsService } from "../connectors.js";
 import {
   type DownloadableHarness,
@@ -68,6 +69,11 @@ export interface DesktopAgentRegistryDeps {
   agentHomesDir: string;
   /** App-owned cache for integrity-pinned native harness components. */
   harnessComponentsDir: string;
+  /**
+   * Files pasted into chats (`<attachmentsDir>/<projectId>/`), which the
+   * built-in agent may read though they sit outside the project.
+   */
+  attachmentsDir?: string;
   /** Agents' window into the user's workspace (tabs, browser, terminals). */
   workspaceBridge?: WorkspaceBridge;
   /**
@@ -1088,6 +1094,13 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 config,
                 profileId,
               }),
+              ...(this.deps.attachmentsDir
+                ? {
+                    readableRoots: readableAttachments({
+                      attachmentsDir: this.deps.attachmentsDir,
+                    }),
+                  }
+                : {}),
             });
             if (!loaded) {
               return new FailFastCodingAgent(

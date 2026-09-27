@@ -658,6 +658,7 @@ export function defineGithubConnectionProvider(
                 label: "Private key (PEM)",
                 secret: true,
                 required: true,
+                multiline: true,
               },
               {
                 name: "installationId",

@@ -154,7 +154,7 @@ How the three connect (setting up / troubleshooting, read in this order):
 - `.agents/skills/using-catamorphic/SKILL.md` — embedding catamorphic in a host app (local dev linking)
 - `.agents/skills/embedding-guide/SKILL.md`, `.agents/skills/api-type-safety/SKILL.md`, `.agents/skills/code-first-architecture/SKILL.md`, `.agents/skills/database-conventions/SKILL.md`, `.agents/skills/sandbox-agent-integration/SKILL.md`, `.agents/skills/workflow-code-conventions/SKILL.md`
 
-`packages/core/src/seeds.ts` assembles `SEED_SKILLS`: `catamorphic-projects`,
+`packages/core/src/seeds.ts` assembles `SEED_SKILLS`: `work-projects`,
 `writing-workflows`, `batch-workflows`, `durable-workflows`, `building-apps`
 (mechanics), and `designing-apps` (replaceable doctrine). Workflow guidance lives
 in the corresponding `packages/core/src/*-skill.ts` modules so each skill can be
@@ -162,7 +162,9 @@ maintained and its examples exercised independently.
 
 `HOST_SKILLS` includes `workflow-lifecycle` (source placement and enablement),
 `session-workflows` (timers, events, attention, and actions), `session-artifacts`,
-and `slack` (Slack from project code: trigger library, a chat per thread, citing).
+`searching-documents`, `publishing-to-github`, `slack` (Slack from project code:
+trigger library, a chat per thread, citing), and `reviewing-pull-requests` (pull
+request review as project code: review Environment, reviewer agent, workflows).
 These reach existing projects without rewriting their seeded files. Read the
 relevant skill when changing its contract; keep sibling guidance consistent.
 Project and user skill overrides retain their existing precedence.

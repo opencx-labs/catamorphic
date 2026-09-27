@@ -194,7 +194,12 @@ describe("GitHub connections: App installation (service)", () => {
       kind: "form",
       fields: expect.arrayContaining([
         expect.objectContaining({ name: "appId", required: true }),
-        expect.objectContaining({ name: "privateKey", secret: true }),
+        expect.objectContaining({
+          name: "privateKey",
+          secret: true,
+          // A PEM key keeps its line breaks only in a multiline field.
+          multiline: true,
+        }),
       ]),
     });
     const authorized = await provider.completeAuthorization?.({
