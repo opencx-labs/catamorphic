@@ -400,3 +400,35 @@ describe("tool permission routes with named approvers (ADR 0176)", () => {
     await server.close();
   });
 });
+
+describe("keyed chats a caller may not see (ADR 0173)", () => {
+  it("answer exactly like no chat at all", async () => {
+    const denied = async () => {
+      throw new AccessDeniedError();
+    };
+    const server = createTestApp({
+      core: {
+        agentSessions: {
+          keyedChatId: async ({ key }: { key: string }) =>
+            key === "pr-1" ? SESSION_ID : undefined,
+          get: denied,
+          close: denied,
+        },
+      } as never,
+    });
+    for (const key of ["pr-1", "pr-2"]) {
+      const url = `/api/projects/${PROJECT_ID}/agent/chats/${key}?member=alice`;
+      const found = await server.inject({ method: "GET", url });
+      expect([found.statusCode, found.json()]).toEqual([
+        404,
+        { error: "No open chat" },
+      ]);
+      const closed = await server.inject({ method: "DELETE", url });
+      expect([closed.statusCode, closed.json()]).toEqual([
+        200,
+        { sessionId: null, closed: false },
+      ]);
+    }
+    await server.close();
+  });
+});

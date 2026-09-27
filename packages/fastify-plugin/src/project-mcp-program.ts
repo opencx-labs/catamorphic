@@ -332,6 +332,11 @@ function overviewTool(
               id: project.id,
               name: project.name,
               publishedFrom: project.remoteUrl ?? "this server",
+              // Accepted changes stop arriving while main has diverged
+              // from the code host's (ADR 0170).
+              ...(project.remoteDivergedAt
+                ? { divergedFromPublishedSince: project.remoteDivergedAt }
+                : {}),
             }
           : { id: projectId },
         you: {

@@ -111,6 +111,8 @@ export interface paths {
                                 remoteUrl: string | null;
                                 /** @enum {string|null} */
                                 remoteOwnership: "owned" | "attached" | null;
+                                /** Format: date-time */
+                                remoteDivergedAt: string | null;
                                 defaultBranch: string;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -154,6 +156,8 @@ export interface paths {
                             remoteUrl: string | null;
                             /** @enum {string|null} */
                             remoteOwnership: "owned" | "attached" | null;
+                            /** Format: date-time */
+                            remoteDivergedAt: string | null;
                             defaultBranch: string;
                             /** Format: date-time */
                             createdAt: string;
@@ -225,6 +229,8 @@ export interface paths {
                             remoteUrl: string | null;
                             /** @enum {string|null} */
                             remoteOwnership: "owned" | "attached" | null;
+                            /** Format: date-time */
+                            remoteDivergedAt: string | null;
                             defaultBranch: string;
                             /** Format: date-time */
                             createdAt: string;
@@ -366,6 +372,8 @@ export interface paths {
                             remoteUrl: string | null;
                             /** @enum {string|null} */
                             remoteOwnership: "owned" | "attached" | null;
+                            /** Format: date-time */
+                            remoteDivergedAt: string | null;
                             defaultBranch: string;
                             /** Format: date-time */
                             createdAt: string;
@@ -15937,6 +15945,8 @@ export interface paths {
                             remoteUrl: string | null;
                             /** @enum {string|null} */
                             remoteOwnership: "owned" | "attached" | null;
+                            /** Format: date-time */
+                            remoteDivergedAt: string | null;
                             defaultBranch: string;
                             /** Format: date-time */
                             createdAt: string;

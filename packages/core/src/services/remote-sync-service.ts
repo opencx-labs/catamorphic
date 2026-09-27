@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import {
   fetchFromRemote,
@@ -44,7 +45,12 @@ export class RemoteSyncService {
     private readonly codeHosts: CodeHostsService,
   ) {}
 
-  /** Download accepted code-host changes without publishing a member's work. */
+  /**
+   * Download accepted code-host changes without publishing a member's work.
+   * When the project's main has diverged from the code host's, nothing is
+   * downloaded; the project records since when (`remoteDivergedAt`) until
+   * the two converge again.
+   */
   async syncPublished(input: {
     identity: Identity;
     projectId: string;
@@ -87,8 +93,10 @@ export class RemoteSyncService {
           });
           const remoteSha = fetched.sha;
           if (!remoteSha) return { status: "no-op", localSha, remoteSha };
-          if (remoteSha === localSha)
+          if (remoteSha === localSha) {
+            await this.markDiverged({ identity, projectId, diverged: false });
             return { status: "up-to-date", localSha, remoteSha };
+          }
           try {
             await push({
               dev,
@@ -101,10 +109,12 @@ export class RemoteSyncService {
           } catch (error) {
             if (error instanceof PushNotFastForwardError) {
               // Never resolve divergence by pushing unreviewed server work to the code host.
+              await this.markDiverged({ identity, projectId, diverged: true });
               return { status: "diverged", localSha, remoteSha };
             }
             throw error;
           }
+          await this.markDiverged({ identity, projectId, diverged: false });
           return { status: "pulled", localSha: remoteSha, remoteSha };
         } finally {
           await dev.dispose();
@@ -350,6 +360,21 @@ export class RemoteSyncService {
     }
   }
 
+  /** Record (or clear) since when main diverged from the code host's. */
+  private async markDiverged(input: {
+    identity: Identity;
+    projectId: string;
+    diverged: boolean;
+  }): Promise<void> {
+    await this.db
+      .updateTable("projects")
+      .set({ remote_diverged_at: input.diverged ? new Date() : null })
+      .where("id", "=", input.projectId)
+      .where("tenant_id", "=", input.identity.tenantId)
+      .where("remote_diverged_at", input.diverged ? "is" : "is not", null)
+      .execute();
+  }
+
   private projectRow(identity: Identity, projectId: string) {
     return this.db
       .selectFrom("projects")
@@ -376,8 +401,15 @@ function validLocalBranch(ref: string): boolean {
   );
 }
 
-/** `work/<title-slug>-HHmm` — readable on the host, unique enough. */
-function prBranchName(title: string, now: Date): string {
+/**
+ * `work/<title-slug>-YYYYMMDD-HHmm-<suffix>`: readable on the host, and
+ * distinct across days and for pull requests opened in the same minute.
+ */
+export function prBranchName(
+  title: string,
+  now: Date,
+  suffix: string = randomBytes(3).toString("hex"),
+): string {
   const slug =
     title
       .toLowerCase()
@@ -385,7 +417,7 @@ function prBranchName(title: string, now: Date): string {
       .replace(/^-+|-+$/g, "")
       .slice(0, 40) || "change";
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${MANAGED_BRANCH_PREFIX}${slug}-${pad(now.getUTCHours())}${pad(
-    now.getUTCMinutes(),
-  )}`;
+  const day = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}`;
+  const time = `${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}`;
+  return `${MANAGED_BRANCH_PREFIX}${slug}-${day}-${time}-${suffix}`;
 }
