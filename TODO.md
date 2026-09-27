@@ -97,7 +97,7 @@
   and optional profile sync before implementation. This is intentionally
   deferred from temporary project Watchers.
 - **Agent channel integrations: Slack, code review.** The per-agent
-  schema (capabilities + tool policies + mode) is the substrate; what's
+  schema (capabilities + tool policies + sandboxing) is the substrate; what's
   missing is the *binding* of an agent to a channel. Slack: a
   Claude-Tag-class experience — a project agent wired to a Slack
   connector answers mentions/threads, with the agent's toolPolicies
@@ -106,7 +106,7 @@
   (`slack.mention`) + a workflow that opens an `ask_agent` turn, so it
   rides ADR 0039/0042 rather than new machinery. Code review: an agent
   assigned ONLY to reviews — a `github.pr-opened` trigger (CodeHost
-  seam, ADR 0045) invoking a read-only-mode agent whose persona is the
+  seam, ADR 0045) invoking a contained agent whose persona is the
   review doctrine, posting via the PR-review surface. Both are
   consumers of ADR 0056; neither needs new agent-side schema.
 - **Claude plugin for Catamorphic project connections.** Ship a general

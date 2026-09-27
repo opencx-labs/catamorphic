@@ -52,6 +52,9 @@ control-plane descriptors carry them, and an Environment's image, containers
 and restricted egress become capability requirements (ADR 0167 matching).
 
 **Modes govern what leaves the sandbox**, enforced by core, harness-independent.
+(ADR 0182 renames this setting `sandboxing`: `contained`, `propose`,
+`publish` for `read-only`, `edit`, `full-access`, and gives harnesses their
+own permission modes back.)
 An agent may run anything inside its own sandbox.
 - `read-only`: nothing is synced back, shipped to the store, or checkpointed;
   only read capabilities run; connection actions must read (a provider's

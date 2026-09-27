@@ -36,7 +36,7 @@ todos/delegation/monitors stay disabled when the host owns those functions.
 ## Inventory and disposition
 
 Names below omit `workspace.` or `project.` prefixes for readability.
-Availability also depends on identity, services, agent mode and topology.
+Availability also depends on identity, services, agent sandboxing and topology.
 
 | Operations | Projection and purpose |
 |---|---|

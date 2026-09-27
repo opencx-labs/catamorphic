@@ -368,11 +368,13 @@ containers are not budgeted.
 
 ## Unattended agents
 
-A committed agent's `mode` decides what leaves its sandbox: `read-only`
-keeps every change in the sandbox and calls only read connection actions,
-`edit` may propose but not deploy or publish, `full-access` may do what its
-roles allow. The Work server defaults project agents to `edit`. Its
-`toolPolicies` narrow tools on the server as on the desktop.
+A committed agent's `sandboxing` decides what leaves its sandbox:
+`contained` keeps every change in the sandbox, pushes nothing, and calls only
+read connection actions, `propose` may propose but not deploy or publish,
+`publish` may do what its roles allow. The Work server defaults project
+agents to `propose`. Its `toolPolicies` narrow tools on the server as on the
+desktop. A Claude Code or Codex agent's own permission mode is separate:
+`harnessPermissions` (see [harnesses](harnesses.md)).
 
 An approval in a project chat goes to the approvers the automation named when
 it delivered (`deliver({ key, audience: "project", approvers: { members: [...],

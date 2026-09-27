@@ -68,7 +68,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0053](0053-identity-scope-and-app-routes.md) | Identity scope: one artifact vocabulary, structural narrowing, synchronous calls | Accepted |
 | [0054](0054-tool-permissions.md) | Tool permissions: layered connection/agent policies that intersect; ask via host prompt | Accepted (enforcement transport refined by 0067; server-side definition policies by 0176) |
 | [0055](0055-company-brain-roles-store-and-change-loop.md) | Company brain: program vs. project store, roles as files, scoped agents, the change loop | Accepted; paths superseded by 0142; the builder flag superseded by 0158 |
-| [0056](0056-agent-configuration.md) | Agent configuration: one surface, layered defaults, enforced capabilities | Accepted; paths superseded by 0142 |
+| [0056](0056-agent-configuration.md) | Agent configuration: one surface, layered defaults, enforced capabilities | Accepted; paths superseded by 0142; normalized `mode` superseded by 0182 |
 | [0057](0057-agent-usage-and-cost.md) | Agent usage and cost: transcript-scanned page, per-turn usage in metadata | Accepted |
 | [0058](0058-mobile-pwa.md) | The mobile PWA: chats on the go, wrapper-ready; tool asks answerable over HTTP | Accepted |
 | [0059](0059-stock-server.md) | The stock server: zero-dependency, disk-backed, invite-first; mDNS LAN discovery | Accepted (auth, invites, and administration superseded by 0071 and 0072; multi-machine storage superseded by 0099); paths superseded by 0142 |
@@ -194,9 +194,10 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0173](0173-keyed-chat-lifecycle-and-chat-placement.md) | Keyed chats: project keys, close, idle release, and their own placement | Accepted (project chat connections refined by 0181) |
 | [0174](0174-background-processes-as-a-sandbox-capability.md) | Background processes are a sandbox capability | Accepted |
 | [0175](0175-grants-reach-sandboxes.md) | Grants reach sandboxes; credentials never do | Accepted (Git implementation notes; workspaces at a ref in 0178; models and harnesses in 0180) |
-| [0176](0176-environment-images-containers-egress-and-modes.md) | Environments choose images, containers, egress, and what agents may change | Accepted |
+| [0176](0176-environment-images-containers-egress-and-modes.md) | Environments choose images, containers, egress, and what agents may change | Accepted (`mode` renamed sandboxing by 0182) |
 | [0177](0177-github-is-a-connection.md) | GitHub is a connection | Accepted |
 | [0178](0178-session-workspaces-at-a-ref.md) | Session workspaces at a ref of the project's remote | Accepted |
 | [0179](0179-integrations-from-project-code-slack.md) | Integrations from project code: named HTTP operations and declared delivery ids | Accepted (session event keys in 0181) |
 | [0180](0180-harnesses-run-in-the-sandbox-models-through-the-gateway.md) | Harnesses run in the sandbox; models through the gateway | Accepted |
 | [0181](0181-project-chats-use-their-environments-bindings.md) | Project chats use their Environment's bindings; session events carry keys | Accepted |
+| [0182](0182-sandboxing-and-permission-modes-are-different-settings.md) | Sandboxing and permission modes are different settings | Accepted |

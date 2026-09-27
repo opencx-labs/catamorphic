@@ -99,7 +99,7 @@ it("requires explicit consent and rejects a late answer after interruption", asy
   expect(await handler(request, abort.signal)).toEqual({ action: "cancel" });
 });
 
-it("full-access local sessions accept native app requests without adding desktop consent", async () => {
+it("publish-sandboxing local sessions accept native app requests without adding desktop consent", async () => {
   const elicit = vi.fn<WorkspaceBridge["elicit"]>(async () => ({
     action: "decline",
   }));

@@ -63,7 +63,7 @@ profile, exact file paths, access mode and validation errors. It resolves the pr
 project folder even when the session runs in a worktree or another profile is
 foreground. Turn context carries only current validation errors (ADR 0152). Native
 agents edit files directly with ordinary file/shell facilities; native permissions
-still apply. Read-only agents inspect only. Sandboxed agents without host filesystem
+still apply. Agents whose sandboxing is contained inspect only. Sandboxed agents without host filesystem
 access must report that limitation. No settings write tools or mirrored
 configuration transport exist.
 

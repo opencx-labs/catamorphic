@@ -70,8 +70,8 @@ The accepted multi-machine architecture uses server instances sharing one
 Postgres and one authority, with machines exposed as permitted Environments.
 Postgres mode shares origins, artifacts, credentials, auth, and leased execution.
 Each Environment can choose its sandbox image, give agents their own Docker,
-and limit which hosts they reach; an agent's mode decides what leaves its
-sandbox. See
+and limit which hosts they reach; an agent's sandboxing decides what leaves
+its sandbox, apart from its harness's own permission mode. See
 [the machine setup and recovery model](skills/setup-work-server/references/cluster-deployment.md).
 The Work server is single-tenant because its local-process execution can access
 the host machine. Run one trusted organization or household per deployment.

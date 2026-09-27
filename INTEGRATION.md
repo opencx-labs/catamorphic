@@ -574,12 +574,16 @@ supplies two things:
 
 Core also applies a committed definition's `toolPolicies` (keyed by
 connection alias or `catamorphic`) as the agent's layer on every host, and
-enforces its `mode` at the control plane (ADR 0176): a `read-only` session's
-changes never leave its sandbox and only read connection actions run
-(`ConnectionProvider.readOnly(action)`, else the action's `readOnlyHint`); an
-`edit` session may not invoke capabilities marked `mode: "full-access"`.
-`RegisteredCodingAgent.privilege` and `.toolPolicies` carry the same for
-agents a host defines itself.
+enforces its `sandboxing` at the control plane (ADR 0182): a `contained`
+session's changes never leave its sandbox, it cannot push through the
+gateway, and only read connection actions run
+(`ConnectionProvider.readOnly(action)`, else the action's `readOnlyHint`); a
+`propose` session may not invoke capabilities marked `sandboxing: "publish"`.
+`RegisteredCodingAgent.sandboxing` and `.toolPolicies` carry the same for
+agents a host defines itself. A definition's `harnessPermissions` (Claude
+Code `permissionMode`; Codex `sandbox` and `approvals`) reach the harness as
+`TurnOptions.harnessPermissions` on every turn; harnesses honor them over
+their constructor defaults.
 
 ## Ready-made components: `@catamorphic/ui`
 

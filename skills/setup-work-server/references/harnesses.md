@@ -89,8 +89,14 @@ a derived image `FROM` it that adds them to the PATH).
 
 `kind` is `claude-code` or `codex`; `credentials.connection` names the
 model alias of the agent's Environment (its API must match the harness).
-`mode` works as for every agent: the sandbox is the boundary, and core
-decides what leaves it (ADR 0176). The repository's `CLAUDE.md` and
+`sandboxing` works as for every agent: the sandbox is the boundary, and core
+decides what leaves it (ADR 0182). The harness's own permission mode is a
+separate `harnessPermissions` field in its native values:
+`{ "permissionMode": "auto" }` for Claude Code (`default`, `acceptEdits`,
+`plan`, `auto`, `dontAsk`, `bypassPermissions`; default `acceptEdits`), or
+`{ "sandbox": "workspace-write", "approvals": "never" }` for Codex (default
+`danger-full-access`, since the Work sandbox is the boundary). Both settings
+are in the definition's consent hash. The repository's `CLAUDE.md` and
 `.claude/` apply as in the CLI.
 
 ## Verify
