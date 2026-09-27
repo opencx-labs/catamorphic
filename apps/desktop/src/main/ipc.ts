@@ -60,6 +60,7 @@ import {
   continueAuthorizationInBrowser,
   trackAuthorization,
 } from "./authorization-recovery.js";
+import { throughCodeHost } from "./code-host-fallback.js";
 import { removeComposerFiles, saveComposerFile } from "./composer-files.js";
 import { parseConnectLink } from "./connect-link.js";
 import {
@@ -2935,6 +2936,23 @@ export function registerIpcHandlers(
       ? codeHosts
       : null;
   };
+  /**
+   * A pull request operation through the person's connection, or `null` for
+   * the CLI path: no connection serves the origin, or it cannot reach this
+   * repository (the App is not installed on its owner) and the CLI is on.
+   */
+  const viaCodeHost = async <T>(
+    event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+    run: (
+      codeHosts: NonNullable<Awaited<ReturnType<typeof connectedCodeHost>>>,
+    ) => Promise<T>,
+  ) =>
+    throughCodeHost({
+      codeHosts: await connectedCodeHost(projectId),
+      cliEnabled: storesFor(event).prefs.load().githubCliEnabled === true,
+      run,
+    });
   ipcMain.handle("catamorphic:github-cli-status", async () => {
     const token = await githubCliToken();
     if (!token)
@@ -2966,15 +2984,16 @@ export function registerIpcHandlers(
       return storedRemoteClient(event, input.projectId, link).proposalComment(
         input,
       );
-    const codeHosts = await connectedCodeHost(input.projectId);
-    if (codeHosts)
-      return codeHosts.commentOnPullRequest({
+    const viaHost = await viaCodeHost(event, input.projectId, (codeHosts) =>
+      codeHosts.commentOnPullRequest({
         identity,
         projectId: input.projectId,
         number: input.number,
         body: input.body,
         ...(input.replyTo ? { replyTo: input.replyTo } : {}),
-      });
+      }),
+    );
+    if (viaHost) return viaHost.value;
     requireGithubCli(event);
     return githubCliPrComment({
       rootPath: await requireRoot(input.projectId),
@@ -3001,25 +3020,27 @@ export function registerIpcHandlers(
         input.number,
       );
     }
-    const codeHosts = link ? null : await connectedCodeHost(input.projectId);
-    if (codeHosts) {
-      if (input.decision === "apply")
-        await codeHosts.mergePullRequest({
-          identity,
-          projectId: input.projectId,
-          number: input.number,
-          headSha: input.headSha,
-        });
-      else
-        await codeHosts.reviewPullRequest({
-          identity,
-          projectId: input.projectId,
-          number: input.number,
-          headSha: input.headSha,
-          decision:
-            input.decision === "approve" ? "approve" : "request_changes",
-          body: input.body,
-        });
+    const viaHost = link
+      ? null
+      : await viaCodeHost(event, input.projectId, (codeHosts) =>
+          input.decision === "apply"
+            ? codeHosts.mergePullRequest({
+                identity,
+                projectId: input.projectId,
+                number: input.number,
+                headSha: input.headSha,
+              })
+            : codeHosts.reviewPullRequest({
+                identity,
+                projectId: input.projectId,
+                number: input.number,
+                headSha: input.headSha,
+                decision:
+                  input.decision === "approve" ? "approve" : "request_changes",
+                body: input.body,
+              }),
+        );
+    if (viaHost) {
       notifyGitChanged(input.projectId);
       return { decision: input.decision };
     }
@@ -3070,9 +3091,10 @@ export function registerIpcHandlers(
         return storedRemoteClient(event, projectId, link).proposalDiscussion(
           number,
         );
-      const codeHosts = await connectedCodeHost(projectId);
-      if (codeHosts)
-        return codeHosts.pullRequestDiscussion({ identity, projectId, number });
+      const viaHost = await viaCodeHost(event, projectId, (codeHosts) =>
+        codeHosts.pullRequestDiscussion({ identity, projectId, number }),
+      );
+      if (viaHost) return viaHost.value;
       requireGithubCli(event);
       return githubCliPrDetails({
         rootPath: await requireRoot(projectId),
@@ -3095,8 +3117,7 @@ export function registerIpcHandlers(
         return storedRemoteClient(event, projectId, link).proposalReview(
           number,
         );
-      const codeHosts = await connectedCodeHost(projectId);
-      if (codeHosts) {
+      const viaHost = await viaCodeHost(event, projectId, async (codeHosts) => {
         const before = await codeHosts.pullRequest({
           identity,
           projectId,
@@ -3112,6 +3133,10 @@ export function registerIpcHandlers(
           projectId,
           number,
         });
+        return { before, proposal, files };
+      });
+      if (viaHost) {
+        const { before, proposal, files } = viaHost.value;
         if (before.headSha !== proposal.headSha)
           throw new Error(
             "This proposal changed while loading. Refresh to review the latest version.",
@@ -3144,13 +3169,14 @@ export function registerIpcHandlers(
     if (fixture) return fixture.prs;
     const link = storesFor(event).remoteProjects.get(projectId);
     if (link) return storedRemoteClient(event, projectId, link).listProposals();
-    const codeHosts = await connectedCodeHost(projectId);
-    if (codeHosts)
-      return codeHosts.listPullRequests({
+    const viaHost = await viaCodeHost(event, projectId, (codeHosts) =>
+      codeHosts.listPullRequests({
         identity,
         projectId,
         principal: "member",
-      });
+      }),
+    );
+    if (viaHost) return viaHost.value;
     requireGithubCli(event);
     const server = state.current;
     if (!server) return [];
@@ -3176,13 +3202,14 @@ export function registerIpcHandlers(
       const link = storesFor(event).remoteProjects.get(projectId);
       if (link)
         return storedRemoteClient(event, projectId, link).proposalFiles(number);
-      const codeHosts = await connectedCodeHost(projectId);
-      if (codeHosts)
-        return codeHosts.pullRequestFiles({
+      const viaHost = await viaCodeHost(event, projectId, (codeHosts) =>
+        codeHosts.pullRequestFiles({
           identity,
           projectId,
           number: Number(number),
-        });
+        }),
+      );
+      if (viaHost) return viaHost.value;
       requireGithubCli(event);
       const server = state.current;
       if (!server) throw new Error("Server not running");
