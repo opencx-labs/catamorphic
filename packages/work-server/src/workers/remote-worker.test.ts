@@ -544,9 +544,17 @@ describe("keyed chats on workers (ADR 0173)", () => {
       machine: { id: "worker.chat-box" },
     });
 
-    // Closing forgets the workspace: branch, copy, Allocation.
+    // Closing forgets the workspace: branch, copy, Allocation, sandbox.
     await sessions.close(identity, projectId, session.id);
     expect(await branch()).toBeNull();
+    await waitFor(async () => {
+      const row = await core.db
+        .selectFrom("execution_allocations")
+        .select(["status", "capacity_released_at"])
+        .where("id", "=", after.allocationId ?? "")
+        .executeTakeFirstOrThrow();
+      return row.status === "released" && row.capacity_released_at !== null;
+    }, "the worker to destroy the closed chat's workspace");
     expect(
       await core.projectManager.exists(
         SERVER_TENANT_ID,
