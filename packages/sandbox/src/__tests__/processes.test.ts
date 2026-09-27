@@ -7,6 +7,8 @@ import {
   decodeUtf8Prefix,
   followProcess,
   OutputWindow,
+  type ProcessOutput,
+  processReadBounds,
   shellSandboxProcesses,
 } from "../processes.js";
 import { sandboxCommandLine, spawnInSandbox } from "../sandbox-stdio.js";
@@ -97,7 +99,7 @@ describe("shellSandboxProcesses", () => {
     // The environment never stays behind on disk.
     expect(
       fs.readdirSync(path.join(root, "state", started.processId)).sort(),
-    ).toEqual(["ended", "exit", "meta.json", "output", "pid"]);
+    ).toEqual(["boot", "ended", "exit", "meta.json", "output", "pid"]);
   }, 20_000);
 
   it("waits for a line, then stops the whole process group", async () => {
@@ -203,7 +205,147 @@ describe("shellSandboxProcesses", () => {
   }, 20_000);
 });
 
+describe("shellSandboxProcesses reads and state", () => {
+  it("starts a read inside a character at the next one, and reads at least one character", async () => {
+    const started = await processes.startProcess({
+      sandboxId,
+      command: "printf '😀😀'",
+    });
+    await followProcess({
+      processes,
+      sandboxId,
+      processId: started.processId,
+      cursor: 0,
+      timeoutMs: 10_000,
+    });
+    const inside = await processes.readProcessOutput({
+      sandboxId,
+      processId: started.processId,
+      cursor: 1,
+    });
+    expect(inside).toMatchObject({ chunk: "😀", cursor: 4, nextCursor: 8 });
+    const narrow = await processes.readProcessOutput({
+      sandboxId,
+      processId: started.processId,
+      maxBytes: 1,
+    });
+    expect(narrow).toMatchObject({ chunk: "😀", nextCursor: 4, more: true });
+  }, 20_000);
+
+  it("treats a process from an earlier boot as exited, and leaves its group alone", async () => {
+    const started = await processes.startProcess({
+      sandboxId,
+      command: "sleep 30",
+    });
+    const state = path.join(root, "state", started.processId);
+    const pgid = Number(fs.readFileSync(path.join(state, "pid"), "utf8"));
+    expect(alive(pgid)).toBe(true);
+    // The sandbox restarted: this pgid may now belong to anything.
+    fs.writeFileSync(path.join(state, "boot"), "an-earlier-boot");
+    const [listed] = (await processes.listProcesses({ sandboxId })).filter(
+      (item) => item.processId === started.processId,
+    );
+    expect(listed?.status).toBe("exited");
+    await processes.signalProcess({
+      sandboxId,
+      processId: started.processId,
+      signal: "SIGKILL",
+    });
+    expect(alive(pgid)).toBe(true);
+    process.kill(-pgid, "SIGKILL");
+  }, 20_000);
+});
+
+describe("followProcess", () => {
+  it("times out while output keeps flowing", async () => {
+    let cursor = 0;
+    const chatty = {
+      readProcessOutput: async (): Promise<ProcessOutput> => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        cursor += 10;
+        return {
+          processId: "proc-chatty000",
+          chunk: "building\n",
+          cursor: cursor - 10,
+          nextCursor: cursor,
+          more: true,
+          outputBytes: cursor + 100,
+          status: "running",
+          exitCode: null,
+          signal: null,
+        };
+      },
+    };
+    const started = Date.now();
+    const followed = await followProcess({
+      processes: chatty,
+      sandboxId,
+      processId: "proc-chatty000",
+      cursor: 0,
+      timeoutMs: 300,
+    });
+    expect(followed.timedOut).toBe(true);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  }, 5_000);
+
+  it("answers a matched line even while more output waits", async () => {
+    let cursor = 0;
+    const chatty = {
+      readProcessOutput: async (): Promise<ProcessOutput> => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        cursor += 6;
+        return {
+          processId: "proc-chatty000",
+          chunk: "ready\n",
+          cursor: cursor - 6,
+          nextCursor: cursor,
+          more: true,
+          outputBytes: cursor + 100,
+          status: "running",
+          exitCode: null,
+          signal: null,
+        };
+      },
+    };
+    const followed = await followProcess({
+      processes: chatty,
+      sandboxId,
+      processId: "proc-chatty000",
+      cursor: 0,
+      timeoutMs: 300,
+      until: /ready/,
+    });
+    expect(followed).toMatchObject({ matched: "ready", timedOut: false });
+  }, 5_000);
+});
+
 describe("stdio processes in a sandbox (ADR 0180)", () => {
+  it("delivers a large last write before end of file", async () => {
+    const started = await processes.startProcess({
+      sandboxId,
+      // Starts reading late, then a byte at a time: the input waits in the
+      // pipe well after the write that ended it returned.
+      command:
+        'sleep 2; n=0; while IFS= read -r line; do n=$((n+1)); done; echo "lines $n"',
+      stdin: true,
+    });
+    await processes.writeProcessInput({
+      sandboxId,
+      processId: started.processId,
+      data: `${"x".repeat(49)}\n`.repeat(20_000),
+      end: true,
+    });
+    const followed = await followProcess({
+      processes,
+      sandboxId,
+      processId: started.processId,
+      cursor: 0,
+      timeoutMs: 60_000,
+    });
+    expect(followed).toMatchObject({ status: "exited", exitCode: 0 });
+    expect(followed.output).toBe("lines 20000\n");
+  }, 90_000);
+
   it("writes input to a process started with stdin, and ends it", async () => {
     const started = await processes.startProcess({
       sandboxId,
@@ -313,6 +455,14 @@ describe("process output helpers", () => {
       bytes: 1,
     });
     expect(decodeUtf8Prefix(bytes, false)).toEqual({ text: "aé", bytes: 3 });
+  });
+
+  it("reads at least one whole character", () => {
+    expect(
+      processReadBounds({ sandboxId, processId: "p", maxBytes: 1 }),
+    ).toMatchObject({
+      maxBytes: 4,
+    });
   });
 
   it("keeps the start and end of long output", () => {

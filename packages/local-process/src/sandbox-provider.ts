@@ -25,7 +25,7 @@ import {
   assertProcessId,
   assertSandboxResources,
   assertWriteSize,
-  decodeUtf8Prefix,
+  decodeProcessChunk,
   newProcessId,
   PROCESS_SIGNALS,
   processReadBounds,
@@ -465,12 +465,15 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
       }
     }
     const more = size - cursor > length;
-    const decoded = decodeUtf8Prefix(bytes, status === "exited" && !more);
+    const decoded = decodeProcessChunk({
+      bytes,
+      cursor,
+      maxBytes: length,
+      final: status === "exited" && !more,
+    });
     return {
       processId: entry.process.processId,
-      chunk: decoded.text,
-      cursor,
-      nextCursor: cursor + decoded.bytes,
+      ...decoded,
       more,
       outputBytes: size,
       status,
@@ -513,7 +516,12 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     // A process that already exited drops what it was sent, like a pipe.
     if (entry.process.status === "exited") return;
     await new Promise<void>((resolve) => {
-      const done = () => resolve();
+      // Harness sessions write thousands of times: nothing stays behind.
+      const done = () => {
+        input.off("error", done);
+        input.off("drain", done);
+        resolve();
+      };
       input.once("error", done);
       if (args.end) input.end(args.data, done);
       else if (input.write(args.data)) done();
