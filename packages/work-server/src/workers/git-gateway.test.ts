@@ -341,9 +341,10 @@ beforeAll(async () => {
 afterAll(async () => {
   await Promise.all(workers.map((running) => running.stop()));
   await server?.shutdown();
+  upstream?.closeAllConnections();
   await new Promise((resolve) => upstream?.close(resolve));
   fs.rmSync(root, { recursive: true, force: true });
-}, 60_000);
+}, 120_000);
 
 describe("a pull request review chat with Git through the gateway", () => {
   let sessionId = "";

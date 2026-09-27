@@ -60,7 +60,8 @@ export async function ensureSandboxBaseline(input: {
     command: [
       "(git rev-parse --git-dir >/dev/null 2>&1 || git init -q -b main)",
       "git add -A",
-      `(git ${AGENT} commit -m baseline --quiet || true)`,
+      // An empty workspace still gets a baseline, so HEAD always exists.
+      `(git ${AGENT} commit -m baseline --quiet || git rev-parse -q --verify HEAD >/dev/null || git ${AGENT} commit --allow-empty -m baseline --quiet)`,
       "git update-ref refs/work/synced HEAD",
       originScript(input.originUrl),
     ].join(" && "),
