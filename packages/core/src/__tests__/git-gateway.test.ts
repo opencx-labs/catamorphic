@@ -267,7 +267,8 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
   const project = () => path.join(root, "workspace", "project");
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "work-sandbox-git-"));
+    // A data directory like "Application Support": spaces and a `#`.
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "work sandbox #git-"));
     await fs.mkdir(path.join(root, "home"), { recursive: true });
     await fs.mkdir(project(), { recursive: true });
     await fs.writeFile(path.join(project(), "app.ts"), "one\n");
@@ -372,5 +373,19 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       renewOnly: true,
     });
     expect(await fill()).toContain("password=grant-two");
+    // A later turn without Git aliases no longer rewrites remotes.
+    await configureSandboxGateway({
+      provider,
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      grants: [{ alias: "model", grant: "grant-three" }],
+      gitAliases: [],
+    });
+    const plain = await execute(
+      "git",
+      ["ls-remote", "--get-url", "https://git.example.test/org/repo.git"],
+      { cwd: project(), env },
+    );
+    expect(plain.stdout.trim()).toBe("https://git.example.test/org/repo.git");
   });
 });

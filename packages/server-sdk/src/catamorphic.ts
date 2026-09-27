@@ -289,8 +289,8 @@ export interface CatamorphicHostConfig {
    */
   toolPermissions?: CatamorphicCoreConfig["toolPermissions"];
   /**
-   * Hosts sandboxes reach this control plane at; restricted egress always
-   * allows them (ADR 0176).
+   * Hosts and ports (`work.acme.com:443`) sandboxes reach this control plane
+   * at; restricted egress always allows them (ADR 0176).
    */
   gatewayHosts?: CatamorphicCoreConfig["gatewayHosts"];
 }

@@ -173,7 +173,12 @@ export async function configureSandboxGateway(input: {
       ...input,
       cwd: directory,
       what: "renew the session's gateway grants",
-      command: "chmod 600 grants/*",
+      // Without Git aliases, an earlier turn's rewrites must not send
+      // remotes to aliases this session no longer holds.
+      command:
+        input.renewOnly || input.gitAliases.length > 0
+          ? "chmod 600 grants/*"
+          : "chmod 600 grants/* && { [ ! -f gitconfig ] || : > gitconfig; }",
     });
     return;
   }
@@ -197,7 +202,8 @@ export async function configureSandboxGateway(input: {
       // An empty helper first drops system helpers (a keychain) for the
       // gateway, so a grant is never stored outside the sandbox's files.
       "\thelper =",
-      `\thelper = "@ROOT@/git-credential-work ${alias.alias}"`,
+      // A shell command (`!`), so the path can be quoted.
+      `\thelper = "!'@ROOT@/git-credential-work' ${alias.alias}"`,
       `[url "${gateway}/${alias.alias}/"]`,
       ...alias.remoteBaseUrls.map(
         (base) => `\tinsteadOf = ${base.endsWith("/") ? base : `${base}/`}`,
@@ -218,7 +224,10 @@ export async function configureSandboxGateway(input: {
       "chmod 700 git-credential-work",
       "chmod 600 grants/*",
       "root=$(pwd -P)",
-      `sed "s#@ROOT@#$root#g" gitconfig.in > gitconfig`,
+      // Quoted in the config and for the shell; these would need escaping.
+      `case "$root" in *[\\'\\"\\\\]*) echo "The sandbox path $root holds a quote or backslash" >&2; exit 1;; esac`,
+      // A literal replacement, whatever the path holds (spaces, #, &).
+      `while IFS= read -r line; do case "$line" in *@ROOT@*) printf '%s%s%s\\n' "\${line%%@ROOT@*}" "$root" "\${line#*@ROOT@}";; *) printf '%s\\n' "$line";; esac; done < gitconfig.in > gitconfig`,
       "rm -f gitconfig.in",
       `(git config --global --get-all include.path 2>/dev/null | grep -Fqx "$root/gitconfig" || git config --global --add include.path "$root/gitconfig")`,
     ].join(" && "),

@@ -9,7 +9,10 @@ import type {
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
-import type { ResolvedConnectionBinding } from "./connection-types.js";
+import {
+  CONNECTION_ALIAS_PATTERN,
+  type ResolvedConnectionBinding,
+} from "./connection-types.js";
 import { requireTenantProject } from "./projects-service.js";
 import { toJson } from "./run-coordinator.js";
 import {
@@ -54,7 +57,8 @@ const AllocationPolicySchema = z.object({
     .array(
       z.object({
         connectionId: z.string().uuid(),
-        alias: z.string(),
+        // Names files, Git config sections and helper arguments in sandboxes.
+        alias: z.string().regex(CONNECTION_ALIAS_PATTERN),
         providerKind: z.string(),
         principalKind: z.enum(["member", "project_service", "tenant_service"]),
         capabilities: z.array(z.string()),

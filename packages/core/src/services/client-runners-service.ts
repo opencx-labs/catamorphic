@@ -16,7 +16,12 @@ import {
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ProjectEnvironmentsService } from "./project-environments-service.js";
-import { jsonColumn, toJson } from "./run-coordinator.js";
+import {
+  jsonColumn,
+  storableJson,
+  toJson,
+  withoutNul,
+} from "./run-coordinator.js";
 
 const tracer = getTracer("@catamorphic/core");
 const resourceLimitsSchema = z.array(
@@ -398,8 +403,8 @@ export class ClientRunnersService {
       .updateTable("client_runner_jobs")
       .set({
         status: args.error ? "failed" : "completed",
-        response: jsonColumn(toJson(args.response ?? null)),
-        error: args.error ?? null,
+        response: jsonColumn(storableJson(args.response)),
+        error: args.error === undefined ? null : withoutNul(args.error),
       })
       .where("id", "=", args.jobId)
       .where("runner_id", "=", args.id)

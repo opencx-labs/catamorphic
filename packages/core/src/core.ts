@@ -193,8 +193,9 @@ export interface CatamorphicCoreConfig {
     externalUserId: string;
   }) => Promise<Identity | null>;
   /**
-   * Hosts sandboxes reach the control plane at: its public URL's host. An
-   * Environment with restricted egress always reaches them, and
+   * Where sandboxes reach the control plane: its public URL's host and port
+   * (`work.acme.com:443`, see `gatewayHostOf`; a bare host allows every
+   * port). An Environment with restricted egress always reaches them, and
    * `egress: "gateway"` reaches nothing else (ADR 0176).
    */
   gatewayHosts?: readonly string[];

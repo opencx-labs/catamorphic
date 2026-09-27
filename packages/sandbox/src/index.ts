@@ -151,6 +151,7 @@ export {
 export {
   assertProcessId,
   assertWriteSize,
+  decodeProcessChunk,
   decodeUtf8Prefix,
   type FollowProcessResult,
   followProcess,
@@ -159,6 +160,7 @@ export {
   PROCESS_READ_DEFAULT_BYTES,
   PROCESS_READ_MAX_BYTES,
   PROCESS_READ_MAX_WAIT_MS,
+  PROCESS_READ_MIN_BYTES,
   PROCESS_SIGNALS,
   PROCESS_WRITE_MAX_BYTES,
   type ProcessOutput,

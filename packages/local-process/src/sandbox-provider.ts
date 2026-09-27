@@ -25,7 +25,7 @@ import {
   assertProcessId,
   assertSandboxResources,
   assertWriteSize,
-  decodeUtf8Prefix,
+  decodeProcessChunk,
   newProcessId,
   PROCESS_SIGNALS,
   processReadBounds,
@@ -34,6 +34,7 @@ import {
 } from "@catamorphic/sandbox";
 import { APP_DATA_ENV } from "@catamorphic/workflow/project-layout";
 import {
+  DOCKER_CLIENT_ENV,
   type DockerProxy,
   removeDockerResources,
   startDockerProxy,
@@ -67,7 +68,7 @@ export interface LocalProcessProviderConfig {
   docker?: {
     socketPath: string;
     /**
-     * Docker CLI plugins (`docker compose`, `docker buildx`) for sandboxes,
+     * Docker CLI plugins (`docker compose`) for sandboxes,
      * whose HOME is their own: linked as `~/.docker/cli-plugins`. Only
      * needed where plugins are installed per user (Docker Desktop).
      */
@@ -370,7 +371,9 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     }
     const { socketPath } = await proxy;
     const entry = this.sandboxes.get(sandboxId) ?? { envVars: {} };
-    entry.envVars.DOCKER_HOST = `unix://${socketPath}`;
+    Object.assign(entry.envVars, DOCKER_CLIENT_ENV, {
+      DOCKER_HOST: `unix://${socketPath}`,
+    });
     this.sandboxes.set(sandboxId, entry);
   }
 
@@ -462,12 +465,15 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
       }
     }
     const more = size - cursor > length;
-    const decoded = decodeUtf8Prefix(bytes, status === "exited" && !more);
+    const decoded = decodeProcessChunk({
+      bytes,
+      cursor,
+      maxBytes: length,
+      final: status === "exited" && !more,
+    });
     return {
       processId: entry.process.processId,
-      chunk: decoded.text,
-      cursor,
-      nextCursor: cursor + decoded.bytes,
+      ...decoded,
       more,
       outputBytes: size,
       status,
@@ -510,7 +516,12 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     // A process that already exited drops what it was sent, like a pipe.
     if (entry.process.status === "exited") return;
     await new Promise<void>((resolve) => {
-      const done = () => resolve();
+      // Harness sessions write thousands of times: nothing stays behind.
+      const done = () => {
+        input.off("error", done);
+        input.off("drain", done);
+        resolve();
+      };
       input.once("error", done);
       if (args.end) input.end(args.data, done);
       else if (input.write(args.data)) done();

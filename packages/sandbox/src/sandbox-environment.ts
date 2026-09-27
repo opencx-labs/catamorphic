@@ -36,7 +36,11 @@ export type SandboxEgress =
   | { mode: "open" }
   | {
       mode: "allowlist";
-      /** Domains, `*.suffix` patterns, or IP literals. DNS is always allowed. */
+      /**
+       * Domains, `*.suffix` patterns, or IP literals, each optionally with a
+       * port (`host:443`, `[fd00::1]:8080`) that narrows it to that TCP
+       * port. DNS is always allowed.
+       */
       allow: readonly string[];
     };
 
@@ -75,9 +79,15 @@ export function resolveEgress(args: {
   return { mode: "allowlist", allow: [...new Set(allow)] };
 }
 
-/** The host part of a URL, for `gatewayHosts`. */
+/**
+ * The host and port of a URL (`work.acme.com:443`, `[::1]:8787`), for
+ * `gatewayHosts`: sandboxes reach the gateway there and nowhere else on
+ * that host.
+ */
 export function gatewayHostOf(url: string): string {
-  return new URL(url).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  const parsed = new URL(url);
+  const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+  return `${parsed.hostname}:${port}`.toLowerCase();
 }
 
 export function dockerfileDigest(content: string): string {

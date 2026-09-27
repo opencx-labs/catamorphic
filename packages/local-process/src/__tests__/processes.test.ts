@@ -172,6 +172,59 @@ describe("LocalProcessSandboxProvider background processes (ADR 0174)", () => {
     await provider.destroySandbox(handle.providerId);
   });
 
+  it("leaves no listener behind per input write", async () => {
+    const handle = await provider.createSandbox({});
+    const started = await provider.processes.startProcess({
+      sandboxId: handle.providerId,
+      command: "cat",
+      stdin: true,
+    });
+    const warnings: string[] = [];
+    const warned = (warning: Error) => warnings.push(warning.name);
+    process.on("warning", warned);
+    try {
+      for (let index = 0; index < 40; index++)
+        await provider.processes.writeProcessInput({
+          sandboxId: handle.providerId,
+          processId: started.processId,
+          data: `${index}\n`,
+        });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      process.off("warning", warned);
+    }
+    expect(warnings).not.toContain("MaxListenersExceededWarning");
+    await provider.destroySandbox(handle.providerId);
+  });
+
+  it("starts a read inside a character at the next one, and reads at least one character", async () => {
+    const handle = await provider.createSandbox({});
+    const started = await provider.processes.startProcess({
+      sandboxId: handle.providerId,
+      command: "printf '😀😀'",
+    });
+    await followProcess({
+      processes: provider.processes,
+      sandboxId: handle.providerId,
+      processId: started.processId,
+      cursor: 0,
+      timeoutMs: 10_000,
+    });
+    const inside = await provider.processes.readProcessOutput({
+      sandboxId: handle.providerId,
+      processId: started.processId,
+      cursor: 1,
+    });
+    expect(inside).toMatchObject({ chunk: "😀", cursor: 4, nextCursor: 8 });
+    const narrow = await provider.processes.readProcessOutput({
+      sandboxId: handle.providerId,
+      processId: started.processId,
+      maxBytes: 1,
+    });
+    expect(narrow).toMatchObject({ chunk: "😀", nextCursor: 4, more: true });
+    await provider.destroySandbox(handle.providerId);
+  });
+
   it("dies with its sandbox", async () => {
     const sandbox = await provider.createSandbox({});
     const started = await provider.processes.startProcess({

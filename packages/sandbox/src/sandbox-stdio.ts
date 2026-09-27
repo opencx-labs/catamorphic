@@ -211,6 +211,15 @@ class SandboxStdioChild extends EventEmitter implements SandboxStdioProcess {
         }
       }
     } catch (error) {
+      // Its output can no longer be followed: the process must not go on
+      // working in the sandbox unseen once this child reads as exited.
+      await this.spawn.processes
+        .signalProcess({
+          sandboxId: this.spawn.sandboxId,
+          processId,
+          signal: "SIGKILL",
+        })
+        .catch(() => {});
       this.fail(error);
       this.finish(1, null);
     }

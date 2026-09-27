@@ -124,6 +124,8 @@ export const PROCESS_READ_DEFAULT_BYTES = 64 * 1024;
 export const PROCESS_READ_MAX_BYTES = 1024 * 1024;
 /** The longest one read blocks; followers read again for longer waits. */
 export const PROCESS_READ_MAX_WAIT_MS = 20_000;
+/** The fewest bytes per read: the longest UTF-8 character, so every read can progress. */
+export const PROCESS_READ_MIN_BYTES = 4;
 
 const PROCESS_ID = /^proc-[a-z0-9]{8,32}$/;
 
@@ -149,7 +151,10 @@ export function processReadBounds(args: ReadProcessOutputArgs): {
   return {
     cursor: whole(args.cursor, 0),
     maxBytes: Math.min(
-      Math.max(whole(args.maxBytes, PROCESS_READ_DEFAULT_BYTES), 1),
+      Math.max(
+        whole(args.maxBytes, PROCESS_READ_DEFAULT_BYTES),
+        PROCESS_READ_MIN_BYTES,
+      ),
       PROCESS_READ_MAX_BYTES,
     ),
     waitMs: Math.min(whole(args.waitMs, 0), PROCESS_READ_MAX_WAIT_MS),
@@ -179,6 +184,36 @@ export function decodeUtf8Prefix(
   return {
     text: new TextDecoder().decode(bytes.subarray(0, end)),
     bytes: end,
+  };
+}
+
+/**
+ * The text of one read of `bytes` found at `cursor`, of which at most
+ * `maxBytes` count. A cursor inside a character (where a follower skipped a
+ * backlog) moves to the next character; a read ending inside one leaves it
+ * for the next read.
+ */
+export function decodeProcessChunk(args: {
+  bytes: Uint8Array;
+  cursor: number;
+  maxBytes: number;
+  final: boolean;
+}): { chunk: string; cursor: number; nextCursor: number } {
+  let lead = 0;
+  while (
+    lead < 3 &&
+    lead < Math.min(args.bytes.length, args.maxBytes) &&
+    ((args.bytes[lead] ?? 0) & 0xc0) === 0x80
+  )
+    lead++;
+  const decoded = decodeUtf8Prefix(
+    args.bytes.subarray(lead, args.maxBytes),
+    args.final,
+  );
+  return {
+    chunk: decoded.text,
+    cursor: args.cursor + lead,
+    nextCursor: args.cursor + lead + decoded.bytes,
   };
 }
 
@@ -296,13 +331,18 @@ export async function followProcess(args: {
       await sleep(Math.min(200, deadline - Date.now()));
     }
     if (read.chunk) sawOutput = true;
+    const late = Date.now() >= deadline;
     // What already waits is read before answering: a caller gets all the
-    // output up to now, not the first page of it.
+    // output up to now, not the first page of it, unless output arrives
+    // faster than it is read and the time is up.
     const done =
       exited ||
-      (!read.more &&
+      ((!read.more || late) &&
         (matched !== undefined || (args.until === "output" && sawOutput)));
-    const timedOut = !done && !read.more && Date.now() >= deadline;
+    // An exited process's output is finite (and the backlog bounded), so it
+    // is read to the end; a running one stops at the deadline, however
+    // much it keeps printing.
+    const timedOut = !done && late && read.status !== "exited";
     const aborted = !done && Boolean(args.signal?.aborted);
     if (done || timedOut || aborted) {
       return {
@@ -322,8 +362,10 @@ export async function followProcess(args: {
 /**
  * {@link SandboxProcessProvider} for any sandbox that runs bash, built only
  * on `executeCommand`. Each process gets a state directory inside the
- * sandbox (its output, process group id, and exit code), so its state lives
- * and dies with the sandbox. The process runs in its own session and group
+ * sandbox (its output, process group id, the boot it started in, and exit
+ * code), so its state lives and dies with the sandbox; a process from an
+ * earlier boot of a restarted sandbox reads as exited, since its group id
+ * may since name something else. The process runs in its own session and group
  * (`setsid`, or job control where `setsid` is missing) so it survives the
  * command that started it and a signal reaches everything it spawned. When
  * the command ends, whatever it left running in its group is stopped.
@@ -339,6 +381,7 @@ export function shellSandboxProcesses(args: {
   stateDirectory?: string;
 }): SandboxProcessProvider {
   const stateDirectory = args.stateDirectory ?? "/tmp/.catamorphic-processes";
+  const writing = new Map<string, Promise<void>>();
   const directory = (processId: string) => {
     assertProcessId(processId);
     return `${stateDirectory}/${processId}`;
@@ -392,13 +435,19 @@ export function shellSandboxProcesses(args: {
         startedAt: new Date().toISOString(),
         ...(start.name ? { name: start.name } : {}),
       });
-      // Input, when kept open, is a file the writes append to, followed
-      // into a pipe by `tail -f`; stopping the follower is end of file.
+      // Input, when kept open, is a file the writes append to. A relay
+      // copies what they append into the process's input pipe; each write
+      // wakes it (a second's poll covers a missed wake). Once the input is
+      // closed it copies the rest and exits, and only then does the process
+      // read end of file, so the last write always arrives.
       const input = start.stdin
         ? [
-            'mkfifo "$D/stdin.pipe"',
-            '(exec tail -c +1 -f "$D/input" > "$D/stdin.pipe") &',
-            'printf %s "$!" > "$D/stdin.pid"',
+            'mkfifo "$D/stdin.pipe" "$D/stdin.wake"',
+            '(exec 3< "$D/input" 4<> "$D/stdin.wake"',
+            "  while cat <&3; do",
+            '    if [ -f "$D/input.closed" ]; then cat <&3; exit; fi',
+            "    read -r -t 1 -n 1 _ <&4",
+            '  done) > "$D/stdin.pipe" 2>/dev/null &',
             // Its end is expected: no job report in the output.
             "disown",
           ]
@@ -427,6 +476,7 @@ export function shellSandboxProcesses(args: {
           "set -e",
           `dir=${quote(dir)}`,
           'mkdir -p "$dir"',
+          '{ cat /proc/sys/kernel/random/boot_id 2>/dev/null || true; } > "$dir/boot"',
           `printf %s ${quote(toBase64(meta))} | base64 -d > "$dir/meta.json"`,
           `printf %s ${quote(toBase64(runner))} | base64 -d > "$dir/run.sh"`,
           ': > "$dir/output"',
@@ -482,15 +532,15 @@ export function shellSandboxProcesses(args: {
         raw.length > 0
           ? bounds.cursor
           : Math.min(bounds.cursor, state.sizeAtState);
-      const decoded = decodeUtf8Prefix(
-        raw.subarray(0, bounds.maxBytes),
-        state.process.status === "exited" && !more,
-      );
+      const decoded = decodeProcessChunk({
+        bytes: raw,
+        cursor,
+        maxBytes: bounds.maxBytes,
+        final: state.process.status === "exited" && !more,
+      });
       return {
         processId: read.processId,
-        chunk: decoded.text,
-        cursor,
-        nextCursor: cursor + decoded.bytes,
+        ...decoded,
         more,
         outputBytes: Math.max(state.sizeAtState, cursor + raw.length),
         status: state.process.status,
@@ -506,9 +556,10 @@ export function shellSandboxProcesses(args: {
       await run(
         request.sandboxId,
         [
+          STATE_FUNCTIONS,
           `dir=${quote(dir)}`,
           '[ -f "$dir/pid" ] || { echo "Unknown process" >&2; exit 3; }',
-          'if [ ! -f "$dir/exit" ]; then',
+          "if alive; then",
           `  printf %s ${request.signal} > "$dir/signal"`,
           `  kill -s ${request.signal.slice(3)} -- "-$(cat "$dir/pid")" 2>/dev/null || true`,
           "fi",
@@ -522,31 +573,61 @@ export function shellSandboxProcesses(args: {
     async writeProcessInput(write) {
       assertWriteSize(write.data);
       const dir = directory(write.processId);
-      await run(
-        write.sandboxId,
-        [
-          `dir=${quote(dir)}`,
-          '[ -f "$dir/pid" ] || { echo "Unknown process" >&2; exit 3; }',
-          '[ -f "$dir/input" ] || { echo "The process was started without input" >&2; exit 3; }',
-          '[ -f "$dir/input.closed" ] && { echo "The process input is closed" >&2; exit 3; }',
-          ...(write.data
-            ? [
-                `printf %s ${quote(toBase64(write.data))} | base64 -d >> "$dir/input"`,
-              ]
-            : []),
-          ...(write.end
-            ? [
-                ': > "$dir/input.closed"',
-                // `tail -f` polls once a second where inotify is missing:
-                // give it that long to pass on the last write, then stop
-                // it, which the process reads as end of file.
-                'sleep 1; kill "$(cat "$dir/stdin.pid" 2>/dev/null || echo 0)" 2>/dev/null || true',
-              ]
-            : []),
-        ].join("\n"),
-      );
+      // One write's pieces stay together and in order.
+      const key = `${write.sandboxId}\0${write.processId}`;
+      const previous = writing.get(key) ?? Promise.resolve();
+      const current = previous
+        .catch(() => {})
+        .then(async () => {
+          const pieces = splitBytes(
+            Buffer.from(write.data, "utf8"),
+            SHELL_WRITE_PIECE_BYTES,
+          );
+          for (const [index, piece] of pieces.entries()) {
+            const last = index === pieces.length - 1;
+            await run(
+              write.sandboxId,
+              [
+                `dir=${quote(dir)}`,
+                '[ -f "$dir/pid" ] || { echo "Unknown process" >&2; exit 3; }',
+                '[ -f "$dir/input" ] || { echo "The process was started without input" >&2; exit 3; }',
+                '[ -f "$dir/input.closed" ] && { echo "The process input is closed" >&2; exit 3; }',
+                ...(piece.length > 0
+                  ? [
+                      `printf %s ${quote(piece.toString("base64"))} | base64 -d >> "$dir/input"`,
+                    ]
+                  : []),
+                ...(last && write.end ? [': > "$dir/input.closed"'] : []),
+                // Opening the wake pipe read-write never blocks, even
+                // once the relay is gone.
+                'printf x 1<> "$dir/stdin.wake" 2>/dev/null || true',
+              ].join("\n"),
+            );
+          }
+        });
+      writing.set(key, current);
+      try {
+        await current;
+      } finally {
+        if (writing.get(key) === current) writing.delete(key);
+      }
     },
   };
+}
+
+/**
+ * The most input bytes one shell command carries: the command is a single
+ * argument, and Linux caps one argument at 128 KiB (base64 grows by a third).
+ */
+const SHELL_WRITE_PIECE_BYTES = 64 * 1024;
+
+/** `bytes` in pieces of at most `size`; one empty piece for no bytes. */
+function splitBytes(bytes: Buffer, size: number): Buffer[] {
+  if (bytes.length === 0) return [bytes];
+  const pieces: Buffer[] = [];
+  for (let start = 0; start < bytes.length; start += size)
+    pieces.push(bytes.subarray(start, start + size));
+  return pieces;
 }
 
 /** Refuses input larger than one write may carry. */
@@ -562,7 +643,9 @@ export function assertWriteSize(data: string): void {
  * alive, its output size, and one tab-separated state line.
  */
 const STATE_FUNCTIONS = [
-  'alive() { [ -f "$dir/exit" ] && return 1; kill -0 -- "-$(cat "$dir/pid" 2>/dev/null || echo 0)" 2>/dev/null; }',
+  "boot_id() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }",
+  // A group id from an earlier boot may now be anyone's.
+  'alive() { [ -f "$dir/exit" ] && return 1; [ "$(cat "$dir/boot" 2>/dev/null)" = "$(boot_id)" ] || return 1; kill -0 -- "-$(cat "$dir/pid" 2>/dev/null || echo 0)" 2>/dev/null; }',
   'size() { if [ -f "$dir/output" ]; then echo $(( $(wc -c < "$dir/output") )); else echo 0; fi; }',
   "state_line() {",
   '  [ -f "$dir/pid" ] || return 0',

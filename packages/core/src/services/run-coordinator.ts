@@ -1493,6 +1493,26 @@ export function toJson(value: unknown): Json {
   return JSON.parse(JSON.stringify(value ?? null)) as Json;
 }
 
+/**
+ * A result from a machine as jsonb can hold it: Postgres refuses U+0000 in
+ * jsonb (and text), which process output and command results may carry, so
+ * it arrives as U+FFFD.
+ */
+export function storableJson(value: unknown): Json {
+  return toJson(
+    JSON.parse(
+      JSON.stringify(value ?? null, (_key, item: unknown) =>
+        typeof item === "string" ? withoutNul(item) : item,
+      ),
+    ),
+  );
+}
+
+/** Text Postgres can store: U+0000 becomes U+FFFD. */
+export function withoutNul(text: string): string {
+  return text.replaceAll("\u0000", "\uFFFD");
+}
+
 export function jsonColumn(value: Json) {
   return sql<Json>`${JSON.stringify(value)}::jsonb`;
 }
