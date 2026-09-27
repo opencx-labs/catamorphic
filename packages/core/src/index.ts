@@ -401,12 +401,15 @@ export {
 } from "./services/git-gateway.js";
 export { executeHostCall, type HostCallInput } from "./services/host-calls.js";
 export {
+  dbModelGatewayStore,
   MODEL_REQUEST_MAX_BYTES,
   type ModelCallUsage,
   ModelGatewayError,
   type ModelGatewayRequest,
   type ModelGatewayResponse,
   ModelGatewayService,
+  type ModelGatewayStore,
+  type ModelUsageRecord,
   modelAllowed,
   modelEndpointAction,
   SseUsageReader,

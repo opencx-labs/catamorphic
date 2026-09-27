@@ -72,7 +72,10 @@ import { ExecutionEnvironmentsService } from "./services/execution-environments-
 import { ExecutionJobsService } from "./services/execution-jobs-service.js";
 import { ExecutionWorkerService } from "./services/execution-worker-service.js";
 import { GitGatewayService } from "./services/git-gateway.js";
-import { ModelGatewayService } from "./services/model-gateway.js";
+import {
+  dbModelGatewayStore,
+  ModelGatewayService,
+} from "./services/model-gateway.js";
 import { executeHostCall } from "./services/host-calls.js";
 import { MembershipsService } from "./services/memberships-service.js";
 import { PluginsService } from "./services/plugins-service.js";
@@ -844,7 +847,7 @@ export class CatamorphicCore {
         connections: this.connections,
       });
       this.modelGateway = new ModelGatewayService({
-        db: this.db,
+        store: dbModelGatewayStore(this.db),
         grants: this.connectionGrants,
         allocations: this.executionAllocations,
         broker: this.connectionBroker,

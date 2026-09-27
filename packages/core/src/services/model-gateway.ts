@@ -284,10 +284,112 @@ function forwardedResponseHeader(name: string): boolean {
   );
 }
 
+/** One model call's usage as the gateway records it. */
+export interface ModelUsageRecord {
+  tenantId: string;
+  projectId: string;
+  sessionId: string | null;
+  turnId: string | null;
+  allocationId: string;
+  connectionId: string;
+  alias: string;
+  endpoint: string;
+  usage: ModelCallUsage;
+}
+
+/** What the model gateway reads and writes beside grants (ADR 0180). */
+export interface ModelGatewayStore {
+  /** A session's owner, whether it is open, and the turn running now. */
+  session(sessionId: string): Promise<
+    | { ownerId: string; active: boolean; runningTurnId: string | undefined }
+    | undefined
+  >;
+  recordUsage(record: ModelUsageRecord): Promise<void>;
+  /** Token totals of a session's calls, or of one of its turns. */
+  usage(args: {
+    sessionId: string;
+    turnId?: string;
+  }): Promise<AgentTurnUsage | undefined>;
+}
+
+/** The gateway's store in the host's database (`model_usage`). */
+export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
+  return {
+    session: async (sessionId) => {
+      const row = await db
+        .selectFrom("agent_sessions")
+        .select(["external_user_id", "status"])
+        .where("id", "=", sessionId)
+        .executeTakeFirst();
+      if (!row) return undefined;
+      const turn = await db
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("session_id", "=", sessionId)
+        .where("status", "=", "running")
+        .orderBy("started_at", "desc")
+        .executeTakeFirst();
+      return {
+        ownerId: row.external_user_id,
+        active: row.status === "active",
+        runningTurnId: turn?.id,
+      };
+    },
+    recordUsage: async (record) => {
+      await db
+        .insertInto("model_usage")
+        .values({
+          tenant_id: record.tenantId,
+          project_id: record.projectId,
+          agent_session_id: record.sessionId,
+          turn_id: record.turnId,
+          allocation_id: record.allocationId,
+          connection_id: record.connectionId,
+          alias: record.alias,
+          endpoint: record.endpoint,
+          model: record.usage.model ?? null,
+          input_tokens: record.usage.inputTokens,
+          cached_input_tokens: record.usage.cachedInputTokens,
+          cache_creation_tokens: record.usage.cacheCreationTokens,
+          output_tokens: record.usage.outputTokens,
+          reasoning_tokens: record.usage.reasoningTokens,
+        })
+        .execute();
+    },
+    usage: async (args) => {
+      let query = db
+        .selectFrom("model_usage")
+        .where("agent_session_id", "=", args.sessionId);
+      if (args.turnId) query = query.where("turn_id", "=", args.turnId);
+      const row = await query
+        .select([
+          sql<string>`count(*)`.as("calls"),
+          sql<string>`coalesce(sum(input_tokens), 0)`.as("input"),
+          sql<string>`coalesce(sum(cached_input_tokens), 0)`.as("cached"),
+          sql<string>`coalesce(sum(cache_creation_tokens), 0)`.as("creation"),
+          sql<string>`coalesce(sum(output_tokens), 0)`.as("output"),
+          sql<string>`coalesce(sum(reasoning_tokens), 0)`.as("reasoning"),
+          sql<string | null>`max(model)`.as("model"),
+        ])
+        .executeTakeFirst();
+      if (!row || Number(row.calls) === 0) return undefined;
+      return {
+        ...(row.model ? { model: row.model } : {}),
+        inputTokens: Number(row.input),
+        cachedInputTokens: Number(row.cached),
+        cacheCreationTokens: Number(row.creation),
+        outputTokens: Number(row.output),
+        reasoningTokens: Number(row.reasoning),
+      };
+    },
+  };
+}
+
 interface AuthorizedModelRequest {
   identity: Identity;
   projectId: string;
   sessionId: string | null;
+  turnId: string | undefined;
   allocationId: string;
   api: ModelApi;
   providerKind: string;
@@ -306,11 +408,11 @@ export class ModelGatewayService {
 
   constructor(
     private readonly deps: {
-      db: Kysely<DB>;
-      grants: ConnectionCapabilityGrantsService;
-      allocations: ExecutionAllocationsService;
-      broker: ConnectionBroker;
-      providers: ConnectionProviderRegistry;
+      store: ModelGatewayStore;
+      grants: Pick<ConnectionCapabilityGrantsService, "validate">;
+      allocations: Pick<ExecutionAllocationsService, "get">;
+      broker: Pick<ConnectionBroker, "modelAccess">;
+      providers: Pick<ConnectionProviderRegistry, "get">;
       fetch?: typeof fetch;
     },
   ) {
@@ -341,34 +443,11 @@ export class ModelGatewayService {
   }
 
   /** Token totals of a session's model calls, or of one of its turns. */
-  async sessionUsage(args: {
+  sessionUsage(args: {
     sessionId: string;
     turnId?: string;
   }): Promise<AgentTurnUsage | undefined> {
-    let query = this.deps.db
-      .selectFrom("model_usage")
-      .where("agent_session_id", "=", args.sessionId);
-    if (args.turnId) query = query.where("turn_id", "=", args.turnId);
-    const row = await query
-      .select([
-        sql<string>`count(*)`.as("calls"),
-        sql<string>`coalesce(sum(input_tokens), 0)`.as("input"),
-        sql<string>`coalesce(sum(cached_input_tokens), 0)`.as("cached"),
-        sql<string>`coalesce(sum(cache_creation_tokens), 0)`.as("creation"),
-        sql<string>`coalesce(sum(output_tokens), 0)`.as("output"),
-        sql<string>`coalesce(sum(reasoning_tokens), 0)`.as("reasoning"),
-        sql<string | null>`max(model)`.as("model"),
-      ])
-      .executeTakeFirst();
-    if (!row || Number(row.calls) === 0) return undefined;
-    return {
-      ...(row.model ? { model: row.model } : {}),
-      inputTokens: Number(row.input),
-      cachedInputTokens: Number(row.cached),
-      cacheCreationTokens: Number(row.creation),
-      outputTokens: Number(row.output),
-      reasoningTokens: Number(row.reasoning),
-    };
+    return this.deps.store.usage(args);
   }
 
   private async handleUninstrumented(
@@ -406,9 +485,7 @@ export class ModelGatewayService {
         `'${request.alias}' serves only ${authorized.policy?.allow?.join(", ")}; '${model}' is not allowed`,
       );
     const stream = body?.stream === true;
-    const turnId = authorized.sessionId
-      ? await this.runningTurn(authorized.sessionId)
-      : undefined;
+    const turnId = authorized.turnId;
     const budget = authorized.policy?.maxOutputTokensPerTurn;
     if (budget && authorized.sessionId && turnId && action !== "count_tokens") {
       const used = await this.sessionUsage({
@@ -488,9 +565,12 @@ export class ModelGatewayService {
       };
     }
     const settle = async (usage: ModelCallUsage) => {
-      await this.recordUsage({
-        authorized,
-        turnId,
+      await this.deps.store.recordUsage({
+        tenantId: authorized.identity.tenantId,
+        projectId: authorized.projectId,
+        sessionId: authorized.sessionId,
+        turnId: turnId ?? null,
+        allocationId: authorized.allocationId,
         connectionId: access.binding.connectionId,
         alias: request.alias,
         endpoint: action,
@@ -534,14 +614,10 @@ export class ModelGatewayService {
         "authentication_error",
         "This session's grant has expired or was revoked",
       );
-    const owner = grant.agentSessionId
-      ? await this.deps.db
-          .selectFrom("agent_sessions")
-          .select(["external_user_id", "status"])
-          .where("id", "=", grant.agentSessionId)
-          .executeTakeFirst()
+    const session = grant.agentSessionId
+      ? await this.deps.store.session(grant.agentSessionId)
       : undefined;
-    if (grant.agentSessionId && owner?.status !== "active")
+    if (grant.agentSessionId && !session?.active)
       throw new ModelGatewayError(
         401,
         "authentication_error",
@@ -550,7 +626,7 @@ export class ModelGatewayService {
     const identity: Identity = {
       tenantId: grant.tenantId,
       externalUserId:
-        owner?.external_user_id ?? `connection-grant:${grant.allocationId}`,
+        session?.ownerId ?? `connection-grant:${grant.allocationId}`,
     };
     const allocation = await this.deps.allocations.get({
       identity,
@@ -576,6 +652,7 @@ export class ModelGatewayService {
       identity,
       projectId: allocation.projectId,
       sessionId: grant.agentSessionId,
+      turnId: session?.runningTurnId,
       allocationId: allocation.id,
       api: endpoint.api,
       providerKind: binding.providerKind,
@@ -583,45 +660,6 @@ export class ModelGatewayService {
     };
   }
 
-  private async runningTurn(sessionId: string): Promise<string | undefined> {
-    const row = await this.deps.db
-      .selectFrom("agent_turns")
-      .select("id")
-      .where("session_id", "=", sessionId)
-      .where("status", "=", "running")
-      .orderBy("started_at", "desc")
-      .executeTakeFirst();
-    return row?.id;
-  }
-
-  private async recordUsage(args: {
-    authorized: AuthorizedModelRequest;
-    turnId: string | undefined;
-    connectionId: string;
-    alias: string;
-    endpoint: string;
-    usage: ModelCallUsage;
-  }): Promise<void> {
-    await this.deps.db
-      .insertInto("model_usage")
-      .values({
-        tenant_id: args.authorized.identity.tenantId,
-        project_id: args.authorized.projectId,
-        agent_session_id: args.authorized.sessionId,
-        turn_id: args.turnId ?? null,
-        allocation_id: args.authorized.allocationId,
-        connection_id: args.connectionId,
-        alias: args.alias,
-        endpoint: args.endpoint,
-        model: args.usage.model ?? null,
-        input_tokens: args.usage.inputTokens,
-        cached_input_tokens: args.usage.cachedInputTokens,
-        cache_creation_tokens: args.usage.cacheCreationTokens,
-        output_tokens: args.usage.outputTokens,
-        reasoning_tokens: args.usage.reasoningTokens,
-      })
-      .execute();
-  }
 }
 
 /**

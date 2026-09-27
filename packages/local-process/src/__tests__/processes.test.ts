@@ -135,6 +135,43 @@ describe("LocalProcessSandboxProvider background processes (ADR 0174)", () => {
     await provider.destroySandbox(other.id);
   }, 20_000);
 
+  it("feeds standard input to a process that asked for it (ADR 0180)", async () => {
+    const handle = await provider.createSandbox({});
+    const processes = provider.processes;
+    const started = await processes.startProcess({
+      sandboxId: handle.providerId,
+      command: "cat",
+      stdin: true,
+    });
+    await processes.writeProcessInput({
+      sandboxId: handle.providerId,
+      processId: started.processId,
+      data: "through stdin\n",
+      end: true,
+    });
+    const done = await followProcess({
+      processes,
+      sandboxId: handle.providerId,
+      processId: started.processId,
+      cursor: 0,
+      timeoutMs: 10_000,
+    });
+    expect(done).toMatchObject({ status: "exited", exitCode: 0 });
+    expect(done.output).toBe("through stdin\n");
+    const closed = await processes.startProcess({
+      sandboxId: handle.providerId,
+      command: "cat",
+    });
+    await expect(
+      processes.writeProcessInput({
+        sandboxId: handle.providerId,
+        processId: closed.processId,
+        data: "x",
+      }),
+    ).rejects.toThrow("without input");
+    await provider.destroySandbox(handle.providerId);
+  });
+
   it("dies with its sandbox", async () => {
     const sandbox = await provider.createSandbox({});
     const started = await provider.processes.startProcess({

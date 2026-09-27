@@ -399,6 +399,8 @@ export function shellSandboxProcesses(args: {
             'mkfifo "$D/stdin.pipe"',
             '(exec tail -c +1 -f "$D/input" > "$D/stdin.pipe") &',
             'printf %s "$!" > "$D/stdin.pid"',
+            // Its end is expected: no job report in the output.
+            "disown",
           ]
         : [];
       const runner = [
