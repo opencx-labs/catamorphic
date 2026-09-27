@@ -67,7 +67,7 @@ const EnvironmentConnectionBindingSchema = z
           .optional(),
       })
       .optional(),
-    /** Models through the gateway (ADR 0180): allowed ids, turn budget. */
+    /** Models through the gateway (ADR 0180): allowed model ids. */
     model: z
       .strictObject({
         allow: z
@@ -80,7 +80,6 @@ const EnvironmentConnectionBindingSchema = z
           )
           .min(1)
           .optional(),
-        maxOutputTokensPerTurn: z.number().int().positive().optional(),
       })
       .optional(),
   })

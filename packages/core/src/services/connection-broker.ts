@@ -525,35 +525,30 @@ export class ConnectionBroker {
   }
 
   /**
-   * The upstream endpoint and key headers for one model call through the
-   * gateway (ADR 0180). The binding must hold `model`. The call passes the
-   * guards as connection kind `model` (action = the endpoint, input = the
-   * provider, model and limits, never the prompt), and the returned
-   * `audit` records how it ended. The headers serve this one request and
-   * never leave the control plane.
+   * The upstream endpoint and key headers of a model alias (ADR 0180). The
+   * binding must hold `model`. The gateway keeps the result briefly per
+   * grant and connection revision, so a call does not decrypt the key
+   * again; the headers never leave the control plane.
    */
-  async modelAccess(args: {
+  async modelEndpoint(args: {
     identity: Identity;
     allocationId: string;
     alias: string;
-    action: string;
-    input: JsonObject;
     agentSessionId?: string;
   }): Promise<{
     endpoint: ConnectionModelEndpoint;
     headers: Record<string, string>;
     binding: ResolvedConnectionBinding;
-    audit: (outcome: "allowed" | "error", metadata?: Json) => Promise<void>;
+    projectId: string;
   }> {
     return withSpan(
       {
         tracer,
-        name: "connection.model",
+        name: "connection.model.resolve",
         attributes: {
           "catamorphic.tenant.id": args.identity.tenantId,
           "catamorphic.allocation.id": args.allocationId,
           "catamorphic.connection.alias": args.alias,
-          "catamorphic.connection.action": args.action,
         },
       },
       async () => {
@@ -565,51 +560,24 @@ export class ConnectionBroker {
             `Connection '${args.alias}' is not a model API`,
           );
         }
-        const record = (
-          outcome: "allowed" | "denied" | "error",
-          metadata?: Json,
-        ) =>
-          this.connections.audit({
+        if (!binding.capabilities.includes(MODEL_CAPABILITY)) {
+          await this.connections.audit({
             identity: args.identity,
             projectId: allocation.projectId,
             connectionId: binding.connectionId,
             allocationId: allocation.id,
             eventType: "connection.model",
-            outcome,
-            action: args.action,
+            outcome: "denied",
             metadata: {
               ...(args.agentSessionId
                 ? { sessionId: args.agentSessionId }
                 : {}),
-              input: args.input,
-              ...(metadata === undefined ? {} : jsonObject(metadata)),
+              reason: `missing ${MODEL_CAPABILITY}`,
             },
           });
-        if (!binding.capabilities.includes(MODEL_CAPABILITY)) {
-          await record("denied", { reason: `missing ${MODEL_CAPABILITY}` });
           throw new ConnectionActionDeniedError(
             `this session may not call models through '${args.alias}' (it lacks ${MODEL_CAPABILITY})`,
           );
-        }
-        const review = await this.review({
-          identity: args.identity,
-          projectId: allocation.projectId,
-          allocationId: allocation.id,
-          connection: {
-            id: binding.connectionId,
-            kind: MODEL_CAPABILITY,
-            alias: binding.alias,
-          },
-          action: args.action,
-          input: args.input,
-          caller: "agent",
-          ...(args.agentSessionId
-            ? { agentSessionId: args.agentSessionId }
-            : {}),
-        });
-        if (review.verdict === "deny") {
-          await record("denied", review.metadata);
-          throw new ConnectionActionDeniedError(review.reason);
         }
         try {
           await this.connections.refreshIfNeeded({
@@ -625,14 +593,9 @@ export class ConnectionBroker {
             endpoint,
             headers,
             binding,
-            audit: (outcome, metadata) =>
-              record(outcome, {
-                ...jsonObject(review.metadata),
-                ...(metadata === undefined ? {} : jsonObject(metadata)),
-              }),
+            projectId: allocation.projectId,
           };
         } catch (cause) {
-          await record("error", review.metadata);
           if (
             cause instanceof ConnectionUnavailableError ||
             isConnectionAuthorizationExpiredError(cause)
@@ -649,6 +612,72 @@ export class ConnectionBroker {
     );
   }
 
+  /** Whether any guard reviews connections of `kind` (ADR 0183). */
+  reviews(kind: string): boolean {
+    return this.gateway.guards.some(
+      (guard) => !guard.kinds || guard.kinds.includes(kind),
+    );
+  }
+
+  /**
+   * Review one model call as connection kind `model` (action = method and
+   * path, input = provider, model and stream, never the prompt) and return
+   * how to audit its end. Without guards this reads nothing.
+   */
+  async reviewModelCall(args: {
+    identity: Identity;
+    projectId: string;
+    allocationId: string;
+    connectionId: string;
+    alias: string;
+    action: string;
+    input: JsonObject;
+    agentSessionId?: string;
+  }): Promise<
+    (outcome: "allowed" | "error", metadata?: Json) => Promise<void>
+  > {
+    const record = (outcome: "allowed" | "denied" | "error", metadata?: Json) =>
+      this.connections.audit({
+        identity: args.identity,
+        projectId: args.projectId,
+        connectionId: args.connectionId,
+        allocationId: args.allocationId,
+        eventType: "connection.model",
+        outcome,
+        action: args.action,
+        metadata: {
+          ...(args.agentSessionId ? { sessionId: args.agentSessionId } : {}),
+          input: args.input,
+          ...(metadata === undefined ? {} : jsonObject(metadata)),
+        },
+      });
+    const review = await this.review({
+      identity: args.identity,
+      projectId: args.projectId,
+      allocationId: args.allocationId,
+      connection: {
+        id: args.connectionId,
+        kind: MODEL_CAPABILITY,
+        alias: args.alias,
+      },
+      action: args.action,
+      input: args.input,
+      caller: "agent",
+      // The gateway's identity is already the session's owner.
+      actor: args.identity.externalUserId,
+      ...(args.agentSessionId ? { agentSessionId: args.agentSessionId } : {}),
+    });
+    if (review.verdict === "deny") {
+      await record("denied", review.metadata);
+      throw new ConnectionActionDeniedError(review.reason);
+    }
+    return (outcome, metadata) =>
+      record(outcome, {
+        ...jsonObject(review.metadata),
+        ...(metadata === undefined ? {} : jsonObject(metadata)),
+      });
+  }
+
   /**
    * Run the gateway's guards. Escalations ask the agent session's person;
    * a workflow cannot wait on a person mid-step, so it is refused.
@@ -662,6 +691,8 @@ export class ConnectionBroker {
     input: Json;
     caller?: "agent" | "workflow";
     agentSessionId?: string;
+    /** The member acting, when the caller already knows it. */
+    actor?: string;
   }): Promise<
     | { verdict: "allow"; metadata: Json }
     | { verdict: "deny"; reason: string; metadata: Json }
@@ -671,6 +702,7 @@ export class ConnectionBroker {
     }
     const caller = args.caller ?? "workflow";
     const actor =
+      args.actor ||
       (args.agentSessionId &&
         (await this.gateway.sessionOwner?.(args.agentSessionId))) ||
       args.identity.externalUserId;

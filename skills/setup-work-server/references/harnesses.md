@@ -41,19 +41,26 @@ custom server adds; harnesses never receive them.
     "image": ".work/images/harness.Dockerfile",
     "connections": {
       "anthropic": { "provider": "anthropic", "principal": "service", "service": "anthropic",
-                     "model": { "allow": ["claude-*"], "maxOutputTokensPerTurn": 200000 } }
+                     "model": { "allow": ["claude-*"] } }
     }
   }
 }
 ```
 
-- `model.allow` lists model id patterns the alias serves; absent, any.
-- `model.maxOutputTokensPerTurn` refuses further calls in an agent turn once
-  that turn's calls produced that many output tokens.
+- `model.allow` lists model id patterns the alias serves; absent, any. With
+  it, every POST must name an allowed model.
+- The gateway passes the provider's API through unchanged: any method and
+  path below the base URL, the body byte for byte, and the answer streamed
+  back. It adds the stored key and drops the caller's key, cookies, and
+  hop-by-hop and forwarding headers.
 - A custom server's guards review every call as connection kind `model`
-  (`kinds: ["model"]`), action `messages`, `count_tokens`, `responses`,
-  `chat.completions`, or `models`, with the provider, model, and output
-  limit, never the prompt.
+  (`kinds: ["model"]`), action the method and path (`POST v1/messages`,
+  `GET v1/models`), with the provider, model, and stream, never the prompt.
+  Restrict endpoints or spending there, for example by summing `model_usage`.
+- Usage is read from each answer as it passes: Anthropic Messages, OpenAI
+  Responses, and Chat Completions when the harness asks for
+  `stream_options.include_usage`. An answer the gateway cannot read counts
+  zero.
 
 ## 3. Put the CLI in the image
 

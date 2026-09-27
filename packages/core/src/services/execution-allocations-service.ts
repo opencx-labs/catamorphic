@@ -71,7 +71,6 @@ const AllocationPolicySchema = z.object({
         model: z
           .object({
             allow: z.array(z.string()).optional(),
-            maxOutputTokensPerTurn: z.number().optional(),
           })
           .optional(),
       }),

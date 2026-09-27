@@ -408,8 +408,11 @@ export {
 } from "./services/memberships-service.js";
 export {
   dbModelGatewayStore,
+  type LiveModelGrant,
   MODEL_REQUEST_MAX_BYTES,
   type ModelCallUsage,
+  type ModelGatewayAdmission,
+  type ModelGatewayAdmitResult,
   ModelGatewayError,
   type ModelGatewayRequest,
   type ModelGatewayResponse,
@@ -417,7 +420,7 @@ export {
   type ModelGatewayStore,
   type ModelUsageRecord,
   modelAllowed,
-  modelEndpointAction,
+  modelRequestPath,
   SseUsageReader,
   usageFromJson,
 } from "./services/model-gateway.js";

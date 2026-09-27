@@ -103,7 +103,8 @@ not declare it here.
   entry here.
 - `model`: a model API (`"api": "anthropic"` or `"openai"`, with a
   `baseUrl` for OpenRouter or a self-hosted server) that Claude Code and
-  Codex reach from sandboxes through `/api/gateway/model/<alias>/…`.
+  Codex reach from sandboxes through `/api/gateway/model/<alias>/…`, which
+  passes any path below the base URL through with the stored key.
   `anthropic` and `openai` are built in; see
   [Harnesses on the server](harnesses.md).
 

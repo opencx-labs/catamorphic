@@ -398,25 +398,38 @@ describe("Claude Code on a worker, with its model through the gateway", () => {
       inputTokens: 50,
       outputTokens: 22,
     });
-    const usage = await server.catamorphic.core.db
-      .selectFrom("model_usage")
-      .selectAll()
-      .where("agent_session_id", "=", sessionId)
-      .execute();
+    // Usage rows land after each answer ends, off its critical path.
+    const usageRows = () =>
+      server.catamorphic.core.db
+        .selectFrom("model_usage")
+        .selectAll()
+        .where("agent_session_id", "=", sessionId)
+        .execute();
+    await waitFor(
+      async () => (await usageRows()).length === 2,
+      "the gateway's usage rows",
+    );
+    const usage = await usageRows();
     expect(usage).toHaveLength(2);
     expect(usage.every((row) => Number(row.output_tokens) === 11)).toBe(true);
     expect(usage.every((row) => row.turn_id !== null)).toBe(true);
     expect(usage[0]?.model).toBe("claude-test");
-    const audit = await server.catamorphic.core.db
-      .selectFrom("connection_audit_events")
-      .select(["action", "outcome", "metadata"])
-      .where("event_type", "=", "connection.model")
-      .execute();
-    expect(
-      audit.filter(
-        (row) => row.action === "messages" && row.outcome === "allowed",
-      ),
-    ).toHaveLength(2);
+    const audits = () =>
+      server.catamorphic.core.db
+        .selectFrom("connection_audit_events")
+        .select(["action", "outcome", "metadata"])
+        .where("event_type", "=", "connection.model")
+        .execute();
+    const allowed = (rows: Awaited<ReturnType<typeof audits>>) =>
+      rows.filter(
+        (row) => row.action === "POST v1/messages" && row.outcome === "allowed",
+      );
+    await waitFor(
+      async () => allowed(await audits()).length === 2,
+      "the gateway's audits",
+    );
+    const audit = await audits();
+    expect(allowed(audit)).toHaveLength(2);
     // Audits say which model was called, never what it was asked.
     expect(JSON.stringify(audit)).not.toContain("edited by claude code");
   }, 120_000);
@@ -457,11 +470,25 @@ describe("Claude Code on a worker, with its model through the gateway", () => {
     expect(await forbidden.text()).toContain(
       "claude-forbidden is not for agents",
     );
-    // Between turns the grant spends nothing (ADR 0180).
-    const idle = await gatewayCall(grant, "claude-test");
-    expect(idle.status).toBe(403);
-    expect(await idle.text()).toContain("no running turn");
     expect(upstreamKeys).toHaveLength(calls);
+    // Between turns the grant still reaches the model: spending rules are
+    // guards (ADR 0180), and the call is counted without a turn.
+    const idle = await gatewayCall(grant, "claude-test");
+    expect(idle.status).toBe(200);
+    await idle.text();
+    expect(upstreamKeys).toEqual([...upstreamKeys.slice(0, calls), REAL_KEY]);
+    await waitFor(
+      async () =>
+        (
+          await server.catamorphic.core.db
+            .selectFrom("model_usage")
+            .select("id")
+            .where("agent_session_id", "=", sessionId)
+            .where("turn_id", "is", null)
+            .execute()
+        ).length === 1,
+      "the between-turn call's usage",
+    );
   }, 60_000);
 
   it("stops honoring the grant once the chat is closed", async () => {
