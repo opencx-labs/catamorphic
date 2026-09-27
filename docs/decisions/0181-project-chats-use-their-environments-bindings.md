@@ -48,11 +48,13 @@ and `connections` in a second reviewed file that drifts from them, which ADR
 publishing trigger function in place). A closed chat keeps its key, so its
 closing events carry it too.
 
-**`where` gains `{ prefix }`.** A leaf `{ prefix: "slack:" }` matches a string
-that starts with it; anything else (a number, null, absent) does not match.
-`Where<T>` offers it only where the payload holds a string. The Slack reply
-recipe now binds `session.turn-changed` with
-`where: { payload: { session: { key: { prefix: "slack:" } } } }`.
+**`where` gains `{ $prefix }`.** A leaf `{ $prefix: "slack:" }` matches a
+string that starts with it; anything else (a number, null, absent) does not
+match. `Where<T>` offers it only where the payload holds a string. The Slack
+reply recipe now binds `session.turn-changed` with
+`where: { payload: { session: { key: { $prefix: "slack:" } } } }`. Operators
+are `$`-prefixed keys (ADR 0171), so payload fields named `prefix` or
+`exists` still match by value.
 
 **The review automation is project code.** The host skill
 `reviewing-pull-requests` carries the complete automation (GitHub trigger

@@ -84,5 +84,11 @@ export {
   PROJECT_TOOLING_PACKAGE,
   SANDBOX_STRIPPED_PACKAGES,
 } from "./types.js";
+export {
+  type WebhookSettingsIssue,
+  webhookSettingsConflicts,
+  webhookSettingsIssues,
+  webhookSettingsKey,
+} from "./webhook-settings.js";
 
 export const PARSER_PACKAGE_VERSION = "0.0.2";

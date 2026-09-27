@@ -581,6 +581,7 @@ export {
 export { parseSnapshot } from "./services/sandbox-sync.js";
 export { SchedulesService } from "./services/schedules-service.js";
 export {
+  SecretDeclarationConflictError,
   type SecretStatus,
   SecretsService,
 } from "./services/secrets-service.js";
@@ -745,6 +746,8 @@ export {
   verifyWebhookRequest,
   WEBHOOK_DEFAULT_MAX_BYTES,
   WEBHOOK_MAX_BYTES_LIMIT,
+  WEBHOOK_MAX_SIGNATURE_HEADER,
+  WEBHOOK_MIN_KEY_BYTES,
   WEBHOOK_NAME_PATTERN,
   type WebhookCheck,
   type WebhookConfig,

@@ -49,7 +49,7 @@ project. Example: trigger("session.turn-changed", { sessionId: "actual-id",
 statuses: ["completed", "failed"] }). Never guess an id. Keyed chats carry their
 key in payload.session.key (null otherwise), so where selects a family of chats
 without starting runs for the rest: where: { payload: { session: { key: {
-prefix: "pr-" } } } }.
+$prefix: "pr-" } } } }.
 
 A watcher may bind the project's own trigger kinds too, such as the GitHub
 library in writing-workflows. A host without a public webhook URL (the desktop)

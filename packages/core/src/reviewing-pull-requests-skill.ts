@@ -227,7 +227,7 @@ export const answerReviewComments = defineWorkflow(({ defineBoundary }) => ({
   triggers: [
     trigger("github.issue_comment", {
       where: {
-        payload: { body: { issue: { state: "open", pull_request: { exists: true } }, comment: { user: { type: "User" } } } },
+        payload: { body: { issue: { state: "open", pull_request: { $exists: true } }, comment: { user: { type: "User" } } } },
       },
     }),
     trigger("github.pull_request_review_comment", {

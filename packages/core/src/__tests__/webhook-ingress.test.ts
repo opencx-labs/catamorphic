@@ -150,7 +150,8 @@ describe("webhook verification schemes", () => {
       secret: "WEBHOOK_SECRET",
       header: "webhook-signature",
       encoding: "base64",
-      pattern: "v1,([A-Za-z0-9+/=]+)",
+      separator: " ",
+      prefix: "v1,",
       content: "{header:webhook-id}.{timestamp}.{body}",
       timestamp: { header: "webhook-timestamp" },
       secretEncoding: "base64",
@@ -193,20 +194,21 @@ describe("webhook verification schemes", () => {
       scheme: "hmac",
       secret: "STRIPE_WEBHOOK_SECRET",
       header: "stripe-signature",
-      pattern: "v1=([0-9a-f]+)",
+      separator: ",",
+      prefix: "v1=",
       content: "{timestamp}.{body}",
-      timestamp: { header: "stripe-signature", pattern: "t=(\\d+)" },
+      timestamp: { header: "stripe-signature", separator: ",", prefix: "t=" },
     });
     const body = '{"id":"evt_1","type":"payment_intent.succeeded"}';
     const t = "1700000000";
     const v1 = crypto
-      .createHmac("sha256", "whsec_stripe")
+      .createHmac("sha256", "whsec_stripe_signing_key")
       .update(`${t}.${body}`)
       .digest("hex");
     expect(
       verify({
         verify: stripe,
-        secret: "whsec_stripe",
+        secret: "whsec_stripe_signing_key",
         request: request({
           headers: { "stripe-signature": `t=${t},v1=${v1},v0=deadbeef` },
           body,
@@ -220,7 +222,7 @@ describe("webhook verification schemes", () => {
   it("Shopify: base64 digest of the body", () => {
     const body = '{"id":820982911946154508}';
     const digest = crypto
-      .createHmac("sha256", "shpss_secret")
+      .createHmac("sha256", "shpss_secret_for_tests")
       .update(body)
       .digest("base64");
     expect(
@@ -231,7 +233,7 @@ describe("webhook verification schemes", () => {
           header: "x-shopify-hmac-sha256",
           encoding: "base64",
         }),
-        secret: "shpss_secret",
+        secret: "shpss_secret_for_tests",
         request: request({
           headers: { "x-shopify-hmac-sha256": digest },
           body,
@@ -244,7 +246,7 @@ describe("webhook verification schemes", () => {
   it("Linear: hex digest without a prefix, upper-case accepted", () => {
     const body = '{"action":"create","type":"Issue"}';
     const digest = crypto
-      .createHmac("sha256", "lin_wh_secret")
+      .createHmac("sha256", "lin_wh_secret_for_tests")
       .update(body)
       .digest("hex")
       .toUpperCase();
@@ -255,7 +257,7 @@ describe("webhook verification schemes", () => {
           secret: "LINEAR_SECRET",
           header: "linear-signature",
         }),
-        secret: "lin_wh_secret",
+        secret: "lin_wh_secret_for_tests",
         request: request({ headers: { "linear-signature": digest }, body }),
       }),
     ).toEqual({ ok: true });
@@ -321,10 +323,23 @@ describe("webhook verification schemes", () => {
           scheme: "hmac",
           secret: "S",
           header: "h",
-          pattern: "v1=[a-f]+",
+          timestamp: { header: "t" },
         },
       }),
-    ).toEqual(["Use exactly one capture group"]);
+    ).toEqual([
+      "A timestamp only rejects replays when the signed content includes {timestamp}",
+    ]);
+    // Composite headers are split, never matched by a project regex.
+    expect(
+      problems({
+        verify: { scheme: "hmac", secret: "S", header: "h", pattern: "(a+)+$" },
+      }),
+    ).toEqual([expect.stringContaining("pattern")]);
+    expect(
+      problems({
+        verify: { scheme: "hmac", secret: "S", header: "h", separator: "" },
+      }),
+    ).toHaveLength(1);
     expect(problems({ verify: { scheme: "token", secret: "S" } })).toEqual([
       "Name exactly one of header or query",
     ]);
@@ -342,6 +357,90 @@ describe("webhook verification schemes", () => {
       "Name a value under body, query or headers",
     ]);
     expect(problems({ deliveryId: "body.event_id" })).toEqual([]);
+  });
+
+  it("rejects an HMAC key that is empty or short", () => {
+    const standard = scheme({
+      scheme: "hmac",
+      secret: "WEBHOOK_SECRET",
+      header: "webhook-signature",
+      secretEncoding: "base64",
+      secretPrefix: "whsec_",
+    });
+    // An empty key signs anything an attacker computes with the same key.
+    const forged = crypto
+      .createHmac("sha256", Buffer.alloc(0))
+      .update("{}")
+      .digest("hex");
+    for (const secret of ["whsec_", "whsec_====", "whsec_c2hvcnQ="])
+      expect(
+        verify({
+          verify: standard,
+          secret,
+          request: request({
+            headers: { "webhook-signature": forged },
+            body: "{}",
+          }),
+        }),
+      ).toEqual({
+        ok: false,
+        reason: "The signing secret must be at least 16 bytes",
+      });
+    expect(
+      verify({
+        verify: scheme({ scheme: "hmac", secret: "S", header: "sig" }),
+        secret: "short",
+        request: request({ headers: { sig: "00" }, body: "{}" }),
+      }),
+    ).toEqual({
+      ok: false,
+      reason: "The signing secret must be at least 16 bytes",
+    });
+  });
+
+  it("reads composite headers in linear time and bounds their length", () => {
+    const stripe = scheme({
+      scheme: "hmac",
+      secret: "STRIPE_WEBHOOK_SECRET",
+      header: "stripe-signature",
+      separator: ",",
+      prefix: "v1=",
+      content: "{timestamp}.{body}",
+      timestamp: { header: "stripe-signature", separator: ",", prefix: "t=" },
+    });
+    const now = new Date(1_700_000_000_000);
+    const hostile = `t=1700000000,${"v1=a,".repeat(800)}`;
+    const started = performance.now();
+    expect(
+      verify({
+        verify: stripe,
+        secret: "whsec_stripe_signing_key",
+        request: request({ headers: { "stripe-signature": hostile } }),
+        now,
+      }),
+    ).toEqual({ ok: false, reason: "Signature does not match" });
+    expect(performance.now() - started).toBeLessThan(250);
+    expect(
+      verify({
+        verify: stripe,
+        secret: "whsec_stripe_signing_key",
+        request: request({
+          headers: { "stripe-signature": `t=1700000000,${"a".repeat(16_000)}` },
+        }),
+        now,
+      }),
+    ).toEqual({ ok: false, reason: "Signature header too long" });
+    // A timestamp is whole seconds, nothing else.
+    expect(
+      verify({
+        verify: stripe,
+        secret: "whsec_stripe_signing_key",
+        request: request({
+          headers: { "stripe-signature": "t=1.7e9,v1=00" },
+        }),
+        now,
+      }),
+    ).toEqual({ ok: false, reason: "Missing timestamp" });
   });
 
   it("reads a sender's event id at the declared delivery id path", () => {
@@ -388,7 +487,7 @@ describe("webhook handshakes", () => {
           echo: "query.hub.challenge",
         },
         {
-          when: { query: { validationToken: { exists: true } } },
+          when: { query: { validationToken: { $exists: true } } },
           echo: "query.validationToken",
         },
       ],

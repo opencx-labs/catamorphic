@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
-import { matchesWhere, whereErrors } from "@catamorphic/parser";
+import {
+  matchesWhere,
+  webhookSettingsIssues,
+  webhookSettingsKey,
+} from "@catamorphic/parser";
 import { z } from "zod";
 
 /**
@@ -19,28 +23,29 @@ export const WEBHOOK_DEFAULT_MAX_BYTES = 1024 * 1024;
 /** Largest body cap an endpoint may declare; hosts may set a lower maximum. */
 export const WEBHOOK_MAX_BYTES_LIMIT = 64 * 1024 * 1024;
 
+/** Longest signature or timestamp header an endpoint reads. */
+export const WEBHOOK_MAX_SIGNATURE_HEADER = 4096;
+
+/** Shortest HMAC key accepted: a shorter one is guessable. */
+export const WEBHOOK_MIN_KEY_BYTES = 16;
+
 const secretName = z
   .string()
   .regex(/^[A-Z][A-Z0-9_]*$/, "Use the project secret's name");
 const headerName = z.string().min(1).max(100);
 const queryName = z.string().min(1).max(100);
-const pattern = z
-  .string()
-  .min(1)
-  .max(200)
-  .refine(compiles, "Use a valid regular expression")
-  .refine(
-    (value) =>
-      compiles(value) && new RegExp(`${value}|`).exec("")?.length === 2,
-    "Use exactly one capture group",
-  );
+/** Text that separates the parts of a composite header, e.g. "," or " ". */
+const separator = z.string().min(1).max(5);
 
 /**
  * An HMAC over a signed-content template. The signature header may carry a
- * prefix (`sha256=`) or several signatures a `pattern` extracts (Stripe's
- * `t=…,v1=…`, Standard Webhooks' `v1,…`); `content` builds the signed bytes
- * from `{body}`, `{timestamp}` and `{header:<name>}` (default `{body}`);
- * `timestamp` rejects deliveries outside a tolerance window.
+ * prefix (`sha256=`), or several parts split by a `separator` of which those
+ * starting with `prefix` are signatures (Stripe's `t=…,v1=…`, Standard
+ * Webhooks' `v1,… v1,…`). Headers are read by plain splitting, never by a
+ * project-authored regular expression, so reading one is linear in its
+ * length. `content` builds the signed bytes from `{body}`, `{timestamp}` and
+ * `{header:<name>}` (default `{body}`); `timestamp` rejects deliveries
+ * outside a tolerance window and must be signed.
  */
 export const webhookHmacVerify = z.strictObject({
   scheme: z.literal("hmac"),
@@ -52,15 +57,17 @@ export const webhookHmacVerify = z.strictObject({
   /** Text before the signature, e.g. "sha256=" or "v0=". */
   prefix: z.string().max(40).optional(),
   encoding: z.enum(["hex", "base64"]).optional(),
-  /** Extracts each signature (capture group 1) from a composite header. */
-  pattern: pattern.optional(),
+  /** Splits a composite header into parts; signatures start with `prefix`. */
+  separator: separator.optional(),
   /** The signed bytes: `{body}`, `{timestamp}`, `{header:<name>}`. */
   content: z.string().min(1).max(500).optional(),
   timestamp: z
     .strictObject({
       header: headerName,
-      /** Extracts the Unix seconds (capture group 1) from the header. */
-      pattern: pattern.optional(),
+      /** Text before the Unix seconds, e.g. "t=". */
+      prefix: z.string().max(40).optional(),
+      /** Splits a composite header; the first part with `prefix` wins. */
+      separator: separator.optional(),
       /** Seconds a delivery may be early or late. Defaults to 300. */
       toleranceSeconds: z.number().int().positive().max(86_400).optional(),
     })
@@ -137,39 +144,8 @@ export const webhookConfig = z
       .optional(),
   })
   .superRefine((config, context) => {
-    const verify = config.verify;
-    if (verify?.scheme === "token") oneLocation(verify, context, ["verify"]);
-    if (verify?.scheme === "hmac") {
-      const placeholders = verify.content?.match(/\{[^}]*\}/g) ?? [];
-      for (const placeholder of placeholders) {
-        if (
-          placeholder !== "{body}" &&
-          placeholder !== "{timestamp}" &&
-          !/^\{header:[A-Za-z0-9-]+\}$/.test(placeholder)
-        )
-          context.addIssue({
-            code: "custom",
-            path: ["verify", "content"],
-            message: `Unknown placeholder ${placeholder}; use {body}, {timestamp} or {header:<name>}`,
-          });
-        if (placeholder === "{timestamp}" && !verify.timestamp)
-          context.addIssue({
-            code: "custom",
-            path: ["verify", "content"],
-            message: "{timestamp} needs a timestamp source",
-          });
-      }
-    }
-    for (const [index, rule] of (config.respond ?? []).entries()) {
-      if (rule.token)
-        oneLocation(rule.token, context, ["respond", index, "token"]);
-      for (const message of whereErrors(rule.when, "when"))
-        context.addIssue({
-          code: "custom",
-          path: ["respond", index, "when"],
-          message,
-        });
-    }
+    for (const issue of webhookSettingsIssues(config))
+      context.addIssue({ code: "custom", ...issue });
   });
 
 export type WebhookConfig = z.output<typeof webhookConfig>;
@@ -198,16 +174,20 @@ export function verifyWebhookRequest(input: {
     return checkWebhookToken({ check: verify, request, secret: input.secret });
   const received = request.headers[verify.header.toLowerCase()];
   if (!received) return { ok: false, reason: "Missing signature" };
+  if (received.length > WEBHOOK_MAX_SIGNATURE_HEADER)
+    return { ok: false, reason: "Signature header too long" };
   const source = verify.timestamp;
-  const raw = source && request.headers[source.header.toLowerCase()];
-  const timestamp =
-    raw && source?.pattern ? new RegExp(source.pattern).exec(raw)?.[1] : raw;
+  let timestamp = "";
   if (source) {
-    const seconds = Number(timestamp);
-    if (!timestamp || !Number.isFinite(seconds))
+    const raw = request.headers[source.header.toLowerCase()] ?? "";
+    if (raw.length > WEBHOOK_MAX_SIGNATURE_HEADER)
+      return { ok: false, reason: "Timestamp header too long" };
+    timestamp =
+      headerParts({ value: raw, ...source }).find((part) => part !== "") ?? "";
+    if (!/^\d{1,12}$/.test(timestamp))
       return { ok: false, reason: "Missing timestamp" };
     if (
-      Math.abs(input.now.getTime() / 1000 - seconds) >
+      Math.abs(input.now.getTime() / 1000 - Number(timestamp)) >
       (source.toleranceSeconds ?? 300)
     )
       return { ok: false, reason: "Timestamp outside the tolerance window" };
@@ -215,7 +195,7 @@ export function verifyWebhookRequest(input: {
   const content = signedContent({
     template: verify.content ?? "{body}",
     request,
-    timestamp: timestamp ?? "",
+    timestamp,
   });
   const secret =
     verify.secretPrefix && input.secret.startsWith(verify.secretPrefix)
@@ -225,29 +205,47 @@ export function verifyWebhookRequest(input: {
     verify.secretEncoding === "base64"
       ? Buffer.from(secret, "base64")
       : Buffer.from(secret, "utf8");
+  // An empty or short key makes every signature forgeable or guessable.
+  if (key.byteLength < WEBHOOK_MIN_KEY_BYTES)
+    return {
+      ok: false,
+      reason: `The signing secret must be at least ${WEBHOOK_MIN_KEY_BYTES} bytes`,
+    };
   const encoding = verify.encoding ?? "hex";
   const expected = crypto
     .createHmac(verify.algorithm ?? "sha256", key)
     .update(content)
     .digest(encoding);
-  const candidates = verify.pattern
-    ? [...received.matchAll(new RegExp(verify.pattern, "g"))].map(
-        (match) => match[1] ?? "",
-      )
-    : [received];
-  const prefix = verify.prefix ?? "";
-  const matched = candidates.some((candidate) => {
-    const trimmed = candidate.trim();
-    if (!trimmed.startsWith(prefix)) return false;
-    const signature = trimmed.slice(prefix.length);
-    return sameSecret(
-      expected,
-      encoding === "hex" ? signature.toLowerCase() : signature,
-    );
-  });
+  const matched = headerParts({ value: received, ...verify }).some(
+    (signature) =>
+      sameSecret(
+        expected,
+        encoding === "hex" ? signature.toLowerCase() : signature,
+      ),
+  );
   return matched
     ? { ok: true }
     : { ok: false, reason: "Signature does not match" };
+}
+
+/**
+ * The values a header carries: split by `separator` when there is one,
+ * trimmed, keeping the parts that start with `prefix`, without it. Linear
+ * in the header's length.
+ */
+function headerParts(input: {
+  value: string;
+  prefix?: string;
+  separator?: string;
+}): string[] {
+  const prefix = input.prefix ?? "";
+  const parts = input.separator
+    ? input.value.split(input.separator)
+    : [input.value];
+  return parts
+    .map((part) => part.trim())
+    .filter((part) => part.startsWith(prefix))
+    .map((part) => part.slice(prefix.length));
 }
 
 /**
@@ -351,28 +349,6 @@ function valueAt(value: unknown, segments: readonly string[]): unknown {
   return undefined;
 }
 
-function oneLocation(
-  check: { header?: string; query?: string },
-  context: z.RefinementCtx,
-  path: (string | number)[],
-): void {
-  if (Boolean(check.header) === Boolean(check.query))
-    context.addIssue({
-      code: "custom",
-      path,
-      message: "Name exactly one of header or query",
-    });
-}
-
-function compiles(value: string): boolean {
-  try {
-    new RegExp(value);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** Constant-time comparison of two secrets or signatures. */
 export function sameSecret(expected: string, received: string): boolean {
   const a = Buffer.from(expected);
@@ -380,25 +356,4 @@ export function sameSecret(expected: string, received: string): boolean {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-/**
- * One endpoint's settings in a stable form: every binding of a webhook
- * name must declare the same verification, handshakes and limit, because
- * one URL cannot answer a sender two ways.
- */
-export function webhookSettingsKey(config: WebhookConfig): string {
-  return canonicalJson(config);
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (typeof value === "object" && value !== null)
-    return `{${Object.keys(value)
-      .filter((key) => Reflect.get(value, key) !== undefined)
-      .sort()
-      .map(
-        (key) =>
-          `${JSON.stringify(key)}:${canonicalJson(Reflect.get(value, key))}`,
-      )
-      .join(",")}}`;
-  return JSON.stringify(value) ?? "null";
-}
+export { webhookSettingsKey };

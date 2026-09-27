@@ -18,7 +18,6 @@ import {
   type WebhookHandshake,
   type WebhookRequest,
   webhookConfig,
-  webhookSettingsKey,
 } from "../webhook-ingress.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ProjectEventsService } from "./project-events-service.js";
@@ -241,6 +240,11 @@ export class WebhooksService {
   }): Promise<WebhookEndpoint[]> {
     if (!hasProjectPermission(input.identity, input.projectId, "webhooks:read"))
       throw new AccessDeniedError();
+    await requireTenantProject(
+      this.db,
+      input.identity.tenantId,
+      input.projectId,
+    );
     const latest = await this.db
       .selectFrom("trigger_definition_scans")
       .select("commit_sha")
@@ -248,6 +252,7 @@ export class WebhooksService {
       .orderBy("scanned_at", "desc")
       .limit(1)
       .executeTakeFirst();
+    const now = this.now();
     const bindings = await this.db
       .selectFrom("trigger_definitions as definition")
       .leftJoin(
@@ -265,7 +270,7 @@ export class WebhooksService {
         "definition.workflow_name as workflowName",
         "definition.commit_sha as commitSha",
         "definition.config as config",
-        sql<boolean>`coalesce(binding.status = 'active' and enablement.status = 'active', false)`.as(
+        sql<boolean>`coalesce(binding.status = 'active' and enablement.status = 'active' and (enablement.expires_at is null or enablement.expires_at > ${now}), false)`.as(
           "active",
         ),
       ])
@@ -285,10 +290,6 @@ export class WebhooksService {
       };
       if (!entry.workflows.includes(binding.workflowName))
         entry.workflows.push(binding.workflowName);
-      if (binding.active) {
-        entry.listening = true;
-        entry.verified ||= Boolean(parseConfig(binding.config)?.verify);
-      }
       byName.set(binding.name, entry);
     }
     const endpoints = [...byName.values()].sort((a, b) =>
@@ -296,6 +297,9 @@ export class WebhooksService {
     );
     for (const endpoint of endpoints) {
       endpoint.workflows.sort();
+      const authority = await this.authority(input.projectId, endpoint.name);
+      endpoint.listening = authority !== undefined;
+      endpoint.verified = Boolean(authority && parseConfig(authority)?.verify);
       const token = await this.ensureToken(input.projectId, endpoint.name);
       endpoint.path = `/hooks/${input.projectId}/${endpoint.name}/${token}`;
     }
@@ -335,17 +339,31 @@ export class WebhooksService {
       !hasProjectPermission(input.identity, input.projectId, "webhooks:write")
     )
       throw new AccessDeniedError();
-    await this.db
+    await requireTenantProject(
+      this.db,
+      input.identity.tenantId,
+      input.projectId,
+    );
+    const rotated = await this.db
       .updateTable("webhook_endpoints")
       .set({ token: newToken() })
       .where("project_id", "=", input.projectId)
       .where("name", "=", input.name)
-      .execute();
-    const endpoint = (await this.list(input)).find(
-      (candidate) => candidate.name === input.name,
+      .returning("token")
+      .executeTakeFirst();
+    if (!rotated) throw new WebhookNotFoundError();
+    // A name registered before any workflow binds it has a URL too.
+    return (
+      (await this.list(input)).find(
+        (candidate) => candidate.name === input.name,
+      ) ?? {
+        name: input.name,
+        path: `/hooks/${input.projectId}/${input.name}/${rotated.token}`,
+        workflows: [],
+        listening: false,
+        verified: false,
+      }
     );
-    if (!endpoint) throw new WebhookNotFoundError();
-    return endpoint;
   }
 
   private async ensureToken(projectId: string, name: string): Promise<string> {
@@ -368,14 +386,31 @@ export class WebhooksService {
   }
 
   /**
-   * The settings every active binding of the name declares. No binding
-   * means nobody listens; bindings that disagree fail closed.
+   * The endpoint settings requests to a name are checked by: those of the
+   * active, unexpired binding from the most recently deployed commit. One
+   * commit's bindings of a name always agree (the deploy scan refuses
+   * otherwise); across commits, as when one of two workflows on a name has
+   * been updated and the other not yet, the newest declaration governs the
+   * URL while every listening workflow still receives its events.
    */
   private async activeConfig(
     projectId: string,
     name: string,
   ): Promise<WebhookConfig> {
-    const rows = await this.db
+    const authority = await this.authority(projectId, name);
+    if (authority === undefined) throw new WebhookNotFoundError();
+    const config = parseConfig(authority);
+    if (!config)
+      throw new WebhookRejectedError("This webhook's settings are invalid");
+    return config;
+  }
+
+  /** The governing binding's stored config, when anything listens. */
+  private async authority(
+    projectId: string,
+    name: string,
+  ): Promise<Json | undefined> {
+    const row = await this.db
       .selectFrom("trigger_definitions as definition")
       .innerJoin(
         "workflow_enablement_triggers as binding",
@@ -387,24 +422,33 @@ export class WebhooksService {
         "enablement.id",
         "binding.enablement_id",
       )
+      .innerJoin("trigger_definition_scans as scan", (join) =>
+        join
+          .onRef("scan.project_id", "=", "definition.project_id")
+          .onRef("scan.commit_sha", "=", "definition.commit_sha"),
+      )
       .select("definition.config as config")
       .where("definition.project_id", "=", projectId)
       .where("definition.trigger_kind", "=", "webhook")
       .where(sql<boolean>`definition.config->>'name' = ${name}`)
       .where("binding.status", "=", "active")
       .where("enablement.status", "=", "active")
-      .execute();
-    if (rows.length === 0) throw new WebhookNotFoundError();
-    const configs = rows.map((row) => parseConfig(row.config));
-    const [first] = configs;
-    if (!first || configs.some((config) => !config))
-      throw new WebhookRejectedError("This webhook's settings are invalid");
-    const key = webhookSettingsKey(first);
-    if (configs.some((config) => config && webhookSettingsKey(config) !== key))
-      throw new WebhookRejectedError(
-        "Workflows on this webhook declare different settings",
-      );
-    return first;
+      .where(({ or, eb }) =>
+        or([
+          eb("enablement.expires_at", "is", null),
+          eb("enablement.expires_at", ">", this.now()),
+        ]),
+      )
+      .orderBy("scan.scanned_at", "desc")
+      .orderBy("definition.commit_sha")
+      .orderBy("definition.id")
+      .limit(1)
+      .executeTakeFirst();
+    return row?.config;
+  }
+
+  private now(): Date {
+    return this.deps.now?.() ?? new Date();
   }
 
   /**
@@ -437,7 +481,7 @@ export class WebhooksService {
             verify,
             request,
             secret,
-            now: this.deps.now?.() ?? new Date(),
+            now: this.now(),
           })
         : { ok: true };
     if (!result.ok) throw new WebhookRejectedError(result.reason);

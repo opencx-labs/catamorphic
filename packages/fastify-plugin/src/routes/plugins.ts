@@ -1,6 +1,7 @@
 import {
   assertProjectPermission,
   PluginNotAttachedError,
+  SecretDeclarationConflictError,
   UndeclaredSecretError,
   UnfulfilledCapabilityError,
 } from "@catamorphic/core";
@@ -186,6 +187,7 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
       } catch (err) {
         if (
           err instanceof UndeclaredSecretError ||
+          err instanceof SecretDeclarationConflictError ||
           err instanceof PluginNotAttachedError
         ) {
           return reply.status(400).send({ error: err.message });

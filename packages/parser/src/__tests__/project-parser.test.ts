@@ -485,6 +485,82 @@ export const secrets = defineSecrets(declarations);
     expect(result.secrets).toEqual([]);
     expect(result.errors[0]?.message).toMatch(/inline object literal/);
   });
+
+  it("reads use as a constant and never lets a webhook secret fall back to run", () => {
+    const uses = (source: string) => {
+      const result = parseProject({
+        ".work/workflows/src/secrets.ts": `
+import { defineSecrets } from "@catamorphic/workflow";
+const WEBHOOK = "webhook";
+const base = { use: "webhook" as const };
+${source}
+`,
+      });
+      return {
+        uses: Object.fromEntries(
+          result.secrets.map((secret) => [secret.name, secret.use]),
+        ),
+        errors: result.errors.map((error) => error.message),
+      };
+    };
+    expect(
+      uses(`export const secrets = defineSecrets({
+  AS_CONST: { use: "webhook" as const },
+  SATISFIES: { use: ("webhook" satisfies string) },
+  TEMPLATE: { use: \`webhook\` },
+  RUN: { use: "run" },
+  PLAIN: {},
+});`),
+    ).toEqual({
+      uses: {
+        AS_CONST: "webhook",
+        SATISFIES: "webhook",
+        TEMPLATE: "webhook",
+        RUN: "run",
+        PLAIN: "run",
+      },
+      errors: [],
+    });
+    const unreadable = uses(`export const secrets = defineSecrets({
+  IDENTIFIER: { use: WEBHOOK },
+  SUBSTITUTION: { use: \`\${WEBHOOK}\` },
+  OTHER: { use: "sometimes" },
+  SPREAD: { ...base },
+  OPTIONS: base,
+});`);
+    expect(unreadable.uses).toEqual({
+      IDENTIFIER: "webhook",
+      SUBSTITUTION: "webhook",
+      OTHER: "webhook",
+      SPREAD: "webhook",
+      OPTIONS: "webhook",
+    });
+    expect(unreadable.errors).toEqual([
+      `defineSecrets: 'IDENTIFIER' use must be the literal "run" or "webhook".`,
+      `defineSecrets: 'SUBSTITUTION' use must be the literal "run" or "webhook".`,
+      `defineSecrets: 'OTHER' use must be the literal "run" or "webhook".`,
+      "defineSecrets: declare 'SPREAD' with an inline object of plain 'key: value' properties.",
+      "defineSecrets: declare 'OPTIONS' with an inline object of plain 'key: value' properties.",
+    ]);
+  });
+
+  it("keeps a secret webhook-only when any declaration of it says so", () => {
+    const result = parseProject({
+      ".work/workflows/src/a.ts": `
+import { defineSecrets } from "@catamorphic/workflow";
+export const a = defineSecrets({ SIGNING: { use: "webhook" } });
+export const b = defineSecrets({ SIGNING: { use: "run" } });
+`,
+      ".work/workflows/src/z.ts": `
+import { defineSecrets } from "@catamorphic/workflow";
+export const c = defineSecrets({ SIGNING: {} });
+`,
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.secrets.map((secret) => [secret.name, secret.use])).toEqual([
+      ["SIGNING", "webhook"],
+    ]);
+  });
 });
 
 describe("app-api contract surface", () => {

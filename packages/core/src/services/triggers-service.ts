@@ -11,6 +11,7 @@ import {
   parseProject,
   renderAppApiTypesModule,
   resolveTriggerBinding,
+  webhookSettingsConflicts,
 } from "@catamorphic/parser";
 import {
   PROJECT_CHECK_SCRIPT_PATH,
@@ -24,7 +25,6 @@ import {
   SYSTEM_AUTHOR,
 } from "../identity.js";
 import { PROJECT_CHECK_SCRIPT } from "../seeds.js";
-import { webhookConfig, webhookSettingsKey } from "../webhook-ingress.js";
 import { assertProjectPermission, resolveScope } from "./artifact-scope.js";
 import { requireTenantProject } from "./projects-service.js";
 import type {
@@ -972,26 +972,13 @@ export class TriggersService {
     }
     // One webhook name is one URL that verifies and answers senders one
     // way: every binding of a name, however it got there (directly or
-    // through project kinds), must declare the same settings.
-    const webhookSettings = new Map<
-      string,
-      { workflow: string; settings: string }
-    >();
-    for (const binding of bindings) {
-      if (binding.kind !== "webhook") continue;
-      const parsedConfig = webhookConfig.safeParse(binding.config);
-      if (!parsedConfig.success) continue;
-      const name = parsedConfig.data.name;
-      const settings = webhookSettingsKey(parsedConfig.data);
-      const first = webhookSettings.get(name);
-      if (!first) {
-        webhookSettings.set(name, { workflow: binding.workflowName, settings });
-      } else if (first.settings !== settings) {
-        errors.push(
-          `Workflows '${first.workflow}' and '${binding.workflowName}' bind webhook '${name}' with different settings (verify, respond, deliveryId, maxBodyBytes); declare the webhook once in a project trigger kind`,
-        );
-      }
-    }
+    // through project kinds), must declare the same settings. Projects run
+    // the same rule in their local check.
+    errors.push(
+      ...webhookSettingsConflicts(
+        bindings.filter((binding) => binding.kind === "webhook"),
+      ),
+    );
     // Effective MCP tool names must be unique per project and may not claim
     // the shared poll tool. Serve time keeps a backstop, but the primary
     // enforcement is here: a name collision should stop the deploy, not
