@@ -11,16 +11,18 @@ import { GoogleWorkspaceDirectory } from "./google-directory.js";
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "work-google-directory-"));
 afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
 
-function keyFile(): string {
+function serviceAccountKey() {
   const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  return {
+    type: "service_account",
+    client_email: "directory@project.iam.gserviceaccount.com",
+    private_key: String(privateKey.export({ type: "pkcs8", format: "pem" })),
+  };
+}
+
+function keyFile(): string {
   const file = path.join(dir, `key-${Math.random()}.json`);
-  fs.writeFileSync(
-    file,
-    JSON.stringify({
-      client_email: "directory@project.iam.gserviceaccount.com",
-      private_key: privateKey.export({ type: "pkcs8", format: "pem" }),
-    }),
-  );
+  fs.writeFileSync(file, JSON.stringify(serviceAccountKey()));
   return file;
 }
 
@@ -144,6 +146,36 @@ describe("Google Workspace directory", () => {
     });
     await expect(
       offline.check({ accountId: "ada", email: "a@example.com", groups: [] }),
+    ).rejects.toBeInstanceOf(DirectoryUnavailableError);
+  });
+
+  it("takes the key inline, as a secret manager hands it over (ADR 0183)", async () => {
+    const key = serviceAccountKey();
+    for (const inline of [key, JSON.stringify(key)]) {
+      const google = fakeGoogle({
+        "/users/ada": () => Response.json({ suspended: false }),
+      });
+      const directory = new GoogleWorkspaceDirectory({
+        providerId: "google",
+        credentials: { key: inline },
+        fetch: google.fetch,
+      });
+      expect(
+        await directory.check({
+          accountId: "ada",
+          email: "ada@example.com",
+          groups: [],
+        }),
+      ).toEqual({ active: true, groups: [] });
+      expect(google.calls[0]?.url).toBe("https://oauth2.googleapis.com/token");
+    }
+    const broken = new GoogleWorkspaceDirectory({
+      providerId: "google",
+      credentials: { key: "not json" },
+      fetch: fakeGoogle({}).fetch,
+    });
+    await expect(
+      broken.check({ accountId: "ada", email: "a@example.com", groups: [] }),
     ).rejects.toBeInstanceOf(DirectoryUnavailableError);
   });
 

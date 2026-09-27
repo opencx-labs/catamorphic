@@ -10,7 +10,7 @@ export function testServerOptions(args: {
 }): WorkServerOptions {
   return {
     config: {
-      ...workServerConfigFromEnv(args.env),
+      ...workServerConfigFromEnv({ WORK_DATA_DIR: args.dataDir, ...args.env }),
       dataDir: args.dataDir,
       ...(args.publicBases ? { publicBases: args.publicBases } : {}),
     },

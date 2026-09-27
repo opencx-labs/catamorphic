@@ -138,6 +138,8 @@ export interface CatamorphicHostConfig {
   heldWorkerNodes?: CatamorphicCoreConfig["heldWorkerNodes"];
   /** Review every brokered connection action (ADR 0162). */
   connectionGuards?: CatamorphicCoreConfig["connectionGuards"];
+  /** How long one guard may take before its action escalates (ADR 0183). */
+  connectionGuardTimeoutMs?: CatamorphicCoreConfig["connectionGuardTimeoutMs"];
   /**
    * Connection aliases the host offers beside those committed in each
    * Environment of `.work/project.json` (ADR 0172).
@@ -378,6 +380,9 @@ export class Catamorphic {
       connectionProviders: contributions.connectionProviders,
       ...(config.connectionGuards
         ? { connectionGuards: config.connectionGuards }
+        : {}),
+      ...(config.connectionGuardTimeoutMs
+        ? { connectionGuardTimeoutMs: config.connectionGuardTimeoutMs }
         : {}),
       ...(config.connectionBindings
         ? { connectionBindings: config.connectionBindings }

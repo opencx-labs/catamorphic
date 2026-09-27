@@ -57,6 +57,8 @@ export class ConnectionActionRefusedError extends Error {
 /** Review policy for every brokered action (ADR 0162). */
 export interface ConnectionGateway {
   guards: readonly ConnectionActionGuard[];
+  /** How long one guard may take before the action escalates (ADR 0183). */
+  guardTimeoutMs?: number;
   /** Where an escalated agent action asks its person for approval. */
   approvals?: ToolPermissionChannel;
   /** The member who owns an agent session, for review and audit. */
@@ -674,6 +676,9 @@ export class ConnectionBroker {
       args.identity.externalUserId;
     const outcome = await reviewConnectionAction({
       guards: this.gateway.guards,
+      ...(this.gateway.guardTimeoutMs
+        ? { timeoutMs: this.gateway.guardTimeoutMs }
+        : {}),
       context: {
         tenantId: args.identity.tenantId,
         projectId: args.projectId,
