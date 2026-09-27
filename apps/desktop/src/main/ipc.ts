@@ -16,10 +16,7 @@ import { isPersonalFile } from "@catamorphic/git";
 import {
   buildInstallationUrl,
   GithubApi,
-  GithubAuthError,
-  pollDeviceToken,
   repoFullNameFromUrl,
-  requestDeviceCode,
 } from "@catamorphic/github";
 import { probeMcpServer } from "@catamorphic/mcp";
 import type { McpToolPolicy } from "@catamorphic/sandbox";
@@ -1917,38 +1914,48 @@ export function registerIpcHandlers(
     if (!rootPath) throw new Error("Project folder not found");
     return rootPath;
   };
+  // The person's own GitHub connection reads the exact repository first; a
+  // missing or narrower one gets one chance to adopt the `gh` CLI's
+  // credential as that connection (ADR 0073), checked against the same
+  // repository before it is stored.
   const ensureGithubRepositoryAccess = async (
     server: EmbeddedServer,
     fullName: string,
     allowCli: boolean,
   ) => {
-    const github = server.catamorphic.core.github;
-    if (!github) {
-      throw new Error(`[github-required] Connect GitHub to clone ${fullName}.`);
-    }
+    const core = server.catamorphic.core;
     try {
-      await github.repository(identity, fullName);
+      await core.codeHosts.repository({
+        identity,
+        provider: server.github.kind,
+        fullName,
+      });
       return;
     } catch {
-      // A missing, stale, or narrower stored credential gets one chance to
-      // use the local GitHub CLI as a credential source.
+      // Not connected, expired, or no access to this repository.
     }
     const cliToken = allowCli ? await githubCliToken() : null;
-    if (cliToken) {
+    if (cliToken && core.connections) {
       try {
-        await github.connectForRepository(
+        await new GithubApi(cliToken, {
+          signal: AbortSignal.timeout(30_000),
+        }).getRepo(fullName);
+        await core.connections.savePersonal({
           identity,
-          {
-            accessToken: cliToken,
-            expiresAt: null,
-            refreshToken: null,
-            refreshTokenExpiresAt: null,
-          },
-          fullName,
-        );
+          providerKind: server.github.kind,
+          label: "GitHub (GitHub CLI)",
+          authorized: await server.github.authorizeUser({
+            tokens: {
+              accessToken: cliToken,
+              expiresAt: null,
+              refreshToken: null,
+              refreshTokenExpiresAt: null,
+            },
+          }),
+        });
         return;
       } catch {
-        // The shared GitHub API rejected this credential for the exact repo.
+        // GitHub rejected this credential for the exact repository.
       }
     }
     throw new Error(
@@ -2019,9 +2026,9 @@ export function registerIpcHandlers(
               githubFullName,
               storesFor(event).prefs.load().githubCliEnabled,
             );
-            const github = server.catamorphic.core.github;
-            if (!github) throw new Error("GitHub integration not configured");
-            return github.importRepo(identity, {
+            return server.catamorphic.core.codeHosts.importRepository({
+              identity,
+              provider: server.github.kind,
               id,
               fullName: githubFullName,
               name: capabilities.name ?? input.name,
@@ -2904,6 +2911,23 @@ export function registerIpcHandlers(
       );
     }
   };
+  /**
+   * A local project's pull requests go through the code host with the
+   * person's own GitHub connection (ADR 0177) when it serves the project's
+   * origin; the optional GitHub CLI stays the fallback (ADR 0117).
+   */
+  const connectedCodeHost = async (projectId: string) => {
+    const server = state.current;
+    if (!server) return null;
+    const codeHosts = server.catamorphic.core.codeHosts;
+    return (await codeHosts.originConnected({
+      identity,
+      projectId,
+      principal: "member",
+    }))
+      ? codeHosts
+      : null;
+  };
   ipcMain.handle("catamorphic:github-cli-status", async () => {
     const token = await githubCliToken();
     if (!token)
@@ -2935,6 +2959,15 @@ export function registerIpcHandlers(
       return storedRemoteClient(event, input.projectId, link).proposalComment(
         input,
       );
+    const codeHosts = await connectedCodeHost(input.projectId);
+    if (codeHosts)
+      return codeHosts.commentOnPullRequest({
+        identity,
+        projectId: input.projectId,
+        number: input.number,
+        body: input.body,
+        ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+      });
     requireGithubCli(event);
     return githubCliPrComment({
       rootPath: await requireRoot(input.projectId),
@@ -2960,6 +2993,28 @@ export function registerIpcHandlers(
       await storedRemoteClient(event, input.projectId, link).proposalFiles(
         input.number,
       );
+    }
+    const codeHosts = link ? null : await connectedCodeHost(input.projectId);
+    if (codeHosts) {
+      if (input.decision === "apply")
+        await codeHosts.mergePullRequest({
+          identity,
+          projectId: input.projectId,
+          number: input.number,
+          headSha: input.headSha,
+        });
+      else
+        await codeHosts.reviewPullRequest({
+          identity,
+          projectId: input.projectId,
+          number: input.number,
+          headSha: input.headSha,
+          decision:
+            input.decision === "approve" ? "approve" : "request_changes",
+          body: input.body,
+        });
+      notifyGitChanged(input.projectId);
+      return { decision: input.decision };
     }
     requireGithubCli(event);
     const repository = await githubCliRepository(
@@ -3008,6 +3063,9 @@ export function registerIpcHandlers(
         return storedRemoteClient(event, projectId, link).proposalDiscussion(
           number,
         );
+      const codeHosts = await connectedCodeHost(projectId);
+      if (codeHosts)
+        return codeHosts.pullRequestDiscussion({ identity, projectId, number });
       requireGithubCli(event);
       return githubCliPrDetails({
         rootPath: await requireRoot(projectId),
@@ -3030,6 +3088,29 @@ export function registerIpcHandlers(
         return storedRemoteClient(event, projectId, link).proposalReview(
           number,
         );
+      const codeHosts = await connectedCodeHost(projectId);
+      if (codeHosts) {
+        const before = await codeHosts.pullRequest({
+          identity,
+          projectId,
+          number,
+        });
+        const files = await codeHosts.pullRequestFiles({
+          identity,
+          projectId,
+          number,
+        });
+        const proposal = await codeHosts.pullRequest({
+          identity,
+          projectId,
+          number,
+        });
+        if (before.headSha !== proposal.headSha)
+          throw new Error(
+            "This proposal changed while loading. Refresh to review the latest version.",
+          );
+        return { proposal, files };
+      }
       requireGithubCli(event);
       const cli = await githubCliRepository(await requireRoot(projectId));
       if (!cli)
@@ -3056,6 +3137,13 @@ export function registerIpcHandlers(
     if (fixture) return fixture.prs;
     const link = storesFor(event).remoteProjects.get(projectId);
     if (link) return storedRemoteClient(event, projectId, link).listProposals();
+    const codeHosts = await connectedCodeHost(projectId);
+    if (codeHosts)
+      return codeHosts.listPullRequests({
+        identity,
+        projectId,
+        principal: "member",
+      });
     requireGithubCli(event);
     const server = state.current;
     if (!server) return [];
@@ -3081,6 +3169,13 @@ export function registerIpcHandlers(
       const link = storesFor(event).remoteProjects.get(projectId);
       if (link)
         return storedRemoteClient(event, projectId, link).proposalFiles(number);
+      const codeHosts = await connectedCodeHost(projectId);
+      if (codeHosts)
+        return codeHosts.pullRequestFiles({
+          identity,
+          projectId,
+          number: Number(number),
+        });
       requireGithubCli(event);
       const server = state.current;
       if (!server) throw new Error("Server not running");
@@ -3093,22 +3188,35 @@ export function registerIpcHandlers(
     },
   );
 
-  // --- GitHub device flow ---
-  // The flow lives in the main process: it opens a workspace browser tab and
-  // polls GitHub, while the renderer only ever sees the short user code and
-  // the final connected/failed state. Tokens go straight into the embedded
-  // server's GithubService (encrypted via safeStorage before touching disk).
+  // --- GitHub sign-in ---
+  // The person's GitHub account is their personal `github` connection
+  // (ADR 0177), authorized with the provider's device flow through core
+  // connections and kept in the credential vault like any connection. The
+  // renderer only ever sees the short user code and the final state.
   let deviceFlowGeneration = 0;
 
   ipcMain.handle("catamorphic:github-connect-start", async (event) => {
-    const grant = await requestDeviceCode(GITHUB_APP);
+    const server = state.current;
+    const connections = server?.catamorphic.core.connections;
+    if (!server || !connections) throw new Error("Server not running");
+    const started = await connections.beginPersonalAuthorization({
+      identity,
+      providerKind: server.github.kind,
+      redirectUri: `${server.url}/api/connection-authorizations/callback`,
+    });
+    const challenge = started.challenge;
+    if (challenge.kind !== "device")
+      throw new Error("GitHub sign-in did not offer a device code");
     cancelAuthorization(event.sender);
     const generation = ++deviceFlowGeneration;
+    const expiresAt = challenge.expiresAt
+      ? Date.parse(challenge.expiresAt)
+      : Date.now() + 900_000;
     const dispose = trackAuthorization({
       sender: event.sender,
-      url: grant.verificationUri,
+      url: challenge.verificationUrl,
       label: "Connect GitHub",
-      expiresAt: Date.now() + grant.expiresIn * 1000,
+      expiresAt,
       cancel: () => {
         if (generation !== deviceFlowGeneration) return;
         deviceFlowGeneration += 1;
@@ -3116,52 +3224,44 @@ export function registerIpcHandlers(
           event.sender.send("catamorphic:github-connected", {
             error: "GitHub sign-in ended. Connect again when ready.",
           });
-        closeWorkspaceCallback(event.sender, grant.verificationUri);
+        closeWorkspaceCallback(event.sender, challenge.verificationUrl);
       },
     });
-    openWorkspaceUrl(event.sender, grant.verificationUri);
+    openWorkspaceUrl(event.sender, challenge.verificationUrl);
 
-    const poll = async (): Promise<void> => {
-      const started = Date.now();
-      let intervalMs = grant.interval * 1000;
-      while (Date.now() - started < grant.expiresIn * 1000) {
-        // A newer connect attempt or an app shutdown obsoletes this loop.
+    // Completing waits until the person finishes on GitHub or the code
+    // expires; a newer attempt or a cancel only silences this one.
+    void connections
+      .completeAuthorization({
+        identity,
+        state: started.authorizationId,
+        callback: {},
+      })
+      .then((connection) => {
         if (generation !== deviceFlowGeneration) return;
-        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        const account = connection.account;
+        state.broadcast("catamorphic:github-connected", {
+          connected: true,
+          login:
+            account &&
+            typeof account === "object" &&
+            !Array.isArray(account) &&
+            typeof account.login === "string"
+              ? account.login
+              : "",
+        });
+      })
+      .catch(() => {
         if (generation !== deviceFlowGeneration) return;
-        const server = state.current;
-        if (!server) return;
-        try {
-          const result = await pollDeviceToken(GITHUB_APP, grant.deviceCode);
-          if (generation !== deviceFlowGeneration) return;
-          if (result.tokens) {
-            const status = await server.catamorphic.core.github?.connect(
-              identity,
-              result.tokens,
-            );
-            state.broadcast("catamorphic:github-connected", status ?? null);
-            return;
-          }
-          if (result.retryAfter > 0) intervalMs = result.retryAfter * 1000;
-        } catch (cause) {
-          state.broadcast("catamorphic:github-connected", {
-            error:
-              cause instanceof GithubAuthError
-                ? cause.message
-                : "GitHub authorization failed",
-          });
-          return;
-        }
-      }
-      state.broadcast("catamorphic:github-connected", {
-        error: "The GitHub device code expired. Try connecting again",
-      });
-    };
-    void poll().finally(dispose);
+        state.broadcast("catamorphic:github-connected", {
+          error: "GitHub sign-in did not finish. Try connecting again",
+        });
+      })
+      .finally(dispose);
 
     return {
-      userCode: grant.userCode,
-      verificationUri: grant.verificationUri,
+      userCode: challenge.userCode,
+      verificationUri: challenge.verificationUrl,
     };
   });
 
@@ -3188,8 +3288,14 @@ export function registerIpcHandlers(
   ipcMain.handle("catamorphic:github-disconnect", async () => {
     deviceFlowGeneration += 1;
     const server = state.current;
-    if (!server) return;
-    await server.catamorphic.core.github?.disconnect(identity);
+    const connections = server?.catamorphic.core.connections;
+    if (!server || !connections) return;
+    const personal = await connections.personal({
+      identity,
+      providerKind: server.github.kind,
+    });
+    if (personal)
+      await connections.revoke({ identity, connectionId: personal.id });
   });
 
   // Import runs through IPC (not HTTP) for the same reason project-create
@@ -3202,23 +3308,21 @@ export function registerIpcHandlers(
     ) => {
       const server = state.current;
       if (!server) throw new Error("Server not running");
-      if (!server.catamorphic.core.github) {
-        throw new Error("GitHub integration not configured");
-      }
       if (!path.isAbsolute(input.rootPath)) {
         throw new Error("rootPath must be an absolute path");
       }
-      const github = server.catamorphic.core.github;
       const project = await server.projectRoots.register({
         rootPath: input.rootPath,
         existing: false,
         automaticCheckpoints: false,
         reopen: (id) => server.catamorphic.core.projects.get(identity, id),
         create: (id, rootPath) =>
-          github.importRepo(identity, {
+          server.catamorphic.core.codeHosts.importRepository({
+            identity,
+            provider: server.github.kind,
             id,
             fullName: input.fullName,
-            name: input.name,
+            ...(input.name ? { name: input.name } : {}),
             rootPath,
           }),
       });

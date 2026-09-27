@@ -20,7 +20,6 @@ function fixture() {
     projects: `${root}/projects`,
     remotes: `${root}/remotes`,
     appBundles: `${root}/apps`,
-    githubFile: `${root}/github.json`,
     profilesFile: `${root}/profiles.json`,
     profilesDir: `${root}/profiles`,
     agentHomesDir: `${root}/agents`,

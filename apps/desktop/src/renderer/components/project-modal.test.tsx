@@ -42,14 +42,19 @@ vi.mock("../lib/desktop-api.js", () => ({
 }));
 
 vi.mock("@catamorphic/react", () => ({
-  useGithubStatus: () => ({
-    data: {
-      connected: github.connected,
-      ...(github.login ? { login: github.login } : {}),
-    },
+  useCodeHosts: () => ({
+    data: [
+      {
+        provider: "github",
+        displayName: "GitHub",
+        connection: github.connected
+          ? { id: "c", status: "ready", account: { login: github.login } }
+          : null,
+      },
+    ],
     isLoading: false,
   }),
-  useGithubRepos: () => ({
+  useCodeHostRepositories: () => ({
     data: github.repos,
     error: null,
     isError: false,

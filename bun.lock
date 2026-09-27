@@ -98,6 +98,7 @@
         "zod": "^4.1.8",
       },
       "devDependencies": {
+        "@catamorphic/parser": "workspace:*",
         "@tailwindcss/vite": "^4.2.2",
         "@types/node": "^26.1.1",
         "@types/qrcode": "^1.5.5",
