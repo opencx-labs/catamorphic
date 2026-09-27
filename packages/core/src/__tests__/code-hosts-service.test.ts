@@ -134,6 +134,40 @@ describe("CodeHostsService", () => {
     ).toBeUndefined();
   });
 
+  it("refreshes a lapsed personal token before acting", async () => {
+    const forge = fakeCodeHost({
+      db,
+      projectManager: manager,
+      remoteBase: temp,
+    });
+    const frank: Identity = { tenantId, externalUserId: "frank" };
+    forge.provider.refresh = async () => ({
+      material: new TextEncoder().encode("frank-fresh"),
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+    await forge.connections.savePersonal({
+      identity: frank,
+      providerKind: "forge",
+      authorized: {
+        material: new TextEncoder().encode("frank-stale"),
+        expiresAt: new Date(Date.now() - 1_000),
+      },
+    });
+    const remoteUrl = path.join(temp, "remotes", "shared.git");
+    const projectId = await linkedProject(remoteUrl);
+    expect(
+      (
+        await forge.codeHosts.gitCredentials({
+          identity: frank,
+          projectId,
+          remoteUrl,
+          access: "read",
+          principal: "member",
+        })
+      )?.password,
+    ).toBe("frank-fresh");
+  });
+
   it("personal authorization runs the provider's challenge and re-authorizing rotates it", async () => {
     const forge = fakeCodeHost({
       db,

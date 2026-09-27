@@ -1829,7 +1829,7 @@ export const MeSchema = z.object({
   features: z.object({
     publications: z.union([z.enum(["public", "members"]), z.literal(false)]),
     proposals: z.boolean(),
-    /** True when a proposalBot is configured: proposals open pull requests. */
+    /** True when a code host is configured: proposals open pull requests through the service connection. */
     proposalsOpenPullRequests: z.boolean(),
     mcp: z.boolean(),
     agentSessions: z.boolean(),

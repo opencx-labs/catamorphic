@@ -362,7 +362,8 @@ export class ConnectionsService {
 
   /**
    * The caller's own ready connection to a provider for one project: one
-   * they authorized in the project, else their personal one.
+   * they authorized in the project, else their personal one. A lapsed
+   * access token still counts; the caller refreshes it before use.
    */
   async ownConnection(args: {
     identity: Identity;
@@ -387,10 +388,9 @@ export class ConnectionsService {
       )
       .orderBy("updated_at", "desc")
       .execute();
-    const ready = rows.filter(isReady);
     const chosen =
-      ready.find((row) => row.project_id !== null) ??
-      ready.find((row) => row.project_id === null);
+      rows.find((row) => row.project_id !== null) ??
+      rows.find((row) => row.project_id === null);
     return chosen ? mapConnection(chosen) : undefined;
   }
 
