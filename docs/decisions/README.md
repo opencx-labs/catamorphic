@@ -112,7 +112,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0097](0097-host-owned-workflow-inspectors.md) | Host-owned workflow inspectors | Accepted (layout and packaged toolbar amended by 0157) |
 | [0098](0098-project-authorized-local-and-remote-agents.md) | Project-authorized local and remote agent execution | Accepted (`this-machine` binding is `device: "member"`, 0167) |
 | [0099](0099-shared-postgres-server-environments.md) | Shared-Postgres server instances as managed Environments | Accepted (execution machines superseded by 0164) |
-| [0100](0100-workspace-resource-admission.md) | Workspace reservations and provider-enforced resource limits | Accepted |
+| [0100](0100-workspace-resource-admission.md) | Workspace reservations and provider-enforced resource limits | Accepted (idle release refined by 0173) |
 | [0101](0101-harness-capabilities-and-session-monitors.md) | Harness capabilities and session monitors | Accepted |
 | [0102](0102-tabbed-sidebars-and-app-widgets.md) | Tabbed sidebars and compact app widgets | Accepted (refined by 0107) |
 | [0103](0103-agent-context-and-deferred-capabilities.md) | Agent context and deferred capabilities | Accepted |
@@ -173,6 +173,8 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0156](0156-project-automations-webhooks-and-command-watches.md) | Project automations, one deliver, webhooks, and command watches | Accepted |
 | [0155](0155-shells-background-commands-and-live-status.md) | Native shells, host background commands, and the agent's live status | Accepted |
 | [0156](0156-project-automations-webhooks-and-command-watches.md) | Project automations, one deliver, webhooks, and command watches | Accepted (webhook ingress refined by 0171) |
+| [0155](0155-shells-background-commands-and-live-status.md) | Native shells, host background commands, and the agent's live status | Accepted |
+| [0156](0156-project-automations-webhooks-and-command-watches.md) | Project automations, one deliver, webhooks, and command watches | Accepted (keys and chat placement refined by 0173) |
 | [0157](0157-workflow-status-chrome.md) | Workflow tabs: status chrome and a panel that follows its subject | Accepted |
 | [0158](0158-project-permissions.md) | Project permissions: read, write, publish, and what workflows declare | Accepted |
 | [0159](0159-work-server-identity-and-image.md) | The Work server: product identity and a published image | Accepted |
@@ -183,10 +185,11 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0164](0164-control-plane-and-enrolled-workers.md) | A control plane and enrolled workers without credentials | Accepted (placement refined by 0167; processes by 0174) |
 | [0165](0165-guests-and-shares.md) | Guests and shares for people outside the company | Accepted |
 | [0166](0166-members-work-from-their-own-agents.md) | Members work from their own agents over the project MCP | Accepted |
-| [0167](0167-machine-pools-access-and-owner-placement.md) | Machine pools, node access, and placement by owner | Accepted |
+| [0167](0167-machine-pools-access-and-owner-placement.md) | Machine pools, node access, and placement by owner | Accepted (project access and chat placement refined by 0173) |
 | [0169](0169-work-project-workspace.md) | The project workspace is `.work/`, and what lands in repositories is named Work | Accepted |
 | [0170](0170-attached-repositories-receive-pull-requests.md) | Attached repositories receive pull requests, never pushes | Accepted |
 | [0171](0171-project-trigger-kinds-and-declarative-webhook-ingress.md) | Project-defined trigger kinds and declarative webhook ingress | Accepted |
 | [0172](0172-committed-connection-bindings-and-named-service-connections.md) | Committed connection bindings, named service connections, organization administrators | Accepted |
+| [0173](0173-keyed-chat-lifecycle-and-chat-placement.md) | Keyed chats: project keys, close, idle release, and their own placement | Accepted |
 | [0174](0174-background-processes-as-a-sandbox-capability.md) | Background processes are a sandbox capability | Accepted |
 | [0175](0175-grants-reach-sandboxes.md) | Grants reach sandboxes; credentials never do | Accepted |

@@ -191,6 +191,10 @@ everyone in the project. It binds \`gh.pull_request\` from the GitHub trigger
 library in \`writing-workflows\` (\`.work/triggers/github.ts\`), and its \`where\`
 lets only opened and updated, non-draft pull requests start a run. Enable it for
 the project; the key reuses the chat when the same pull request changes again.
+Keys belong to the project, so a second automation closes the same chat when
+the pull request merges or closes: its workspace, branches, and grants are
+released, the transcript stays readable, and a reopened pull request starts a
+fresh chat.
 
 \`\`\`typescript
 import { type BoundaryContext, defineWorkflow, type TriggerPayload, trigger } from "@catamorphic/workflow";
@@ -213,6 +217,21 @@ export const reviewPullRequests = defineWorkflow(({ defineBoundary }) => ({
           content: "Review the changes in " + event.pull_request.html_url + " and summarize risks.",
           notification: { title: "Review ready", body: event.pull_request.title },
         });
+      },
+    }),
+  ],
+}));
+
+/** @displayname Close pull request chats */
+export const closePullRequestChats = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("gh.pull_request", { where: { payload: { body: { action: "closed" } } } })],
+  steps: [
+    /** @displayname Close the review chat */
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<TriggerPayload<"gh.pull_request">>) => {
+        const event = input.payload.body;
+        const key = "pr-" + event.repository.full_name + "-" + event.number;
+        return host["catamorphic.sessions"].close({ key, idempotencyKey: "closed:" + key });
       },
     }),
   ],

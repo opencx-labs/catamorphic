@@ -62,6 +62,16 @@ const ProjectEnvironmentDefinitionSchema = z
     device: z.literal("member").optional(),
     /** Never fall back past the narrowest nodes open to the owner. */
     strict: z.boolean().optional(),
+    /**
+     * Minutes a chat may wait without a turn before its workspace gives back
+     * its slot and reservation (ADR 0173); `0` keeps it for the chat's life.
+     */
+    idleReleaseMinutes: z
+      .number()
+      .int()
+      .min(0)
+      .max(60 * 24 * 30)
+      .optional(),
     requirements: z
       .strictObject({
         trust: z.enum(["local", "managed"]).optional(),
@@ -85,12 +95,16 @@ const ProjectEnvironmentDefinitionSchema = z
 /** The Environment every project has unless its manifest declares others. */
 export const DEFAULT_ENVIRONMENT = "default";
 
+/** Minutes an idle chat keeps its workspace unless its Environment says otherwise. */
+export const DEFAULT_IDLE_RELEASE_MINUTES = 30;
+
 export interface ProjectEnvironmentDefinition {
   description?: string;
   workloads: readonly WorkloadKind[];
   pool?: Readonly<Record<string, string>>;
   device?: "member";
   strict?: boolean;
+  idleReleaseMinutes?: number;
   requirements?: Omit<EnvironmentRequirements, "workload" | "topology">;
   connections?: Readonly<Record<string, EnvironmentConnectionBinding>>;
 }

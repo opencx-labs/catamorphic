@@ -1,14 +1,57 @@
 import { createHash } from "node:crypto";
+import { z } from "zod";
 import {
+  EVERY_ARTIFACT,
   hasProjectPermission,
   type Identity,
   isProjectPrincipal,
+  PROJECT_PRINCIPAL_ID,
   projectPrincipalIdentity,
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 
 /** Whose keyed chat a delivery reaches (ADR 0156). */
 export type ChatAudience = "project" | { member: string };
+
+/**
+ * A chat key (ADR 0173): the project's name for one open chat, such as
+ * `pr-42`. Any automation in the project may use it; 1 to 200 characters,
+ * no control characters.
+ */
+export const ChatKeySchema = z
+  .string()
+  .trim()
+  .min(1, "key must not be empty")
+  .max(200, "key must be at most 200 characters")
+  .regex(/^[^\p{Cc}]+$/u, "key must not contain control characters");
+
+export const ChatAudienceSchema = z.union([
+  z.literal("project"),
+  z.strictObject({ member: z.string().trim().min(1) }),
+]);
+
+/** Validate a chat key, with a readable error. */
+export function parseChatKey(value: unknown): string {
+  const parsed = ChatKeySchema.safeParse(value);
+  if (!parsed.success)
+    throw new Error(parsed.error.issues[0]?.message ?? "Invalid key");
+  return parsed.data;
+}
+
+/**
+ * Whose open chat a key names when a caller looks it up (ADR 0173): the
+ * project chat for `audience: "project"` or a project principal caller, a
+ * named member's, or otherwise the caller's own. Lookup grants nothing;
+ * reading or changing the chat checks access as usual.
+ */
+export function keyedChatOwnerId(input: {
+  caller: Identity;
+  audience: ChatAudience | undefined;
+}): string {
+  if (input.audience === "project") return PROJECT_PRINCIPAL_ID;
+  if (input.audience) return input.audience.member;
+  return input.caller.externalUserId;
+}
 
 type DeliveryMessage = {
   content: string;
@@ -30,8 +73,6 @@ export type ChatDelivery = DeliveryMessage &
         environment?: string;
       }
   );
-
-const KEY_MAX = 200;
 
 /**
  * Validate a workflow's `deliver` call. Exactly one of `sessionId` and
@@ -85,8 +126,7 @@ export function parseChatDelivery(value: unknown): ChatDelivery {
     if (!sessionId) throw new Error("sessionId must be a non-empty string");
     return { ...common, sessionId };
   }
-  const key = text("key", KEY_MAX, true);
-  if (!key) throw new Error("key must be a non-empty string");
+  const key = parseChatKey(input.key);
   const audience = parseAudience(input.audience);
   const agentSlug = text("agentSlug", 255);
   const title = text("title", 500);
@@ -103,16 +143,10 @@ export function parseChatDelivery(value: unknown): ChatDelivery {
 
 function parseAudience(value: unknown): ChatAudience | undefined {
   if (value === undefined) return undefined;
-  if (value === "project") return "project";
-  if (
-    value &&
-    typeof value === "object" &&
-    "member" in value &&
-    typeof value.member === "string" &&
-    value.member.trim()
-  )
-    return { member: value.member.trim() };
-  throw new Error('audience must be "project" or { member: "<user id>" }');
+  const parsed = ChatAudienceSchema.safeParse(value);
+  if (!parsed.success)
+    throw new Error('audience must be "project" or { member: "<user id>" }');
+  return parsed.data;
 }
 
 function parseNotification(
@@ -158,6 +192,11 @@ export function defaultDeliveryKey(input: {
  * acts for its caller: the caller's own chat, the project chat with
  * `automations:write`, or another member's with `sessions:write`, each a
  * permission the workflow declares (the run holds nothing else).
+ *
+ * The chat is placed by its own Environment, never the run's (ADR 0173):
+ * a member's chat in the Environments their roles grant, a project chat in
+ * any Environment the project declares. The chat's agent policy
+ * (`environment.allowed`) and the machines open to its owner decide the rest.
  */
 export async function chatOwner(input: {
   /** The run's caller: the enablement's owner, or whoever started it. */
@@ -167,7 +206,6 @@ export async function chatOwner(input: {
   enablement:
     | { owner_kind: string; owner_external_user_id: string | null }
     | undefined;
-  environment: string | undefined;
   resolveMember(args: {
     tenantId: string;
     projectId: string;
@@ -185,10 +223,15 @@ export async function chatOwner(input: {
       throw new Error(`${externalUserId} is not a member of this project`);
     return found;
   };
+  // The project's own chats may run in any Environment the project declares.
+  const projectChat = (principal: Identity): Identity => ({
+    ...principal,
+    executionScope: [{ projectId: input.projectId, name: EVERY_ARTIFACT }],
+  });
   if (enablement?.owner_kind === "project") {
     // A project automation's run already acts as the project, with its
     // consented connections.
-    if (!audience || audience === "project") return caller;
+    if (!audience || audience === "project") return projectChat(caller);
     return member(audience.member);
   }
   if (audience === "project") {
@@ -196,14 +239,14 @@ export async function chatOwner(input: {
       throw new AccessDeniedError(
         "Reaching the project chat needs the automations:write permission; turn the workflow on for the project instead",
       );
-    if (isProjectPrincipal(caller.externalUserId)) return caller;
-    if (!input.environment)
-      throw new Error("A project chat needs an Environment to run in");
-    return projectPrincipalIdentity({
-      tenantId: caller.tenantId,
-      projectId: input.projectId,
-      environment: input.environment,
-    });
+    if (isProjectPrincipal(caller.externalUserId)) return projectChat(caller);
+    return projectChat(
+      projectPrincipalIdentity({
+        tenantId: caller.tenantId,
+        projectId: input.projectId,
+        environment: EVERY_ARTIFACT,
+      }),
+    );
   }
   if (!audience || audience.member === caller.externalUserId) return caller;
   if (!hasProjectPermission(caller, input.projectId, "sessions:write"))

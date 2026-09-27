@@ -84,7 +84,7 @@ it("the reusable completion recipe is quiet for unrelated sessions and reacts on
       path.join(directory, "verify.ts"),
       `
       import { childCompletion } from "./recipe.ts";
-      const host = { "catamorphic.sessions": { deliver: args => ({ operation: "deliver", args }) } };
+      const host = { "catamorphic.sessions": Object.fromEntries(["deliver", "close"].map(operation => [operation, args => ({ operation, args })])) };
       const run = parentSessionId => childCompletion.steps[0].run({ host, input: { id: "event-1", payload: { sessionId: "child", session: { parentSessionId, workStatus: "completed" } } } });
       console.log(JSON.stringify([await run("unrelated"), await run("REPLACE_WITH_PARENT_SESSION_ID")]));
     `,
@@ -199,7 +199,7 @@ async function runRecipe(input: {
       path.join(directory, "verify.ts"),
       `
       import { ${input.exportName} as workflow } from "./recipe.ts";
-      const host = { "catamorphic.sessions": { deliver: args => ({ operation: "deliver", args }) } };
+      const host = { "catamorphic.sessions": Object.fromEntries(["deliver", "close"].map(operation => [operation, args => ({ operation, args })])) };
       const events = ${JSON.stringify(input.events)};
       const calls = [];
       for (const event of events) calls.push(await workflow.steps[0].run({ input: event, host }));
@@ -247,6 +247,31 @@ it("the shipped pull-request recipe delivers to one keyed chat per pull request"
           "Review the changes in https://github.test/pr/7 and summarize risks.",
         notification: { title: "Review ready", body: "Fix login" },
       },
+    },
+  ]);
+});
+
+it("the shipped close recipe closes the same project-keyed chat when a pull request closes", async () => {
+  expect(
+    await runRecipe({
+      exportName: "closePullRequestChats",
+      events: [
+        {
+          payload: {
+            body: {
+              action: "closed",
+              number: 7,
+              repository: { full_name: "acme/web" },
+              pull_request: { merged: true },
+            },
+          },
+        },
+      ],
+    }),
+  ).toEqual([
+    {
+      operation: "close",
+      args: { key: "pr-acme/web-7", idempotencyKey: "closed:pr-acme/web-7" },
     },
   ]);
 });

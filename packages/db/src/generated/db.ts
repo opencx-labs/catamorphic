@@ -114,6 +114,7 @@ export interface AgentSessions {
   authority_seen_at: Generated<Timestamp>;
   base_commit_sha: string | null;
   chat_key: string | null;
+  chat_workflows: Generated<Json>;
   created_at: Generated<Timestamp>;
   environment_name: string | null;
   external_user_id: string;
@@ -126,6 +127,7 @@ export interface AgentSessions {
   model: string | null;
   model_effort: string | null;
   parent_session_id: string | null;
+  placement: Json | null;
   project_id: string;
   provider: string;
   provider_session_id: string | null;
@@ -483,6 +485,7 @@ export interface ExecutionAllocations {
   id: Generated<string>;
   policy_snapshot: Json;
   project_id: string;
+  release_reason: string | null;
   released_at: Timestamp | null;
   reserved_cpu_millis: Generated<number>;
   reserved_memory_mb: Generated<number>;

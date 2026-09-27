@@ -3,6 +3,7 @@ import {
   accessTier,
   type EnvironmentBinding,
   environmentSatisfies,
+  type NodeAccess,
   placementOrder,
   poolMatches,
 } from "../execution-environment.js";
@@ -93,27 +94,47 @@ describe("placement (ADR 0167)", () => {
   });
 
   it("ranks a person's own node before a group's before everyone's", () => {
+    const tier = (access: NodeAccess, owner = alice) =>
+      accessTier({ access, owner });
+    expect(tier({ users: ["alice@example.com"], groups: [] })).toBe(0);
     expect(
-      accessTier({ users: ["alice@example.com"], groups: [] }, alice),
+      tier({ users: ["alice@example.com", "bob@example.com"], groups: [] }),
+    ).toBe(1);
+    expect(tier({ users: [], groups: ["eng@example.com"] })).toBe(1);
+    expect(tier({ everyone: true })).toBe(2);
+    expect(tier({ users: ["bob@example.com"], groups: [] })).toBeUndefined();
+    // Project-owned work lands on nodes open to everyone or to its project.
+    expect(
+      accessTier({
+        access: { users: [], groups: ["eng@example.com"] },
+        owner: undefined,
+        projectId: "p1",
+      }),
+    ).toBeUndefined();
+    expect(accessTier({ access: { everyone: true }, owner: undefined })).toBe(
+      2,
+    );
+  });
+
+  it("opens a node to one project's own work without opening it to its members", () => {
+    const reviewPool: NodeAccess = { users: [], groups: [], projects: ["p1"] };
+    expect(
+      accessTier({ access: reviewPool, owner: undefined, projectId: "p1" }),
     ).toBe(0);
     expect(
-      accessTier(
-        { users: ["alice@example.com", "bob@example.com"], groups: [] },
-        alice,
-      ),
+      accessTier({ access: reviewPool, owner: undefined, projectId: "p2" }),
+    ).toBeUndefined();
+    expect(
+      accessTier({
+        access: { users: [], groups: [], projects: ["p1", "p2"] },
+        owner: undefined,
+        projectId: "p1",
+      }),
     ).toBe(1);
-    expect(accessTier({ users: [], groups: ["eng@example.com"] }, alice)).toBe(
-      1,
-    );
-    expect(accessTier({ everyone: true }, alice)).toBe(2);
+    // A member's own chat in that project does not reach the pool.
     expect(
-      accessTier({ users: ["bob@example.com"], groups: [] }, alice),
+      accessTier({ access: reviewPool, owner: alice, projectId: "p1" }),
     ).toBeUndefined();
-    // Project-owned work only lands on nodes open to everyone.
-    expect(
-      accessTier({ users: [], groups: ["eng@example.com"] }, undefined),
-    ).toBeUndefined();
-    expect(accessTier({ everyone: true }, undefined)).toBe(2);
   });
 
   it("orders narrowest first and stays there when strict", () => {

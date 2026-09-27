@@ -580,43 +580,39 @@ export class CatamorphicCore {
               sessionCreated: false,
             };
           }
-          // A chat named by key belongs to whoever the automation serves.
+          // A chat named by key belongs to whoever the automation serves;
+          // the key belongs to the project, so every automation in it
+          // reaches the same chat (ADR 0173).
           const run = await this.db
             .selectFrom("workflow_runs")
-            .select(["workflow_enablement_id", "environment_name"])
+            .select("workflow_enablement_id")
             .where("id", "=", context.runId)
             .executeTakeFirst();
           const enablement = run?.workflow_enablement_id
             ? await this.db
                 .selectFrom("workflow_enablements")
-                .select([
-                  "owner_kind",
-                  "owner_external_user_id",
-                  "environment_name",
-                ])
+                .select(["owner_kind", "owner_external_user_id"])
                 .where("id", "=", run.workflow_enablement_id)
                 .executeTakeFirstOrThrow()
             : undefined;
-          const environment =
-            enablement?.environment_name ??
-            input.environment ??
-            run?.environment_name ??
-            undefined;
           const owner = await chatOwner({
             caller: context.caller,
             projectId: context.projectId,
             audience: input.audience,
             enablement,
-            environment,
             resolveMember: this.resolveMember,
           });
+          // Placed by its own Environment, never the run's: the one this
+          // delivery names, else the agent's preferred, else the project
+          // default.
           const chat = await this.agentSessions.chatForKey(
             owner,
             context.projectId,
             {
-              chatKey: JSON.stringify([context.workflowName, input.key]),
+              key: input.key,
+              workflowName: context.workflowName,
               ...(input.agentSlug ? { agentSlug: input.agentSlug } : {}),
-              ...(environment ? { environment } : {}),
+              ...(input.environment ? { environment: input.environment } : {}),
               ...(input.title ? { title: input.title } : {}),
               origin,
             },

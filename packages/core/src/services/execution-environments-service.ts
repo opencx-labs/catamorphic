@@ -18,13 +18,27 @@ import {
   mayUseProject,
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
-import type { ProjectEnvironmentsService } from "./project-environments-service.js";
+import {
+  DEFAULT_IDLE_RELEASE_MINUTES,
+  type ProjectEnvironmentsService,
+} from "./project-environments-service.js";
 import { EnvironmentCapacityError } from "./worker-capacity.js";
 
 const tracer = getTracer("@catamorphic/core");
 
+/**
+ * Why admission chose an Environment (ADR 0173): the caller named it, the
+ * agent prefers it, it is the project default, or it was the first that fit.
+ */
+export type PlacementReason =
+  | "requested"
+  | "agent_preferred"
+  | "project_default"
+  | "available";
+
 export interface EnvironmentAdmission {
   environmentName: string;
+  reason: PlacementReason;
   runtime: EnvironmentRuntimeBinding;
   binding: EnvironmentBinding;
   effectiveRequirements: EnvironmentRequirements;
@@ -313,6 +327,7 @@ export class ExecutionEnvironmentsService {
           const evaluated = await this.evaluate({
             ...args,
             name: args.environment,
+            reason: "requested",
           });
           if ("admission" in evaluated) return evaluated.admission;
           if (evaluated.bindingUnavailable) {
@@ -340,16 +355,23 @@ export class ExecutionEnvironmentsService {
             reasons[name] = ["Identity is not granted this Environment"];
             continue;
           }
-          const evaluated = await this.evaluate({ ...args, name }).catch(
-            (error) => {
-              if (error instanceof EnvironmentCapacityError)
-                return {
-                  bindingUnavailable: false as const,
-                  reasons: [error.message],
-                };
-              throw error;
-            },
-          );
+          const reason: PlacementReason = args.preferred?.includes(name)
+            ? "agent_preferred"
+            : name === policy.defaultEnvironment
+              ? "project_default"
+              : "available";
+          const evaluated = await this.evaluate({
+            ...args,
+            name,
+            reason,
+          }).catch((error) => {
+            if (error instanceof EnvironmentCapacityError)
+              return {
+                bindingUnavailable: false as const,
+                reasons: [error.message],
+              };
+            throw error;
+          });
           if ("admission" in evaluated) return evaluated.admission;
           reasons[name] = evaluated.bindingUnavailable
             ? ["No machine for it is online and open to this work"]
@@ -366,11 +388,29 @@ export class ExecutionEnvironmentsService {
     );
   }
 
+  /**
+   * Minutes a chat in this Environment may wait without a turn before its
+   * workspace is released (ADR 0173); 0 never releases it.
+   */
+  async idleReleaseMinutes(args: {
+    identity: Identity;
+    projectId: string;
+    environment: string;
+  }): Promise<number> {
+    const definition = await this.projects.get({
+      identity: args.identity,
+      projectId: args.projectId,
+      name: args.environment,
+    });
+    return definition?.idleReleaseMinutes ?? DEFAULT_IDLE_RELEASE_MINUTES;
+  }
+
   private async evaluate(args: {
     identity: Identity;
     projectId: string;
     owner?: PlacementOwner;
     name: string;
+    reason?: PlacementReason;
     workerNodeId?: string;
     allocationBindingId?: string;
     requirements: EnvironmentRequirements;
@@ -420,6 +460,7 @@ export class ExecutionEnvironmentsService {
     return {
       admission: {
         environmentName: args.name,
+        reason: args.reason ?? "requested",
         runtime,
         binding: runtime.descriptor,
         effectiveRequirements,

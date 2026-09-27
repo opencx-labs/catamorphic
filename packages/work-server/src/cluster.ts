@@ -21,7 +21,7 @@ import {
 import type { Kysely } from "kysely";
 import {
   nodeAccess,
-  servesOnePerson,
+  servesOneOwner,
   type WorkerPlacement,
 } from "./workers/placement.js";
 import { isWorkerNode } from "./workers/worker-registry.js";
@@ -87,6 +87,7 @@ export async function registerWorkMachine(args: {
   const environmentProvider: EnvironmentProvider = {
     get: async ({
       tenantId,
+      projectId,
       ownerUserId,
       pool,
       strict,
@@ -136,16 +137,17 @@ export async function registerWorkMachine(args: {
           // the operator marked those people as trusting each other.
           (!policy ||
             policy.trusted ||
-            servesOnePerson(policy.access) ||
+            servesOneOwner(policy.access) ||
             node.descriptor.isolation !== "process"),
       );
       const ordered = placementOrder(
         eligible,
         ({ policy }) =>
-          accessTier(
-            policy ? nodeAccess(policy.access) : { everyone: true },
+          accessTier({
+            access: policy ? nodeAccess(policy.access) : { everyone: true },
             owner,
-          ),
+            ...(projectId ? { projectId } : {}),
+          }),
         { strict },
       );
       const chosen = ordered.find(

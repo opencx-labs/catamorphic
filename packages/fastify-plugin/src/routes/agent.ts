@@ -15,8 +15,10 @@ import {
   EnvironmentCapacityError,
   EnvironmentIncompatibleError,
   EnvironmentNotFoundError,
+  keyedChatOwnerId,
   NoCompatibleEnvironmentError,
   ProjectNotFoundError,
+  parseChatKey,
   SessionMirrorDivergedError,
   UnsupportedAgentTopologyError,
 } from "@catamorphic/core";
@@ -42,12 +44,15 @@ import {
   AnswerAgentQuestionSchema,
   ArchiveAgentSessionSchema,
   AuthenticationRequiredSchema,
+  ClosedKeyedChatSchema,
   CreateAgentSessionSchema,
   CreateAgentSubsessionSchema,
   EnvironmentAccessErrorSchema,
   EnvironmentErrorSchema,
   ErrorSchema,
   ForkAgentSessionSchema,
+  KeyedChatParamsSchema,
+  KeyedChatQuerySchema,
   ListSchema,
   MirrorAgentSessionSchema,
   MirrorConflictSchema,
@@ -1270,6 +1275,93 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
     },
   });
 
+  // A chat by the project's key (ADR 0173). Finding never starts a chat.
+  typed.get(
+    "/projects/:projectId/agent/chats/:key",
+    {
+      schema: {
+        params: KeyedChatParamsSchema,
+        querystring: KeyedChatQuerySchema,
+        response: {
+          200: AgentSessionSchema,
+          404: ErrorSchema,
+          503: ErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      const identity = resolveIdentity(request);
+      const { projectId } = request.params;
+      const sessionId = await agentSessions.keyedChatId({
+        projectId,
+        key: parseChatKey(request.params.key),
+        ownerId: keyedChatOwnerId({
+          caller: identity,
+          audience: keyedAudience(request.query),
+        }),
+      });
+      if (!sessionId) return reply.status(404).send({ error: "No open chat" });
+      try {
+        return reply.send(
+          await agentSessions.get(identity, projectId, sessionId),
+        );
+      } catch (err) {
+        if (
+          err instanceof ProjectNotFoundError ||
+          err instanceof AgentSessionNotFoundError
+        )
+          return reply.status(404).send({ error: "No open chat" });
+        throw err;
+      }
+    },
+  );
+
+  // Close a keyed chat: its work, workspace and key are released; the
+  // transcript stays readable. Closing a key with no open chat is a no-op.
+  typed.route({
+    method: "DELETE",
+    url: "/projects/:projectId/agent/chats/:key",
+    schema: {
+      params: KeyedChatParamsSchema,
+      querystring: KeyedChatQuerySchema,
+      response: {
+        200: ClosedKeyedChatSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      const identity = resolveIdentity(request);
+      const { projectId } = request.params;
+      const sessionId = await agentSessions.keyedChatId({
+        projectId,
+        key: parseChatKey(request.params.key),
+        ownerId: keyedChatOwnerId({
+          caller: identity,
+          audience: keyedAudience(request.query),
+        }),
+      });
+      if (!sessionId) return reply.send({ sessionId: null, closed: false });
+      try {
+        await agentSessions.close(identity, projectId, sessionId);
+        return reply.send({ sessionId, closed: true });
+      } catch (err) {
+        if (
+          err instanceof ProjectNotFoundError ||
+          err instanceof AgentSessionNotFoundError
+        )
+          return reply.status(404).send({ error: "No open chat" });
+        throw err;
+      }
+    },
+  });
+
   typed.get(
     "/projects/:projectId/agent/sessions/:sessionId/archive-impact",
     {
@@ -1492,4 +1584,12 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
       }
     },
   });
+}
+
+function keyedAudience(query: {
+  audience?: "project";
+  member?: string;
+}): "project" | { member: string } | undefined {
+  if (query.audience) return query.audience;
+  return query.member ? { member: query.member } : undefined;
 }

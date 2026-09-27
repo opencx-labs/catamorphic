@@ -126,6 +126,23 @@ export class FsBackend implements StorageBackend {
     this.initializedRoots.delete(`${tenantId}:${projectId}`);
   }
 
+  async deleteCopy(
+    tenantId: string,
+    projectId: string,
+    externalUserId: string,
+  ): Promise<void> {
+    // A mapped project folder is every user's copy; it belongs to the user.
+    if (
+      (await this.pathResolver?.(tenantId, projectId)) ||
+      this.initializedRoots.has(`${tenantId}:${projectId}`)
+    )
+      return;
+    await fs.rm(this.resolveInternalPath(tenantId, projectId, externalUserId), {
+      recursive: true,
+      force: true,
+    });
+  }
+
   async exists(
     tenantId: string,
     projectId: string,

@@ -6277,6 +6277,17 @@ export interface paths {
                                     id: string;
                                     content: string;
                                 };
+                                key: string | null;
+                                keyWorkflows: string[];
+                                placement: {
+                                    environment: string;
+                                    /** @enum {string} */
+                                    reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                    machine: {
+                                        id: string;
+                                        label: string;
+                                    };
+                                } | null;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -6400,6 +6411,17 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -6682,6 +6704,17 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -6883,6 +6916,17 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -7023,6 +7067,17 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -7231,6 +7286,17 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -7359,6 +7425,17 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -7561,6 +7638,17 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -7780,6 +7868,17 @@ export interface paths {
                                     id: string;
                                     content: string;
                                 };
+                                key: string | null;
+                                keyWorkflows: string[];
+                                placement: {
+                                    environment: string;
+                                    /** @enum {string} */
+                                    reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                    machine: {
+                                        id: string;
+                                        label: string;
+                                    };
+                                } | null;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -7919,6 +8018,17 @@ export interface paths {
                                     id: string;
                                     content: string;
                                 };
+                                key: string | null;
+                                keyWorkflows: string[];
+                                placement: {
+                                    environment: string;
+                                    /** @enum {string} */
+                                    reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                    machine: {
+                                        id: string;
+                                        label: string;
+                                    };
+                                } | null;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -8101,6 +8211,17 @@ export interface paths {
                                     id: string;
                                     content: string;
                                 };
+                                key: string | null;
+                                keyWorkflows: string[];
+                                placement: {
+                                    environment: string;
+                                    /** @enum {string} */
+                                    reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                    machine: {
+                                        id: string;
+                                        label: string;
+                                    };
+                                } | null;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -8308,6 +8429,17 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -8890,6 +9022,17 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -9210,6 +9353,202 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectId}/agent/chats/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    audience?: "project";
+                    member?: string;
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                    key: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            workStatus: "open" | "completed";
+                            stateRevision: number;
+                            childCount?: number;
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string;
+                            externalUserId: string;
+                            /** @enum {string} */
+                            owner: "member" | "project";
+                            provider: string;
+                            /** @enum {string} */
+                            source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
+                            providerSessionId: string | null;
+                            /** Format: uuid */
+                            sandboxId: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
+                            agentId: string | null;
+                            model: string | null;
+                            /** @enum {string|null} */
+                            modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            title: string | null;
+                            icon: string | null;
+                            /** Format: uuid */
+                            forkedFromSessionId: string | null;
+                            /** Format: uuid */
+                            parentSessionId: string | null;
+                            /** @enum {string} */
+                            visibility: "latent" | "promoted" | "archived";
+                            /** Format: date-time */
+                            archivedAt: string | null;
+                            /** @enum {string} */
+                            status: "active" | "closed";
+                            activity: string | null;
+                            todos: {
+                                /** Format: uuid */
+                                id: string;
+                                title: string;
+                                description: string;
+                                /** @enum {string} */
+                                status: "pending" | "in_progress" | "completed";
+                            }[];
+                            authorityHostId: string;
+                            authorityRevision: number;
+                            /** Format: date-time */
+                            authoritySeenAt: string | null;
+                            mirrorMessageCount: number;
+                            /** @enum {string} */
+                            handoffStatus: "none" | "pending";
+                            handoffDestinationHostId: string | null;
+                            resumable: boolean;
+                            /** Format: date-time */
+                            pausedAt: string | null;
+                            running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
+                            attentionMessage?: {
+                                /** Format: uuid */
+                                id: string;
+                                content: string;
+                            };
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
+                            baseCommitSha: string | null;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: {
+                    audience?: "project";
+                    member?: string;
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                    key: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            sessionId: string | null;
+                            closed: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{projectId}/agent/sessions/{sessionId}/archive-impact": {
         parameters: {
             query?: never;
@@ -9401,6 +9740,17 @@ export interface paths {
                                     id: string;
                                     content: string;
                                 };
+                                key: string | null;
+                                keyWorkflows: string[];
+                                placement: {
+                                    environment: string;
+                                    /** @enum {string} */
+                                    reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                    machine: {
+                                        id: string;
+                                        label: string;
+                                    };
+                                } | null;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -9562,6 +9912,17 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -10693,6 +11054,17 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
