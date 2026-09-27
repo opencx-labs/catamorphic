@@ -282,8 +282,7 @@ export async function chatOwner(input: {
   const projectChat = (principal: Identity): Identity =>
     projectChatScope(principal, input.projectId);
   if (enablement?.owner_kind === "project") {
-    // A project automation's run already acts as the project, with its
-    // consented connections.
+    // A project automation's run already acts as the project.
     if (!audience || audience === "project") return projectChat(caller);
     return member(audience.member);
   }
@@ -306,11 +305,20 @@ export async function chatOwner(input: {
   return member(audience.member);
 }
 
-/** The project's own chats may run in any Environment the project declares. */
+/**
+ * The project's own chats may run in any Environment the project declares
+ * and use that Environment's committed bindings (ADR 0181): the bindings in
+ * `.work/project.json` are reviewed configuration, and a project chat is
+ * unattended, so admission resolves them to service connections only,
+ * never a member's. The automation's consented connections stay its own.
+ */
 function projectChatScope(principal: Identity, projectId: string): Identity {
   return {
     ...principal,
     executionScope: [{ projectId, name: EVERY_ARTIFACT }],
+    connectionScope: [
+      { projectId, environment: EVERY_ARTIFACT, alias: EVERY_ARTIFACT },
+    ],
   };
 }
 

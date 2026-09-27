@@ -97,8 +97,9 @@ fabricating a registry or editing generated declarations.
 Every binding may add \`where\`, a filter the host checks before a run starts:
 \`trigger("schedule", { cron: "0 8 * * 1-5", timezone: "UTC", where: { ... } })\`.
 It mirrors the payload; a leaf is a value (equal), a list of values (one of),
-or \`{ exists: true | false }\`. Header names match in any case. Filter in
-\`where\` rather than in code, so unrelated events never start runs.
+\`{ exists: true | false }\`, or \`{ prefix: "slack:" }\` (a string that starts
+with it, such as a namespace of chat keys). Header names match in any case.
+Filter in \`where\` rather than in code, so unrelated events never start runs.
 
 Webhooks use \`trigger("webhook", { name: "github" })\`: a lowercase name that
 becomes the project's URL segment. The server stores each request durably and

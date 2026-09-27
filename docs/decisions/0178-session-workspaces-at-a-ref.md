@@ -62,4 +62,5 @@ every fetched ref and are pruned only by deleting the project; pins are
 dropped when a chat closes. A project chat started by a project automation
 still uses only the enablement's consented connections (0173), so it seeds
 from the code host's credentials unless the chat's Environment binding is
-available to it.
+available to it. ADR 0181 makes it available: a project chat uses its own
+Environment's service bindings.

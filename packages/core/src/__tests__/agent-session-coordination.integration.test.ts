@@ -1781,6 +1781,19 @@ describe("agent session coordination", () => {
       }),
     ).rejects.toThrow();
 
+    // Every event of a keyed chat carries its key, closing included, so a
+    // workflow selects a key namespace with `where` (ADR 0181).
+    const events = await sessions.exportEvents({
+      identity,
+      projectId: project.id,
+      sessionId: first.sessionId,
+    });
+    expect(events.map((event) => event.kind)).toContain(
+      "session.state-changed",
+    );
+    for (const event of events)
+      expect(event.payload).toMatchObject({ session: { key: "pr-7" } });
+
     // The pull request reopened: the key starts a fresh chat.
     const reopened = await sessions.chatForKey(identity, project.id, {
       key: "pr-7",
@@ -1915,7 +1928,7 @@ describe("agent session coordination", () => {
     expect(events.at(-1)?.payload).toMatchObject({
       actor: author,
       causation: ["activation-1"],
-      session: { workStatus: "open" },
+      session: { key: null, workStatus: "open" },
     });
     await sessions.sendMessage(
       identity,

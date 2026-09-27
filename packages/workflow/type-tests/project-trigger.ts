@@ -146,6 +146,18 @@ const wrongValue = trigger("github.pull_request", {
 });
 void wrongValue;
 
+// A string position also takes `{ prefix }`; a number position does not.
+const titled = trigger("github.pull_request", {
+  where: { payload: { body: { pull_request: { title: { prefix: "[db]" } } } } },
+});
+void titled;
+
+const numberPrefix = trigger("github.pull_request", {
+  // @ts-expect-error Only strings have prefixes.
+  where: { payload: { body: { number: { prefix: "4" } } } },
+});
+void numberPrefix;
+
 const wrongKey = trigger("github.pull_request", {
   // @ts-expect-error A where names only positions the payload has.
   where: { payload: { bdy: { action: "opened" } } },

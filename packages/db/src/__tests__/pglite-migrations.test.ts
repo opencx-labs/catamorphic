@@ -71,6 +71,7 @@ describe("PGlite migrations", () => {
       "031_session_approvers.sql",
       "032_personal_connections.sql",
       "033_session_workspaces_and_sandbox_grants.sql",
+      "034_session_event_keys.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

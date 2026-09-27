@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { parseProject } from "@catamorphic/parser";
+import { matchesWhere, parseProject } from "@catamorphic/parser";
 import { expect, it } from "vitest";
 import { HOST_SKILLS } from "../seeds.js";
 import { agentDefinitionSchema } from "../services/agent-definitions-service.js";
@@ -144,6 +144,19 @@ it("the Slack library parses as three project kinds on one signed webhook", () =
       capabilities: ["chat.postMessage"],
     },
   ]);
+  // Only a Slack thread's chat starts a reply run (ADR 0181).
+  const [settled] = workflows.postSlackReplies?.graph.triggers ?? [];
+  const where = settled?.where;
+  expect(settled).toMatchObject({
+    kind: "session.turn-changed",
+    config: { statuses: ["completed"] },
+  });
+  const event = (key: string | null) => ({
+    payload: { sessionId: "chat-1", session: { key } },
+  });
+  expect(matchesWhere(where, event("slack:C1:100.1"))).toBe(true);
+  expect(matchesWhere(where, event("pr-acme/web-7"))).toBe(false);
+  expect(matchesWhere(where, event(null))).toBe(false);
 });
 
 it("keeps one chat per Slack thread and one message per event", async () => {
@@ -206,7 +219,7 @@ it("names a Slack user as a member only where the project links them", async () 
   );
 });
 
-it("posts the settled reply to its thread and stays quiet for every other chat", async () => {
+it("posts the settled reply to its thread and stays quiet for anything else", async () => {
   const turn = (resultMessageId?: string) => ({
     payload: {
       sessionId: "chat-1",

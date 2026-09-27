@@ -189,12 +189,13 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0167](0167-machine-pools-access-and-owner-placement.md) | Machine pools, node access, and placement by owner | Accepted (project access and chat placement refined by 0173) |
 | [0169](0169-work-project-workspace.md) | The project workspace is `.work/`, and what lands in repositories is named Work | Accepted |
 | [0170](0170-attached-repositories-receive-pull-requests.md) | Attached repositories receive pull requests, never pushes | Accepted |
-| [0171](0171-project-trigger-kinds-and-declarative-webhook-ingress.md) | Project-defined trigger kinds and declarative webhook ingress | Accepted (GitHub host kinds removed by 0177) |
+| [0171](0171-project-trigger-kinds-and-declarative-webhook-ingress.md) | Project-defined trigger kinds and declarative webhook ingress | Accepted (GitHub host kinds removed by 0177; `prefix` leaf in 0181) |
 | [0172](0172-committed-connection-bindings-and-named-service-connections.md) | Committed connection bindings, named service connections, organization administrators | Accepted |
-| [0173](0173-keyed-chat-lifecycle-and-chat-placement.md) | Keyed chats: project keys, close, idle release, and their own placement | Accepted |
+| [0173](0173-keyed-chat-lifecycle-and-chat-placement.md) | Keyed chats: project keys, close, idle release, and their own placement | Accepted (project chat connections refined by 0181) |
 | [0174](0174-background-processes-as-a-sandbox-capability.md) | Background processes are a sandbox capability | Accepted |
 | [0175](0175-grants-reach-sandboxes.md) | Grants reach sandboxes; credentials never do | Accepted (Git implementation notes; workspaces at a ref in 0178) |
 | [0176](0176-environment-images-containers-egress-and-modes.md) | Environments choose images, containers, egress, and what agents may change | Accepted |
 | [0177](0177-github-is-a-connection.md) | GitHub is a connection | Accepted |
 | [0178](0178-session-workspaces-at-a-ref.md) | Session workspaces at a ref of the project's remote | Accepted |
-| [0179](0179-integrations-from-project-code-slack.md) | Integrations from project code: named HTTP operations and declared delivery ids | Accepted |
+| [0179](0179-integrations-from-project-code-slack.md) | Integrations from project code: named HTTP operations and declared delivery ids | Accepted (session event keys in 0181) |
+| [0181](0181-project-chats-use-their-environments-bindings.md) | Project chats use their Environment's bindings; session events carry keys | Accepted |
