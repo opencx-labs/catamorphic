@@ -68,6 +68,13 @@ const ENDPOINTS: Record<
   ],
 };
 
+/** Actions whose answers spend tokens, counted in `model_usage`. */
+const GENERATING_ACTIONS = new Set([
+  "messages",
+  "responses",
+  "chat.completions",
+]);
+
 /** The gateway action a request names, or undefined for anything else. */
 export function modelEndpointAction(input: {
   api: ModelApi;
@@ -567,21 +574,24 @@ export class ModelGatewayService {
         body: new Uint8Array(await upstream.arrayBuffer()),
       };
     }
+    // Counting tokens and listing models spend none: audited, not counted.
+    const generates = GENERATING_ACTIONS.has(action);
     const settle = async (usage: ModelCallUsage) => {
-      await this.deps.store.recordUsage({
-        tenantId: authorized.identity.tenantId,
-        projectId: authorized.projectId,
-        sessionId: authorized.sessionId,
-        turnId: turnId ?? null,
-        allocationId: authorized.allocationId,
-        connectionId: access.binding.connectionId,
-        alias: request.alias,
-        endpoint: action,
-        usage: { ...usage, ...(usage.model || !model ? {} : { model }) },
-      });
+      if (generates)
+        await this.deps.store.recordUsage({
+          tenantId: authorized.identity.tenantId,
+          projectId: authorized.projectId,
+          sessionId: authorized.sessionId,
+          turnId: turnId ?? null,
+          allocationId: authorized.allocationId,
+          connectionId: access.binding.connectionId,
+          alias: request.alias,
+          endpoint: action,
+          usage: { ...usage, ...(usage.model || !model ? {} : { model }) },
+        });
       await access.audit("allowed", {
         status: upstream.status,
-        usage: { ...usage },
+        ...(generates ? { usage: { ...usage } } : {}),
       });
     };
     const sse = (upstream.headers.get("content-type") ?? "").includes(

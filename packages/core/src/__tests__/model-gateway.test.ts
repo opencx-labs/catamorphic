@@ -506,6 +506,9 @@ describe("the model gateway", () => {
       path: "v1/messages/count_tokens",
     });
     expect(counted.status).toBe(200);
+    await bodyText(counted);
+    expect(spent.recorded).toHaveLength(0);
+    expect(spent.audits.map((audit) => audit.outcome)).toEqual(["allowed"]);
 
     const unknown = await allow.gateway.handle({
       ...messages({ model: "claude-test-1" }),
