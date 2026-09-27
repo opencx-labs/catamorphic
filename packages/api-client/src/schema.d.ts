@@ -6288,6 +6288,10 @@ export interface paths {
                                         label: string;
                                     };
                                 } | null;
+                                workspace: {
+                                    ref: string;
+                                    commit: string;
+                                } | null;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -6335,6 +6339,11 @@ export interface paths {
                         /** Format: uuid */
                         parentSessionId?: string;
                         title?: string;
+                        workspace?: {
+                            ref: string;
+                            /** @enum {string} */
+                            update?: "reset" | "rebase";
+                        };
                     };
                 };
             };
@@ -6421,6 +6430,10 @@ export interface paths {
                                     id: string;
                                     label: string;
                                 };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
                             } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
@@ -6715,6 +6728,10 @@ export interface paths {
                                     label: string;
                                 };
                             } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -6927,6 +6944,10 @@ export interface paths {
                                     label: string;
                                 };
                             } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -7077,6 +7098,10 @@ export interface paths {
                                     id: string;
                                     label: string;
                                 };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
                             } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
@@ -7297,6 +7322,10 @@ export interface paths {
                                     label: string;
                                 };
                             } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -7435,6 +7464,10 @@ export interface paths {
                                     id: string;
                                     label: string;
                                 };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
                             } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
@@ -7648,6 +7681,10 @@ export interface paths {
                                     id: string;
                                     label: string;
                                 };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
                             } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
@@ -7879,6 +7916,10 @@ export interface paths {
                                         label: string;
                                     };
                                 } | null;
+                                workspace: {
+                                    ref: string;
+                                    commit: string;
+                                } | null;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -8028,6 +8069,10 @@ export interface paths {
                                         id: string;
                                         label: string;
                                     };
+                                } | null;
+                                workspace: {
+                                    ref: string;
+                                    commit: string;
                                 } | null;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
@@ -8221,6 +8266,10 @@ export interface paths {
                                         id: string;
                                         label: string;
                                     };
+                                } | null;
+                                workspace: {
+                                    ref: string;
+                                    commit: string;
                                 } | null;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
@@ -8440,6 +8489,10 @@ export interface paths {
                                     label: string;
                                 };
                             } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -8611,6 +8664,11 @@ export interface paths {
                         })[];
                         /** @enum {string} */
                         deliveryMode?: "next_turn" | "interrupt";
+                        workspace?: {
+                            ref: string;
+                            /** @enum {string} */
+                            update?: "reset" | "rebase";
+                        };
                     };
                 };
             };
@@ -9032,6 +9090,10 @@ export interface paths {
                                     id: string;
                                     label: string;
                                 };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
                             } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
@@ -9458,6 +9520,10 @@ export interface paths {
                                     label: string;
                                 };
                             } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -9751,6 +9817,10 @@ export interface paths {
                                         label: string;
                                     };
                                 } | null;
+                                workspace: {
+                                    ref: string;
+                                    commit: string;
+                                } | null;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -9922,6 +9992,10 @@ export interface paths {
                                     id: string;
                                     label: string;
                                 };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
                             } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
@@ -11064,6 +11138,10 @@ export interface paths {
                                     id: string;
                                     label: string;
                                 };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
                             } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */

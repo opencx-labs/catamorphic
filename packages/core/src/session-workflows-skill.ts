@@ -191,6 +191,10 @@ everyone in the project. It binds \`gh.pull_request\` from the GitHub trigger
 library in \`writing-workflows\` (\`.work/triggers/github.ts\`), and its \`where\`
 lets only opened and updated, non-draft pull requests start a run. Enable it for
 the project; the key reuses the chat when the same pull request changes again.
+\`workspace\` starts the chat's checkout at the pull request's head, fetched from
+the project's remote by the host; each later push moves the same chat to the new
+head (the agent is told the old and new heads and what changed), and the chat's
+\`workspace\` records the exact commit it reviewed.
 Keys belong to the project, so a second automation closes the same chat when
 the pull request merges or closes: its workspace, branches, and grants are
 released, the transcript stays readable, and a reopened pull request starts a
@@ -213,6 +217,7 @@ export const reviewPullRequests = defineWorkflow(({ defineBoundary }) => ({
         const event = input.payload.body;
         return host["catamorphic.sessions"].deliver({
           key: "pr-" + event.repository.full_name + "-" + event.number,
+          workspace: { ref: "refs/pull/" + event.number + "/head", update: "reset" },
           title: "Review: " + event.pull_request.title,
           content: "Review the changes in " + event.pull_request.html_url + " and summarize risks.",
           notification: { title: "Review ready", body: event.pull_request.title },
@@ -293,6 +298,19 @@ export const answerSlackMentions = defineWorkflow(({ defineBoundary }) => ({
   \`sessions:write\` in the workflow's \`permissions\`; the project chat from a
   member's automation needs \`automations:write\`. Listing everyone's chats
   needs \`sessions:read\`.
+- workspace on deliver (and create) starts a chat's checkout at a ref of the
+  project's linked remote: a branch, tag, commit, or full ref such as
+  refs/pull/42/head. The host fetches it with the remote's own credentials; the
+  sandbox never holds them. Delivered again to an open chat it moves the
+  checkout before the next turn: update "rebase" (default) keeps the agent's
+  work on top of the new base, "reset" discards it. The agent is told what
+  changed, and a conflicting rebase changes nothing and says so.
+- Git inside a chat's sandbox reaches remotes through the gateway when the
+  chat's Environment binds a Git connection (a binding with git.repositories
+  and git.push rules): plain git fetch and git push origin work, with the
+  session's grant, never the remote's credential. Pushes go to work/* branches
+  (or the binding's push rules); the default branch, deletes, and anything
+  without git:write are refused with a readable Git error.
 - spawn respects the source agent's configured delegation routes. Fresh context
   is the default. fork explicitly copies transcript history; create makes an
   independent conversation. Do not simulate children as untracked shell agents.

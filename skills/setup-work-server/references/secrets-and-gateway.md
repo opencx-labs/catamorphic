@@ -16,6 +16,7 @@ holds company data.
 | An HTTP API with a key (billing, CRM, internal service) | An `http` gateway connection |
 | Reading a production database | A `postgres` gateway connection to a read-only replica role |
 | Tools behind an MCP server | An `mcp` gateway connection |
+| Git with a company remote from agents' sandboxes (fetch, push a fix branch) | A Git-capable connection (`git` gateway entry, or the GitHub provider) bound with `git` rules |
 | A value a workflow's own code must read (a webhook signing secret, a non-sensitive token) | A project secret (`defineSecrets`), sealed in the vault |
 
 Prefer a gateway connection whenever the value is a credential: the call is
@@ -55,7 +56,9 @@ print them, or pass them to agents.
     { "kind": "company", "displayName": "Company tools",
       "url": "https://tools.example.com/mcp" },
     { "kind": "slack", "displayName": "Slack", "url": "https://mcp.slack.com/mcp",
-      "oauth": { "client": { "id": "1234.5678", "secretEnv": "SLACK_CLIENT_SECRET" } } }
+      "oauth": { "client": { "id": "1234.5678", "secretEnv": "SLACK_CLIENT_SECRET" } } },
+    { "type": "git", "kind": "company-git", "displayName": "Company Git",
+      "baseUrl": "https://git.example.com/" }
   ],
   "guards": [
     { "type": "model", "name": "query-review", "kinds": ["prod-replica"],
@@ -86,6 +89,10 @@ and how. The file is host policy, not project logic; it holds no credential.
   dynamically (Slack's). Register the redirect URI
   `<WORK_PUBLIC_URL>/api/connection-authorizations/callback`; put a
   confidential client's secret in the variable `secretEnv` names.
+- `git`: any Git host over HTTPS. Its service connection stores a username and
+  a password or access token (a form); the gateway uses it for sandboxes'
+  fetches and pushes. Code-host providers that serve Git (GitHub) need no
+  entry here.
 
 ## Service connections and administrators
 
@@ -164,6 +171,48 @@ answer. A model guard's key comes from the provider's usual variable
 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`) or the variable
 named in `apiKeyEnv`. Use `"provider": "openai-compatible"` with `baseUrl` for
 a self-hosted classifier; its `apiKeyEnv` is optional. Every decision is in the connection audit.
+
+## Git from sandboxes, through the gateway
+
+Agents that verify changes need live Git: fetch branches, bisect, push a fix
+branch. Their sandboxes never hold the remote's credential (ADR 0175). A
+binding whose provider serves Git gives the session a grant instead, and the
+sandbox's Git talks to the gateway:
+
+```json
+"connections": {
+  "code": { "provider": "company-git", "principal": "service", "service": "company-git",
+            "git": { "repositories": ["platform/api"], "push": ["work/*"] } }
+}
+```
+
+- `git.repositories` lists the remote paths the alias may reach; absent, only
+  the project's linked remote. `git.push` lists the branches a push may update
+  (`work/*` by default; `refs/tags/v*` for a full ref). A remote's default
+  branch and deletions are always refused, and nothing is pushed without the
+  `git:write` capability (narrow an alias to `"capabilities": ["git:read"]` for
+  fetch only). Refusals come back as ordinary Git errors.
+- The agent names the alias in its definition (`"connections": ["code"]`).
+  When a turn starts, the sandbox gets `url.<gateway>.insteadOf` for the
+  remote's base URL and a credential helper that reads the session's current
+  grant, so `git fetch origin` and `git push origin work/fix` just work. The
+  grant lives an hour, is renewed while the session runs, and stops working
+  when the chat is closed, released while idle, or archived.
+- Sandboxes reach the gateway at the server's public URL
+  (`WORK_PUBLIC_URL/api/gateway/git/<alias>/…`). If an Environment restricts
+  egress, allow that URL.
+- Every fetch and push is reviewed by the guards for the connection's kind
+  (action `fetch` or `push`, with the repository and refs) and audited with
+  the session's owner, the refs, and the outcome.
+- Workflows start a chat's checkout at a ref of the project's remote with
+  `deliver({ key, workspace: { ref: "refs/pull/42/head" } })`; the server
+  fetches it into its mirror with the binding's (or code host's) credential
+  and seeds the sandbox from there, with no Git traffic from the sandbox.
+
+Verify: from a chat in that Environment, `git fetch origin` succeeds,
+`git push origin work/<name>` succeeds, `git push --force origin HEAD:main` is
+refused with a readable reason, `env` and the worker's files hold no remote
+credential, and after closing the chat its grant is refused.
 
 ## A production database, safely
 

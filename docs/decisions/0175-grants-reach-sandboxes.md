@@ -72,3 +72,30 @@ so large repositories should seed workspaces from a control-plane mirror
 A grant file exists inside the sandbox; code that can read it can use the
 gateway as that session until it expires or is revoked, which is the
 session's own authority.
+
+## Implementation notes (Git, 2026-09-27)
+
+- Grants carry a `channel`: `mcp` for the harness's connection MCP servers,
+  `sandbox` for the file written into the sandbox, so renewing one never
+  revokes the other. Sandbox grants live an hour, are issued at every sandbox
+  turn and renewed every 20 minutes while it runs, and are revoked with the
+  session's Allocation on close, idle release, and archive.
+- The plugin mounts `/gateway/git/:alias/*` (under the host's API prefix). The
+  grant is the HTTP Basic password (or a bearer); an unauthenticated request
+  gets `WWW-Authenticate: Basic` so Git's credential helper answers.
+- A connection whose provider serves Git carries `git:read` and `git:write`;
+  bindings add `git: { repositories?, push? }` (default: the project's linked
+  remote, `work/*`). The gateway reads receive-pack's commands (and a shallow
+  client's `shallow` lines) before forwarding, refuses the default branch,
+  deletions, refs outside the rules, and pushes without `git:write` as
+  report-status `ng` lines Git prints, and audits each fetch and push as
+  `connection.git`. Guards see the provider kind, action `fetch` or `push`,
+  and `{ repository, refs }`. Force pushes to allowed branches are not
+  detected (the gateway does not hold the pushed objects); protect branches
+  on the code host where that matters.
+- The sandbox's global Git configuration (the sandbox's own `HOME`) includes
+  `url.<gateway>/git/<alias>/.insteadOf <remote base>` and a helper that reads
+  the current grant file; an empty helper first keeps system keychains out.
+- `WORK_GATEWAY_CONFIG` gains a generic `git` entry (base URL; the service
+  connection stores a username and password or token) beside providers that
+  serve Git natively (GitHub).

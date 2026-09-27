@@ -6736,7 +6736,11 @@ export class AgentSessionsService {
       identity,
       allocationId: session.allocation_id,
     });
-    const bindings = allocation?.policy.connections ?? [];
+    // An alias that only serves Git is reached through the sandbox's Git,
+    // not as tools (ADR 0175).
+    const bindings = (allocation?.policy.connections ?? []).filter((binding) =>
+      binding.capabilities.some((capability) => !capability.startsWith("git:")),
+    );
     if (bindings.length === 0) return {};
     if (!this.connectionMcpUrl) {
       throw new Error(

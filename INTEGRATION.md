@@ -929,6 +929,37 @@ for project automations (schedules, webhooks and events that run while nobody
 is present). To keep a privileged service action out of a local Environment,
 bind that alias only in the managed Environment.
 
+Git through the gateway (ADR 0175): a provider that serves Git sets
+`git: { remoteBaseUrls, credentials({ material, remoteUrl, access }) }`
+(`defineGitConnectionProvider` from `@catamorphic/server-sdk` covers any host
+with a stored username and password or token; the GitHub provider mints
+repository tokens). Such a connection carries `git:read` and `git:write`, and a
+binding may add `git: { repositories?, push? }`. Pass `gatewayUrl` to
+`createCatamorphic` (the plugin's `<api>/gateway` as sandboxes reach it; the
+Work server uses its public URL, the desktop its loopback URL). At each sandbox
+turn core writes the session's grant for every Git-capable alias into the
+sandbox, configures `url.<gateway>/git/<alias>/.insteadOf <remote base>` and a
+credential helper that reads the grant, and renews it while the turn runs.
+The plugin serves Git smart HTTP at `/gateway/git/:alias/*` (public route;
+the grant is the Basic password or a bearer), streams both directions, and
+enforces the binding's repositories and push rules (never a default branch,
+no deletes) before forwarding with the upstream credential; guards see kind
+= the provider, action `fetch` or `push`, and the refs. Hosts with their own
+401 challenge must leave `/gateway/` answering `WWW-Authenticate: Basic` so
+Git's credential helpers run.
+
+Workspaces at a ref (ADR 0178): `create` and `deliver` accept
+`workspace: { ref, update? }`. The control plane fetches the ref from the
+project's linked remote (`projects.remote_url`) into a per-project bare mirror
+(`StorageBackend.mirrorPath`, `FsBackend` keeps it under `.mirrors/`) with the
+session's Git binding or, failing that, the code host's credentials
+(`RemoteSyncService.origin`), publishes it as the session's `sessions/<id>`
+branch, and seeds the sandbox from a shallow pack. Native checkouts receive
+`workspace: { ref, commit, repository, pin }` in
+`NativeAgentCheckout.resolve` and start a new worktree at that commit. A
+session at a ref always works in its own session copy, and its DTO reports
+`workspace: { ref, commit }`.
+
 Long-lived API keys and service-account material use service connections, not
 project secrets. A provider's `completeAuthorization` turns the challenge's
 answer into vault material, so its checks (the Postgres provider's read-only
