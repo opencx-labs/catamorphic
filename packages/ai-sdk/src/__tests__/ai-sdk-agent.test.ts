@@ -277,6 +277,41 @@ describe("AiSdkCodingAgent", () => {
     );
   });
 
+  it("names dotted MCP tools the way model APIs accept, calling them by their own names", async () => {
+    const callToolRaw = vi.fn(async () => ({
+      content: [{ type: "text", text: "{}" }],
+      structuredContent: { ok: true },
+    }));
+    connectMcpServerMock.mockResolvedValueOnce({
+      tools: [
+        {
+          name: "conversations.replies",
+          description: "Read a thread",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+      callTool: vi.fn(async () => "unused"),
+      callToolRaw,
+      readResource: vi.fn(),
+      close: vi.fn(async () => {}),
+    });
+    const model = new MockLanguageModelV4({
+      doStream: [
+        toolCallStream("mcp__slack__conversations_replies", {}),
+        textStream("Read it."),
+      ],
+    });
+    const agent = new AiSdkCodingAgent({
+      model,
+      sandboxProvider: createProvider(),
+      mcpServers: {
+        slack: { transport: "http", url: "https://work.test/connection-mcp" },
+      },
+    });
+    await collect(agent, await start(agent), "Read the thread");
+    expect(callToolRaw).toHaveBeenCalledWith("conversations.replies", {});
+  });
+
   it("mounts MCP server tools beside the built-ins and maps their calls", async () => {
     const callToolRaw = vi.fn(async () => ({
       content: [{ type: "text", text: "3 open issues" }],
