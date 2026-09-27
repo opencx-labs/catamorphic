@@ -341,7 +341,10 @@ An Environment chooses its sandbox (ADR 0176) in `.work/project.json`:
   microsandbox machines boot images. A Dockerfile needs a machine with a
   builder: set `WORK_IMAGE_BUILDER=docker` (or `podman`) and install that CLI
   and its daemon on the machine. The build context is the Dockerfile alone;
-  each machine builds a digest once and keeps it cached.
+  each machine builds a digest once and keeps it cached. Build steps (`RUN`)
+  use the builder's network, not the Environment's `network.egress`, so
+  review a Dockerfile's downloads like the rest of the program, or give the
+  builder's daemon a restricted default network or proxy.
 - `requirements.containers` places the work where the sandbox gets its own
   container runtime. On microsandbox, Docker runs inside the VM (on by
   default; `WORK_SANDBOX_CONTAINERS=0` turns it off) on a private disk, and
@@ -359,7 +362,7 @@ An Environment chooses its sandbox (ADR 0176) in `.work/project.json`:
   is a per-user plugin (Docker Desktop), also set `WORK_DOCKER_CLI_PLUGINS`
   to that plugin directory.
 - `network.egress` is `open` (default), `gateway` (only this server's public
-  host, from `WORK_PUBLIC_URL`, and DNS), or `allowlist`. Only microsandbox
+  host and port, from `WORK_PUBLIC_URL`, and DNS), or `allowlist`. Only microsandbox
   enforces it, containers inside the VM included. A restricted image must
   already contain git and bash, since the setup step cannot install them.
   Local-process refuses such Environments unless the operator sets

@@ -23,6 +23,10 @@ the manifest (64 KiB cap) and fixes its content and digest in the
 Allocation. Machines build it once and cache it by digest. Microsandbox
 builds with the host's Docker or Podman (`WORK_IMAGE_BUILDER`) and loads
 the result into its image cache. The build context is the Dockerfile alone.
+Build steps use the builder's own network, not the Environment's egress
+policy, which governs the running sandbox: an image is shared by every
+Environment naming that Dockerfile, and a builder cannot enforce a domain
+allowlist. The Dockerfile is reviewed with the program for that reason.
 
 **Containers are a declared requirement.** `requirements.containers: true`
 needs a machine that gives the sandbox its own container runtime. Docker
@@ -44,7 +48,7 @@ against hostile code.
 
 **Egress is an Environment policy.** `network: { egress: "open" | "gateway"
 | "allowlist", allow?: [domain | *.suffix | IPv4] }`, default open.
-`gateway` reaches only the control plane's public host (and DNS);
+`gateway` reaches only the control plane's public host and port (and DNS);
 `allowlist` adds the listed hosts. Microsandbox enforces it with a
 deny-by-default network policy, which also covers nested containers.
 Local-process cannot enforce it; an operator may accept that explicitly

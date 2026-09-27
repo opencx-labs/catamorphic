@@ -1,3 +1,4 @@
+import { gatewayHostOf, resolveEgress } from "@catamorphic/sandbox";
 import { describe, expect, it } from "vitest";
 import { microsandboxEgressPolicy } from "../egress-policy.js";
 
@@ -56,5 +57,43 @@ describe("microsandboxEgressPolicy (ADR 0176)", () => {
       egress: { mode: "allowlist", allow: [] },
     });
     expect(policy?.rules).toHaveLength(1);
+  });
+
+  it("narrows the gateway to its port, the host's loopback included", () => {
+    expect(gatewayHostOf("http://localhost:8787/api")).toBe("localhost:8787");
+    expect(gatewayHostOf("https://Work.Acme.com")).toBe("work.acme.com:443");
+    expect(gatewayHostOf("http://[::1]:3000")).toBe("[::1]:3000");
+    const egress = resolveEgress({
+      policy: { egress: "gateway" },
+      gatewayHosts: [
+        gatewayHostOf("http://localhost:8787"),
+        gatewayHostOf("https://work.acme.com"),
+        gatewayHostOf("http://[fd00::7]:3000"),
+      ],
+    });
+    const policy = microsandboxEgressPolicy({ egress });
+    expect(policy?.rules.slice(1)).toEqual(
+      [
+        [{ kind: "group", group: "host" }, 8787],
+        [{ kind: "domain", domain: "work.acme.com" }, 443],
+        [{ kind: "cidr", cidr: "fd00::7/128" }, 3000],
+      ].map(([destination, port]) => ({
+        direction: "egress",
+        destination,
+        protocols: ["tcp"],
+        ports: [{ start: port, end: port }],
+        action: "allow",
+      })),
+    );
+  });
+
+  it("matches IPv6 literals as addresses, not names", () => {
+    const policy = microsandboxEgressPolicy({
+      egress: { mode: "allowlist", allow: ["2001:db8::1", "[2001:db8::2]"] },
+    });
+    expect(policy?.rules.slice(1).map((rule) => rule.destination)).toEqual([
+      { kind: "cidr", cidr: "2001:db8::1/128" },
+      { kind: "cidr", cidr: "2001:db8::2/128" },
+    ]);
   });
 });
