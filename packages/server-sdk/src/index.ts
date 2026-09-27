@@ -200,6 +200,10 @@ export {
 } from "./define-trigger-kind.js";
 export { FsBundleStore } from "./fs-bundle-store.js";
 export {
+  defineGitConnectionProvider,
+  type GitConnectionOptions,
+} from "./git-connection-provider.js";
+export {
   defineGithubConnectionProvider,
   GITHUB_CONNECTION_ACTIONS,
   type GithubConnectionOptions,

@@ -479,6 +479,7 @@ async function createWorkServerInner(
       ...(hooks.connectionProviders ?? []),
     ],
     connectionMcpUrl: () => `${publicBase}/api/connection-mcp`,
+    gatewayUrl: () => `${publicBase}/api/gateway`,
     ...(agents.registry ? { codingAgent: agents.registry } : {}),
     appBundleStore:
       objectStore ?? new FsBundleStore(path.join(data, "app-bundles")),
@@ -869,7 +870,13 @@ async function createWorkServerInner(
   });
   instrumentHttpServer(app);
   app.addHook("onSend", (request, reply, payload, done) => {
-    if (reply.statusCode !== 401 || !request.url.startsWith("/api/")) {
+    // The Git gateway answers its own challenge (Basic, for Git's
+    // credential helpers, ADR 0175).
+    if (
+      reply.statusCode !== 401 ||
+      !request.url.startsWith("/api/") ||
+      request.url.startsWith("/api/gateway/")
+    ) {
       done(null, payload);
       return;
     }

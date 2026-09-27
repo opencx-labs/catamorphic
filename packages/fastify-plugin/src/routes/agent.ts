@@ -154,6 +154,9 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
             source: request.body.source,
             parentSessionId: request.body.parentSessionId,
             title: request.body.title,
+            ...(request.body.workspace
+              ? { workspace: request.body.workspace }
+              : {}),
           },
         );
         return reply.status(201).send(session);
@@ -878,6 +881,9 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
             idempotencyKey: request.body.idempotencyKey
               ? `user:${identity.externalUserId}:${request.body.idempotencyKey}`
               : undefined,
+            ...(request.body.workspace
+              ? { workspace: request.body.workspace }
+              : {}),
           },
         );
         return reply.status(202).send(receipt);

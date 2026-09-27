@@ -3,6 +3,7 @@ import {
   AccessDeniedError,
   EVERY_ARTIFACT,
   mayUseProject,
+  parseWorkspaceRequest,
   projectAgentId,
   resolveScope,
   SESSION_ACTION_SCHEMAS,
@@ -582,6 +583,17 @@ export function surfaceTools(
             },
             attention: { type: "string", enum: ["none", "required"] },
             idempotencyKey: { type: "string" },
+            workspace: {
+              type: "object",
+              description:
+                "Move the receiving session's workspace to a ref of the project's linked remote before its next turn (a branch, tag, commit, or refs/pull/<n>/head). update: rebase (default) keeps its commits, reset discards them.",
+              properties: {
+                ref: { type: "string" },
+                update: { type: "string", enum: ["reset", "rebase"] },
+              },
+              required: ["ref"],
+              additionalProperties: false,
+            },
           },
           required: ["toSessionId", "message", "mode"],
         },
@@ -622,6 +634,9 @@ export function surfaceTools(
           ...(str(args.idempotencyKey)
             ? { idempotencyKey: str(args.idempotencyKey) }
             : {}),
+          ...(args.workspace === undefined
+            ? {}
+            : { workspace: parseWorkspaceRequest(args.workspace) }),
         });
       }),
     });

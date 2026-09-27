@@ -1046,6 +1046,21 @@ export const ClosedKeyedChatSchema = z.object({
   closed: z.boolean(),
 });
 
+/**
+ * Where a chat's workspace starts, or moves to (ADR 0178): a branch, tag,
+ * commit, or full ref (`refs/pull/42/head`) of the project's linked remote.
+ */
+export const SessionWorkspaceRequestBodySchema = z.strictObject({
+  ref: z.string().trim().min(1).max(255),
+  update: z.enum(["reset", "rebase"]).optional(),
+});
+
+/** The base a chat's workspace stands on (ADR 0178). */
+export const SessionWorkspaceSchema = z.object({
+  ref: z.string(),
+  commit: z.string(),
+});
+
 export const AgentSessionPlacementSchema = z.object({
   environment: z.string(),
   reason: z.enum([
@@ -1104,6 +1119,8 @@ export const AgentSessionSchema = z.object({
   keyWorkflows: z.array(z.string()),
   /** Where the chat runs and why (ADR 0173). */
   placement: AgentSessionPlacementSchema.nullable(),
+  /** The base the chat's workspace stands on (ADR 0178). */
+  workspace: SessionWorkspaceSchema.nullable(),
   baseCommitSha: z.string().length(40).nullable(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -1143,6 +1160,8 @@ export const CreateAgentSessionSchema = z.object({
   source: AgentSessionSourceSchema.optional(),
   parentSessionId: z.string().uuid().optional(),
   title: z.string().min(1).max(500).optional(),
+  /** Start the workspace at a ref of the project's linked remote. */
+  workspace: SessionWorkspaceRequestBodySchema.optional(),
 });
 
 export const CreateAgentSubsessionSchema = z.object({
@@ -1515,6 +1534,8 @@ export const SendMessageSchema = z
     idempotencyKey: z.string().min(1).max(200).optional(),
     attachments: z.array(AgentAttachmentSchema).max(32).optional(),
     deliveryMode: z.enum(["next_turn", "interrupt"]).optional(),
+    /** Move the chat's workspace to a ref before this turn (ADR 0178). */
+    workspace: SessionWorkspaceRequestBodySchema.optional(),
   })
   .refine(
     (body) =>
