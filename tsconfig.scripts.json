@@ -4,7 +4,16 @@
     "declaration": false,
     "declarationMap": false,
     "sourceMap": false,
-    "types": ["node"]
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@catamorphic/workflow/project-layout": [
+        "./packages/workflow/src/project-layout.ts"
+      ]
+    }
   },
-  "include": ["scripts/**/*.ts"]
+  "include": [
+    "scripts/**/*.ts"
+  ]
 }
