@@ -176,11 +176,11 @@ export function registerGithubAppSetup(args: {
     return reply.type("text/html; charset=utf-8").send(
       page({
         title: "Register the GitHub App",
-        body: `<p>Continue on GitHub to create <strong>${escape(
+        body: `<p>Continue on GitHub to create <strong>${escapeHtml(
           input.name,
-        )}</strong>${input.organization ? ` for ${escape(input.organization)}` : ""}.</p>
-<form id="manifest" method="post" action="${escape(form.action)}">
-<input type="hidden" name="manifest" value="${escape(form.fields.manifest)}">
+        )}</strong>${input.organization ? ` for ${escapeHtml(input.organization)}` : ""}.</p>
+<form id="manifest" method="post" action="${escapeHtml(form.action)}">
+<input type="hidden" name="manifest" value="${escapeHtml(form.fields.manifest)}">
 <button type="submit">Continue on GitHub</button>
 </form>
 <script>document.getElementById("manifest").submit();</script>`,
@@ -214,7 +214,7 @@ export function registerGithubAppSetup(args: {
         .send(
           page({
             title: "GitHub did not return the App",
-            body: `<p>${escape(error instanceof Error ? error.message : "The conversion failed")}. Start again from the operator API.</p>`,
+            body: `<p>${escapeHtml(error instanceof Error ? error.message : "The conversion failed")}. Start again from the operator API.</p>`,
           }),
         );
     }
@@ -281,7 +281,7 @@ export function registerGithubAppSetup(args: {
         .send(
           page({
             title: "The App could not be connected",
-            body: `<p>${escape(error instanceof Error ? error.message : "Connecting failed")}</p>`,
+            body: `<p>${escapeHtml(error instanceof Error ? error.message : "Connecting failed")}</p>`,
           }),
         );
     }
@@ -295,7 +295,7 @@ export function registerGithubAppSetup(args: {
     return reply.type("text/html; charset=utf-8").send(
       page({
         title: "GitHub is connected",
-        body: `<p><strong>${escape(app.name)}</strong> is installed and connected as the <code>${escape(
+        body: `<p><strong>${escapeHtml(app.name)}</strong> is installed and connected as the <code>${escapeHtml(
           name,
         )}</code> service connection. Bind it in <code>.work/project.json</code> to give agents and workflows GitHub, and sync and pull requests use it now.</p>${secretNote}`,
       }),
@@ -327,7 +327,7 @@ async function storeWebhookSecret(args: {
     return `<p>The webhook secret is stored as the project's <code>${GITHUB_WEBHOOK_SECRET}</code>.</p>`;
   } catch (error) {
     if (!(error instanceof UndeclaredSecretError)) throw error;
-    return `<p>The project does not declare <code>${GITHUB_WEBHOOK_SECRET}</code> yet. Declare it with the GitHub trigger library, then set it to this value, shown only now:</p><pre>${escape(
+    return `<p>The project does not declare <code>${GITHUB_WEBHOOK_SECRET}</code> yet. Declare it with the GitHub trigger library, then set it to this value, shown only now:</p><pre>${escapeHtml(
       args.secret,
     )}</pre>`;
   }
@@ -346,14 +346,14 @@ function expired(reply: FastifyReply): FastifyReply {
 }
 
 function page(args: { title: string; body: string }): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(
     args.title,
-  )}</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem}pre{white-space:pre-wrap;word-break:break-all}</style></head><body><h1>${escape(
+  )}</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem}pre{white-space:pre-wrap;word-break:break-all}</style></head><body><h1>${escapeHtml(
     args.title,
   )}</h1>${args.body}</body></html>`;
 }
 
-function escape(value: string): string {
+function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
