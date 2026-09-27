@@ -103,11 +103,13 @@ export class DurableToolPermissionBroker implements ToolPermissionChannel {
         decision: "deny",
         reason: `"${args.request.tool}" on ${args.request.server} needs a person's approval, and no one watches this chat. The automation that delivers into it can name approvers (members or project roles).`,
       };
-    const timeoutMs = chat.waitMinutes
-      ? chat.waitMinutes * 60_000
-      : unattended
-        ? this.unattendedTimeoutMs
-        : this.timeoutMs;
+    // A person in their own chat answers promptly or not at all; the
+    // Environment's wait is for chats no one watches.
+    const timeoutMs = !unattended
+      ? this.timeoutMs
+      : chat.waitMinutes
+        ? chat.waitMinutes * 60_000
+        : this.unattendedTimeoutMs;
     const turn = await this.db
       .selectFrom("agent_turns")
       .select("id")
