@@ -1194,7 +1194,7 @@ describe("agents and profiles", () => {
     await runWait(
       `const inspector = $('[data-testid="session-inspector-content"]');
        return inspector?.textContent.includes('Checkout') &&
-         inspector.textContent.includes('catamorphic/');`,
+         inspector.textContent.includes('work/');`,
       { label: "active chat isolated checkout in session status" },
     );
   });

@@ -176,8 +176,7 @@ with their own \`where\` on top; every filter along the chain must match. Write
 already register. A type argument states the payload the filtered events carry;
 \`Narrow<Base, Patch>\` types part of it, such as a webhook's body. The host
 regenerates \`work-triggers.d.ts\` with these kinds; \`bun run --cwd .work check\`
-checks them. \`.work/package.json\` needs \`@catamorphic/workflow\` in
-\`devDependencies\` so these files type-check.
+checks them.
 
 A GitHub library, for a repository or GitHub App webhook sending JSON to the
 project's \`github\` URL with the secret stored as \`GITHUB_WEBHOOK_SECRET\`. The
