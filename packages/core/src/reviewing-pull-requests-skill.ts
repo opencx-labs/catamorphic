@@ -175,6 +175,13 @@ const GITHUB_MEMBERS: Record<string, string> = {};
 /** How people ask the reviewer something in a pull request comment. */
 const REVIEWER_HANDLE = "@work";
 
+// Every trigger below names the repository this project reviews,
+// "acme/web": replace it with yours (owner/name). One App webhook delivers
+// events from every repository the App is installed on, and a review chat's
+// workspace always fetches from this project's own remote, so events from
+// any other repository must not start a review. A \`where\` filter is
+// constant data, so the name is written in each one.
+
 /** @displayname Review pull requests */
 export const reviewPullRequests = defineWorkflow(({ defineBoundary }) => ({
   triggers: [
@@ -184,6 +191,7 @@ export const reviewPullRequests = defineWorkflow(({ defineBoundary }) => ({
           body: {
             action: ["opened", "synchronize", "reopened", "ready_for_review"],
             pull_request: { draft: false },
+            repository: { full_name: "acme/web" },
           },
         },
       },
@@ -227,11 +235,25 @@ export const answerReviewComments = defineWorkflow(({ defineBoundary }) => ({
   triggers: [
     trigger("github.issue_comment", {
       where: {
-        payload: { body: { issue: { state: "open", pull_request: { exists: true } }, comment: { user: { type: "User" } } } },
+        payload: {
+          body: {
+            issue: { state: "open", pull_request: { exists: true } },
+            comment: { user: { type: "User" } },
+            repository: { full_name: "acme/web" },
+          },
+        },
       },
     }),
     trigger("github.pull_request_review_comment", {
-      where: { payload: { body: { pull_request: { state: "open" }, comment: { user: { type: "User" } } } } },
+      where: {
+        payload: {
+          body: {
+            pull_request: { state: "open" },
+            comment: { user: { type: "User" } },
+            repository: { full_name: "acme/web" },
+          },
+        },
+      },
     }),
   ],
   steps: [
@@ -267,7 +289,11 @@ export const answerReviewComments = defineWorkflow(({ defineBoundary }) => ({
 
 /** @displayname Close pull request chats */
 export const closePullRequestChats = defineWorkflow(({ defineBoundary }) => ({
-  triggers: [trigger("github.pull_request", { where: { payload: { body: { action: "closed" } } } })],
+  triggers: [
+    trigger("github.pull_request", {
+      where: { payload: { body: { action: "closed", repository: { full_name: "acme/web" } } } },
+    }),
+  ],
   steps: [
     /** @displayname Close the review chat */
     defineBoundary({
@@ -385,6 +411,12 @@ codebase, which tests are slow, what never to touch.
 ${REVIEWER_DOCTRINE}\`\`\`\`
 
 ## .work/workflows/src/reviews.ts
+
+Replace \`acme/web\` in every trigger's \`where\` with the repository this
+project is attached to. The App's webhook delivers events from every
+repository the App is installed on, while a review chat's workspace fetches
+from the project's own remote, so a filter naming another repository (or
+none) reviews the wrong code.
 
 \`GITHUB_MEMBERS\` maps GitHub logins to project members: the author and
 requested reviewers who are mapped approve the chat's escalations (a guarded

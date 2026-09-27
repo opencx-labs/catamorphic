@@ -62,6 +62,7 @@ const pullRequest = (input: {
   draft?: boolean;
   body?: string | null;
   reviewers?: string[];
+  repository?: string;
 }) => ({
   kind: "webhook",
   payload: {
@@ -90,13 +91,18 @@ const pullRequest = (input: {
         head: { sha: HEAD, ref: "totals" },
         base: { sha: "c".repeat(40), ref: "main" },
       },
-      repository: { full_name: "acme/web" },
+      repository: { full_name: input.repository ?? "acme/web" },
       sender: { login: "ada", type: "User" },
     },
   },
 });
 
-const comment = (input: { body: string; type?: string; inline?: boolean }) => ({
+const comment = (input: {
+  body: string;
+  type?: string;
+  inline?: boolean;
+  repository?: string;
+}) => ({
   kind: "webhook",
   payload: {
     name: "github",
@@ -132,7 +138,7 @@ const comment = (input: { body: string; type?: string; inline?: boolean }) => ({
         user: { login: "grace", type: input.type ?? "User" },
         ...(input.inline ? { path: "src/orders.ts", line: 12 } : {}),
       },
-      repository: { full_name: "acme/web" },
+      repository: { full_name: input.repository ?? "acme/web" },
     },
   },
 });
@@ -244,6 +250,28 @@ describe("the reviewing-pull-requests skill", () => {
         comment({ body: "@work why?", type: "Bot" }),
       ),
     ).toBe(false);
+    // The App's webhook also delivers other repositories' events; the
+    // workspace fetches from the project's remote, so they start nothing.
+    const elsewhere = "acme/payments";
+    expect(
+      starts(
+        "reviewPullRequests",
+        pullRequest({ action: "opened", repository: elsewhere }),
+      ),
+    ).toBe(false);
+    expect(
+      starts(
+        "closePullRequestChats",
+        pullRequest({ action: "closed", repository: elsewhere }),
+      ),
+    ).toBe(false);
+    for (const inline of [false, true])
+      expect(
+        starts(
+          "answerReviewComments",
+          comment({ body: "@work why?", inline, repository: elsewhere }),
+        ),
+      ).toBe(false);
   });
 
   it("hands each pull request to its keyed chat at its head", async () => {
