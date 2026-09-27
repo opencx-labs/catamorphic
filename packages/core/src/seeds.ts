@@ -228,16 +228,18 @@ export const APP_PACKAGE_VERSION = "0.0.4";
  * no Catamorphic host.
  */
 export const PROJECT_CHECK_SCRIPT = `/**
- * Project check — parses this workspace, validates workflows and trigger
+ * Project check: parses this workspace, validates workflows and trigger
  * bindings, and verifies the generated app-api types are fresh.
  *
- * Seeded by Catamorphic, owned by this project: edit it freely. The heavy
- * lifting lives in the \`@catamorphic/parser\` devDependency; this script is
- * just the how-to-run-it. (Missing the dependency? \`bun install --cwd .work\`,
- * or \`bun add --cwd .work -d @catamorphic/parser\`.)
+ * Seeded by Work, owned by this project: edit it freely. The heavy lifting
+ * lives in the \`@catamorphic/parser\` devDependency; this script is just the
+ * how-to-run-it. The \`@catamorphic/*\` packages are not yet on a public
+ * registry, so \`bun install --cwd .work\` works only where one serving them
+ * is configured. Where the host offers a check (the project MCP
+ * \`program_check\` tool), use that instead.
  *
  * Usage:
- *   bun run --cwd .work check                # validate (exit 1 on errors) — CI-friendly
+ *   bun run --cwd .work check                # validate (exit 1 on errors), CI-friendly
  *   bun run --cwd .work check -- --write     # also (re)write generated app-api types
  *   bun run --cwd .work check -- --host URL  # validate trigger bindings against a
  *                                # running Catamorphic host (GET /api/trigger-kinds)
@@ -406,7 +408,7 @@ Workflows and apps live in a bun workspace: an independent \`.work/package.json\
 Then:
 
 1. Set \`.work/package.json\` "name" to the project's name. Leave the imported project's root manifest, dependencies, and instruction files unchanged. Create \`.work/.gitignore\` with \`/app-data/\`, \`node_modules/\`, and \`dist/\` entries if it does not exist; preserve the user's existing ignore choices.
-2. Run \`bun install --cwd .work\`. Run workspace checks with \`bun run --cwd .work check\`.
+2. Check the workspace with the host's check when it offers one (the project MCP \`program_check\` tool). Otherwise run \`bun install --cwd .work\` and \`bun run --cwd .work check\`; they need \`@catamorphic/workflow\` and \`@catamorphic/parser\`, which are not yet on a public registry.
 3. Read \`writing-workflows\` before writing workflow code and \`building-apps\` before creating an app under \`.work/apps/<name>/\`. Use the host's skill listing and reader: imported projects may receive these skills from the host without copies in \`.work/skills/\`.
 
 Do NOT install the workspace preemptively — only when automations or apps are actually wanted.

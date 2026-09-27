@@ -455,7 +455,10 @@ and a check run on the head commit (\`create_check_run\`, later
 
 ## Turn it on and check it
 
-1. \`bun run --cwd .work check\`, then deploy.
+1. Check the workspace with the host's check (the project MCP
+   \`program_check\` tool), then deploy. \`bun run --cwd .work check\` does
+   the same where \`bun install --cwd .work\` can reach the \`@catamorphic/*\`
+   packages, which are not yet on a public registry.
 2. Store \`GITHUB_WEBHOOK_SECRET\` as a project secret (the server does this
    when it registered the App for this project) and turn on
    \`reviewPullRequests\`, \`answerReviewComments\`, and \`closePullRequestChats\`

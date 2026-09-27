@@ -110,8 +110,10 @@ Ask an agent in the project to add the review automation from the
 Replace `acme/web` in each trigger's `where` with the project's repository,
 so events from the App's other repositories start nothing. Map GitHub logins
 to members in `GITHUB_MEMBERS` (they approve the chat's escalations) or
-commit a `reviewers` role. Run `bun run --cwd .work check`, then propose the
-change; it lands through a pull request like any other.
+commit a `reviewers` role. Check it with the project MCP `program_check`
+tool (`bun run --cwd .work check` needs the `@catamorphic/*` packages, which
+are not yet on a public registry), then propose the change; it lands through
+a pull request like any other.
 
 ## 5. Turn it on
 
