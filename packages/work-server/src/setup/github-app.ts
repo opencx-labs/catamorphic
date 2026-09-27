@@ -11,7 +11,7 @@ import {
   type GithubConnectionProvider,
   githubAppManifestForm,
 } from "@catamorphic/server-sdk";
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { verifyWorkOperatorSecret } from "./operator-access.js";
 
@@ -68,15 +68,18 @@ const TTL_MS = 60 * 60 * 1000;
 /**
  * Register a GitHub App from a manifest and connect it as a service
  * connection (ADR 0177). The operator starts it on the loopback listener and
- * opens the returned one-time URL in a browser on this machine: the page
- * posts the manifest to GitHub, GitHub returns here with a code that becomes
- * the App's credentials, the operator installs the App, and the installation
+ * hands a person the returned one-time link on the public origin: the page
+ * posts the manifest to GitHub, GitHub returns with a code that becomes the
+ * App's credentials, the person installs the App, and the installation
  * becomes the `github` service connection. The App's webhook points at a
  * project's `github` webhook URL when a project is named, with its secret
  * stored as that project's `GITHUB_WEBHOOK_SECRET`.
  */
 export function registerGithubAppSetup(args: {
-  app: FastifyInstance;
+  /** Loopback operator listener: starts a registration. */
+  operatorApp: FastifyInstance;
+  /** Public listener: the browser legs, authorized by the one-time state. */
+  publicApp: FastifyInstance;
   operatorSecret: string;
   operatorIdentity: Identity;
   core: () => CatamorphicCore;
@@ -88,51 +91,54 @@ export function registerGithubAppSetup(args: {
   const pending = new Map<string, PendingRegistration>();
   const now = args.now ?? Date.now;
   const identity = args.operatorIdentity;
-  const base = "/_work/operator/github/app";
-  const origin = (request: FastifyRequest) =>
-    `${request.protocol}://${request.host}`;
+  const base = "/_work/github/app";
   const take = (state: string): PendingRegistration | undefined => {
     for (const [key, entry] of pending)
       if (entry.expiresAt <= now()) pending.delete(key);
     return pending.get(state);
   };
 
-  args.app.post(base, async (request, reply) => {
-    const authorization = request.headers.authorization;
-    if (
-      !verifyWorkOperatorSecret(
-        Array.isArray(authorization) ? authorization[0] : authorization,
-        args.operatorSecret,
+  args.operatorApp.post(
+    "/_work/operator/github/app",
+    async (request, reply) => {
+      const authorization = request.headers.authorization;
+      if (
+        !verifyWorkOperatorSecret(
+          Array.isArray(authorization) ? authorization[0] : authorization,
+          args.operatorSecret,
+        )
       )
-    )
-      return reply.status(401).send({ error: "Operator credential required" });
-    const input = StartInput.safeParse(request.body ?? {});
-    if (!input.success)
-      return reply.status(400).send({
-        error: input.error.issues[0]?.message ?? "Invalid input",
+        return reply
+          .status(401)
+          .send({ error: "Operator credential required" });
+      const input = StartInput.safeParse(request.body ?? {});
+      if (!input.success)
+        return reply.status(400).send({
+          error: input.error.issues[0]?.message ?? "Invalid input",
+        });
+      if (input.data.projectId) {
+        const project = await args
+          .core()
+          .projects.get(identity, input.data.projectId)
+          .catch(() => undefined);
+        if (!project)
+          return reply.status(404).send({ error: "Project not found" });
+      }
+      const state = randomBytes(24).toString("base64url");
+      const expiresAt = now() + TTL_MS;
+      pending.set(state, { input: input.data, expiresAt });
+      return reply.status(201).send({
+        url: `${args.publicBase}${base}/${state}`,
+        expiresAt: new Date(expiresAt).toISOString(),
       });
-    if (input.data.projectId) {
-      const project = await args
-        .core()
-        .projects.get(identity, input.data.projectId)
-        .catch(() => undefined);
-      if (!project)
-        return reply.status(404).send({ error: "Project not found" });
-    }
-    const state = randomBytes(24).toString("base64url");
-    const expiresAt = now() + TTL_MS;
-    pending.set(state, { input: input.data, expiresAt });
-    return reply.status(201).send({
-      url: `${origin(request)}${base}/${state}`,
-      expiresAt: new Date(expiresAt).toISOString(),
-    });
-  });
+    },
+  );
 
   // The browser legs carry no operator credential: the unguessable,
   // one-hour state in the path is the bearer, issued to the operator.
   const Params = z.object({ state: z.string().min(20) });
 
-  args.app.get(`${base}/:state`, async (request, reply) => {
+  args.publicApp.get(`${base}/:state`, async (request, reply) => {
     const params = Params.safeParse(request.params);
     const entry = params.success ? take(params.data.state) : undefined;
     if (!params.success || !entry) return expired(reply);
@@ -145,7 +151,7 @@ export function registerGithubAppSetup(args: {
           name: "github",
         })}`
       : undefined;
-    const here = `${origin(request)}${base}/${state}`;
+    const here = `${args.publicBase}${base}/${state}`;
     const manifest = buildGithubAppManifest({
       name: input.name,
       url: args.publicBase,
@@ -182,7 +188,7 @@ export function registerGithubAppSetup(args: {
     );
   });
 
-  args.app.get(`${base}/:state/created`, async (request, reply) => {
+  args.publicApp.get(`${base}/:state/created`, async (request, reply) => {
     const params = Params.safeParse(request.params);
     const query = z
       .object({ code: z.string().min(1), state: z.string().min(1) })
@@ -219,7 +225,7 @@ export function registerGithubAppSetup(args: {
     );
   });
 
-  args.app.get(`${base}/:state/installed`, async (request, reply) => {
+  args.publicApp.get(`${base}/:state/installed`, async (request, reply) => {
     const params = Params.safeParse(request.params);
     const query = z
       .object({ installation_id: z.coerce.number().int().positive() })

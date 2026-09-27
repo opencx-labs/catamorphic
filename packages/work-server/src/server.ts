@@ -981,7 +981,8 @@ async function createWorkServerInner(
     publicBase,
   });
   registerGithubAppSetup({
-    app: operatorApp,
+    operatorApp,
+    publicApp: app,
     operatorSecret,
     operatorIdentity: rootIdentity,
     core: () => core,

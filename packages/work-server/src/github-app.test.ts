@@ -204,15 +204,12 @@ afterAll(async () => {
   fs.rmSync(reposDir, { recursive: true, force: true });
 });
 
-const operator = (method: "GET" | "POST", url: string, body?: unknown) =>
+const operator = (method: "POST", url: string, body?: unknown) =>
   server.operatorApp.inject({
     method,
     url,
     headers: {
-      host: "127.0.0.1:4701",
-      ...(method === "POST"
-        ? { authorization: `Bearer ${operatorSecret}` }
-        : {}),
+      authorization: `Bearer ${operatorSecret}`,
       ...(body !== undefined ? { "content-type": "application/json" } : {}),
     },
     ...(body !== undefined ? { payload: JSON.stringify(body) } : {}),
@@ -257,10 +254,21 @@ describe("GitHub as the github service connection (ADR 0177)", () => {
     });
     expect(started.statusCode).toBe(201);
     const link = new URL(started.json().url);
-    expect(link.origin).toBe("http://127.0.0.1:4701");
+    // The browser legs live on the public origin, where the person can reach
+    // them; the one-time state authorizes them.
+    expect(link.origin).toBe("https://work.acme.test");
     const state = link.pathname.split("/").at(-1) ?? "";
 
-    const form = await operator("GET", link.pathname);
+    const browser = (url: string) => server.app.inject({ method: "GET", url });
+    expect(
+      (
+        await server.app.inject({
+          method: "POST",
+          url: "/_work/operator/github/app",
+        })
+      ).statusCode,
+    ).toBe(404);
+    const form = await browser(link.pathname);
     expect(form.statusCode).toBe(200);
     expect(form.body).toContain(
       `action="${git.url}/organizations/acme/settings/apps/new?state=${state}"`,
@@ -273,8 +281,8 @@ describe("GitHub as the github service connection (ADR 0177)", () => {
     expect(manifest).toMatchObject({
       name: "Work Acme",
       url: "https://work.acme.test",
-      redirect_url: `http://127.0.0.1:4701/_work/operator/github/app/${state}/created`,
-      setup_url: `http://127.0.0.1:4701/_work/operator/github/app/${state}/installed`,
+      redirect_url: `https://work.acme.test/_work/github/app/${state}/created`,
+      setup_url: `https://work.acme.test/_work/github/app/${state}/installed`,
       callback_urls: [
         "https://work.acme.test/api/connection-authorizations/callback",
       ],
@@ -296,13 +304,11 @@ describe("GitHub as the github service connection (ADR 0177)", () => {
       ),
     );
 
-    const forged = await operator(
-      "GET",
+    const forged = await browser(
       `${link.pathname}/created?code=manifest-code&state=other`,
     );
     expect(forged.statusCode).toBe(404);
-    const converted = await operator(
-      "GET",
+    const converted = await browser(
       `${link.pathname}/created?code=manifest-code&state=${state}`,
     );
     expect(converted.statusCode).toBe(302);
@@ -310,8 +316,7 @@ describe("GitHub as the github service connection (ADR 0177)", () => {
       `${git.url}/apps/work-acme/installations/new?state=${state}`,
     );
 
-    const installed = await operator(
-      "GET",
+    const installed = await browser(
       `${link.pathname}/installed?installation_id=77&setup_action=install`,
     );
     expect(installed.statusCode).toBe(200);
@@ -335,7 +340,7 @@ describe("GitHub as the github service connection (ADR 0177)", () => {
       }),
     );
     // The one-time link is spent.
-    expect((await operator("GET", link.pathname)).statusCode).toBe(404);
+    expect((await browser(link.pathname)).statusCode).toBe(404);
   });
 
   it("provisions an attached repository through the service connection and proposes its roles", async () => {
