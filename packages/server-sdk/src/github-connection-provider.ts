@@ -97,7 +97,7 @@ export type GithubConnectionProvider = ConnectionProvider & {
   /** `owner` and `name` of a remote under this provider's web origin. */
   repositoryOf(remoteUrl: string): { owner: string; name: string };
   /** REST client settings for calls with {@link accessToken}. */
-  readonly api: { baseUrl: string; fetch: FetchLike };
+  readonly api: { baseUrl: string; webBaseUrl: string; fetch: FetchLike };
 };
 
 const Repository = z
@@ -779,7 +779,7 @@ export function defineGithubConnectionProvider(
     repositoryOf: (remoteUrl) =>
       repositoryFromRemote({ remoteUrl, webBaseUrl }),
 
-    api: { baseUrl: apiBaseUrl, fetch: doFetch },
+    api: { baseUrl: apiBaseUrl, webBaseUrl, fetch: doFetch },
 
     listActions: async ({ capabilities }) =>
       actions.filter((action) => capabilities.includes(action.name)),

@@ -28,10 +28,12 @@ import {
   type Catamorphic,
   connectionAuthorizationPage,
   createCatamorphic,
+  defineGithubConnectionProvider,
   EncryptedCredentialVault,
   FsBackend,
   FsBundleStore,
-  GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
+  type GithubConnectionOptions,
+  githubCodeHost,
   ObjectRemoteBackend,
   PostgresObjectStore,
   ProjectManager,
@@ -68,13 +70,13 @@ import type { WorkServerConfig } from "./config.js";
 import { EncryptedFileCredentialVault } from "./credential-vault.js";
 import { workExecution } from "./execution-config.js";
 import { gatewayGuards, gatewayProviders } from "./gateway/gateway-config.js";
-import { workGithub } from "./github-config.js";
 import { AccountLifecycle } from "./identity/account-lifecycle.js";
 import { registerAdministratorRoutes } from "./identity/administrator-routes.js";
 import { WorkAdministrators } from "./identity/administrators.js";
 import type { DirectoryProvider } from "./identity/directory.js";
 import { GoogleWorkspaceDirectory } from "./identity/google-directory.js";
 import { registerConnectionSetup } from "./setup/connections.js";
+import { registerGithubAppSetup } from "./setup/github-app.js";
 import { registerMachineSetup } from "./setup/machines.js";
 import {
   loadWorkOperatorSecret,
@@ -121,6 +123,14 @@ export interface WorkServerHooks {
   agentCapabilities?: AgentCapabilityOptions;
   /** Added to the connections declared in `config.gateway`. */
   connectionProviders?: readonly ConnectionProvider[];
+  /**
+   * The built-in `github` connection provider (ADR 0177): an Enterprise
+   * Server's URLs, the App's OAuth client for members' own connections, or
+   * a `fetch` for tests. GitHub is always available as a connection; its
+   * App installation is the `github` service connection an administrator
+   * connects.
+   */
+  github?: GithubConnectionOptions;
   /** Replace or extend the files seeded into new projects (ADR 0049). */
   projectSeeds?: (
     defaults: Readonly<Record<string, string>>,
@@ -419,10 +429,9 @@ async function createWorkServerInner(
     toolPermissions,
     settings: config.agent,
   });
-  const github = workGithub({
-    settings: config.github,
-    tenantId: SERVER_TENANT_ID,
-  });
+  // GitHub is an ordinary connection (ADR 0177): built in, always offered,
+  // backed by the `github` service connection an administrator connects.
+  const github = defineGithubConnectionProvider(hooks.github);
 
   const gatewayConnectionProviders = config.gateway
     ? gatewayProviders(config.gateway)
@@ -433,7 +442,6 @@ async function createWorkServerInner(
     ),
   );
   const catamorphic = createCatamorphic({
-    ...(github ? { github: github.config, proposalBot: github.identity } : {}),
     hostId,
     agentCapabilities: workAgentCapabilities({
       core: () => catamorphic.core,
@@ -475,9 +483,11 @@ async function createWorkServerInner(
       ...(hooks.connectionGuards ?? []),
     ],
     connectionProviders: [
+      github,
       ...gatewayConnectionProviders,
       ...(hooks.connectionProviders ?? []),
     ],
+    codeHosts: [githubCodeHost(github)],
     connectionMcpUrl: () => `${publicBase}/api/connection-mcp`,
     ...(agents.registry ? { codingAgent: agents.registry } : {}),
     appBundleStore:
@@ -485,13 +495,7 @@ async function createWorkServerInner(
     documentBlobStore:
       objectStore ?? new FsBundleStore(path.join(data, "document-blobs")),
     toolPermissions,
-    triggerKinds: [
-      aiToolCall,
-      schedule,
-      webhook,
-      ...SESSION_TRIGGER_KINDS,
-      ...GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
-    ],
+    triggerKinds: [aiToolCall, schedule, webhook, ...SESSION_TRIGGER_KINDS],
     // Workflows bound to `ai.tool-call` are tools on the project MCP, for
     // project agents and members' own MCP clients alike.
     mcpToolKinds: [aiToolKind],
@@ -550,24 +554,22 @@ async function createWorkServerInner(
   });
   disposers.push(() => worker.stop());
   const core = catamorphic.core;
-  // Webhooks, chat and GitHub events start workflows whether or not
+  // Webhooks, chat and polled events start workflows whether or not
   // coding agents are configured.
   const eventDispatcher = startEventDispatcher({ core });
   disposers.push(() => eventDispatcher.stop());
-  if (github && core.github) {
-    await core.github.connect(github.identity, {
-      accessToken: github.accessToken,
-      expiresAt: null,
-      refreshToken: null,
-      refreshTokenExpiresAt: null,
-    });
-  }
-  if (github) {
+  // Company projects attached to a code host receive what their default
+  // branch accepts, through the organization's service connection.
+  const rootIdentity: Identity = {
+    tenantId: SERVER_TENANT_ID,
+    externalUserId: SETUP_AGENT_USER,
+  };
+  {
     let stopped = false;
     let activeSync: Promise<void> | undefined;
     const syncProjects = async () => {
       for (let offset = 0; !stopped; offset += 50) {
-        const page = await core.projects.list(github.identity, {
+        const page = await core.projects.list(rootIdentity, {
           limit: 50,
           offset,
         });
@@ -576,7 +578,7 @@ async function createWorkServerInner(
           if (!project.remoteUrl) continue;
           try {
             const result = await core.remoteSync.syncPublished({
-              identity: github.identity,
+              identity: rootIdentity,
               projectId: project.id,
             });
             if (result.status === "pulled" || result.status === "merged") {
@@ -612,10 +614,6 @@ async function createWorkServerInner(
     });
     tick();
   }
-  const rootIdentity: Identity = {
-    tenantId: SERVER_TENANT_ID,
-    externalUserId: SETUP_AGENT_USER,
-  };
   const admission = new WorkAdmissionService({
     db: core.db,
     membershipWriterIdentity: rootIdentity,
@@ -982,6 +980,14 @@ async function createWorkServerInner(
     administrators,
     publicBase,
   });
+  registerGithubAppSetup({
+    app: operatorApp,
+    operatorSecret,
+    operatorIdentity: rootIdentity,
+    core: () => core,
+    provider: github,
+    publicBase,
+  });
   operatorApp.post("/_work/operator/projects", async (request, reply) => {
     const authorization = Array.isArray(request.headers.authorization)
       ? request.headers.authorization[0]
@@ -999,7 +1005,7 @@ async function createWorkServerInner(
     try {
       const result = await provisionWorkProject({
         services: {
-          ...(core.github ? { github: core.github } : {}),
+          codeHosts: core.codeHosts,
           projects: core.projects,
           deployment: core.deployment,
           roles: core.roles,
@@ -1007,7 +1013,6 @@ async function createWorkServerInner(
           admission,
         },
         operatorIdentity: rootIdentity,
-        githubIdentity: github?.identity,
         input: parsed.data,
       });
       return reply.status(201).send(result);

@@ -227,9 +227,7 @@ describe("Work server", () => {
     const kinds = server.catamorphic.core.triggers
       .listKinds()
       .map((kind) => kind.name);
-    expect(kinds).toEqual(
-      expect.arrayContaining(["webhook", "schedule", "github.pull_request"]),
-    );
+    expect(kinds).toEqual(expect.arrayContaining(["webhook", "schedule"]));
     // The intake is public: a sender has no account, only the URL.
     const unknown = await server.app.inject({
       method: "POST",

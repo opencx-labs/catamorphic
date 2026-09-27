@@ -83,16 +83,20 @@ export {
 export type {
   DeviceCodeGrant,
   GithubAppConfig,
+  GithubAppRegistration,
   GithubRepo,
   GithubTokenSet,
   GithubUser,
 } from "@catamorphic/github";
 export {
   buildAuthorizeUrl,
+  buildGithubAppManifest,
+  convertGithubAppManifest,
   exchangeCode,
   GithubApi,
   GithubApiError,
   GithubAuthError,
+  githubAppManifestForm,
   pollDeviceToken,
   refreshAccessToken,
   requestDeviceCode,
