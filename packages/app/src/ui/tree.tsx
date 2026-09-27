@@ -55,6 +55,9 @@ export interface TreeDragAndDrop<T> {
   /** Whether a payload with these MIME types may land on this target. */
   accept: (types: readonly string[], target: TreeDropTarget<T>) => boolean;
   onDrop: (transfer: DataTransfer, target: TreeDropTarget<T>) => void;
+  /** A row of this tree started or stopped being dragged. */
+  onDragStart?: (item: T) => void;
+  onDragEnd?: () => void;
 }
 
 /**
@@ -173,11 +176,39 @@ export function Tree<T extends TreeItem>({
     items: sourceItems,
     getKey: (item) => item.id,
   });
-  const items = useMemo(() => animated.map((entry) => entry.item), [animated]);
+  // A removed row leaves the layout at once, so the rows below start sliding
+  // up while it fades where it stood: one motion, not a fade and then a
+  // slide. Its last placement is remembered for that fade.
+  const items = useMemo(
+    () => animated.filter((entry) => !entry.exiting).map((entry) => entry.item),
+    [animated],
+  );
+  const exiting = useMemo(
+    () => animated.filter((entry) => entry.exiting),
+    [animated],
+  );
   const motion = useMemo(
     () => new Map(animated.map((entry) => [entry.key, entry])),
     [animated],
   );
+  const placements = useRef(
+    new Map<
+      string,
+      { top: number; depth: number; expanded: boolean; hasChildren: boolean }
+    >(),
+  );
+  useEffect(() => {
+    for (const id of placements.current.keys())
+      if (!motion.has(id)) placements.current.delete(id);
+  }, [motion]);
+  // Only a row on screen in the last commit fades where it stood; one that
+  // was scrolled away or folded into a collapsed parent simply leaves, since
+  // its remembered place may now belong to another row.
+  const onScreen = useRef<ReadonlySet<string>>(new Set());
+  const renderedNow = new Set<string>();
+  useLayoutEffect(() => {
+    onScreen.current = renderedNow;
+  });
   const viewport = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [overrides, setOverrides] = useState<ReadonlyMap<string, boolean>>(
@@ -189,6 +220,13 @@ export function Tree<T extends TreeItem>({
     position: TreeDropPosition;
   } | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  // The row just dropped within this tree: dimmed like the drag source until
+  // the host's reorder lands, then placed straight into its new slot (where
+  // the insertion line was) while its neighbours slide around it.
+  const [settling, setSettling] = useState<{
+    id: string;
+    index: number;
+  } | null>(null);
   const byId = useMemo(
     () => new Map(items.map((item) => [item.id, item])),
     [items],
@@ -210,6 +248,24 @@ export function Tree<T extends TreeItem>({
     [controlled, items, overrides, defaultExpanded],
   );
   const tree = useMemo(() => indexTree({ items, expanded }), [items, expanded]);
+  const settledIndex = settling ? tree.indexById.get(settling.id) : undefined;
+  const settleMoved =
+    settling !== null &&
+    settledIndex !== undefined &&
+    settledIndex !== settling.index;
+  useEffect(() => {
+    if (!settling) return;
+    if (settleMoved) {
+      // Two frames: the row must be styled invisible in its new slot once
+      // before it fades in, or the fade starts from the dimmed drag pose.
+      let frame = requestAnimationFrame(() => {
+        frame = requestAnimationFrame(() => setSettling(null));
+      });
+      return () => cancelAnimationFrame(frame);
+    }
+    const timer = setTimeout(() => setSettling(null), 600);
+    return () => clearTimeout(timer);
+  }, [settling, settleMoved]);
   const toggle = (id: string) => {
     const next = new Set(expanded);
     if (next.has(id)) next.delete(id);
@@ -229,7 +285,9 @@ export function Tree<T extends TreeItem>({
       typeof matchMedia === "function" &&
       matchMedia("(prefers-reduced-motion: reduce)").matches
         ? undefined
-        : "200ms cubic-bezier(0.2, 0, 0, 1)",
+        : // The host's structural motion token; the shell, which loads
+          // no kit sheet, falls back to its own 200ms.
+          "var(--cat-motion-base, 200ms) var(--ease-standard, cubic-bezier(0.2, 0, 0, 1))",
     [],
   );
   const reveal = useCallback(
@@ -339,6 +397,11 @@ export function Tree<T extends TreeItem>({
     setDrop(null);
     setDraggingId(null);
   };
+  const settleDropped = () => {
+    const index = draggingId ? tree.indexById.get(draggingId) : undefined;
+    if (draggingId && index !== undefined)
+      setSettling({ id: draggingId, index });
+  };
   const rootDropHandlers = dragAndDrop
     ? {
         onDragOver: (event: DragEvent<HTMLElement>) => {
@@ -380,6 +443,7 @@ export function Tree<T extends TreeItem>({
           const target = dropTargetFor(null, "inside");
           if (!dragAndDrop.accept(event.dataTransfer.types, target)) return;
           event.preventDefault();
+          settleDropped();
           clearDrop();
           dragAndDrop.onDrop(event.dataTransfer, target);
         },
@@ -431,6 +495,7 @@ export function Tree<T extends TreeItem>({
             if (!dragAndDrop.accept(event.dataTransfer.types, target)) return;
             event.preventDefault();
             event.stopPropagation();
+            settleDropped();
             clearDrop();
             dragAndDrop.onDrop(event.dataTransfer, target);
           },
@@ -446,21 +511,31 @@ export function Tree<T extends TreeItem>({
           event.dataTransfer.setData(type, value);
         event.dataTransfer.effectAllowed = spec.effectAllowed ?? "copyMove";
         setDraggingId(item.id);
+        dragAndDrop?.onDragStart?.(item);
       },
-      onDragEnd: clearDrop,
+      onDragEnd: () => {
+        clearDrop();
+        dragAndDrop?.onDragEnd?.();
+      },
     };
   };
   const dropLineIndex =
     drop && drop.id !== null && drop.position !== "inside"
       ? tree.indexById.get(drop.id)
       : undefined;
-  const dropLineTop =
+  const slotTop =
     dropLineIndex === undefined
       ? drop?.id === null
         ? tree.rows.length * rowHeight
         : undefined
       : dropLineIndex * rowHeight +
         (drop?.position === "after" ? rowHeight : 0);
+  // The line (2px, with a dot reaching 3px above and 5px below) stays inside
+  // the viewport, which clips: at the very top or bottom it hugs the edge.
+  const dropLineTop =
+    slotTop === undefined
+      ? undefined
+      : Math.max(3, Math.min(slotTop, tree.rows.length * rowHeight - 5));
   return (
     <>
       <div
@@ -472,7 +547,9 @@ export function Tree<T extends TreeItem>({
         data-dragging={draggingId ? "true" : undefined}
         {...rootDropHandlers}
         style={{
-          overflow: "auto",
+          // Rows that fit never scroll: while the height tweens to fit new
+          // rows, an auto overflow flashed a scrollbar.
+          overflow: tree.rows.length * rowHeight > height ? "auto" : "hidden",
           // A tree that fits its rows must not trap the wheel: containment
           // on a scroller with nothing to scroll blocks the surrounding
           // sidebar section from scrolling at all.
@@ -609,20 +686,32 @@ export function Tree<T extends TreeItem>({
               const hasChildren = Boolean(
                 item.hasChildren || tree.children.get(row.id)?.length,
               );
+              renderedNow.add(row.id);
+              placements.current.set(row.id, {
+                top: index * rowHeight,
+                depth: row.depth,
+                expanded: expanded.has(row.id),
+                hasChildren,
+              });
               return (
                 <div
                   key={row.id}
                   role="treeitem"
-                  aria-hidden={motion.get(row.id)?.exiting || undefined}
-                  inert={motion.get(row.id)?.exiting || undefined}
                   className={
-                    motion.get(row.id)?.exiting
-                      ? (motionClasses?.exit ?? "cat-row-exit")
-                      : motion.get(row.id)?.entering
-                        ? (motionClasses?.enter ?? "cat-row-enter")
-                        : undefined
+                    motion.get(row.id)?.entering
+                      ? (motionClasses?.enter ?? "cat-row-enter")
+                      : undefined
                   }
                   data-tree-id={row.id}
+                  data-tree-dragging={
+                    row.id === draggingId ||
+                    (row.id === settling?.id && !settleMoved)
+                      ? ""
+                      : undefined
+                  }
+                  data-tree-settling={
+                    settleMoved && row.id === settling?.id ? "" : undefined
+                  }
                   data-drop={
                     drop?.id === row.id && drop.position === "inside"
                       ? "inside"
@@ -646,7 +735,10 @@ export function Tree<T extends TreeItem>({
                     height: rowHeight,
                     left: 0,
                     right: 0,
-                    transition: slide && `top ${slide}`,
+                    transition:
+                      settleMoved && row.id === settling?.id
+                        ? "none"
+                        : slide && `top ${slide}`,
                   }}
                 >
                   {renderItem(item, {
@@ -658,6 +750,34 @@ export function Tree<T extends TreeItem>({
                 </div>
               );
             })}
+          {exiting.map(({ key, item }) => {
+            const placed = placements.current.get(key);
+            if (!placed || !onScreen.current.has(key)) return null;
+            renderedNow.add(key);
+            return (
+              <div
+                key={`exiting:${key}`}
+                aria-hidden="true"
+                inert
+                data-tree-exiting={key}
+                className={motionClasses?.exit ?? "cat-row-exit"}
+                style={{
+                  position: "absolute",
+                  top: placed.top,
+                  height: rowHeight,
+                  left: 0,
+                  right: 0,
+                }}
+              >
+                {renderItem(item, {
+                  depth: placed.depth,
+                  expanded: placed.expanded,
+                  hasChildren: placed.hasChildren,
+                  toggle: () => {},
+                })}
+              </div>
+            );
+          })}
         </div>
       </div>
       {onLoadMore && (

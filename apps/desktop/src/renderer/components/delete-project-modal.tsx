@@ -88,7 +88,7 @@ export function DeleteProjectModal({
               checked={alsoTrash}
               onChange={(event) => setAlsoTrash(event.target.checked)}
               data-testid="delete-trash-checkbox"
-              className="mt-0.5 size-3.5 shrink-0 accent-[var(--color-danger)]"
+              className="mt-0.5"
             />
             <span className="min-w-0 text-xs leading-relaxed text-fg-muted">
               Also move the project folder to the Trash

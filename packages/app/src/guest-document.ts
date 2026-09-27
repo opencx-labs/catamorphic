@@ -77,6 +77,12 @@ export function buildAppGuestDocument(args: {
     "for(const[name,persist]of[['localStorage',true],['sessionStorage',false]]){" +
     "try{void window[name]}catch{" +
     "Object.defineProperty(window,name,{value:store(persist?seed:{},persist),configurable:true})}}})();" +
+    // Focus rings follow the keyboard, as in the host shell: navigation
+    // keys turn them on, a pointer press turns them off (ADR 0168).
+    "(()=>{const N=new Set(['Tab','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','End','PageUp','PageDown','F6','ContextMenu']);" +
+    "const set=(m)=>{const r=document.documentElement;if(r.dataset.focusModality!==m)r.dataset.focusModality=m};" +
+    "addEventListener('keydown',(e)=>{if(N.has(e.key))set('keyboard')},true);" +
+    "addEventListener('pointerdown',()=>set('pointer'),true)})();" +
     "addEventListener('load',()=>{const post=()=>parent.postMessage(" +
     `{catamorphicApp:${APP_PROTOCOL_VERSION},kind:'resize',height:document.documentElement.scrollHeight},'*');` +
     "post();const o=new ResizeObserver(post);o.observe(document.documentElement);o.observe(document.body)});" +

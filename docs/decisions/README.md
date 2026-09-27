@@ -182,3 +182,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0165](0165-guests-and-shares.md) | Guests and shares for people outside the company | Accepted |
 | [0166](0166-members-work-from-their-own-agents.md) | Members work from their own agents over the project MCP | Accepted |
 | [0167](0167-machine-pools-access-and-owner-placement.md) | Machine pools, node access, and placement by owner | Accepted |
+| [0168](0168-keyboard-led-focus-rings-and-continuous-sidebar-motion.md) | Keyboard-led focus rings and continuous sidebar motion | Accepted |

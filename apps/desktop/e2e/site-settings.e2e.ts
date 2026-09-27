@@ -188,4 +188,37 @@ describe("site settings", () => {
     );
     expect(app.getRendererErrors()).toEqual([]);
   });
+
+  it("asks before a page opens another app, names it, and withdraws when the page moves on", async () => {
+    await app.press("Escape");
+    await app.waitFor(`!${modal}`, { label: "site settings closed" });
+    // Back to the lab page from the Sites page.
+    await app.eval(
+      `(document.querySelector('[data-point-key^="browser:"] button') ?? document.querySelector('[data-point-key^="browser:"]')).click(); true`,
+    );
+    await app.waitFor(
+      `(() => { const view = ${guest}; try { return !!view && view.getTitle() === 'Lab' && !view.isLoading(); } catch { return false; } })()`,
+      { label: "lab page back" },
+    );
+    // No app is registered for this scheme, so nothing can launch; the
+    // prompt names the scheme's links instead of an app.
+    await inGuest("location.href = 'work-e2e-app://open'; true");
+    await app.waitFor(
+      `!!document.querySelector('[data-testid="site-permission-prompt"]')`,
+      { label: "open-app prompt" },
+    );
+    expect(
+      await app.eval<string>(
+        `document.querySelector('[data-testid="site-permission-prompt"]').textContent`,
+      ),
+    ).toContain(`${new URL(origin).host} wants to open work-e2e-app: links`);
+    // Leaving the page takes the question back: a late answer must not
+    // open an app for a page that is gone.
+    await inGuest("location.href = '/lab?moved'; true");
+    await app.waitFor(
+      `!document.querySelector('[data-testid="site-permission-prompt"]')`,
+      { label: "prompt withdrawn on navigation" },
+    );
+    expect(app.getRendererErrors()).toEqual([]);
+  });
 });

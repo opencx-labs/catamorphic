@@ -26,6 +26,29 @@ an overnight leak is fixed from a brief flat trace. Keep long runs outside the
 normal merge gate. `e2e/runtime-idle.e2e.ts` remains the fast lifecycle regression
 suite for hidden loops, browser visibility and guest cleanup.
 
+## Layout transitions over heavy content
+
+A sidebar opening or closing, or the workspace frame insetting, changes the
+content area's size on every frame. A web page renders in its own process and
+the embedder waits for it on each resize; a terminal refits and Monaco
+relayouts. With a GitHub tab showing, a Cmd+B toggle ran 4–7 frames of
+40–55 ms (a terminal: 6 of 53–67 ms) while the renderer's main thread was
+nearly idle; with Settings showing it ran at 14 ms.
+
+Elements whose own width, margins or padding animate carry
+`data-layout-transition`. `lib/layout-transition.ts` hears their
+`transitionrun` and holds heavy content (`useSteadyWidthDuringLayoutTransitions`:
+the browser page, terminal, code editor and app frame) at one width wide
+enough for both ends, clipped by its container, until the transition ends. The
+content resizes once instead of on every frame: afterwards the same toggle ran
+at 14 ms with at most one or two longer frames at an edge. Add the attribute to
+any new element that animates layout, and the hook to any new content that
+resizes expensively.
+
+Measure with rAF gaps and `long-animation-frame` entries in the workspace
+window over CDP while toggling. Long frames with no script and no layout time
+are waiting on another process, not the renderer.
+
 ## Development timing retention
 
 React 19.2.8 emits User Timing measures with copied component prop details in

@@ -6,7 +6,14 @@ import {
   type TreeDropTarget,
 } from "@catamorphic/app/ui";
 import { FolderPlus, MessageSquare, Plus } from "lucide-react";
-import { type DragEvent as ReactDragEvent, useEffect, useState } from "react";
+import {
+  type DOMAttributes,
+  type DragEvent as ReactDragEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { orderedSiblings, siblingRanks } from "../../shared/bookmark-order.js";
 import { parseChatBookmarkUrl } from "../../shared/bookmark-target.js";
 import type { OpenMode } from "../../shared/open-mode.js";
@@ -18,6 +25,7 @@ import {
   type ProjectBookmarks,
   type SidebarMenuEntry,
 } from "../lib/desktop-api.js";
+import { useListMotion } from "../lib/list-motion.js";
 import {
   currentSidebarDrag,
   isOwnSidebarDrag,
@@ -25,6 +33,7 @@ import {
   sidebarItemDragSpec,
 } from "../lib/sidebar-drag.js";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag.js";
+import { Collapsible } from "./collapsible.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
 import { ShortcutHint } from "./shortcut-hint.js";
@@ -83,6 +92,42 @@ function SiteIcon({
 }
 
 /** Profile-wide favorites, project bookmarks, and recursive folders share one store. */
+/** The pinned tiles (or rows): one arriving or leaving glides the rest. */
+function PinnedList({
+  tiles,
+  ids,
+  drop,
+  handlers,
+  children,
+}: {
+  tiles: boolean;
+  ids: readonly string[];
+  drop?: string;
+  handlers: Pick<
+    DOMAttributes<HTMLElement>,
+    "onDragOver" | "onDragLeave" | "onDrop"
+  >;
+  children: ReactNode;
+}) {
+  const list = useRef<HTMLUListElement>(null);
+  useListMotion(list, ids.join("\n"));
+  return (
+    <ul
+      ref={list}
+      role="list"
+      aria-label="Pinned bookmarks"
+      data-drop-zone="pinned"
+      data-drop={drop}
+      {...handlers}
+      className={
+        tiles ? "grid grid-cols-4 gap-2 px-1 py-1" : "flex flex-col gap-0.5"
+      }
+    >
+      {children}
+    </ul>
+  );
+}
+
 export function BookmarksNav({
   projectId,
   profileId,
@@ -108,14 +153,24 @@ export function BookmarksNav({
     position: "before" | "after" | "inside";
   } | null>(null);
   // With nothing pinned the pinned area is gone entirely, not an empty
-  // state. It comes back only as a drop target, while something is being
-  // dragged; "Pin across projects" in a bookmark's menu works regardless.
+  // state. It comes back only as a drop target, while something it could
+  // pin is being dragged; "Pin across projects" in a bookmark's menu works
+  // regardless. It opens and closes through Collapsible, so the lists below
+  // slide instead of jumping.
   const [dragging, setDragging] = useState(false);
+  // A drop into the empty area keeps it open until the new pin arrives,
+  // instead of closing on drop and reopening a moment later.
+  const [awaitingPin, setAwaitingPin] = useState(false);
+  const acceptsPinRef = useRef<(types: readonly string[]) => boolean>(
+    () => false,
+  );
   useEffect(() => {
     // Deferred a tick: revealing the area moves the dragged row, and
     // Chromium cancels a drag whose source moves during `dragstart`.
     let reveal: number | undefined;
-    const start = () => {
+    const start = (event: DragEvent) => {
+      const types = [...(event.dataTransfer?.types ?? [])];
+      if (!acceptsPinRef.current(types)) return;
       reveal = window.setTimeout(() => setDragging(true), 0);
     };
     const end = () => {
@@ -151,6 +206,11 @@ export function BookmarksNav({
         ).length
       : 0,
   );
+  const pinnedCount = data
+    ? data.pinned.bookmarks.length + data.pinned.folders.length
+    : 0;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the pin count changing is the arrival being waited for
+  useEffect(() => setAwaitingPin(false), [pinnedCount]);
   useSidebarContent({
     state: data === null ? "loading" : isEmpty ? "empty" : "ready",
     empty: "No bookmarks yet.",
@@ -224,6 +284,8 @@ export function BookmarksNav({
         ? data?.pinned
         : data?.library;
   const acceptsExternal = (scope: Scope) => scope !== "library";
+  acceptsPinRef.current = (types) =>
+    accepts("pinned", types, { item: null, position: "inside" });
   const accepts = (
     scope: Scope,
     types: readonly string[],
@@ -297,6 +359,7 @@ export function BookmarksNav({
       return;
     }
     const slot = slotFor(scope, target);
+    if (scope === "pinned") setAwaitingPin(true);
     perform(
       desktopApi
         .bookmarksPlace({
@@ -316,6 +379,12 @@ export function BookmarksNav({
               ? "Pinned bookmarks"
               : "Bookmarks";
           setStatus(`Saved ${bookmark.label} to ${location ?? "folder"}.`);
+        })
+        .finally(() => {
+          // A failed or duplicate pin never changes the count; let the area
+          // close once the pin had its moment to arrive.
+          if (scope === "pinned")
+            window.setTimeout(() => setAwaitingPin(false), 300);
         }),
     );
   };
@@ -458,6 +527,7 @@ export function BookmarksNav({
   const row = (bookmark: Bookmark, pinned: boolean, library = false) => (
     <li
       key={bookmark.id}
+      data-item-id={bookmark.id}
       draggable
       data-drop={gridDrop?.id === bookmark.id ? gridDrop.position : undefined}
       onDragStart={(event) => {
@@ -652,73 +722,72 @@ export function BookmarksNav({
     );
   };
 
-  const hasPinned =
-    !!data &&
-    (data.pinned.bookmarks.length > 0 || data.pinned.folders.length > 0);
+  const hasPinned = pinnedCount > 0;
+  const pinnedTiles = data
+    ? projectSidebarItems(data.pinned.bookmarks, contribution?.section)
+        .filter(
+          (bookmark) =>
+            !contribution?.section.itemOverrides?.[bookmark.id]?.hide,
+        )
+        .filter((bookmark) => !bookmark.folderId)
+    : [];
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col">
       {/* The section title already says "Bookmarks": the profile-wide pins
           and the saved library are unlabelled groups, and the project list
-          is the one labelled, collapsible group. */}
-      {hasPinned || dragging ? (
-        <SidebarSubsection>
-          <section
-            className="max-h-[min(40vh,24rem)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
-            aria-label="Pinned bookmarks scroll area"
-          >
-            {data && (
-              <ul
-                role="list"
-                aria-label="Pinned bookmarks"
-                data-drop-zone="pinned"
-                data-drop={
-                  gridDrop?.id === null ? gridDrop.position : undefined
-                }
-                {...gridHandlers()}
-                className={
-                  pinnedStyle === "tiles"
-                    ? "grid grid-cols-4 gap-2 px-1 py-1"
-                    : "flex flex-col gap-0.5"
-                }
-              >
-                {data.pinned.bookmarks.filter((bookmark) => !bookmark.folderId)
-                  .length === 0 && (
-                  <li className="col-span-4 px-2 py-3 text-center text-xs text-fg-muted">
-                    Drop a tab here to pin across projects
-                  </li>
-                )}
-                {projectSidebarItems(
-                  data.pinned.bookmarks,
-                  contribution?.section,
-                )
-                  .filter(
-                    (bookmark) =>
-                      !contribution?.section.itemOverrides?.[bookmark.id]?.hide,
-                  )
-                  .filter((bookmark) => !bookmark.folderId)
-                  .map((bookmark) => row(bookmark, true))}
-              </ul>
-            )}
-            {data && (
-              <ul role="list" className="flex flex-col gap-0.5">
-                {renderTree(data.pinned, true, false, true)}
-              </ul>
-            )}
-          </section>
-        </SidebarSubsection>
-      ) : null}
-      {data?.library &&
-        (data.library.bookmarks.length > 0 ||
-          data.library.folders.length > 0) && (
+          is the one labelled, collapsible group. Groups carry their own
+          bottom spacing so a closing group takes its gap with it. */}
+      <Collapsible
+        open={Boolean(data) && (hasPinned || dragging || awaitingPin)}
+      >
+        <div className="pb-2">
+          <SidebarSubsection>
+            <section
+              className="max-h-[min(40vh,24rem)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
+              aria-label="Pinned bookmarks scroll area"
+            >
+              {data && (
+                <PinnedList
+                  tiles={pinnedStyle === "tiles"}
+                  ids={pinnedTiles.map((bookmark) => bookmark.id)}
+                  drop={gridDrop?.id === null ? gridDrop.position : undefined}
+                  handlers={gridHandlers()}
+                >
+                  {pinnedTiles.length === 0 && (dragging || awaitingPin) && (
+                    <li className="col-span-4 px-2 py-3 text-center text-xs text-fg-muted">
+                      Drop a tab here to pin across projects
+                    </li>
+                  )}
+                  {pinnedTiles.map((bookmark) => row(bookmark, true))}
+                </PinnedList>
+              )}
+              {data && (
+                <ul role="list" className="flex flex-col gap-0.5">
+                  {renderTree(data.pinned, true, false, true)}
+                </ul>
+              )}
+            </section>
+          </SidebarSubsection>
+        </div>
+      </Collapsible>
+      <Collapsible
+        open={Boolean(
+          data?.library &&
+            (data.library.bookmarks.length > 0 ||
+              data.library.folders.length > 0),
+        )}
+      >
+        <div className="pb-2">
           <SidebarSubsection>
             <section aria-label="Bookmark library">
               <ul role="list" className="flex flex-col gap-0.5">
-                {renderTree(data.library, false, true)}
+                {data?.library && renderTree(data.library, false, true)}
               </ul>
             </section>
           </SidebarSubsection>
-        )}
+        </div>
+      </Collapsible>
       <SidebarSubsection label="This project" collapsible>
         <ul role="list" className="flex flex-col gap-0.5">
           {data && renderTree(data.project, false)}
