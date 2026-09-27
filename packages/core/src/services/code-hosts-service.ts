@@ -31,6 +31,10 @@ import {
   type ProjectsService,
 } from "./projects-service.js";
 
+/** Project ids are UUIDs; anything else names no project. */
+const PROJECT_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const tracer = getTracer("@catamorphic/core");
 
 /**
@@ -229,6 +233,8 @@ export class CodeHostsService {
     projectId: string;
     principal: CodeHostPrincipal;
   }): Promise<boolean> {
+    // An id that cannot name a project names no connected origin.
+    if (!PROJECT_ID.test(args.projectId)) return false;
     const project = await this.deps.db
       .selectFrom("projects")
       .where("id", "=", args.projectId)

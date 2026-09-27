@@ -61,43 +61,69 @@ export class ConnectionCapabilityGrantsService {
       Date.now() +
         Math.min(args.ttlSeconds ?? 900, MAX_GRANT_TTL_SECONDS) * 1000,
     );
-    if (args.agentSessionId) {
-      await this.db
-        .updateTable("connection_capability_grants")
-        .set({ revoked_at: new Date() })
-        .where("agent_session_id", "=", args.agentSessionId)
-        .where("alias", "=", binding.alias)
-        .where("channel", "=", channel)
-        .where("revoked_at", "is", null)
+    // Issue under a share lock on the Allocation: a release (close, idle
+    // release, archive) that commits first leaves nothing to issue against,
+    // and one that commits later revokes what this inserted.
+    await this.db.transaction().execute(async (trx) => {
+      const live = await trx
+        .selectFrom("execution_allocations")
+        .select("status")
+        .where("id", "=", allocation.id)
+        .forShare()
+        .executeTakeFirst();
+      if (live?.status !== "active") {
+        throw new Error("Connection grant cannot be issued");
+      }
+      if (args.agentSessionId) {
+        await trx
+          .updateTable("connection_capability_grants")
+          .set({ revoked_at: new Date() })
+          .where("agent_session_id", "=", args.agentSessionId)
+          .where("alias", "=", binding.alias)
+          .where("channel", "=", channel)
+          .where("revoked_at", "is", null)
+          .execute();
+      }
+      await trx
+        .insertInto("connection_capability_grants")
+        .values({
+          tenant_id: args.identity.tenantId,
+          project_id: allocation.projectId,
+          allocation_id: allocation.id,
+          agent_session_id: args.agentSessionId ?? null,
+          alias: binding.alias,
+          connection_id: binding.connectionId,
+          token_hash: hashBearer(token),
+          capabilities: toJson(binding.capabilities),
+          expires_at: expiresAt,
+          channel,
+        })
         .execute();
-    }
-    await this.db
-      .insertInto("connection_capability_grants")
-      .values({
-        tenant_id: args.identity.tenantId,
-        project_id: allocation.projectId,
-        allocation_id: allocation.id,
-        agent_session_id: args.agentSessionId ?? null,
-        alias: binding.alias,
-        connection_id: binding.connectionId,
-        token_hash: hashBearer(token),
-        capabilities: toJson(binding.capabilities),
-        expires_at: expiresAt,
-        channel,
-      })
-      .execute();
+    });
     return { token, expiresAt: expiresAt.toISOString() };
   }
 
   async validate(args: {
     token: string;
   }): Promise<ValidConnectionGrant | null> {
+    // A grant is only as live as its Allocation: a released one ends every
+    // grant bound to it, even one issued in a race with the release.
     const row = await this.db
       .selectFrom("connection_capability_grants")
-      .where("token_hash", "=", hashBearer(args.token))
-      .where("revoked_at", "is", null)
-      .where("expires_at", ">", new Date())
-      .selectAll()
+      .innerJoin(
+        "execution_allocations",
+        "execution_allocations.id",
+        "connection_capability_grants.allocation_id",
+      )
+      .where(
+        "connection_capability_grants.token_hash",
+        "=",
+        hashBearer(args.token),
+      )
+      .where("connection_capability_grants.revoked_at", "is", null)
+      .where("connection_capability_grants.expires_at", ">", new Date())
+      .where("execution_allocations.status", "=", "active")
+      .selectAll("connection_capability_grants")
       .executeTakeFirst();
     return row
       ? {

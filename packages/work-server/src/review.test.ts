@@ -912,13 +912,17 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       .where("id", "=", before?.allocation_id ?? "")
       .executeTakeFirstOrThrow();
     expect(allocation.status).toBe("released");
-    const liveGrants = await db
-      .selectFrom("connection_capability_grants")
-      .select("id")
-      .where("agent_session_id", "=", sessionId)
-      .where("revoked_at", "is", null)
-      .execute();
-    expect(liveGrants).toEqual([]);
+    // Closing releases the Allocation with the chat (which already ends
+    // every grant bound to it) and then revokes the rows themselves.
+    await waitFor("the chat's grants to be revoked", async () => {
+      const live = await db
+        .selectFrom("connection_capability_grants")
+        .select("id")
+        .where("agent_session_id", "=", sessionId)
+        .where("revoked_at", "is", null)
+        .execute();
+      return live.length === 0 ? true : undefined;
+    });
     expect(await originBranches()).not.toContain(
       `refs/heads/sessions/${sessionId}`,
     );
