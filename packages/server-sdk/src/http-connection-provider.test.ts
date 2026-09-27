@@ -277,6 +277,29 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
     expect(requests).toHaveLength(2);
   });
 
+  it("counts a named action as read-only by its declared method (ADR 0176)", () => {
+    const slack = defineHttpApiConnectionProvider({
+      kind: "slack",
+      displayName: "Slack",
+      baseUrl: "https://slack.test/api",
+      actions: [
+        {
+          name: "conversations.history",
+          method: "get",
+          path: "/conversations.history",
+        },
+        // Named like a read, but it writes.
+        { name: "get", method: "post", path: "/chat.postMessage" },
+      ],
+    });
+    expect(slack.readOnly?.("conversations.history")).toBe(true);
+    expect(slack.readOnly?.("get")).toBe(false);
+    expect(slack.readOnly?.("unknown")).toBe(false);
+    const generic = provider().api;
+    expect(generic.readOnly?.("get")).toBe(true);
+    expect(generic.readOnly?.("post")).toBe(false);
+  });
+
   it("refuses malformed named actions", () => {
     const define = (overrides: Partial<HttpApiConnectionOptions>) => () =>
       defineHttpApiConnectionProvider({
