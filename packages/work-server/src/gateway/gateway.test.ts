@@ -264,6 +264,74 @@ describe("gateway configuration", () => {
     ).toThrow("MISSING_SECRET");
   });
 
+  it("offers an HTTP API's named operations as its actions (ADR 0179)", async () => {
+    const config = gatewayConfigFromFile({
+      path: write({
+        connections: [
+          {
+            type: "http",
+            kind: "slack",
+            displayName: "Slack",
+            baseUrl: "https://slack.com/api",
+            actions: [
+              {
+                name: "conversations.replies",
+                method: "get",
+                path: "/conversations.replies",
+                description: "Read a thread",
+              },
+              {
+                name: "chat.postMessage",
+                method: "post",
+                path: "/chat.postMessage",
+              },
+            ],
+          },
+        ],
+      }),
+      env: {},
+    });
+    const [slack] = gatewayProviders(config);
+    const authorized = await slack?.completeAuthorization?.({
+      tenantId: "t",
+      externalUserId: "admin",
+      callback: { apiKey: "xoxb-test" },
+    });
+    expect(authorized?.capabilities).toEqual([
+      "conversations.replies",
+      "chat.postMessage",
+    ]);
+    const invalid = (actions: unknown, extra: object = {}) => () =>
+      gatewayConfigFromFile({
+        path: write({
+          connections: [
+            {
+              type: "http",
+              kind: "slack",
+              displayName: "Slack",
+              baseUrl: "https://slack.com/api",
+              actions,
+              ...extra,
+            },
+          ],
+        }),
+        env: {},
+      });
+    const post = { name: "chat.postMessage", method: "post" };
+    expect(
+      invalid([{ ...post, path: "/chat.postMessage" }], { paths: ["/chat"] }),
+    ).toThrow("either actions or paths");
+    expect(
+      invalid([
+        { ...post, path: "/chat.postMessage" },
+        { ...post, path: "/chat.update" },
+      ]),
+    ).toThrow("Duplicate action");
+    expect(invalid([{ ...post, path: "/chat.postMessage?as_user=1" }])).toThrow(
+      "plain path",
+    );
+  });
+
   it("names the missing key instead of starting without a reviewer", () => {
     expect(() =>
       gatewayConfigFromFile({

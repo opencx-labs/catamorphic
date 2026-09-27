@@ -6,6 +6,7 @@ import { sql } from "kysely";
 import { hasProjectPermission, type Identity } from "../identity.js";
 import {
   checkWebhookToken,
+  declaredWebhookDeliveryId,
   matchWebhookHandshake,
   sameSecret,
   verifyWebhookRequest,
@@ -181,9 +182,19 @@ export class WebhooksService {
         }
         if (request.method !== "POST") throw new WebhookMethodNotAllowedError();
         await this.check({ projectId: input.projectId, config, request });
-        const deliveryId = DELIVERY_ID_HEADERS.map(
-          (name) => request.headers[name],
-        ).find((value) => value && value.length <= 200);
+        const deliveryId =
+          (config.deliveryId
+            ? declaredWebhookDeliveryId({
+                path: config.deliveryId,
+                request,
+                body,
+              })
+            : undefined) ??
+          DELIVERY_ID_HEADERS.map((name) => request.headers[name]).find(
+            (value) => value && value.length <= 200,
+          );
+        if (deliveryId)
+          span.setAttribute("catamorphic.webhook.delivery_id", deliveryId);
         // A shared-secret token is a credential: it never reaches a run.
         const verify = config.verify;
         const tokenHeader =

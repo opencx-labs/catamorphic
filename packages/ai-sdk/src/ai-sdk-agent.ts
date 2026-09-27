@@ -918,7 +918,10 @@ function buildMcpTools(
   for (const [serverName, roster] of connections) {
     const safeServer = serverName.replace(/[^A-Za-z0-9-]+/g, "_");
     for (const info of roster.tools) {
-      tools[`mcp__${safeServer}__${info.name}`] = dynamicTool({
+      // Model APIs allow only letters, digits, `_` and `-` in tool names;
+      // MCP also allows dots (`chat.postMessage`). Calls use `info.name`.
+      const safeTool = info.name.replace(/[^A-Za-z0-9_-]+/g, "_");
+      tools[`mcp__${safeServer}__${safeTool}`] = dynamicTool({
         description: info.description,
         inputSchema: jsonSchema<Record<string, unknown>>(
           info.inputSchema as Parameters<typeof jsonSchema>[0],

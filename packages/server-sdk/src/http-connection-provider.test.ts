@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineHttpApiConnectionProvider } from "./http-connection-provider.js";
+import {
+  defineHttpApiConnectionProvider,
+  type HttpApiConnectionOptions,
+} from "./http-connection-provider.js";
 
 const KEY = new TextEncoder().encode("sk-live-secret");
 const CONNECTION = { id: "connection", revision: 1 };
@@ -193,6 +196,116 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
         connection: CONNECTION,
       }),
     ).rejects.toThrow("Only GET");
+  });
+
+  it("named actions make each operation its own capability (ADR 0179)", async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const slack = defineHttpApiConnectionProvider({
+      kind: "slack",
+      displayName: "Slack",
+      baseUrl: "https://slack.test/api",
+      actions: [
+        {
+          name: "conversations.replies",
+          method: "get",
+          path: "/conversations.replies",
+          description: "Read a thread",
+        },
+        { name: "chat.postMessage", method: "post", path: "/chat.postMessage" },
+      ],
+      fetch: async (url, init) => {
+        requests.push({ url, init });
+        return Response.json({ ok: true });
+      },
+    });
+    const authorized = await slack.completeAuthorization?.({
+      tenantId: "t",
+      externalUserId: "u",
+      callback: { apiKey: "xoxb-bot" },
+    });
+    expect(authorized?.capabilities).toEqual([
+      "conversations.replies",
+      "chat.postMessage",
+    ]);
+    const listed = await slack.listActions?.({
+      material: KEY,
+      capabilities: ["chat.postMessage"],
+    });
+    expect(listed?.map((action) => action.name)).toEqual(["chat.postMessage"]);
+    expect(listed?.[0]?.inputSchema).toMatchObject({
+      properties: { body: {} },
+      additionalProperties: false,
+    });
+    expect(listed?.[0]?.inputSchema).not.toHaveProperty("properties.path");
+    expect(listed?.[0]?.annotations).toEqual({ readOnlyHint: false });
+
+    const call = (action: string, input: Record<string, unknown>) =>
+      slack.invoke({
+        material: new TextEncoder().encode("xoxb-bot"),
+        action,
+        input: JSON.parse(JSON.stringify(input)),
+        capabilities: ["conversations.replies", "chat.postMessage"],
+        connection: CONNECTION,
+      });
+    await call("chat.postMessage", {
+      body: { channel: "C1", thread_ts: "1.2", text: "Done" },
+    });
+    await call("conversations.replies", {
+      query: { channel: "C1", ts: "1.2" },
+    });
+    expect(requests.map(({ url, init }) => [init.method, url])).toEqual([
+      ["POST", "https://slack.test/api/chat.postMessage"],
+      ["GET", "https://slack.test/api/conversations.replies?channel=C1&ts=1.2"],
+    ]);
+    const headers = new Headers(requests[0]?.init.headers);
+    expect(headers.get("authorization")).toBe("Bearer xoxb-bot");
+    expect(headers.get("content-type")).toBe("application/json; charset=utf-8");
+    expect(requests[0]?.init.body).toBe(
+      JSON.stringify({ channel: "C1", thread_ts: "1.2", text: "Done" }),
+    );
+
+    // The path is the action's; generic methods are not offered.
+    await expect(
+      call("chat.postMessage", { path: "/admin.users.remove", body: {} }),
+    ).rejects.toThrow("path is fixed");
+    await expect(call("post", { path: "/chat.postMessage" })).rejects.toThrow(
+      "Unknown action",
+    );
+    expect(requests).toHaveLength(2);
+  });
+
+  it("refuses malformed named actions", () => {
+    const define = (overrides: Partial<HttpApiConnectionOptions>) => () =>
+      defineHttpApiConnectionProvider({
+        kind: "slack",
+        displayName: "Slack",
+        baseUrl: "https://slack.test/api",
+        ...overrides,
+      });
+    const post = { name: "chat.postMessage", method: "post" as const };
+    expect(
+      define({
+        paths: ["/chat.postMessage"],
+        actions: [{ ...post, path: "/chat.postMessage" }],
+      }),
+    ).toThrow("either actions or paths");
+    expect(
+      define({
+        actions: [
+          { ...post, path: "/chat.postMessage" },
+          { ...post, path: "/chat.update" },
+        ],
+      }),
+    ).toThrow("duplicate");
+    expect(define({ actions: [{ ...post, path: "/a/../b" }] })).toThrow(
+      "plain path",
+    );
+    expect(define({ actions: [{ ...post, path: "/a?b=c" }] })).toThrow(
+      "plain path",
+    );
+    expect(
+      define({ actions: [{ ...post, name: "has space", path: "/a" }] }),
+    ).toThrow("invalid action name");
   });
 
   it("requires HTTPS for remote APIs", () => {

@@ -46,25 +46,62 @@ const McpEntry = z.strictObject({
 export const HTTP_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 export const HTTP_MAX_TIMEOUT_MS = 120_000;
 
-/** An API reached through the gateway with a stored key (ADR 0162). */
-const HttpEntry = z.strictObject({
-  type: z.literal("http"),
-  kind: Kind,
-  displayName: z.string().min(1),
-  baseUrl: z.url(),
-  auth: z
-    .strictObject({ header: z.string().min(1), scheme: z.string().optional() })
-    .optional(),
-  paths: z.array(z.string().startsWith("/")).optional(),
-  /** Largest part of a body one call returns; larger GETs read in ranges. */
-  maxResponseBytes: z
-    .number()
-    .int()
-    .positive()
-    .max(HTTP_MAX_RESPONSE_BYTES)
-    .optional(),
-  timeoutMs: z.number().int().positive().max(HTTP_MAX_TIMEOUT_MS).optional(),
+/**
+ * One named operation of an HTTP API (ADR 0179): a fixed method and path,
+ * granted by name (`chat.postMessage`) instead of by HTTP method.
+ */
+const HttpAction = z.strictObject({
+  name: z.string().regex(/^[A-Za-z][A-Za-z0-9._-]{0,63}$/),
+  method: z.enum(["get", "post", "put", "patch", "delete"]),
+  path: z
+    .string()
+    .startsWith("/")
+    .regex(/^[^?#%\\]*$/, "A plain path without query or escapes")
+    .refine((path) => !path.includes(".."), "No '..' segments"),
+  description: z.string().min(1).optional(),
 });
+
+/** An API reached through the gateway with a stored key (ADR 0162). */
+const HttpEntry = z
+  .strictObject({
+    type: z.literal("http"),
+    kind: Kind,
+    displayName: z.string().min(1),
+    baseUrl: z.url(),
+    auth: z
+      .strictObject({
+        header: z.string().min(1),
+        scheme: z.string().optional(),
+      })
+      .optional(),
+    paths: z.array(z.string().startsWith("/")).optional(),
+    /** Named operations; when present, the connection's only actions. */
+    actions: z.array(HttpAction).min(1).optional(),
+    /** Largest part of a body one call returns; larger GETs read in ranges. */
+    maxResponseBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(HTTP_MAX_RESPONSE_BYTES)
+      .optional(),
+    timeoutMs: z.number().int().positive().max(HTTP_MAX_TIMEOUT_MS).optional(),
+  })
+  .superRefine((entry, context) => {
+    if (entry.actions && entry.paths)
+      context.addIssue({
+        code: "custom",
+        path: ["actions"],
+        message: "Declare either actions or paths, not both",
+      });
+    const names = entry.actions?.map((action) => action.name) ?? [];
+    for (const [index, name] of names.entries())
+      if (names.indexOf(name) !== index)
+        context.addIssue({
+          code: "custom",
+          path: ["actions", index, "name"],
+          message: `Duplicate action '${name}'`,
+        });
+  });
 
 /** A database reached with a stored read-only credential (ADR 0163). */
 const PostgresEntry = z.strictObject({
@@ -243,6 +280,7 @@ export function gatewayProviders(
         baseUrl: entry.baseUrl,
         ...(entry.auth ? { auth: entry.auth } : {}),
         ...(entry.paths ? { paths: entry.paths } : {}),
+        ...(entry.actions ? { actions: entry.actions } : {}),
         ...(entry.maxResponseBytes
           ? { maxResponseBytes: entry.maxResponseBytes }
           : {}),

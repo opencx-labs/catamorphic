@@ -329,11 +329,16 @@ describe("WebhooksService", () => {
             echo: "body.challenge",
           },
         ],
+        deliveryId: "body.event_id",
       },
       enabled: true,
     });
     const token = await tokenFor("slack");
-    const post = (payload: object, key = "slack-key") => {
+    const post = (
+      payload: object,
+      key = "slack-key",
+      headers: Record<string, string> = {},
+    ) => {
       const body = JSON.stringify(payload);
       const timestamp = String(Math.floor(Date.now() / 1000));
       const signature = crypto
@@ -347,6 +352,7 @@ describe("WebhooksService", () => {
           "content-type": "application/json",
           "x-slack-request-timestamp": timestamp,
           "x-slack-signature": `v0=${signature}`,
+          ...headers,
         },
         body,
       });
@@ -368,12 +374,30 @@ describe("WebhooksService", () => {
       .executeTakeFirstOrThrow();
     expect(Number(after.count)).toBe(Number(before.count));
     // Events still arrive as events.
-    const event = await post({
+    const callback = {
       type: "event_callback",
+      event_id: "Ev0SLACK1",
       event: { type: "app_mention", text: "hi" },
-    });
+    };
+    const event = await post(callback);
+    expect(event).toMatchObject({ type: "event", duplicate: false });
     expect(await storedPayload(event)).toMatchObject({
       body: { event: { type: "app_mention" } },
+    });
+    // Slack retries an event it thinks was lost with a fresh signature and
+    // x-slack-retry-num; the declared delivery id stores it once.
+    const retried = await post(callback, "slack-key", {
+      "x-slack-retry-num": "1",
+      "x-slack-retry-reason": "http_timeout",
+    });
+    expect(retried).toEqual({
+      type: "event",
+      eventId: "eventId" in event ? event.eventId : "",
+      duplicate: true,
+    });
+    // Another event is another delivery.
+    expect(await post({ ...callback, event_id: "Ev0SLACK2" })).toMatchObject({
+      duplicate: false,
     });
   });
 

@@ -116,6 +116,18 @@ export const webhookConfig = z
       .discriminatedUnion("scheme", [webhookHmacVerify, webhookTokenVerify])
       .optional(),
     respond: z.array(webhookHandshake).max(10).optional(),
+    /**
+     * Where the sender's own id for an event is, for senders that repeat it
+     * in the body rather than a delivery header (Slack's `body.event_id`,
+     * Stripe's `body.id`): a retried event is stored and run once.
+     */
+    deliveryId: z
+      .string()
+      .regex(
+        /^(body|query|headers)\.[^\s]+$/,
+        "Name a value under body, query or headers",
+      )
+      .optional(),
     /** Largest body accepted, up to the host's maximum. Defaults to 1 MiB. */
     maxBodyBytes: z
       .number()
@@ -260,6 +272,28 @@ export function matchWebhookHandshake(input: {
       return { rule, answer: String(answer) };
   }
   return undefined;
+}
+
+/**
+ * The sender's id for this event at the declared `deliveryId` path, when it
+ * is a string or number of at most 200 characters.
+ */
+export function declaredWebhookDeliveryId(input: {
+  path: string;
+  request: WebhookRequest;
+  body: unknown;
+}): string | undefined {
+  const value = valueAt(
+    {
+      headers: input.request.headers,
+      query: input.request.query,
+      body: input.body,
+    },
+    input.path.split("."),
+  );
+  if (typeof value !== "string" && typeof value !== "number") return undefined;
+  const id = String(value);
+  return id.length > 0 && id.length <= 200 ? id : undefined;
 }
 
 /** A shared secret carried in a header or query parameter. */
