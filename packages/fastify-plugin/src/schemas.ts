@@ -1611,6 +1611,13 @@ export const SkillSchema = z.object({
   source: z.enum(["project", "user", "host"]),
 });
 
+/** A harness's own permission settings, in its native values (ADR 0182). */
+export const HarnessPermissionsSchema = z.object({
+  permissionMode: z.enum(CLAUDE_CODE_PERMISSION_MODES).optional(),
+  sandbox: z.enum(CODEX_SANDBOX_MODES).optional(),
+  approvals: z.enum(CODEX_APPROVAL_POLICIES).optional(),
+});
+
 // --- Project agent definitions (ADR 0050) ---
 // Committed `.work/agents/<slug>.json` files, parsed and validated by core's
 // AgentDefinitionsService. Broken files come back as invalid entries with
@@ -1624,13 +1631,7 @@ export const ProjectAgentDefinitionSchema = z.object({
   /** What may leave the agent's sandbox (ADR 0182). */
   sandboxing: z.enum(SANDBOXING_LEVELS).optional(),
   /** The harness's own permission mode, in its native values (ADR 0182). */
-  harnessPermissions: z
-    .object({
-      permissionMode: z.enum(CLAUDE_CODE_PERMISSION_MODES).optional(),
-      sandbox: z.enum(CODEX_SANDBOX_MODES).optional(),
-      approvals: z.enum(CODEX_APPROVAL_POLICIES).optional(),
-    })
-    .optional(),
+  harnessPermissions: HarnessPermissionsSchema.optional(),
   memory: z.boolean().optional(),
   description: z.string().optional(),
   credentials: z
@@ -2056,6 +2057,10 @@ export const AgentCatalogSchema = z.object({
       available: z.boolean(),
       reason: z.string().nullable(),
       environments: EnvironmentListSchema,
+      /** What may leave the agent's sandbox, when declared (ADR 0182). */
+      sandboxing: z.enum(SANDBOXING_LEVELS).optional(),
+      /** The harness's own permission settings, as declared (ADR 0182). */
+      harnessPermissions: HarnessPermissionsSchema.optional(),
     }),
   ),
   defaultAgentId: z.string().optional(),

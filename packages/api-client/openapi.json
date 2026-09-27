@@ -23570,6 +23570,44 @@
                             },
                             "required": ["items"],
                             "additionalProperties": false
+                          },
+                          "sandboxing": {
+                            "type": "string",
+                            "enum": ["contained", "propose", "publish"]
+                          },
+                          "harnessPermissions": {
+                            "type": "object",
+                            "properties": {
+                              "permissionMode": {
+                                "type": "string",
+                                "enum": [
+                                  "default",
+                                  "acceptEdits",
+                                  "plan",
+                                  "auto",
+                                  "dontAsk",
+                                  "bypassPermissions"
+                                ]
+                              },
+                              "sandbox": {
+                                "type": "string",
+                                "enum": [
+                                  "read-only",
+                                  "workspace-write",
+                                  "danger-full-access"
+                                ]
+                              },
+                              "approvals": {
+                                "type": "string",
+                                "enum": [
+                                  "untrusted",
+                                  "on-failure",
+                                  "on-request",
+                                  "never"
+                                ]
+                              }
+                            },
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -23694,9 +23732,43 @@
                             "type": "string",
                             "enum": ["low", "medium", "high", "xhigh", "max"]
                           },
-                          "mode": {
+                          "sandboxing": {
                             "type": "string",
-                            "enum": ["read-only", "edit", "full-access"]
+                            "enum": ["contained", "propose", "publish"]
+                          },
+                          "harnessPermissions": {
+                            "type": "object",
+                            "properties": {
+                              "permissionMode": {
+                                "type": "string",
+                                "enum": [
+                                  "default",
+                                  "acceptEdits",
+                                  "plan",
+                                  "auto",
+                                  "dontAsk",
+                                  "bypassPermissions"
+                                ]
+                              },
+                              "sandbox": {
+                                "type": "string",
+                                "enum": [
+                                  "read-only",
+                                  "workspace-write",
+                                  "danger-full-access"
+                                ]
+                              },
+                              "approvals": {
+                                "type": "string",
+                                "enum": [
+                                  "untrusted",
+                                  "on-failure",
+                                  "on-request",
+                                  "never"
+                                ]
+                              }
+                            },
+                            "additionalProperties": false
                           },
                           "memory": {
                             "type": "boolean"

@@ -51,6 +51,7 @@ import {
   useAgentDefaultModel,
 } from "../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
+import { agentPermissionView } from "../lib/agent-permissions.js";
 import {
   type AgentInfo,
   desktopApi,
@@ -474,6 +475,7 @@ function ChatDockContent({
   onOpenParent,
   onEditModel,
   onEditEffort,
+  onEditPermissionMode,
   runtimeSettingsError,
   onEntryChange,
   onEscapeToFloating,
@@ -948,6 +950,23 @@ function ChatDockContent({
             defaultAgentId ??
             roster.defaultAgentId),
       );
+  // The agent's permission mode (the harness's own) and sandboxing (Work's),
+  // shown apart in the inspector (ADR 0182). Profile agents change here;
+  // committed and server definitions change in their files.
+  const remoteAgent = authority
+    ? catalog.data?.items.find(
+        (agent) => agent.id === (chat.session?.agentId ?? selectedAgentId),
+      )
+    : undefined;
+  const agentPermissions = agentPermissionView({
+    agent: activeAgent,
+    remote: authority
+      ? {
+          sandboxing: remoteAgent?.sandboxing,
+          harnessPermissions: remoteAgent?.harnessPermissions,
+        }
+      : undefined,
+  });
   // Unknown roster (fetch pending/failed): stay permissive; the server
   // answers with a friendly error if the harness really can't take it.
   const accepts = activeAgent?.accepts ?? ["image", "document"];
@@ -2281,6 +2300,24 @@ function ChatDockContent({
                   supportedEfforts(activeAgent, effortModel).length === 0
                     ? undefined
                     : onEditEffort
+                }
+                permissionMode={agentPermissions.permissionMode}
+                sandboxing={agentPermissions.sandboxing}
+                onEditPermissionMode={
+                  agentPermissions.editable &&
+                  !chat.isSending &&
+                  !chat.session?.running
+                    ? onEditPermissionMode
+                    : undefined
+                }
+                permissionModeDisabledReason={
+                  !agentPermissions.permissionMode
+                    ? undefined
+                    : !agentPermissions.editable
+                      ? agentPermissions.readOnlyReason
+                      : chat.isSending || chat.session?.running
+                        ? "The permission mode can be changed after the current turn finishes."
+                        : undefined
                 }
                 modelDisabledReason={
                   chat.isSending || chat.session?.running

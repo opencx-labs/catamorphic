@@ -48,10 +48,14 @@ export function SessionInspector({
   modelIsDefault = false,
   reportedModel,
   effort = "Default",
+  permissionMode,
+  sandboxing,
   onEditModel,
   onEditEffort,
+  onEditPermissionMode,
   modelDisabledReason,
   effortDisabledReason,
+  permissionModeDisabledReason,
   moveDisabledReason,
   moveError,
   onMove,
@@ -81,10 +85,19 @@ export function SessionInspector({
   modelIsDefault?: boolean;
   reportedModel?: string | null;
   effort?: string;
+  /**
+   * The harness's own permission mode in its own words (ADR 0182); null
+   * when the harness has none.
+   */
+  permissionMode?: string | null;
+  /** What may leave the agent's sandbox (ADR 0182), as a label. */
+  sandboxing?: string | null;
   onEditModel?: () => void;
   onEditEffort?: () => void;
+  onEditPermissionMode?: () => void;
   modelDisabledReason?: string;
   effortDisabledReason?: string;
+  permissionModeDisabledReason?: string;
   moveDisabledReason?: string | null;
   moveError?: string | null;
   onMove?: () => void;
@@ -159,8 +172,19 @@ export function SessionInspector({
                   }
                 : undefined
             }
+            permissionMode={permissionMode}
+            sandboxing={sandboxing}
+            onEditPermissionMode={
+              onEditPermissionMode
+                ? () => {
+                    dismiss();
+                    onEditPermissionMode();
+                  }
+                : undefined
+            }
             modelDisabledReason={modelDisabledReason}
             effortDisabledReason={effortDisabledReason}
+            permissionModeDisabledReason={permissionModeDisabledReason}
             moveDisabledReason={moveDisabledReason}
             moveError={moveError}
             onMove={onMove}
@@ -238,10 +262,14 @@ export function SessionInspectorContent({
   modelIsDefault = false,
   reportedModel,
   effort = "Default",
+  permissionMode,
+  sandboxing,
   onEditModel,
   onEditEffort,
+  onEditPermissionMode,
   modelDisabledReason,
   effortDisabledReason,
+  permissionModeDisabledReason,
   moveDisabledReason,
   moveError,
   onMove,
@@ -264,10 +292,19 @@ export function SessionInspectorContent({
   modelIsDefault?: boolean;
   reportedModel?: string | null;
   effort?: string;
+  /**
+   * The harness's own permission mode in its own words (ADR 0182); null
+   * when the harness has none.
+   */
+  permissionMode?: string | null;
+  /** What may leave the agent's sandbox (ADR 0182), as a label. */
+  sandboxing?: string | null;
   onEditModel?: () => void;
   onEditEffort?: () => void;
+  onEditPermissionMode?: () => void;
   modelDisabledReason?: string;
   effortDisabledReason?: string;
+  permissionModeDisabledReason?: string;
   moveDisabledReason?: string | null;
   moveError?: string | null;
   onMove?: () => void;
@@ -322,7 +359,7 @@ export function SessionInspectorContent({
         </div>
       </header>
 
-      <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-2 py-3 text-[11px]">
+      <dl className="grid grid-cols-[6.5rem_1fr] gap-x-3 gap-y-2 py-3 text-[11px]">
         <InspectorRow label="Agent" value={agentName} />
         <InspectorRow
           label="Model"
@@ -344,6 +381,17 @@ export function SessionInspectorContent({
           onEdit={onEditEffort}
           disabledReason={effortDisabledReason}
         />
+        {permissionMode ? (
+          <InspectorRow
+            label="Permission mode"
+            value={permissionMode}
+            onEdit={onEditPermissionMode}
+            disabledReason={permissionModeDisabledReason}
+          />
+        ) : null}
+        {sandboxing ? (
+          <InspectorRow label="Sandboxing" value={sandboxing} />
+        ) : null}
         <InspectorRow label="Source" value={source} />
         <InspectorRow label="Status" value={state} />
         <dt className="text-fg-faint">Environment</dt>

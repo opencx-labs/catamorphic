@@ -530,6 +530,30 @@ describe("a pull request review chat with Git through the gateway", () => {
     ).toHaveLength(3);
   }, 120_000);
 
+  it("stops honoring the grant once the chat is closed", async () => {
+    const grantFile = filesUnder(workerDir).find((file) =>
+      file.endsWith(path.join(".work-session", "grants", "code")),
+    );
+    if (!grantFile) throw new Error("No grant file in the sandbox");
+    const grant = fs.readFileSync(grantFile, "utf8").trim();
+    const infoRefs = () =>
+      fetch(
+        `${base}/api/gateway/git/code/repo.git/info/refs?service=git-upload-pack`,
+        {
+          headers: {
+            authorization: `Basic ${Buffer.from(`work:${grant}`).toString("base64")}`,
+          },
+        },
+      );
+    expect((await infoRefs()).status).toBe(200);
+    const sessions = server.catamorphic.core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    await sessions.close(identity, projectId, sessionId);
+    const refused = await infoRefs();
+    expect(refused.status).toBe(401);
+    expect(refused.headers.get("www-authenticate")).toContain("Basic");
+  }, 60_000);
+
   it("refuses a contained agent's push and says why (ADR 0182)", async () => {
     const delivered = await server.catamorphic.core.capabilities.call(
       "catamorphic.sessions",
@@ -567,31 +591,11 @@ describe("a pull request review chat with Git through the gateway", () => {
     expect(pushed).not.toMatch(/^exit=0/);
     expect(pushed).toContain("sandboxing is contained");
     await expect(
-      nativeGit(repository, ["rev-parse", "--verify", "refs/heads/work/inspect"]),
+      nativeGit(repository, [
+        "rev-parse",
+        "--verify",
+        "refs/heads/work/inspect",
+      ]),
     ).rejects.toThrow();
   }, 120_000);
-
-  it("stops honoring the grant once the chat is closed", async () => {
-    const grantFile = filesUnder(workerDir).find((file) =>
-      file.endsWith(path.join(".work-session", "grants", "code")),
-    );
-    if (!grantFile) throw new Error("No grant file in the sandbox");
-    const grant = fs.readFileSync(grantFile, "utf8").trim();
-    const infoRefs = () =>
-      fetch(
-        `${base}/api/gateway/git/code/repo.git/info/refs?service=git-upload-pack`,
-        {
-          headers: {
-            authorization: `Basic ${Buffer.from(`work:${grant}`).toString("base64")}`,
-          },
-        },
-      );
-    expect((await infoRefs()).status).toBe(200);
-    const sessions = server.catamorphic.core.agentSessions;
-    if (!sessions) throw new Error("Agent sessions are unavailable");
-    await sessions.close(identity, projectId, sessionId);
-    const refused = await infoRefs();
-    expect(refused.status).toBe(401);
-    expect(refused.headers.get("www-authenticate")).toContain("Basic");
-  }, 60_000);
 });

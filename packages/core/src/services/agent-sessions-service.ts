@@ -19,16 +19,17 @@ import {
   type AgentTurnUsage,
   type AttachedPluginForAgent,
   capabilityEventPresenter,
+  type HarnessPermissions,
   type McpToolPolicyLayers,
   messageWithAttachmentNames,
   narrowingLayer,
   PROJECT_TOOLS_SERVER_KEY,
   type ProviderSession,
+  SANDBOXING_LEVELS,
+  type Sandboxing,
   type SandboxModelGateway,
   type SandboxProvider,
   serverKeyOf,
-  SANDBOXING_LEVELS,
-  type Sandboxing,
   type ToolPermission,
   type TurnOptions,
 } from "@catamorphic/sandbox";
@@ -6372,6 +6373,10 @@ export class AgentSessionsService {
       available: boolean;
       reason: string | null;
       environments: import("./execution-environments-service.js").EnvironmentDiscovery;
+      /** What may leave its sandbox, when the host or definition says (ADR 0182). */
+      sandboxing?: Sandboxing;
+      /** Its harness's own permission settings, as declared. */
+      harnessPermissions?: HarnessPermissions;
     }> = [];
     for (const candidate of candidates.values()) {
       try {
@@ -6398,6 +6403,10 @@ export class AgentSessionsService {
           ),
           environments,
           reason: null,
+          ...(agent.sandboxing ? { sandboxing: agent.sandboxing } : {}),
+          ...(agent.defaults?.harnessPermissions
+            ? { harnessPermissions: agent.defaults.harnessPermissions }
+            : {}),
         });
       } catch (error) {
         items.push({

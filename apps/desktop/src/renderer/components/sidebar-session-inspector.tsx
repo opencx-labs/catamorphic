@@ -6,6 +6,7 @@ import {
   useAgentDefaultModel,
 } from "../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
+import { agentPermissionView } from "../lib/agent-permissions.js";
 import {
   type AgentInfo,
   desktopApi,
@@ -14,7 +15,12 @@ import {
 } from "../lib/desktop-api.js";
 import { SessionInspectorContent } from "./session-inspector.js";
 
-export type SessionCommand = "model" | "effort" | "fork" | "parent";
+export type SessionCommand =
+  | "model"
+  | "effort"
+  | "permission-mode"
+  | "fork"
+  | "parent";
 
 /** Mounted on hover only: the same live details and actions as chat chrome. */
 export function SidebarSessionInspector({
@@ -77,6 +83,7 @@ export function SidebarSessionInspector({
   const effortModel = catalog.data?.models.find(
     (entry) => entry.id === modelId || entry.resolvedId === modelId,
   );
+  const permissions = agentPermissionView({ agent });
   const reason = session.running
     ? "Wait for the current work to finish"
     : eligibility.isPending
@@ -112,6 +119,16 @@ export function SidebarSessionInspector({
           !session.running && supportedEfforts(agent, effortModel).length
             ? () => onCommand("effort")
             : undefined
+        }
+        permissionMode={permissions.permissionMode}
+        sandboxing={permissions.sandboxing}
+        onEditPermissionMode={
+          !session.running && permissions.editable
+            ? () => onCommand("permission-mode")
+            : undefined
+        }
+        permissionModeDisabledReason={
+          permissions.editable ? undefined : permissions.readOnlyReason
         }
         onFork={() => onCommand("fork")}
         onOpenParent={

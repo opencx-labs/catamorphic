@@ -8,6 +8,11 @@ import {
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import {
+  permissionModeLabel,
+  SANDBOXING_OPTIONS,
+  sandboxingLabel,
+} from "../../shared/agent-permissions.js";
+import {
   type AgentAuthMode,
   type AgentConnectionsSetting,
   type AgentCoordinationStrategy,
@@ -15,16 +20,22 @@ import {
   type AgentEffort,
   type AgentHarness,
   type AgentInfo,
-  type AgentMode,
   type AgentSkillsSetting,
   type AgentsData,
   type ConnectionInfo,
   desktopApi,
+  type HarnessPermissions,
   type McpToolPolicy,
   type ProjectAgentInfo,
   type ProjectAgentsData,
+  type Sandboxing,
   type UpdateAgentInput,
 } from "../lib/desktop-api.js";
+import {
+  PermissionModeFields,
+  SettingSelect,
+  samePermissions,
+} from "./agent-permission-fields.js";
 import { AgentSkillsField } from "./agent-skills-field.js";
 import { AgentToolPolicyField } from "./agent-tool-policy-field.js";
 import { ConnectionsAssignmentField } from "./connections-field.js";
@@ -51,28 +62,6 @@ const EFFORT_OPTIONS: Array<{ value: AgentEffort; label: string }> = [
   { value: "high", label: "High — thorough" },
   { value: "xhigh", label: "Extra high — extended reasoning" },
   { value: "max", label: "Max — deepest reasoning" },
-];
-
-const MODE_OPTIONS: Array<{
-  value: AgentMode;
-  label: string;
-  detail: string;
-}> = [
-  {
-    value: "read-only",
-    label: "Read-only",
-    detail: "Explore and answer; no edits, no commands.",
-  },
-  {
-    value: "edit",
-    label: "Edit",
-    detail: "Limit file writes to the project folder.",
-  },
-  {
-    value: "full-access",
-    label: "Full access",
-    detail: "Run commands and edit local files freely (the local default).",
-  },
 ];
 
 const COORDINATION_OPTIONS: Array<{
@@ -302,7 +291,9 @@ function ProfileAgentBody({
   const [provider, setProvider] = useState(agent.provider ?? "anthropic");
   const [model, setModel] = useState(agent.model);
   const [effort, setEffort] = useState<AgentEffort>(agent.effort);
-  const [mode, setMode] = useState<AgentMode>(agent.mode);
+  const [sandboxing, setSandboxing] = useState<Sandboxing>(agent.sandboxing);
+  const [harnessPermissions, setHarnessPermissions] =
+    useState<HarnessPermissions>(agent.harnessPermissions);
   const [coordination, setCoordination] = useState<AgentCoordinationStrategy>(
     agent.coordination,
   );
@@ -361,7 +352,10 @@ function ProfileAgentBody({
         name: name.trim() || undefined,
         model: model.trim(),
         effort,
-        mode,
+        ...(sandboxing !== agent.sandboxing ? { sandboxing } : {}),
+        ...(samePermissions(harnessPermissions, agent.harnessPermissions)
+          ? {}
+          : { harnessPermissions }),
         coordination,
         memory,
         instructions,
@@ -509,31 +503,19 @@ function ProfileAgentBody({
                   )}
               </label>
 
-              {harness !== "ai-sdk" && (
-                <label className="flex flex-col gap-1 text-xs text-fg-muted">
-                  Mode
-                  <select
-                    value={mode}
-                    onChange={(event) =>
-                      setMode(event.target.value as AgentMode)
-                    }
-                    className="field h-8 px-2 text-[13px] text-fg"
-                    data-testid="agent-mode"
-                  >
-                    {MODE_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="text-fg-faint">
-                    {
-                      MODE_OPTIONS.find((option) => option.value === mode)
-                        ?.detail
-                    }
-                  </span>
-                </label>
-              )}
+              <PermissionModeFields
+                harness={harness}
+                value={harnessPermissions}
+                onChange={setHarnessPermissions}
+              />
+
+              <SettingSelect
+                label="Sandboxing"
+                options={SANDBOXING_OPTIONS}
+                value={sandboxing}
+                onChange={setSandboxing}
+                testId="agent-sandboxing"
+              />
 
               <DefaultRows
                 agentId={agent.id}
@@ -752,7 +734,7 @@ function ProfileAgentBody({
                 projectId={projectId}
               />
               <AgentToolPolicyField
-                mode={mode}
+                sandboxing={sandboxing}
                 value={toolPolicies}
                 onChange={setToolPolicies}
                 connections={profileConnections}
@@ -923,7 +905,17 @@ function ProjectAgentBody({
           {fact("Harness", agent.kind)}
           {fact("Model", agent.model ?? "harness default")}
           {fact("Effort", agent.effort ?? "medium")}
-          {fact("Mode", agent.mode ?? "full-access")}
+          {fact(
+            "Permission mode",
+            permissionModeLabel({
+              harness:
+                agent.kind === "claude-code" || agent.kind === "codex"
+                  ? agent.kind
+                  : "ai-sdk",
+              permissions: agent.harnessPermissions,
+            }),
+          )}
+          {fact("Sandboxing", sandboxingLabel(agent.sandboxing ?? "publish"))}
           {fact("Concurrent work", agent.coordination ?? "shared-first")}
           {fact(
             "Memory",

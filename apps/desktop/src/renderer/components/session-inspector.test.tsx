@@ -117,4 +117,53 @@ describe("SessionInspectorContent", () => {
     expect(onEditModel).toHaveBeenCalledOnce();
     expect(onEditEffort).toHaveBeenCalledOnce();
   });
+
+  it("shows the harness's permission mode apart from Work's sandboxing (ADR 0182)", async () => {
+    const onEditPermissionMode = vi.fn();
+    await act(async () => {
+      root.render(
+        <SessionInspectorContent
+          session={session}
+          fallbackTitle="Chat"
+          agentName="Claude"
+          permissionMode="Bypass permissions"
+          sandboxing="Contained"
+          onEditPermissionMode={onEditPermissionMode}
+          checkout={null}
+          incognito={false}
+        />,
+      );
+    });
+    const change = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Change permission mode"]',
+    );
+    expect(change?.textContent).toBe("Bypass permissions");
+    expect(container.textContent).toContain("Sandboxing");
+    expect(container.textContent).toContain("Contained");
+    expect(
+      container.querySelector('button[aria-label="Change sandboxing"]'),
+    ).toBeNull();
+    await act(async () => change?.click());
+    expect(onEditPermissionMode).toHaveBeenCalledOnce();
+
+    // A definition's mode is shown, and says where it is set.
+    await act(async () => {
+      root.render(
+        <SessionInspectorContent
+          session={session}
+          fallbackTitle="Chat"
+          agentName="Reviewer"
+          permissionMode="Plan"
+          permissionModeDisabledReason="Set in the project's agent definition in .work/agents."
+          checkout={null}
+          incognito={false}
+        />,
+      );
+    });
+    const locked = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Change permission mode"]',
+    );
+    expect(locked?.disabled).toBe(true);
+    expect(locked?.textContent).toBe("Plan");
+  });
 });

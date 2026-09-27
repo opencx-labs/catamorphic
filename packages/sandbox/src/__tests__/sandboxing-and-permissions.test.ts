@@ -15,15 +15,15 @@ describe("sandboxing", () => {
     expect(
       sandboxingAllows({ sandboxing: "contained", required: "propose" }),
     ).toBe(false);
-    expect(sandboxingAllows({ sandboxing: "propose", required: "propose" })).toBe(
-      true,
-    );
-    expect(sandboxingAllows({ sandboxing: "propose", required: "publish" })).toBe(
-      false,
-    );
-    expect(sandboxingAllows({ sandboxing: "publish", required: "publish" })).toBe(
-      true,
-    );
+    expect(
+      sandboxingAllows({ sandboxing: "propose", required: "propose" }),
+    ).toBe(true);
+    expect(
+      sandboxingAllows({ sandboxing: "propose", required: "publish" }),
+    ).toBe(false);
+    expect(
+      sandboxingAllows({ sandboxing: "publish", required: "publish" }),
+    ).toBe(true);
   });
 
   it("names the level and what the agent may do instead", () => {
@@ -50,9 +50,9 @@ describe("harness permissions", () => {
         permissions: { sandbox: "danger-full-access", approvals: "never" },
       }),
     ).toEqual([]);
-    expect(harnessPermissionIssues({ kind: "builtin", permissions: {} })).toEqual(
-      [],
-    );
+    expect(
+      harnessPermissionIssues({ kind: "builtin", permissions: {} }),
+    ).toEqual([]);
   });
 
   it("refuses settings another harness owns", () => {

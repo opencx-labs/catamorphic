@@ -74,7 +74,8 @@ export function harnessPermissionIssues(args: {
   ];
   return fields
     .filter(
-      (field) => args.permissions[field] !== undefined && !allowed.includes(field),
+      (field) =>
+        args.permissions[field] !== undefined && !allowed.includes(field),
     )
     .map((field) => ({
       field,

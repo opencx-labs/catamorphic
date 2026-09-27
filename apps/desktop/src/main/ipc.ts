@@ -32,6 +32,10 @@ import {
 } from "electron";
 import type { AgentCommandsResult } from "../shared/agent-commands.js";
 import type { AgentDefaultModelResult } from "../shared/agent-default-model.js";
+import type {
+  HarnessPermissions,
+  Sandboxing,
+} from "../shared/agent-permissions.js";
 import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
@@ -176,8 +180,10 @@ export interface ProjectAgentInfo {
   description: string | null;
   model: string | null;
   effort: "low" | "medium" | "high" | "xhigh" | "max" | null;
-  /** Normalized operating mode (ADR 0056); null = the local desktop default (full access). */
-  mode: "read-only" | "edit" | "full-access" | null;
+  /** What may leave its sandbox (ADR 0182); null = the local default (publish). */
+  sandboxing: Sandboxing | null;
+  /** The harness's own permission settings; null = the local defaults. */
+  harnessPermissions: HarnessPermissions | null;
   coordination:
     | "shared-first"
     | "isolate-on-contention"
@@ -766,7 +772,8 @@ export function registerIpcHandlers(
       description: definition?.description ?? null,
       model: definition?.model ?? null,
       effort: definition?.effort ?? null,
-      mode: definition?.mode ?? null,
+      sandboxing: definition?.sandboxing ?? null,
+      harnessPermissions: definition?.harnessPermissions ?? null,
       coordination: definition?.coordination ?? null,
       memory: definition?.memory ?? null,
       credentialsSource: source,

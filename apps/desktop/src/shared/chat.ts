@@ -204,6 +204,8 @@ export interface ChatDockProps {
   onEditModel?: () => void;
   /** Open the session reasoning-effort picker. */
   onEditEffort?: () => void;
+  /** Open the permission-mode picker for this chat's agent (ADR 0182). */
+  onEditPermissionMode?: () => void;
   runtimeSettingsError?: string | null;
   onEntryChange: (entry: ChatDockEntry) => void;
   /** Records the tab → floating Escape handoff for an immediate Cmd+W. */
