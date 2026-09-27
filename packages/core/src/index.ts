@@ -229,10 +229,13 @@ export {
 export {
   type AuthorizationChallenge,
   type ConnectionActionDefinition,
+  ConnectionAuthorizationExpiredError,
   type ConnectionAuthorizationResult,
   type ConnectionCredentialVersion,
+  type ConnectionGitRemotes,
   type ConnectionProvider,
   ConnectionProviderRegistry,
+  type GitRemoteCredentials,
 } from "./services/connection-providers.js";
 export {
   bindingPrincipalKinds,
