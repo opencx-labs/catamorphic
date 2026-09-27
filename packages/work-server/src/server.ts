@@ -228,6 +228,17 @@ async function createWorkServerInner(
   // the image's environment layer reads files for it (ADR 0183).
   const workAuthConfig = parseWorkAuthConfig(config.auth ?? {});
   const gateway = config.gateway ? parseGatewayConfig(config.gateway) : null;
+  if (
+    config.connectionGuardTimeoutMs !== undefined &&
+    !(
+      Number.isSafeInteger(config.connectionGuardTimeoutMs) &&
+      config.connectionGuardTimeoutMs > 0
+    )
+  ) {
+    throw new Error(
+      "config.connectionGuardTimeoutMs must be a positive whole number of milliseconds",
+    );
+  }
   if (config.databaseUrl && !config.secret) {
     throw new Error(
       "Postgres deployments require the same WORK_SECRET on every instance",
