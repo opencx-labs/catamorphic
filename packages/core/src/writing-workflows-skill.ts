@@ -123,10 +123,15 @@ senders, always with a project secret's name:
   subscriptions \`{ when: { method: "GET", query: { "hub.mode": "subscribe" } },
   echo: "query.hub.challenge", token: { secret, query: "hub.verify_token" } }\`.
   A rule without \`token\` answers only requests that pass \`verify\`.
+- \`deliveryId\` names where a sender repeats its own event id when it sends
+  no delivery-id header (\`"body.event_id"\` for Slack, \`"body.id"\` for
+  Stripe), so a retried event is stored and run once.
 - \`maxBodyBytes\` raises the 1 MiB body limit up to the server's maximum.
 
 Every binding of one webhook name must declare identical settings, so declare
-an integration's webhook once, in a project trigger kind. People who manage the
+an integration's webhook once, in a project trigger kind. Declare the secret
+it names with \`defineSecrets\` in the same file, so the project can store its
+value. People who manage the
 project copy the URL from the workflow's **Automatic** view after enabling it.
 Webhooks reach servers that are online, so enable them on a brain server.
 
@@ -218,41 +223,8 @@ export const issueComment = defineTrigger<Delivery<IssueCommentEvent>>({
 });
 \`\`\`
 
-A Slack library for an Events API app whose Request URL is the project's
-\`slack\` URL, signing secret stored as \`SLACK_SIGNING_SECRET\`. The \`respond\`
-rule answers Slack's URL verification when the URL is saved:
-
-\`\`\`typescript
-// .work/triggers/slack.ts
-import { defineTrigger, type Narrow, type TriggerPayload, trigger } from "@catamorphic/workflow";
-
-export interface SlackEventCallback {
-  type: "event_callback";
-  team_id: string;
-  event_id: string;
-  event: { type: string; user?: string; text?: string; channel?: string; ts?: string; thread_ts?: string };
-}
-
-export const slackEvent = defineTrigger<
-  Narrow<TriggerPayload<"webhook">, { payload: { body: SlackEventCallback } }>
->({
-  name: "slack.event",
-  description: "An event from the Slack app",
-  from: trigger("webhook", {
-    name: "slack",
-    verify: {
-      scheme: "hmac",
-      secret: "SLACK_SIGNING_SECRET",
-      header: "x-slack-signature",
-      prefix: "v0=",
-      content: "v0:{timestamp}:{body}",
-      timestamp: { header: "x-slack-request-timestamp", toleranceSeconds: 300 },
-    },
-    respond: [{ when: { body: { type: "url_verification" } }, echo: "body.challenge" }],
-  }),
-  where: { payload: { body: { type: "event_callback" } } },
-});
-\`\`\`
+The Slack library (\`slack.event\`, \`slack.mention\`, \`slack.message\`), with
+the workflows that keep a chat per thread, is in the \`slack\` skill.
 
 A workflow that runs only for merged pull requests:
 

@@ -26,6 +26,7 @@ it("shipped workflow recipes typecheck against the public API and real host trig
         (name) => SEED_SKILLS[`.work/skills/${name}/SKILL.md`],
       ),
       HOST_SKILLS["session-workflows/SKILL.md"],
+      HOST_SKILLS["slack/SKILL.md"],
     ];
     // Recipes lay out like a project: a trigger library names its file on
     // its first line (`// .work/triggers/github.ts`); the rest are
@@ -49,6 +50,8 @@ it("shipped workflow recipes typecheck against the public API and real host trig
       "gh.issue_comment",
       "gh.pull_request",
       "slack.event",
+      "slack.mention",
+      "slack.message",
     ]);
     for (const [file, content] of Object.entries(files)) {
       await fs.mkdir(path.dirname(path.join(directory, file)), {

@@ -87,10 +87,18 @@ export interface SessionHostOperations {
   list: Call<{ limit?: number }, { items: SessionSnapshot[]; total: number }>;
   /** The open chat for a key, or null. Never starts one. */
   find: Call<{ key: string; audience?: Audience }, SessionSnapshot | null>;
-  /** The newest `limit` messages (default 30, max 100), oldest first. */
+  /**
+   * The newest `limit` messages (default 30, max 100), oldest first, and the
+   * chat's key. `through` ends at that message instead: the transcript as
+   * of an event, such as a settled turn's `resultMessageId`.
+   */
   history: Call<
-    Target & { limit?: number },
-    { sessionId: string; messages: SessionHistoryMessage[] }
+    Target & { limit?: number; through?: string },
+    {
+      sessionId: string;
+      key: string | null;
+      messages: SessionHistoryMessage[];
+    }
   >;
   /**
    * Send a message to a chat. Name it by `sessionId`, or by `key`: the

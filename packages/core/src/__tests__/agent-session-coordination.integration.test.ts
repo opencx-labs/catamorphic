@@ -2465,6 +2465,60 @@ describe("agent session coordination", () => {
     ).toBe(true);
   });
 
+  it("reads a chat's history through one message and names the chat's key (ADR 0179)", async () => {
+    const project = await projects.create(identity, { name: "History" });
+    const session = await sessions.create(identity, project.id);
+    await db
+      .updateTable("agent_sessions")
+      .set({ chat_key: "slack:C1:1.2" })
+      .where("id", "=", session.id)
+      .execute();
+    const ids: string[] = [];
+    for (const content of ["first", "second", "third"]) {
+      const delivered = await sessions.deliver(
+        identity,
+        project.id,
+        session.id,
+        {
+          content,
+          author: { kind: "user", externalUserId: identity.externalUserId },
+          mode: "message_only",
+          idempotencyKey: content,
+        },
+      );
+      ids.push(delivered.messageId);
+    }
+    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const history = (args: Record<string, unknown>) =>
+      actions.execute({
+        identity,
+        projectId: project.id,
+        operation: "history",
+        args: { sessionId: session.id, ...args },
+        author: { kind: "user", externalUserId: identity.externalUserId },
+      });
+    const contents = (result: unknown) =>
+      JSON.stringify(result).match(/"content":"(first|second|third)"/g);
+    expect(await history({ limit: 2 })).toMatchObject({
+      sessionId: session.id,
+      key: "slack:C1:1.2",
+    });
+    expect(contents(await history({ limit: 2 }))).toEqual([
+      '"content":"second"',
+      '"content":"third"',
+    ]);
+    expect(contents(await history({ through: ids[1], limit: 1 }))).toEqual([
+      '"content":"second"',
+    ]);
+    expect(contents(await history({ through: ids[1] }))).toEqual([
+      '"content":"first"',
+      '"content":"second"',
+    ]);
+    await expect(history({ through: crypto.randomUUID() })).rejects.toThrow(
+      "No message in this chat has that id",
+    );
+  });
+
   it("retries workflow child creation without duplicating a delegated session", async () => {
     const project = await projects.create(identity, {
       name: "Workflow delegation",

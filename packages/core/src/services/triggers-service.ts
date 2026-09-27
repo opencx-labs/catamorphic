@@ -988,7 +988,7 @@ export class TriggersService {
         webhookSettings.set(name, { workflow: binding.workflowName, settings });
       } else if (first.settings !== settings) {
         errors.push(
-          `Workflows '${first.workflow}' and '${binding.workflowName}' bind webhook '${name}' with different settings (verify, respond, maxBodyBytes); declare the webhook once in a project trigger kind`,
+          `Workflows '${first.workflow}' and '${binding.workflowName}' bind webhook '${name}' with different settings (verify, respond, deliveryId, maxBodyBytes); declare the webhook once in a project trigger kind`,
         );
       }
     }

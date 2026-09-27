@@ -53,6 +53,11 @@ export const SESSION_ACTION_SCHEMAS = {
   history: chat({
     ...target,
     limit: z.number().int().min(1).max(100).optional(),
+    /**
+     * End at this message instead of the newest: the transcript as of an
+     * event, such as a settled turn's `resultMessageId`.
+     */
+    through: z.string().uuid().optional(),
   }),
   create: chat({
     ...mutation,
@@ -195,13 +200,26 @@ export class SessionActionsService {
         );
         const session = detail;
         if (input.operation === "inspect") return json(session);
-        if (input.operation === "history")
+        if (input.operation === "history") {
+          const through =
+            "through" in args && args.through !== undefined
+              ? args.through
+              : undefined;
+          const end =
+            through === undefined
+              ? session.messages.length
+              : session.messages.findIndex(
+                  (message) => message.id === through,
+                ) + 1;
+          if (end === 0 && through !== undefined)
+            throw new Error("No message in this chat has that id");
+          const limit = "limit" in args ? (args.limit ?? 30) : 30;
           return json({
             sessionId: session.id,
-            messages: session.messages.slice(
-              -("limit" in args ? (args.limit ?? 30) : 30),
-            ),
+            key: session.key,
+            messages: session.messages.slice(Math.max(0, end - limit), end),
           });
+        }
         if (!("idempotencyKey" in args))
           throw new Error("idempotencyKey is required");
         // Everything past this point changes the session: settle access

@@ -215,7 +215,9 @@ export {
 } from "./github-trigger-kinds.js";
 export {
   defineHttpApiConnectionProvider,
+  type HttpApiAction,
   type HttpApiConnectionOptions,
+  type HttpMethod,
 } from "./http-connection-provider.js";
 export {
   definePostgresConnectionProvider,

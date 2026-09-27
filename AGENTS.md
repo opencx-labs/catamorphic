@@ -161,7 +161,8 @@ in the corresponding `packages/core/src/*-skill.ts` modules so each skill can be
 maintained and its examples exercised independently.
 
 `HOST_SKILLS` includes `workflow-lifecycle` (source placement and enablement),
-`session-workflows` (timers, events, attention, and actions), and `session-artifacts`.
+`session-workflows` (timers, events, attention, and actions), `session-artifacts`,
+and `slack` (Slack from project code: trigger library, a chat per thread, citing).
 These reach existing projects without rewriting their seeded files. Read the
 relevant skill when changing its contract; keep sibling guidance consistent.
 Project and user skill overrides retain their existing precedence.
