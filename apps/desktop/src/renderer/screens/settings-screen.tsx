@@ -922,15 +922,24 @@ function LayoutSection({
       unsubscribe();
     };
   }, [projectId, scope, refreshKey]);
+  // Changes show at once: the control, its source line and its Reset follow
+  // the click, not the round trip. Controls stay enabled meanwhile (a
+  // disabled checkbox dims for the length of the save); a failed save puts
+  // the previous state back and says why.
   const save = async (patch: SettingsPatch) => {
     const request = generation.current;
+    const before = snapshot;
+    if (before) setSnapshot(applyPatch(before, patch));
     setSaving(true);
     setError(null);
     try {
       const result = await desktopApi.setSettings({ projectId, scope, patch });
       if (request === generation.current) setSnapshot(result);
     } catch (cause) {
-      if (request === generation.current) setError(String(cause));
+      if (request === generation.current) {
+        if (before) setSnapshot(before);
+        setError(String(cause));
+      }
     } finally {
       setSaving(false);
     }
@@ -939,6 +948,7 @@ function LayoutSection({
     <section
       className="settings-card mt-4 flex flex-col gap-3"
       data-settings-layout={title === "Workspace layout" ? "" : undefined}
+      aria-busy={saving || undefined}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-sm font-semibold">{title}</h2>
@@ -947,7 +957,6 @@ function LayoutSection({
             aria-label="Settings scope"
             className="field h-8 min-w-0 max-w-full rounded-md px-2 text-xs"
             value={scope}
-            disabled={saving}
             onChange={(event) => setScope(event.target.value as SettingsScope)}
           >
             <option value="profile">Profile</option>
@@ -1007,7 +1016,8 @@ function LayoutSection({
                 )}
                 <p className="mt-1 grid text-[11px] text-fg-muted">
                   {/* Reserve the longest source label so toggling an override
-                      cannot change the row's height when its text wraps. */}
+                      cannot change the row's height when its text wraps; the
+                      two labels cross-fade in that one cell. */}
                   <span
                     aria-hidden="true"
                     className="invisible col-start-1 row-start-1"
@@ -1015,10 +1025,20 @@ function LayoutSection({
                     {SETTING_SOURCE_LABELS[scope]} · From{" "}
                     {SETTING_SOURCE_LABELS.default.toLowerCase()}
                   </span>
-                  <span className="col-start-1 row-start-1">
-                    {overridden
-                      ? `Custom for ${SETTING_SOURCE_LABELS[scope].toLowerCase()}`
-                      : `${SETTING_SOURCE_LABELS[scope]} · From ${SETTING_SOURCE_LABELS[snapshot.sources[key]].toLowerCase()}`}
+                  <span
+                    aria-hidden={!overridden}
+                    data-source-current={overridden || undefined}
+                    className={`col-start-1 row-start-1 transition-opacity duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${overridden ? "opacity-100" : "opacity-0"}`}
+                  >
+                    Custom for {SETTING_SOURCE_LABELS[scope].toLowerCase()}
+                  </span>
+                  <span
+                    aria-hidden={overridden}
+                    data-source-current={!overridden || undefined}
+                    className={`col-start-1 row-start-1 transition-opacity duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${overridden ? "opacity-0" : "opacity-100"}`}
+                  >
+                    {SETTING_SOURCE_LABELS[scope]} · From{" "}
+                    {SETTING_SOURCE_LABELS[snapshot.sources[key]].toLowerCase()}
                   </span>
                 </p>
               </div>
@@ -1032,17 +1052,18 @@ function LayoutSection({
                   >
                     Reset
                   </span>
-                  {overridden && (
-                    <button
-                      type="button"
-                      aria-label={`Reset ${definition.label} to inherited`}
-                      disabled={saving}
-                      className="col-start-1 row-start-1 text-xs text-fg-muted hover:text-fg disabled:opacity-40"
-                      onClick={() => void save({ [key]: null })}
-                    >
-                      Reset
-                    </button>
-                  )}
+                  {/* Always mounted: it fades in and out in its reserved cell. */}
+                  <button
+                    type="button"
+                    aria-label={`Reset ${definition.label} to inherited`}
+                    aria-hidden={!overridden}
+                    inert={!overridden}
+                    tabIndex={overridden ? undefined : -1}
+                    className={`col-start-1 row-start-1 text-xs text-fg-muted transition-[opacity,color] duration-150 ease-[cubic-bezier(0.2,0,0,1)] hover:text-fg ${overridden ? "opacity-100" : "pointer-events-none opacity-0"}`}
+                    onClick={() => void save({ [key]: null })}
+                  >
+                    Reset
+                  </button>
                 </span>
                 {"range" in definition ? (
                   <input
@@ -1052,7 +1073,6 @@ function LayoutSection({
                     min={definition.range.min}
                     max={definition.range.max}
                     step={definition.range.step}
-                    disabled={saving}
                     value={Number(value)}
                     className="field h-8 w-20 rounded-md px-2 text-sm"
                     onChange={(event) => {
@@ -1064,7 +1084,6 @@ function LayoutSection({
                   <select
                     id={id}
                     name={key}
-                    disabled={saving}
                     value={String(value)}
                     className="field h-8 min-w-0 max-w-full rounded-md px-2 text-sm"
                     onChange={(event) =>
@@ -1084,7 +1103,6 @@ function LayoutSection({
                     id={id}
                     name={key}
                     type="checkbox"
-                    disabled={saving}
                     checked={value === true}
                     onChange={(event) =>
                       void save({ [key]: event.target.checked })
@@ -2037,4 +2055,21 @@ function ConfigurationErrors({ projectId }: { projectId?: string }) {
       ))}
     </div>
   );
+}
+
+/** The snapshot a patch will produce, shown before the save returns. A
+ * reset waits for the answer: only it knows which layer the value falls back
+ * to, and guessing showed the wrong source for a frame. */
+function applyPatch(
+  snapshot: SettingsSnapshot,
+  patch: SettingsPatch,
+): SettingsSnapshot {
+  const values = { ...snapshot.values };
+  const overrides = { ...snapshot.overrides };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null || value === undefined) continue;
+    Reflect.set(overrides, key, value);
+    Reflect.set(values, key, value);
+  }
+  return { ...snapshot, values, overrides };
 }
