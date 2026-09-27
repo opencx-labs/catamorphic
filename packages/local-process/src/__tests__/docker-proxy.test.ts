@@ -772,5 +772,9 @@ describe.skipIf(!hostSocket)("local-process containers on real Docker", () => {
       const { stdout } = await run("docker", args, { env });
       expect(stdout.trim()).toBe("");
     }
+    // Images stay in the machine's shared cache: the test removes its own.
+    await run("docker", ["rmi", "-f", "workspace-web"], { env }).catch(
+      () => undefined,
+    );
   }, 600_000);
 });
