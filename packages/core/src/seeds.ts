@@ -896,7 +896,7 @@ next to the host's own.
 | \`Button\` | \`variant\` primary/ghost/danger/subtle, \`size\` sm/md, \`loading\`, \`loadingLabel\` | Actions. \`loading\` shows a spinner and disables WITHOUT changing width — use it for every workflow call a button starts. |
 | \`Field\` | \`label\`, \`hint\`, \`error\` | Wrap one control; ids and aria wiring are automatic. \`error\` replaces the hint and turns the control invalid. |
 | \`Input\` / \`Textarea\` | \`invalid\` + native props | Text entry on the inset surface. |
-| \`Select\` | \`invalid\` + native props; \`<option>\` children | Native select with the host's own picker menu (overlay surface, accent checkmark) — free keyboard/screen-reader behavior. |
+| \`Select\` | \`invalid\` + native props; \`<option>\` children | Native select with free keyboard and screen-reader behavior; where the engine supports it (Chromium), its menu is the host's own picker with an accent checkmark. |
 | \`Checkbox\` | native props (\`indeterminate\` via the DOM property) | The host's checkbox: neutral edge when off, solid accent with a drawn check when on, a small press. Never style checkboxes yourself. |
 | \`Switch\` | \`checked\`, \`onCheckedChange\` | On/off toggle (\`role=switch\`). |
 | \`Card\` | \`title\`, \`description\`, \`footer\` | THE surface unit — compose screens from Cards on the app background. |

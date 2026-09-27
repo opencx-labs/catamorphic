@@ -38,6 +38,8 @@ function mount() {
 }
 
 function sized(element: HTMLElement, width: number) {
+  // jsdom lays nothing out: report a box so the container reads as shown.
+  element.getClientRects = () => [{ width }] as unknown as DOMRectList;
   element.getBoundingClientRect = () =>
     ({
       width,
@@ -73,6 +75,30 @@ describe("steady width during layout transitions", () => {
     transition("transitionend", sidebar, "width");
     expect(content.style.width).toBe("100%");
     expect(box.style.overflow).toBe("");
+  });
+
+  it("leaves hidden content, overlays and content inside the panel alone", () => {
+    const { box, content } = mount();
+    sized(box, 1000);
+    const overlay = document.createElement("aside");
+    overlay.setAttribute("data-layout-transition", "");
+    overlay.style.position = "absolute";
+    overlay.style.width = "0px";
+    sized(overlay, 280);
+    document.body.append(overlay);
+    transition("transitionrun", overlay, "width");
+    expect(content.style.width).toBe("100%");
+    transition("transitionend", overlay, "width");
+
+    const panel = document.createElement("aside");
+    panel.setAttribute("data-layout-transition", "");
+    panel.style.width = "0px";
+    sized(panel, 260);
+    document.body.append(panel);
+    panel.append(box.parentElement as HTMLElement);
+    transition("transitionrun", panel, "width");
+    expect(content.style.width).toBe("100%");
+    transition("transitionend", panel, "width");
   });
 
   it("ignores elements and properties that do not move the layout", () => {

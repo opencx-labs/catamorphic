@@ -118,11 +118,15 @@ function externalAppFor(
   } catch {
     return undefined;
   }
+  // Linux answers with a desktop-file id through a synchronous xdg-mime
+  // call on the main thread; the scheme's links read better than that.
   let name: string | undefined;
-  try {
-    name = app.getApplicationNameForProtocol(externalUrl) || undefined;
-  } catch {
-    name = undefined;
+  if (process.platform !== "linux") {
+    try {
+      name = app.getApplicationNameForProtocol(externalUrl) || undefined;
+    } catch {
+      name = undefined;
+    }
   }
   // macOS reports the bundle's display name with its extension.
   return { scheme, ...(name ? { name: name.replace(/\.app$/i, "") } : {}) };
@@ -138,9 +142,11 @@ function requestAttention(
   host: WebContents,
   guestId: number,
 ): (() => void) | undefined {
-  host.send("catamorphic:browser-reveal-guest", { guestId });
   const window = BrowserWindow.fromWebContents(host);
+  // While Work is in front, the prompt shows where the person already is;
+  // a background tab must not pull them away from what they are doing.
   if (!window || window.isDestroyed() || window.isFocused()) return undefined;
+  host.send("catamorphic:browser-reveal-guest", { guestId });
   if (process.platform === "darwin" && app.dock) {
     const bounce = app.dock.bounce("critical");
     return () => app.dock?.cancelBounce(bounce);
@@ -1006,9 +1012,10 @@ export function registerBrowserSupport(
       });
     });
     // A request to open another app belongs to the page that made it: once
-    // the tab moves on, answering must not launch anything.
-    contents.on("did-start-navigation", (details) => {
-      if (!details.isMainFrame || details.isSameDocument) return;
+    // the tab commits another page, answering must not launch anything.
+    // Only a committed navigation counts (as in Chrome): downloads, 204s and
+    // "open the app" fallbacks that never load a page keep the question.
+    contents.on("did-navigate", () => {
       const ids = permissionBroker.withdrawExternalApps(contents.id);
       const host = contents.hostWebContents;
       if (ids.length > 0 && host && !host.isDestroyed())

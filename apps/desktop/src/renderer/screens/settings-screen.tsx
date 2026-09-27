@@ -12,7 +12,13 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { ACTION_LABELS, KEYBINDING_ACTIONS } from "../../shared/actions.js";
 import { bindingFromEvent, parseBinding } from "../../shared/keybindings.js";
 import {
@@ -891,11 +897,28 @@ function LayoutSection({
   children?: ReactNode;
 }) {
   const [scope, setScope] = useState<SettingsScope>("profile");
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
   const [snapshot, setSnapshot] = useState<SettingsSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Reads and scope changes: a stale read or a save for another scope never
+  // lands. Saves in flight are tracked separately (see `pending`).
   const generation = useRef(0);
   const [refreshKey, setRefreshKey] = useState(0);
+  // Changes show at once and stay on screen until their own save settles:
+  // every snapshot that arrives meanwhile (an older save's answer, the
+  // refresh a save triggers) gets them layered back on top, so a quick
+  // second click never flickers back to the first value.
+  const pending = useRef(
+    new Map<SettingKey, { save: number; value: unknown }>(),
+  );
+  const server = useRef<SettingsSnapshot | null>(null);
+  const saves = useRef(0);
+  const showServer = useCallback((result: SettingsSnapshot) => {
+    server.current = result;
+    setSnapshot(withPending(result, pending.current));
+  }, []);
   // biome-ignore lint/correctness/useExhaustiveDependencies: Retry intentionally restarts a failed IPC read.
   useEffect(() => {
     let alive = true;
@@ -905,7 +928,7 @@ function LayoutSection({
         .getSettings({ projectId, scope })
         .then((result) => {
           if (alive && request === generation.current) {
-            setSnapshot(result);
+            showServer(result);
             setError(null);
           }
         })
@@ -913,6 +936,8 @@ function LayoutSection({
           if (alive && request === generation.current) setError(String(cause));
         });
     };
+    pending.current.clear();
+    server.current = null;
     setSnapshot(null);
     refresh();
     const unsubscribe = desktopApi.onPrefsChanged(refresh);
@@ -921,27 +946,41 @@ function LayoutSection({
       generation.current++;
       unsubscribe();
     };
-  }, [projectId, scope, refreshKey]);
-  // Changes show at once: the control, its source line and its Reset follow
-  // the click, not the round trip. Controls stay enabled meanwhile (a
-  // disabled checkbox dims for the length of the save); a failed save puts
-  // the previous state back and says why.
+  }, [projectId, scope, refreshKey, showServer]);
+  // Controls stay enabled while saving (a disabled checkbox dims for the
+  // length of the save). A reset waits for the answer: only it knows which
+  // layer the value falls back to.
   const save = async (patch: SettingsPatch) => {
-    const request = generation.current;
-    const before = snapshot;
-    if (before) setSnapshot(applyPatch(before, patch));
+    const forScope = scope;
+    const id = ++saves.current;
+    for (const [key, value] of Object.entries(patch) as [
+      SettingKey,
+      unknown,
+    ][]) {
+      if (value === null || value === undefined) pending.current.delete(key);
+      else pending.current.set(key, { save: id, value });
+    }
+    if (server.current)
+      setSnapshot(withPending(server.current, pending.current));
     setSaving(true);
     setError(null);
+    const settleOwn = () => {
+      for (const [key, entry] of pending.current)
+        if (entry.save === id) pending.current.delete(key);
+    };
     try {
       const result = await desktopApi.setSettings({ projectId, scope, patch });
-      if (request === generation.current) setSnapshot(result);
+      if (forScope !== scopeRef.current) return;
+      settleOwn();
+      showServer(result);
     } catch (cause) {
-      if (request === generation.current) {
-        if (before) setSnapshot(before);
-        setError(String(cause));
-      }
+      if (forScope !== scopeRef.current) return;
+      // Only this save's keys go back, to whatever the server holds now.
+      settleOwn();
+      if (server.current) showServer(server.current);
+      setError(String(cause));
     } finally {
-      setSaving(false);
+      if (id === saves.current) setSaving(false);
     }
   };
   return (
@@ -2057,17 +2096,15 @@ function ConfigurationErrors({ projectId }: { projectId?: string }) {
   );
 }
 
-/** The snapshot a patch will produce, shown before the save returns. A
- * reset waits for the answer: only it knows which layer the value falls back
- * to, and guessing showed the wrong source for a frame. */
-function applyPatch(
+/** A server snapshot with the changes still being saved laid over it. */
+function withPending(
   snapshot: SettingsSnapshot,
-  patch: SettingsPatch,
+  pending: ReadonlyMap<SettingKey, { value: unknown }>,
 ): SettingsSnapshot {
+  if (pending.size === 0) return snapshot;
   const values = { ...snapshot.values };
   const overrides = { ...snapshot.overrides };
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === null || value === undefined) continue;
+  for (const [key, { value }] of pending) {
     Reflect.set(overrides, key, value);
     Reflect.set(values, key, value);
   }
