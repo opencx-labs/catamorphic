@@ -30,6 +30,7 @@ binding grants exactly the methods it lists. Bind it per Environment in
 {
   "environments": {
     "default": {
+      "workloads": ["agent", "workflow"],
       "connections": {
         "slack": {
           "provider": "slack",

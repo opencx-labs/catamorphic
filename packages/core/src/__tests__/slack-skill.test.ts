@@ -6,6 +6,8 @@ import { promisify } from "node:util";
 import { parseProject } from "@catamorphic/parser";
 import { expect, it } from "vitest";
 import { HOST_SKILLS } from "../seeds.js";
+import { agentDefinitionSchema } from "../services/agent-definitions-service.js";
+import { parseProjectEnvironmentPolicy } from "../services/project-environments-service.js";
 
 const SKILL = HOST_SKILLS["slack/SKILL.md"] ?? "";
 const blocks = [...SKILL.matchAll(/```typescript\n([\s\S]*?)```/g)].map(
@@ -81,6 +83,27 @@ const mention = (input: { ts: string; threadTs?: string; id: string }) => ({
       },
     },
   },
+});
+
+it("the skill's committed binding and agent are valid project files", () => {
+  const json = [...SKILL.matchAll(/```json\n([\s\S]*?)```/g)].map((match) =>
+    JSON.parse(match[1] ?? ""),
+  );
+  const [manifest, agent] = json;
+  const policy = parseProjectEnvironmentPolicy(manifest);
+  expect(policy.invalid).toBeUndefined();
+  expect(policy.entries).toEqual([
+    expect.objectContaining({
+      name: "default",
+      definition: expect.any(Object),
+    }),
+  ]);
+  expect(Object.keys(policy.environments.default?.connections ?? {})).toEqual([
+    "slack",
+    "slackSearch",
+  ]);
+  const parsed = agentDefinitionSchema().safeParse(agent);
+  expect(parsed.success, JSON.stringify(parsed.error)).toBe(true);
 });
 
 it("the Slack library parses as three project kinds on one signed webhook", () => {
