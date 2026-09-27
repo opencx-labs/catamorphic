@@ -70,6 +70,7 @@ import {
 import { allocationSandboxProvider } from "./allocation-sandbox-provider.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import { AccessDeniedError, resolveScope } from "./artifact-scope.js";
+import { projectChatIdentity } from "./chat-delivery.js";
 import type {
   CodingAgentRegistry,
   RegisteredCodingAgent,
@@ -718,11 +719,18 @@ export class AgentSessionsService {
       for (const candidate of candidates) {
         if (stopped) return;
         try {
-          const identity = await input.resolveIdentity({
-            tenantId: candidate.tenant_id,
-            projectId: candidate.project_id,
-            externalUserId: candidate.external_user_id,
-          });
+          // A project chat belongs to the project principal, which is
+          // nobody's member: rebuild its identity instead of resolving one.
+          const identity = isProjectPrincipal(candidate.external_user_id)
+            ? projectChatIdentity({
+                tenantId: candidate.tenant_id,
+                projectId: candidate.project_id,
+              })
+            : await input.resolveIdentity({
+                tenantId: candidate.tenant_id,
+                projectId: candidate.project_id,
+                externalUserId: candidate.external_user_id,
+              });
           if (!identity) continue;
           // Recovery belongs to the worker, never to a client's GET request.
           const pending = await this.turns.listPending({

@@ -265,11 +265,8 @@ export async function chatOwner(input: {
       throw new Error(`${externalUserId} is not a member of this project`);
     return found;
   };
-  // The project's own chats may run in any Environment the project declares.
-  const projectChat = (principal: Identity): Identity => ({
-    ...principal,
-    executionScope: [{ projectId: input.projectId, name: EVERY_ARTIFACT }],
-  });
+  const projectChat = (principal: Identity): Identity =>
+    projectChatScope(principal, input.projectId);
   if (enablement?.owner_kind === "project") {
     // A project automation's run already acts as the project, with its
     // consented connections.
@@ -282,13 +279,10 @@ export async function chatOwner(input: {
         "Reaching the project chat needs the automations:write permission; turn the workflow on for the project instead",
       );
     if (isProjectPrincipal(caller.externalUserId)) return projectChat(caller);
-    return projectChat(
-      projectPrincipalIdentity({
-        tenantId: caller.tenantId,
-        projectId: input.projectId,
-        environment: EVERY_ARTIFACT,
-      }),
-    );
+    return projectChatIdentity({
+      tenantId: caller.tenantId,
+      projectId: input.projectId,
+    });
   }
   if (!audience || audience.member === caller.externalUserId) return caller;
   if (!hasProjectPermission(caller, input.projectId, "sessions:write"))
@@ -296,4 +290,31 @@ export async function chatOwner(input: {
       `Reaching ${audience.member}'s chat needs the sessions:write permission`,
     );
   return member(audience.member);
+}
+
+/** The project's own chats may run in any Environment the project declares. */
+function projectChatScope(principal: Identity, projectId: string): Identity {
+  return {
+    ...principal,
+    executionScope: [{ projectId, name: EVERY_ARTIFACT }],
+  };
+}
+
+/**
+ * The identity a project chat's turns run with when no automation run is
+ * delivering to it: the project principal, without any member's authority
+ * (ADR 0156). Workers use it to resume a project chat's queued turns.
+ */
+export function projectChatIdentity(input: {
+  tenantId: string;
+  projectId: string;
+}): Identity {
+  return projectChatScope(
+    projectPrincipalIdentity({
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      environment: EVERY_ARTIFACT,
+    }),
+    input.projectId,
+  );
 }

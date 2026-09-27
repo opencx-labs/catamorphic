@@ -18,6 +18,7 @@ import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
+import { projectChatIdentity } from "../services/chat-delivery.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
@@ -604,6 +605,44 @@ describe("agent session coordination", () => {
         expect(
           detail.messages.filter((message) => message.role === "user"),
         ).toHaveLength(1);
+        expect(
+          await sessions.turns.listPending({ sessionId: session.id }),
+        ).toEqual([]);
+      });
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it("recovers a project chat's queued turn although nobody is its member", async () => {
+    const project = await projects.create(identity, {
+      name: "Project chat recovery",
+    });
+    const projectChat = projectChatIdentity({
+      tenantId: identity.tenantId,
+      projectId: project.id,
+    });
+    const session = await sessions.create(projectChat, project.id);
+    await sessions.sendMessage(
+      projectChat,
+      project.id,
+      session.id,
+      "Reconnect durable turn",
+    );
+    await db
+      .updateTable("agent_turns")
+      .set({ available_at: new Date(0) })
+      .where("session_id", "=", session.id)
+      .execute();
+    // The host's member lookup knows nobody for the project principal.
+    const worker = sessions.startWorker({
+      resolveIdentity: async () => null,
+      pollIntervalMs: 10,
+    });
+    try {
+      await vi.waitFor(async () => {
+        const detail = await sessions.get(projectChat, project.id, session.id);
+        expect(detail.messages.at(-1)?.content).toBe("Connection restored");
         expect(
           await sessions.turns.listPending({ sessionId: session.id }),
         ).toEqual([]);
