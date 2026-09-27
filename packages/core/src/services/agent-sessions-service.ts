@@ -2196,6 +2196,8 @@ export class AgentSessionsService {
         await copy.dispose();
       }
     }
+    // Git through the gateway is a convenience of the turn, not a condition
+    // of it: the agent still works in its checkout if it cannot be set up.
     if (row.allocation_id)
       await this.configureSandboxGit({
         identity: input.identity,
@@ -2205,7 +2207,12 @@ export class AgentSessionsService {
         provider: input.provider,
         sandboxProviderId: input.sandboxProviderId,
         renewOnly: false,
-      });
+      }).catch((error: unknown) =>
+        console.warn(
+          `[catamorphic] Could not configure gateway Git for session ${input.sessionId}`,
+          error,
+        ),
+      );
   }
 
   /**
