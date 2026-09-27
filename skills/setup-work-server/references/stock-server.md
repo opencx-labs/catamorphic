@@ -131,7 +131,11 @@ people who review, and members never receive its tokens. An imported
 repository is attached (ADR 0170): Work never
 commits or pushes to its default branch or to any branch it did not create.
 Everything Work originates there arrives as a `work/` branch and a pull
-request, reviewed like any other change.
+request, reviewed like any other change. A direct deploy to such a project is
+refused; propose the change instead. The server takes what the default branch
+accepts every minute; if its copy ever diverges from that branch, the project
+reports `remoteDivergedAt` and the server logs that it stopped receiving
+updates until the two histories are reconciled.
 
 Provisioning with `repository` imports the source through that connection. When the default
 branch already has `.work/roles/*.json`, those roles are used as they are and

@@ -1007,9 +1007,12 @@ session's Git binding or, failing that, the code host's credentials
 (`RemoteSyncService.origin`), publishes it as the session's `sessions/<id>`
 branch, and seeds the sandbox from a shallow pack. Native checkouts receive
 `workspace: { ref, commit, repository, pin }` in
-`NativeAgentCheckout.resolve` and start a new worktree at that commit. A
-session at a ref always works in its own session copy, and its DTO reports
-`workspace: { ref, commit }`.
+`NativeAgentCheckout.resolve` (the base, or the one a pending move asks
+for) and start a new worktree at that commit when the session has none of
+its own. `resolve` returns `{ path, owned }`: `owned` is true only for a
+checkout the host made for that session, and core moves a base only in an
+owned checkout, never in a person's own folder. A session at a ref always
+works in its own session copy, and its DTO reports `workspace: { ref, commit }`.
 
 Long-lived API keys and service-account material use service connections, not
 project secrets. A provider's `completeAuthorization` turns the challenge's

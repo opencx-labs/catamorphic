@@ -66,7 +66,8 @@ policies (ADR 0054).
 **Approvals reach people.** A project chat, or one an automation named
 `approvers: { members, roles }` for when it delivered, routes each escalation
 (tool `ask`, gateway guard) to those people through notifications and
-attention; they may answer without otherwise holding the chat. It waits
+attention. Only they see and answer it, whether or not they otherwise hold
+the chat; an escalation that names no one is the chat's own. It waits
 `environments.<name>.approvals.waitMinutes` (default 30), then denies with a
 reason. With no approver it is refused at once. Workflow steps still refuse.
 

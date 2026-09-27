@@ -28,14 +28,17 @@ interrupt, complete, reopen, stopWatcher, fork, spawn. `find({ key })` returns
 the open chat or null and never creates one. The same shapes serve workflows,
 the project MCP (`session_*`), and REST (`GET`/`DELETE
 /projects/:id/agent/chats/:key`). A key lookup grants nothing; the usual
-session access check decides.
+session access check decides, and a chat the caller may not see answers
+exactly like no open chat.
 
 **`close` ends a chat's life.** For the chat and its subsessions it cancels
 queued work, interrupts running work, stops watchers, releases the workspace
 Allocation (the node destroys the sandbox), revokes connection grants, deletes
 the `sessions/<id>` branch and the `session-<id>` copy, and frees the key. The
 transcript stays readable. A later delivery for the key starts a new chat.
-Closing a key with no open chat is a no-op.
+Work delivered while running turns stop is cancelled with the closing.
+Closing a key with no open chat, or a chat already closed, is a no-op
+(`{ closed: false }`); retrying a close that stopped partway finishes it.
 
 **Archive is only visibility.** Delivering work to an archived chat restores it
 for everyone who archived it and runs; the drainer never skips a queued turn
@@ -48,14 +51,19 @@ workspace: the sandbox is synced and checkpointed to its session branch, then
 the Allocation is released with reason `idle`. The next turn admits a fresh
 Allocation in the same Environment and rehydrates the sandbox from the branch.
 The agent worker sweeps each minute on the instance holding the node lease.
-Nothing is released when the workspace could not be saved. Capacity follows
-activity, not open chats.
+Nothing is released when the workspace could not be saved; a read-only
+agent's workspace (0176) is released without saving, since its changes never
+leave the sandbox. A released chat with queued work is admitted again wherever
+it fits, even when the machine it left is gone. Capacity follows activity, not
+open chats.
 
 **Each workload is placed by its own Environment.** A workflow run uses its
 enablement's Environment. A chat it delivers to uses the delivery's
 `environment`, else the agent's `environment.preferred`, else the project
-default. Admission checks permission, not equality: the chat's owner must be
-allowed the Environment under 0158 grants (a member through role
+default. A chat's turns run as its owner, whoever delivered them: the
+deliverer's access is checked when they deliver, and admission and connection
+bindings are the owner's. Admission checks permission, not equality: the
+chat's owner must be allowed the Environment under 0158 grants (a member through role
 `environments`; a project chat, the project's own work, may use any Environment
 the project declares) and the agent's `environment.allowed` must include it.
 No new permission: reaching a project chat already needs a project automation
