@@ -68,10 +68,15 @@ const rootWorkspacePkg = (name: string) =>
       private: true,
       workspaces: ["contracts", "workflows", "apps/*"],
       scripts: { check: "bun scripts/check.ts" },
-      // Dev-only tooling for the seeded check script; stripped from every
-      // sandbox install. Trigger kinds in `triggers/` resolve the workflow
-      // package through the workflows workspace, which Bun hoists.
-      devDependencies: { "@catamorphic/parser": PARSER_PACKAGE_VERSION },
+      // Dev-only: the parser runs the seeded check script, and the workflow
+      // package gives `triggers/` its types (Bun installs workspaces
+      // isolated, so only the root's own dependencies resolve there). Both
+      // are stripped from sandbox installs; executions receive the host's
+      // copy of the workflow package through the workflows workspace.
+      devDependencies: {
+        "@catamorphic/parser": PARSER_PACKAGE_VERSION,
+        "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
+      },
     },
     null,
     2,

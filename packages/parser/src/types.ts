@@ -3,6 +3,7 @@ import {
   isProjectPathWithin,
   isProjectSourcePath,
   PROJECT_APPS_DIR,
+  PROJECT_PACKAGE_PATH,
   PROJECT_WORKFLOWS_DIR,
 } from "@catamorphic/workflow/project-layout";
 
@@ -20,6 +21,20 @@ export const PROJECT_TOOLING_PACKAGE = "@catamorphic/parser";
 export const SANDBOX_STRIPPED_PACKAGES: readonly string[] = [
   APP_RUNTIME_PACKAGE,
   PROJECT_TOOLING_PACKAGE,
+];
+
+/** The workflow authoring package, which no public registry serves yet. */
+const WORKFLOW_AUTHORING_PACKAGE = "@catamorphic/workflow";
+
+/**
+ * Also stripped from the workspace root manifest, which declares the workflow
+ * package only so `.work/triggers/` resolves it for types. The workflows
+ * package keeps its declaration: that is what selects the host's local copy,
+ * uploaded into the execution's node_modules.
+ */
+const WORKSPACE_ROOT_STRIPPED_PACKAGES: readonly string[] = [
+  ...SANDBOX_STRIPPED_PACKAGES,
+  WORKFLOW_AUTHORING_PACKAGE,
 ];
 
 /**
@@ -48,14 +63,26 @@ export function executionFiles(
       .map(([filePath, content]) => [
         filePath,
         !locked && filePath.endsWith("package.json")
-          ? stripSandboxUnresolvableDependencies(content)
+          ? stripSandboxUnresolvableDependencies({
+              packageJson: content,
+              packageNames:
+                filePath === PROJECT_PACKAGE_PATH
+                  ? WORKSPACE_ROOT_STRIPPED_PACKAGES
+                  : SANDBOX_STRIPPED_PACKAGES,
+            })
           : content,
       ]),
   );
 }
 
-function stripSandboxUnresolvableDependencies(packageJson: string): string {
-  if (!SANDBOX_STRIPPED_PACKAGES.some((name) => packageJson.includes(name))) {
+function stripSandboxUnresolvableDependencies({
+  packageJson,
+  packageNames,
+}: {
+  packageJson: string;
+  packageNames: readonly string[];
+}): string {
+  if (!packageNames.some((name) => packageJson.includes(name))) {
     return packageJson;
   }
   let parsed: unknown;
@@ -73,7 +100,7 @@ function stripSandboxUnresolvableDependencies(packageJson: string): string {
   ]) {
     const deps = manifest[section];
     if (typeof deps === "object" && deps !== null) {
-      for (const name of SANDBOX_STRIPPED_PACKAGES) {
+      for (const name of packageNames) {
         delete (deps as Record<string, unknown>)[name];
       }
     }

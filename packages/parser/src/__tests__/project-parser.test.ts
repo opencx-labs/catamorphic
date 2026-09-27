@@ -663,4 +663,26 @@ describe("executionFiles", () => {
       files[".work/workflows/package.json"],
     );
   });
+
+  it("strips the root's type-only workflow package but keeps the workflows package's", () => {
+    const files = {
+      ".work/package.json": JSON.stringify({
+        devDependencies: {
+          "@catamorphic/parser": "0.0.1",
+          "@catamorphic/workflow": "0.0.3",
+          typescript: "5.9.0",
+        },
+      }),
+      ".work/workflows/package.json": JSON.stringify({
+        dependencies: { "@catamorphic/workflow": "0.0.3" },
+      }),
+    };
+    const result = executionFiles(files);
+    expect(JSON.parse(result[".work/package.json"] ?? "{}")).toEqual({
+      devDependencies: { typescript: "5.9.0" },
+    });
+    expect(result[".work/workflows/package.json"]).toBe(
+      files[".work/workflows/package.json"],
+    );
+  });
 });
