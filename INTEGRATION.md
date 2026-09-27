@@ -52,7 +52,12 @@ Common host shapes, composed from those axes:
   disk, stock Better Auth with local or configured provider sign-in,
   OAuth/PKCE remote clients, credential-free admission links, mDNS LAN
   discovery, and `DATABASE_URL` to swap PGlite for real Postgres. Read it as the
-  reference for this shape before writing a host from scratch.
+  reference for this shape before writing a host from scratch. A company that
+  needs its own code runs the same server as a library
+  ([`@catamorphic/work-server`](packages/work-server/README.md), ADR 0160):
+  `config` is typed data validated by the image's file schemas, `hooks` are
+  code, and only `workServerConfigFromEnv` reads `WORK_*` variables and files
+  (ADR 0183).
 - **Read-only embed / reporting**: `@catamorphic/db` migrations plus SQL
   joins, or the SDK without a sandbox provider.
 
@@ -926,6 +931,19 @@ external systems are enabled. The host vault stores opaque encrypted material us
 wrapping key remains outside the database. Provider code runs in the control plane. Workflows call
 `context.connections.<alias>.<action>(args)` and agents use allocation-bound
 Catamorphic MCP grants. Neither receives upstream credentials.
+
+Review policy is host code (ADRs 0162, 0183): pass `connectionGuards`, each a
+`ConnectionActionGuard` (`name`, optional provider `kinds`, and
+`review(context)` answering `allow`, `deny`, or `escalate`). The framework and
+the Work server ship none. Core runs them in order on every brokered action
+(connections, Git, models) and keeps the mechanics: any deny wins, a guard
+that throws denies, one slower than `connectionGuardTimeoutMs` (default 30
+seconds) escalates, an escalation asks the agent session's person or a project
+chat's approvers through `toolPermissions` (a workflow's is refused), and each
+verdict lands in the connection audit. Guards skip connections outside their
+`kinds`, so the audit holds only verdicts that were judged. Provider limits,
+Git push rules, and model allowlists and budgets are mechanics and stay in
+providers and bindings.
 Connection aliases use letters, numbers, underscores, and hyphens only. Core
 does not perform lossy alias normalization, so one alias always maps to one MCP
 server and policy key.

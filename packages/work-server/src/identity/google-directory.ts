@@ -17,15 +17,18 @@ const METADATA_TOKEN =
   "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
 
 /**
- * How the server authenticates to the Admin SDK: a service account key file
- * (the account holds a read-only admin role; no domain-wide delegation), or
- * the metadata server when the server runs as that account on Google Cloud.
+ * How the server authenticates to the Admin SDK: a service account key (the
+ * account holds a read-only admin role; no domain-wide delegation) as a file
+ * or inline, for hosts that read it from a secret manager (ADR 0183), or the
+ * metadata server when the server runs as that account on Google Cloud.
  */
 export type GoogleDirectoryCredentials =
   | { keyFile: string }
+  | { key: string | GoogleServiceAccountKey }
   | { metadataServer: true };
 
-interface ServiceAccountKey {
+/** The fields of a service account's JSON key the token exchange uses. */
+export interface GoogleServiceAccountKey {
   client_email: string;
   private_key: string;
   token_uri?: string;
@@ -138,7 +141,12 @@ export class GoogleWorkspaceDirectory implements DirectoryProvider {
         ? await this.fetch(`${METADATA_TOKEN}?scopes=${SCOPES.join(",")}`, {
             headers: { "metadata-flavor": "Google" },
           })
-        : await this.exchangeServiceAccountKey(credentials.keyFile, now);
+        : await this.exchangeServiceAccountKey(
+            "keyFile" in credentials
+              ? readServiceAccountKey(credentials.keyFile)
+              : serviceAccountKey(credentials.key),
+            now,
+          );
     const body = await this.json(response, "token request");
     if (
       typeof body.access_token !== "string" ||
@@ -156,10 +164,9 @@ export class GoogleWorkspaceDirectory implements DirectoryProvider {
   }
 
   private exchangeServiceAccountKey(
-    keyFile: string,
+    key: GoogleServiceAccountKey,
     now: number,
   ): Promise<Response> {
-    const key = readServiceAccountKey(keyFile);
     const tokenUri = key.token_uri ?? "https://oauth2.googleapis.com/token";
     const issuedAt = Math.floor(now / 1000);
     const encode = (value: object) =>
@@ -186,15 +193,32 @@ export class GoogleWorkspaceDirectory implements DirectoryProvider {
   }
 }
 
-function readServiceAccountKey(file: string): ServiceAccountKey {
-  let parsed: unknown;
+function readServiceAccountKey(file: string): GoogleServiceAccountKey {
+  let contents: string;
   try {
-    parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    contents = fs.readFileSync(file, "utf8");
   } catch (error) {
     throw new DirectoryUnavailableError(
       "The Google service account key could not be read",
       { cause: error },
     );
+  }
+  return serviceAccountKey(contents);
+}
+
+function serviceAccountKey(
+  key: string | GoogleServiceAccountKey,
+): GoogleServiceAccountKey {
+  let parsed: unknown = key;
+  if (typeof key === "string") {
+    try {
+      parsed = JSON.parse(key);
+    } catch (error) {
+      throw new DirectoryUnavailableError(
+        "The Google service account key is not JSON",
+        { cause: error },
+      );
+    }
   }
   if (
     typeof parsed === "object" &&

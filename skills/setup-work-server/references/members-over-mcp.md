@@ -69,8 +69,8 @@ team or shared machine; pass `environment` to choose another Environment
 (`project_overview` lists them and what each runs for you).
 Continue a conversation with its `sessionId`; the same chat appears in the
 Work app. Server agents reach connected systems, such as a read-only
-production database, through the gateway with guard review
-([secrets and the gateway](secrets-and-gateway.md)). A member's own client
+production database, through the gateway, reviewed by any guards the
+company added ([secrets and the gateway](secrets-and-gateway.md)). A member's own client
 never receives those credentials; ask a project agent instead. An action a
 guard escalates waits for approval in the Work app.
 

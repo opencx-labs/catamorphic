@@ -54,7 +54,7 @@ import { WorkAdmissionService } from "./admission/admission-service.js";
 import { registerWorkAdmissionRoutes } from "./admission/routes.js";
 import { workAgentCapabilities } from "./agent-capabilities.js";
 import { buildAgentRegistry } from "./agents.js";
-import { loadWorkAuthConfig } from "./auth/auth-config.js";
+import { parseWorkAuthConfig } from "./auth/auth-config.js";
 import { openWorkAuthDatabase } from "./auth/auth-database.js";
 import { registerWorkAuthRoutes } from "./auth/fastify-auth.js";
 import {
@@ -71,7 +71,10 @@ import {
 import type { WorkServerConfig } from "./config.js";
 import { EncryptedFileCredentialVault } from "./credential-vault.js";
 import { workExecution } from "./execution-config.js";
-import { gatewayGuards, gatewayProviders } from "./gateway/gateway-config.js";
+import {
+  gatewayProviders,
+  parseGatewayConfig,
+} from "./gateway/gateway-config.js";
 import { AccountLifecycle } from "./identity/account-lifecycle.js";
 import { registerAdministratorRoutes } from "./identity/administrator-routes.js";
 import { WorkAdministrators } from "./identity/administrators.js";
@@ -139,7 +142,9 @@ export interface WorkServerHooks {
   ) => Record<string, string>;
   /**
    * Checks on every brokered connection action from agents and workflows
-   * (ADR 0162): a query policy, a model classifier, a rate limit.
+   * (ADR 0162): a query policy, a model classifier, a rate limit. Guards
+   * are host code; Work ships none (ADR 0183). A throwing guard denies; one
+   * slower than `config.connectionGuardTimeoutMs` escalates to a person.
    */
   connectionGuards?: readonly ConnectionActionGuard[];
   /**
@@ -219,6 +224,21 @@ async function createWorkServerInner(
   const log = options.log ?? (() => {});
   const data = config.dataDir;
   const publicBase = config.publicBases[0] ?? "http://127.0.0.1:4700";
+  // Config is data, validated by the schemas the image's files use; only
+  // the image's environment layer reads files for it (ADR 0183).
+  const workAuthConfig = parseWorkAuthConfig(config.auth ?? {});
+  const gateway = config.gateway ? parseGatewayConfig(config.gateway) : null;
+  if (
+    config.connectionGuardTimeoutMs !== undefined &&
+    !(
+      Number.isSafeInteger(config.connectionGuardTimeoutMs) &&
+      config.connectionGuardTimeoutMs > 0
+    )
+  ) {
+    throw new Error(
+      "config.connectionGuardTimeoutMs must be a positive whole number of milliseconds",
+    );
+  }
   if (config.databaseUrl && !config.secret) {
     throw new Error(
       "Postgres deployments require the same WORK_SECRET on every instance",
@@ -297,10 +317,6 @@ async function createWorkServerInner(
   const objectStore = config.databaseUrl
     ? new PostgresObjectStore(ownDb)
     : undefined;
-  const workAuthConfig = loadWorkAuthConfig({
-    dataDir: data,
-    ...(config.authConfigPath ? { configuredPath: config.authConfigPath } : {}),
-  });
   // The credential vault key is its own secret (ADR 0162): never derived
   // from the sign-in secret, and supplied by a key service through a hook
   // when the deployment has one.
@@ -435,9 +451,7 @@ async function createWorkServerInner(
   // backed by the `github` service connection an administrator connects.
   const github = defineGithubConnectionProvider(hooks.github);
 
-  const gatewayConnectionProviders = config.gateway
-    ? gatewayProviders(config.gateway)
-    : [];
+  const gatewayConnectionProviders = gateway ? gatewayProviders(gateway) : [];
   disposers.push(() =>
     Promise.all(
       gatewayConnectionProviders.map((provider) => provider.close?.()),
@@ -480,10 +494,12 @@ async function createWorkServerInner(
     sandboxProvider,
     environmentProvider,
     credentialVault,
-    connectionGuards: [
-      ...(config.gateway ? gatewayGuards(config.gateway) : []),
-      ...(hooks.connectionGuards ?? []),
-    ],
+    ...(hooks.connectionGuards
+      ? { connectionGuards: hooks.connectionGuards }
+      : {}),
+    ...(config.connectionGuardTimeoutMs
+      ? { connectionGuardTimeoutMs: config.connectionGuardTimeoutMs }
+      : {}),
     connectionProviders: [
       github,
       // Model keys are connections too (ADR 0180): harnesses in sandboxes

@@ -1,6 +1,6 @@
 # 0163 — Production databases through the gateway, with reviewed queries
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by 0183)
 - **Date:** 2026-09-25
 - **Refines:** 0162
 

@@ -184,8 +184,14 @@ export interface CatamorphicCoreConfig {
   /**
    * Checks every brokered connection action from agents and workflows (ADR
    * 0162). Escalations ask the agent session's person via `toolPermissions`.
+   * Guards are host code (ADR 0183).
    */
   connectionGuards?: readonly ConnectionActionGuard[];
+  /**
+   * How long one connection guard may take before its action escalates to a
+   * person (default 30 seconds). A throwing guard always denies.
+   */
+  connectionGuardTimeoutMs?: number;
   /** Re-resolve current member authority for workflow dispatch and agent capabilities. */
   resolveMemberIdentity?: (args: {
     tenantId: string;
@@ -809,6 +815,9 @@ export class CatamorphicCore {
         () => this.workflowEnablements,
         {
           guards: config.connectionGuards ?? [],
+          ...(config.connectionGuardTimeoutMs
+            ? { guardTimeoutMs: config.connectionGuardTimeoutMs }
+            : {}),
           ...(config.toolPermissions
             ? { approvals: config.toolPermissions }
             : {}),

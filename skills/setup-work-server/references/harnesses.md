@@ -28,8 +28,8 @@ another base URL, declare the kind in `WORK_GATEWAY_CONFIG` first:
 `api` is `anthropic` (Messages, for Claude Code) or `openai` (Responses and
 Chat Completions, for Codex). An entry with kind `anthropic` or `openai`
 replaces the built-in one. The server's own `ANTHROPIC_API_KEY` (and the
-other key variables) only serve the built-in assistant and model guards;
-harnesses never receive them.
+other key variables) only serve the built-in assistant and any guards a
+custom server adds; harnesses never receive them.
 
 ## 2. Bind it in the Environment
 
@@ -50,9 +50,10 @@ harnesses never receive them.
 - `model.allow` lists model id patterns the alias serves; absent, any.
 - `model.maxOutputTokensPerTurn` refuses further calls in an agent turn once
   that turn's calls produced that many output tokens.
-- Guards review every call as connection kind `model` (`"kinds": ["model"]`),
-  action `messages`, `count_tokens`, `responses`, `chat.completions`, or
-  `models`, with the provider, model, and output limit, never the prompt.
+- A custom server's guards review every call as connection kind `model`
+  (`kinds: ["model"]`), action `messages`, `count_tokens`, `responses`,
+  `chat.completions`, or `models`, with the provider, model, and output
+  limit, never the prompt.
 
 ## 3. Put the CLI in the image
 

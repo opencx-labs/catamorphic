@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { betterAuth } from "better-auth";
 import { bearer, genericOAuth, mcp, username } from "better-auth/plugins";
-import { parseWorkAuthConfig, type WorkAuthConfig } from "./auth-config.js";
+import {
+  parseWorkAuthConfig,
+  type ResolvedWorkAuthConfig,
+} from "./auth-config.js";
 import type { WorkAuthDatabase } from "./auth-database.js";
 
 export interface WorkAuthUser {
@@ -80,7 +83,7 @@ export function createWorkAuth(options: {
   database: WorkAuthDatabase;
   baseURL: string;
   secret: string;
-  config?: WorkAuthConfig;
+  config?: ResolvedWorkAuthConfig;
   /** Runs at every upstream sign-in after the provider's own checks. */
   signInGate?: WorkSignInGate;
 }): WorkAuth {

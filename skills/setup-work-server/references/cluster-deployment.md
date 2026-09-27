@@ -205,7 +205,8 @@ Do not call a controller sandbox a locally running model or promise offline use.
 ## Connections and verification
 
 `WORK_GATEWAY_CONFIG` declares the connections the server brokers (MCP
-endpoints, HTTP APIs, databases) and the guards that review them; see
+endpoints, HTTP APIs, databases, Git hosts, model APIs); guards that review
+them are code in a custom server. See
 [secrets and the gateway](secrets-and-gateway.md). This is host endpoint
 configuration, not workflow logic or a second role model.
 Organization administrators connect the named service connections once;

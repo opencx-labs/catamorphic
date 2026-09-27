@@ -34,8 +34,9 @@ Start small and add only what the situation needs:
   configured sign-in provider (or local sign-in), and invitations.
 - **A company brain:** Google Workspace sign-in with directory
   deprovisioning and groups as roles ([company identity](references/company-identity.md));
-  credentials only through the gateway, with guards on anything touching
-  production ([secrets and the gateway](references/secrets-and-gateway.md));
+  credentials only through the gateway, with guards in a small custom server
+  on anything touching production
+  ([secrets and the gateway](references/secrets-and-gateway.md));
   the company's GitHub App as the `github` service connection
   ([Connect GitHub](references/connect-github.md)), with pull request reviews
   on a review pool ([Review pull requests](references/review-pull-requests.md));

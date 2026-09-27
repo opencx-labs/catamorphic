@@ -682,10 +682,14 @@ describe("credential connections", () => {
               if (page === 666) return { verdict: "deny", reason: "too broad" };
               if (page === 7) return { verdict: "escalate", reason: "unusual" };
               if (page === 13) throw new Error("classifier crashed");
+              // A reviewer that never answers.
+              if (page === 99) return new Promise(() => {});
               return { verdict: "allow" };
             },
           },
         ],
+        // The host sets how long a guard may take (ADR 0183).
+        guardTimeoutMs: 50,
         approvals: {
           handlerFor: () => async (request) => {
             asked.push(`${request.sessionId}:${request.description}`);
@@ -750,13 +754,18 @@ describe("credential connections", () => {
 
     await expect(call(7)).resolves.toEqual({ action: "users.list", ok: true });
     expect(asked).toEqual(["session-1:Needs your approval: unusual"]);
+    // A guard that does not answer in time sends the action to a person.
+    await expect(call(99)).resolves.toEqual({ action: "users.list", ok: true });
+    expect(asked.at(-1)).toBe(
+      "session-1:Needs your approval: policy did not answer",
+    );
     answer = "deny";
     await expect(call(7)).rejects.toThrow("not approved");
     // A workflow cannot wait for a person mid-step; escalation refuses it.
     await expect(call(7, "workflow")).rejects.toThrow(
       "requires human approval",
     );
-    expect(asked).toHaveLength(2);
+    expect(asked).toHaveLength(3);
 
     const audit = (
       await connections.listAudit({ identity: admin, projectId })

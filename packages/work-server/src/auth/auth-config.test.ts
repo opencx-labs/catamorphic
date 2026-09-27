@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadWorkAuthConfig } from "./auth-config.js";
+import { parseWorkAuthConfig, workAuthConfigFromFile } from "./auth-config.js";
 
 const dirs: string[] = [];
 
@@ -14,7 +14,9 @@ describe("Work server auth configuration", () => {
   it("defaults an unconfigured Work server to local credentials", () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cata-auth-config-"));
     dirs.push(dataDir);
-    const config = loadWorkAuthConfig({ dataDir });
+    const config = parseWorkAuthConfig(
+      workAuthConfigFromFile(path.join(dataDir, "auth-config.json")),
+    );
     expect(config.local).toEqual({ enabled: true });
     expect(config.providers).toEqual([]);
     expect(config.publicMethods()).toEqual({ local: true, providers: [] });
@@ -43,7 +45,7 @@ describe("Work server auth configuration", () => {
       }),
       { mode: 0o600 },
     );
-    const config = loadWorkAuthConfig({ dataDir, configuredPath: file });
+    const config = parseWorkAuthConfig(workAuthConfigFromFile(file));
     expect(config.providers[0]?.clientSecret).toBe("do-not-render");
     expect(config.publicMethods()).toEqual({
       local: false,
@@ -78,8 +80,30 @@ describe("Work server auth configuration", () => {
         ],
       }),
     );
-    expect(() => loadWorkAuthConfig({ dataDir, configuredPath: file })).toThrow(
-      /provider|discovery/i,
-    );
+    expect(() => workAuthConfigFromFile(file)).toThrow(/provider|discovery/i);
+  });
+
+  it("validates code-built config with the file's rules (ADR 0183)", () => {
+    const config = parseWorkAuthConfig({
+      providers: [
+        {
+          kind: "google-workspace",
+          clientId: "client",
+          clientSecret: "secret",
+          domains: ["example.com"],
+          directory: {
+            credentials: {
+              key: { client_email: "d@example.com", private_key: "pem" },
+            },
+          },
+        },
+      ],
+    });
+    expect(config.providers[0]?.directory?.credentials).toEqual({
+      key: { client_email: "d@example.com", private_key: "pem" },
+    });
+    expect(() =>
+      parseWorkAuthConfig({ sessions: { idleDays: 14, maxDays: 7 } }),
+    ).toThrow("config.auth");
   });
 });
