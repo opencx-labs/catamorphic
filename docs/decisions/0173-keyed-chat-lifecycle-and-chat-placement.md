@@ -77,4 +77,5 @@ a fresh chat. A dedicated review pool needs a labelled worker opened to the
 project and an agent that prefers it; control-plane machines stay unlabelled.
 Consented connections are bound to the enablement's Environment, so a chat
 placed elsewhere does not carry them; session-bound grants are follow-up work.
+ADR 0181: a project chat uses its own Environment's service bindings.
 Background processes in an idle chat stop when its workspace is released.

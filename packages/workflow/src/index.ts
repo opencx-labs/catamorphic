@@ -58,6 +58,7 @@ export type {
   Where,
   WhereAny,
   WhereExists,
+  WherePrefix,
   WherePrimitive,
 } from "./where.js";
 export type {

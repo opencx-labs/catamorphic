@@ -46,7 +46,10 @@ session.turn-changed, session.state-changed, session.work-changed, and
 session.authority-changed. Config may select sessionId, agentId, statuses, and
 workStatus. Omitting sessionId observes authorized matching sessions in the
 project. Example: trigger("session.turn-changed", { sessionId: "actual-id",
-statuses: ["completed", "failed"] }). Never guess an id.
+statuses: ["completed", "failed"] }). Never guess an id. Keyed chats carry their
+key in payload.session.key (null otherwise), so where selects a family of chats
+without starting runs for the rest: where: { payload: { session: { key: {
+prefix: "pr-" } } } }.
 
 A watcher may bind the project's own trigger kinds too, such as the GitHub
 library in writing-workflows. A host without a public webhook URL (the desktop)
@@ -280,8 +283,9 @@ Both recipes, with the trigger library they bind, are in the \`slack\` skill.
   project chat that everyone whose role reaches the agent can read and continue,
   or one member's chat with audience: { member: "<id>" } (a current member; use
   an id from an event or a lookup, never a guess). A project chat runs as the
-  project, with the enablement's connections, not as any person. Grant the
-  project agent and its required connections/Environment. Reaching a chat that
+  project, not as any person: it runs in its agent's Environment and uses that
+  Environment's committed service bindings (never a member's connection), so
+  the agent definition names the aliases it needs. Reaching a chat that
   is not the run's own (another member's by sessionId or audience) needs
   \`sessions:write\` in the workflow's \`permissions\`; the project chat from a
   member's automation needs \`automations:write\`. Listing everyone's chats

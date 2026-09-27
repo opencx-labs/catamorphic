@@ -5,8 +5,9 @@
  * evaluates filters before a run starts without running project code.
  *
  * A filter mirrors the payload. A leaf is a JSON primitive (equality), an
- * array of primitives (one of), or `{ exists: boolean }`; any other object
- * descends. Keys under `headers` match case-insensitively.
+ * array of primitives (one of), `{ exists: boolean }`, or `{ prefix: string }`
+ * (a string value that starts with it); any other object descends. Keys
+ * under `headers` match case-insensitively.
  */
 
 type Primitive = string | number | boolean | null;
@@ -33,6 +34,15 @@ function existsLeaf(value: Record<string, unknown>): boolean | undefined {
     : undefined;
 }
 
+function prefixLeaf(value: Record<string, unknown>): string | undefined {
+  const keys = Object.keys(value);
+  return keys.length === 1 &&
+    keys[0] === "prefix" &&
+    typeof value.prefix === "string"
+    ? value.prefix
+    : undefined;
+}
+
 /** Why `value` is not a valid filter; empty when it is. */
 export function whereErrors(value: unknown, path = "where"): string[] {
   if (isPrimitive(value)) return [];
@@ -45,6 +55,11 @@ export function whereErrors(value: unknown, path = "where"): string[] {
   }
   if (!isRecord(value)) return [`${path} must be a JSON value`];
   if (existsLeaf(value) !== undefined) return [];
+  const prefix = prefixLeaf(value);
+  if (prefix !== undefined)
+    return prefix === ""
+      ? [`${path}.prefix must not be empty; leave the position out instead`]
+      : [];
   return Object.entries(value).flatMap(([key, child]) =>
     whereErrors(child, `${path}.${key}`),
   );
@@ -70,6 +85,9 @@ function matches(where: unknown, value: unknown, headers: boolean): boolean {
   const exists = existsLeaf(where);
   if (exists !== undefined)
     return exists === (value !== undefined && value !== null);
+  const prefix = prefixLeaf(where);
+  if (prefix !== undefined)
+    return typeof value === "string" && value.startsWith(prefix);
   if (!isRecord(value)) return false;
   return Object.entries(where).every(([key, child]) =>
     matches(

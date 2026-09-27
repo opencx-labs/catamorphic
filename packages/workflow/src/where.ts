@@ -7,6 +7,8 @@
  * - An array of primitives matches when the value is one of them.
  * - `{ exists: true }` matches a present, non-null value; `{ exists: false }`
  *   an absent or null one.
+ * - `{ prefix: "slack:" }` matches a string that starts with it, such as a
+ *   namespace of chat keys.
  * - An object descends: every key it names must match. Header names match
  *   case-insensitively.
  */
@@ -19,16 +21,26 @@ export interface WhereExists {
   readonly exists: boolean;
 }
 
+/** Matches a string that starts with `prefix` (never a non-string). */
+export interface WherePrefix {
+  readonly prefix: string;
+}
+
 /** A filter over a position whose type is not known: any shape is allowed. */
 export type WhereAny =
   | WherePrimitive
   | readonly WherePrimitive[]
   | WhereExists
+  | WherePrefix
   | { readonly [key: string]: WhereAny };
 
 type WhereEquals<Value> = [Extract<Value, WherePrimitive>] extends [never]
   ? never
   : Extract<Value, WherePrimitive> | readonly Extract<Value, WherePrimitive>[];
+
+type WhereString<Value> = [Extract<Value, string>] extends [never]
+  ? never
+  : WherePrefix;
 
 type WhereObject<Value> = [
   Exclude<Value, WherePrimitive | readonly unknown[]>,
@@ -42,12 +54,16 @@ type WhereObject<Value> = [
 
 /**
  * A filter typed against a payload: a deep partial whose leaves accept a
- * value, a list of values, or `{ exists }`. Arrays in the payload can only
- * be tested for existence.
+ * value, a list of values, `{ exists }`, or `{ prefix }` where the payload
+ * holds a string. Arrays in the payload can only be tested for existence.
  */
 export type Where<Payload> = unknown extends Payload
   ? WhereAny
-  : WhereEquals<Payload> | WhereObject<Payload> | WhereExists;
+  :
+      | WhereEquals<Payload>
+      | WhereString<Payload>
+      | WhereObject<Payload>
+      | WhereExists;
 
 /**
  * `Base` with the positions `Patch` names typed more precisely: how a

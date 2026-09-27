@@ -1906,6 +1906,8 @@ export class AgentSessionsService {
             projectId,
             environment: admitted.environmentName,
             requirements,
+            // A project chat is unattended: service connections only (ADR 0181).
+            unattended: isProjectPrincipal(identity.externalUserId),
           })
         : [];
     // A workspace at a ref starts from that commit (ADR 0178): fetched into
@@ -2760,6 +2762,7 @@ export class AgentSessionsService {
               projectId,
               environment: admission.environmentName,
               requirements,
+              unattended: isProjectPrincipal(session.external_user_id),
             })
           : [];
       reallocatedRow = await this.db
@@ -4254,6 +4257,7 @@ export class AgentSessionsService {
             projectId,
             environment: admission.environmentName,
             requirements,
+            unattended: isProjectPrincipal(session.external_user_id),
           })
         : [];
     const previous = parsePlacement(session.placement);

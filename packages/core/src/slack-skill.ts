@@ -192,10 +192,11 @@ anyone sets search up. Put how it should answer in \`.work/agents/slack.md\`
 }
 \`\`\`
 
-Only the second automation declares \`chat.postMessage\`. It runs when any
-project chat's turn settles, reads the settled reply the event names
-(\`history\` with \`through\`), and posts it to the thread when the chat's key
-is a Slack thread; for every other chat it stays quiet.
+Only the second automation declares \`chat.postMessage\`. Session events
+carry the chat's key, so its \`where\` selects the Slack threads' chats
+(\`{ prefix: "slack:" }\`) and no other chat's turn starts a run. It reads
+the settled reply the event names (\`history\` with \`through\`) and posts it
+to the thread.
 
 \`\`\`typescript
 import {
@@ -243,7 +244,12 @@ type SettledReply = { sessionId: string; key: string | null; messages: SessionHi
 
 /** @displayname Post replies to Slack threads */
 export const postSlackReplies = defineWorkflow(({ defineBoundary }) => ({
-  triggers: [trigger("session.turn-changed", { statuses: ["completed"] })],
+  triggers: [
+    trigger("session.turn-changed", {
+      statuses: ["completed"],
+      where: { payload: { session: { key: { prefix: "slack:" } } } },
+    }),
+  ],
   connections: [{ alias: "slack", principal: "service", capabilities: ["chat.postMessage"] }],
   steps: [
     /** @displayname Read the settled reply */

@@ -187,16 +187,20 @@ describe("chatOwner", () => {
     ).rejects.toThrow("mallory is not a member");
   });
 
-  it("a project automation reaches the project chat with its connections, or a named member", async () => {
+  it("a project automation reaches the project chat, which uses its own Environment's bindings, or a named member", async () => {
     const enablement = { owner_kind: "project", owner_external_user_id: null };
     // The chat is placed by its own Environment, not the automation's: the
-    // project's own chats may run in any Environment the project declares.
+    // project's own chats may run in any Environment the project declares
+    // and use that Environment's committed bindings (ADR 0181), which
+    // admission resolves to service connections only.
     await expect(
       owner({ caller: projectCaller, audience: undefined, enablement }),
     ).resolves.toEqual({
       ...projectCaller,
       executionScope: [{ projectId, name: "*" }],
+      connectionScope: [{ projectId, environment: "*", alias: "*" }],
     });
+    // The run itself keeps exactly what was consented.
     expect(projectCaller.connectionScope).toEqual([
       { projectId, environment: "production", alias: "github" },
     ]);
@@ -232,6 +236,7 @@ describe("chatOwner", () => {
       externalUserId: PROJECT_PRINCIPAL_ID,
       scope: [{ kind: "agent", projectId, name: "*" }],
       executionScope: [{ projectId, name: "*" }],
+      connectionScope: [{ projectId, environment: "*", alias: "*" }],
       projectPermissions: [],
     });
   });

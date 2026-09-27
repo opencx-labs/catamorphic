@@ -311,6 +311,37 @@ describe("where filters", () => {
     );
   });
 
+  it("matches a string's prefix", () => {
+    const chat = {
+      payload: { session: { key: "slack:C1:1.2" }, detail: { status: 7 } },
+    };
+    expect(
+      matchesWhere(
+        { payload: { session: { key: { prefix: "slack:" } } } },
+        chat,
+      ),
+    ).toBe(true);
+    expect(
+      matchesWhere({ payload: { session: { key: { prefix: "pr-" } } } }, chat),
+    ).toBe(false);
+    // Only strings have prefixes; an absent or null key never matches.
+    expect(
+      matchesWhere({ payload: { detail: { status: { prefix: "7" } } } }, chat),
+    ).toBe(false);
+    expect(
+      matchesWhere(
+        { payload: { session: { key: { prefix: "slack:" } } } },
+        { payload: { session: { key: null } } },
+      ),
+    ).toBe(false);
+    expect(
+      matchesWhere(
+        { payload: { body: { action: { prefix: "clo" } } } },
+        delivery,
+      ),
+    ).toBe(true);
+  });
+
   it("matches header names case-insensitively", () => {
     expect(
       matchesWhere(
@@ -348,8 +379,15 @@ describe("where filters", () => {
 
   it("validates filter shapes", () => {
     expect(
-      whereErrors({ a: [1, "x", null, true], b: { exists: false } }),
+      whereErrors({
+        a: [1, "x", null, true],
+        b: { exists: false },
+        c: { prefix: "slack:" },
+      }),
     ).toEqual([]);
+    expect(whereErrors({ key: { prefix: "" } })).toEqual([
+      "where.key.prefix must not be empty; leave the position out instead",
+    ]);
     expect(whereErrors({ a: [{ b: 1 }] })).toEqual([
       "where.a lists values to match; each must be a string, number, boolean or null",
     ]);

@@ -488,6 +488,38 @@ describe("Slack from project code (#117)", () => {
     // Nothing more arrives later.
     await new Promise((resolve) => setTimeout(resolve, 2_000));
     expect(posts()).toHaveLength(2);
+
+    // Another chat's settled turn starts no reply run: session events carry
+    // the key, and the reply workflow's `where` selects Slack threads only.
+    const core = server.catamorphic.core;
+    const sessions = core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const replyRuns = () =>
+      core.db
+        .selectFrom("workflow_runs")
+        .select("id")
+        .where("project_id", "=", projectId)
+        .where("workflow_name", "=", "postSlackReplies")
+        .execute();
+    const before = (await replyRuns()).length;
+    const project = projectPrincipalIdentity({
+      tenantId: SERVER_TENANT_ID,
+      projectId,
+      environment: "default",
+      connections: [{ alias: "slack" }],
+    });
+    const other = await sessions.create(project, projectId, {
+      agentId: `project:${projectId}:slack`,
+    });
+    const answered = await sessions.sendMessage(
+      project,
+      projectId,
+      other.id,
+      "Hello",
+    );
+    expect(answered.metadata?.status).not.toBe("failed");
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    expect(await replyRuns()).toHaveLength(before);
   }, 120_000);
 
   it("the thread's agent reads Slack through the gateway and cannot post itself", async () => {
@@ -506,16 +538,6 @@ describe("Slack from project code (#117)", () => {
     });
     const grants = core.connectionGrants;
     if (!grants || !session.allocation_id) throw new Error("No chat grant");
-    console.error(
-      "ALLOC",
-      JSON.stringify(
-        await core.db
-          .selectFrom("execution_allocations")
-          .selectAll()
-          .where("id", "=", session.allocation_id)
-          .execute(),
-      ),
-    );
     // What the chat's harness holds: a short-lived grant for its alias.
     const grant = await grants.issue({
       identity: principal,

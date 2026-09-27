@@ -26,6 +26,7 @@ it("shipped workflow recipes typecheck against the public API and real host trig
       ),
       HOST_SKILLS["session-workflows/SKILL.md"],
       HOST_SKILLS["slack/SKILL.md"],
+      HOST_SKILLS["reviewing-pull-requests/SKILL.md"],
     ];
     // Recipes lay out like a project: a trigger library names its file on
     // its first line (`// .work/triggers/github.ts`); the rest are
@@ -41,13 +42,15 @@ it("shipped workflow recipes typecheck against the public API and real host trig
         index += 1;
       }
     }
-    expect(index).toBe(11);
+    // The review skill repeats the GitHub library verbatim (one file).
+    expect(index).toBe(13);
     const parsed = parseProject(files);
     expect(parsed.errors).toEqual([]);
     expect(parsed.triggerKinds.map((kind) => kind.name)).toEqual([
       "github.delivery",
       "github.issue_comment",
       "github.pull_request",
+      "github.pull_request_review_comment",
       "slack.event",
       "slack.mention",
       "slack.message",

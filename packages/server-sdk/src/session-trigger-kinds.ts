@@ -16,6 +16,8 @@ const sessionEventPayload = z.object({
     externalUserId: z.string(),
     session: z.object({
       id: z.string(),
+      /** The chat's key (ADR 0173), e.g. `pr-acme/web-42`; null when unkeyed. */
+      key: z.string().nullable(),
       title: z.string().nullable(),
       status: z.enum(["active", "closed"]),
       workStatus: z.enum(["open", "completed"]),
@@ -54,7 +56,7 @@ export const SESSION_TRIGGER_KINDS = [
       icon: "messages-square",
     },
     description:
-      "A durable session transition. Select a session or agent in config; inspect event-time state in input.payload and read current state with catamorphic.sessions.inspect. Turn completion does not mean work completion.",
+      "A durable session transition. Select a session or agent in config, or keyed chats with where on payload.session.key (a { prefix } matches a key namespace); inspect event-time state in input.payload and read current state with catamorphic.sessions.inspect. Turn completion does not mean work completion.",
     payload: sessionEventPayload,
     config,
     correlationKey: (event) => event.id,
