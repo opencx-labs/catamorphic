@@ -12,7 +12,6 @@ export interface DataPaths {
   /** FsBundleStore app bundles. */
   appBundles: string;
   /** GitHub connection encrypted through safeStorage. */
-  githubFile: string;
   /** Chrome-style profiles (plain JSON). */
   profilesFile: string;
   /**
@@ -52,7 +51,6 @@ export function resolveDataPaths(): DataPaths {
     projects: path.join(root, "projects"),
     remotes: path.join(root, "remotes"),
     appBundles: path.join(root, "app-bundles"),
-    githubFile: path.join(userData, "github.json"),
     profilesFile: path.join(userData, "profiles.json"),
     profilesDir: path.join(userData, "profiles"),
     agentHomesDir: path.join(userData, "agent-homes"),

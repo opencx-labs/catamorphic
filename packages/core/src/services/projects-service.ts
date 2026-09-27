@@ -69,7 +69,7 @@ export interface CreateProjectInput {
   /**
    * Populate the project by cloning a network git remote instead of
    * scaffolding. Library-direct only (like `rootPath`) — HTTP callers go
-   * through the GitHub surface, which resolves credentials server-side.
+   * through the code-host surface, which resolves credentials server-side.
    */
   cloneFrom?: {
     url: string;

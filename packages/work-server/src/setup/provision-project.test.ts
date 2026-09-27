@@ -9,10 +9,6 @@ const operatorIdentity: Identity = {
   tenantId: "00000000-0000-4000-8000-0000000005e1",
   externalUserId: "work-setup-agent",
 };
-const githubIdentity: Identity = {
-  tenantId: operatorIdentity.tenantId,
-  externalUserId: "work-github",
-};
 
 const MEMBER = { version: 1 as const, name: "Member", agents: ["assistant"] };
 const MANAGER = {
@@ -43,7 +39,7 @@ const imported = project({
 
 function services(repositoryRoles: ProjectRoleEntry[] = []) {
   return {
-    github: { importRepo: vi.fn(async () => imported) },
+    codeHosts: { importRepository: vi.fn(async () => imported) },
     projects: { create: vi.fn(async () => project()) },
     deployment: { deploy: vi.fn(async () => ({ commitSha: "abc123" })) },
     roles: {
@@ -120,10 +116,9 @@ describe("provisionWorkProject", () => {
     const result = await provisionWorkProject({
       services: provided,
       operatorIdentity,
-      githubIdentity,
       input: {
         name: "Brain",
-        githubRepository: "acme/brain",
+        repository: "acme/brain",
         roles: [
           { slug: "member", definition: MEMBER },
           { slug: "manager", definition: MANAGER },
@@ -132,9 +127,13 @@ describe("provisionWorkProject", () => {
       },
     });
 
-    expect(provided.github.importRepo).toHaveBeenCalledWith(githubIdentity, {
+    // The organization's service connection clones it (ADR 0177).
+    expect(provided.codeHosts.importRepository).toHaveBeenCalledWith({
+      identity: operatorIdentity,
+      provider: "github",
       name: "Brain",
       fullName: "acme/brain",
+      principal: "service",
     });
     // Nothing is committed to the repository's default branch.
     expect(provided.deployment.deploy).not.toHaveBeenCalled();
@@ -179,8 +178,7 @@ describe("provisionWorkProject", () => {
     const result = await provisionWorkProject({
       services: provided,
       operatorIdentity,
-      githubIdentity,
-      input: { name: "Brain", githubRepository: "acme/brain", admission },
+      input: { name: "Brain", repository: "acme/brain", admission },
     });
 
     expect(provided.deployment.deploy).not.toHaveBeenCalled();
@@ -198,8 +196,7 @@ describe("provisionWorkProject", () => {
       provisionWorkProject({
         services: provided,
         operatorIdentity,
-        githubIdentity,
-        input: { name: "Brain", githubRepository: "acme/brain", admission },
+        input: { name: "Brain", repository: "acme/brain", admission },
       }),
     ).rejects.toThrow("defines no roles");
     expect(provided.deployment.deploy).not.toHaveBeenCalled();
@@ -214,7 +211,7 @@ describe("provisionWorkProject", () => {
     expect(
       ProvisionWorkProjectInputSchema.safeParse({
         name: "Brain",
-        githubRepository: "acme/brain",
+        repository: "acme/brain",
         admission,
       }).success,
     ).toBe(true);

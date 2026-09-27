@@ -20,10 +20,19 @@ const RoleSlugSchema = z
 export const ProvisionWorkProjectInputSchema = z
   .strictObject({
     name: z.string().trim().min(1).max(200),
-    githubRepository: z
+    /**
+     * An existing repository to attach (ADR 0170), `owner/name`, imported
+     * through the organization's service connection to `codeHost`.
+     */
+    repository: z
       .string()
       .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)
       .optional(),
+    /** The code host's connection provider. Default `github`. */
+    codeHost: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9._-]*$/)
+      .default("github"),
     /**
      * Required for a project the server creates. For an imported repository,
      * roles its default branch already defines win and these are unused;
@@ -57,7 +66,7 @@ export const ProvisionWorkProjectInputSchema = z
     if (!input.roles) {
       // An imported repository may define its own roles; they are checked
       // against the admission policy once the repository is read.
-      if (!input.githubRepository) {
+      if (!input.repository) {
         context.addIssue({
           code: "custom",
           path: ["roles"],
@@ -119,11 +128,14 @@ export type ProvisionedRoles =
     };
 
 interface WorkProjectProvisioningServices {
-  github?: {
-    importRepo(
-      identity: Identity,
-      input: { name: string; fullName: string },
-    ): Promise<Project>;
+  codeHosts: {
+    importRepository(input: {
+      identity: Identity;
+      provider: string;
+      fullName: string;
+      name?: string;
+      principal?: "member" | "service" | "either";
+    }): Promise<Project>;
   };
   projects: {
     create(identity: Identity, input: { name: string }): Promise<Project>;
@@ -166,7 +178,6 @@ interface WorkProjectProvisioningServices {
 export async function provisionWorkProject(args: {
   services: WorkProjectProvisioningServices;
   operatorIdentity: Identity;
-  githubIdentity?: Identity;
   input: ProvisionWorkProjectInput;
 }): Promise<{ project: Project; roles: ProvisionedRoles }> {
   const parsed = ProvisionWorkProjectInputSchema.parse(args.input);
@@ -196,7 +207,7 @@ export async function provisionWorkProject(args: {
   );
   const slugs = supplied.map((role) => role.slug);
 
-  if (!parsed.githubRepository) {
+  if (!parsed.repository) {
     // The server's own project: its origin is Work's, so roles commit directly.
     const project = await services.projects.create(operatorIdentity, {
       name: parsed.name,
@@ -211,14 +222,13 @@ export async function provisionWorkProject(args: {
     await policy(project.id);
     return { project, roles: { source: "committed", slugs } };
   }
-  if (!services.github || !args.githubIdentity) {
-    throw new Error(
-      "Configure the server's GitHub connection before importing a company repository",
-    );
-  }
-  const project = await services.github.importRepo(args.githubIdentity, {
+  // The organization's service connection clones it (ADR 0177).
+  const project = await services.codeHosts.importRepository({
+    identity: operatorIdentity,
+    provider: parsed.codeHost,
+    fullName: parsed.repository,
     name: parsed.name,
-    fullName: parsed.githubRepository,
+    principal: "service",
   });
   const existing = (
     await services.roles.list(operatorIdentity, project.id)
@@ -235,7 +245,7 @@ export async function provisionWorkProject(args: {
   }
   if (supplied.length === 0) {
     throw new Error(
-      `${parsed.githubRepository} defines no roles in ${PROJECT_ROLES_DIR}. Supply roles to propose them.`,
+      `${parsed.repository} defines no roles in ${PROJECT_ROLES_DIR}. Supply roles to propose them.`,
     );
   }
   const proposal = await services.proposals.propose({

@@ -4,14 +4,14 @@ import type {
   CallRunInput,
   CancelRunInput,
   CatamorphicCore,
+  CodeHostRepository,
+  ConnectionRecord,
   WorkflowDetail as CoreWorkflowDetail,
   WorkflowSummary as CoreWorkflowSummary,
   CreateProjectInput,
   EnrollmentConflictPolicy,
   GetRunInput,
-  GithubConnectionStatus,
   Identity,
-  ImportGithubRepoInput,
   ListBatchItemStepsInput,
   ListBatchItemsInput,
   ListBatchItemsResult,
@@ -23,7 +23,6 @@ import type {
   Project,
   ProjectFileEntry,
   ProjectPermissionRef,
-  PublishGithubProjectInput,
   ResumeRunInput,
   ResumeRunPauseInput,
   Run,
@@ -41,7 +40,6 @@ import type {
   WriteFileInput,
 } from "@catamorphic/core";
 import type { Json } from "@catamorphic/db";
-import type { GithubRepo, GithubTokenSet } from "@catamorphic/github";
 import { correlationAttributes, withTelemetryContext } from "@catamorphic/otel";
 import type { AgentCapabilityGateway } from "@catamorphic/sandbox";
 import type { TriggerKindDefinition } from "./define-trigger-kind.js";
@@ -64,25 +62,28 @@ export interface ProjectsResource {
 }
 
 /**
- * GitHub connection + import surface. Unavailable (methods throw) unless the
- * host configured `github` on `createCatamorphic`. Token acquisition is
- * host-owned: obtain a `GithubTokenSet` via the device flow or web flow
- * helpers in `@catamorphic/github`, then hand it to `connect`.
+ * Repositories through the caller's personal code-host connection (ADR
+ * 0177). The connection itself is authorized through core connections
+ * (`core.connections.beginPersonalAuthorization`).
  */
-export interface GithubResource {
-  status(): Promise<GithubConnectionStatus>;
-  connect(args: { tokens: GithubTokenSet }): Promise<GithubConnectionStatus>;
-  connectWithCode(args: {
-    code: string;
-    redirectUri?: string;
-  }): Promise<GithubConnectionStatus>;
-  disconnect(): Promise<void>;
-  listRepos(): Promise<GithubRepo[]>;
-  importRepo(args: ImportGithubRepoInput): Promise<Project>;
+export interface CodeHostsResource {
+  /** The caller's personal connection to the host's provider, if any. */
+  connection(args: { provider: string }): Promise<ConnectionRecord | null>;
+  listRepositories(args: { provider: string }): Promise<CodeHostRepository[]>;
+  /** Clone a repository into a new project it is attached to (ADR 0170). */
+  importRepository(args: {
+    provider: string;
+    fullName: string;
+    name?: string;
+  }): Promise<Project>;
   /** Publish an unlinked project to a new repository Work owns (ADR 0170). */
-  publishProject(
-    args: { projectId: string } & PublishGithubProjectInput,
-  ): Promise<{ fullName: string; remoteUrl: string }>;
+  publishProject(args: {
+    projectId: string;
+    provider: string;
+    name: string;
+    organization?: string;
+    visibility?: "private" | "public";
+  }): Promise<{ fullName: string; remoteUrl: string }>;
 }
 
 export interface WorkflowsResource {
@@ -353,32 +354,29 @@ function buildFiles(core: CatamorphicCore, identity: Identity): FilesResource {
   };
 }
 
-function buildGithub(
+function buildCodeHosts(
   core: CatamorphicCore,
   identity: Identity,
-): GithubResource {
-  const github = () => {
-    if (!core.github) {
-      throw new Error(
-        "GitHub integration not configured — pass `github` to createCatamorphic",
-      );
-    }
-    return core.github;
-  };
+): CodeHostsResource {
   return {
-    status: () => withIdentity(identity, () => github().status(identity)),
-    connect: ({ tokens }) =>
-      withIdentity(identity, () => github().connect(identity, tokens)),
-    connectWithCode: (args) =>
-      withIdentity(identity, () => github().connectWithCode(identity, args)),
-    disconnect: () =>
-      withIdentity(identity, () => github().disconnect(identity)),
-    listRepos: () => withIdentity(identity, () => github().listRepos(identity)),
-    importRepo: (args) =>
-      withIdentity(identity, () => github().importRepo(identity, args)),
-    publishProject: ({ projectId, ...input }) =>
+    connection: ({ provider }) =>
+      withIdentity(
+        identity,
+        async () =>
+          (await core.codeHosts.personalConnection({ identity, provider })) ??
+          null,
+      ),
+    listRepositories: ({ provider }) =>
       withIdentity(identity, () =>
-        github().publishProject(identity, projectId, input),
+        core.codeHosts.listRepositories({ identity, provider }),
+      ),
+    importRepository: (args) =>
+      withIdentity(identity, () =>
+        core.codeHosts.importRepository({ ...args, identity }),
+      ),
+    publishProject: (args) =>
+      withIdentity(identity, () =>
+        core.codeHosts.publishProject({ ...args, identity }),
       ),
   };
 }
@@ -478,7 +476,7 @@ export class ScopedClient {
   readonly files: FilesResource;
   readonly runs: RunsResource;
   readonly triggers: TriggersResource;
-  readonly github: GithubResource;
+  readonly codeHosts: CodeHostsResource;
 
   constructor(
     core: CatamorphicCore,
@@ -494,7 +492,7 @@ export class ScopedClient {
     this.files = buildFiles(core, identity);
     this.runs = buildRuns(core, identity);
     this.triggers = buildTriggers(core, identity);
-    this.github = buildGithub(core, identity);
+    this.codeHosts = buildCodeHosts(core, identity);
   }
 
   get tenantId(): string {

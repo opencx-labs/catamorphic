@@ -13,11 +13,10 @@ import { MANAGED_BRANCH_PREFIX } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import { hasProjectPermission, type Identity } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
-import type {
-  CodeHost,
-  PullRequestFile,
-  PullRequestSummary,
-} from "./code-host.js";
+import {
+  type CodeHostsService,
+  CodeHostUnsupportedError,
+} from "./code-hosts-service.js";
 import { remoteOwnership } from "./projects-service.js";
 
 const tracer = getTracer("@catamorphic/core");
@@ -26,26 +25,12 @@ const SYNC_AUTHOR = { name: "Work", email: "system@work.software" };
 
 export type RemoteSyncOutcome = { status: "no-remote" } | NetworkSyncResult;
 
-export class ProjectHasNoRemoteError extends Error {
-  constructor(readonly projectId: string) {
-    super(`Project '${projectId}' is not linked to a remote repository`);
-    this.name = "ProjectHasNoRemoteError";
-  }
-}
-
-export class PullRequestsUnsupportedError extends Error {
-  constructor(remoteUrl: string) {
-    super(`No connected code host can open pull requests for '${remoteUrl}'`);
-    this.name = "PullRequestsUnsupportedError";
-  }
-}
-
 /**
  * Keeps a project's local `main` converged with its linked network remote
  * (ADR 0044). An attached remote (one that existed before Work, ADR 0170) is
  * only fetched and fast-forwarded; local commits reach it as a `work/*`
  * branch plus a pull request. Provider-agnostic: hosts contribute credentials
- * and optional capabilities through the {@link CodeHost} seam. Calls are coalesced per
+ * and pull requests through connections and the code-host seam (ADR 0177). Calls are coalesced per
  * project — sync fires from turn-settled hooks, boot, and timers, and must
  * never run concurrently against one repo nor break its caller.
  */
@@ -55,7 +40,7 @@ export class RemoteSyncService {
   constructor(
     private readonly db: Kysely<DB>,
     private readonly projectManager: ProjectManager,
-    private readonly hosts: CodeHost[],
+    private readonly codeHosts: CodeHostsService,
   ) {}
 
   /** Download accepted code-host changes without publishing a member's work. */
@@ -91,7 +76,12 @@ export class RemoteSyncService {
           const fetched = await fetchFromRemote({
             repoPath: dev.repoPath,
             url: row.remote_url,
-            credentials: await this.credentialsFor(identity, row.remote_url),
+            credentials: await this.credentialsFor({
+              identity,
+              projectId,
+              remoteUrl: row.remote_url,
+              access: "read",
+            }),
             branch: row.remote_branch ?? "main",
           });
           const remoteSha = fetched.sha;
@@ -109,7 +99,7 @@ export class RemoteSyncService {
             });
           } catch (error) {
             if (error instanceof PushNotFastForwardError) {
-              // Never resolve divergence by pushing unreviewed server work to GitHub.
+              // Never resolve divergence by pushing unreviewed server work to the code host.
               return { status: "diverged", localSha, remoteSha };
             }
             throw error;
@@ -167,7 +157,14 @@ export class RemoteSyncService {
         const row = await this.projectRow(identity, projectId);
         if (!row?.remote_url) return { status: "no-remote" };
 
-        const credentials = await this.credentialsFor(identity, row.remote_url);
+        const ownership = remoteOwnership(row.remote_ownership) ?? "attached";
+        const credentials = await this.credentialsFor({
+          identity,
+          projectId,
+          remoteUrl: row.remote_url,
+          // Work pushes only to a repository it created (ADR 0170).
+          access: ownership === "owned" ? "write" : "read",
+        });
         const dev = await this.projectManager.openDev(
           identity.tenantId,
           projectId,
@@ -179,7 +176,7 @@ export class RemoteSyncService {
             url: row.remote_url,
             credentials,
             remoteBranch: row.remote_branch ?? "main",
-            ownership: remoteOwnership(row.remote_ownership) ?? "attached",
+            ownership,
             author: SYNC_AUTHOR,
           });
         } finally {
@@ -235,135 +232,93 @@ export class RemoteSyncService {
         },
       },
       async () => {
-        const row = await this.projectRow(identity, projectId);
-        const remoteUrl = row?.remote_url;
-        if (!remoteUrl) throw new ProjectHasNoRemoteError(projectId);
-        const host = this.hosts.find((h) => h.handles(remoteUrl));
-        if (!host?.createPullRequest) {
-          throw new PullRequestsUnsupportedError(remoteUrl);
-        }
-        const credentials = await host.credentials(identity);
-
-        const dev = await this.projectManager.openDev(
-          identity.tenantId,
+        return this.codeHosts.withOrigin({
+          identity,
           projectId,
-          identity.externalUserId,
-        );
-        try {
-          if (!input.localRef) {
-            const status = await dev.status();
-            if (status.dirty) {
-              if (
+          principal: "either",
+          capability: "opening pull requests",
+          use: async ({ host, provider, credential, remoteUrl, project }) => {
+            if (!host.createPullRequest || !provider.git) {
+              throw new CodeHostUnsupportedError(
+                remoteUrl,
+                "opening pull requests",
+              );
+            }
+            const minted = await provider.git.credentials({
+              material: credential.material,
+              remoteUrl,
+              access: "write",
+            });
+            const dev = await this.projectManager.openDev(
+              identity.tenantId,
+              projectId,
+              identity.externalUserId,
+            );
+            try {
+              const local = Boolean(
                 await this.projectManager.localPath({
                   tenantId: identity.tenantId,
                   projectId,
-                })
-              )
-                throw new Error(
-                  "Record the changes you want to share first. Opening a pull request will not stage your pending work.",
-                );
-              await dev.commit(input.title, SYNC_AUTHOR);
+                }),
+              );
+              if (!input.localRef) {
+                const status = await dev.status();
+                if (status.dirty) {
+                  if (local)
+                    throw new Error(
+                      "Record the changes you want to share first. Opening a pull request will not stage your pending work.",
+                    );
+                  await dev.commit(input.title, SYNC_AUTHOR);
+                }
+              }
+              const branch = prBranchName(input.title, new Date());
+              await pushToRemote({
+                repoPath: dev.repoPath,
+                native: local,
+                url: remoteUrl,
+                credentials: {
+                  username: minted.username,
+                  password: minted.password,
+                },
+                ownership:
+                  remoteOwnership(project.remoteOwnership) ?? "attached",
+                ref: input.localRef ?? "HEAD",
+                remoteBranch: branch,
+              });
+              const pr = await host.createPullRequest({
+                credential,
+                remoteUrl,
+                title: input.title,
+                head: branch,
+                base: project.defaultBranch ?? project.remoteBranch ?? "main",
+                ...(input.body !== undefined ? { body: input.body } : {}),
+              });
+              return { ...pr, branch };
+            } finally {
+              await dev.dispose();
             }
-          }
-          const branch = prBranchName(input.title, new Date());
-          await pushToRemote({
-            repoPath: dev.repoPath,
-            native: Boolean(
-              await this.projectManager.localPath({
-                tenantId: identity.tenantId,
-                projectId,
-              }),
-            ),
-            url: remoteUrl,
-            credentials,
-            ownership: remoteOwnership(row.remote_ownership) ?? "attached",
-            ref: input.localRef ?? "HEAD",
-            remoteBranch: branch,
-          });
-          const pr = await host.createPullRequest(identity, {
-            remoteUrl,
-            title: input.title,
-            head: branch,
-            base: row?.default_branch ?? row?.remote_branch ?? "main",
-            body: input.body,
-          });
-          return { ...pr, branch };
-        } finally {
-          await dev.dispose();
-        }
+          },
+        });
       },
     );
   }
 
-  /**
-   * Open PRs on the linked remote, `[]` when the project has no remote or
-   * no connected host offers PR listing — review surfaces render an empty
-   * section, they don't error.
-   */
-  async listPullRequests(
-    identity: Identity,
-    projectId: string,
-  ): Promise<PullRequestSummary[]> {
-    return withSpan(
-      {
-        tracer,
-        name: "project.remote.list_pull_requests",
-        attributes: {
-          "catamorphic.tenant.id": identity.tenantId,
-          "user.id": identity.externalUserId,
-          "catamorphic.project.id": projectId,
-        },
-      },
-      async () => {
-        const row = await this.projectRow(identity, projectId);
-        const remoteUrl = row?.remote_url;
-        if (!remoteUrl) return [];
-        const host = this.hosts.find((h) => h.handles(remoteUrl));
-        if (!host?.listPullRequests) return [];
-        return host.listPullRequests(identity, { remoteUrl });
-      },
-    );
-  }
-
-  /** A PR's changed files with patches; throws when unsupported. */
-  async pullRequestFiles(
-    identity: Identity,
-    projectId: string,
-    number: number,
-  ): Promise<PullRequestFile[]> {
-    return withSpan(
-      {
-        tracer,
-        name: "project.remote.pull_request_files",
-        attributes: {
-          "catamorphic.tenant.id": identity.tenantId,
-          "user.id": identity.externalUserId,
-          "catamorphic.project.id": projectId,
-        },
-      },
-      async () => {
-        const row = await this.projectRow(identity, projectId);
-        const remoteUrl = row?.remote_url;
-        if (!remoteUrl) throw new ProjectHasNoRemoteError(projectId);
-        const host = this.hosts.find((h) => h.handles(remoteUrl));
-        if (!host?.pullRequestFiles) {
-          throw new PullRequestsUnsupportedError(remoteUrl);
-        }
-        return host.pullRequestFiles(identity, { remoteUrl, number });
-      },
-    );
-  }
-
-  private async credentialsFor(identity: Identity, remoteUrl: string) {
-    const host = this.hosts.find((h) => h.handles(remoteUrl));
-    if (!host) return undefined;
+  private async credentialsFor(args: {
+    identity: Identity;
+    projectId: string;
+    remoteUrl: string;
+    access: "read" | "write";
+  }) {
     try {
-      return await host.credentials(identity);
+      return await this.codeHosts.gitCredentials(args);
     } catch (cause) {
-      // A host that cannot mint credentials (disconnected, expired) must not
-      // kill the sync — unauthenticated access may still work for public
-      // remotes, and the failure will surface on the push if it matters.
-      console.warn(`Code host '${host.id}' credentials unavailable:`, cause);
+      // A connection that cannot mint credentials (expired, revoked) must
+      // not kill the sync: unauthenticated access may still work for public
+      // remotes, and the failure surfaces on the push if it matters.
+      console.warn(
+        `Code host credentials unavailable for ${args.projectId}:`,
+        cause,
+      );
       return undefined;
     }
   }

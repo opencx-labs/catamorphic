@@ -34,7 +34,6 @@ Environment variables parsed by `workServerConfigFromEnv` in
 | `DATABASE_URL` | Network Postgres instead of PGlite; then `WORK_SECRET`, `WORK_VAULT_KEY`, and a public URL are required. |
 | `WORK_SECRET` | Deployment secret for sign-in state. Generated under the data directory when absent (PGlite only). |
 | `WORK_VAULT_KEY`, `WORK_VAULT_PREVIOUS_KEYS` | Credential vault keys (32 bytes, base64); see [secrets and the gateway](secrets-and-gateway.md). |
-| `WORK_GITHUB_CLIENT_ID`, `WORK_GITHUB_TOKEN` | Service account for GitHub-backed projects. |
 | `WORK_GATEWAY_CONFIG` | Connections (MCP, HTTP APIs, databases) and the guards that review them; see [secrets and the gateway](secrets-and-gateway.md). |
 | `WORK_SANDBOX` and budget variables | `local-process` (default) or `microsandbox`; see the machines reference. |
 | `WORK_IMAGE_BUILDER`, `WORK_SANDBOX_CONTAINERS` | Microsandbox: build project Dockerfiles with `docker` or `podman`; `0` turns off Docker inside sandboxes. See [images, containers, and egress](cluster-deployment.md#images-containers-and-egress). |
@@ -85,7 +84,8 @@ not a human CLI.
 3. `POST /_work/operator/projects` with `name`, `roles`
    (`[{ slug, definition }]`), `admission` (`mode`: `invitation_only`,
    `approved_domain`, `request`, or `open`; `defaultRole`;
-   `approvedDomains`), and optionally `githubRepository: "owner/repo"`.
+   `approvedDomains`), and optionally `repository: "owner/repo"` (a GitHub
+   repository, attached through the `github` service connection).
    `roles` is required unless the repository already defines them. The
    response carries `project` and `roles.source`: `committed` (a project the
    server created), `repository` (the repository's own roles, used as they
@@ -125,13 +125,15 @@ tokens.
 
 ## GitHub-backed projects
 
-Use a service account distinct from human reviewers and never give its token
-to members. An imported repository is attached (ADR 0170): Work never
+Connect the company's GitHub App first ([Connect GitHub](connect-github.md)):
+its installation is the `github` service connection, distinct from the
+people who review, and members never receive its tokens. An imported
+repository is attached (ADR 0170): Work never
 commits or pushes to its default branch or to any branch it did not create.
 Everything Work originates there arrives as a `work/` branch and a pull
 request, reviewed like any other change.
 
-Provisioning with `githubRepository` imports the source. When the default
+Provisioning with `repository` imports the source through that connection. When the default
 branch already has `.work/roles/*.json`, those roles are used as they are and
 the supplied `roles` are not written. Otherwise the supplied roles are
 proposed as a pull request; give the person `roles.pullRequest.url` to

@@ -144,7 +144,6 @@ describe("desktop theme", () => {
       projects: path.join(dataRoot, "projects"),
       remotes: path.join(dataRoot, "remotes"),
       appBundles: path.join(dataRoot, "app-bundles"),
-      githubFile: path.join(root, "github.json"),
       profilesFile: path.join(root, "profiles.json"),
       profilesDir: path.join(root, "profiles"),
       agentHomesDir: path.join(root, "agent-homes"),

@@ -98,6 +98,7 @@
         "zod": "^4.1.8",
       },
       "devDependencies": {
+        "@catamorphic/parser": "workspace:*",
         "@tailwindcss/vite": "^4.2.2",
         "@types/node": "^26.1.1",
         "@types/qrcode": "^1.5.5",
@@ -273,7 +274,6 @@
         "@catamorphic/app": "workspace:*",
         "@catamorphic/db": "workspace:*",
         "@catamorphic/git": "workspace:*",
-        "@catamorphic/github": "workspace:*",
         "@catamorphic/otel": "workspace:*",
         "@catamorphic/parser": "workspace:*",
         "@catamorphic/plugins": "workspace:*",
@@ -329,7 +329,6 @@
         "@catamorphic/core": "workspace:*",
         "@catamorphic/db": "workspace:*",
         "@catamorphic/git": "workspace:*",
-        "@catamorphic/github": "workspace:*",
         "@catamorphic/otel": "workspace:*",
         "@catamorphic/parser": "workspace:*",
         "@catamorphic/plugins": "workspace:*",

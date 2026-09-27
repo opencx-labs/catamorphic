@@ -35,8 +35,8 @@
   checkpoint history per chat reply via `agent_messages.commit_sha`.
   The publishing-to-github skill still publishes through `gh repo create`,
   which leaves the project unlinked in core; route it through
-  `GithubService.publishProject` (an owned link) when the desktop gains a
-  publish surface.
+  `core.codeHosts.publishProject` (an owned link, ADR 0177) when the desktop
+  gains a publish surface.
 - **Registry git-panel: drafts are now commits-ahead.** ADR 0044 made
   "draft" mean local-commits-not-yet-pushed instead of a dirty tree;
   `git-panel`/`useCommitChanges` in packages/registry still assume the

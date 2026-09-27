@@ -5,6 +5,10 @@ export type {
   BatchProgress,
   CancelRunInput,
   CatamorphicCore,
+  CodeHost,
+  CodeHostCredential,
+  CodeHostPrincipal,
+  CodeHostRepository,
   ConnectionActionContext,
   ConnectionActionGuard,
   ConnectionGuardVerdict,
@@ -18,9 +22,6 @@ export type {
   ExecutionWorkerHandle,
   ExecutionWorkerOptions,
   GetRunInput,
-  GithubConnectionStatus,
-  GithubServiceConfig,
-  ImportGithubRepoInput,
   ListBatchItemStepsInput,
   ListBatchItemsInput,
   ListBatchItemsResult,
@@ -31,7 +32,6 @@ export type {
   PauseRunInput,
   Project,
   ProjectFileEntry,
-  PublishGithubProjectInput,
   RedriveRunJobInput,
   ResumeRunInput,
   ResumeRunPauseInput,
@@ -57,18 +57,18 @@ export type {
 export {
   AccessDeniedError,
   appScaffold,
+  CodeHostNotConnectedError,
+  CodeHostUnsupportedError,
   ConnectionActionDeniedError,
   ConnectionActionRefusedError,
   createCatamorphicCore,
-  GithubNotConnectedError,
-  GithubTokenExpiredError,
   narrowIdentity,
   PluginSecretsMissingError,
   ProductionDeploymentNotFoundError,
   ProjectAlreadyLinkedError,
   ProjectFileNotFoundError,
+  ProjectHasNoRemoteError,
   ProjectNotFoundError,
-  ProjectNotLinkedToGithubError,
   RunCapabilityError,
   RunEnrollmentConflictError,
   RunNotFoundError,
@@ -83,18 +83,20 @@ export {
 export type {
   DeviceCodeGrant,
   GithubAppConfig,
+  GithubAppRegistration,
   GithubRepo,
   GithubTokenSet,
-  GithubTokenStore,
   GithubUser,
-  StoredGithubConnection,
 } from "@catamorphic/github";
 export {
   buildAuthorizeUrl,
+  buildGithubAppManifest,
+  convertGithubAppManifest,
   exchangeCode,
   GithubApi,
   GithubApiError,
   GithubAuthError,
+  githubAppManifestForm,
   pollDeviceToken,
   refreshAccessToken,
   requestDeviceCode,
@@ -199,20 +201,13 @@ export {
   mcpToolKind,
 } from "./define-trigger-kind.js";
 export { FsBundleStore } from "./fs-bundle-store.js";
+export { githubCodeHost } from "./github-code-host.js";
 export {
   defineGithubConnectionProvider,
   GITHUB_CONNECTION_ACTIONS,
   type GithubConnectionOptions,
   type GithubConnectionProvider,
 } from "./github-connection-provider.js";
-export {
-  GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
-  githubCheckRun,
-  githubCheckSuite,
-  githubPullRequest,
-  githubPullRequestReview,
-  githubWorkflowRun,
-} from "./github-trigger-kinds.js";
 export {
   defineHttpApiConnectionProvider,
   type HttpApiAction,
@@ -228,8 +223,8 @@ export {
 export { PostgresObjectStore } from "./postgres-object-store.js";
 export { schedule } from "./schedule-trigger-kind.js";
 export type {
+  CodeHostsResource,
   FilesResource,
-  GithubResource,
   ProjectsResource,
   RunsResource,
   TriggerKindRef,

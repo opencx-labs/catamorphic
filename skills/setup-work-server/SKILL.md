@@ -36,6 +36,8 @@ Start small and add only what the situation needs:
   deprovisioning and groups as roles ([company identity](references/company-identity.md));
   credentials only through the gateway, with guards on anything touching
   production ([secrets and the gateway](references/secrets-and-gateway.md));
+  the company's GitHub App as the `github` service connection
+  ([Connect GitHub](references/connect-github.md));
   agent sandboxes on enrolled workers with `WORK_CONTROL_PLANE_WORKLOADS=workflow`
   on the control plane ([machines](references/cluster-deployment.md)); and
   shares for customer material ([sharing](references/sharing.md)). Members
@@ -52,6 +54,7 @@ Start small and add only what the situation needs:
 | Work server image or `apps/server` | [Work server](references/stock-server.md) |
 | Company sign-in through Google Workspace, deprovisioning, groups as roles | [Company identity](references/company-identity.md) |
 | Credentials, API keys, a production database, query review, vault keys | [Secrets and the gateway](references/secrets-and-gateway.md) |
+| GitHub: a GitHub App, company repositories, pull requests, webhooks | [Connect GitHub](references/connect-github.md) |
 | Slack: a project answering mentions in threads, reading and searching Slack | [Connect Slack](references/connect-slack.md) |
 | More execution capacity, workers, replicas for availability | [Machines: control plane, replicas, and workers](references/cluster-deployment.md) |
 | Sharing documents, folders, or apps with customers behind a sign-in | [Sharing outside the company](references/sharing.md) |
@@ -104,8 +107,10 @@ disagree with the installed source, the source wins.
 - **Isolation matches trust.** Local-process execution is for trusted
   single-tenant use. For remote development use microsandbox with explicit
   budgets; a live heartbeat is not spare capacity.
-- **One code path after credentials.** A GitHub CLI token may feed the regular
-  GitHub service; it does not justify a second clone or API implementation.
+- **GitHub is a connection.** The organization's GitHub App installation is
+  the `github` service connection; sync, proposals, and agents' GitHub
+  actions all go through it (ADR 0177). There is no GitHub token variable
+  and no second clone or API implementation.
 
 ## Common mistakes
 

@@ -181,6 +181,47 @@ describe("GitHub connections: App installation (service)", () => {
     ).rejects.toThrow(/not installed on ghost/);
   });
 
+  it("asks an administrator for the App through a form, even without OAuth (ADR 0177)", async () => {
+    const { provider } = appProvider();
+    const started = await provider.beginAuthorization?.({
+      tenantId: "t",
+      externalUserId: "admin",
+      principal: "service",
+      redirectUri: "https://work.test/callback",
+      state: "s",
+    });
+    expect(started?.challenge).toMatchObject({
+      kind: "form",
+      fields: expect.arrayContaining([
+        expect.objectContaining({ name: "appId", required: true }),
+        expect.objectContaining({ name: "privateKey", secret: true }),
+      ]),
+    });
+    const authorized = await provider.completeAuthorization?.({
+      tenantId: "t",
+      externalUserId: "admin",
+      principal: "service",
+      callback: {
+        appId: "12345",
+        privateKey,
+        owner: "octo",
+        installationId: "",
+      },
+    });
+    expect(authorized?.account).toMatchObject({
+      type: "app",
+      installationId: 77,
+    });
+    await expect(
+      provider.completeAuthorization?.({
+        tenantId: "t",
+        externalUserId: "admin",
+        principal: "service",
+        callback: { appId: "12345" },
+      }),
+    ).rejects.toThrow();
+  });
+
   it("mints a token narrowed to the repository a REST path addresses", async () => {
     const { github, provider } = appProvider();
     const material = await appMaterial(provider);
@@ -475,6 +516,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
         tenantId: "t",
         projectId: "p",
         externalUserId: "u",
+        principal: "member",
         redirectUri: "https://work.test/cb",
         state: "s",
       }),
@@ -507,6 +549,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
       tenantId: "t",
       projectId: "p",
       externalUserId: "u",
+      principal: "member",
       redirectUri: "https://work.test/cb",
       state: "s",
     });
@@ -520,6 +563,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
       tenantId: "t",
       projectId: "p",
       externalUserId: "u",
+      principal: "member",
       callback: {},
       privateState: begun?.privateState,
     });
@@ -593,6 +637,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
       tenantId: "t",
       projectId: "p",
       externalUserId: "u",
+      principal: "member",
       redirectUri: "https://work.test/cb",
       state: "s1",
     });
@@ -604,6 +649,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
       tenantId: "t",
       projectId: "p",
       externalUserId: "u",
+      principal: "member",
       callback: { code: "c1", state: "s1" },
       privateState: begun?.privateState,
     });

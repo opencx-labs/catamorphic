@@ -16,7 +16,7 @@ the host's actual capabilities and schemas; a skill does not enable a missing to
 | User intent | Source | Activation |
 | --- | --- | --- |
 | Tell me when a command's result changes or succeeds (a URL, a file, a CLI) | Use the host's \`watch_command\` when offered: it runs the check where your commands run. | Owned by this chat; ends on success, stop, expiry or archive. |
-| Remind me, follow up in this chat, or watch Project Events | Pass TypeScript directly to \`create_watcher\` or \`create_github_watcher\`. The host retains an isolated revision with this session. | Session-owned, with no default expiry. See \`session-workflows\` for time, attention, and cancellation. |
+| Remind me, follow up in this chat, or watch Project Events | Pass TypeScript directly to \`create_watcher\` (with \`eventSource\` for a host-polled source such as GitHub on the desktop). The host retains an isolated revision with this session. | Session-owned, with no default expiry. See \`session-workflows\` for time, attention, and cancellation. |
 | Save reusable automation for the project | Use \`.work/workflows/src/<name>.ts\`. | Deploy an immutable revision, then enable it for unattended execution. |
 | Run a reviewed workflow for one member | Reuse committed project source. | A member-owned enablement uses that member's authorized connections and Environment. |
 | Run it for the whole project (webhooks, PR reviews, shared inboxes) | Reuse committed project source. | A project enablement, turned on by someone with \`automations:write\`, runs as the project with shared connections and the permissions consented to. Its chats are project chats. |

@@ -7,6 +7,10 @@
 
 ## Current scope
 
+[ADR 0177](0177-github-is-a-connection.md) removes the GitHub monitor and the
+`github.*` host kinds: a watcher names a host-registered polled event source,
+and the desktop's GitHub source records webhook-shaped deliveries.
+
 [ADR 0139](0139-session-reminder-lifetime-and-attention.md) supersedes the expiry
 and placement rules below. Session-owned watchers have no implicit expiry, stay
 on their session's authoritative host and Environment, and are cancelled on

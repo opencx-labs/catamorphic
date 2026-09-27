@@ -77,6 +77,27 @@ export type GithubConnectionProvider = ConnectionProvider & {
     installationId?: number;
     owner?: string;
   }): Promise<ConnectionAuthorizationResult>;
+  /**
+   * Check a user access token set the host obtained itself (the `gh` CLI's
+   * token, a device flow it ran) and encode it as member material.
+   */
+  authorizeUser(args: {
+    tokens: GithubTokenSet;
+  }): Promise<ConnectionAuthorizationResult>;
+  /**
+   * A token for one call on the control plane (the code host, a host's
+   * event poller): minted and narrowed for an App, stored for a member.
+   * Never hand it to an agent or a sandbox.
+   */
+  accessToken(args: {
+    material: Uint8Array;
+    repository?: { owner: string; name: string };
+    permissions?: GithubPermissions;
+  }): Promise<string>;
+  /** `owner` and `name` of a remote under this provider's web origin. */
+  repositoryOf(remoteUrl: string): { owner: string; name: string };
+  /** REST client settings for calls with {@link accessToken}. */
+  readonly api: { baseUrl: string; webBaseUrl: string; fetch: FetchLike };
 };
 
 const Repository = z
@@ -270,6 +291,24 @@ const Material = z.union([UserMaterial, AppMaterial]);
 type Material = z.infer<typeof Material>;
 type AppMaterial = z.infer<typeof AppMaterial>;
 type UserMaterial = z.infer<typeof UserMaterial>;
+
+/** What an administrator enters to connect an App installation. */
+const AppForm = z.object({
+  appId: z.string().trim().min(1),
+  privateKey: z.string().trim().min(1),
+  installationId: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => (value ? Number(value) : undefined))
+    .pipe(z.number().int().positive().optional()),
+  owner: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => value || undefined)
+    .pipe(z.string().regex(NAME).optional()),
+});
 
 const PrivateState = z.discriminatedUnion("flow", [
   z.object({ flow: z.literal("web"), redirectUri: z.string() }),
@@ -558,11 +597,84 @@ export function defineGithubConnectionProvider(
     return options.oauth;
   };
 
+  const authorizeApp: GithubConnectionProvider["authorizeApp"] = async ({
+    appId,
+    privateKey,
+    installationId,
+    owner,
+  }) => {
+    parseGithubAppPrivateKey(privateKey);
+    const app = { appId: appId.trim(), privateKey: privateKey.trim() };
+    const installation =
+      installationId !== undefined
+        ? await appAuth.installation({ app, installationId })
+        : owner
+          ? await appAuth.findInstallation({ app, owner })
+          : null;
+    if (!installation) {
+      throw new Error(
+        owner
+          ? `The GitHub App is not installed on ${owner}`
+          : "An installation ID or owner is required",
+      );
+    }
+    if (installation.suspendedAt) {
+      throw new Error("The GitHub App installation is suspended");
+    }
+    const material: AppMaterial = {
+      kind: "app",
+      ...app,
+      installationId: installation.id,
+      ...(installation.account ? { owner: installation.account.login } : {}),
+    };
+    return {
+      material: encode(material),
+      account: {
+        type: "app",
+        appId: app.appId,
+        installationId: installation.id,
+        account: installation.account?.login ?? null,
+        repositorySelection: installation.repositorySelection,
+      },
+      capabilities: GITHUB_CONNECTION_ACTIONS,
+    };
+  };
+
   return {
     kind,
     displayName,
 
-    beginAuthorization: async ({ redirectUri, state }) => {
+    beginAuthorization: async ({ principal, redirectUri, state }) => {
+      // An organization connects its GitHub App installation; a person
+      // signs in with the App's OAuth client.
+      if (principal === "service") {
+        return {
+          challenge: {
+            kind: "form",
+            fields: [
+              { name: "appId", label: "App ID", secret: false, required: true },
+              {
+                name: "privateKey",
+                label: "Private key (PEM)",
+                secret: true,
+                required: true,
+              },
+              {
+                name: "installationId",
+                label: "Installation ID",
+                secret: false,
+                required: false,
+              },
+              {
+                name: "owner",
+                label: "Installed on (organization or user)",
+                secret: false,
+                required: false,
+              },
+            ],
+          },
+        };
+      }
       const oauth = requireOauth();
       if (oauth.clientSecret) {
         return {
@@ -598,7 +710,18 @@ export function defineGithubConnectionProvider(
       };
     },
 
-    completeAuthorization: async ({ callback, privateState }) => {
+    completeAuthorization: async ({ principal, callback, privateState }) => {
+      if (principal === "service") {
+        const fields = AppForm.parse(callback);
+        return authorizeApp({
+          appId: fields.appId,
+          privateKey: fields.privateKey,
+          ...(fields.installationId
+            ? { installationId: fields.installationId }
+            : {}),
+          ...(fields.owner ? { owner: fields.owner } : {}),
+        });
+      }
       const oauth = requireOauth();
       if (!privateState)
         throw new Error("GitHub authorization state is missing");
@@ -642,43 +765,21 @@ export function defineGithubConnectionProvider(
       }
     },
 
-    authorizeApp: async ({ appId, privateKey, installationId, owner }) => {
-      parseGithubAppPrivateKey(privateKey);
-      const app = { appId: appId.trim(), privateKey: privateKey.trim() };
-      const installation =
-        installationId !== undefined
-          ? await appAuth.installation({ app, installationId })
-          : owner
-            ? await appAuth.findInstallation({ app, owner })
-            : null;
-      if (!installation) {
-        throw new Error(
-          owner
-            ? `The GitHub App is not installed on ${owner}`
-            : "An installation ID or owner is required",
-        );
-      }
-      if (installation.suspendedAt) {
-        throw new Error("The GitHub App installation is suspended");
-      }
-      const material: AppMaterial = {
-        kind: "app",
-        ...app,
-        installationId: installation.id,
-        ...(installation.account ? { owner: installation.account.login } : {}),
-      };
-      return {
-        material: encode(material),
-        account: {
-          type: "app",
-          appId: app.appId,
-          installationId: installation.id,
-          account: installation.account?.login ?? null,
-          repositorySelection: installation.repositorySelection,
-        },
-        capabilities: GITHUB_CONNECTION_ACTIONS,
-      };
-    },
+    authorizeApp,
+
+    authorizeUser: async ({ tokens }) => userMaterial(tokens),
+
+    accessToken: ({ material, repository, permissions }) =>
+      tokenFor({
+        credential: decodeMaterial(material),
+        ...(repository ? { repository } : {}),
+        ...(permissions ? { permissions } : {}),
+      }),
+
+    repositoryOf: (remoteUrl) =>
+      repositoryFromRemote({ remoteUrl, webBaseUrl }),
+
+    api: { baseUrl: apiBaseUrl, webBaseUrl, fetch: doFetch },
 
     listActions: async ({ capabilities }) =>
       actions.filter((action) => capabilities.includes(action.name)),

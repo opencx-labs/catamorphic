@@ -33,6 +33,7 @@ await server.app.listen({ port: 4700, host: "0.0.0.0" });
 | --- | --- |
 | `agentCapabilities` | Host capabilities, profiles, and approvals for agents |
 | `connectionProviders` | Connection providers beside the configured MCP endpoints |
+| `github` | Options of the built-in `github` connection provider: Enterprise Server URLs, the App's OAuth client for members' own connections (ADR 0177) |
 | `connectionGuards` | Guards that review each gateway action, such as a query classifier (ADR 0162) |
 | `vaultKeys` | Credential vault keys from a key service instead of `WORK_VAULT_KEY` |
 | `directories` | Upstream directories (beyond Google Workspace) that keep accounts active or disable them (ADR 0161) |

@@ -145,11 +145,16 @@ Advanced hosts can inject their own wiring instead: `database: { db }` with a pr
 ### Scoped-client surface
 
 The scoped client exposes project CRUD, workflow listing/fetching, file I/O,
-the complete identity-bound Runs resource, the Triggers resource, and — when
-`github` is configured on `createCatamorphic` — a `scoped.github` resource
-(connection status, repo listing, repo import, and `publishProject` to a new
-repository Work owns; token acquisition uses the OAuth/device-flow helpers
-exported from `@catamorphic/github`). An imported repository is attached
+the complete identity-bound Runs resource, the Triggers resource, and
+`scoped.codeHosts` (the caller's personal connection to a code host,
+repository listing, repository import, and `publishProject` to a new
+repository Work owns). Code hosts act through connections (ADR 0177):
+register the provider and its code host,
+`connectionProviders: [github]` and `codeHosts: [githubCodeHost(github)]`
+with `const github = defineGithubConnectionProvider({ oauth })`. A call uses
+the caller's own connection (authorized in the project, or their personal
+connection from `core.connections.beginPersonalAuthorization`), else the
+service connection named like the provider. An imported repository is attached
 (ADR 0170): every network push passes the guard in `@catamorphic/git`, so
 Work only creates `work/` branches there and shares changes as pull
 requests, whichever host embeds it. Every public
@@ -187,7 +192,8 @@ host kind it builds on, with all filters along the chain; `list` reports
 `kind` (the host kind), `where`, and `projectKind`. Codegen adds project kinds
 to `work-triggers.d.ts`, so `syncTypes` needs nothing from the host.
 
-Project Events (webhooks, chat events, GitHub) reach workflows through the
+Project Events (webhooks, chat events, polled sources such as a desktop's
+GitHub poller registered in `projectEventSources`) reach workflows through the
 event dispatcher. Start it once per server, whether or not coding agents are
 configured, and stop it on shutdown:
 
@@ -781,7 +787,7 @@ files remain available as original bytes through the documents surface or on dis
 
 Two more members' surfaces, both enforced by core and served by the plugin:
 
-- **Propose a change** — `POST /projects/:id/proposals` `{ title, body?, changes: [{ path, content } | { path, delete: true }] }` (also the MCP tool `propose_change`). Program paths only (store paths ship directly). Core commits the files on a fresh `work/proposals/<member>/<title>-<stamp>` branch from the shared `main`, authored as the member, and — when the project is linked to a code host and you configured `proposalBot` (the identity whose GitHub connection acts for members) — pushes it and opens a pull request "Proposed by <member> via Catamorphic". Without a bot the branch lands on the project origin, where holders of `program:read` see it. Approving and applying a proposal needs `program:publish`. Anyone who may use the project may propose.
+- **Propose a change** — `POST /projects/:id/proposals` `{ title, body?, changes: [{ path, content } | { path, delete: true }] }` (also the MCP tool `propose_change`). Program paths only (store paths ship directly). Core commits the files on a fresh `work/proposals/<member>/<title>-<stamp>` branch from the shared `main`, authored as the member, and — when the project is linked to a code host with a ready service connection named like its provider (the organization's GitHub App as `github`, ADR 0177) — pushes it and opens a pull request "Proposed by <member> via Work". Without one the branch lands on the project origin, where holders of `program:read` see it. Approving and applying a proposal needs `program:publish`. Anyone who may use the project may propose.
 - **Publications** — `POST /projects/:id/publications` `{ path, audience: "public" | "members", slug? }` → `{ slug, url, … }`; `GET` lists your own, or everyone's with `publications:read`; `DELETE …/:slug` revokes your own, or anyone's with `publications:write`. Publishing a program path needs `program:publish`; members publish what they may write (their own store documents). Serving: `GET /projects/:id/publications/:slug` for members (host auth) and `GET /public/:id/:slug` for `public` — the one route the identity hook lets through unauthenticated (route config `public: true`); it reads the document as an anonymous identity scoped to exactly that document, so nothing else is reachable. Unknown, revoked and not-for-you are one uniform 404.
 
 ### Reference architecture: a database per project

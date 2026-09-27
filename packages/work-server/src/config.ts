@@ -57,8 +57,6 @@ export interface WorkServerConfig {
   machineLabels: Record<string, string>;
   execution: WorkExecutionSettings;
   agent: WorkAgentSettings;
-  /** Service account for GitHub-backed projects and proposals. */
-  github?: { clientId: string; token: string };
   /**
    * Connections the gateway brokers (MCP endpoints, HTTP APIs, databases) and
    * the guards that review their actions (ADRs 0162, 0163).
@@ -87,12 +85,6 @@ export function workServerConfigFromEnv(
     );
   }
   const loopbackBase = `http://127.0.0.1:${port}`;
-  const github = env.WORK_GITHUB_TOKEN || env.WORK_GITHUB_CLIENT_ID;
-  if (github && (!env.WORK_GITHUB_TOKEN || !env.WORK_GITHUB_CLIENT_ID)) {
-    throw new Error(
-      "Configure both WORK_GITHUB_TOKEN and WORK_GITHUB_CLIENT_ID for the server's GitHub connection",
-    );
-  }
   return {
     dataDir: env.WORK_DATA_DIR ?? "/data",
     // OAuth discovery and invitation links publish only a secure public
@@ -118,14 +110,6 @@ export function workServerConfigFromEnv(
     machineLabels: parseMachineLabels(env.WORK_MACHINE_LABELS),
     execution: executionSettingsFromEnv(env),
     agent: agentSettingsFromEnv(env),
-    ...(env.WORK_GITHUB_TOKEN && env.WORK_GITHUB_CLIENT_ID
-      ? {
-          github: {
-            clientId: env.WORK_GITHUB_CLIENT_ID,
-            token: env.WORK_GITHUB_TOKEN,
-          },
-        }
-      : {}),
     ...(env.WORK_GATEWAY_CONFIG
       ? {
           gateway: gatewayConfigFromFile({

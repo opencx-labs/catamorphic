@@ -8,6 +8,7 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { RemoteSyncService } from "../services/remote-sync-service.js";
+import { fakeCodeHost } from "./code-host-fixture.js";
 
 const database = new PGlite({ extensions: { pgcrypto } });
 const db = new Kysely<DB>({
@@ -75,26 +76,23 @@ it("pushes the selected worktree branch for review against the default branch wi
   await nativeGit(root, ["add", "."]);
   const index = await fs.readFile(path.join(root, ".git/index"));
   const head = await nativeGit(root, ["rev-parse", "HEAD"]);
-  const createPullRequest = vi.fn(async () => ({
-    url: "https://example.invalid/pr/1",
-    number: 1,
-  }));
-  const service = new RemoteSyncService(db, manager, [
-    {
-      id: "test",
-      handles: () => true,
-      credentials: async () => undefined,
-      createPullRequest,
-    },
-  ]);
+  const forge = fakeCodeHost({ db, projectManager: manager, remoteBase: temp });
+  await forge.connectPersonal(identity, "member-token");
+  const service = new RemoteSyncService(db, manager, forge.codeHosts);
   const result = await service.createPullRequestFromRef(identity, projectId, {
     title: "Worktree review",
     localRef: "feature",
   });
-  expect(createPullRequest).toHaveBeenCalledWith(
-    identity,
+  // The caller's own connection pushed the branch and opened the PR.
+  expect(forge.createPullRequest).toHaveBeenCalledWith(
     expect.objectContaining({ base: "trunk", head: result.branch }),
   );
+  expect(result.url).toBe("https://forge.test/pr/member-token");
+  expect(forge.gitCalls).toContainEqual({
+    token: "member-token",
+    access: "write",
+    remoteUrl: remote,
+  });
   expect(await nativeGit(remote, ["show", `${result.branch}:notes.txt`])).toBe(
     "feature",
   );
@@ -104,24 +102,25 @@ it("pushes the selected worktree branch for review against the default branch wi
     service.createPullRequest(identity, projectId, { title: "Private work" }),
   ).rejects.toThrow("will not stage");
 });
-it("propagates listing failures while unsupported hosts remain an empty list", async () => {
-  const service = new RemoteSyncService(db, manager, [
-    {
-      id: "test",
-      handles: () => true,
-      credentials: async () => undefined,
-      listPullRequests: async () => {
-        throw new Error("Sign in again");
-      },
-    },
-  ]);
-  await expect(service.listPullRequests(identity, projectId)).rejects.toThrow(
-    "Sign in again",
-  );
+it("propagates listing failures while unsupported or unconnected hosts remain an empty list", async () => {
+  const forge = fakeCodeHost({ db, projectManager: manager, remoteBase: temp });
+  const other = { ...identity, externalUserId: "other" };
   expect(
-    await new RemoteSyncService(db, manager, []).listPullRequests(
-      identity,
-      projectId,
-    ),
+    await forge.codeHosts.listPullRequests({ identity: other, projectId }),
+  ).toEqual([]);
+  await forge.connectPersonal(other, "other-token");
+  vi.mocked(forge.host.listPullRequests)?.mockRejectedValueOnce(
+    new Error("Sign in again"),
+  );
+  await expect(
+    forge.codeHosts.listPullRequests({ identity: other, projectId }),
+  ).rejects.toThrow("Sign in again");
+  const unrelated = fakeCodeHost({
+    db,
+    projectManager: manager,
+    remoteBase: "https://elsewhere.test/",
+  });
+  expect(
+    await unrelated.codeHosts.listPullRequests({ identity, projectId }),
   ).toEqual([]);
 });

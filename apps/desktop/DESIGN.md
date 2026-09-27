@@ -1173,3 +1173,18 @@ watch the graph while the agent works.
 The canvas follows the app's language: neutral nodes on raised surfaces,
 the accent only on the selection, solid still edges instead of marching
 dashes, icons instead of emoji, and a start node labeled Start.
+
+### 2026-09-27: GitHub is one of your connections
+
+Signing in to GitHub used to fill a GitHub-only token file beside the
+connections everything else used, and an agent watching pull requests
+bound GitHub-only trigger kinds that a server never fired. Now the sign-in
+is your personal `github` connection, kept in the same vault as every other
+connection (ADR 0177). It clones repositories, syncs, opens pull requests,
+and shows the PRs panel, with the GitHub CLI as the fallback it always was.
+
+The desktop has no public address for GitHub to call, so a watcher asks the
+desktop to poll: new repository activity arrives as the same deliveries the
+project's `github` webhook receives on a server, marked as fetched by the
+host rather than signed. One trigger library, and the same filters, work in
+both places.

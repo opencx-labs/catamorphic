@@ -17,9 +17,16 @@ import { authorFor, type Identity, mayUseProject } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type {
   CodeHost,
+  CodeHostCredential,
   PullRequestFile,
   PullRequestSummary,
 } from "./code-host.js";
+import {
+  CodeHostNotConnectedError,
+  type CodeHostsService,
+  CodeHostUnsupportedError,
+  ProjectHasNoRemoteError,
+} from "./code-hosts-service.js";
 import {
   DocumentPathError,
   documentAccessAllowed,
@@ -31,13 +38,14 @@ import { ProjectNotFoundError, remoteOwnership } from "./projects-service.js";
 
 /**
  * Propose a change to the program (ADR 0055): a member who cannot commit
- * — no GitHub access, no `program:write` — asks for a doc fix, a new template,
+ * — no code-host access, no `program:write` — asks for a doc fix, a new template,
  * a workflow tweak. Their agent (or the HTTP surface) hands us the files;
  * we commit them on a fresh branch from the shared `main`, authored as the
- * member, and open a pull request through the code host on the HOST's
- * credential ("on behalf of <member>"). Admins review as usual. Without a
- * code host the branch still lands on the project origin, where program
- * writers see it in the desktop.
+ * member, and open a pull request through the code host with the
+ * organization's service connection ("on behalf of <member>", ADR 0177).
+ * Admins review as usual. Without a service connection for the origin the
+ * branch still lands on the project origin, where program writers see it in
+ * the desktop.
  *
  * Only program paths are proposable: `store/…` changes ship directly.
  */
@@ -82,12 +90,7 @@ export class ProposalsService {
   constructor(
     private readonly db: Kysely<DB>,
     private readonly projectManager: ProjectManager,
-    private readonly hosts: readonly CodeHost[],
-    /**
-     * The identity whose code-host connection opens pull requests for
-     * members (the organisation's bot). Absent = branches only.
-     */
-    private readonly botIdentity?: Identity,
+    private readonly codeHosts: CodeHostsService,
   ) {}
 
   /** Read proposals through the company identity, narrowed to member documents. */
@@ -95,19 +98,17 @@ export class ProposalsService {
     identity: Identity;
     projectId: string;
   }): Promise<PullRequestSummary[]> {
-    const source = await this.proposalSource(input);
-    if (!source) return [];
-    const proposals = (
-      (await source.host.listPullRequests?.(source.identity, {
-        remoteUrl: source.remoteUrl,
-      })) ?? []
-    ).filter((item) => item.head.startsWith(PROPOSAL_BRANCH_PREFIX));
+    const proposals =
+      (await this.viaService(input, async ({ host, call }) =>
+        ((await host.listPullRequests?.(call)) ?? []).filter((item) =>
+          item.head.startsWith(PROPOSAL_BRANCH_PREFIX),
+        ),
+      )) ?? [];
     const visible: PullRequestSummary[] = [];
     for (const proposal of proposals) {
-      const files = await source.host.pullRequestFiles?.(source.identity, {
-        remoteUrl: source.remoteUrl,
-        number: proposal.number,
-      });
+      const files = await this.viaService(input, async ({ host, call }) =>
+        host.pullRequestFiles?.({ ...call, number: proposal.number }),
+      );
       if (
         files?.length &&
         files.every((file) => this.canReadProposalFile(input, file))
@@ -123,34 +124,31 @@ export class ProposalsService {
     projectId: string;
     number: number;
   }): Promise<{ proposal: PullRequestSummary; files: PullRequestFile[] }> {
-    const source = await this.proposalSource(input);
-    if (!source) throw new ProposalsUnsupportedError();
-    const readSummary = async () =>
-      source.host.pullRequest
-        ? source.host.pullRequest(source.identity, {
-            remoteUrl: source.remoteUrl,
-            number: input.number,
-          })
-        : (
-            await source.host.listPullRequests?.(source.identity, {
-              remoteUrl: source.remoteUrl,
-            })
-          )?.find((item) => item.number === input.number);
-    const proposal = await readSummary();
-    if (!proposal?.head.startsWith(PROPOSAL_BRANCH_PREFIX))
-      throw new AccessDeniedError();
-    const files = await source.host.pullRequestFiles?.(source.identity, {
-      remoteUrl: source.remoteUrl,
-      number: input.number,
+    const result = await this.viaService(input, async ({ host, call }) => {
+      const readSummary = async () =>
+        host.pullRequest
+          ? host.pullRequest({ ...call, number: input.number })
+          : (await host.listPullRequests?.(call))?.find(
+              (item) => item.number === input.number,
+            );
+      const proposal = await readSummary();
+      if (!proposal?.head.startsWith(PROPOSAL_BRANCH_PREFIX))
+        throw new AccessDeniedError();
+      const files = await host.pullRequestFiles?.({
+        ...call,
+        number: input.number,
+      });
+      if (!files?.every((file) => this.canReadProposalFile(input, file)))
+        throw new AccessDeniedError();
+      const after = await readSummary();
+      if (!after || proposal.headSha !== after.headSha)
+        throw new DocumentPathError(
+          "This proposal changed while loading. Refresh to review the latest version.",
+        );
+      return { proposal: after, files };
     });
-    if (!files?.every((file) => this.canReadProposalFile(input, file)))
-      throw new AccessDeniedError();
-    const after = await readSummary();
-    if (!after || proposal.headSha !== after.headSha)
-      throw new DocumentPathError(
-        "This proposal changed while loading. Refresh to review the latest version.",
-      );
-    return { proposal: after, files };
+    if (!result) throw new ProposalsUnsupportedError();
+    return result;
   }
 
   async files(input: {
@@ -167,13 +165,11 @@ export class ProposalsService {
     number: number;
   }) {
     await this.files(input);
-    const source = await this.proposalSource(input);
-    if (!source?.host.pullRequestDiscussion)
-      throw new ProposalsUnsupportedError();
-    return source.host.pullRequestDiscussion(source.identity, {
-      remoteUrl: source.remoteUrl,
-      number: input.number,
-    });
+    const discussion = await this.viaService(input, async ({ host, call }) =>
+      host.pullRequestDiscussion?.({ ...call, number: input.number }),
+    );
+    if (!discussion) throw new ProposalsUnsupportedError();
+    return discussion;
   }
 
   async comment(input: {
@@ -188,9 +184,6 @@ export class ProposalsService {
         "Write a comment of at most 60,000 characters",
       );
     await this.files(input);
-    const source = await this.proposalSource(input);
-    if (!source?.host.commentOnPullRequest)
-      throw new ProposalsUnsupportedError();
     if (input.replyTo) {
       const discussion = await this.discussion(input);
       if (
@@ -200,12 +193,16 @@ export class ProposalsService {
       )
         throw new AccessDeniedError();
     }
-    return source.host.commentOnPullRequest(source.identity, {
-      remoteUrl: source.remoteUrl,
-      number: input.number,
-      body: `${input.body.trim()}\n\n_On behalf of ${input.identity.externalUserId} via Catamorphic._`,
-      replyTo: input.replyTo,
-    });
+    const comment = await this.viaService(input, async ({ host, call }) =>
+      host.commentOnPullRequest?.({
+        ...call,
+        number: input.number,
+        body: `${input.body.trim()}\n\n_On behalf of ${input.identity.externalUserId} via Work._`,
+        ...(input.replyTo !== undefined ? { replyTo: input.replyTo } : {}),
+      }),
+    );
+    if (!comment) throw new ProposalsUnsupportedError();
+    return comment;
   }
 
   private canReadProposalFile(
@@ -220,26 +217,44 @@ export class ProposalsService {
     );
   }
 
-  private async proposalSource(input: {
-    identity: Identity;
-    projectId: string;
-  }) {
+  /**
+   * Run against the origin with the organization's service connection;
+   * null when the project has no origin, no code host serves it, or no
+   * service connection is ready.
+   */
+  private async viaService<T>(
+    input: { identity: Identity; projectId: string },
+    use: (source: {
+      host: CodeHost;
+      call: { credential: CodeHostCredential; remoteUrl: string };
+    }) => Promise<T>,
+  ): Promise<T | null> {
     if (!mayPropose(input.identity, input.projectId))
       throw new AccessDeniedError();
     const project = await this.db
       .selectFrom("projects")
       .where("id", "=", input.projectId)
       .where("tenant_id", "=", input.identity.tenantId)
-      .select("remote_url")
+      .select("id")
       .executeTakeFirst();
     if (!project) throw new ProjectNotFoundError(input.projectId);
-    const remoteUrl = project.remote_url;
-    const identity = this.botIdentity;
-    const host =
-      remoteUrl && identity
-        ? this.hosts.find((host) => host.handles(remoteUrl))
-        : undefined;
-    return host && remoteUrl && identity ? { host, remoteUrl, identity } : null;
+    try {
+      return await this.codeHosts.withOrigin({
+        identity: input.identity,
+        projectId: input.projectId,
+        principal: "service",
+        use: ({ host, credential, remoteUrl }) =>
+          use({ host, call: { credential, remoteUrl } }),
+      });
+    } catch (error) {
+      if (
+        error instanceof ProjectHasNoRemoteError ||
+        error instanceof CodeHostUnsupportedError ||
+        error instanceof CodeHostNotConnectedError
+      )
+        return null;
+      throw error;
+    }
   }
 
   async propose(input: ProposeInput): Promise<ProposalResult> {
@@ -351,48 +366,57 @@ export class ProposalsService {
         "",
         args.body?.trim() ?? "",
         "",
-        `Proposed by ${identity.externalUserId} via Catamorphic.`,
+        `Proposed by ${identity.externalUserId} via Work.`,
       ]
         .join("\n")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
       await dev.commit(message, authorFor(identity.externalUserId));
 
-      // Land the branch: on the linked code host when the bot can, else on
-      // the project origin.
-      const remoteUrl = args.project.remote_url;
-      const host =
-        remoteUrl && this.botIdentity
-          ? this.hosts.find((h) => h.handles(remoteUrl))
-          : undefined;
-      let pullRequest: ProposalResult["pullRequest"];
-      if (remoteUrl && host && this.botIdentity) {
-        const credentials = await host.credentials(this.botIdentity);
-        await pushToRemote({
-          repoPath: dev.repoPath,
-          url: remoteUrl,
-          credentials,
-          ownership:
-            remoteOwnership(args.project.remote_ownership) ?? "attached",
-          ref: branch,
-          remoteBranch: branch,
-        });
-        if (host.createPullRequest) {
-          pullRequest = await host.createPullRequest(this.botIdentity, {
-            remoteUrl,
-            title,
-            head: branch,
-            base: baseBranch,
-            body: [
-              `Proposed by **${identity.externalUserId}** via Catamorphic.`,
-              "",
-              args.body?.trim() ?? "",
-            ]
-              .join("\n")
-              .trim(),
-          });
-        }
-      } else {
+      // Land the branch: on the linked code host when the organization's
+      // service connection can, else on the project origin.
+      const body = [
+        `Proposed by **${identity.externalUserId}** via Work.`,
+        "",
+        args.body?.trim() ?? "",
+      ]
+        .join("\n")
+        .trim();
+      const landed = args.project.remote_url
+        ? await this.viaService(
+            { identity, projectId },
+            async ({ host, call }) => {
+              await pushToRemote({
+                repoPath: dev.repoPath,
+                url: call.remoteUrl,
+                credentials: await this.codeHosts.gitCredentials({
+                  identity,
+                  projectId,
+                  remoteUrl: call.remoteUrl,
+                  access: "write",
+                  principal: "service",
+                }),
+                ownership:
+                  remoteOwnership(args.project.remote_ownership) ?? "attached",
+                ref: branch,
+                remoteBranch: branch,
+              });
+              return {
+                pullRequest: host.createPullRequest
+                  ? await host.createPullRequest({
+                      ...call,
+                      title,
+                      head: branch,
+                      base: baseBranch,
+                      body,
+                    })
+                  : undefined,
+              };
+            },
+          )
+        : null;
+      const pullRequest = landed?.pullRequest;
+      if (!landed) {
         await push({
           dev,
           remote,

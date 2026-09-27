@@ -14,16 +14,19 @@ The server is the `@catamorphic/work-server` package
 process. A company that needs custom code extends the image with a small
 server file that calls `createWorkServer` with its own hooks.
 
-For GitHub-backed company proposals, configure `WORK_GITHUB_CLIENT_ID`
-and `WORK_GITHUB_TOKEN` on the server. Use a service account with access
-only to the company repositories, separate from the people who review its
-PRs. Members never receive this token. The stock host validates the account at
-boot and supplies the existing `GithubService` and proposal bot identity.
-Tokens that need rotation are replaced in the deployment environment.
+GitHub is an ordinary connection (ADR 0177). An organization administrator
+connects a GitHub App installation as the `github` service connection, or the
+operator registers a new App from a manifest
+(`POST /_work/operator/github/app` on the loopback listener, then a one-time
+browser link on the public URL). Sync, proposals, and agents' GitHub actions
+use that connection with tokens minted per call; members never receive one.
+See the setup skill's
+[Connect GitHub](../../skills/setup-work-server/references/connect-github.md).
 
-The machine-local project setup operation accepts `githubRepository` as
-`owner/repository` alongside the explicit roles and admission policy. It imports
-that repository and publishes the requested role definitions. Ongoing source
+The machine-local project setup operation accepts `repository` as
+`owner/repository` alongside the explicit roles and admission policy. It
+attaches that repository through the `github` service connection and
+proposes the requested role definitions when the repository has none. Ongoing source
 changes use ordinary proposals and repository review. Members can list and read
 proposals through their company sign-in only when their document scope permits
 every changed path, including the old path of renamed files.

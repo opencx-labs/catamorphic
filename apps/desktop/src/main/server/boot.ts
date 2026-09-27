@@ -21,6 +21,8 @@ import {
   createCatamorphic,
   defineStaticEnvironments,
   FsBundleStore,
+  type GithubConnectionProvider,
+  githubCodeHost,
 } from "@catamorphic/server-sdk";
 import { createPushTransport } from "@catamorphic/server-sdk/web-push";
 import { PGlite } from "@electric-sql/pglite";
@@ -56,7 +58,8 @@ import { validateDatabaseFiles } from "./database-files.js";
 import { desktopCapabilitySource } from "./desktop-capabilities.js";
 import { DESKTOP_SETTINGS_SKILL } from "./desktop-settings-skill.js";
 import { E2eLocalSandboxProvider } from "./e2e-fakes.js";
-import { FileGithubTokenStore, GITHUB_APP } from "./github.js";
+import { desktopGithubProvider } from "./github.js";
+import { githubPollingEventSource } from "./github-events.js";
 import {
   type HostSkillsRuntime,
   materializeHostSkills,
@@ -91,6 +94,11 @@ export interface EmbeddedServer {
   url: string;
   clientRunners: RemoteClientRunners;
   catamorphic: Catamorphic;
+  /**
+   * The person's GitHub connection provider (ADR 0177): device-flow sign-in
+   * and the `gh` CLI credential become their personal `github` connection.
+   */
+  github: GithubConnectionProvider;
   projectRoots: ProjectRootsStore;
   /** Desktop-local checkout assignment and Git worktree lifecycle. */
   sessionCheckouts: SessionCheckouts;
@@ -402,6 +410,9 @@ export async function startEmbeddedServer(
     }
   }
 
+  // GitHub is an ordinary connection (ADR 0177): the person signs in once
+  // and it backs import, sync, pull requests, and the event poller.
+  const github = desktopGithubProvider();
   const catamorphic = createCatamorphic({
     hostSkills: (defaults) => ({
       ...defaults,
@@ -423,7 +434,16 @@ export async function startEmbeddedServer(
     credentialVault: new DesktopCredentialVault(
       path.join(paths.root, "credentials.json"),
     ),
-    connectionProviders,
+    connectionProviders: [...(connectionProviders ?? []), github],
+    codeHosts: [githubCodeHost(github)],
+    // No public webhook URL here: watchers poll GitHub instead, recording
+    // the events the project's `github` webhook would have received.
+    projectEventSources: [
+      githubPollingEventSource({
+        core: () => catamorphic.core,
+        provider: github,
+      }),
+    ],
     connectionBindings: async ({ projectId, environment }) =>
       profileMcpConnectionBindings({
         profiles,
@@ -490,10 +510,6 @@ export async function startEmbeddedServer(
     // Local projects: the folder IS the store; remote projects sync their
     // store/ explicitly (Ship). No per-turn pull/ship into the local store.
     storeSyncAroundTurns: false,
-    github: {
-      app: GITHUB_APP,
-      tokenStore: new FileGithubTokenStore(paths.githubFile),
-    },
     triggerKinds: DESKTOP_TRIGGER_KINDS,
     mcpToolKinds: DESKTOP_MCP_TOOL_KINDS,
     agentCapabilities: {
@@ -1338,6 +1354,7 @@ export async function startEmbeddedServer(
     url,
     clientRunners,
     catamorphic,
+    github,
     projectRoots,
     sessionCheckouts,
     returnSessionToProjectFolder,

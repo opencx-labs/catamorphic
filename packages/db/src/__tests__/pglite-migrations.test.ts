@@ -69,6 +69,7 @@ describe("PGlite migrations", () => {
       "029_trigger_filters.sql",
       "030_client_runner_processes.sql",
       "031_session_approvers.sql",
+      "032_personal_connections.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

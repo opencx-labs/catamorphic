@@ -155,7 +155,7 @@ describe("trigger types codegen", () => {
       ],
       projectKinds: [
         {
-          name: "gh.pull_request",
+          name: "github.pull_request",
           description: "A pull request changed",
           exportName: "pullRequest",
           filePath: ".work/triggers/github.ts",
@@ -177,7 +177,7 @@ describe("trigger types codegen", () => {
     expect(content).toContain(
       [
         "    /** A pull request changed */",
-        '    "gh.pull_request": {',
+        '    "github.pull_request": {',
         '      payload: PayloadOf<typeof import("../../triggers/github").pullRequest>;',
         "      config: Record<string, never>;",
         "    };",

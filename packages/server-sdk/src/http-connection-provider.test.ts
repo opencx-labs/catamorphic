@@ -30,6 +30,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
       tenantId: "t",
       projectId: "p",
       externalUserId: "u",
+      principal: "service",
       redirectUri: "https://work.test/cb",
       state: "s",
     });
@@ -43,6 +44,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
       tenantId: "t",
       projectId: "p",
       externalUserId: "u",
+      principal: "service",
       callback: { apiKey: "  sk-live-secret " },
     });
     expect(new TextDecoder().decode(result?.material)).toBe("sk-live-secret");

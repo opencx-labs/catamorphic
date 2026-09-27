@@ -56,7 +56,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0041](0041-generated-projections.md) | Generated projections: schemas and types derived from code | Accepted; paths superseded by 0142 |
 | [0042](0042-parameterized-trigger-kinds-and-workflow-tools-mcp.md) | Parameterized trigger kinds (holes) and workflow tools over MCP | Accepted (refined by 0171) |
 | [0043](0043-general-purpose-projects.md) | Projects are general-purpose; the workflow workspace is scaffolded on demand | Accepted; paths superseded by 0142 |
-| [0044](0044-checkpoint-commits-and-remote-sync.md) | Checkpoint commits, remote sync, and the code-host seam | Accepted (push policy refined by 0170) |
+| [0044](0044-checkpoint-commits-and-remote-sync.md) | Checkpoint commits, remote sync, and the code-host seam | Accepted (push policy refined by 0170; GitHub code host superseded by 0177) |
 | [0045](0045-desktop-as-dev-shell.md) | The desktop is a dev shell: harness fidelity, worktrees, diffs, PRs | Accepted |
 | [0046](0046-plugin-activation-planes.md) | Plugin activation planes: capability providers and project lifecycle hooks | Accepted |
 | [0047](0047-local-process-execution.md) | Sandboxless execution is a provider: `@catamorphic/local-process` | Accepted (provider selection refined by 0064) |
@@ -85,8 +85,8 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0070](0070-default-local-environment-policy.md) | Default local Environment policy | Accepted (the default is named `default` and selects no pool, 0167) |
 | [0071](0071-stock-auth-and-agent-driven-setup.md) | Stock auth and agent-driven setup | Accepted |
 | [0072](0072-remote-oauth-admission-and-project-administration.md) | Remote OAuth, admission, and project administration | Accepted; paths superseded by 0142; permission names superseded by 0158 |
-| [0073](0073-recoverable-project-remotes-and-builder-checkout.md) | Recoverable project remotes and builder checkout | Accepted; paths superseded by 0142 |
-| [0074](0074-temporary-watchers-and-session-delivery.md) | Temporary Watchers and durable session delivery | Accepted (trigger model superseded by 0076; lifetime and placement superseded by 0139) |
+| [0073](0073-recoverable-project-remotes-and-builder-checkout.md) | Recoverable project remotes and builder checkout | Accepted; paths superseded by 0142; CLI credential destination superseded by 0177 |
+| [0074](0074-temporary-watchers-and-session-delivery.md) | Temporary Watchers and durable session delivery | Accepted (trigger model superseded by 0076; lifetime and placement superseded by 0139; GitHub monitor superseded by 0177) |
 | [0075](0075-parallel-local-development-isolation.md) | Parallel local development isolation | Accepted |
 | [0076](0076-watchers-are-workflow-enablement.md) | Watchers are temporary workflow enablements | Accepted (lifetime and placement superseded by 0139) |
 | [0077](0077-explicit-session-handoff-push-and-schedules.md) | Explicit session handoff, durable push, and schedule triggers | Accepted |
@@ -126,11 +126,11 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0110](0110-discoverable-desktop-settings.md) | Discoverable desktop settings | Agent tools superseded by 0111 |
 | [0111](0111-direct-desktop-configuration.md) | Direct desktop configuration editing | Accepted |
 | [0112](0112-browser-control-and-tool-media.md) | Browser control, host tool media, and Codex app-server | Accepted |
-| [0113](0113-desktop-workspace-frame-and-local-pr-access.md) | Configurable workspace frame and local PR access | Accepted |
+| [0113](0113-desktop-workspace-frame-and-local-pr-access.md) | Configurable workspace frame and local PR access | Accepted (PR access refined by 0177) |
 | [0114](0114-focused-pull-request-review.md) | Focused pull request review | Accepted |
 | [0115](0115-native-review-conversation.md) | Native review conversation | Accepted |
 | [0116](0116-bookmark-library-and-pins.md) | Bookmark library and pins | Accepted |
-| [0117](0117-optional-github-cli-connection.md) | Optional GitHub CLI connection | Accepted |
+| [0117](0117-optional-github-cli-connection.md) | Optional GitHub CLI connection | Accepted (refined by 0177) |
 | [0118](0118-review-navigation-and-code-rendering.md) | Review navigation and code rendering | Accepted |
 | [0119](0119-three-signal-observability.md) | Three-signal observability | Accepted |
 | [0120](0120-telemetry-correlation-context.md) | Telemetry correlation context | Accepted |
@@ -189,10 +189,11 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0167](0167-machine-pools-access-and-owner-placement.md) | Machine pools, node access, and placement by owner | Accepted (project access and chat placement refined by 0173) |
 | [0169](0169-work-project-workspace.md) | The project workspace is `.work/`, and what lands in repositories is named Work | Accepted |
 | [0170](0170-attached-repositories-receive-pull-requests.md) | Attached repositories receive pull requests, never pushes | Accepted |
-| [0171](0171-project-trigger-kinds-and-declarative-webhook-ingress.md) | Project-defined trigger kinds and declarative webhook ingress | Accepted |
+| [0171](0171-project-trigger-kinds-and-declarative-webhook-ingress.md) | Project-defined trigger kinds and declarative webhook ingress | Accepted (GitHub host kinds removed by 0177) |
 | [0172](0172-committed-connection-bindings-and-named-service-connections.md) | Committed connection bindings, named service connections, organization administrators | Accepted |
 | [0173](0173-keyed-chat-lifecycle-and-chat-placement.md) | Keyed chats: project keys, close, idle release, and their own placement | Accepted |
 | [0174](0174-background-processes-as-a-sandbox-capability.md) | Background processes are a sandbox capability | Accepted |
 | [0175](0175-grants-reach-sandboxes.md) | Grants reach sandboxes; credentials never do | Accepted |
 | [0176](0176-environment-images-containers-egress-and-modes.md) | Environments choose images, containers, egress, and what agents may change | Accepted |
+| [0177](0177-github-is-a-connection.md) | GitHub is a connection | Accepted |
 | [0179](0179-integrations-from-project-code-slack.md) | Integrations from project code: named HTTP operations and declared delivery ids | Accepted |

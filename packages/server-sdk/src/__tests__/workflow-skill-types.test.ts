@@ -11,7 +11,6 @@ import {
 } from "@catamorphic/core";
 import { parseProject } from "@catamorphic/parser";
 import { expect, it } from "vitest";
-import { GITHUB_PROJECT_EVENT_TRIGGER_KINDS } from "../github-trigger-kinds.js";
 import { schedule } from "../schedule-trigger-kind.js";
 import { SESSION_TRIGGER_KINDS } from "../session-trigger-kinds.js";
 import { webhook } from "../webhook-trigger-kind.js";
@@ -46,9 +45,9 @@ it("shipped workflow recipes typecheck against the public API and real host trig
     const parsed = parseProject(files);
     expect(parsed.errors).toEqual([]);
     expect(parsed.triggerKinds.map((kind) => kind.name)).toEqual([
-      "gh.delivery",
-      "gh.issue_comment",
-      "gh.pull_request",
+      "github.delivery",
+      "github.issue_comment",
+      "github.pull_request",
       "slack.event",
       "slack.mention",
       "slack.message",
@@ -62,12 +61,7 @@ it("shipped workflow recipes typecheck against the public API and real host trig
     await fs.writeFile(
       path.join(directory, TRIGGER_TYPES_SOURCE_PATH),
       renderTriggerTypesModule({
-        kinds: [
-          schedule,
-          webhook,
-          ...SESSION_TRIGGER_KINDS,
-          ...GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
-        ],
+        kinds: [schedule, webhook, ...SESSION_TRIGGER_KINDS],
         projectKinds: parsed.triggerKinds,
       }),
     );

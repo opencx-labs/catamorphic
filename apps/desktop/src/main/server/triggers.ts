@@ -7,7 +7,6 @@ import {
   aiToolCall,
   aiToolKind,
   defineTriggerKind,
-  GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
   SESSION_TRIGGER_KINDS,
   schedule,
   webhook,
@@ -33,7 +32,6 @@ export const DESKTOP_TRIGGER_KINDS = [
   aiToolCall,
   schedule,
   webhook,
-  ...GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
 ];
 
 /** Tool-kind roster behind the desktop's per-project MCP endpoint. */
