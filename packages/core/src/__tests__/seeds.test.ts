@@ -42,9 +42,9 @@ describe("seed skill support files", () => {
       expect(skill).toContain(`files/${name}`);
     }
     // The copyable workspace scaffold matches the canonical one.
-    expect(
-      SEED_SKILLS[".work/skills/work-projects/files/check.ts"],
-    ).toBe(workspaceFiles({ name: "my-project" })[".work/scripts/check.ts"]);
+    expect(SEED_SKILLS[".work/skills/work-projects/files/check.ts"]).toBe(
+      workspaceFiles({ name: "my-project" })[".work/scripts/check.ts"],
+    );
   });
 
   it("ships every file the building-apps skill says to copy", () => {
