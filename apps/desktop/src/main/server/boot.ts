@@ -41,6 +41,8 @@ import {
   mcpAppViewCsp,
   mcpAppViewDocument,
 } from "../mcp-apps.js";
+import { desktopPersonalEnvironment } from "../personal-environment-host.js";
+import type { PersonalEnvironmentSync } from "../personal-environment-sync.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
 import { forwardRemoteApi } from "../remote-api.js";
@@ -126,6 +128,8 @@ export interface EmbeddedServer {
   resumeExecution: () => void;
   /** Poll linked remote hosts for messages addressed to local sessions. */
   syncSessionMailboxes: () => void;
+  /** The member's remote environment per linked project (ADR 0184). */
+  personalEnvironment: PersonalEnvironmentSync;
   sessionMoveEligibility: (
     projectId: string,
     sessionId: string,
@@ -1288,6 +1292,18 @@ export async function startEmbeddedServer(
     () => sessionMirror.syncMailboxesInBackground(),
     5_000,
   );
+  // Remote environments (ADR 0184): the member's own sign-ins and chosen
+  // files, sent to each linked server whose Environments allow them.
+  const personalEnvironment = desktopPersonalEnvironment({
+    profiles,
+    profileConfig,
+    projectRoot: (projectId) => projectRoots.get(projectId),
+    ensureHarnessExecutable: (harness) =>
+      agentRegistry.ensureHarnessExecutable(harness),
+    isolated:
+      e2eFakeAgent || Boolean(process.env.CATAMORPHIC_E2E_DATA_DIR),
+  });
+  personalEnvironment.start();
   sessionMirror.syncMirrorsInBackground();
   const sessionMirrorTimer = setInterval(
     () => sessionMirror.syncMirrorsInBackground(),
@@ -1297,6 +1313,7 @@ export async function startEmbeddedServer(
   const shutdown = () => {
     shutdownDone ??= (async () => {
       await clientRunners.stop();
+      personalEnvironment.stop();
       clearInterval(remoteSyncTimer);
       clearInterval(notificationTimer);
       clearInterval(sessionMailboxTimer);
@@ -1346,6 +1363,7 @@ export async function startEmbeddedServer(
     suspendExecution,
     resumeExecution,
     syncSessionMailboxes: () => sessionMirror.syncMailboxesInBackground(),
+    personalEnvironment,
     sessionMoveEligibility: (projectId, sessionId) =>
       sessionMirror.eligibility(projectId, sessionId),
     moveSessionToServer: (projectId, sessionId) =>

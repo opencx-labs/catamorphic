@@ -497,6 +497,28 @@ export const BUILTIN_ACTIONS = [
       "pwa",
     ],
   },
+  {
+    id: "remote-environment",
+    label: "Remote environment settings",
+    description:
+      "choose which of your own sign-ins (Claude Code, Codex) and project files reach your sessions on this project's server",
+    defaultBinding: null,
+    keywords: [
+      "remote",
+      "environment",
+      "server",
+      "sandbox",
+      "env",
+      "dotenv",
+      "credentials",
+      "login",
+      "sign-in",
+      "claude",
+      "codex",
+      "files",
+      "personal",
+    ],
+  },
 ] as const satisfies readonly ActionDefinition[];
 
 /** Union of built-in action ids ("new-tab" | "command-palette" | …). */

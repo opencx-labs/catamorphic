@@ -48,6 +48,10 @@ import type {
 } from "../../shared/history.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import type {
+  PersonalEnvironmentView,
+  PersonalHarness,
+} from "../../shared/personal-environment.js";
+import type {
   PrComment,
   PrCommentInput,
   PrDecisionInput,
@@ -953,6 +957,29 @@ export interface CatamorphicDesktopApi {
     projectId: string;
     connectionId: string;
   }) => Promise<void>;
+  /** The member's remote environment for a linked project (ADR 0184). */
+  personalEnvironment: (projectId: string) => Promise<PersonalEnvironmentView>;
+  personalEnvironmentSync: (
+    projectId: string,
+  ) => Promise<PersonalEnvironmentView>;
+  /** Opens a file picker in the project folder; null when cancelled. */
+  personalEnvironmentAddFiles: (
+    projectId: string,
+  ) => Promise<PersonalEnvironmentView | null>;
+  personalEnvironmentRemoveFile: (input: {
+    projectId: string;
+    path: string;
+  }) => Promise<PersonalEnvironmentView>;
+  personalEnvironmentSetLogin: (input: {
+    projectId: string;
+    harness: PersonalHarness;
+    included: boolean;
+  }) => Promise<PersonalEnvironmentView>;
+  /** Creates the config when absent; returns its project path. */
+  personalEnvironmentConfigFile: (projectId: string) => Promise<string>;
+  onPersonalEnvironmentChanged: (
+    listener: (change: { profileId: string; projectId: string }) => void,
+  ) => () => void;
   remoteSync: (projectId: string) => Promise<RemoteSyncReport>;
   remoteShip: (input: {
     projectId: string;

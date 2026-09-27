@@ -146,6 +146,82 @@ export interface RemoteMe {
   };
 }
 
+/**
+ * `PUT /projects/:projectId/personal-environment` (ADR 0184): replaces the
+ * caller's own sign-ins and files for the project. Logins carry no refresh
+ * token; file contents are base64.
+ */
+export interface RemotePersonalEnvironmentUpload {
+  logins: {
+    "claude-code"?: { credentials: string; expiresAt?: string };
+    codex?: { auth: string; expiresAt?: string };
+  };
+  files: Array<{ path: string; content: string }>;
+}
+
+/** `GET /projects/:projectId/personal-environment`: never any contents. */
+export interface RemotePersonalEnvironment {
+  /** Some Environment of the project allows it for this member. */
+  allowed: boolean;
+  logins: {
+    [harness in "claude-code" | "codex"]?: {
+      fingerprint: string;
+      expiresAt?: string;
+      updatedAt: string;
+      needsRefresh: boolean;
+    };
+  };
+  files: Array<{
+    path: string;
+    fingerprint: string;
+    bytes: number;
+    updatedAt: string;
+  }>;
+}
+
+/** Reads the status defensively: sync decisions depend on it. */
+export function parseRemotePersonalEnvironment(
+  value: unknown,
+): RemotePersonalEnvironment {
+  const object = (item: unknown): Record<string, unknown> | null =>
+    typeof item === "object" && item !== null && !Array.isArray(item)
+      ? Object.fromEntries(Object.entries(item))
+      : null;
+  const body = object(value);
+  if (!body || typeof body.allowed !== "boolean")
+    throw new Error("The server sent an unreadable remote environment");
+  const logins: RemotePersonalEnvironment["logins"] = {};
+  const rawLogins = object(body.logins) ?? {};
+  for (const harness of ["claude-code", "codex"] as const) {
+    const entry = object(rawLogins[harness]);
+    if (!entry) continue;
+    logins[harness] = {
+      fingerprint: typeof entry.fingerprint === "string" ? entry.fingerprint : "",
+      ...(typeof entry.expiresAt === "string"
+        ? { expiresAt: entry.expiresAt }
+        : {}),
+      updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
+      needsRefresh: entry.needsRefresh === true,
+    };
+  }
+  const files = (Array.isArray(body.files) ? body.files : []).flatMap(
+    (item) => {
+      const entry = object(item);
+      if (!entry || typeof entry.path !== "string") return [];
+      return [
+        {
+          path: entry.path,
+          fingerprint:
+            typeof entry.fingerprint === "string" ? entry.fingerprint : "",
+          bytes: typeof entry.bytes === "number" ? entry.bytes : 0,
+          updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
+        },
+      ];
+    },
+  );
+  return { allowed: body.allowed, logins, files };
+}
+
 /** A 401 from the host: the token no longer works. */
 export class RemoteAuthError extends Error {
   constructor(what: string) {
@@ -195,6 +271,10 @@ export interface RemoteProjectClient extends RemoteDocumentsClient {
     callback: Record<string, string>;
   }): Promise<RemoteServiceConnection>;
   revokeConnection(connectionId: string): Promise<void>;
+  /** The member's remote environment, or null on a server without it. */
+  personalEnvironment(): Promise<RemotePersonalEnvironment | null>;
+  putPersonalEnvironment(input: RemotePersonalEnvironmentUpload): Promise<void>;
+  deletePersonalEnvironment(): Promise<void>;
   publish(input: {
     path: string;
     audience: "public" | "members";
@@ -252,6 +332,7 @@ export function httpDocumentsClient(args: {
 }): RemoteProjectClient {
   const doFetch = args.fetch ?? fetch;
   const base = `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/documents`;
+  const personalEnvironmentUrl = `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/personal-environment`;
   const authorizedFetch = async (url: string, init: RequestInit = {}) => {
     const request = async (forceRefresh: boolean) =>
       doFetch(url, {
@@ -422,6 +503,34 @@ export function httpDocumentsClient(args: {
         { method: "DELETE" },
       );
       if (!response.ok) return fail(response, "Revoking the connection");
+    },
+    async personalEnvironment() {
+      const response = await authorizedFetch(personalEnvironmentUrl);
+      if (response.status === 404) {
+        await response.body?.cancel();
+        return null;
+      }
+      if (!response.ok)
+        return fail(response, "Reading your remote environment");
+      return parseRemotePersonalEnvironment(await response.json());
+    },
+    async putPersonalEnvironment(input) {
+      const response = await authorizedFetch(personalEnvironmentUrl, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      if (!response.ok)
+        return fail(response, "Sending your remote environment");
+      await response.body?.cancel();
+    },
+    async deletePersonalEnvironment() {
+      const response = await authorizedFetch(personalEnvironmentUrl, {
+        method: "DELETE",
+      });
+      if (!response.ok && response.status !== 404)
+        return fail(response, "Removing your remote environment");
+      await response.body?.cancel();
     },
     async list() {
       const response = await authorizedFetch(base);
