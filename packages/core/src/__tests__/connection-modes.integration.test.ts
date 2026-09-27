@@ -26,13 +26,36 @@ const db = new Kysely<DB>({
 });
 const tenantId = crypto.randomUUID();
 const projectId = crypto.randomUUID();
-const admin: Identity = { tenantId, externalUserId: "admin" };
+const admin: Identity = {
+  tenantId,
+  externalUserId: "admin",
+  controlPlanePermissions: ["connections:read", "connections:write"],
+};
+
+/** Administrators authorize these fakes by pasting a token. */
+const pastedToken = {
+  beginAuthorization: async () => ({
+    challenge: {
+      kind: "form" as const,
+      fields: [{ name: "code", label: "Token", secret: true, required: true }],
+    },
+  }),
+  completeAuthorization: async ({
+    callback,
+  }: {
+    callback: Readonly<Record<string, string>>;
+  }) => ({
+    material: new TextEncoder().encode(callback.code ?? ""),
+    capabilities: ["users.list", "users.disable", "search", "post"],
+  }),
+};
 
 const invoked: string[] = [];
 /** Declares which actions read, like the HTTP and Postgres providers. */
 const declared: ConnectionProvider = {
   kind: "declared",
   displayName: "Declared",
+  ...pastedToken,
   readOnly: (action) => action === "users.list",
   invoke: async ({ action }) => {
     invoked.push(`declared:${action}`);
@@ -43,6 +66,7 @@ const declared: ConnectionProvider = {
 const annotated: ConnectionProvider = {
   kind: "annotated",
   displayName: "Annotated",
+  ...pastedToken,
   listActions: async () => [
     {
       name: "search",
@@ -59,11 +83,26 @@ const annotated: ConnectionProvider = {
 
 describe("connection actions by agent mode (ADR 0176)", () => {
   const providers = new ConnectionProviderRegistry([declared, annotated]);
-  const connections = new ConnectionsService(
+  const connections = new ConnectionsService({
     db,
-    new MemoryCredentialVault(),
+    vault: new MemoryCredentialVault(),
     providers,
-  );
+    // What `.work/project.json` commits for the `review` Environment.
+    bindings: async () => ({
+      directory: {
+        provider: "declared",
+        principal: "service",
+        service: "directory",
+        capabilities: ["users.list", "users.disable"],
+      },
+      chat: {
+        provider: "annotated",
+        principal: "service",
+        service: "chat",
+        capabilities: ["search", "post"],
+      },
+    }),
+  });
   const allocations = new ExecutionAllocationsService(db);
   let mode: AgentMode | undefined = "read-only";
   const broker = new ConnectionBroker(
@@ -85,28 +124,26 @@ describe("connection actions by agent mode (ADR 0176)", () => {
       .insertInto("projects")
       .values({ id: projectId, tenant_id: tenantId, name: "P" })
       .execute();
-    for (const [alias, kind, capabilities] of [
-      ["directory", "declared", ["users.list", "users.disable"]],
-      ["chat", "annotated", ["search", "post"]],
+    for (const [name, kind] of [
+      ["directory", "declared"],
+      ["chat", "annotated"],
     ] as const) {
-      const service = await connections.create({
+      const service = await connections.createService({
         identity: admin,
-        projectId,
+        name,
         providerKind: kind,
         principalKind: "project_service",
-        label: alias,
-        material: new TextEncoder().encode(`${alias}-token`),
-        capabilities: [...capabilities],
-      });
-      await connections.bind({
-        identity: admin,
         projectId,
-        environment: "review",
-        alias,
-        providerKind: kind,
-        principalKinds: ["project_service"],
-        serviceConnectionId: service.id,
-        capabilities: [...capabilities],
+      });
+      const started = await connections.beginServiceAuthorization({
+        identity: admin,
+        connectionId: service.id,
+        redirectUri: "https://work.test/api/connection-authorizations/callback",
+      });
+      await connections.completeAuthorization({
+        identity: admin,
+        state: started.authorizationId,
+        callback: { code: `${name}-token` },
       });
     }
     const resolved = await connections.resolve({
