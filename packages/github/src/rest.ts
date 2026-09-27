@@ -109,13 +109,14 @@ export function githubRestUrl(args: {
   const path = args.path.startsWith("/") ? args.path : `/${args.path}`;
   if (
     path.includes("..") ||
+    path.split("/").includes(".") ||
     path.includes("\\") ||
     path.includes("//") ||
     /[?#]/.test(path) ||
     /%(2e|2f|5c)/i.test(path)
   ) {
     throw new Error(
-      "Paths may not contain '..', '//', '?', '#', backslashes, or encoded dots and slashes",
+      "Paths may not contain '.' or '..' segments, '//', '?', '#', backslashes, or encoded dots and slashes",
     );
   }
   const target = new URL(`${basePath}${path}`, base.origin);

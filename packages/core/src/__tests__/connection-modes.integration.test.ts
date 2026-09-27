@@ -88,7 +88,7 @@ const forge: ConnectionProvider = {
   ...pastedToken,
   completeAuthorization: async ({ callback }) => ({
     material: new TextEncoder().encode(callback.code ?? ""),
-    capabilities: ["git:read", "git:write"],
+    capabilities: ["git:read", "git:write", "issues.list"],
   }),
   git: {
     remoteBaseUrls: ["https://forge.test"],
@@ -97,8 +97,13 @@ const forge: ConnectionProvider = {
       password: `token-${access}`,
     }),
   },
-  invoke: async () => ({ ok: true }),
+  readOnly: (action) => action === "issues.list",
+  invoke: async ({ repositories }) => {
+    forgeRepositories.push(repositories);
+    return { ok: true };
+  },
 };
+const forgeRepositories: Array<readonly string[] | undefined> = [];
 
 describe("connection actions by agent mode (ADR 0176)", () => {
   const providers = new ConnectionProviderRegistry([
@@ -128,7 +133,7 @@ describe("connection actions by agent mode (ADR 0176)", () => {
         provider: "forge",
         principal: "service",
         service: "repo",
-        capabilities: ["git:read", "git:write"],
+        capabilities: ["git:read", "git:write", "issues.list"],
       },
     }),
   });
@@ -139,7 +144,12 @@ describe("connection actions by agent mode (ADR 0176)", () => {
     providers,
     allocations,
     undefined,
-    { guards: [], sessionMode: async () => mode },
+    {
+      guards: [],
+      sessionMode: async () => mode,
+      // The project's linked remote scopes the forge binding (ADR 0175).
+      projectRemote: async () => "https://forge.test/org/repo.git",
+    },
   );
   let allocationId = "";
 
@@ -277,5 +287,12 @@ describe("connection actions by agent mode (ADR 0176)", () => {
         credentials: { password: "token-write" },
       });
     }
+  });
+
+  it("scopes a Git provider's API actions to the binding's repositories", async () => {
+    mode = "full-access";
+    forgeRepositories.length = 0;
+    await expect(call("repo", "issues.list")).resolves.toEqual({ ok: true });
+    expect(forgeRepositories).toEqual([["org/repo"]]);
   });
 });

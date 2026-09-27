@@ -14,6 +14,18 @@ const { privateKey } = generateKeyPairSync("rsa", {
 });
 const NOW = 1_750_000_000_000;
 const SHA = "a".repeat(40);
+const INSTALLATION_PERMISSIONS = {
+  contents: "write",
+  pull_requests: "write",
+  metadata: "read",
+  workflows: "write",
+};
+/** What a read (GET) token asks for: the installation's, at read level. */
+const READ_PERMISSIONS = {
+  contents: "read",
+  pull_requests: "read",
+  metadata: "read",
+};
 
 interface Call {
   method: string;
@@ -49,11 +61,25 @@ function fakeGithub(overrides: Record<string, () => Response> = {}) {
         id: 77,
         account: { login: "octo", id: 1, type: "Organization" },
         repository_selection: "all",
-        permissions: {},
+        permissions: INSTALLATION_PERMISSIONS,
         events: [],
         app_slug: "work",
         suspended_at: null,
       });
+    }
+    if (key === "GET /app/installations/77") {
+      return Response.json({
+        id: 77,
+        account: { login: "octo", id: 1, type: "Organization" },
+        repository_selection: "all",
+        permissions: INSTALLATION_PERMISSIONS,
+        events: [],
+        app_slug: "work",
+        suspended_at: null,
+      });
+    }
+    if (key === "GET /repos/octo/hello") {
+      return Response.json({ full_name: "octo/hello", default_branch: "main" });
     }
     if (key === "POST /app/installations/77/access_tokens") {
       minted += 1;
@@ -153,6 +179,8 @@ async function appMaterial(
 }
 
 const ALL = GITHUB_CONNECTION_ACTIONS;
+/** The binding's repositories (the project's linked remote). */
+const REPOS = ["octo/hello"];
 
 describe("GitHub connections: App installation (service)", () => {
   it("finds the installation from the owner and grants every action", async () => {
@@ -231,12 +259,16 @@ describe("GitHub connections: App installation (service)", () => {
       action: "get",
       input: { path: "/repos/octo/hello/pulls", query: { state: "open" } },
       capabilities: ALL,
+      repositories: REPOS,
     });
     expect(result).toMatchObject({ status: 200, body: [{ number: 7 }] });
     const mint = github.calls.find((call) =>
       call.url.endsWith("/access_tokens"),
     );
-    expect(mint?.body).toEqual({ repositories: ["hello"] });
+    expect(mint?.body).toEqual({
+      repositories: ["hello"],
+      permissions: READ_PERMISSIONS,
+    });
     expect(mint?.authorization).toMatch(/^Bearer ey/);
     const request = github.calls.at(-1);
     expect(request?.url).toBe(
@@ -250,10 +282,140 @@ describe("GitHub connections: App installation (service)", () => {
       action: "get",
       input: { path: "/repos/octo/hello/pulls" },
       capabilities: ALL,
+      repositories: REPOS,
     });
     expect(
       github.calls.filter((call) => call.url.endsWith("/access_tokens")),
     ).toHaveLength(1);
+  });
+
+  it("keeps REST calls to the binding's repositories and GETs read-only", async () => {
+    const { github, provider } = appProvider();
+    const material = await appMaterial(provider);
+    const call = (
+      action: string,
+      input: Record<string, unknown>,
+      repositories: readonly string[] | null = REPOS,
+    ) =>
+      provider.invoke({
+        connection: TEST_CONNECTION,
+        material,
+        action,
+        input: JSON.parse(JSON.stringify(input)),
+        capabilities: ALL,
+        ...(repositories ? { repositories } : {}),
+      });
+    const before = github.calls.length;
+    // Another repository, or none named by the binding.
+    await expect(
+      call("get", { path: "/repos/octo/secret/contents/a" }),
+    ).rejects.toThrow(/outside this connection's repositories/);
+    await expect(
+      call("get", { path: "/repos/octo/hello/pulls" }, null),
+    ).rejects.toThrow(/reaches no repository/);
+    await expect(
+      call("pull_request_files", { repository: "octo/secret", number: 1 }),
+    ).rejects.toThrow(/outside this connection's repositories/);
+    // Paths outside one repository mint an installation-wide token.
+    for (const path of ["/graphql", "/search/code", "/orgs/octo/repos"]) {
+      await expect(call("post", { path, body: {} })).rejects.toThrow(
+        /reaches only its repositories/,
+      );
+    }
+    await expect(
+      call("get", { path: "/repos/octo/./secret/pulls" }),
+    ).rejects.toThrow();
+    expect(github.calls.slice(before)).toEqual([]);
+    // Case differs, same repository.
+    await call("get", { path: "/repos/Octo/Hello/pulls" });
+    // A write mints the installation's own permissions.
+    await call("post", { path: "/repos/octo/hello/issues", body: {} });
+    const mints = github.calls
+      .filter((entry) => entry.url.endsWith("/access_tokens"))
+      .map((entry) => entry.body);
+    expect(mints).toEqual([
+      { repositories: ["Hello"], permissions: READ_PERMISSIONS },
+      { repositories: ["hello"] },
+    ]);
+    // A host may open named paths beyond repositories.
+    const opened = defineGithubConnectionProvider({
+      fetch: github.fetch,
+      now: () => NOW,
+      unscopedRestPaths: ["/user"],
+    });
+    await opened.invoke({
+      connection: TEST_CONNECTION,
+      material,
+      action: "get",
+      input: { path: "/user" },
+      capabilities: ALL,
+      repositories: REPOS,
+    });
+    expect(github.calls.at(-1)?.url).toBe("https://api.github.com/user");
+  });
+
+  it("never writes the default branch through the REST API", async () => {
+    const { github, provider } = appProvider();
+    const material = await appMaterial(provider);
+    const call = (action: string, input: Record<string, unknown>) =>
+      provider.invoke({
+        connection: TEST_CONNECTION,
+        material,
+        action,
+        input: JSON.parse(JSON.stringify(input)),
+        capabilities: ALL,
+        repositories: REPOS,
+      });
+    const content = { message: "m", content: "eA==" };
+    await expect(
+      call("put", { path: "/repos/octo/hello/contents/a.md", body: content }),
+    ).rejects.toThrow(/without naming a branch/);
+    await expect(
+      call("put", {
+        path: "/repos/octo/hello/contents/a.md",
+        body: { ...content, branch: "main" },
+      }),
+    ).rejects.toThrow(/main is the default branch of octo\/hello/);
+    await expect(
+      call("delete", {
+        path: "/repos/octo/hello/contents/a.md",
+        body: { message: "m", sha: SHA, branch: "refs/heads/main" },
+      }),
+    ).rejects.toThrow(/default branch/);
+    await expect(
+      call("patch", {
+        path: "/repos/octo/hello/git/refs/heads/main",
+        body: { sha: SHA, force: true },
+      }),
+    ).rejects.toThrow(/default branch/);
+    await expect(
+      call("delete", { path: "/repos/octo/hello/git/refs/heads/main" }),
+    ).rejects.toThrow(/default branch/);
+    await expect(
+      call("post", {
+        path: "/repos/octo/hello/merges",
+        body: { base: "main", head: "work/x" },
+      }),
+    ).rejects.toThrow(/default branch/);
+    const writes = () =>
+      github.calls.filter(
+        (entry) =>
+          entry.method !== "GET" && entry.url.includes("/repos/octo/hello/"),
+      );
+    expect(writes()).toEqual([]);
+    // Other branches are fine.
+    await call("put", {
+      path: "/repos/octo/hello/contents/a.md",
+      body: { ...content, branch: "work/docs" },
+    });
+    await call("patch", {
+      path: "/repos/octo/hello/git/refs/heads/work/docs",
+      body: { sha: SHA },
+    });
+    expect(writes().map((entry) => `${entry.method} ${entry.url}`)).toEqual([
+      "PUT https://api.github.com/repos/octo/hello/contents/a.md",
+      "PATCH https://api.github.com/repos/octo/hello/git/refs/heads/work/docs",
+    ]);
   });
 
   it("accepts the JSON credential an operator pastes", async () => {
@@ -267,6 +429,7 @@ describe("GitHub connections: App installation (service)", () => {
       action: "get",
       input: { path: "/repos/octo/hello/pulls" },
       capabilities: ALL,
+      repositories: REPOS,
     });
     expect(github.calls.at(-1)?.authorization).toBe("Bearer ghs_1");
     await expect(
@@ -276,6 +439,7 @@ describe("GitHub connections: App installation (service)", () => {
         action: "get",
         input: { path: "/user" },
         capabilities: ALL,
+        repositories: REPOS,
       }),
     ).rejects.toThrow("GitHub connection credentials are not readable");
   });
@@ -302,6 +466,7 @@ describe("GitHub connections: App installation (service)", () => {
         action: "post",
         input: { path: "/repos/octo/hello/issues", body: {} },
         capabilities: ["get"],
+        repositories: REPOS,
       }),
     ).rejects.toThrow(/outside the connection grant/);
     await expect(
@@ -311,6 +476,7 @@ describe("GitHub connections: App installation (service)", () => {
         action: "get",
         input: { path: "/repos/../user" },
         capabilities: ALL,
+        repositories: REPOS,
       }),
     ).rejects.toThrow();
   });
@@ -324,6 +490,7 @@ describe("GitHub connections: App installation (service)", () => {
       action: "pull_request_files",
       input: { repository: "octo/hello", number: 7 },
       capabilities: ALL,
+      repositories: REPOS,
     });
     expect(files).toEqual({
       files: [
@@ -358,6 +525,7 @@ describe("GitHub connections: App installation (service)", () => {
         ],
       },
       capabilities: ALL,
+      repositories: REPOS,
     });
     expect(review).toEqual({
       id: 9,
@@ -408,6 +576,7 @@ describe("GitHub connections: App installation (service)", () => {
         },
       },
       capabilities: ALL,
+      repositories: REPOS,
     });
     expect(run).toEqual({
       id: 5,
@@ -440,6 +609,18 @@ describe("GitHub connections: App installation (service)", () => {
         action: "issue_comment",
         input: { repository: "other/hello", number: 1, body: "hi" },
         capabilities: ALL,
+        repositories: REPOS,
+      }),
+    ).rejects.toThrow(/outside this connection's repositories \(octo\/hello\)/);
+    // A binding naming a repository beyond the installation still stops there.
+    await expect(
+      provider.invoke({
+        connection: TEST_CONNECTION,
+        material,
+        action: "issue_comment",
+        input: { repository: "other/hello", number: 1, body: "hi" },
+        capabilities: ALL,
+        repositories: [...REPOS, "other/hello"],
       }),
     ).rejects.toThrow(/outside the GitHub App installation on octo/);
     await expect(
@@ -449,6 +630,7 @@ describe("GitHub connections: App installation (service)", () => {
         action: "create_check_run",
         input: { repository: "octo/hello", name: "x", headSha: "short" },
         capabilities: ALL,
+        repositories: REPOS,
       }),
     ).rejects.toThrow();
   });
@@ -583,6 +765,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
       action: "get",
       input: { path: "/repos/octo/hello/pulls" },
       capabilities: ALL,
+      repositories: REPOS,
     });
     expect(github.calls.at(-1)?.authorization).toBe("Bearer ghu_1");
     expect(
@@ -606,8 +789,9 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
       connection: TEST_CONNECTION,
       material: next,
       action: "get",
-      input: { path: "/user" },
+      input: { path: "/repos/octo/hello/pulls" },
       capabilities: ALL,
+      repositories: REPOS,
     });
     expect(github.calls.at(-1)?.authorization).toBe("Bearer ghu_2");
 
@@ -617,8 +801,9 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
         connection: TEST_CONNECTION,
         material,
         action: "get",
-        input: { path: "/user" },
+        input: { path: "/repos/octo/hello/pulls" },
         capabilities: ALL,
+        repositories: REPOS,
       }),
     ).rejects.toMatchObject({ code: "connection_authorization_expired" });
   });
@@ -670,6 +855,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
         action: "get",
         input: { path: "/repos/octo/hello" },
         capabilities: ALL,
+        repositories: REPOS,
       }),
     ).rejects.toMatchObject({ code: "connection_authorization_expired" });
     await provider.revoke?.({ material });

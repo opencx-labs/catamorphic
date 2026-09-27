@@ -831,6 +831,15 @@ export class CatamorphicCore {
                 })
               : undefined;
           },
+          projectRemote: async ({ tenantId, projectId }) =>
+            (
+              await this.db
+                .selectFrom("projects")
+                .select("remote_url")
+                .where("id", "=", projectId)
+                .where("tenant_id", "=", tenantId)
+                .executeTakeFirst()
+            )?.remote_url,
         },
       );
       this.connectionGrants = new ConnectionCapabilityGrantsService(

@@ -25,6 +25,7 @@ import {
   ConnectionUnavailableError,
 } from "./connections-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
+import { bindingRepositories } from "./git-repositories.js";
 import type { ToolPermissionChannel } from "./tool-permission-broker.js";
 import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
 
@@ -62,6 +63,14 @@ export interface ConnectionGateway {
   sessionOwner?: (sessionId: string) => Promise<string | undefined>;
   /** The session agent's mode: read-only agents only read (ADR 0176). */
   sessionMode?: (sessionId: string) => Promise<AgentMode | undefined>;
+  /**
+   * A project's linked remote URL, which scopes a Git-serving binding that
+   * names no repositories (ADR 0175). Without it such a binding reaches none.
+   */
+  projectRemote?: (args: {
+    tenantId: string;
+    projectId: string;
+  }) => Promise<string | null | undefined>;
 }
 
 export class ConnectionBroker {
@@ -214,6 +223,19 @@ export class ConnectionBroker {
         identity: args.identity,
         connectionId: binding.connectionId,
       });
+      const git = provider.git;
+      const repositories = git
+        ? bindingRepositories({
+            policy: binding.git,
+            bases: git.remoteBaseUrls,
+            projectRemote: binding.git?.repositories
+              ? undefined
+              : await this.gateway.projectRemote?.({
+                  tenantId: args.identity.tenantId,
+                  projectId: allocation.projectId,
+                }),
+          })
+        : undefined;
       const result = await this.connections.withCredential({
         identity: args.identity,
         connectionId: binding.connectionId,
@@ -224,6 +246,7 @@ export class ConnectionBroker {
             input: args.input,
             capabilities: binding.capabilities,
             connection: { id: connection.id, revision: connection.revision },
+            ...(repositories ? { repositories } : {}),
           }),
       });
       await this.connections.audit({

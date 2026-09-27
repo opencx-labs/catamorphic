@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   type ConnectionActionDefinition,
+  ConnectionActionRefusedError,
   ConnectionAuthorizationExpiredError,
   type ConnectionAuthorizationResult,
   type ConnectionGitRemotes,
@@ -20,6 +21,7 @@ import {
   type GithubRestMethod,
   type GithubTokenSet,
   githubRestRequest,
+  githubRestUrl,
   isTokenStale,
   parseGithubAppPrivateKey,
   pollDeviceToken,
@@ -52,6 +54,12 @@ export interface GithubConnectionOptions {
    * installation (service) connections.
    */
   oauth?: GithubAppConfig;
+  /**
+   * REST path prefixes outside `/repos/{owner}/{name}` that callers may
+   * reach, e.g. `/user`. Default none: GraphQL, search, and organization
+   * endpoints reach beyond the binding's repositories.
+   */
+  unscopedRestPaths?: readonly string[];
   /** Largest REST response slice returned to callers. Default 1 MiB. */
   maxResponseBytes?: number;
   /** Longest pull request patch returned per file. Default 20,000 chars. */
@@ -352,6 +360,8 @@ export function defineGithubConnectionProvider(
   const maxPatchChars = options.maxPatchChars ?? 20_000;
   const appAuth = new GithubAppAuth({ fetch: doFetch, apiBaseUrl, now });
   const installations = new Map<string, Promise<number>>();
+  const readGrants = new Map<string, Promise<GithubPermissions>>();
+  const unscopedRestPaths = options.unscopedRestPaths ?? [];
 
   const actions: ConnectionActionDefinition[] = [
     ...REST_ACTIONS.map((method) => ({
@@ -389,6 +399,67 @@ export function defineGithubConnectionProvider(
     installations.set(key, pending);
     pending.catch(() => installations.delete(key));
     return pending;
+  };
+
+  /**
+   * Every permission of the App's installation at read level, for tokens
+   * that serve reads: a GET never carries write access.
+   */
+  const readPermissionsFor = async (
+    app: AppMaterial,
+  ): Promise<GithubPermissions> => {
+    const installationId = await installationIdFor(app);
+    const key = JSON.stringify([
+      app.appId,
+      createHash("sha256").update(app.privateKey).digest("hex"),
+      installationId,
+    ]);
+    const cached = readGrants.get(key);
+    if (cached) return cached;
+    const pending = appAuth
+      .installation({ app, installationId })
+      .then((installation) => readOnlyPermissions(installation.permissions));
+    readGrants.set(key, pending);
+    pending.catch(() => readGrants.delete(key));
+    return pending;
+  };
+
+  /**
+   * The default branch is never written through the API, as through Git
+   * (ADR 0175): contents writes name another branch, and refs and merges
+   * never target it.
+   */
+  const refuseDefaultBranchWrite = async (args: {
+    token: string;
+    repository: { owner: string; name: string };
+    method: RestAction;
+    path: string;
+    body: unknown;
+  }): Promise<void> => {
+    const branch = branchWritten(args);
+    if (branch === undefined) return;
+    const full = `${args.repository.owner}/${args.repository.name}`;
+    if (branch === null)
+      throw new ConnectionActionRefusedError(
+        `Writing contents of ${full} without naming a branch writes its default branch, which Work never changes directly; name a work/ branch and open a pull request`,
+      );
+    const metadata = await githubRestRequest({
+      token: args.token,
+      method: "GET",
+      path: `/repos/${full}`,
+      apiBaseUrl,
+      fetch: doFetch,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const defaultBranch = jsonField(metadata.body, "default_branch");
+    if (metadata.status !== 200 || typeof defaultBranch !== "string")
+      throw new ConnectionActionRefusedError(
+        `Could not read the default branch of ${full} (${metadata.status}), so this write is refused`,
+      );
+    if (branch === defaultBranch)
+      throw new ConnectionActionRefusedError(
+        `${defaultBranch} is the default branch of ${full}, which Work never changes directly; push a work/ branch and open a pull request`,
+      );
   };
 
   /** A token for one call: minted and narrowed for apps, stored for members. */
@@ -455,11 +526,13 @@ export function defineGithubConnectionProvider(
     credential: Material;
     action: TypedAction;
     input: Json;
+    repositories: readonly string[] | undefined;
   }): Promise<unknown> => {
     // Validate before minting anything.
     TypedSchemas[args.action].parse(args.input);
     const repositoryField = repositoryOf(args.input);
     const [owner = "", name = ""] = repositoryField.split("/");
+    requireRepository({ owner, name }, args.repositories);
     const token = await tokenFor({
       credential: args.credential,
       repository: { owner, name },
@@ -535,12 +608,33 @@ export function defineGithubConnectionProvider(
     credential: Material;
     method: RestAction;
     input: Json;
+    repositories: readonly string[] | undefined;
   }): Promise<unknown> => {
     const input = RestSchemas[args.method].parse(args.input);
+    // Resolve first: a path GitHub would read differently is refused here.
+    githubRestUrl({ path: input.path, apiBaseUrl });
+    const repository = repositoryFromRestPath(input.path);
+    if (repository) requireRepository(repository, args.repositories);
+    else if (!unscopedRestPaths.some((prefix) => under(input.path, prefix)))
+      throw new ConnectionActionRefusedError(
+        `This connection reaches only its repositories through /repos/{owner}/{name}/...; '${input.path}' is outside them`,
+      );
+    const reads = args.method === "get";
     const token = await tokenFor({
       credential: args.credential,
-      repository: repositoryFromRestPath(input.path) ?? undefined,
+      ...(repository ? { repository } : {}),
+      ...(reads && args.credential.kind === "app"
+        ? { permissions: await readPermissionsFor(args.credential) }
+        : {}),
     });
+    if (!reads && repository)
+      await refuseDefaultBranchWrite({
+        token,
+        repository,
+        method: args.method,
+        path: input.path,
+        body: "body" in input ? input.body : undefined,
+      });
     const response = await githubRestRequest({
       token,
       method: restMethod(args.method),
@@ -784,7 +878,7 @@ export function defineGithubConnectionProvider(
     listActions: async ({ capabilities }) =>
       actions.filter((action) => capabilities.includes(action.name)),
 
-    invoke: async ({ material, action, input, capabilities }) => {
+    invoke: async ({ material, action, input, capabilities, repositories }) => {
       if (!capabilities.includes(action)) {
         throw new Error(
           `GitHub action '${action}' is outside the connection grant`,
@@ -792,10 +886,14 @@ export function defineGithubConnectionProvider(
       }
       const credential = decodeMaterial(material);
       if (isRestAction(action)) {
-        return toJson(await invokeRest({ credential, method: action, input }));
+        return toJson(
+          await invokeRest({ credential, method: action, input, repositories }),
+        );
       }
       if (isTypedAction(action)) {
-        return toJson(await invokeTyped({ credential, action, input }));
+        return toJson(
+          await invokeTyped({ credential, action, input, repositories }),
+        );
       }
       throw new Error(`Unknown GitHub action '${action}'`);
     },
@@ -904,6 +1002,89 @@ function restMethod(action: RestAction): GithubRestMethod {
     case "delete":
       return "DELETE";
   }
+}
+
+/** Refuse a repository outside the binding's (ADR 0175); names ignore case. */
+function requireRepository(
+  repository: { owner: string; name: string },
+  repositories: readonly string[] | undefined,
+): void {
+  const full = `${repository.owner}/${repository.name}`;
+  const allowed = repositories ?? [];
+  if (allowed.some((entry) => entry.toLowerCase() === full.toLowerCase()))
+    return;
+  throw new ConnectionActionRefusedError(
+    allowed.length > 0
+      ? `${full} is outside this connection's repositories (${allowed.join(", ")})`
+      : `This connection reaches no repository, so ${full} is refused: link the project to a GitHub remote or name repositories in the binding`,
+  );
+}
+
+/** Whether a REST path is `prefix` or below it. */
+function under(path: string, prefix: string): boolean {
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  const base = prefix.replace(/\/+$/, "");
+  return normalized === base || normalized.startsWith(`${base}/`);
+}
+
+/**
+ * The branch a REST write updates, for the endpoints that write branches
+ * directly: `null` when a contents write names none (it writes the default
+ * branch), undefined for anything else.
+ */
+function branchWritten(args: {
+  repository: { owner: string; name: string };
+  method: RestAction;
+  path: string;
+  body: unknown;
+}): string | null | undefined {
+  const rest = args.path
+    .replace(/^\/?repos\/[^/]+\/[^/]+\/?/, "")
+    .replace(/\/+$/, "");
+  const field = (name: string) => {
+    const value = jsonField(args.body, name);
+    return typeof value === "string" ? value : undefined;
+  };
+  if (
+    (rest === "contents" || rest.startsWith("contents/")) &&
+    (args.method === "put" || args.method === "delete")
+  )
+    return field("branch")?.replace(/^refs\/heads\//, "") ?? null;
+  if (rest.startsWith("git/refs/heads/") && args.method !== "post")
+    return rest.slice("git/refs/heads/".length);
+  if (rest === "git/refs" && args.method === "post") {
+    const ref = field("ref");
+    return ref?.startsWith("refs/heads/")
+      ? ref.slice("refs/heads/".length)
+      : undefined;
+  }
+  if (rest === "merges" && args.method === "post") return field("base");
+  return undefined;
+}
+
+function jsonField(value: unknown, name: string): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return undefined;
+  return Object.entries(value).find(([key]) => key === name)?.[1];
+}
+
+/** GitHub permissions that exist only at write level. */
+const WRITE_ONLY_PERMISSIONS = new Set(["workflows"]);
+
+/**
+ * An installation's permissions at read level. Never empty: an empty
+ * request would mint every permission the installation holds.
+ */
+function readOnlyPermissions(
+  permissions: Readonly<Record<string, string>>,
+): GithubPermissions {
+  const read: Record<string, "read"> = { metadata: "read" };
+  for (const [name, level] of Object.entries(permissions)) {
+    if (WRITE_ONLY_PERMISSIONS.has(name)) continue;
+    if (level === "read" || level === "write" || level === "admin")
+      read[name] = "read";
+  }
+  return read;
 }
 
 function repositoryOf(input: Json): string {

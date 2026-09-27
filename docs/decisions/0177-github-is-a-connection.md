@@ -32,7 +32,12 @@ publishing use it; proposals use only the service connection, so members act
 through the organization (the old `proposalBot` is gone). Push safety stays
 in `packages/git` (ADR 0170). `githubCodeHost(provider)` in the server SDK is
 the GitHub implementation; tokens are minted per call, narrowed to the
-repository and permissions it needs.
+repository and permissions it needs. The provider's own actions (REST and
+typed) keep to the binding's Git policy: the broker passes the repositories
+the binding reaches (`git.repositories`, else the project's linked remote,
+the set the Git gateway enforces), paths outside one repository are refused
+unless the host names them, a `get` mints read-only permissions, and no
+write targets the default branch.
 
 **Providers know whose authority they authorize.** `begin/completeAuthorization`
 receive `principal`. GitHub signs a person in (device or web flow) and asks

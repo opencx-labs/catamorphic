@@ -17,6 +17,11 @@ import type {
 import type { ConnectionsService } from "./connections-service.js";
 import { ConnectionUnavailableError } from "./connections-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
+import {
+  bindingRepositories,
+  repositoryBelow,
+  repositoryPath,
+} from "./git-repositories.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -185,39 +190,12 @@ export function advertisedDefaultBranch(body: Uint8Array): string | null {
 
 /** `org/repo.git/` → `org/repo`; refuses traversal and empty paths. */
 export function normalizeRepositoryPath(value: string): string {
-  const trimmed = value
-    .replace(/^\/+|\/+$/g, "")
-    .replace(/\.git$/, "")
-    .replace(/\/+$/, "");
-  const segments = trimmed.split("/");
-  if (
-    !trimmed ||
-    segments.some(
-      (segment) =>
-        !segment ||
-        segment === "." ||
-        segment === ".." ||
-        !/^[A-Za-z0-9._~-]+$/.test(segment),
-    )
-  ) {
-    throw new GitGatewayError(404, "No such repository");
-  }
-  return trimmed;
+  const path = repositoryPath(value);
+  if (!path) throw new GitGatewayError(404, "No such repository");
+  return path;
 }
 
-/** A remote URL's path below `base`, normalized, or null when outside it. */
-export function repositoryBelow(
-  remoteUrl: string,
-  base: string,
-): string | null {
-  const prefix = base.endsWith("/") ? base : `${base}/`;
-  if (!remoteUrl.startsWith(prefix)) return null;
-  try {
-    return normalizeRepositoryPath(remoteUrl.slice(prefix.length));
-  } catch {
-    return null;
-  }
-}
+export { repositoryBelow };
 
 /** Whether `ref` matches a push rule: `work/*` or a full `refs/...` pattern. */
 export function refMatches(ref: string, pattern: string): boolean {
@@ -640,25 +618,18 @@ export class GitGatewayService {
     policy: ConnectionGitPolicy | undefined;
     bases: readonly string[];
   }): Promise<string[]> {
-    if (input.policy?.repositories)
-      return input.policy.repositories.flatMap((path) => {
-        try {
-          return [normalizeRepositoryPath(path)];
-        } catch {
-          return [];
-        }
-      });
-    const project = await this.deps.db
-      .selectFrom("projects")
-      .select("remote_url")
-      .where("id", "=", input.projectId)
-      .where("tenant_id", "=", input.identity.tenantId)
-      .executeTakeFirst();
-    const origin = project?.remote_url;
-    if (!origin) return [];
-    return input.bases.flatMap((base) => {
-      const path = repositoryBelow(origin, base);
-      return path ? [path] : [];
+    const project = input.policy?.repositories
+      ? undefined
+      : await this.deps.db
+          .selectFrom("projects")
+          .select("remote_url")
+          .where("id", "=", input.projectId)
+          .where("tenant_id", "=", input.identity.tenantId)
+          .executeTakeFirst();
+    return bindingRepositories({
+      policy: input.policy,
+      bases: input.bases,
+      projectRemote: project?.remote_url,
     });
   }
 
