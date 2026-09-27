@@ -54,6 +54,12 @@ export interface StorageBackend {
     projectId: string,
     externalUserId?: string,
   ): Promise<boolean>;
+  /**
+   * Where this host keeps its bare mirror of the project's linked remote
+   * (ADR 0178): a cache sessions are seeded from. Backends without local
+   * disk omit it, and workspaces at a ref are then unavailable.
+   */
+  mirrorPath?(tenantId: string, projectId: string): string;
 }
 
 export type FileChange =

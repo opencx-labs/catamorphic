@@ -66,3 +66,15 @@ export type {
   RepoStatus,
   StorageBackend,
 } from "./types.js";
+export {
+  buildSeedPack,
+  copyFromMirror,
+  fetchIntoMirror,
+  isCommitId,
+  mirrorChangedFiles,
+  parseWorkspaceRef,
+  seedPackInstallScript,
+  shellQuote,
+  unpinMirrorRef,
+  type WorkspaceBase,
+} from "./workspace-mirror.js";
