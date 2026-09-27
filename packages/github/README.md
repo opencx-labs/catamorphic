@@ -97,10 +97,11 @@ const service = await github.authorizeApp({ appId, privateKey, owner: "acme" });
 ```
 
 - **Service principal**: the App installation. `authorizeApp` checks the key,
-  finds the installation, and returns the vault material. An operator may
-  also paste `{"appId", "privateKey", "installationId" | "owner"}` as the
-  credential. Each call mints an installation token narrowed to the
-  repository (and, for typed actions, the permissions) it needs.
+  finds the installation, and returns the vault material. Authorizing a
+  service connection asks the administrator for the same fields through a
+  form challenge (the provider receives `principal: "service"`). Each call
+  mints an installation token narrowed to the repository (and, for typed
+  actions, the permissions) it needs.
 - **Member principal**: the person's user-to-server token through the web
   flow (with a client secret) or the device flow, refreshed by `refresh`
   and revoked by `revoke`. A 401 marks the authorization expired.
@@ -111,5 +112,26 @@ const service = await github.authorizeApp({ appId, privateKey, owner: "acme" });
 - **Git** (ADR 0175): `git.credentials({ material, remoteUrl, access })`
   returns HTTP credentials for one repository under `git.remoteBaseUrls`:
   an installation token with `contents: read` or `write` (username
-  `x-access-token`), or the member's token. Only the gateway calls it;
+  `x-access-token`), or the member's token. Only the control plane calls it;
   credentials never reach sandboxes.
+
+## The GitHub code host
+
+`githubCodeHost(github)` (ADR 0177) adds pull requests (open, list, read,
+discussion, comment, files, review, merge) and repositories (list, read,
+create) on top of the provider. Register both, and core's remote sync,
+proposals, repository import, and publishing act through the caller's own
+`github` connection or the organization's `github` service connection:
+
+```ts
+createCatamorphic({
+  connectionProviders: [github],
+  codeHosts: [githubCodeHost(github)],
+  // ...
+});
+```
+
+`authorizeUser({ tokens })` turns a token set a host obtained itself (the
+`gh` CLI's, for example) into member material, and `accessToken` mints one
+call's token for host code on the control plane, such as the desktop's
+GitHub event poller.

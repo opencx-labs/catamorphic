@@ -65,7 +65,8 @@ console.log(r.status, await r.text());'
 ```
 
 The response carries the project id. To start from an existing GitHub
-repository instead, add `githubRepository`; Work then proposes the roles as a
+repository instead, connect GitHub first ([Connect GitHub](connect-github.md))
+and add `repository: "owner/name"`; Work then proposes the roles as a
 pull request rather than writing to the repository
 ([Work server](stock-server.md#github-backed-projects)). Then the first person, the owner, bound
 to `admin` (local username and password; offer a configured OAuth provider

@@ -2,6 +2,7 @@
 
 > Local-checkout import, checkpoint, and publication behavior is refined by [ADR 0104](0104-local-checkouts-and-explicit-file-sharing.md).
 > The push policy below applies only to repositories Work created; attached repositories are fetched and fast-forwarded and receive pull requests ([ADR 0170](0170-attached-repositories-receive-pull-requests.md)).
+> Code hosts now act through connections, and the GitHub service with its token store is gone ([ADR 0177](0177-github-is-a-connection.md)).
 
 
 - **Status:** Accepted

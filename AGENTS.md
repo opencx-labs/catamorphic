@@ -93,7 +93,7 @@ Big desktop design/philosophy choices are additionally logged in
 
 Public developer surface:
 
-- `packages/server-sdk`: **`@catamorphic/server-sdk`**, the core backend SDK. `createCatamorphic({ database, storage, environmentProvider, sandboxProvider?, github?, triggerKinds?, mcpToolKinds?, plugins?, projectSeeds?, standingAgentPrompt?, ... })`; identity binds per request via `forTenant({ tenantId }).forUser({ externalUserId, scope? })`.
+- `packages/server-sdk`: **`@catamorphic/server-sdk`**, the core backend SDK. `createCatamorphic({ database, storage, environmentProvider, sandboxProvider?, connectionProviders?, codeHosts?, triggerKinds?, mcpToolKinds?, plugins?, projectSeeds?, standingAgentPrompt?, ... })`; identity binds per request via `forTenant({ tenantId }).forUser({ externalUserId, scope? })`.
 - `packages/fastify-plugin` — **`@catamorphic/fastify-plugin`**: mountable Fastify plugin (`catamorphicPlugin`) + standalone `createApp` factory with Zod schemas and OpenAPI spec. Also serves the per-project MCP endpoints (`/projects/:id/mcp` — the member's working loop: overview, draft/check/deploy, workflow runs, documents, skills, `ask_agent`, `ai.tool-call` workflow tools, and host tools via `projectMcp`, narrowed by identity (ADRs 0055, 0166); `/projects/:id/apps-mcp` MCP Apps) and app guest documents.
 - `packages/react` — headless React bindings (provider, TanStack Query hooks, jotai atoms).
 - `packages/ui`: React Flow editor components (canvas, panels, member review) + `AppMount` (sandboxed app iframe host); all opt-in/composable.
@@ -105,10 +105,10 @@ Public developer surface:
 
 Internal packages:
 
-- `packages/core`: framework-agnostic service layer (the kernel behind server-sdk and fastify-plugin). Services include projects, workflows, runs, deployments, triggers (+ codegen), apps, app policies, **app storage**, plugins, secrets, agent sessions, agent context, **agent definitions** (ADR 0050), the coding-agent registry, committed roles and memberships, workflow enablements, session attention/mailboxes/subsessions/archive, **remote sync**, the **CodeHost seam** + `GithubService`, skills/seeds, and tenant policies. Seeds/doctrine hooks resolve once in the core constructor (ADR 0049).
+- `packages/core`: framework-agnostic service layer (the kernel behind server-sdk and fastify-plugin). Services include projects, workflows, runs, deployments, triggers (+ codegen), apps, app policies, **app storage**, plugins, secrets, agent sessions, agent context, **agent definitions** (ADR 0050), the coding-agent registry, committed roles and memberships, workflow enablements, session attention/mailboxes/subsessions/archive, **remote sync**, the **CodeHost seam** over connections (`CodeHostsService`, ADR 0177), skills/seeds, and tenant policies. Seeds/doctrine hooks resolve once in the core constructor (ADR 0049).
 - `packages/db` — Kysely instance, schema-scoped raw SQL migrations, programmatic `migrateToLatest`, codegen types.
 - `packages/git` — vendor-neutral git-backed project storage (isomorphic-git): `StorageBackend`/`RemoteBackend` contracts, `ProjectManager`, the remote sync engine (`syncWithNetworkRemote` — fetch/merge/push/rescue branches, ADR 0044), filesystem backends.
-- `packages/github` — **`@catamorphic/github`**: GitHub OAuth + device-flow helpers, REST API client, token stores. Consumed by core's `GithubService` (which implements `CodeHost`).
+- `packages/github` — **`@catamorphic/github`**: GitHub OAuth + device-flow helpers, GitHub App auth and manifest registration, REST API client. The server SDK builds the `github` connection provider and `githubCodeHost` on it (ADR 0177).
 - `packages/parser` — ts-morph AST-to-WorkflowGraph parser; also the engine behind each capability workspace's `.work/scripts/check.ts`.
 - `packages/sandbox` — vendor-neutral sandbox + coding-agent contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`, `CodingAgentProvider`), the stdio supervisor transport, `instrumentSandboxProvider`, plugin-doc staging helpers. No vendor SDKs here.
 - `packages/microsandbox` — **`@catamorphic/microsandbox`**: local sandbox provider (the desktop's default execution).
@@ -379,7 +379,7 @@ workflow → git
 workflow → parser
 git → core
 git → s3
-github → core
+github → server-sdk
 parser → core
 parser → ui
 app → sandbox

@@ -161,12 +161,14 @@ it did not make: sync fetches and fast-forwards, and local work reaches a
 shared repository as a `work/` branch plus a **pull request**. A repository
 Work created itself syncs automatically (fetch, fast-forward, merge, push),
 and a conflicting divergence lands on a **rescue branch** instead of a stuck
-state. Everything provider-specific sits behind one `CodeHost` interface;
-GitHub is the first implementation (connect, repo import, publish, pull
-requests). Agents get explicit git verbs (`sync_project`,
-`create_pull_request`) rather than raw git.
+state. A code host acts through an ordinary connection: the person's own
+account, or the organization's service connection (a GitHub App
+installation), with tokens minted per call. GitHub is the first code host
+(repository import, publish, pull requests, reviews). Agents get explicit
+git verbs (`sync_project`, `create_pull_request`) rather than raw git.
 (ADRs [0044](docs/decisions/0044-checkpoint-commits-and-remote-sync.md),
-[0170](docs/decisions/0170-attached-repositories-receive-pull-requests.md))
+[0170](docs/decisions/0170-attached-repositories-receive-pull-requests.md),
+[0177](docs/decisions/0177-github-is-a-connection.md))
 
 ## Coding agents, multi-harness
 
@@ -332,7 +334,7 @@ Also worth knowing, because it's easy to miss from the package list:
 
 | Package | What it is |
 | --- | --- |
-| `@catamorphic/server-sdk` | The core SDK for your Node/Bun backend. Takes a Postgres connection (or `pg.Pool`), manages its own schema-scoped tables and migrations, and exposes projects, workflows, files, runs, triggers, agent sessions, and GitHub. |
+| `@catamorphic/server-sdk` | The core SDK for your Node/Bun backend. Takes a Postgres connection (or `pg.Pool`), manages its own schema-scoped tables and migrations, and exposes projects, workflows, files, runs, triggers, agent sessions, connections, and code hosts (`githubCodeHost` over the `github` connection provider). |
 | `@catamorphic/fastify-plugin` | A mountable Fastify plugin (`app.register(catamorphicPlugin, { core, prefix: "/api" })`) exposing the standard HTTP API for frontends, plus the per-project MCP endpoints. Also exports a standalone `createApp` factory for sidecar deployments. |
 | `@catamorphic/react` | Headless React bindings: `CatamorphicProvider`, TanStack Query hooks, and jotai atoms. Build a fully custom UI on top of these. |
 | `@catamorphic/ui` | Ready-made components: the React Flow workflow canvas, member review and consent, the Runs panel, and `AppMount` (the sandboxed app iframe host). Every piece is opt-in. |
@@ -348,7 +350,7 @@ Supporting packages (consumed through the surface above, importable directly for
 | `@catamorphic/core` | Framework-agnostic service layer: projects, workflows, runs, deployments, triggers, apps, app storage, plugins, secrets, agent sessions, agent definitions, remote sync, and the CodeHost seam. The kernel behind `server-sdk` and `fastify-plugin`. |
 | `@catamorphic/db` | Kysely + Postgres. Schema-scoped (default schema `catamorphic`), raw SQL migrations, programmatic `migrateToLatest`. |
 | `@catamorphic/git` | Git-backed project storage (`isomorphic-git`): per-user working copies, pluggable origin remotes (`RemoteBackend`), and the remote sync engine (`syncWithNetworkRemote`: fetch and fast-forward; merge, push, and rescue branches only for repositories Work created), with the one push guard every network push passes (`work/` branches only on attached repositories). |
-| `@catamorphic/github` | GitHub as a code host: OAuth + device-flow auth helpers, the REST API client, token stores. Feeds core's `GithubService` and its `CodeHost` implementation. |
+| `@catamorphic/github` | GitHub mechanics: OAuth + device-flow helpers, GitHub App auth (app JWTs, installation tokens, manifest registration), and the REST API client. The server SDK builds the `github` connection provider and code host on it. |
 | `@catamorphic/parser` | ts-morph AST → `WorkflowGraph` parser + dagre layout; also powers the seeded project `check` script. |
 | `@catamorphic/sandbox` | Vendor-neutral sandbox + coding-agent contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`, `CodingAgentProvider`), the stdio supervisor transport, OTel instrumentation. |
 | `@catamorphic/microsandbox` | Local sandbox provider over the microsandbox SDK: the desktop's default execution. |

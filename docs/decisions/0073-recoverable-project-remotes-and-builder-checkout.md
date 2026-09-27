@@ -1,5 +1,6 @@
 # 0073: Recoverable project remotes and builder checkout
 
+> The GitHub CLI credential now becomes the person's `github` connection, not a `GithubService` token ([ADR 0177](0177-github-is-a-connection.md)).
 > Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`. The local locator is `.catamorphic/app-data/remote.json`.
 
 - **Status:** Accepted

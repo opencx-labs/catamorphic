@@ -1,6 +1,6 @@
 # 0113: Configurable workspace frame and local PR access
 
-Status: Accepted
+Status: Accepted (PR access refined by [ADR 0177](0177-github-is-a-connection.md): the GitHub connection first, the CLI as fallback)
 
 ## Context
 Workspace spacing and rounding were coupled to tab placement. Sidebar separators

@@ -48,8 +48,6 @@ print them, or pass them to agents.
   "connections": [
     { "type": "postgres", "kind": "prod-replica", "displayName": "Production (replica)",
       "maxRows": 500, "maxCost": 100000, "statementTimeoutMs": 10000, "poolSize": 4 },
-    { "type": "http", "kind": "github", "displayName": "GitHub",
-      "baseUrl": "https://api.github.com", "maxResponseBytes": 4194304, "timeoutMs": 60000 },
     { "type": "http", "kind": "billing", "displayName": "Billing API",
       "baseUrl": "https://api.billing.example/v1", "paths": ["/invoices", "/customers"] },
     { "kind": "company", "displayName": "Company tools",
@@ -68,7 +66,9 @@ print them, or pass them to agents.
 ```
 
 Connection kinds become connection providers: what a connection can reach
-and how. The file is host policy, not project logic; it holds no credential.
+and how. The file is host policy, not project logic; it holds no credential. GitHub
+is built in as the `github` kind ([Connect GitHub](connect-github.md)); do
+not declare it here.
 
 - `http`: `maxResponseBytes` (at most 16 MiB, default 1 MiB) is the largest
   part of a body one call returns, and `timeoutMs` (at most 120000, default
@@ -205,5 +205,6 @@ query can reach it:
 
 GitHub Actions secrets cannot be read back through GitHub's API, so the Work
 server cannot import them. Keep CI secrets in GitHub and enter the credentials
-Work needs through connections or project secrets. For code review work, prefer
-a GitHub App installed on the relevant repositories over a personal token.
+Work needs through connections or project secrets. GitHub itself is the
+`github` service connection, a GitHub App installed on the relevant
+repositories, never a personal token ([Connect GitHub](connect-github.md)).
