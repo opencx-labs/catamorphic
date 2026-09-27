@@ -1007,12 +1007,17 @@ key sets `model: { api, baseUrl, headers({ material }) }`
 (`defineModelConnectionProvider` from `@catamorphic/server-sdk`, `api`
 `anthropic` or `openai`; `builtinModelConnectionProviders()` returns the
 `anthropic` and `openai` kinds). Its connections carry the `model`
-capability, and a binding may add `model: { allow?, maxOutputTokensPerTurn? }`.
-The plugin serves `/gateway/model/:alias/*` (public route; the grant is
-`x-api-key` or a bearer): Anthropic Messages and `count_tokens`, OpenAI
-Responses and Chat Completions, streamed, with guards seeing kind `model`
-and the endpoint as action. Usage lands in `model_usage` per session and
-turn. At each sandbox turn core writes the grant of every model alias into
+capability, and a binding may add `model: { allow? }`. The plugin serves
+`/gateway/model/:alias/*` (public route; the grant is `x-api-key` or a
+bearer), a thin pass-through: any method and path below the base URL, the
+body byte for byte, headers but a small denylist (the caller's key, host,
+cookies, hop-by-hop, proxy and forwarding headers), and the answer streamed
+back unchanged. Guards see kind `model` with action = method and path
+(`POST v1/messages`) and input = provider, model, stream; endpoint and
+spending rules belong in guards. Usage lands in `model_usage` per session and
+turn, read passively from Anthropic and OpenAI answers (zero when a format is
+not recognized, such as a Chat Completions stream without
+`stream_options.include_usage`). At each sandbox turn core writes the grant of every model alias into
 the sandbox (the same `sandbox`-channel grants as Git) and passes the turn
 `TurnOptions.sandbox` and, for an agent registered with `modelConnection:
 <alias>`, `TurnOptions.modelGateway`. `ClaudeCodeAgent` and `CodexAgent` with

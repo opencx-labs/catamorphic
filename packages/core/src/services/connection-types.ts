@@ -86,12 +86,10 @@ export const GIT_CAPABILITIES = ["git:read", "git:write"] as const;
 /**
  * Model policy of one alias, enforced by the gateway's model routes (ADR
  * 0180). `allow` lists model id patterns (`claude-*`); absent allows any
- * model the key reaches. `maxOutputTokensPerTurn` refuses further calls in
- * an agent turn once its calls produced that many output tokens.
+ * model the key reaches. Spending rules are guards (ADR 0183).
  */
 export interface ConnectionModelPolicy {
   allow?: readonly string[];
-  maxOutputTokensPerTurn?: number;
 }
 
 /** The capability of a connection whose provider is a model API (ADR 0180). */

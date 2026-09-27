@@ -1,4 +1,4 @@
-import type { DB, JsonObject } from "@catamorphic/db";
+import type { DB, Json, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { AgentTurnUsage } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
@@ -8,32 +8,39 @@ import {
   ConnectionActionRefusedError,
   type ConnectionBroker,
 } from "./connection-broker.js";
-import type { ConnectionCapabilityGrantsService } from "./connection-capability-grants.js";
-import type {
-  ConnectionProviderRegistry,
-  ModelApi,
-} from "./connection-providers.js";
-import type { ConnectionModelPolicy } from "./connection-types.js";
-import { ConnectionUnavailableError } from "./connections-service.js";
-import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
+import type { ModelApi } from "./connection-providers.js";
+import {
+  type ConnectionModelPolicy,
+  MODEL_CAPABILITY,
+} from "./connection-types.js";
+import {
+  ConnectionUnavailableError,
+  hashBearer,
+} from "./connections-service.js";
 
 const tracer = getTracer("@catamorphic/core");
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-/** Largest request body the gateway reads (it must read the model id). */
+/** Largest request body the gateway reads (it may read the model id). */
 export const MODEL_REQUEST_MAX_BYTES = 32 * 1024 * 1024;
 /** Largest non-streamed answer the gateway reads for its usage. */
 const USAGE_SCAN_MAX_BYTES = 8 * 1024 * 1024;
+/** How long a resolved alias (binding, endpoint, key headers) is reused. */
+const ACCESS_TTL_MS = 30_000;
+/** Most resolved aliases kept at once; the oldest goes first. */
+const ACCESS_CACHE_SIZE = 1024;
+/** A credential this close to expiry is resolved again, so it refreshes. */
+const ACCESS_EXPIRY_MARGIN_MS = 60_000;
 
 /** One HTTP request a sandbox harness sent to `/gateway/model/<alias>/…`. */
 export interface ModelGatewayRequest {
   alias: string;
-  /** Path below the connection's base URL, e.g. `v1/messages`. */
+  /** Path below the connection's base URL as sent, e.g. `v1/messages`. */
   path: string;
   /** The raw query string, without `?`. */
   query?: string;
-  method: "GET" | "POST";
+  method: string;
   headers: Readonly<Record<string, string | undefined>>;
   body?: Uint8Array;
 }
@@ -45,60 +52,34 @@ export interface ModelGatewayResponse {
 }
 
 /**
- * The endpoints each API family serves through the gateway, and the action
- * name guards and roles see for them.
+ * A request path below a model API's base URL, unchanged, or null when it
+ * could leave the base: dot segments (plain or percent-encoded), encoded
+ * slashes or backslashes, empty segments, or characters a path never holds.
  */
-const ENDPOINTS: Record<
-  ModelApi,
-  ReadonlyArray<{ method: "GET" | "POST"; path: string; action: string }>
-> = {
-  anthropic: [
-    { method: "POST", path: "v1/messages", action: "messages" },
-    {
-      method: "POST",
-      path: "v1/messages/count_tokens",
-      action: "count_tokens",
-    },
-    { method: "GET", path: "v1/models", action: "models" },
-  ],
-  openai: [
-    { method: "POST", path: "responses", action: "responses" },
-    { method: "POST", path: "chat/completions", action: "chat.completions" },
-    { method: "GET", path: "models", action: "models" },
-  ],
-};
-
-/** Actions whose answers spend tokens, counted in `model_usage`. */
-const GENERATING_ACTIONS = new Set([
-  "messages",
-  "responses",
-  "chat.completions",
-]);
-
-/** The body field bounding a generating call's output tokens. */
-function outputLimitField(
-  action: string,
-  body: Record<string, unknown>,
-): string | undefined {
-  if (action === "messages") return "max_tokens";
-  if (action === "responses") return "max_output_tokens";
-  if (action === "chat.completions")
-    return "max_completion_tokens" in body || !("max_tokens" in body)
-      ? "max_completion_tokens"
-      : "max_tokens";
-  return undefined;
-}
-
-/** The gateway action a request names, or undefined for anything else. */
-export function modelEndpointAction(input: {
-  api: ModelApi;
-  method: "GET" | "POST";
-  path: string;
-}): string | undefined {
-  const path = input.path.replace(/^\/+|\/+$/g, "");
-  return ENDPOINTS[input.api].find(
-    (endpoint) => endpoint.method === input.method && endpoint.path === path,
-  )?.action;
+export function modelRequestPath(value: string): string | null {
+  const path = value.replace(/^\/+/, "");
+  if (!path) return null;
+  const segments = path.split("/");
+  for (const [index, segment] of segments.entries()) {
+    // A trailing slash is the provider's business; an empty segment elsewhere is not.
+    if (!segment && index < segments.length - 1) return null;
+    if (!/^[A-Za-z0-9._~!$&'()*+,;=:@%-]*$/.test(segment)) return null;
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      return null;
+    }
+    if (
+      decoded === "." ||
+      decoded === ".." ||
+      /[/\\]/.test(decoded) ||
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: refusing them
+      /[\u0000-\u001f\u007f]/.test(decoded)
+    )
+      return null;
+  }
+  return path;
 }
 
 /** Whether `model` matches one of the binding's patterns (`claude-*`). */
@@ -115,6 +96,97 @@ export function modelAllowed(
         .join(".*")}$`,
     ).test(model),
   );
+}
+
+// --- headers ---
+
+/** Hop-by-hop headers (RFC 9110 7.6.1): they describe one connection. */
+const HOP_BY_HOP = new Set([
+  "connection",
+  "keep-alive",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
+/**
+ * Request headers that stay here: the caller's grant (the stored key
+ * replaces it), its host and cookies, and what the transport recomputes
+ * (length, and the encodings `fetch` itself negotiates and decodes).
+ */
+const DENIED_REQUEST_HEADERS = new Set([
+  "x-api-key",
+  "authorization",
+  "host",
+  "cookie",
+  "content-length",
+  "accept-encoding",
+  "expect",
+  "forwarded",
+]);
+
+/**
+ * Response headers that stay upstream: cookies, and what no longer holds
+ * once `fetch` decoded the body (its encoding and length) or names the
+ * provider's own origin (`alt-svc`).
+ */
+const DENIED_RESPONSE_HEADERS = new Set([
+  "set-cookie",
+  "content-length",
+  "content-encoding",
+  "alt-svc",
+  "forwarded",
+]);
+
+/** Headers a `Connection` header names are hop-by-hop too. */
+function connectionTokens(value: string | null | undefined): Set<string> {
+  return new Set(
+    (value ?? "")
+      .split(",")
+      .map((token) => token.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+function hopByHop(name: string, named: ReadonlySet<string>): boolean {
+  return (
+    HOP_BY_HOP.has(name) ||
+    named.has(name) ||
+    name.startsWith("proxy-") ||
+    name.startsWith("x-forwarded-")
+  );
+}
+
+/** Every request header but the denied ones, then the stored key's. */
+export function upstreamRequestHeaders(
+  incoming: Readonly<Record<string, string | undefined>>,
+  key: Readonly<Record<string, string>>,
+): Headers {
+  const named = connectionTokens(incoming.connection);
+  const headers = new Headers();
+  for (const [raw, value] of Object.entries(incoming)) {
+    const name = raw.toLowerCase();
+    if (value === undefined || DENIED_REQUEST_HEADERS.has(name)) continue;
+    if (hopByHop(name, named)) continue;
+    headers.set(name, value);
+  }
+  for (const [name, value] of Object.entries(key)) headers.set(name, value);
+  return headers;
+}
+
+/** Every response header but the denied ones. */
+export function downstreamResponseHeaders(
+  upstream: Headers,
+): Record<string, string> {
+  const named = connectionTokens(upstream.get("connection"));
+  const out: Record<string, string> = {};
+  upstream.forEach((value, raw) => {
+    const name = raw.toLowerCase();
+    if (DENIED_RESPONSE_HEADERS.has(name) || hopByHop(name, named)) return;
+    out[name] = value;
+  });
+  return out;
 }
 
 // --- usage ---
@@ -187,7 +259,7 @@ function openAiUsage(raw: Record<string, unknown>): ModelCallUsage {
   return usage;
 }
 
-/** Usage of a complete (non-streamed) JSON answer. */
+/** Usage of a complete (non-streamed) JSON answer; zero when it has none. */
 export function usageFromJson(api: ModelApi, body: unknown): ModelCallUsage {
   const answer = record(body);
   const model = typeof answer.model === "string" ? answer.model : undefined;
@@ -199,12 +271,21 @@ export function usageFromJson(api: ModelApi, body: unknown): ModelCallUsage {
   return { ...openAiUsage(record(answer.usage)), ...(model ? { model } : {}) };
 }
 
+/** Reads an answer's usage from its bytes as they pass, never changing them. */
+interface UsageTap {
+  push(chunk: Uint8Array): void;
+  /** The usage read so far; zero when the answer's format was not recognized. */
+  finish(): ModelCallUsage;
+}
+
 /**
  * Follows a streamed answer's server-sent events for its usage: Anthropic's
  * `message_start` and `message_delta`, OpenAI Responses' `response.completed`
- * and Chat Completions' final `usage` chunk. Reads only what it needs.
+ * and Chat Completions' final `usage` chunk (sent only when the caller asked
+ * for it with `stream_options.include_usage`). Parses only events that can
+ * carry usage.
  */
-export class SseUsageReader {
+export class SseUsageReader implements UsageTap {
   readonly usage: ModelCallUsage = emptyUsage();
   private pending = "";
 
@@ -222,10 +303,22 @@ export class SseUsageReader {
     this.pending = "";
   }
 
+  finish(): ModelCallUsage {
+    this.end();
+    return this.usage;
+  }
+
   private line(line: string): void {
     if (!line.startsWith("data:")) return;
     const data = line.slice(5).trim();
     if (!data || data === "[DONE]") return;
+    // Most events are deltas: skip them without parsing.
+    if (
+      this.api === "anthropic"
+        ? !data.includes("message_start") && !data.includes("message_delta")
+        : !data.includes('"usage"')
+    )
+      return;
     let event: Record<string, unknown>;
     try {
       event = record(JSON.parse(data));
@@ -256,9 +349,37 @@ export class SseUsageReader {
         : typeof event.model === "string"
           ? event.model
           : undefined;
-    if (model) this.usage.model = model;
     if (usage && Object.keys(usage).length > 0)
       Object.assign(this.usage, openAiUsage(usage), model ? { model } : {});
+  }
+}
+
+/** Keeps a JSON answer (up to a bound) to read its usage once it ends. */
+class JsonUsageReader implements UsageTap {
+  private chunks: Uint8Array[] = [];
+  private size = 0;
+
+  constructor(private readonly api: ModelApi) {}
+
+  push(chunk: Uint8Array): void {
+    if (this.size > USAGE_SCAN_MAX_BYTES) return;
+    this.size += chunk.length;
+    if (this.size > USAGE_SCAN_MAX_BYTES) this.chunks = [];
+    else this.chunks.push(chunk);
+  }
+
+  finish(): ModelCallUsage {
+    if (this.size > USAGE_SCAN_MAX_BYTES) return emptyUsage();
+    try {
+      return usageFromJson(
+        this.api,
+        JSON.parse(decoder.decode(Buffer.concat(this.chunks))),
+      );
+    } catch {
+      return emptyUsage();
+    } finally {
+      this.chunks = [];
+    }
   }
 }
 
@@ -281,28 +402,6 @@ export class ModelGatewayError extends Error {
   }
 }
 
-/** Request headers forwarded upstream; identity and routing stay here. */
-const FORWARDED_REQUEST_HEADERS = [
-  "content-type",
-  "accept",
-  "anthropic-version",
-  "anthropic-beta",
-  "openai-beta",
-  "user-agent",
-  "x-stainless-helper-method",
-];
-
-function forwardedResponseHeader(name: string): boolean {
-  return (
-    name === "content-type" ||
-    name === "retry-after" ||
-    name === "request-id" ||
-    name === "x-request-id" ||
-    name.startsWith("anthropic-ratelimit-") ||
-    name.startsWith("x-ratelimit-")
-  );
-}
-
 /** The model call a usage row belongs to. */
 export interface ModelUsageRecord {
   tenantId: string;
@@ -312,33 +411,43 @@ export interface ModelUsageRecord {
   allocationId: string;
   connectionId: string;
   alias: string;
+  /** The path called below the base URL, e.g. `v1/messages`. */
   endpoint: string;
   model?: string;
 }
 
-/** What the model gateway reads and writes beside grants (ADR 0180). */
+/**
+ * A grant while it, its Allocation, its session (if any) and its
+ * connection are live, read in one indexed query per call.
+ */
+export interface LiveModelGrant {
+  id: string;
+  tenantId: string;
+  allocationId: string;
+  agentSessionId: string | null;
+  alias: string;
+  /** The grant's session: its owner and whether it is open. */
+  session?: { ownerId: string; active: boolean };
+  /** The connection behind the alias: a new revision means a new key. */
+  connection: {
+    id: string;
+    revision: number;
+    status: string;
+    expiresAt: Date | null;
+  };
+}
+
+/** What the model gateway reads and writes (ADR 0180). */
 export interface ModelGatewayStore {
-  /** A session's owner, whether it is open, and the turn running now. */
-  session(
-    sessionId: string,
-  ): Promise<
-    | { ownerId: string; active: boolean; runningTurnId: string | undefined }
-    | undefined
-  >;
-  /**
-   * Record a generating call before it is forwarded, counting
-   * `outputTokens` against its turn until `settle` replaces them with what
-   * the call used. With `budget` (and a turn), the reservation is atomic
-   * across the turn's concurrent calls and grants at most what the turn has
-   * left; nothing is recorded when nothing is left (`id` null).
-   */
-  reserve(args: {
+  /** The live grant a bearer names, or undefined. */
+  liveGrant(args: { token: string }): Promise<LiveModelGrant | undefined>;
+  /** The turn a session is running now, if any. */
+  runningTurn(args: { sessionId: string }): Promise<string | undefined>;
+  /** One call's usage, once its answer ended. */
+  recordUsage(args: {
     record: ModelUsageRecord;
-    outputTokens: number;
-    budget?: number;
-  }): Promise<{ id: string | null; outputTokens: number }>;
-  /** A reservation's final usage, or null to drop it (the call never ran). */
-  settle(args: { id: string; usage: ModelCallUsage | null }): Promise<void>;
+    usage: ModelCallUsage;
+  }): Promise<void>;
   /** Token totals of a session's calls, or of one of its turns. */
   usage(args: {
     sessionId: string;
@@ -349,79 +458,95 @@ export interface ModelGatewayStore {
 /** The gateway's store in the host's database (`model_usage`). */
 export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
   return {
-    session: async (sessionId) => {
+    liveGrant: async ({ token }) => {
+      // A grant is only as live as its Allocation: a released one ends
+      // every grant bound to it, even one issued in a race with the release.
       const row = await db
-        .selectFrom("agent_sessions")
-        .select(["external_user_id", "status"])
-        .where("id", "=", sessionId)
+        .selectFrom("connection_capability_grants as grant")
+        .innerJoin(
+          "execution_allocations as allocation",
+          "allocation.id",
+          "grant.allocation_id",
+        )
+        .innerJoin("connections as connection", (join) =>
+          join
+            .onRef("connection.id", "=", "grant.connection_id")
+            .onRef("connection.tenant_id", "=", "grant.tenant_id"),
+        )
+        .leftJoin(
+          "agent_sessions as session",
+          "session.id",
+          "grant.agent_session_id",
+        )
+        .where("grant.token_hash", "=", hashBearer(token))
+        .where("grant.revoked_at", "is", null)
+        .where("grant.expires_at", ">", new Date())
+        .where("allocation.status", "=", "active")
+        .select([
+          "grant.id as id",
+          "grant.tenant_id as tenantId",
+          "grant.allocation_id as allocationId",
+          "grant.agent_session_id as agentSessionId",
+          "grant.alias as alias",
+          "connection.id as connectionId",
+          "connection.revision as revision",
+          "connection.status as connectionStatus",
+          "connection.expires_at as connectionExpiresAt",
+          "session.external_user_id as sessionOwnerId",
+          "session.status as sessionStatus",
+        ])
         .executeTakeFirst();
-      if (!row) return undefined;
-      const turn = await db
-        .selectFrom("agent_turns")
-        .select("id")
-        .where("session_id", "=", sessionId)
-        .where("status", "=", "running")
-        .orderBy("started_at", "desc")
-        .executeTakeFirst();
+      if (!row?.alias) return undefined;
       return {
-        ownerId: row.external_user_id,
-        active: row.status === "active",
-        runningTurnId: turn?.id,
+        id: row.id,
+        tenantId: row.tenantId,
+        allocationId: row.allocationId,
+        agentSessionId: row.agentSessionId,
+        alias: row.alias,
+        ...(row.sessionOwnerId
+          ? {
+              session: {
+                ownerId: row.sessionOwnerId,
+                active: row.sessionStatus === "active",
+              },
+            }
+          : {}),
+        connection: {
+          id: row.connectionId,
+          revision: row.revision,
+          status: row.connectionStatus,
+          expiresAt: row.connectionExpiresAt,
+        },
       };
     },
-    reserve: ({ record, outputTokens, budget }) =>
-      db.transaction().execute(async (trx) => {
-        let granted = outputTokens;
-        if (budget !== undefined && record.turnId) {
-          // One reservation at a time per turn, across replicas.
-          await sql`SELECT pg_advisory_xact_lock(hashtextextended(${`model_usage:${record.turnId}`}, 0))`.execute(
-            trx,
-          );
-          const used = await trx
-            .selectFrom("model_usage")
-            .select(sql<string>`coalesce(sum(output_tokens), 0)`.as("output"))
-            .where("turn_id", "=", record.turnId)
-            .executeTakeFirst();
-          granted = Math.min(
-            outputTokens,
-            Math.max(0, budget - Number(used?.output ?? 0)),
-          );
-          if (granted <= 0) return { id: null, outputTokens: 0 };
-        }
-        const row = await trx
-          .insertInto("model_usage")
-          .values({
-            tenant_id: record.tenantId,
-            project_id: record.projectId,
-            agent_session_id: record.sessionId,
-            turn_id: record.turnId,
-            allocation_id: record.allocationId,
-            connection_id: record.connectionId,
-            alias: record.alias,
-            endpoint: record.endpoint,
-            model: record.model ?? null,
-            output_tokens: granted,
-          })
-          .returning("id")
-          .executeTakeFirstOrThrow();
-        return { id: String(row.id), outputTokens: granted };
-      }),
-    settle: async ({ id, usage }) => {
-      if (!usage) {
-        await db.deleteFrom("model_usage").where("id", "=", id).execute();
-        return;
-      }
+    runningTurn: async ({ sessionId }) =>
+      (
+        await db
+          .selectFrom("agent_turns")
+          .select("id")
+          .where("session_id", "=", sessionId)
+          .where("status", "=", "running")
+          .executeTakeFirst()
+      )?.id,
+    recordUsage: async ({ record, usage }) => {
       await db
-        .updateTable("model_usage")
-        .set({
-          ...(usage.model ? { model: usage.model } : {}),
+        .insertInto("model_usage")
+        .values({
+          tenant_id: record.tenantId,
+          project_id: record.projectId,
+          agent_session_id: record.sessionId,
+          turn_id: record.turnId,
+          allocation_id: record.allocationId,
+          connection_id: record.connectionId,
+          alias: record.alias,
+          endpoint: record.endpoint,
+          model: usage.model ?? record.model ?? null,
           input_tokens: usage.inputTokens,
           cached_input_tokens: usage.cachedInputTokens,
           cache_creation_tokens: usage.cacheCreationTokens,
           output_tokens: usage.outputTokens,
           reasoning_tokens: usage.reasoningTokens,
         })
-        .where("id", "=", id)
         .execute();
     },
     usage: async (args) => {
@@ -453,35 +578,67 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
   };
 }
 
-interface AuthorizedModelRequest {
+/** A grant resolved to its alias's upstream: reused for a few seconds. */
+interface ModelAccess {
   identity: Identity;
   projectId: string;
-  sessionId: string | null;
-  turnId: string | undefined;
   allocationId: string;
+  sessionId: string | null;
+  alias: string;
+  connectionId: string;
   api: ModelApi;
   providerKind: string;
   policy: ConnectionModelPolicy | undefined;
+  baseUrl: string;
+  /** The stored key's headers: they never leave the control plane. */
+  headers: Readonly<Record<string, string>>;
 }
+
+/**
+ * A request `admit` let in, handed to `handle` so it is not checked twice.
+ * Only this gateway's own admissions count.
+ */
+export interface ModelGatewayAdmission {
+  readonly access: ModelAccess;
+}
+
+/** What `admit` decided: a refusal to send, or an admission. */
+export type ModelGatewayAdmitResult =
+  | { refused: ModelGatewayResponse }
+  | { admitted: ModelGatewayAdmission };
 
 /**
  * Models through the gateway (ADR 0180). A harness in a sandbox sends its
  * provider's HTTP API to `/gateway/model/<alias>/…` with its session grant
- * as the API key; the gateway checks the grant, the binding's model
- * allowlist and turn budget, and the guards, then forwards with the stored
- * key, streaming the answer back and reading its usage on the way.
+ * as the API key. The gateway checks the grant, the binding's model
+ * allowlist and the guards, then forwards any method and path below the
+ * connection's base URL with the stored key: the body byte for byte, the
+ * answer streamed back unchanged, its usage read on the way.
+ *
+ * Built for time to first token: one indexed read checks the grant on each
+ * call; the resolved alias and its key are reused for 30 seconds per grant
+ * and connection revision; audit and usage writes happen off the response.
  */
 export class ModelGatewayService {
   private readonly fetch: typeof fetch;
+  private readonly access = new Map<
+    string,
+    { revision: number; until: number; access: ModelAccess }
+  >();
+  private readonly admissions = new WeakSet<ModelGatewayAdmission>();
+  /** Usage writes still in flight, per session. */
+  private readonly pending = new Map<string, Set<Promise<void>>>();
 
   constructor(
     private readonly deps: {
       store: ModelGatewayStore;
-      grants: Pick<ConnectionCapabilityGrantsService, "validate">;
-      allocations: Pick<ExecutionAllocationsService, "get">;
-      broker: Pick<ConnectionBroker, "modelAccess">;
-      providers: Pick<ConnectionProviderRegistry, "get">;
+      broker: Pick<
+        ConnectionBroker,
+        "modelEndpoint" | "reviewModelCall" | "reviews"
+      >;
       fetch?: typeof fetch;
+      /** Clock for the access cache (tests). */
+      now?: () => number;
     },
   ) {
     this.fetch = deps.fetch ?? ((input, init) => fetch(input, init));
@@ -489,21 +646,26 @@ export class ModelGatewayService {
 
   /**
    * Check a request's grant before its body is read, so an unauthenticated
-   * caller cannot make the host buffer a large body. Null admits it;
-   * otherwise the refusal to send. `handle` checks the grant again.
+   * caller cannot make the host buffer a large body. Pass the admission to
+   * `handle`.
    */
   async admit(
     request: Pick<ModelGatewayRequest, "alias" | "path" | "headers">,
-  ): Promise<ModelGatewayResponse | null> {
+  ): Promise<ModelGatewayAdmitResult> {
     try {
-      await this.authorize(request);
-      return null;
+      const admission: ModelGatewayAdmission = {
+        access: await this.authorize(request),
+      };
+      this.admissions.add(admission);
+      return { admitted: admission };
     } catch (error) {
-      return refusalResponse(requestApi(request), error);
+      return { refused: refusalResponse(requestApi(request), error) };
     }
   }
 
-  async handle(request: ModelGatewayRequest): Promise<ModelGatewayResponse> {
+  async handle(
+    request: ModelGatewayRequest & { admitted?: ModelGatewayAdmission },
+  ): Promise<ModelGatewayResponse> {
     const api = requestApi(request);
     try {
       return await withSpan(
@@ -522,214 +684,197 @@ export class ModelGatewayService {
     }
   }
 
-  /** Token totals of a session's model calls, or of one of its turns. */
-  sessionUsage(args: {
+  /**
+   * Token totals of a session's model calls, or of one of its turns, once
+   * this replica's usage writes for the session have landed.
+   */
+  async sessionUsage(args: {
     sessionId: string;
     turnId?: string;
   }): Promise<AgentTurnUsage | undefined> {
+    const pending = this.pending.get(args.sessionId);
+    if (pending) await Promise.allSettled([...pending]);
     return this.deps.store.usage(args);
   }
 
   private async handleUninstrumented(
-    request: ModelGatewayRequest,
+    request: ModelGatewayRequest & { admitted?: ModelGatewayAdmission },
   ): Promise<ModelGatewayResponse> {
-    const authorized = await this.authorize(request);
-    const action = modelEndpointAction({
-      api: authorized.api,
-      method: request.method,
-      path: request.path,
-    });
-    if (!action)
+    const access =
+      request.admitted && this.admissions.has(request.admitted)
+        ? request.admitted.access
+        : await this.authorize(request);
+    const path = modelRequestPath(request.path);
+    const url = path ? upstreamUrl(access.baseUrl, path, request.query) : null;
+    if (!path || !url)
       throw new ModelGatewayError(
         404,
         "not_found_error",
-        `The gateway does not serve ${request.method} /${request.path.replace(/^\/+/, "")} for '${request.alias}'`,
+        `The gateway serves only paths below '${request.alias}''s base URL`,
       );
-    let body: Record<string, unknown> | undefined;
-    if (request.method === "POST") {
-      try {
-        body = record(
-          JSON.parse(decoder.decode(request.body ?? new Uint8Array())),
-        );
-      } catch {
+    const method = request.method.toUpperCase();
+    // A POST may generate: it names its model when the binding has an
+    // allowlist. The body is only read, never rewritten.
+    const post = method === "POST";
+    const allow = access.policy?.allow;
+    const fields =
+      post && (allow || this.deps.broker.reviews(MODEL_CAPABILITY))
+        ? requestFields(request.body)
+        : {};
+    if (allow && post) {
+      if (!fields.model)
         throw new ModelGatewayError(
           400,
           "invalid_request_error",
-          "The request body must be JSON",
+          `'${request.alias}' serves only ${allow.join(", ")}; name the model`,
         );
-      }
+      if (!modelAllowed(fields.model, allow))
+        throw new ModelGatewayError(
+          403,
+          "permission_error",
+          `'${request.alias}' serves only ${allow.join(", ")}; '${fields.model}' is not allowed`,
+        );
     }
-    const model = typeof body?.model === "string" ? body.model : undefined;
-    const allow = authorized.policy?.allow;
-    if (allow && body && !model)
-      throw new ModelGatewayError(
-        400,
-        "invalid_request_error",
-        `'${request.alias}' serves only ${allow.join(", ")}; name the model`,
-      );
-    if (model && !modelAllowed(model, allow))
-      throw new ModelGatewayError(
-        403,
-        "permission_error",
-        `'${request.alias}' serves only ${allow?.join(", ")}; '${model}' is not allowed`,
-      );
-    const stream = body?.stream === true;
-    const turnId = authorized.turnId;
-    const generates = GENERATING_ACTIONS.has(action);
-    const budget = authorized.policy?.maxOutputTokensPerTurn;
-    const limitField = body ? outputLimitField(action, body) : undefined;
-    const requested = limitField ? count(body?.[limitField]) : 0;
+    const action = `${method} ${path}`;
     const input: JsonObject = {
-      provider: authorized.providerKind,
-      endpoint: action,
-      ...(model ? { model } : {}),
-      stream,
-      ...(requested > 0 ? { maxOutputTokens: requested } : {}),
+      provider: access.providerKind,
+      ...(fields.model ? { model: fields.model } : {}),
+      ...(fields.stream !== undefined ? { stream: fields.stream } : {}),
     };
-    const access = await this.deps.broker.modelAccess({
-      identity: authorized.identity,
-      allocationId: authorized.allocationId,
+    const auditCall = await this.deps.broker.reviewModelCall({
+      identity: access.identity,
+      projectId: access.projectId,
+      allocationId: access.allocationId,
+      connectionId: access.connectionId,
       alias: request.alias,
       action,
       input,
-      ...(authorized.sessionId ? { agentSessionId: authorized.sessionId } : {}),
+      ...(access.sessionId ? { agentSessionId: access.sessionId } : {}),
     });
-    // A session's model calls belong to its turns: between turns nothing
-    // (a background process, a leftover harness) spends on its behalf.
-    if (generates && authorized.sessionId && !turnId)
-      throw new ModelGatewayError(
-        403,
-        "permission_error",
-        `This session has no running turn; model calls through '${request.alias}' belong to a turn`,
+    const audit = (outcome: "allowed" | "error", metadata: Json) => {
+      auditCall(outcome, metadata).catch((error: unknown) =>
+        console.warn("[catamorphic] Could not audit a model call", error),
       );
-    // Counting tokens and listing models spend none: audited, not counted.
-    // A generating call reserves its output limit before it is forwarded,
-    // so concurrent calls cannot all pass a budget the first one spends.
-    const budgeted = Boolean(budget && turnId);
-    const reservation = generates
-      ? await this.deps.store.reserve({
-          record: {
-            tenantId: authorized.identity.tenantId,
-            projectId: authorized.projectId,
-            sessionId: authorized.sessionId,
-            turnId: turnId ?? null,
-            allocationId: authorized.allocationId,
-            connectionId: access.binding.connectionId,
-            alias: request.alias,
-            endpoint: action,
-            ...(model ? { model } : {}),
-          },
-          outputTokens: budgeted ? requested || (budget ?? 0) : requested,
-          ...(budgeted && budget ? { budget } : {}),
-        })
-      : undefined;
-    if (reservation && !reservation.id) {
-      throw new ModelGatewayError(
-        403,
-        "permission_error",
-        `This turn has used its model budget of ${budget} output tokens through '${request.alias}'; finish the turn with what you have`,
-      );
-    }
-    // What the turn has left bounds this call's own output limit.
-    if (
-      body &&
-      budgeted &&
-      limitField &&
-      reservation &&
-      reservation.outputTokens !== requested
-    )
-      body[limitField] = reservation.outputTokens;
-    const release = async () => {
-      if (reservation?.id)
-        await this.deps.store
-          .settle({ id: reservation.id, usage: null })
-          .catch((error: unknown) =>
-            console.warn("[catamorphic] Could not release model usage", error),
-          );
     };
-    // Chat Completions streams report usage only when asked to.
-    if (
-      body &&
-      stream &&
-      action === "chat.completions" &&
-      record(body.stream_options).include_usage === undefined
-    )
-      body.stream_options = {
-        ...record(body.stream_options),
-        include_usage: true,
-      };
-    const headers = new Headers();
-    for (const name of FORWARDED_REQUEST_HEADERS) {
-      const value = request.headers[name];
-      if (value) headers.set(name, value);
-    }
-    for (const [name, value] of Object.entries(access.headers))
-      headers.set(name, value);
-    const base = access.endpoint.baseUrl.replace(/\/+$/, "");
-    const url = `${base}/${request.path.replace(/^\/+/, "")}${request.query ? `?${request.query}` : ""}`;
-    const upstream = await this.fetch(url, {
-      method: request.method,
-      headers,
-      redirect: "manual",
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    }).catch(async (error: unknown) => {
-      await release();
-      await access.audit("error", { error: "upstream unreachable" });
+    // The turn a call belongs to is the one running when it starts; read
+    // beside the call, never before it.
+    const turn =
+      post && access.sessionId
+        ? this.deps.store
+            .runningTurn({ sessionId: access.sessionId })
+            .catch(() => undefined)
+        : undefined;
+    const body =
+      request.body && method !== "GET" && method !== "HEAD"
+        ? request.body
+        : undefined;
+    let upstream: Response;
+    try {
+      upstream = await this.fetch(url, {
+        method,
+        headers: upstreamRequestHeaders(request.headers, access.headers),
+        redirect: "manual",
+        ...(body ? { body } : {}),
+      });
+    } catch (error) {
+      audit("error", { error: "upstream unreachable" });
       throw new ModelGatewayError(
         502,
         "api_error",
         `The model provider could not be reached: ${error instanceof Error ? error.message : String(error)}`,
       );
-    });
-    const out: Record<string, string> = { "cache-control": "no-cache" };
-    upstream.headers.forEach((value, name) => {
-      if (forwardedResponseHeader(name.toLowerCase())) out[name] = value;
-    });
-    if (!upstream.ok || !upstream.body) {
-      await release();
-      await access.audit("error", { status: upstream.status });
-      // The provider's own error travels: clients know how to read it.
+    }
+    const headers = downstreamResponseHeaders(upstream.headers);
+    if (!upstream.body) {
+      audit(upstream.ok ? "allowed" : "error", { status: upstream.status });
+      return { status: upstream.status, headers, body: new Uint8Array() };
+    }
+    if (!upstream.ok || !post) {
+      // The provider's own errors travel unchanged: clients know them.
+      const outcome = upstream.ok ? "allowed" : "error";
       return {
         status: upstream.status,
-        headers: out,
-        body: new Uint8Array(await upstream.arrayBuffer()),
+        headers,
+        body: relay({
+          source: upstream.body,
+          onEnd: (finished) =>
+            audit(outcome, {
+              status: upstream.status,
+              ...(finished ? {} : { interrupted: true }),
+            }),
+        }),
       };
     }
-    const reserved = reservation?.outputTokens ?? 0;
-    const settle = async (reported: ModelCallUsage, finished: boolean) => {
-      // An answer cut short may not have reported its output yet (Anthropic
-      // streams do only at the end): count what the call could have spent.
-      const usage =
-        finished || reported.outputTokens >= reserved
-          ? reported
-          : { ...reported, outputTokens: reserved };
-      if (reservation?.id)
-        await this.deps.store.settle({ id: reservation.id, usage });
-      await access.audit("allowed", {
-        status: upstream.status,
-        ...(generates ? { usage: { ...usage } } : {}),
-        ...(finished ? {} : { interrupted: true }),
-      });
-    };
-    const sse = (upstream.headers.get("content-type") ?? "").includes(
-      "text/event-stream",
-    );
+    const contentType = upstream.headers.get("content-type") ?? "";
+    const tap: UsageTap | undefined = contentType.includes("text/event-stream")
+      ? new SseUsageReader(access.api)
+      : contentType.includes("json")
+        ? new JsonUsageReader(access.api)
+        : undefined;
     return {
       status: upstream.status,
-      headers: out,
-      body: tapUsage({
-        api: authorized.api,
-        sse,
+      headers,
+      body: relay({
         source: upstream.body,
-        settle,
+        ...(tap ? { tap } : {}),
+        // After the answer ended, off its critical path.
+        onEnd: (finished) =>
+          setImmediate(() => {
+            const usage = tap?.finish() ?? emptyUsage();
+            this.recordUsage({ access, path, fields, usage, turn });
+            audit("allowed", {
+              status: upstream.status,
+              usage: { ...usage },
+              ...(finished ? {} : { interrupted: true }),
+            });
+          }),
       }),
     };
   }
 
-  /** The grant, its session and binding. */
+  /** Write a call's usage without anyone waiting on it. */
+  private recordUsage(args: {
+    access: ModelAccess;
+    path: string;
+    fields: RequestFields;
+    usage: ModelCallUsage;
+    turn: Promise<string | undefined> | undefined;
+  }): void {
+    const { access } = args;
+    const write = (async () => {
+      const turnId = (await args.turn) ?? null;
+      await this.deps.store.recordUsage({
+        record: {
+          tenantId: access.identity.tenantId,
+          projectId: access.projectId,
+          sessionId: access.sessionId,
+          turnId,
+          allocationId: access.allocationId,
+          connectionId: access.connectionId,
+          alias: access.alias,
+          endpoint: args.path,
+          ...(args.fields.model ? { model: args.fields.model } : {}),
+        },
+        usage: args.usage,
+      });
+    })().catch((error: unknown) =>
+      console.warn("[catamorphic] Could not record model usage", error),
+    );
+    const sessionId = access.sessionId;
+    if (!sessionId) return;
+    const pending = this.pending.get(sessionId) ?? new Set();
+    pending.add(write);
+    this.pending.set(sessionId, pending);
+    void write.finally(() => {
+      pending.delete(write);
+      if (pending.size === 0) this.pending.delete(sessionId);
+    });
+  }
+
+  /** The grant, checked on every call, and its alias, resolved at most every 30 seconds. */
   private async authorize(
     request: Pick<ModelGatewayRequest, "alias" | "headers">,
-  ): Promise<AuthorizedModelRequest> {
+  ): Promise<ModelAccess> {
     const token = grantFrom(request.headers);
     if (!token)
       throw new ModelGatewayError(
@@ -737,74 +882,127 @@ export class ModelGatewayService {
         "authentication_error",
         "Send this session's grant as the API key",
       );
-    const grant = await this.deps.grants.validate({ token });
+    const grant = await this.deps.store.liveGrant({ token });
     if (!grant || grant.alias !== request.alias)
       throw new ModelGatewayError(
         401,
         "authentication_error",
         "This session's grant has expired or was revoked",
       );
-    const session = grant.agentSessionId
-      ? await this.deps.store.session(grant.agentSessionId)
-      : undefined;
-    if (grant.agentSessionId && !session?.active)
+    if (grant.agentSessionId && !grant.session?.active)
       throw new ModelGatewayError(
         401,
         "authentication_error",
         "This session is closed",
       );
+    const now = this.deps.now?.() ?? Date.now();
+    const cached = this.access.get(grant.id);
+    if (
+      cached &&
+      cached.revision === grant.connection.revision &&
+      cached.until > now &&
+      grant.connection.status === "ready"
+    )
+      return cached.access;
+    this.access.delete(grant.id);
     const identity: Identity = {
       tenantId: grant.tenantId,
       externalUserId:
-        session?.ownerId ?? `connection-grant:${grant.allocationId}`,
+        grant.session?.ownerId ?? `connection-grant:${grant.allocationId}`,
     };
-    const allocation = await this.deps.allocations.get({
+    const resolved = await this.deps.broker.modelEndpoint({
       identity,
       allocationId: grant.allocationId,
+      alias: grant.alias,
+      ...(grant.agentSessionId ? { agentSessionId: grant.agentSessionId } : {}),
     });
-    const binding = allocation?.policy.connections?.find(
-      (candidate) => candidate.alias === grant.alias,
-    );
-    if (allocation?.status !== "active" || !binding)
-      throw new ModelGatewayError(
-        401,
-        "authentication_error",
-        "This session's grant is no longer valid",
-      );
-    const endpoint = this.deps.providers.get(binding.providerKind)?.model;
-    if (!endpoint)
-      throw new ModelGatewayError(
-        404,
-        "not_found_error",
-        `Connection '${request.alias}' is not a model API`,
-      );
-    return {
+    const access: ModelAccess = {
       identity,
-      projectId: allocation.projectId,
+      projectId: resolved.projectId,
+      allocationId: grant.allocationId,
       sessionId: grant.agentSessionId,
-      turnId: session?.runningTurnId,
-      allocationId: allocation.id,
-      api: endpoint.api,
-      providerKind: binding.providerKind,
-      policy: binding.model,
+      alias: grant.alias,
+      connectionId: resolved.binding.connectionId,
+      api: resolved.endpoint.api,
+      providerKind: resolved.binding.providerKind,
+      policy: resolved.binding.model,
+      baseUrl: resolved.endpoint.baseUrl,
+      headers: resolved.headers,
     };
+    const until = Math.min(
+      now + ACCESS_TTL_MS,
+      grant.connection.expiresAt
+        ? grant.connection.expiresAt.getTime() - ACCESS_EXPIRY_MARGIN_MS
+        : Number.POSITIVE_INFINITY,
+    );
+    if (until > now) {
+      if (this.access.size >= ACCESS_CACHE_SIZE) {
+        const oldest = this.access.keys().next().value;
+        if (oldest !== undefined) this.access.delete(oldest);
+      }
+      this.access.set(grant.id, {
+        revision: grant.connection.revision,
+        until,
+        access,
+      });
+    }
+    return access;
   }
 }
 
+/** `base` joined with a checked path; null if the result left the base. */
+function upstreamUrl(
+  base: string,
+  path: string,
+  query: string | undefined,
+): string | null {
+  const root = base.replace(/\/+$/, "");
+  const url = `${root}/${path}${query ? `?${query}` : ""}`;
+  try {
+    const parsed = new URL(url);
+    const prefix = new URL(`${root}/`);
+    return parsed.origin === prefix.origin &&
+      parsed.pathname.startsWith(prefix.pathname)
+      ? url
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** What the gateway reads from a request body: never more than this. */
+interface RequestFields {
+  model?: string;
+  stream?: boolean;
+}
+
+function requestFields(body: Uint8Array | undefined): RequestFields {
+  if (!body || body.length === 0) return {};
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = record(JSON.parse(decoder.decode(body)));
+  } catch {
+    return {};
+  }
+  return {
+    ...(typeof parsed.model === "string" && parsed.model
+      ? { model: parsed.model }
+      : {}),
+    ...(typeof parsed.stream === "boolean" ? { stream: parsed.stream } : {}),
+  };
+}
+
 /**
- * Pass an answer through unchanged while reading its usage; settles once,
- * when the answer ends (`finished`) or the caller stops reading.
+ * Pass an answer through unchanged, feeding `tap`; `onEnd` hears once,
+ * when it ended (`finished`) or the caller stopped reading, and is never
+ * awaited.
  */
-async function* tapUsage(args: {
-  api: ModelApi;
-  sse: boolean;
+async function* relay(args: {
   source: ReadableStream<Uint8Array>;
-  settle: (usage: ModelCallUsage, finished: boolean) => Promise<void>;
+  tap?: UsageTap;
+  onEnd: (finished: boolean) => void;
 }): AsyncIterable<Uint8Array> {
   const reader = args.source.getReader();
-  const events = args.sse ? new SseUsageReader(args.api) : undefined;
-  const whole: Uint8Array[] = [];
-  let size = 0;
   let finished = false;
   try {
     for (;;) {
@@ -813,35 +1011,17 @@ async function* tapUsage(args: {
         finished = true;
         break;
       }
-      if (events) events.push(next.value);
-      else if (size < USAGE_SCAN_MAX_BYTES) {
-        whole.push(next.value);
-        size += next.value.length;
-      }
+      args.tap?.push(next.value);
       yield next.value;
     }
   } finally {
-    await reader.cancel().catch(() => {});
+    if (!finished) reader.cancel().catch(() => {});
     reader.releaseLock();
-    let usage: ModelCallUsage;
-    if (events) {
-      events.end();
-      usage = events.usage;
-    } else {
-      try {
-        usage = usageFromJson(
-          args.api,
-          JSON.parse(decoder.decode(Buffer.concat(whole))),
-        );
-      } catch {
-        usage = emptyUsage();
-      }
+    try {
+      args.onEnd(finished);
+    } catch (error) {
+      console.warn("[catamorphic] Could not settle a model call", error);
     }
-    await args
-      .settle(usage, finished)
-      .catch((error: unknown) =>
-        console.warn("[catamorphic] Could not record model usage", error),
-      );
   }
 }
 

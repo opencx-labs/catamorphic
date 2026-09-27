@@ -1,6 +1,6 @@
 -- Models through the gateway (ADR 0180): the tokens each model call a
 -- sandbox harness made through the gateway used, per session and agent
--- turn, for accounting and turn budgets. Never the prompt or the answer.
+-- turn, for accounting. Never the prompt or the answer.
 CREATE TABLE model_usage (
     id bigserial PRIMARY KEY,
     tenant_id uuid NOT NULL,

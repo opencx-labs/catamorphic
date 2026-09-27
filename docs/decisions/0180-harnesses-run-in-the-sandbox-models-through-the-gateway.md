@@ -23,31 +23,50 @@ offers `anthropic` and `openai` built in, and `WORK_GATEWAY_CONFIG` entries of
 type `model` add OpenAI-compatible servers (OpenRouter, self-hosted) or
 replace a built-in base URL. An administrator stores the key once as a
 service connection with the `model` capability; Environments bind it like any
-alias, optionally with `model: { allow: ["claude-*"], maxOutputTokensPerTurn }`.
+alias, optionally with `model: { allow: ["claude-*"] }`.
 The server's `ANTHROPIC_API_KEY` and friends remain for the control plane's
 own loop and guards only.
 
-**The gateway forwards model APIs.** `/gateway/model/<alias>/…` passes the
-provider's HTTP API through, streaming both ways. The session's grant is the
-API key (`x-api-key` or `Authorization: Bearer`); the gateway checks it, the
-binding's allowlist and turn budget, and the guards (connection kind `model`,
-action = endpoint: `messages`, `count_tokens`, `responses`,
-`chat.completions`, `models`; input = provider, model, stream, output limit,
-never the prompt), then adds the stored key. The grant is checked before the
-request body is read. A binding with an allowlist requires the request to
-name its model. A session's generating calls (`messages`, `responses`,
-`chat.completions`) belong to its turns: between turns they are refused.
-Each generating call reserves its output limit in `model_usage` before it is
-forwarded; under a budget the reservation is atomic per turn and grants at
-most what the turn has left, lowering the request's own limit (or setting
-one) to match, so concurrent calls cannot overspend. It reads usage from the
-answer or its server-sent events into that row (migration 035, ADR 0057's
-token fields, per session and agent turn); an answer cut short counts its
-reserved limit, since Anthropic streams report output only at the end. Each
-call is audited as `connection.model`. Refusals, including an unavailable
-connection, use the calling API's own error shape and never a retryable
-status; only an unreachable provider answers 502. When a harness reports no usage for a turn, the settled
+**The gateway forwards model APIs.** `/gateway/model/<alias>/…` is a thin
+pass-through, so a provider's new endpoints, headers and fields, or a
+harness's, need no change here. It forwards any method and any path below
+the connection's base URL (a path that could leave the base, through dot
+segments or encoded slashes, is refused); the request body byte for byte;
+every request header but the caller's key (`x-api-key`, `Authorization`),
+`Host`, cookies, hop-by-hop, proxy and `X-Forwarded-*` headers; and the
+answer streamed back unchanged, with every response header but cookies,
+hop-by-hop headers and the encoding and length `fetch` already undid. The
+session's grant is the API key; the gateway checks it before the body is
+read, then the binding's allowlist (a POST must name an allowed model: the
+only thing the gateway reads from a body, and only when an allowlist or a
+guard needs it) and the guards (connection kind `model`, action = method and
+path, `POST v1/messages`; input = provider, model, stream, never the
+prompt), and adds the stored key. Endpoint and spending rules are guards,
+host code (ADR 0183): the gateway has no endpoint list and no token budget,
+and a session's calls between turns pass like any other. Usage is a passive
+side channel: the gateway reads each POST's answer or its server-sent events
+as they pass (Anthropic Messages, OpenAI Responses, and Chat Completions when
+the caller asked for `stream_options.include_usage`) into one `model_usage`
+row per call (migration 035, ADR 0057's token fields, per session and the
+turn running when the call started); an answer in a format it does not
+recognize, or cut short before reporting, counts what it reported, often
+zero. Each call is audited as `connection.model` without its prompt.
+Refusals, including an unavailable connection, use the calling API's own
+error shape and never a retryable status (401, 403, 404); only an
+unreachable provider answers 502, and the provider's own errors pass
+through unchanged. When a harness reports no usage for a turn, the settled
 reply's `metadata.usage` comes from these rows.
+
+**Time to first token comes first.** Each call costs one indexed read
+before it is forwarded: the grant with its Allocation, session and
+connection revision, so a revoked grant, a released Allocation or a closed
+session stops working on the next call on every replica. The alias's
+resolution (binding, workflow enablement, provider, refreshed and decrypted
+key) is reused for 30 seconds per grant and connection revision (a rotated
+or refreshed key is a new revision), never past the credential's expiry.
+Guards run on every call and cost nothing when a host has none. Audit and
+usage writes happen after the answer ends and never hold it open; a session's
+usage read waits for this replica's writes still in flight.
 
 **Grants are one mechanism.** At every sandbox turn the control plane issues
 the session's `sandbox`-channel grants for its aliases served as protocols
@@ -82,6 +101,11 @@ refuses `connection` agents with a clear reason. The harness binaries come
 from the Environment's image (ADR 0176).
 
 ## Consequences
+
+Considered and dropped: a per-turn output budget reserved before forwarding
+(a transaction and an advisory lock on every call's critical path, request
+rewriting to clamp output limits, and a refusal between turns). Hosts that
+need spending limits write a guard over `model_usage`.
 
 The acceptance holds end to end: a `claude-code` agent runs on a
 local-process worker, edits and runs commands in its sandbox, calls its model

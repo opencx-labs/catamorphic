@@ -868,10 +868,7 @@ export class CatamorphicCore {
       });
       this.modelGateway = new ModelGatewayService({
         store: dbModelGatewayStore(this.db),
-        grants: this.connectionGrants,
-        allocations: this.executionAllocations,
         broker: this.connectionBroker,
-        providers,
       });
     }
     this.codeHosts = new CodeHostsService({

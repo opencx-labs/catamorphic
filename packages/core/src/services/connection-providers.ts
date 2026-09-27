@@ -95,9 +95,10 @@ export type ModelApi = "anthropic" | "openai";
  */
 export interface ConnectionModelEndpoint {
   /**
-   * `anthropic`: the Messages API below `baseUrl` (`v1/messages`,
-   * `v1/messages/count_tokens`). `openai`: Responses and Chat Completions
-   * below `baseUrl` (`responses`, `chat/completions`).
+   * The API family behind `baseUrl`: the shape of the gateway's refusals
+   * and how it reads usage from answers. `anthropic`: Messages. `openai`:
+   * Responses and Chat Completions. The gateway forwards any path below
+   * `baseUrl` either way.
    */
   readonly api: ModelApi;
   /**
