@@ -46,6 +46,44 @@ export interface EnvironmentRuntimeBinding {
   workerNodeId?: string;
   workerLeaseToken?: string;
   sandboxProvider?: SandboxProvider;
+  /**
+   * The host placed the owner's work on a machine no one else's work
+   * reaches (ADR 0167 access naming only that person), so it may hold the
+   * owner's personal credentials (ADR 0184).
+   */
+  servesOnlyOwner?: boolean;
+}
+
+/**
+ * What a machine offers beside its sandbox provider's own capabilities
+ * (ADR 0184), advertised in its binding descriptor like them.
+ */
+export const MACHINE_CAPABILITIES = {
+  /**
+   * The operator accepts members' personal credentials on this machine
+   * although it runs several people's work as processes
+   * (`WORK_PERSONAL_CREDENTIALS=accept`).
+   */
+  personalCredentials: "credentials.personal",
+  /** The Claude Code CLI is on the machine's path. */
+  claudeCode: "harness.claude-code",
+  /** The Codex CLI is on the machine's path. */
+  codex: "harness.codex",
+} as const;
+
+/** A harness whose own account login a member may bring (ADR 0184). */
+export type PersonalLoginKind = "claude-code" | "codex";
+
+export const PERSONAL_LOGIN_KINDS: readonly PersonalLoginKind[] = [
+  "claude-code",
+  "codex",
+];
+
+/** The machine capability saying a harness's CLI is installed. */
+export function harnessCapability(kind: PersonalLoginKind): string {
+  return kind === "codex"
+    ? MACHINE_CAPABILITIES.codex
+    : MACHINE_CAPABILITIES.claudeCode;
 }
 
 export interface EnvironmentRequirements {

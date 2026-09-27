@@ -25,7 +25,7 @@ vi.mock("../app-server.js", () => ({
   },
 }));
 
-import { CodexAgent } from "../codex-agent.js";
+import { CodexAgent, sandboxPathEnv } from "../codex-agent.js";
 
 /** A sandbox whose operations are never reached in these tests. */
 function fakeSandboxProvider(withProcesses: boolean): SandboxProvider {
@@ -212,6 +212,53 @@ describe("CodexAgent", () => {
         },
       },
     });
+  });
+
+  it("runs the app server with the owner's own login and Codex's own provider (ADR 0184)", async () => {
+    startThread.mockReturnValue(
+      scriptedThread([
+        { type: "thread.started", thread_id: "thread-10" },
+        {
+          type: "turn.completed",
+          usage: {
+            input_tokens: 1,
+            cached_input_tokens: 0,
+            output_tokens: 1,
+            reasoning_output_tokens: 0,
+            cache_write_input_tokens: 0,
+          },
+        },
+      ]),
+    );
+    const agent = new CodexAgent({ sandbox: {}, apiKey: "host-key" });
+    const events = [];
+    for await (const event of agent.sendMessage(
+      { ...session, providerSessionId: null },
+      "hello",
+      {
+        sandbox: {
+          provider: fakeSandboxProvider(true),
+          sandboxId: "sandbox-1",
+          stateDirectory: "/workspace/.work-session",
+        },
+        personalLogin: {
+          harness: "codex",
+          home: "/workspace/.work-session/home/codex",
+        },
+      },
+    ))
+      events.push(event);
+    expect(events.at(-1)).toMatchObject({ type: "done" });
+    const options = codexCtor.mock.calls[0]?.[0];
+    expect(options).not.toHaveProperty("apiKey");
+    expect(options).not.toHaveProperty("env");
+    expect(options.config?.model_provider).toBeUndefined();
+    expect(options.config?.model_providers).toBeUndefined();
+    expect(
+      sandboxPathEnv({
+        auth: { kind: "personal", home: "/workspace/.work-session/home/codex" },
+      }),
+    ).toEqual({ CODEX_HOME: "/workspace/.work-session/home/codex" });
   });
 
   it("refuses a sandbox turn whose sandbox cannot run processes", async () => {

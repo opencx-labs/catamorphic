@@ -11,7 +11,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 }));
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { ClaudeCodeAgent } from "../claude-code-agent.js";
+import { ClaudeCodeAgent, sandboxPathEnv } from "../claude-code-agent.js";
 
 const queryMock = vi.mocked(query);
 
@@ -276,6 +276,58 @@ describe("ClaudeCodeAgent", () => {
     });
     expect(options?.pathToClaudeCodeExecutable).toBe("claude");
     expect(typeof options?.spawnClaudeCodeProcess).toBe("function");
+  });
+
+  it("runs the CLI with the owner's own login and no gateway (ADR 0184)", async () => {
+    queryMock.mockReturnValue(scriptedQuery([successResult]));
+    const agent = new ClaudeCodeAgent({ sandbox: {} });
+    await collect(agent, "hello", {
+      sandbox: {
+        provider: fakeSandboxProvider(true),
+        sandboxId: "sandbox-1",
+        stateDirectory: "/workspace/.work-session",
+      },
+      // A gateway alias the Environment also binds is not used.
+      modelGateway: {
+        alias: "anthropic",
+        api: "anthropic",
+        baseUrl: "https://work.example.test/api/gateway/model/anthropic",
+        keyFile: "/workspace/.work-session/grants/anthropic",
+      },
+      personalLogin: {
+        harness: "claude-code",
+        home: "/workspace/.work-session/home/claude",
+      },
+    });
+    const options = lastQueryOptions();
+    expect(options.env?.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(options.env?.CLAUDE_CODE_API_KEY_HELPER_TTL_MS).toBeUndefined();
+    expect(options.env?.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(options.settings).toBeUndefined();
+    expect(
+      sandboxPathEnv({
+        auth: {
+          kind: "personal",
+          home: "/workspace/.work-session/home/claude",
+        },
+      }),
+    ).toEqual({ CLAUDE_CONFIG_DIR: "/workspace/.work-session/home/claude" });
+  });
+
+  it("does not use a Codex login for Claude Code", async () => {
+    const agent = new ClaudeCodeAgent({ sandbox: {} });
+    const events = await collect(agent, "hello", {
+      sandbox: {
+        provider: fakeSandboxProvider(true),
+        sandboxId: "sandbox-1",
+        stateDirectory: "/workspace/.work-session",
+      },
+      personalLogin: {
+        harness: "codex",
+        home: "/workspace/.work-session/home/codex",
+      },
+    });
+    expect(String(events[0]?.content)).toContain("no model connection");
   });
 
   it("refuses a sandbox turn without a model connection it can speak", async () => {
