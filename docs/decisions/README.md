@@ -186,7 +186,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0167](0167-machine-pools-access-and-owner-placement.md) | Machine pools, node access, and placement by owner | Accepted |
 | [0169](0169-work-project-workspace.md) | The project workspace is `.work/`, and what lands in repositories is named Work | Accepted |
 | [0170](0170-attached-repositories-receive-pull-requests.md) | Attached repositories receive pull requests, never pushes | Accepted |
-| [0171](0171-project-trigger-kinds-and-declarative-webhook-ingress.md) | Project-defined trigger kinds and declarative webhook ingress | Accepted |
+| [0171](0171-project-trigger-kinds-and-declarative-webhook-ingress.md) | Project-defined trigger kinds and declarative webhook ingress | Accepted (GitHub host kinds removed by 0177) |
 | [0172](0172-committed-connection-bindings-and-named-service-connections.md) | Committed connection bindings, named service connections, organization administrators | Accepted |
 | [0174](0174-background-processes-as-a-sandbox-capability.md) | Background processes are a sandbox capability | Accepted |
 | [0175](0175-grants-reach-sandboxes.md) | Grants reach sandboxes; credentials never do | Accepted |

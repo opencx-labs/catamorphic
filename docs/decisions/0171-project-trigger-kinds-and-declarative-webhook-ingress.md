@@ -68,6 +68,7 @@ introspectable, not typed per binding).
 - Filtered-out events start no runs; the delivery is still recorded.
 - The framework `github.*` host kinds remain for desktop session watchers
   until watchers generalize; their names are reserved from project kinds.
-  `GithubService.ingestWebhook` (unused) is gone.
+  `GithubService.ingestWebhook` (unused) is gone. ADR 0177 removed those
+  kinds: watchers now poll GitHub into `github` webhook deliveries.
 - Stored webhook events gain `query`; a token-scheme credential is dropped
   from stored headers and query.
