@@ -268,7 +268,7 @@ function DefaultRows({
           row(
             "Project default (everyone)",
             isProjectDefault
-              ? "Committed in .work/project.json — click to clear it."
+              ? "Committed in .work/project.json. Click to clear it."
               : "Commit as the project's default for every collaborator.",
             isProjectDefault,
             () =>
