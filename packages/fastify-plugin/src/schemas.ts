@@ -1914,39 +1914,33 @@ export const SecretNameParamsSchema = ProjectIdParamsSchema.extend({
   name: z.string().min(1),
 });
 
-// --- GitHub ---
-export const GithubStatusSchema = z.object({
-  connected: z.boolean(),
-  login: z.string().optional(),
+// --- Code hosts (ADR 0177) ---
+export const CodeHostParamsSchema = z.object({
+  provider: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/),
 });
 
-export const GithubConnectSchema = z.object({
-  /** Authorization code from the GitHub web-flow callback. */
-  code: z.string().min(1),
-  /** Must match the redirect_uri sent to /login/oauth/authorize, if any. */
-  redirectUri: z.string().optional(),
-});
-
-export const GithubRepoSchema = z.object({
-  id: z.number(),
+export const CodeHostRepositorySchema = z.object({
   fullName: z.string(),
   name: z.string(),
   owner: z.string(),
   private: z.boolean(),
   defaultBranch: z.string(),
+  cloneUrl: z.string(),
   description: z.string().nullable(),
   pushedAt: z.string().nullable(),
 });
 
-export const GithubImportSchema = z.object({
-  fullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "Expected owner/repo"),
+export const CodeHostImportSchema = z.object({
+  /** Host-specific repository path, e.g. `owner/name` on GitHub. */
+  fullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "Expected owner/name"),
   name: z.string().min(1).optional(),
 });
 
 /** Publish an unlinked project to a new repository Work creates (ADR 0170). */
-export const GithubPublishSchema = z.object({
+export const CodeHostPublishSchema = z.object({
+  provider: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/),
   name: z.string().regex(/^[\w.-]+$/, "Expected a repository name"),
-  /** Organization login; the connected account when omitted. */
+  /** Organization; the connected account when omitted. */
   organization: z
     .string()
     .regex(/^[\w.-]+$/, "Expected an organization login")
@@ -1954,7 +1948,7 @@ export const GithubPublishSchema = z.object({
   visibility: z.enum(["private", "public"]).optional(),
 });
 
-export const GithubPublishResultSchema = z.object({
+export const CodeHostPublishResultSchema = z.object({
   fullName: z.string(),
   remoteUrl: z.string(),
 });

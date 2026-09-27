@@ -729,6 +729,21 @@ export class GithubApi {
       (b.pushedAt ?? "").localeCompare(a.pushedAt ?? ""),
     );
   }
+
+  /** Repositories a GitHub App installation token can reach. */
+  async listInstallationRepos(): Promise<GithubRepo[]> {
+    const repos: GithubRepo[] = [];
+    for (let page = 1; ; page += 1) {
+      const result = await this.request<{ repositories: RawRepo[] }>(
+        `/installation/repositories?per_page=100&page=${page}`,
+      );
+      repos.push(...result.repositories.map(mapRepo));
+      if (result.repositories.length < 100) break;
+    }
+    return repos.sort((a, b) =>
+      (b.pushedAt ?? "").localeCompare(a.pushedAt ?? ""),
+    );
+  }
 }
 
 interface RawCheckRunResult {

@@ -34,6 +34,12 @@ export const webhook = defineTriggerKind({
       query: z.record(z.string(), z.string()),
       contentType: z.string().nullable(),
       body: z.json(),
+      /**
+       * True when the host fetched the event itself from the sender's API
+       * with its own connection instead of receiving a signed request (the
+       * desktop's GitHub poller, ADR 0177): there is no signature to check.
+       */
+      hostVerified: z.boolean().optional(),
     }),
   }),
   matches: ({ config, payload }) => payload.payload.name === config.name,

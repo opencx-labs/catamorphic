@@ -161,37 +161,6 @@ export interface GithubRepositoryEvent {
 }
 
 /**
- * A stored connection: the token set plus the GitHub identity it belongs to.
- * The login is denormalized so hosts can render "connected as X" without an
- * API round-trip.
- */
-export interface StoredGithubConnection {
-  tokens: GithubTokenSet;
-  githubLogin: string;
-  githubUserId: number;
-}
-
-/**
- * Host-owned persistence for GitHub connections. Catamorphic never stores
- * tokens itself — token custody follows the same rule as identity: the host
- * owns auth. Encryption at rest is the implementation's concern. Server
- * embedders typically back this with their own user table or secret manager;
- * the desktop app uses its OS-keychain-encrypted settings file.
- */
-export interface GithubTokenStore {
-  get(
-    tenantId: string,
-    externalUserId: string,
-  ): Promise<StoredGithubConnection | null>;
-  set(
-    tenantId: string,
-    externalUserId: string,
-    connection: StoredGithubConnection,
-  ): Promise<void>;
-  delete(tenantId: string, externalUserId: string): Promise<void>;
-}
-
-/**
  * Server-side credentials of a GitHub App: what signs app JWTs. Distinct from
  * {@link GithubAppConfig}, which only identifies the app's OAuth client.
  */

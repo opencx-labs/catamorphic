@@ -60,6 +60,14 @@ export type {
 } from "./hooks/use-code-editor-link.js";
 export { useCodeEditorLink } from "./hooks/use-code-editor-link.js";
 export {
+  type CodeHostRepositorySummary,
+  type CodeHostSummary,
+  type ImportRepositoryInput,
+  useCodeHostRepositories,
+  useCodeHosts,
+  useImportRepository,
+} from "./hooks/use-code-hosts.js";
+export {
   type CommitChangesInput,
   useCommitChanges,
 } from "./hooks/use-commit-changes.js";
@@ -103,15 +111,6 @@ export {
   type ForkAgentSessionInput,
   useForkAgentSession,
 } from "./hooks/use-fork-agent-session.js";
-// Project hooks
-export {
-  type GithubRepoSummary,
-  type GithubStatus,
-  type ImportGithubRepoInput,
-  useGithubRepos,
-  useGithubStatus,
-  useImportGithubRepo,
-} from "./hooks/use-github.js";
 export { type UseOnParseOptions, useOnParse } from "./hooks/use-on-parse.js";
 export type {
   ParseWorkflowRequest,

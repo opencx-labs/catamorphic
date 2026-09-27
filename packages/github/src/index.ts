@@ -61,7 +61,5 @@ export {
   type GithubReviewComment,
   type GithubReviewEvent,
   type GithubTokenSet,
-  type GithubTokenStore,
   type GithubUser,
-  type StoredGithubConnection,
 } from "./types.js";

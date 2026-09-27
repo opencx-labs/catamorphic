@@ -5,6 +5,7 @@ import type {
   CapabilityProviderRuntime,
   CatamorphicCore,
   CatamorphicCoreConfig,
+  CodeHost,
   CodingAgentRegistry,
   ConnectionProvider,
   CredentialVault,
@@ -13,7 +14,6 @@ import type {
   DeploymentRuntimeRetirementResult,
   ExecutionWorkerHandle,
   ExecutionWorkerOptions,
-  GithubServiceConfig,
   Identity,
   McpToolKindSpec,
   NativeAgentCheckout,
@@ -182,12 +182,13 @@ export interface CatamorphicHostConfig {
   /** Hard cap on a built app bundle (js + css). Defaults to 5 MiB. */
   maxAppBundleBytes?: number;
   /**
-   * GitHub App registration enabling repo import + push-back. Embedders
-   * register their own GitHub App and pass its client id (and, when using the
-   * server-side web OAuth flow, its client secret). Omit to leave the GitHub
-   * surfaces disabled.
+   * Code hosts over connections (ADR 0177), e.g. `githubCodeHost(github)`
+   * beside `defineGithubConnectionProvider` in `connectionProviders`. Sync,
+   * pull requests, proposals, repository import, and publishing act through
+   * the caller's own connection to the host's provider, else the service
+   * connection named like the provider.
    */
-  github?: GithubServiceConfig;
+  codeHosts?: readonly CodeHost[];
   /**
    * The host's custom trigger kinds, built with `defineTriggerKind`.
    * Workflows subscribe with `triggers: [trigger("kind", config)]`; firing a
@@ -269,14 +270,11 @@ export interface CatamorphicHostConfig {
   standingAgentPrompt?: string | false;
   /**
    * ADR 0055 knobs, passed through to core: where store bytes live, the
-   * roles cache, the identity whose GitHub connection opens members'
-   * proposals as pull requests, and whether agents' `store/` writes ship
-   * around turns (default on; a host whose folders are the truth sets
-   * false).
+   * roles cache, and whether agents' `store/` writes ship around turns
+   * (default on; a host whose folders are the truth sets false).
    */
   documentBlobStore?: CatamorphicCoreConfig["documentBlobStore"];
   rolesCacheTtlMs?: number;
-  proposalBot?: CatamorphicCoreConfig["proposalBot"];
   storeSyncAroundTurns?: boolean;
   /**
    * The HTTP answer surface for tool-permission asks (ADR 0054): harnesses
@@ -387,7 +385,7 @@ export class Catamorphic {
         : { deploymentRuntime: config.deploymentRuntime }),
       appBundleStore: config.appBundleStore,
       maxAppBundleBytes: config.maxAppBundleBytes,
-      github: config.github,
+      ...(config.codeHosts ? { codeHosts: config.codeHosts } : {}),
       triggerKinds: contributions.triggerKinds,
       projectEventSources: config.projectEventSources,
       mcpToolKinds: contributions.mcpToolKinds,
@@ -402,7 +400,6 @@ export class Catamorphic {
       standingAgentPrompt: config.standingAgentPrompt,
       documentBlobStore: config.documentBlobStore,
       rolesCacheTtlMs: config.rolesCacheTtlMs,
-      proposalBot: config.proposalBot,
       storeSyncAroundTurns: config.storeSyncAroundTurns,
       toolPermissions: config.toolPermissions,
     });

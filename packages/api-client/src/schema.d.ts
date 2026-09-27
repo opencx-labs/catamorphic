@@ -15172,7 +15172,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/github/status": {
+    "/api/code-hosts": {
         parameters: {
             query?: never;
             header?: never;
@@ -15195,20 +15195,33 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            connected: boolean;
-                            login?: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
+                            provider: string;
+                            displayName: string;
+                            connection: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                projectId: string | null;
+                                providerKind: string;
+                                /** @enum {string} */
+                                principalKind: "member" | "project_service" | "tenant_service";
+                                name: string | null;
+                                ownerExternalUserId: string | null;
+                                label: string;
+                                /** @enum {string} */
+                                status: "pending" | "ready" | "expired" | "revoked";
+                                account: unknown;
+                                scopes: string[];
+                                capabilities: string[];
+                                /** Format: date-time */
+                                expiresAt: string | null;
+                                revision: number;
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                updatedAt: string;
+                            } | null;
+                        }[];
                     };
                 };
             };
@@ -15221,7 +15234,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/github/connect": {
+    "/api/code-hosts/{provider}/connection/authorize": {
         parameters: {
             query?: never;
             header?: never;
@@ -15234,14 +15247,16 @@ export interface paths {
             parameters: {
                 query?: never;
                 header?: never;
-                path?: never;
+                path: {
+                    provider: string;
+                };
                 cookie?: never;
             };
             requestBody: {
                 content: {
                     "application/json": {
-                        code: string;
-                        redirectUri?: string;
+                        /** Format: uri */
+                        redirectUri: string;
                     };
                 };
             };
@@ -15253,13 +15268,46 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            connected: boolean;
-                            login?: string;
+                            authorizationId: string;
+                            challenge: {
+                                /** @enum {string} */
+                                kind: "url";
+                                /** Format: uri */
+                                url: string;
+                                expiresAt?: string;
+                            } | {
+                                /** @enum {string} */
+                                kind: "device";
+                                /** Format: uri */
+                                verificationUrl: string;
+                                userCode: string;
+                                expiresAt?: string;
+                            } | {
+                                /** @enum {string} */
+                                kind: "form";
+                                fields: {
+                                    name: string;
+                                    label: string;
+                                    secret: boolean;
+                                    required: boolean;
+                                }[];
+                            };
                         };
                     };
                 };
                 /** @description Default Response */
-                400: {
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -15288,53 +15336,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/github/connection": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Default Response */
-                204: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": null;
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/github/repos": {
+    "/api/code-hosts/{provider}/repositories": {
         parameters: {
             query?: never;
             header?: never;
@@ -15345,7 +15347,9 @@ export interface paths {
             parameters: {
                 query?: never;
                 header?: never;
-                path?: never;
+                path: {
+                    provider: string;
+                };
                 cookie?: never;
             };
             requestBody?: never;
@@ -15357,12 +15361,12 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            id: number;
                             fullName: string;
                             name: string;
                             owner: string;
                             private: boolean;
                             defaultBranch: string;
+                            cloneUrl: string;
                             description: string | null;
                             pushedAt: string | null;
                         }[];
@@ -15380,6 +15384,17 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
                 503: {
                     headers: {
                         [name: string]: unknown;
@@ -15400,7 +15415,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/github/import": {
+    "/api/code-hosts/{provider}/import": {
         parameters: {
             query?: never;
             header?: never;
@@ -15413,7 +15428,9 @@ export interface paths {
             parameters: {
                 query?: never;
                 header?: never;
-                path?: never;
+                path: {
+                    provider: string;
+                };
                 cookie?: never;
             };
             requestBody: {
@@ -15460,6 +15477,17 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
                 404: {
                     headers: {
                         [name: string]: unknown;
@@ -15489,7 +15517,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/projects/{projectId}/github/publish": {
+    "/api/projects/{projectId}/code-host/publish": {
         parameters: {
             query?: never;
             header?: never;
@@ -15510,6 +15538,7 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
+                        provider: string;
                         name: string;
                         organization?: string;
                         /** @enum {string} */
@@ -15532,6 +15561,17 @@ export interface paths {
                 };
                 /** @description Default Response */
                 401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
                     headers: {
                         [name: string]: unknown;
                     };

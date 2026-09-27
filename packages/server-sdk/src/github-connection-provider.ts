@@ -77,6 +77,27 @@ export type GithubConnectionProvider = ConnectionProvider & {
     installationId?: number;
     owner?: string;
   }): Promise<ConnectionAuthorizationResult>;
+  /**
+   * Check a user access token set the host obtained itself (the `gh` CLI's
+   * token, a device flow it ran) and encode it as member material.
+   */
+  authorizeUser(args: {
+    tokens: GithubTokenSet;
+  }): Promise<ConnectionAuthorizationResult>;
+  /**
+   * A token for one call on the control plane (the code host, a host's
+   * event poller): minted and narrowed for an App, stored for a member.
+   * Never hand it to an agent or a sandbox.
+   */
+  accessToken(args: {
+    material: Uint8Array;
+    repository?: { owner: string; name: string };
+    permissions?: GithubPermissions;
+  }): Promise<string>;
+  /** `owner` and `name` of a remote under this provider's web origin. */
+  repositoryOf(remoteUrl: string): { owner: string; name: string };
+  /** REST client settings for calls with {@link accessToken}. */
+  readonly api: { baseUrl: string; fetch: FetchLike };
 };
 
 const Repository = z
@@ -679,6 +700,20 @@ export function defineGithubConnectionProvider(
         capabilities: GITHUB_CONNECTION_ACTIONS,
       };
     },
+
+    authorizeUser: async ({ tokens }) => userMaterial(tokens),
+
+    accessToken: ({ material, repository, permissions }) =>
+      tokenFor({
+        credential: decodeMaterial(material),
+        ...(repository ? { repository } : {}),
+        ...(permissions ? { permissions } : {}),
+      }),
+
+    repositoryOf: (remoteUrl) =>
+      repositoryFromRemote({ remoteUrl, webBaseUrl }),
+
+    api: { baseUrl: apiBaseUrl, fetch: doFetch },
 
     listActions: async ({ capabilities }) =>
       actions.filter((action) => capabilities.includes(action.name)),

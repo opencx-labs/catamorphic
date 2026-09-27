@@ -574,17 +574,13 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
     });
   });
 
-  it("offers GitHub watcher lifecycle tools when the host configured them", async () => {
+  it("offers watcher tools that start a host's polled event sources (ADR 0177)", async () => {
     const { core, calls } = surfaceCore();
     Object.assign(core, {
-      github: {},
+      projectEventSources: [{ kind: "github", poll: async () => ({}) }],
       watchers: {
         create: async (args: unknown) => {
           calls.push({ op: "watchers.create", args });
-          return { id: "watcher-1", status: "active" };
-        },
-        createGithub: async (args: unknown) => {
-          calls.push({ op: "watchers.createGithub", args });
           return { id: "watcher-1", status: "active" };
         },
         list: async () => [],
@@ -594,46 +590,44 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
     const app = createTestApp({ core: core as never });
     apps.push(app);
     const listed = await rpc(app, "tools/list");
-    const listedTools = listed.result?.tools ?? [];
-    const names = (listedTools as Array<{ name: string }>).map(
-      (tool) => tool.name,
-    );
+    const listedTools = (listed.result?.tools ?? []) as Array<{
+      name: string;
+      inputSchema?: { properties?: Record<string, { enum?: string[] }> };
+    }>;
+    const names = listedTools.map((tool) => tool.name);
     expect(names).toEqual(
       expect.arrayContaining([
         "create_watcher",
-        "create_github_watcher",
         "list_watchers",
         "stop_watcher",
       ]),
     );
-    const createGithubTool = (
-      listedTools as Array<{
-        name: string;
-        inputSchema?: { properties?: Record<string, unknown> };
-      }>
-    ).find((tool) => tool.name === "create_github_watcher");
-    expect(createGithubTool?.inputSchema?.properties).not.toHaveProperty(
-      "eventKinds",
-    );
+    expect(names).not.toContain("create_github_watcher");
+    const create = listedTools.find((tool) => tool.name === "create_watcher");
+    expect(create?.inputSchema?.properties?.eventSource?.enum).toEqual([
+      "github",
+    ]);
 
     await rpc(app, "tools/call", {
-      name: "create_github_watcher",
+      name: "create_watcher",
       arguments: {
         sessionId: "session-1",
         workflowName: "watchPullRequest",
         source:
           'export const watchPullRequest = defineWorkflow(() => ({ triggers: [trigger("github.pull_request")], steps: [] }))',
+        eventSource: "github",
+        pollIntervalSeconds: 30,
       },
     });
     expect(calls.at(-1)).toMatchObject({
-      op: "watchers.createGithub",
+      op: "watchers.create",
       args: expect.objectContaining({
         projectId: PROJECT_ID,
         sessionId: "session-1",
         workflowName: "watchPullRequest",
+        eventSource: { kind: "github", pollIntervalSeconds: 30 },
       }),
     });
-    expect(calls.at(-1)?.args).not.toHaveProperty("eventKinds");
   });
 
   it("scoped callers see only their workflows on the roster", async () => {

@@ -104,7 +104,6 @@ export async function projectToolCapabilities(args: {
               "create_watcher",
               "list_watchers",
               "stop_watcher",
-              "create_github_watcher",
             ].includes(definition.name);
           const result = await tool.call(
             owned ? { ...values, sessionId: context.sessionId } : values,
