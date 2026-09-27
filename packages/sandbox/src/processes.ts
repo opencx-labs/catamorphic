@@ -20,7 +20,26 @@ export interface SandboxProcessProvider {
   /** Signals the process's whole group, so everything it started stops too. */
   signalProcess(args: SignalProcessArgs): Promise<SandboxProcess>;
   listProcesses(args: { sandboxId: string }): Promise<SandboxProcess[]>;
+  /**
+   * Write to the standard input of a process started with `stdin: true`
+   * (ADR 0180), in order; `end` closes it after `data`. How a harness CLI
+   * speaking a stdio protocol runs inside a sandbox: every write is one
+   * short operation, like a read.
+   */
+  writeProcessInput(args: WriteProcessInputArgs): Promise<void>;
 }
+
+export interface WriteProcessInputArgs {
+  sandboxId: string;
+  processId: string;
+  /** UTF-8 text appended to the process's input. */
+  data: string;
+  /** Close the input after `data`: the process reads end of file. */
+  end?: boolean;
+}
+
+/** Largest input one write carries: a write crosses queues and Postgres. */
+export const PROCESS_WRITE_MAX_BYTES = 1024 * 1024;
 
 export interface StartProcessArgs {
   sandboxId: string;
@@ -31,6 +50,11 @@ export interface StartProcessArgs {
   env?: Record<string, string>;
   /** A few human words for what it is ("Dev server"). */
   name?: string;
+  /**
+   * Keep standard input open for {@link SandboxProcessProvider.writeProcessInput}.
+   * Without it the process reads end of file at once.
+   */
+  stdin?: boolean;
 }
 
 export interface ReadProcessOutputArgs {
@@ -368,6 +392,15 @@ export function shellSandboxProcesses(args: {
         startedAt: new Date().toISOString(),
         ...(start.name ? { name: start.name } : {}),
       });
+      // Input, when kept open, is a file the writes append to, followed
+      // into a pipe by `tail -f`; stopping the follower is end of file.
+      const input = start.stdin
+        ? [
+            'mkfifo "$D/stdin.pipe"',
+            '(exec tail -c +1 -f "$D/input" > "$D/stdin.pipe") &',
+            'printf %s "$!" > "$D/stdin.pid"',
+          ]
+        : [];
       const runner = [
         'D="$(cd "$(dirname "$0")" && pwd)"',
         'exec > "$D/output" 2>&1 < /dev/null',
@@ -378,7 +411,8 @@ export function shellSandboxProcesses(args: {
             throw new Error(`Invalid environment variable name '${name}'`);
           return `export ${name}=${quote(value)}`;
         }),
-        `if cd ${quote(cwd)}; then bash -c ${quote(start.command)}; code=$?; else code=1; fi`,
+        ...input,
+        `if cd ${quote(cwd)}; then bash -c ${quote(start.command)}${start.stdin ? ' < "$D/stdin.pipe"' : ""}; code=$?; else code=1; fi`,
         'date -u +%s > "$D/ended"',
         'printf %s "$code" > "$D/exit"',
         // A finished command leaves nothing running behind it.
@@ -394,6 +428,7 @@ export function shellSandboxProcesses(args: {
           `printf %s ${quote(toBase64(meta))} | base64 -d > "$dir/meta.json"`,
           `printf %s ${quote(toBase64(runner))} | base64 -d > "$dir/run.sh"`,
           ': > "$dir/output"',
+          ...(start.stdin ? [': > "$dir/input"'] : []),
           "set +e",
           "if command -v setsid >/dev/null 2>&1; then",
           '  setsid bash "$dir/run.sh" >/dev/null 2>&1 < /dev/null &',
@@ -481,7 +516,43 @@ export function shellSandboxProcesses(args: {
     },
 
     listProcesses: ({ sandboxId }) => describe(sandboxId, "all"),
+
+    async writeProcessInput(write) {
+      assertWriteSize(write.data);
+      const dir = directory(write.processId);
+      await run(
+        write.sandboxId,
+        [
+          `dir=${quote(dir)}`,
+          '[ -f "$dir/pid" ] || { echo "Unknown process" >&2; exit 3; }',
+          '[ -f "$dir/input" ] || { echo "The process was started without input" >&2; exit 3; }',
+          '[ -f "$dir/input.closed" ] && { echo "The process input is closed" >&2; exit 3; }',
+          ...(write.data
+            ? [
+                `printf %s ${quote(toBase64(write.data))} | base64 -d >> "$dir/input"`,
+              ]
+            : []),
+          ...(write.end
+            ? [
+                ': > "$dir/input.closed"',
+                // `tail -f` polls once a second where inotify is missing:
+                // give it that long to pass on the last write, then stop
+                // it, which the process reads as end of file.
+                'sleep 1; kill "$(cat "$dir/stdin.pid" 2>/dev/null || echo 0)" 2>/dev/null || true',
+              ]
+            : []),
+        ].join("\n"),
+      );
+    },
   };
+}
+
+/** Refuses input larger than one write may carry. */
+export function assertWriteSize(data: string): void {
+  if (Buffer.byteLength(data, "utf8") > PROCESS_WRITE_MAX_BYTES)
+    throw new Error(
+      `A process input write carries at most ${PROCESS_WRITE_MAX_BYTES} bytes`,
+    );
 }
 
 /**

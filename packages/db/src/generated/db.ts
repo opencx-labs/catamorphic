@@ -550,6 +550,25 @@ export interface Memberships {
   updated_at: Generated<Timestamp>;
 }
 
+export interface ModelUsage {
+  agent_session_id: string | null;
+  alias: string;
+  allocation_id: string;
+  cache_creation_tokens: Generated<Int8>;
+  cached_input_tokens: Generated<Int8>;
+  connection_id: string;
+  created_at: Generated<Timestamp>;
+  endpoint: string;
+  id: Generated<Int8>;
+  input_tokens: Generated<Int8>;
+  model: string | null;
+  output_tokens: Generated<Int8>;
+  project_id: string;
+  reasoning_tokens: Generated<Int8>;
+  tenant_id: string;
+  turn_id: string | null;
+}
+
 export interface NotificationDeliveries {
   attempt_count: Generated<number>;
   created_at: Generated<Timestamp>;
@@ -1299,6 +1318,7 @@ export interface DB {
   execution_jobs: ExecutionJobs;
   member_connection_attachments: MemberConnectionAttachments;
   memberships: Memberships;
+  model_usage: ModelUsage;
   notification_deliveries: NotificationDeliveries;
   project_event_deliveries: ProjectEventDeliveries;
   project_event_monitors: ProjectEventMonitors;

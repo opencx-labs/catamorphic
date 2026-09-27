@@ -22,7 +22,9 @@ import {
   messageWithAttachmentNames,
   narrowingLayer,
   PROJECT_TOOLS_SERVER_KEY,
+  type AgentTurnUsage,
   type ProviderSession,
+  type SandboxModelGateway,
   type SandboxProvider,
   serverKeyOf,
   type ToolPermission,
@@ -77,7 +79,12 @@ import type {
 } from "./coding-agent-registry.js";
 import type { ConnectionAdmissionService } from "./connection-admission.js";
 import type { ConnectionCapabilityGrantsService } from "./connection-capability-grants.js";
-import { connectionMcpServerName } from "./connection-types.js";
+import type { ModelApi } from "./connection-providers.js";
+import {
+  connectionMcpServerName,
+  isProtocolCapability,
+  MODEL_CAPABILITY,
+} from "./connection-types.js";
 import { DbSandboxStore } from "./db-sandbox-store.js";
 import { DevSandboxService } from "./dev-sandbox-service.js";
 import type { DocumentsService } from "./documents-service.js";
@@ -98,6 +105,8 @@ import { requireTenantProject } from "./projects-service.js";
 import {
   configureSandboxGateway,
   ensureSandboxBaseline,
+  SESSION_DIRECTORY,
+  sandboxGrantFile,
   seedSandboxRepository,
 } from "./sandbox-git.js";
 import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
@@ -590,13 +599,20 @@ interface AgentSessionsDeps {
   /** Workspaces at a ref of the project's linked remote (ADR 0178). */
   workspaces?: SessionWorkspaces;
   /**
-   * Git through the gateway from sandboxes (ADR 0175): the gateway's Git
-   * URL as a sandbox reaches it, and the remote base URLs a connection
-   * provider serves (undefined for providers without Git).
+   * The gateway as sandboxes reach it (ADRs 0175, 0180): its base URL
+   * (`…/gateway`, serving `git/<alias>/…` and `model/<alias>/…`), the
+   * remote base URLs a connection provider serves with Git, and the API a
+   * model provider speaks (undefined when it serves neither).
    */
-  gitGateway?: {
+  sandboxGateway?: {
     url: (args: { projectId: string; sessionId: string }) => string | undefined;
     remoteBaseUrls: (providerKind: string) => readonly string[] | undefined;
+    modelApi: (providerKind: string) => ModelApi | undefined;
+    /** What a turn's model calls through the gateway used (ADR 0180). */
+    turnUsage?: (args: {
+      sessionId: string;
+      turnId: string;
+    }) => Promise<AgentTurnUsage | undefined>;
   };
   plugins?: PluginsService;
   pluginResolver?: PluginResolver;
@@ -685,7 +701,7 @@ export class AgentSessionsService {
   private readonly connectionGrants?: ConnectionCapabilityGrantsService;
   private readonly connectionMcpUrl?: AgentSessionsDeps["connectionMcpUrl"];
   private readonly workspaces?: SessionWorkspaces;
-  private readonly gitGateway?: AgentSessionsDeps["gitGateway"];
+  private readonly sandboxGateway?: AgentSessionsDeps["sandboxGateway"];
   /** Sandbox grant renewals of the turns running in this process. */
   private readonly grantRenewals = new Map<string, NodeJS.Timeout>();
   private readonly plugins?: PluginsService;
@@ -866,7 +882,7 @@ export class AgentSessionsService {
     this.connectionGrants = deps.connectionGrants;
     this.connectionMcpUrl = deps.connectionMcpUrl;
     this.workspaces = deps.workspaces;
-    this.gitGateway = deps.gitGateway;
+    this.sandboxGateway = deps.sandboxGateway;
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
     this.onTurnSettled = deps.onTurnSettled;
@@ -2176,7 +2192,7 @@ export class AgentSessionsService {
     sessionId: string;
     provider: SandboxProvider;
     sandboxProviderId: string;
-  }): Promise<void> {
+  }): Promise<readonly SandboxModelGateway[]> {
     const row = await this.db
       .selectFrom("agent_sessions")
       .select(["workspace", "allocation_id"])
@@ -2209,28 +2225,32 @@ export class AgentSessionsService {
     }
     // Git through the gateway is a convenience of the turn, not a condition
     // of it: the agent still works in its checkout if it cannot be set up.
-    if (row.allocation_id)
-      await this.configureSandboxGit({
-        identity: input.identity,
-        projectId: input.projectId,
-        sessionId: input.sessionId,
-        allocationId: row.allocation_id,
-        provider: input.provider,
-        sandboxProviderId: input.sandboxProviderId,
-        renewOnly: false,
-      }).catch((error: unknown) =>
-        console.warn(
-          `[catamorphic] Could not configure gateway Git for session ${input.sessionId}`,
-          error,
-        ),
+    // A harness that needs its model says so when it cannot reach it.
+    if (!row.allocation_id) return [];
+    return this.configureSandboxGateway({
+      identity: input.identity,
+      projectId: input.projectId,
+      sessionId: input.sessionId,
+      allocationId: row.allocation_id,
+      provider: input.provider,
+      sandboxProviderId: input.sandboxProviderId,
+      renewOnly: false,
+    }).catch((error: unknown) => {
+      console.warn(
+        `[catamorphic] Could not configure the gateway for session ${input.sessionId}`,
+        error,
       );
+      return [];
+    });
   }
 
   /**
-   * Issue the session's sandbox grants for its Git-capable aliases and write
-   * them (with the Git configuration unless renewing) into the sandbox.
+   * Issue the session's sandbox grants (ADRs 0175, 0180) for its aliases
+   * served as protocols, Git and models, and write them (with the Git
+   * configuration unless renewing) into the sandbox. Returns how the
+   * sandbox reaches each model alias.
    */
-  private async configureSandboxGit(input: {
+  private async configureSandboxGateway(input: {
     identity: Identity;
     projectId: string;
     sessionId: string;
@@ -2238,38 +2258,42 @@ export class AgentSessionsService {
     provider: SandboxProvider;
     sandboxProviderId: string;
     renewOnly: boolean;
-  }): Promise<boolean> {
+  }): Promise<SandboxModelGateway[]> {
     const grants = this.connectionGrants;
-    const gateway = this.gitGateway;
-    if (!grants || !gateway) return false;
+    const gateway = this.sandboxGateway;
+    if (!grants || !gateway) return [];
     const allocation = await this.executionAllocations.get({
       identity: input.identity,
       allocationId: input.allocationId,
     });
-    if (allocation?.status !== "active") return false;
+    if (allocation?.status !== "active") return [];
     const bindings = (allocation.policy.connections ?? []).flatMap(
       (binding) => {
         const remoteBaseUrls = gateway.remoteBaseUrls(binding.providerKind);
-        return remoteBaseUrls?.length &&
+        const git =
+          remoteBaseUrls?.length &&
           binding.capabilities.some((capability) =>
             capability.startsWith("git:"),
           )
-          ? [{ alias: binding.alias, remoteBaseUrls }]
-          : [];
+            ? remoteBaseUrls
+            : undefined;
+        const api = binding.capabilities.includes(MODEL_CAPABILITY)
+          ? gateway.modelApi(binding.providerKind)
+          : undefined;
+        return git || api ? [{ alias: binding.alias, git, api }] : [];
       },
     );
-    if (bindings.length === 0) return false;
-    const url = gateway.url({
-      projectId: input.projectId,
-      sessionId: input.sessionId,
-    });
+    if (bindings.length === 0) return [];
+    const url = gateway
+      .url({ projectId: input.projectId, sessionId: input.sessionId })
+      ?.replace(/\/+$/, "");
     if (!url) {
       console.warn(
-        "[catamorphic] The Git gateway is not reachable from sandboxes; Git aliases are unavailable",
+        "[catamorphic] The gateway is not reachable from sandboxes; Git and model aliases are unavailable",
       );
-      return false;
+      return [];
     }
-    const aliases = [];
+    const issued = [];
     for (const binding of bindings) {
       const grant = await grants.issue({
         identity: input.identity,
@@ -2279,25 +2303,44 @@ export class AgentSessionsService {
         ttlSeconds: 3600,
         channel: "sandbox",
       });
-      aliases.push({ ...binding, grant: grant.token });
+      issued.push({ alias: binding.alias, grant: grant.token });
     }
     await configureSandboxGateway({
       provider: input.provider,
       sandboxId: input.sandboxProviderId,
-      gatewayGitUrl: url,
-      aliases,
+      gatewayGitUrl: `${url}/git`,
+      grants: issued,
+      gitAliases: bindings.flatMap((binding) =>
+        binding.git
+          ? [{ alias: binding.alias, remoteBaseUrls: binding.git }]
+          : [],
+      ),
       renewOnly: input.renewOnly,
     });
-    return true;
+    return bindings.flatMap((binding) =>
+      binding.api
+        ? [
+            {
+              alias: binding.alias,
+              api: binding.api,
+              baseUrl: `${url}/model/${binding.alias}`,
+              keyFile: sandboxGrantFile({
+                provider: input.provider,
+                alias: binding.alias,
+              }),
+            },
+          ]
+        : [],
+    );
   }
 
-  /** Keep a running turn's sandbox grants fresh (ADR 0175). */
+  /** Keep a running turn's sandbox grants fresh (ADRs 0175, 0180). */
   private startGrantRenewal(
-    input: Parameters<AgentSessionsService["configureSandboxGit"]>[0],
+    input: Parameters<AgentSessionsService["configureSandboxGateway"]>[0],
   ): void {
     this.stopGrantRenewal(input.sessionId);
     const timer = setInterval(() => {
-      void this.configureSandboxGit({ ...input, renewOnly: true }).catch(
+      void this.configureSandboxGateway({ ...input, renewOnly: true }).catch(
         (error: unknown) =>
           console.warn(
             `[catamorphic] Could not renew the sandbox grants of session ${input.sessionId}`,
@@ -5131,13 +5174,25 @@ export class AgentSessionsService {
                 })
               : undefined);
           if (anchor.sandboxProviderId && runtime.provider) {
-            await this.prepareSandboxGit({
+            const models = await this.prepareSandboxGit({
               identity,
               projectId,
               sessionId,
               provider: runtime.provider,
               sandboxProviderId: anchor.sandboxProviderId,
             });
+            // Harnesses that run their own process in the sandbox (ADR
+            // 0180) start it there and reach their model through the
+            // gateway with the grant written above.
+            turnOptions.sandbox = {
+              provider: runtime.provider,
+              sandboxId: anchor.sandboxProviderId,
+              stateDirectory: `${runtime.provider.workspaceRoot}/${SESSION_DIRECTORY}`,
+            };
+            const modelGateway = agent.modelConnection
+              ? models.find((model) => model.alias === agent.modelConnection)
+              : undefined;
+            if (modelGateway) turnOptions.modelGateway = modelGateway;
             if (session.allocation_id)
               this.startGrantRenewal({
                 identity,
@@ -5496,6 +5551,14 @@ export class AgentSessionsService {
           const usageEvent = [...events]
             .reverse()
             .find((event) => event.type === "usage" && event.usage);
+          // A harness that reports no usage still used its model through
+          // the gateway, which counted every call of this turn (ADR 0180).
+          const gatewayUsage =
+            usageEvent?.usage || !agent.modelConnection
+              ? undefined
+              : await this.sandboxGateway
+                  ?.turnUsage?.({ sessionId, turnId: extras.turnId })
+                  .catch(() => undefined);
           const metadata: JsonObject = {
             status: failed
               ? "failed"
@@ -5508,10 +5571,10 @@ export class AgentSessionsService {
               ) && !events.some((event) => continuesTurn(event)),
             events: stepLogEvents(segmentEvents),
             changedFiles: changedFiles.map((change) => ({ ...change })),
-            ...(usageEvent?.usage
+            ...(usageEvent?.usage || gatewayUsage
               ? {
                   usage: JSON.parse(
-                    JSON.stringify(usageEvent.usage),
+                    JSON.stringify(usageEvent?.usage ?? gatewayUsage),
                   ) as JsonObject,
                 }
               : {}),
@@ -6770,10 +6833,10 @@ export class AgentSessionsService {
       identity,
       allocationId: session.allocation_id,
     });
-    // An alias that only serves Git is reached through the sandbox's Git,
-    // not as tools (ADR 0175).
+    // An alias that only serves Git or a model is reached from the
+    // sandbox through the gateway, not as tools (ADRs 0175, 0180).
     const bindings = (allocation?.policy.connections ?? []).filter((binding) =>
-      binding.capabilities.some((capability) => !capability.startsWith("git:")),
+      binding.capabilities.some((capability) => !isProtocolCapability(capability)),
     );
     if (bindings.length === 0) return {};
     if (!this.connectionMcpUrl) {

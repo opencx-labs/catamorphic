@@ -157,6 +157,8 @@ export function allocationSandboxProvider(args: {
               guard(opts.sandboxId, () => processes.signalProcess(opts)),
             listProcesses: (opts) =>
               guard(opts.sandboxId, () => processes.listProcesses(opts)),
+            writeProcessInput: (opts) =>
+              guard(opts.sandboxId, () => processes.writeProcessInput(opts)),
           },
         }
       : {}),

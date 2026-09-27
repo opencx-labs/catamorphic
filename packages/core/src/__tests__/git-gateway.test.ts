@@ -334,12 +334,9 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       provider,
       sandboxId: "s",
       gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
-      aliases: [
-        {
-          alias: "code",
-          grant: "grant-one",
-          remoteBaseUrls: ["https://git.example.test/"],
-        },
+      grants: [{ alias: "code", grant: "grant-one" }],
+      gitAliases: [
+        { alias: "code", remoteBaseUrls: ["https://git.example.test/"] },
       ],
     });
     const env = { PATH: process.env.PATH ?? "", HOME: path.join(root, "home") };
@@ -368,12 +365,9 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       provider,
       sandboxId: "s",
       gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
-      aliases: [
-        {
-          alias: "code",
-          grant: "grant-two",
-          remoteBaseUrls: ["https://git.example.test/"],
-        },
+      grants: [{ alias: "code", grant: "grant-two" }],
+      gitAliases: [
+        { alias: "code", remoteBaseUrls: ["https://git.example.test/"] },
       ],
       renewOnly: true,
     });

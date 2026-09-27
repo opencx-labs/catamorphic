@@ -1104,6 +1104,7 @@ export class ConnectionsService {
           use.capabilities,
         ),
         ...(binding.git ? { git: binding.git } : {}),
+        ...(binding.model ? { model: binding.model } : {}),
       });
     }
     if (missing.length > 0) {
@@ -1193,7 +1194,11 @@ export class ConnectionsService {
           );
         }
       }
-      const { git: _snapshotGit, ...snapshot } = selected;
+      const {
+        git: _snapshotGit,
+        model: _snapshotModel,
+        ...snapshot
+      } = selected;
       resolved.push({
         ...snapshot,
         capabilities: intersectCapabilities(
@@ -1203,6 +1208,7 @@ export class ConnectionsService {
           use.capabilities,
         ),
         ...(binding.git ? { git: binding.git } : {}),
+        ...(binding.model ? { model: binding.model } : {}),
       });
     }
     return resolved;

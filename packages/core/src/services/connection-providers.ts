@@ -83,11 +83,37 @@ export interface ConnectionGitRemotes {
   }): Promise<GitRemoteCredentials>;
 }
 
+/** The HTTP API family a model connection speaks (ADR 0180). */
+export type ModelApi = "anthropic" | "openai";
+
+/**
+ * A provider whose connection holds a model provider's key (ADR 0180).
+ * Harnesses in sandboxes reach its HTTP API through the gateway's model
+ * routes with their session grant; the gateway adds the stored key.
+ */
+export interface ConnectionModelEndpoint {
+  /**
+   * `anthropic`: the Messages API below `baseUrl` (`v1/messages`,
+   * `v1/messages/count_tokens`). `openai`: Responses and Chat Completions
+   * below `baseUrl` (`responses`, `chat/completions`).
+   */
+  readonly api: ModelApi;
+  /**
+   * Where the API's paths go, e.g. `https://api.anthropic.com` or
+   * `https://api.openai.com/v1` (an OpenAI-compatible server's base).
+   */
+  readonly baseUrl: string;
+  /** The headers that carry the stored key on one upstream request. */
+  headers(args: { material: Uint8Array }): Record<string, string>;
+}
+
 export interface ConnectionProvider {
   readonly kind: string;
   readonly displayName: string;
   /** Present when the gateway may forward Git traffic for this connection. */
   readonly git?: ConnectionGitRemotes;
+  /** Present when the connection is a model API the gateway forwards to. */
+  readonly model?: ConnectionModelEndpoint;
   /**
    * Start authorizing a member's or a service connection. `projectId` is
    * absent for a tenant service connection; `externalUserId` is whoever

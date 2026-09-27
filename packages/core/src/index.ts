@@ -255,9 +255,11 @@ export {
   type ConnectionAuthorizationResult,
   type ConnectionCredentialVersion,
   type ConnectionGitRemotes,
+  type ConnectionModelEndpoint,
   type ConnectionProvider,
   ConnectionProviderRegistry,
   type GitRemoteCredentials,
+  type ModelApi,
 } from "./services/connection-providers.js";
 export {
   bindingPrincipalKinds,
@@ -265,6 +267,7 @@ export {
   CONNECTION_NAME_PATTERN,
   type ConnectionBindingSource,
   type ConnectionGitPolicy,
+  type ConnectionModelPolicy,
   type ConnectionPrincipalKind,
   type ConnectionRecord,
   type ConnectionRequirement,
@@ -273,6 +276,8 @@ export {
   connectionMcpServerName,
   type EnvironmentConnectionBinding,
   GIT_CAPABILITIES,
+  isProtocolCapability,
+  MODEL_CAPABILITY,
   normalizeConnectionRequirement,
   type ResolvedConnectionBinding,
 } from "./services/connection-types.js";
@@ -395,6 +400,18 @@ export {
   reviewPush,
 } from "./services/git-gateway.js";
 export { executeHostCall, type HostCallInput } from "./services/host-calls.js";
+export {
+  MODEL_REQUEST_MAX_BYTES,
+  type ModelCallUsage,
+  ModelGatewayError,
+  type ModelGatewayRequest,
+  type ModelGatewayResponse,
+  ModelGatewayService,
+  modelAllowed,
+  modelEndpointAction,
+  SseUsageReader,
+  usageFromJson,
+} from "./services/model-gateway.js";
 export {
   type GrantMembershipInput,
   type Membership,

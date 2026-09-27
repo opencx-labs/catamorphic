@@ -775,6 +775,13 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // the authorization and nothing personal is used. The e2e fake kind
     // auto-consents under the e2e flag (it never touches credentials).
     const source = def.credentials?.source ?? "profile";
+    if (source === "connection") {
+      // ADR 0180: the harness runs in a server sandbox and reaches its
+      // model through that server's gateway; nothing here can serve it.
+      return {
+        error: `"${def.name}" uses the model connection '${def.credentials?.connection ?? ""}' of a Work server. Ask it from the project's server, or pick another agent here.`,
+      };
+    }
     const hash = definitionHash(def, persona);
     const stores = this.deps.profileConfig.forProject(projectId);
     let bindingAuth:

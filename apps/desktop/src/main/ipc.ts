@@ -739,7 +739,13 @@ export function registerIpcHandlers(
     const definition = entry.definition;
     const source = definition?.credentials?.source ?? "profile";
     let consent: ProjectAgentInfo["consent"] = "not-required";
-    if (definition && definition.kind !== "e2e-fake" && source !== "secret") {
+    // A connection-credentialed agent uses no personal credential (ADR 0180).
+    if (
+      definition &&
+      definition.kind !== "e2e-fake" &&
+      source !== "secret" &&
+      source !== "connection"
+    ) {
       const binding = owning.agentBindings.get(projectId, entry.slug);
       const hash = definitionHash(definition, entry.promptFile);
       consent = !binding
@@ -839,8 +845,9 @@ export function registerIpcHandlers(
       }
       const definition = entry.definition;
       const source = definition.credentials?.source ?? "profile";
-      if (source === "secret") {
-        // Nothing personal to consent to; the secret is the authorization.
+      if (source === "secret" || source === "connection") {
+        // Nothing personal to consent to; the secret or the Environment's
+        // model connection is the authorization.
         return { ok: true };
       }
       const owning = profileConfig.forProject(projectId);

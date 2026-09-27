@@ -120,6 +120,15 @@ export const ClientRunnerOperationSchema = z.discriminatedUnion("kind", [
     cwd: z.string().optional(),
     env: stringMap.optional(),
     name: z.string().optional(),
+    stdin: z.boolean().optional(),
+  }),
+  // A stdio harness in the sandbox (ADR 0180): input arrives in writes.
+  z.object({
+    kind: z.literal("process.write"),
+    sandboxId: z.string(),
+    processId: z.string(),
+    data: z.string(),
+    end: z.boolean().optional(),
   }),
   z.object({
     kind: z.literal("process.read"),
@@ -215,6 +224,9 @@ export function forwardingSandboxProvider(args: {
       z
         .array(processSchema)
         .parse(await call({ kind: "process.list", ...options })),
+    writeProcessInput: async (options) => {
+      await call({ kind: "process.write", ...options });
+    },
   };
   return {
     workspaceRoot: args.workspaceRoot,

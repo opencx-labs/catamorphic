@@ -63,6 +63,8 @@ export interface EnvironmentConnectionBinding {
   capabilities?: readonly string[];
   /** What Git through the gateway may reach with this alias (ADR 0175). */
   git?: ConnectionGitPolicy;
+  /** Which models, and how much, this alias serves sandboxes (ADR 0180). */
+  model?: ConnectionModelPolicy;
 }
 
 /**
@@ -80,6 +82,29 @@ export interface ConnectionGitPolicy {
 
 /** Capabilities of every connection whose provider serves Git (ADR 0175). */
 export const GIT_CAPABILITIES = ["git:read", "git:write"] as const;
+
+/**
+ * Model policy of one alias, enforced by the gateway's model routes (ADR
+ * 0180). `allow` lists model id patterns (`claude-*`); absent allows any
+ * model the key reaches. `maxOutputTokensPerTurn` refuses further calls in
+ * an agent turn once its calls produced that many output tokens.
+ */
+export interface ConnectionModelPolicy {
+  allow?: readonly string[];
+  maxOutputTokensPerTurn?: number;
+}
+
+/** The capability of a connection whose provider is a model API (ADR 0180). */
+export const MODEL_CAPABILITY = "model";
+
+/**
+ * Capabilities the gateway serves as protocols (Git, model APIs) rather
+ * than as MCP tools: an alias holding only these is not offered to agents
+ * as a connection MCP server.
+ */
+export function isProtocolCapability(capability: string): boolean {
+  return capability.startsWith("git:") || capability === MODEL_CAPABILITY;
+}
 
 /** Resolves the bindings of one project Environment, alias to binding. */
 export type ConnectionBindingSource = (args: {
@@ -104,6 +129,7 @@ export interface ResolvedConnectionBinding {
   principalKind: ConnectionPrincipalKind;
   capabilities: readonly string[];
   git?: ConnectionGitPolicy;
+  model?: ConnectionModelPolicy;
 }
 
 export function normalizeConnectionRequirement(

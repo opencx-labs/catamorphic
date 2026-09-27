@@ -72,6 +72,7 @@ import { ExecutionEnvironmentsService } from "./services/execution-environments-
 import { ExecutionJobsService } from "./services/execution-jobs-service.js";
 import { ExecutionWorkerService } from "./services/execution-worker-service.js";
 import { GitGatewayService } from "./services/git-gateway.js";
+import { ModelGatewayService } from "./services/model-gateway.js";
 import { executeHostCall } from "./services/host-calls.js";
 import { MembershipsService } from "./services/memberships-service.js";
 import { PluginsService } from "./services/plugins-service.js";
@@ -201,11 +202,12 @@ export interface CatamorphicCoreConfig {
     alias: string;
   }) => string | undefined;
   /**
-   * The gateway's base URL as a session's sandbox reaches it (ADR 0175),
-   * e.g. `https://work.example.com/api/gateway`, where the host mounts the
-   * plugin's gateway routes. Sandboxes get Git configured for
-   * `<gatewayUrl>/git/<alias>/`. Absent, Git aliases are not offered to
-   * sandboxes.
+   * The gateway's base URL as a session's sandbox reaches it (ADRs 0175,
+   * 0180), e.g. `https://work.example.com/api/gateway`, where the host
+   * mounts the plugin's gateway routes. Sandboxes get Git configured for
+   * `<gatewayUrl>/git/<alias>/` and harnesses reach models at
+   * `<gatewayUrl>/model/<alias>/`. Absent, Git and model aliases are not
+   * offered to sandboxes.
    */
   gatewayUrl?: (args: {
     projectId: string;
@@ -393,6 +395,8 @@ export class CatamorphicCore {
   readonly connectionGrants?: ConnectionCapabilityGrantsService;
   /** Git smart HTTP for sandboxes, authorized by session grants (ADR 0175). */
   readonly gitGateway?: GitGatewayService;
+  /** Models through the gateway for sandbox harnesses (ADR 0180). */
+  readonly modelGateway?: ModelGatewayService;
   /** Workspaces at a ref of a project's linked remote (ADR 0178). */
   readonly sessionWorkspaces: SessionWorkspaces;
   /** Committed `.work/roles/*.json` and their expansion into identities (ADR 0055). */
@@ -839,6 +843,13 @@ export class CatamorphicCore {
         providers,
         connections: this.connections,
       });
+      this.modelGateway = new ModelGatewayService({
+        db: this.db,
+        grants: this.connectionGrants,
+        allocations: this.executionAllocations,
+        broker: this.connectionBroker,
+        providers,
+      });
     }
     this.codeHosts = new CodeHostsService({
       db: this.db,
@@ -1114,14 +1125,19 @@ export class CatamorphicCore {
         workspaces: this.sessionWorkspaces,
         ...(config.gatewayUrl
           ? {
-              gitGateway: {
-                url: (args: { projectId: string; sessionId: string }) => {
-                  const base = config.gatewayUrl?.(args);
-                  return base ? `${base.replace(/\/+$/, "")}/git` : undefined;
-                },
+              sandboxGateway: {
+                url: (args: { projectId: string; sessionId: string }) =>
+                  config.gatewayUrl?.(args),
                 remoteBaseUrls: (providerKind: string) =>
                   this.connectionProviderRegistry?.get(providerKind)?.git
                     ?.remoteBaseUrls,
+                modelApi: (providerKind: string) =>
+                  this.connectionProviderRegistry?.get(providerKind)?.model
+                    ?.api,
+                turnUsage: async (args: {
+                  sessionId: string;
+                  turnId: string;
+                }) => this.modelGateway?.sessionUsage(args),
               },
             }
           : {}),

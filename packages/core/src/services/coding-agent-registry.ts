@@ -32,6 +32,12 @@ export interface RegisteredCodingAgent {
   environment?: AgentEnvironmentPolicy;
   /** Brokered connection aliases required before this agent can start. */
   connectionRequirements?: readonly (string | ConnectionRequirement)[];
+  /**
+   * The Environment alias of the model connection a sandbox-resident
+   * harness reaches through the gateway (ADR 0180). Core hands the harness
+   * that alias's gateway URL and grant file on every sandbox turn.
+   */
+  modelConnection?: string;
   /** Per-turn defaults applied when the session carries no override. */
   defaults?: TurnOptions;
   /** Committed persona instructions supplied by a project harness factory. */

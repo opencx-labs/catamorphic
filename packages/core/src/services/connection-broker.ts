@@ -10,12 +10,16 @@ import {
   reviewConnectionAction,
 } from "./connection-guards.js";
 import {
+  type ConnectionModelEndpoint,
   type ConnectionProvider,
   type ConnectionProviderRegistry,
   type GitRemoteCredentials,
   isConnectionAuthorizationExpiredError,
 } from "./connection-providers.js";
-import type { ResolvedConnectionBinding } from "./connection-types.js";
+import {
+  MODEL_CAPABILITY,
+  type ResolvedConnectionBinding,
+} from "./connection-types.js";
 import {
   type ConnectionsService,
   ConnectionUnavailableError,
@@ -470,6 +474,131 @@ export class ConnectionBroker {
       await audit("error");
       throw error;
     }
+  }
+
+  /**
+   * The upstream endpoint and key headers for one model call through the
+   * gateway (ADR 0180). The binding must hold `model`. The call passes the
+   * guards as connection kind `model` (action = the endpoint, input = the
+   * provider, model and limits, never the prompt), and the returned
+   * `audit` records how it ended. The headers serve this one request and
+   * never leave the control plane.
+   */
+  async modelAccess(args: {
+    identity: Identity;
+    allocationId: string;
+    alias: string;
+    action: string;
+    input: JsonObject;
+    agentSessionId?: string;
+  }): Promise<{
+    endpoint: ConnectionModelEndpoint;
+    headers: Record<string, string>;
+    binding: ResolvedConnectionBinding;
+    audit: (outcome: "allowed" | "error", metadata?: Json) => Promise<void>;
+  }> {
+    return withSpan(
+      {
+        tracer,
+        name: "connection.model",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "catamorphic.allocation.id": args.allocationId,
+          "catamorphic.connection.alias": args.alias,
+          "catamorphic.connection.action": args.action,
+        },
+      },
+      async () => {
+        const { allocation, binding, provider } =
+          await this.resolveInvocation(args);
+        const endpoint = provider.model;
+        if (!endpoint) {
+          throw new ConnectionActionRefusedError(
+            `Connection '${args.alias}' is not a model API`,
+          );
+        }
+        const record = (
+          outcome: "allowed" | "denied" | "error",
+          metadata?: Json,
+        ) =>
+          this.connections.audit({
+            identity: args.identity,
+            projectId: allocation.projectId,
+            connectionId: binding.connectionId,
+            allocationId: allocation.id,
+            eventType: "connection.model",
+            outcome,
+            action: args.action,
+            metadata: {
+              ...(args.agentSessionId
+                ? { sessionId: args.agentSessionId }
+                : {}),
+              input: args.input,
+              ...(metadata === undefined ? {} : jsonObject(metadata)),
+            },
+          });
+        if (!binding.capabilities.includes(MODEL_CAPABILITY)) {
+          await record("denied", { reason: `missing ${MODEL_CAPABILITY}` });
+          throw new ConnectionActionDeniedError(
+            `this session may not call models through '${args.alias}' (it lacks ${MODEL_CAPABILITY})`,
+          );
+        }
+        const review = await this.review({
+          identity: args.identity,
+          projectId: allocation.projectId,
+          allocationId: allocation.id,
+          connection: {
+            id: binding.connectionId,
+            kind: MODEL_CAPABILITY,
+            alias: binding.alias,
+          },
+          action: args.action,
+          input: args.input,
+          caller: "agent",
+          ...(args.agentSessionId
+            ? { agentSessionId: args.agentSessionId }
+            : {}),
+        });
+        if (review.verdict === "deny") {
+          await record("denied", review.metadata);
+          throw new ConnectionActionDeniedError(review.reason);
+        }
+        try {
+          await this.connections.refreshIfNeeded({
+            identity: args.identity,
+            connectionId: binding.connectionId,
+          });
+          const headers = await this.connections.withCredential({
+            identity: args.identity,
+            connectionId: binding.connectionId,
+            use: async (material) => endpoint.headers({ material }),
+          });
+          return {
+            endpoint,
+            headers,
+            binding,
+            audit: (outcome, metadata) =>
+              record(outcome, {
+                ...jsonObject(review.metadata),
+                ...(metadata === undefined ? {} : jsonObject(metadata)),
+              }),
+          };
+        } catch (cause) {
+          await record("error", review.metadata);
+          if (
+            cause instanceof ConnectionUnavailableError ||
+            isConnectionAuthorizationExpiredError(cause)
+          ) {
+            throw new ConnectionUnavailableError(
+              args.alias,
+              "Connection is unavailable",
+              binding.connectionId,
+            );
+          }
+          throw cause;
+        }
+      },
+    );
   }
 
   /**

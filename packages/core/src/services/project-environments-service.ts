@@ -67,6 +67,22 @@ const EnvironmentConnectionBindingSchema = z
           .optional(),
       })
       .optional(),
+    /** Models through the gateway (ADR 0180): allowed ids, turn budget. */
+    model: z
+      .strictObject({
+        allow: z
+          .array(
+            z
+              .string()
+              .min(1)
+              .max(255)
+              .regex(/^[A-Za-z0-9._:/@*-]+$/),
+          )
+          .min(1)
+          .optional(),
+        maxOutputTokensPerTurn: z.number().int().positive().optional(),
+      })
+      .optional(),
   })
   .refine((binding) => binding.principal !== "member" || !binding.service, {
     message: "A member binding does not name a service connection",
