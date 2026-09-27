@@ -32,6 +32,7 @@ export interface paths {
                             identity: {
                                 externalUserId: string;
                                 root: boolean;
+                                controlPlanePermissions: ("connections:read" | "connections:write")[];
                             };
                             projects: {
                                 projectId: string;
@@ -1671,6 +1672,7 @@ export interface paths {
                             providerKind: string;
                             /** @enum {string} */
                             principalKind: "member" | "project_service" | "tenant_service";
+                            name: string | null;
                             ownerExternalUserId: string | null;
                             label: string;
                             /** @enum {string} */
@@ -1702,24 +1704,105 @@ export interface paths {
             };
         };
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/service-connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    projectId?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string | null;
+                            providerKind: string;
+                            /** @enum {string} */
+                            principalKind: "member" | "project_service" | "tenant_service";
+                            name: string | null;
+                            ownerExternalUserId: string | null;
+                            label: string;
+                            /** @enum {string} */
+                            status: "pending" | "ready" | "expired" | "revoked";
+                            account: unknown;
+                            scopes: string[];
+                            capabilities: string[];
+                            /** Format: date-time */
+                            expiresAt: string | null;
+                            revision: number;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
         post: {
             parameters: {
                 query?: never;
                 header?: never;
-                path: {
-                    projectId: string;
-                };
+                path?: never;
                 cookie?: never;
             };
             requestBody: {
                 content: {
                     "application/json": {
+                        name: string;
                         providerKind: string;
                         /** @enum {string} */
-                        principalKind: "project_service" | "tenant_service";
-                        label: string;
-                        credential: string;
-                        capabilities?: string[];
+                        principalKind: "tenant_service" | "project_service";
+                        /** Format: uuid */
+                        projectId?: string;
+                        label?: string;
                     };
                 };
             };
@@ -1738,6 +1821,7 @@ export interface paths {
                             providerKind: string;
                             /** @enum {string} */
                             principalKind: "member" | "project_service" | "tenant_service";
+                            name: string | null;
                             ownerExternalUserId: string | null;
                             label: string;
                             /** @enum {string} */
@@ -1756,7 +1840,135 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
                 403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/service-connections/{connectionId}/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    connectionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            authorizationId: string;
+                            challenge: {
+                                /** @enum {string} */
+                                kind: "url";
+                                /** Format: uri */
+                                url: string;
+                                expiresAt?: string;
+                            } | {
+                                /** @enum {string} */
+                                kind: "device";
+                                /** Format: uri */
+                                verificationUrl: string;
+                                userCode: string;
+                                expiresAt?: string;
+                            } | {
+                                /** @enum {string} */
+                                kind: "form";
+                                fields: {
+                                    name: string;
+                                    label: string;
+                                    secret: boolean;
+                                    required: boolean;
+                                }[];
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -1841,115 +2053,6 @@ export interface paths {
                 };
             };
         };
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/connections/{connectionId}/credential": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    connectionId: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        credential: string;
-                    };
-                };
-            };
-            responses: {
-                /** @description Default Response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            /** Format: uuid */
-                            id: string;
-                            /** Format: uuid */
-                            projectId: string | null;
-                            providerKind: string;
-                            /** @enum {string} */
-                            principalKind: "member" | "project_service" | "tenant_service";
-                            ownerExternalUserId: string | null;
-                            label: string;
-                            /** @enum {string} */
-                            status: "pending" | "ready" | "expired" | "revoked";
-                            account: unknown;
-                            scopes: string[];
-                            capabilities: string[];
-                            /** Format: date-time */
-                            expiresAt: string | null;
-                            revision: number;
-                            /** Format: date-time */
-                            createdAt: string;
-                            /** Format: date-time */
-                            updatedAt: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                403: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                409: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        post?: never;
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2058,17 +2161,13 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            /** Format: uuid */
-                            id: string;
-                            /** Format: uuid */
-                            projectId: string;
                             environment: string;
                             alias: string;
-                            providerKind: string;
-                            principalKinds: ("member" | "project_service" | "tenant_service")[];
-                            /** Format: uuid */
-                            serviceConnectionId: string | null;
-                            capabilities: string[];
+                            provider: string;
+                            /** @enum {string} */
+                            principal: "member" | "service" | "either";
+                            service: string | null;
+                            capabilities: string[] | null;
                             memberConnection: {
                                 /** Format: uuid */
                                 connectionId: string | null;
@@ -2091,10 +2190,6 @@ export interface paths {
                                 account: unknown;
                                 scopes: string[];
                             } | null;
-                            /** Format: date-time */
-                            createdAt: string;
-                            /** Format: date-time */
-                            updatedAt: string;
                         }[];
                     };
                 };
@@ -2123,115 +2218,6 @@ export interface paths {
             };
         };
         put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/projects/{projectId}/environments/{environment}/connections/{alias}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    projectId: string;
-                    environment: string;
-                    alias: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        providerKind: string;
-                        principalKinds: ("member" | "project_service" | "tenant_service")[];
-                        /** Format: uuid */
-                        serviceConnectionId?: string;
-                        capabilities?: string[];
-                    };
-                };
-            };
-            responses: {
-                /** @description Default Response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            /** Format: uuid */
-                            id: string;
-                            /** Format: uuid */
-                            projectId: string;
-                            environment: string;
-                            alias: string;
-                            providerKind: string;
-                            principalKinds: ("member" | "project_service" | "tenant_service")[];
-                            /** Format: uuid */
-                            serviceConnectionId: string | null;
-                            capabilities: string[];
-                            memberConnection: {
-                                /** Format: uuid */
-                                connectionId: string | null;
-                                /** @enum {string} */
-                                principalKind: "member" | "project_service" | "tenant_service";
-                                label: string;
-                                /** @enum {string} */
-                                status: "pending" | "ready" | "expired" | "revoked";
-                                account: unknown;
-                                scopes: string[];
-                            } | null;
-                            serviceConnection: {
-                                /** Format: uuid */
-                                connectionId: string | null;
-                                /** @enum {string} */
-                                principalKind: "member" | "project_service" | "tenant_service";
-                                label: string;
-                                /** @enum {string} */
-                                status: "pending" | "ready" | "expired" | "revoked";
-                                account: unknown;
-                                scopes: string[];
-                            } | null;
-                            /** Format: date-time */
-                            createdAt: string;
-                            /** Format: date-time */
-                            updatedAt: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                403: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
         post?: never;
         delete?: never;
         options?: never;
@@ -2384,6 +2370,7 @@ export interface paths {
                             providerKind: string;
                             /** @enum {string} */
                             principalKind: "member" | "project_service" | "tenant_service";
+                            name: string | null;
                             ownerExternalUserId: string | null;
                             label: string;
                             /** @enum {string} */
@@ -2543,6 +2530,7 @@ export interface paths {
                             providerKind: string;
                             /** @enum {string} */
                             principalKind: "member" | "project_service" | "tenant_service";
+                            name: string | null;
                             ownerExternalUserId: string | null;
                             label: string;
                             /** @enum {string} */
@@ -3856,8 +3844,6 @@ export interface paths {
                                 connections: {
                                     alias: string;
                                     /** Format: uuid */
-                                    bindingId: string;
-                                    /** Format: uuid */
                                     connectionId: string;
                                     providerKind: string;
                                     /** @enum {string} */
@@ -3965,8 +3951,6 @@ export interface paths {
                             };
                             connections: {
                                 alias: string;
-                                /** Format: uuid */
-                                bindingId: string;
                                 /** Format: uuid */
                                 connectionId: string;
                                 providerKind: string;
@@ -4132,8 +4116,6 @@ export interface paths {
                             connections: {
                                 alias: string;
                                 /** Format: uuid */
-                                bindingId: string;
-                                /** Format: uuid */
                                 connectionId: string;
                                 providerKind: string;
                                 /** @enum {string} */
@@ -4264,8 +4246,6 @@ export interface paths {
                             connections: {
                                 alias: string;
                                 /** Format: uuid */
-                                bindingId: string;
-                                /** Format: uuid */
                                 connectionId: string;
                                 providerKind: string;
                                 /** @enum {string} */
@@ -4380,8 +4360,6 @@ export interface paths {
                             };
                             connections: {
                                 alias: string;
-                                /** Format: uuid */
-                                bindingId: string;
                                 /** Format: uuid */
                                 connectionId: string;
                                 providerKind: string;
@@ -4510,8 +4488,6 @@ export interface paths {
                             };
                             connections: {
                                 alias: string;
-                                /** Format: uuid */
-                                bindingId: string;
                                 /** Format: uuid */
                                 connectionId: string;
                                 providerKind: string;
@@ -4646,8 +4622,6 @@ export interface paths {
                             };
                             connections: {
                                 alias: string;
-                                /** Format: uuid */
-                                bindingId: string;
                                 /** Format: uuid */
                                 connectionId: string;
                                 providerKind: string;

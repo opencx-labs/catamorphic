@@ -325,7 +325,8 @@ export class ConnectionsService {
             "catamorphic.tenant.id": args.identity.tenantId,
             "user.id": args.identity.externalUserId,
             "catamorphic.project.id": attempt.project_id ?? "",
-            "catamorphic.connection.environment": attempt.environment_name ?? "",
+            "catamorphic.connection.environment":
+              attempt.environment_name ?? "",
             "catamorphic.connection.alias": attempt.alias ?? "",
             "catamorphic.connection.id": attempt.service_connection_id ?? "",
             "catamorphic.connection.provider": attempt.provider_kind,
@@ -1345,7 +1346,9 @@ export class ConnectionsService {
       | { serviceConnectionId: string };
   }): Promise<{ authorizationId: string; challenge: AuthorizationChallenge }> {
     const subject =
-      "alias" in args.target ? args.target.alias : args.target.serviceConnectionId;
+      "alias" in args.target
+        ? args.target.alias
+        : args.target.serviceConnectionId;
     const provider = this.providers.get(args.providerKind);
     const beginAuthorization = provider?.beginAuthorization;
     if (!beginAuthorization) {
@@ -1437,10 +1440,7 @@ export class ConnectionsService {
       args.identity,
       args.connectionId,
     );
-    if (
-      current.principal_kind === "member" ||
-      current.status === "revoked"
-    ) {
+    if (current.principal_kind === "member" || current.status === "revoked") {
       throw new ConnectionPermissionDeniedError();
     }
     const row = await this.replaceCredential({

@@ -32,7 +32,7 @@ export function EnvironmentConnections({
   if (!query.data?.length) {
     return (
       <p className="p-4 text-sm text-fg-muted">
-        This Environment has no connection bindings.
+        This Environment offers no connections.
       </p>
     );
   }
@@ -40,7 +40,7 @@ export function EnvironmentConnections({
     <div className="space-y-2 p-3">
       {query.data.map((binding) => (
         <EnvironmentConnectionRow
-          key={binding.id}
+          key={binding.alias}
           projectId={projectId}
           environment={environment}
           binding={binding}
@@ -124,9 +124,9 @@ function EnvironmentConnectionRow({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="font-medium text-fg">{binding.alias}</p>
-          <p className="mt-0.5 text-fg-muted">{binding.providerKind}</p>
+          <p className="mt-0.5 text-fg-muted">{binding.provider}</p>
         </div>
-        {binding.principalKinds.includes("member") && (
+        {binding.principal !== "service" && (
           <button
             type="button"
             disabled={authorize.isPending}
@@ -172,7 +172,7 @@ function EnvironmentConnectionRow({
               Connect {binding.alias}
             </h2>
             <p className="mt-1 text-xs leading-relaxed text-fg-muted">
-              {binding.providerKind} asks for these details.
+              {binding.provider} asks for these details.
             </p>
             <div className="mt-4 space-y-3 text-xs">
               {formChallenge.current?.fields.map((field) => (

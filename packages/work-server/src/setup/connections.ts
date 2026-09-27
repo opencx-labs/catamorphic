@@ -183,7 +183,9 @@ export function registerConnectionSetup(args: {
     app.post("/_work/operator/administrators", async (request, reply) => {
       const body = z.strictObject({ email: z.email() }).safeParse(request.body);
       if (!body.success)
-        return reply.status(400).send({ error: "An email address is required" });
+        return reply
+          .status(400)
+          .send({ error: "An email address is required" });
       try {
         const user = await args.administrators.promote(body.data);
         return reply.status(201).send({

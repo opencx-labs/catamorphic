@@ -70,10 +70,10 @@ import { workExecution } from "./execution-config.js";
 import { gatewayGuards, gatewayProviders } from "./gateway/gateway-config.js";
 import { workGithub } from "./github-config.js";
 import { AccountLifecycle } from "./identity/account-lifecycle.js";
-import type { DirectoryProvider } from "./identity/directory.js";
-import { GoogleWorkspaceDirectory } from "./identity/google-directory.js";
 import { registerAdministratorRoutes } from "./identity/administrator-routes.js";
 import { WorkAdministrators } from "./identity/administrators.js";
+import type { DirectoryProvider } from "./identity/directory.js";
+import { GoogleWorkspaceDirectory } from "./identity/google-directory.js";
 import { registerConnectionSetup } from "./setup/connections.js";
 import { registerMachineSetup } from "./setup/machines.js";
 import {

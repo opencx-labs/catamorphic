@@ -44,12 +44,17 @@ Role `permissions` use the `thing:action` form (ADR 0158). Core enforces
 resolution for an embedder's services and project-authored presentation but
 grant no framework authority on their own. Service connections are governed by
 the host-issued `connections:read` and `connections:write`, which project roles
-cannot grant. Desktop presentation may match resolved `permissions` on shared
-sidebar items and project starting actions. It must not branch on role names.
+cannot grant. On the Work server, organization administrators hold them
+(ADR 0172): the operator marks the first ones, administrators promote others,
+and `/me` lists them under `identity.controlPlanePermissions`. Being an
+administrator grants nothing inside projects. Desktop presentation may match
+resolved `permissions` on shared sidebar items and project starting actions.
+It must not branch on role names.
 
 Machine/database authority is outside this model. There is no server-owner or
-super-admin user. A setup agent with deployment access may provision the first
-ordinary user and membership through maintained host operations.
+super-admin user; an organization administrator manages service connections
+only. A setup agent with deployment access may provision the first ordinary
+user, administrator, and membership through maintained host operations.
 
 An invitation admits a user once; it is not a recovery credential after
 membership revocation. Test sign-in, redemption, revocation, and attempted replay

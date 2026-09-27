@@ -203,7 +203,9 @@ describe("project Environment policy", () => {
       environments: {
         review: {
           workloads: ["agent"],
-          connections: { "not an alias": { provider: "x", principal: "member" } },
+          connections: {
+            "not an alias": { provider: "x", principal: "member" },
+          },
         },
       },
     });

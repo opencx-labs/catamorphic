@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-23
 - **Unattended ownership refined by:** 0068
+- **Bindings and service connections refined by:** 0172 (bindings are committed in `.work/project.json`; service connections are named)
 
 ## Context
 

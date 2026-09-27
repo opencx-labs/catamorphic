@@ -217,7 +217,11 @@ describe("gateway configuration", () => {
     });
     expect(config.connections[2]).toMatchObject({
       oauth: {
-        client: { id: "1234.5678", secret: "slack-secret", scopes: ["search:read"] },
+        client: {
+          id: "1234.5678",
+          secret: "slack-secret",
+          scopes: ["search:read"],
+        },
       },
     });
     const providers = gatewayProviders(config);

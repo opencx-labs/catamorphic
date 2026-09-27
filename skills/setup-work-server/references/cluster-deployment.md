@@ -184,8 +184,12 @@ Do not call a controller sandbox a locally running model or promise offline use.
 endpoints, HTTP APIs, databases) and the guards that review them; see
 [secrets and the gateway](secrets-and-gateway.md). This is host endpoint
 configuration, not workflow logic or a second role model.
-Commit project aliases and role capability grants separately. Members authorize
-their own accounts and explicitly review each workflow before enabling it.
+Organization administrators connect the named service connections once;
+projects commit which Environment binds which name in `.work/project.json`,
+and roles grant the aliases (ADR 0172). Members authorize their own accounts
+and explicitly review each workflow before enabling it. Service credentials
+stay on the control plane: workers reach them only through the gateway, and
+Postgres sessions are pooled on the control plane, not on workers.
 
 Verify cross-instance sign-in, PKCE exchange, refresh, approval replies, chosen
 machine execution, role revocation, and checkpoint recovery with deterministic

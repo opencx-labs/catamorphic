@@ -80,7 +80,9 @@ export function definePostgresConnectionProvider(
     string,
     { connectionId: string; revision: number; pool: pg.Pool }
   >();
-  const closePools = async (keep: (entry: { connectionId: string; revision: number }) => boolean) => {
+  const closePools = async (
+    keep: (entry: { connectionId: string; revision: number }) => boolean,
+  ) => {
     const closing = [...pools.entries()].filter(([, entry]) => !keep(entry));
     for (const [key] of closing) pools.delete(key);
     await Promise.all(
