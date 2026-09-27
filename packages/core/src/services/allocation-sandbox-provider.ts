@@ -82,8 +82,14 @@ export function allocationSandboxProvider(args: {
       );
     // Keep the reservation on an uncertain create. Lease expiry does not prove
     // that the provider failed to allocate a machine.
+    // The Environment's image, containers and egress were fixed when the
+    // Allocation was admitted; no caller can widen them (ADR 0176).
+    const sandbox = allocation.policy.sandbox;
     const handle = await provider.createSandbox({
       ...opts,
+      ...(sandbox?.image ? { image: sandbox.image } : {}),
+      ...(sandbox?.containers ? { containers: true } : {}),
+      ...(sandbox?.egress ? { egress: sandbox.egress } : {}),
       resources,
       labels: {
         ...opts.labels,
@@ -109,6 +115,7 @@ export function allocationSandboxProvider(args: {
     workspaceRoot: provider.workspaceRoot,
     resourceLimits: provider.resourceLimits,
     isolation: provider.isolation,
+    capabilities: provider.capabilities,
     createSandbox: create,
     startSandbox: (id) => guard(id, () => provider.startSandbox(id)),
     stopSandbox: (id) => guard(id, () => provider.stopSandbox(id)),

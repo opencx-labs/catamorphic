@@ -185,6 +185,12 @@ export interface CatamorphicCoreConfig {
     projectId: string;
     externalUserId: string;
   }) => Promise<Identity | null>;
+  /**
+   * Hosts sandboxes reach the control plane at: its public URL's host. An
+   * Environment with restricted egress always reaches them, and
+   * `egress: "gateway"` reaches nothing else (ADR 0176).
+   */
+  gatewayHosts?: readonly string[];
   /** Reachable control-plane endpoint for allocation-bound agent MCP grants. */
   connectionMcpUrl?: (args: {
     projectId: string;
@@ -688,6 +694,7 @@ export class CatamorphicCore {
               }),
           }
         : undefined,
+      { gatewayHosts: config.gatewayHosts ?? [] },
     );
     this.agentCapabilities = new AgentCapabilitiesService({
       db: this.db,

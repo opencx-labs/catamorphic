@@ -2011,6 +2011,7 @@ export class RunsService {
               requirements: admission.effectiveRequirements,
               connections,
               workflowEnablementId: args.workflowEnablementId,
+              sandbox: admission.sandbox,
             },
             transaction: trx,
           });

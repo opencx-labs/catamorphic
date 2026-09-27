@@ -32,6 +32,13 @@ export const WorkerOfferSchema = z.strictObject({
   workspaceRoot: z.string().startsWith("/"),
   /** The worker's provider runs background processes (ADR 0174). */
   processes: z.boolean().default(false),
+  /**
+   * What its sandboxes can be given (ADR 0176): images, image builds,
+   * containers, an enforced egress policy.
+   */
+  capabilities: z
+    .array(z.enum(["images", "images.build", "containers", "network.policy"]))
+    .default([]),
   capacity: z.strictObject({
     workspaces: z.number().int().positive().max(1_000),
     cpuMillis: z.number().int().positive().optional(),
@@ -249,7 +256,7 @@ export class WorkWorkerRegistry {
       // Workflow runs carry project secrets; they stay on the control plane.
       workloads: ["agent"],
       agentTopologies: ["controller"],
-      capabilities: ["network.egress"],
+      capabilities: ["network.egress", ...args.offer.capabilities],
       resources: {
         ...(args.offer.capacity.cpuMillis
           ? { cpuMillis: args.offer.capacity.cpuMillis }

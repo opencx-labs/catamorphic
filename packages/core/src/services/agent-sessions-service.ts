@@ -1822,6 +1822,8 @@ export class AgentSessionsService {
             binding: admitted.binding,
             requirements: admitted.effectiveRequirements,
             connections,
+            sandbox: admitted.sandbox,
+            ...(admitted.approvals ? { approvals: admitted.approvals } : {}),
           },
           transaction,
         });
@@ -2256,6 +2258,10 @@ export class AgentSessionsService {
               binding: admission.binding,
               requirements: admission.effectiveRequirements,
               connections,
+              sandbox: admission.sandbox,
+              ...(admission.approvals
+                ? { approvals: admission.approvals }
+                : {}),
             },
             transaction,
           });

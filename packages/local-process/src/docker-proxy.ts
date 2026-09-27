@@ -255,7 +255,8 @@ export async function startDockerProxy(
       if (id === "prune" && method === "POST") return filtered();
       if (id === "create" && method === "POST") {
         const body = await args.body();
-        if (![undefined, "", "bridge"].includes(body.Driver ?? undefined))
+        const driver = body.Driver;
+        if (driver !== undefined && driver !== "" && driver !== "bridge")
           throw new Refusal(
             403,
             "Only bridge networks are available in this sandbox",

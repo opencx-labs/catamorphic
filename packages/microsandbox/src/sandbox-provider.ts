@@ -293,7 +293,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
       return;
     }
-    if (handle.status === "running") await handle.killWithTimeout(0);
+    if (handle.status === "running") await handle.kill();
     await handle.remove();
     await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
   }

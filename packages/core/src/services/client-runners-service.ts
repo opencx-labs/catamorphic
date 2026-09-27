@@ -37,6 +37,27 @@ export const ClientRunnerOperationSchema = z.discriminatedUnion("kind", [
         })
         .optional(),
       snapshotName: z.string().optional(),
+      image: z
+        .discriminatedUnion("kind", [
+          z.object({ kind: z.literal("oci"), reference: z.string() }),
+          z.object({
+            kind: z.literal("dockerfile"),
+            path: z.string(),
+            content: z.string().max(64 * 1024),
+            digest: z.string(),
+          }),
+        ])
+        .optional(),
+      containers: z.boolean().optional(),
+      egress: z
+        .discriminatedUnion("mode", [
+          z.object({ mode: z.literal("open") }),
+          z.object({
+            mode: z.literal("allowlist"),
+            allow: z.array(z.string()).readonly(),
+          }),
+        ])
+        .optional(),
       language: z.string().optional(),
       envVars: stringMap.optional(),
       autoStopInterval: z.number().optional(),

@@ -139,6 +139,10 @@ export async function writeSessionMirror({
               binding: mirrorAdmission.binding,
               requirements: mirrorAdmission.effectiveRequirements,
               connections: mirrorConnections,
+              sandbox: mirrorAdmission.sandbox,
+              ...(mirrorAdmission.approvals
+                ? { approvals: mirrorAdmission.approvals }
+                : {}),
             },
             transaction: trx,
           })

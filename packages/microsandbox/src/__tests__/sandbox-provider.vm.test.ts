@@ -1,4 +1,6 @@
+import { dockerfileDigest } from "@catamorphic/sandbox";
 import { describe, expect, it } from "vitest";
+import { dockerImageBuilder } from "../image-builder.js";
 import { MicrosandboxSandboxProvider } from "../sandbox-provider.js";
 
 // Real microVMs: WORK_TEST_MICROSANDBOX=1 with MSB_PATH naming the SDK's msb
@@ -42,6 +44,34 @@ describe.skipIf(!enabled)("microsandbox Environments (ADR 0176)", () => {
       await provider.destroySandbox(sandbox.id);
     }
   }, 900_000);
+
+  it.skipIf(!process.env.WORK_TEST_DOCKER_SOCKET)(
+    "boots an image built from a project Dockerfile",
+    async () => {
+      const dockerfile = `FROM bash\nRUN echo built-${Date.now()} > /built\n`;
+      const provider = new MicrosandboxSandboxProvider({
+        namePrefix: "test-image",
+        setupCommand: "",
+        imageBuilder: dockerImageBuilder(),
+      });
+      expect(provider.capabilities).toContain("images.build");
+      const sandbox = await provider.createSandbox({
+        image: {
+          kind: "dockerfile",
+          path: ".work/images/test.Dockerfile",
+          content: dockerfile,
+          digest: dockerfileDigest(dockerfile),
+        },
+      });
+      try {
+        const built = await provider.executeCommand(sandbox.id, "cat /built");
+        expect(built.result).toContain("built-");
+      } finally {
+        await provider.destroySandbox(sandbox.id);
+      }
+    },
+    900_000,
+  );
 
   it("reaches only allowlisted hosts", async () => {
     const provider = new MicrosandboxSandboxProvider({
