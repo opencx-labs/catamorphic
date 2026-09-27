@@ -148,7 +148,9 @@ describeIf("agent modes and definition policies (ADR 0176)", () => {
       codingAgents: registry,
       executionEnvironments,
       executionAllocations,
-      nativeAgentCheckout: { resolve: () => rootPath },
+      nativeAgentCheckout: {
+        resolve: () => ({ path: rootPath, owned: false }),
+      },
     });
     const capability = (
       name: string,

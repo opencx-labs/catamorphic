@@ -141,6 +141,82 @@ describe("SessionCheckouts", () => {
     expect(created.branch).toMatch(/^work\/22222222/);
   });
 
+  it("moves a chat asked for a new base out of the project folder, never touching it (ADR 0178)", async () => {
+    const mirror = path.join(tmpDir, "move-mirror.git");
+    await execFileAsync("git", ["clone", "-q", "--bare", rootPath, mirror]);
+    const work = path.join(tmpDir, "move-work");
+    await execFileAsync("git", ["clone", "-q", mirror, work]);
+    await fs.writeFile(path.join(work, "README.md"), "new base\n");
+    await git(work, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-qam",
+      "Base",
+    ]);
+    const head = (await git(work, ["rev-parse", "HEAD"])).trim();
+    await git(work, ["push", "-q", mirror, `HEAD:refs/work/move/${sessionId}`]);
+    // The person's own work in the project folder.
+    const before = (await git(rootPath, ["rev-parse", "HEAD"])).trim();
+    await fs.writeFile(path.join(rootPath, "README.md"), "my edit\n");
+    await fs.writeFile(path.join(rootPath, "draft.md"), "untracked\n");
+    const requiresIsolation = async () => false;
+
+    // Without a base, the chat works in the project folder, which is not its own.
+    expect(
+      await checkouts.resolveForAgent({
+        projectId,
+        sessionId,
+        requiresIsolation,
+      }),
+    ).toEqual({ path: rootPath, owned: false });
+    // A pending move gives it its own worktree at the new base.
+    const moved = await checkouts.resolveForAgent({
+      projectId,
+      sessionId,
+      workspace: {
+        repository: mirror,
+        pin: `refs/work/move/${sessionId}`,
+        commit: head,
+      },
+      requiresIsolation,
+    });
+    expect(moved.owned).toBe(true);
+    expect(moved.path).not.toBe(rootPath);
+    expect((await git(moved.path, ["rev-parse", "HEAD"])).trim()).toBe(head);
+    expect((await git(rootPath, ["rev-parse", "HEAD"])).trim()).toBe(before);
+    expect(await fs.readFile(path.join(rootPath, "README.md"), "utf8")).toBe(
+      "my edit\n",
+    );
+    expect(await fs.readFile(path.join(rootPath, "draft.md"), "utf8")).toBe(
+      "untracked\n",
+    );
+    // Later turns stay in the chat's own worktree.
+    expect(
+      await checkouts.resolveForAgent({
+        projectId,
+        sessionId,
+        requiresIsolation,
+      }),
+    ).toEqual({ path: moved.path, owned: true });
+  });
+
+  it("never reports an assigned worktree as the chat's own", async () => {
+    const external = path.join(tmpDir, "assigned");
+    await git(rootPath, ["worktree", "add", "-q", "-b", "assigned", external]);
+    await checkouts.adopt({ projectId, sessionId, path: external });
+    const resolved = await checkouts.resolveForAgent({
+      projectId,
+      sessionId,
+      workspace: { repository: rootPath, pin: "refs/heads/main", commit: "0" },
+      requiresIsolation: async () => false,
+    });
+    expect(resolved.owned).toBe(false);
+    expect(resolved.path).toBe(await fs.realpath(external));
+  });
+
   it("keeps a new session on primary until it creates a worktree", async () => {
     expect(await checkouts.resolve({ projectId, sessionId })).toBe(rootPath);
 

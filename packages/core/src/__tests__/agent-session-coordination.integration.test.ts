@@ -272,8 +272,10 @@ describe("agent session coordination", () => {
         list: () => [...agents.values()],
       },
       nativeAgentCheckout: {
-        resolve: ({ projectId, sessionId }) =>
-          checkoutBySession.get(sessionId) ?? path.join(tmpDir, projectId),
+        resolve: ({ projectId, sessionId }) => ({
+          path: checkoutBySession.get(sessionId) ?? path.join(tmpDir, projectId),
+          owned: checkoutBySession.has(sessionId),
+        }),
         checkpoint: ({ sessionId, workingDirectory }) => {
           checkpointedSessions.push(sessionId);
           checkpointedTurns.push({ sessionId, workingDirectory });

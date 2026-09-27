@@ -87,6 +87,16 @@ export function workspaceMoveJson(move: SessionWorkspaceMove): Json {
   return { ref: move.ref, commit: move.commit, update: move.update };
 }
 
+/**
+ * What the agent is told when a delivery asked for a base its checkout may
+ * not move to: the folder is a person's own, not the chat's (ADR 0178).
+ */
+export function workspaceMoveRefusedNote(input: {
+  to: SessionWorkspaceBase;
+}): string {
+  return `[Workspace] A delivery asked to move this workspace to ${input.to.ref} at ${input.to.commit.slice(0, 12)}. This chat works in a folder it does not own, so nothing was moved. Fetch that ref yourself if you need it.`;
+}
+
 /** What the agent is told before a turn whose workspace base moved. */
 export function workspaceMoveNote(input: {
   from: SessionWorkspaceBase | null;

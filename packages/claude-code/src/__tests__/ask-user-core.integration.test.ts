@@ -123,7 +123,9 @@ describeIf("ask_user across ClaudeCodeAgent + AgentSessionsService", () => {
       codingAgents: registry,
       executionEnvironments,
       executionAllocations: new ExecutionAllocationsService(db),
-      nativeAgentCheckout: { resolve: () => rootPath },
+      nativeAgentCheckout: {
+        resolve: () => ({ path: rootPath, owned: false }),
+      },
     });
   });
 

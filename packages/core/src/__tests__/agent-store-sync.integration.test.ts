@@ -95,7 +95,9 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
       projectManager,
       sandboxProvider: unusedSandboxProvider,
       environmentProvider: testEnvironmentProvider(unusedSandboxProvider),
-      nativeAgentCheckout: { resolve: () => rootPath },
+      nativeAgentCheckout: {
+        resolve: () => ({ path: rootPath, owned: false }),
+      },
       codingAgent: {
         defaultAgentId: () => registered.id,
         get: (id) => (id === registered.id ? registered : undefined),

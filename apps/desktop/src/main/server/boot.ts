@@ -459,54 +459,16 @@ export async function startEmbeddedServer(
     // Native agents (Claude Code, Codex) run in the project's user-visible
     // WorkerNode folder.
     nativeAgentCheckout: {
-      resolve: async (input) => {
-        const current = await sessionCheckouts.describe(input);
-        // A chat at a ref of the project's remote (ADR 0178) always works in
-        // its own worktree, started at that commit from the host's mirror.
-        if (input.workspace && current.kind === "primary") {
-          const created = await sessionCheckouts.createManaged({
-            projectId: input.projectId,
-            sessionId: input.sessionId,
-            start: {
-              repository: input.workspace.repository,
-              ref: input.workspace.pin,
-              commit: input.workspace.commit,
-            },
-          });
-          return created.path;
-        }
-        if (
-          await requiresIsolatedCheckout(
-            input.projectId,
-            input.sessionId,
-            current.path,
-          )
-        ) {
-          if (current.kind !== "primary") {
-            throw new Error(
-              "Isolation policy prevents sharing this assigned worktree with another running session. Choose another worktree or wait for that session to finish.",
-            );
-          }
-          const created = await sessionCheckouts.createManaged({
-            ...input,
-            ensureAvailable: async (checkoutPath) => {
-              if (
-                await requiresIsolatedCheckout(
-                  input.projectId,
-                  input.sessionId,
-                  checkoutPath,
-                )
-              ) {
-                throw new Error(
-                  "Isolation policy prevents sharing the new worktree with another running session.",
-                );
-              }
-            },
-          });
-          return created.path;
-        }
-        return current.path;
-      },
+      resolve: (input) =>
+        sessionCheckouts.resolveForAgent({
+          ...input,
+          requiresIsolation: (checkoutPath) =>
+            requiresIsolatedCheckout(
+              input.projectId,
+              input.sessionId,
+              checkoutPath,
+            ),
+        }),
       checkpoint: async (input) => {
         const checkout = await sessionCheckouts.describe(input);
         if (

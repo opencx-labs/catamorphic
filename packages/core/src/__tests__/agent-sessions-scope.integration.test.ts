@@ -154,7 +154,9 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       codingAgents: registry,
       executionEnvironments,
       executionAllocations: new ExecutionAllocationsService(db),
-      nativeAgentCheckout: { resolve: () => rootPath },
+      nativeAgentCheckout: {
+        resolve: () => ({ path: rootPath, owned: false }),
+      },
       // The project's tool roster: two tools, one renamed via its trigger.
       mcpToolNames: async () =>
         new Map([
