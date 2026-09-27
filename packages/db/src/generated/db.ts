@@ -1165,6 +1165,17 @@ export interface WorkflowStepAttempts {
   updated_at: Generated<Timestamp>;
 }
 
+export interface WorkGithubAppRegistrations {
+  app_ref: string | null;
+  app_slug: string | null;
+  created_at: Generated<Timestamp>;
+  expires_at: Timestamp;
+  input: Json;
+  state_hash: string;
+  status: Generated<string>;
+  tenant_id: string;
+}
+
 export interface WorkMachineReconciler {
   expires_at: Timestamp;
   holder: string;
@@ -1351,6 +1362,7 @@ export interface DB {
   webhook_endpoints: WebhookEndpoints;
   work_accounts: WorkAccounts;
   work_directory_grants: WorkDirectoryGrants;
+  work_github_app_registrations: WorkGithubAppRegistrations;
   work_machine_reconciler: WorkMachineReconciler;
   work_machine_rules: WorkMachineRules;
   work_project_access_requests: WorkProjectAccessRequests;

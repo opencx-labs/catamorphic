@@ -63,7 +63,11 @@ connection, or the operator registers a new App from a manifest
 converts the code, the operator installs the App, and the installation
 becomes the connection; with a project, the App's webhook points at that
 project's `github` URL and its secret is stored as `GITHUB_WEBHOOK_SECRET`
-when the project declares it. Provisioning attaches repositories through the
+when the project declares it. The registration in progress lives in
+`work_github_app_registrations` (migration 036: the state's hash, each step
+claimed once, the App's credentials sealed in the vault until connected), so
+any replica continues it; the App's OAuth client is shown once at the end
+for members' own accounts. Provisioning attaches repositories through the
 service connection; the published-sync loop covers every linked project.
 
 **Desktop.** GitHub sign-in authorizes the personal `github` connection

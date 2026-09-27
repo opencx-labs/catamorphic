@@ -1007,6 +1007,8 @@ async function createWorkServerInner(
     core: () => core,
     provider: github,
     publicBase,
+    db: ownDb,
+    vault: credentialVault,
   });
   operatorApp.post("/_work/operator/projects", async (request, reply) => {
     const authorization = Array.isArray(request.headers.authorization)

@@ -59,7 +59,12 @@ finishes it in their browser on the server's public URL
    `GITHUB_WEBHOOK_SECRET` once the project declares it (the trigger library
    declares it with `use: "webhook"`, so it verifies deliveries and never
    reaches a run); otherwise the page shows it once to set after the library
-   lands.
+   lands. The page also shows the App's OAuth client (client ID and secret)
+   once, for members' own accounts (see below); Work keeps no copy.
+
+Each step of the link works once, on any replica: the registration is kept
+in the database (the App's key sealed in the vault until the installation is
+connected), so a replayed or forwarded link finds nothing left to do.
 
 ## Use an existing App
 
