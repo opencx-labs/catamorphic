@@ -158,6 +158,22 @@ export {
   type StartProcessArgs,
   shellSandboxProcesses,
 } from "./processes.js";
+export {
+  AGENT_MODES,
+  type AgentMode,
+  dockerfileDigest,
+  dockerfileImageReference,
+  type EnvironmentNetworkPolicy,
+  gatewayHostOf,
+  isEgressPattern,
+  modeAllows,
+  modeRefusal,
+  resolveEgress,
+  SANDBOX_CAPABILITIES,
+  type SandboxCapability,
+  type SandboxEgress,
+  type SandboxImage,
+} from "./sandbox-environment.js";
 export type { SandboxStore } from "./sandbox-manager.js";
 export { SandboxManagerImpl } from "./sandbox-manager.js";
 export type {

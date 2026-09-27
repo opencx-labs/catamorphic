@@ -50,6 +50,7 @@ export function instrumentSandboxProvider(
     workspaceRoot: provider.workspaceRoot,
     resourceLimits: provider.resourceLimits,
     isolation: provider.isolation,
+    capabilities: provider.capabilities,
     deploymentRuntime: provider.deploymentRuntime
       ? instrumentDeploymentRuntimeProvider({
           provider: provider.deploymentRuntime,

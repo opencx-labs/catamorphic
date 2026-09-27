@@ -10,6 +10,7 @@ import type {
   GitCloneOpts,
   ProcessOutput,
   ReadProcessOutputArgs,
+  SandboxCapability,
   SandboxHandle,
   SandboxProcess,
   SandboxProcessProvider,
@@ -26,9 +27,15 @@ import {
   newProcessId,
   PROCESS_SIGNALS,
   processReadBounds,
+  SANDBOX_CAPABILITIES,
   StdioDeploymentRuntimeProvider,
 } from "@catamorphic/sandbox";
 import { APP_DATA_ENV } from "@catamorphic/workflow/project-layout";
+import {
+  type DockerProxy,
+  removeDockerResources,
+  startDockerProxy,
+} from "./docker-proxy.js";
 
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
@@ -49,7 +56,30 @@ export interface LocalProcessProviderConfig {
    * Merged under the per-call env, over the built-in base.
    */
   env?: Record<string, string>;
+  /**
+   * Containers for sandboxes that ask for them (ADR 0176): each gets its own
+   * Docker endpoint in front of this host daemon, which labels what it
+   * creates, shows it only its own, refuses host access, and removes it all
+   * with the sandbox. Trusted machines only.
+   */
+  docker?: {
+    socketPath: string;
+    /**
+     * Docker CLI plugins (`docker compose`, `docker buildx`) for sandboxes,
+     * whose HOME is their own: linked as `~/.docker/cli-plugins`. Only
+     * needed where plugins are installed per user (Docker Desktop).
+     */
+    cliPlugins?: string;
+  };
+  /**
+   * The operator accepts that this machine cannot enforce an Environment's
+   * egress policy and runs such Environments anyway (ADR 0176). Advertises
+   * `network.policy`; nothing restricts the network.
+   */
+  acceptUnenforcedEgress?: boolean;
 }
+
+const CONTAINERS_MARKER = "containers";
 
 /**
  * Sandboxless execution for trusted, single-tenant hosts (ADR 0047): each
@@ -75,6 +105,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
   readonly isolation = "process";
   readonly workspaceRoot = "/workspace";
   readonly deploymentRuntime: DeploymentRuntimeProvider;
+  readonly capabilities: readonly SandboxCapability[];
   /**
    * Background processes (ADR 0174): each writes its output to a log in
    * its sandbox directory, outside the workspace, and is stopped with the
@@ -102,9 +133,20 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     string,
     { envVars: Record<string, string> }
   >();
+  private readonly docker?: LocalProcessProviderConfig["docker"];
+  private readonly acceptUnenforcedEgress: boolean;
+  private readonly dockerProxies = new Map<string, Promise<DockerProxy>>();
 
   constructor(config?: LocalProcessProviderConfig) {
     this.projectDataDirectory = config?.projectDataDirectory;
+    this.docker = config?.docker;
+    this.acceptUnenforcedEgress = config?.acceptUnenforcedEgress ?? false;
+    this.capabilities = [
+      ...(this.docker ? [SANDBOX_CAPABILITIES.containers] : []),
+      ...(this.acceptUnenforcedEgress
+        ? [SANDBOX_CAPABILITIES.egressPolicy]
+        : []),
+    ];
     this.root =
       config?.root ?? path.join(os.tmpdir(), "catamorphic-local-process");
     fs.mkdirSync(this.root, { recursive: true });
@@ -127,9 +169,28 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
 
   async createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle> {
     assertSandboxResources(opts.resources, []);
+    if (opts.image)
+      throw new Error(
+        "Local-process sandboxes run on this machine's own system and cannot boot an image",
+      );
+    if (opts.containers && !this.docker)
+      throw new Error("This machine does not offer containers to sandboxes");
+    if (opts.egress?.mode === "allowlist" && !this.acceptUnenforcedEgress)
+      throw new Error(
+        "Local-process sandboxes cannot enforce an egress policy; place the Environment on a microsandbox machine",
+      );
     const id = `local-${crypto.randomUUID().slice(0, 12)}`;
     for (const dir of ["workspace", "home", "tmp"]) {
       fs.mkdirSync(path.join(this.root, id, dir), { recursive: true });
+    }
+    if (opts.containers) {
+      fs.writeFileSync(path.join(this.root, id, CONTAINERS_MARKER), "");
+      const plugins = this.docker?.cliPlugins;
+      if (plugins) {
+        const config = path.join(this.root, id, "home", ".docker");
+        fs.mkdirSync(config, { recursive: true });
+        fs.symlinkSync(plugins, path.join(config, "cli-plugins"));
+      }
     }
     const dataDirectory =
       opts.labels?.purpose === "deployment-runtime" && opts.labels.projectId
@@ -143,6 +204,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
         ...(dataDirectory ? { [APP_DATA_ENV]: dataDirectory } : {}),
       },
     });
+    await this.ensureDocker(id);
     return { id, providerId: id, sandboxType: "execution", status: "started" };
   }
 
@@ -175,6 +237,19 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     const directory = path.join(this.root, sandboxId);
     if (fs.existsSync(directory)) {
       await this.stopSandbox(sandboxId);
+      if (
+        this.docker &&
+        fs.existsSync(path.join(directory, CONTAINERS_MARKER))
+      ) {
+        // Everything the sandbox started goes with it. A failure keeps the
+        // directory, so cleanup retries and capacity stays reserved.
+        await (await this.dockerProxies.get(sandboxId))?.close();
+        this.dockerProxies.delete(sandboxId);
+        await removeDockerResources({
+          upstreamSocket: this.docker.socketPath,
+          owner: sandboxId,
+        });
+      }
       // Deployments are made read-only inside the sandbox; the owner takes
       // write access back so removal cannot leave the directory behind.
       restoreOwnerWrite(directory);
@@ -200,6 +275,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     opts?: ExecOpts,
   ): Promise<ExecResult> {
     this.requireRunning(sandboxId);
+    await this.ensureDocker(sandboxId);
     const cwd = this.resolvePath(sandboxId, opts?.cwd ?? this.workspaceRoot);
     fs.mkdirSync(cwd, { recursive: true });
     const child = spawn("/bin/bash", ["-c", command], {
@@ -263,8 +339,41 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     }
   }
 
+  /**
+   * Serve a container sandbox's Docker endpoint, again after this process
+   * restarts. Its socket sits beside the sandbox (or in the temp dir when
+   * that path is too long for a Unix socket).
+   */
+  private async ensureDocker(sandboxId: string): Promise<void> {
+    const docker = this.docker;
+    const directory = path.join(this.root, sandboxId);
+    if (!docker || !fs.existsSync(path.join(directory, CONTAINERS_MARKER)))
+      return;
+    let proxy = this.dockerProxies.get(sandboxId);
+    if (!proxy) {
+      const beside = path.join(directory, "docker.sock");
+      const socketPath =
+        Buffer.byteLength(beside) < 100
+          ? beside
+          : path.join(os.tmpdir(), `work-docker-${sandboxId}.sock`);
+      proxy = startDockerProxy({
+        upstreamSocket: docker.socketPath,
+        socketPath,
+        owner: sandboxId,
+        bindRoots: [directory],
+      });
+      this.dockerProxies.set(sandboxId, proxy);
+      proxy.catch(() => this.dockerProxies.delete(sandboxId));
+    }
+    const { socketPath } = await proxy;
+    const entry = this.sandboxes.get(sandboxId) ?? { envVars: {} };
+    entry.envVars.DOCKER_HOST = `unix://${socketPath}`;
+    this.sandboxes.set(sandboxId, entry);
+  }
+
   private async startProcess(args: StartProcessArgs): Promise<SandboxProcess> {
     this.requireRunning(args.sandboxId);
+    await this.ensureDocker(args.sandboxId);
     const virtualCwd = args.cwd ?? this.workspaceRoot;
     const cwd = this.resolvePath(args.sandboxId, virtualCwd);
     fs.mkdirSync(cwd, { recursive: true });
