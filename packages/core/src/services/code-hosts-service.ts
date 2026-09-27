@@ -341,6 +341,11 @@ export class CodeHostsService {
     );
   }
 
+  /**
+   * Comment on a pull request. A reader comments only as themselves, with
+   * their own connection; speaking through the organization's connection
+   * takes `program:write`.
+   */
   async commentOnPullRequest(args: {
     identity: Identity;
     projectId: string;
@@ -350,7 +355,15 @@ export class CodeHostsService {
     principal?: CodeHostPrincipal;
   }): Promise<PullRequestComment> {
     this.assertReads(args);
-    return this.operate(args, "comment_on_pull_request", (call, host) =>
+    const writes = hasProjectPermission(
+      args.identity,
+      args.projectId,
+      "program:write",
+    );
+    if (!writes && args.principal === "service") throw new AccessDeniedError();
+    const member: CodeHostPrincipal = "member";
+    const scoped = writes ? args : { ...args, principal: member };
+    return this.operate(scoped, "comment_on_pull_request", (call, host) =>
       required(
         host.commentOnPullRequest?.bind(host),
         "commenting on pull requests",

@@ -127,6 +127,13 @@ export function fakeForge(args: { remoteBase: string }) {
     provider: "forge",
     createPullRequest,
     listPullRequests: vi.fn(async () => []),
+    commentOnPullRequest: async ({ credential, body }) => ({
+      id: 1,
+      body,
+      author: { login: decode(credential.material) },
+      createdAt: new Date(0).toISOString(),
+      url: "https://forge.test/pr/1#comment-1",
+    }),
     viewer: async ({ credential }) => ({ login: decode(credential.material) }),
   };
   return { provider, host, createPullRequest, gitCalls };
