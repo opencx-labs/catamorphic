@@ -27,14 +27,14 @@ Environment variables parsed by `workServerConfigFromEnv` in
 | `WORK_DATA_DIR` | Data directory (default `/data`). Back up all of it. |
 | `WORK_PUBLIC_URL` | Public origin for OAuth, invitations, and webhook URLs. Must be HTTPS unless loopback. |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` | Model for the built-in agent. `WORK_MODEL`, `WORK_EFFORT` tune it. `WORK_FAKE_AGENT=1` runs a deterministic echo agent. Claude Code and Codex agents never see these; they use model connections ([Harnesses on the server](harnesses.md)). |
-| `WORK_AUTH_CONFIG` | Path to the auth config (default `<data>/auth-config.json`). |
+| `WORK_AUTH_CONFIG` | Path to the sign-in config (default `<data>/auth-config.json`), read at boot. |
 | `WORK_OPERATOR_PORT` | Loopback-only setup listener (default 4701). |
 | `WORK_OPERATOR_SECRET` | Supplies the operator credential instead of the generated `<data>/operator-secret`. |
 | `WORK_MDNS` | `off`, or a hostname (default a unique `work-<id>.local`). |
 | `DATABASE_URL` | Network Postgres instead of PGlite; then `WORK_SECRET`, `WORK_VAULT_KEY`, and a public URL are required. |
 | `WORK_SECRET` | Deployment secret for sign-in state. Generated under the data directory when absent (PGlite only). |
 | `WORK_VAULT_KEY`, `WORK_VAULT_PREVIOUS_KEYS` | Credential vault keys (32 bytes, base64); see [secrets and the gateway](secrets-and-gateway.md). |
-| `WORK_GATEWAY_CONFIG` | Connections (MCP, HTTP APIs, databases) and the guards that review them; see [secrets and the gateway](secrets-and-gateway.md). |
+| `WORK_GATEWAY_CONFIG` | Connections the gateway brokers (MCP, HTTP APIs, databases, Git hosts, model APIs); see [secrets and the gateway](secrets-and-gateway.md). The image ships no guards. |
 | `WORK_SANDBOX` and budget variables | `local-process` (default) or `microsandbox`; see the machines reference. |
 | `WORK_IMAGE_BUILDER`, `WORK_SANDBOX_CONTAINERS` | Microsandbox: build project Dockerfiles with `docker` or `podman`; `0` turns off Docker inside sandboxes. See [images, containers, and egress](cluster-deployment.md#images-containers-and-egress). |
 | `WORK_DOCKER_SOCKET`, `WORK_DOCKER_CLI_PLUGINS`, `WORK_UNENFORCED_EGRESS` | Local-process: give sandboxes filtered Docker access through this daemon socket; `accept` runs restricted-egress Environments without enforcement. |
@@ -70,6 +70,28 @@ providers with `"audience": "guests"` sign customers in to shares only
 Register the provider's redirect URI as
 `<WORK_PUBLIC_URL>/api/auth/oauth2/callback/<id>`. `scopes` defaults to
 `openid email profile`. Keep client secrets out of the repository.
+
+## A custom server
+
+Company code (guards, directories, connection providers, routes) goes in a
+custom server: a short file built on `@catamorphic/work-server` in an image
+extended from the published one, never a fork (ADR 0160; see
+[its README](../../../packages/work-server/README.md)). Its `config` is typed
+data and its `hooks` are code (ADR 0183):
+
+- `workServerConfigFromEnv(process.env)` is the only code that reads `WORK_*`
+  variables and files. It turns the sign-in file into `config.auth` and
+  `WORK_GATEWAY_CONFIG` into `config.gateway`, with the secrets the file names
+  by variable resolved into values. `createWorkServer` reads no config file.
+- A server that keeps configuration in a secret manager builds `config.auth`
+  and `config.gateway` in code instead, in the same shape as the files, and
+  they are validated by the same rules at boot. A Google Workspace directory
+  then takes its service account key inline (`"credentials": { "key": … }`)
+  rather than as a file.
+- Guards, directories, and providers go in `hooks`; see
+  [Guards are host code](secrets-and-gateway.md#guards-are-host-code).
+- Generated state stays under the data directory: the vault key, generated
+  secrets, the host id, and worker credentials.
 
 ## Provisioning the first project and person
 

@@ -77,16 +77,15 @@ grant methods, not "any POST":
         { "name": "search.messages", "method": "get", "path": "/search.messages", "description": "Search messages (user token only)" }
       ]
     }
-  ],
-  "guards": [
-    { "type": "approval", "name": "slack-posts", "kinds": ["slack"], "actions": ["chat.postMessage"] }
   ]
 }
 ```
 
-The approval guard is optional: it makes an agent ask its person before
-posting anywhere, and refuses posts from workflows, so leave it out when the
-reply automation should post on its own. Guards can name any action.
+To have an agent ask its person before posting anywhere, add a guard in a
+custom server that escalates `chat.postMessage` on the `slack` kind
+([Guards are host code](secrets-and-gateway.md#guards-are-host-code)). It also
+refuses posts from workflows, so leave it out when the reply automation
+should post on its own. A guard sees each named action.
 
 ## 3. Connect the bot token
 

@@ -1,6 +1,6 @@
 # 0162 — The connection gateway: guards, sealed secrets, separate vault keys
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by 0183)
 - **Date:** 2026-09-25
 - **Refines:** 0033, 0054, 0065, 0099
 

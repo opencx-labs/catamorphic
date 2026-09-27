@@ -52,14 +52,13 @@ gateway](secrets-and-gateway.md)):
         { "name": "conversations.replies", "method": "get", "path": "/conversations.replies" },
         { "name": "search.messages", "method": "get", "path": "/search.messages" }
       ] }
-  ],
-  "guards": [
-    { "type": "model", "name": "query-review", "kinds": ["prod-replica"],
-      "policy": "Read only what the stated purpose needs. Refuse queries that select email, phone, address, or payment columns.",
-      "model": { "provider": "anthropic", "id": "claude-haiku-4-5" } }
   ]
 }
 ```
+
+To review each query before it runs (refusing queries that select email,
+phone, address, or payment columns), add guards in a custom server
+([Guards are host code](secrets-and-gateway.md#guards-are-host-code)).
 
 Then create and authorize the service connections the review Environment
 names (operator routes, or the app as an organization administrator):

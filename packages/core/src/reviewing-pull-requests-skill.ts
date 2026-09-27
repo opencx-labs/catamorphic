@@ -419,8 +419,8 @@ from the project's own remote, so a filter naming another repository (or
 none) reviews the wrong code.
 
 \`GITHUB_MEMBERS\` maps GitHub logins to project members: the author and
-requested reviewers who are mapped approve the chat's escalations (a guarded
-query, a tool set to ask); with nobody mapped the \`reviewers\` role does, so
+requested reviewers who are mapped approve the chat's escalations (a query a
+server guard escalates, a tool set to ask); with nobody mapped the \`reviewers\` role does, so
 commit a \`reviewers\` role or map people. A mapping names who may approve; it
 never gives the chat anyone's access. The chat itself runs as the project,
 with the \`review\` Environment's service bindings.

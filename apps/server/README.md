@@ -109,9 +109,10 @@ connections and project secrets unrecoverable. Project secrets are sealed in
 the same vault; their database rows hold only references.
 
 Agents and workflows reach company systems through the connection gateway:
-`WORK_GATEWAY_CONFIG` declares MCP endpoints, HTTP APIs, and read-only database
-connections, plus guards (a model classifier or a required approval) that
-review every action. See
+`WORK_GATEWAY_CONFIG` declares MCP endpoints, HTTP APIs, Git hosts, model APIs,
+and read-only database connections. The image ships no guards: a company that
+wants each action reviewed (a model classifier, a required approval) adds a
+guard in a small custom server with `@catamorphic/work-server` (ADR 0183). See
 [secrets and the gateway](../../skills/setup-work-server/references/secrets-and-gateway.md).
 
 Service connections are named and administered (ADR 0172). Organization
