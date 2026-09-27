@@ -52,9 +52,14 @@ print them, or pass them to agents.
       "baseUrl": "https://api.github.com", "maxResponseBytes": 4194304, "timeoutMs": 60000 },
     { "type": "http", "kind": "billing", "displayName": "Billing API",
       "baseUrl": "https://api.billing.example/v1", "paths": ["/invoices", "/customers"] },
+    { "type": "http", "kind": "slack", "displayName": "Slack", "baseUrl": "https://slack.com/api",
+      "actions": [
+        { "name": "conversations.replies", "method": "get", "path": "/conversations.replies" },
+        { "name": "chat.postMessage", "method": "post", "path": "/chat.postMessage" }
+      ] },
     { "kind": "company", "displayName": "Company tools",
       "url": "https://tools.example.com/mcp" },
-    { "kind": "slack", "displayName": "Slack", "url": "https://mcp.slack.com/mcp",
+    { "kind": "slack-mcp", "displayName": "Slack (as yourself)", "url": "https://mcp.slack.com/mcp",
       "oauth": { "client": { "id": "1234.5678", "secretEnv": "SLACK_CLIENT_SECRET" } } }
   ],
   "guards": [
@@ -76,7 +81,12 @@ and how. The file is host policy, not project logic; it holds no credential.
   carries `range.nextOffset` and `range.totalBytes`, and the agent asks for
   the next part with `range: { "offset": … }`, writing parts to files in its
   workspace rather than into the conversation. A 5 MiB pull request diff is
-  five calls, not a truncated one.
+  five calls, not a truncated one. Its actions are the HTTP methods (`get`,
+  `post`, ...) under `paths`, or, with `actions`, named operations with a
+  fixed method and path (`chat.postMessage`), so capabilities, bindings, and
+  guards grant single operations of an RPC-style API (ADR 0179). A caller of
+  a named action passes `query`, `headers`, and `body`, never a path.
+  [Connect Slack](connect-slack.md) is the worked example.
 - `postgres`: each service connection keeps up to `poolSize` sessions (at most
   16, default 4), closed after `poolIdleTimeoutMs` idle and at once when the
   credential rotates or is revoked. Every call still gets its own read-only

@@ -153,7 +153,10 @@ use a project secret named in the trigger's `verify`; declared handshakes
 (Slack URL verification, GET subscription challenges) are answered at once.
 Other requests are answered 202 once stored; failures show in the workflow's
 runs. Bodies over 1 MiB need a binding's `maxBodyBytes` and, beyond the
-server's default, `WORK_WEBHOOK_MAX_BYTES` (ADR 0171).
+server's default, `WORK_WEBHOOK_MAX_BYTES` (ADR 0171). A sender's retry of
+one event is stored once (its delivery-id header, or the binding's
+`deliveryId`). [Connect Slack](connect-slack.md) walks through a complete
+integration.
 
 ## Boundaries
 

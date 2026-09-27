@@ -1,6 +1,6 @@
 ---
 name: setup-work-server
-description: Use when installing or operating a Work server (the prebuilt server image), provisioning its first project and user, company sign-in and deprovisioning, credentials and the connection gateway, enrolling workers or replicas, sharing with customers, embedding Catamorphic in an existing application, mapping host authentication to Catamorphic identity, or configuring Postgres or PGlite.
+description: Use when installing or operating a Work server (the prebuilt server image), provisioning its first project and user, company sign-in and deprovisioning, credentials and the connection gateway, connecting Slack, enrolling workers or replicas, sharing with customers, embedding Catamorphic in an existing application, mapping host authentication to Catamorphic identity, or configuring Postgres or PGlite.
 ---
 
 # Setting up a Work server or a Catamorphic host
@@ -52,6 +52,7 @@ Start small and add only what the situation needs:
 | Work server image or `apps/server` | [Work server](references/stock-server.md) |
 | Company sign-in through Google Workspace, deprovisioning, groups as roles | [Company identity](references/company-identity.md) |
 | Credentials, API keys, a production database, query review, vault keys | [Secrets and the gateway](references/secrets-and-gateway.md) |
+| Slack: a project answering mentions in threads, reading and searching Slack | [Connect Slack](references/connect-slack.md) |
 | More execution capacity, workers, replicas for availability | [Machines: control plane, replicas, and workers](references/cluster-deployment.md) |
 | Sharing documents, folders, or apps with customers behind a sign-in | [Sharing outside the company](references/sharing.md) |
 | Members working from Claude Code, Codex, or another MCP client | [Working from your own agent](references/members-over-mcp.md) |

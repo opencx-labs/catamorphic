@@ -208,7 +208,9 @@ prefix, encoding, a signed-content template over `{body}`, `{timestamp}` and
 a header or query parameter), each naming a project secret. Declared `respond`
 rules answer handshakes (Slack `url_verification`, GET `hub.challenge`) with
 200 and the echoed value, which is why the same path also accepts `GET`;
-anything else is stored and answered 202. Bodies are capped at 1 MiB unless a
+anything else is stored and answered 202. A sender's retry is stored once,
+identified by its delivery-id header or by the binding's `deliveryId`, a value
+the sender repeats in the body (`"body.event_id"` for Slack, ADR 0179). Bodies are capped at 1 MiB unless a
 binding sets `maxBodyBytes`, up to the host maximum
 `createCatamorphic({ webhooks: { maxBodyBytes } })`. Holders of
 `webhooks:read` list URLs with `GET <api>/projects/:projectId/webhooks`, and
