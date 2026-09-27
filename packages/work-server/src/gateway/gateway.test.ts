@@ -295,6 +295,7 @@ describe("gateway configuration", () => {
     const authorized = await slack?.completeAuthorization?.({
       tenantId: "t",
       externalUserId: "admin",
+      principal: "service",
       callback: { apiKey: "xoxb-test" },
     });
     expect(authorized?.capabilities).toEqual([

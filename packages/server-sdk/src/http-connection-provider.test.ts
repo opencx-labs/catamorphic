@@ -223,6 +223,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
     const authorized = await slack.completeAuthorization?.({
       tenantId: "t",
       externalUserId: "u",
+      principal: "service",
       callback: { apiKey: "xoxb-bot" },
     });
     expect(authorized?.capabilities).toEqual([

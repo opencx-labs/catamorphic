@@ -232,11 +232,11 @@ export const reviewPullRequests = defineWorkflow(({ defineBoundary }) => ({
 
 /** @displayname Close pull request chats */
 export const closePullRequestChats = defineWorkflow(({ defineBoundary }) => ({
-  triggers: [trigger("gh.pull_request", { where: { payload: { body: { action: "closed" } } } })],
+  triggers: [trigger("github.pull_request", { where: { payload: { body: { action: "closed" } } } })],
   steps: [
     /** @displayname Close the review chat */
     defineBoundary({
-      run: ({ input, host }: BoundaryContext<TriggerPayload<"gh.pull_request">>) => {
+      run: ({ input, host }: BoundaryContext<TriggerPayload<"github.pull_request">>) => {
         const event = input.payload.body;
         const key = "pr-" + event.repository.full_name + "-" + event.number;
         return host["catamorphic.sessions"].close({ key, idempotencyKey: "closed:" + key });
