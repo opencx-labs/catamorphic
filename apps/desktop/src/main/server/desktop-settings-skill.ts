@@ -26,8 +26,8 @@ schema. Edit with ordinary file or shell facilities, preserving unrelated keys.
 Prefer writing a complete JSON object to a temporary sibling and renaming it over
 the original. Read back your change and report its actual scope.
 
-Paths are metadata, not permission grants. A read-only agent may inspect but must
-not edit. Native harness filesystem permissions still apply outside the checkout.
+Paths are metadata, not permission grants. An agent whose sandboxing is
+contained may inspect but must not edit. Native harness filesystem permissions still apply outside the checkout.
 If host access is unavailable, explain that limitation. A file created inside a
 sandbox does not configure the desktop; do not introduce a mirror directory.
 

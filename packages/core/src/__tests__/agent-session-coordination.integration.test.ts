@@ -208,7 +208,7 @@ describe("agent session coordination", () => {
     provider = new DeferredProvider();
     const registeredAgent = (
       id: string,
-      input: Pick<RegisteredCodingAgent, "privilege" | "delegation"> = {},
+      input: Pick<RegisteredCodingAgent, "sandboxing" | "delegation"> = {},
     ): RegisteredCodingAgent => ({
       id,
       provider,
@@ -218,10 +218,10 @@ describe("agent session coordination", () => {
     const agents = new Map(
       [
         registeredAgent("worker"),
-        registeredAgent("small", { privilege: "read-only" }),
-        registeredAgent("builder", { privilege: "full-access" }),
+        registeredAgent("small", { sandboxing: "contained" }),
+        registeredAgent("builder", { sandboxing: "publish" }),
         registeredAgent("orchestrator", {
-          privilege: "edit",
+          sandboxing: "propose",
           delegation: {
             enabled: true,
             maxConcurrentChildren: 1,
@@ -1212,7 +1212,7 @@ describe("agent session coordination", () => {
     expect(child.agentId).toBe("small");
   });
 
-  it("enforces delegation routes, concurrency, onward grants, and privilege ceilings", async () => {
+  it("enforces delegation routes, concurrency, onward grants, and sandboxing ceilings", async () => {
     const project = await projects.create(identity, {
       name: "Delegation policy",
     });
@@ -1258,7 +1258,7 @@ describe("agent session coordination", () => {
         agentId: "builder",
         task: "Escalate through wildcard",
       }),
-    ).rejects.toThrow(/cannot grant a more privileged agent/);
+    ).rejects.toThrow(/cannot grant an agent with wider sandboxing/);
 
     provider.release();
     await vi.waitFor(async () => {

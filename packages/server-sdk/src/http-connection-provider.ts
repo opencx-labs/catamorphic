@@ -127,7 +127,7 @@ export function defineHttpApiConnectionProvider(
     },
     listActions: async ({ capabilities }) =>
       actions.filter((action) => capabilities.includes(action.name)),
-    // Read-only agents may GET, nothing else (ADR 0176).
+    // Contained agents may GET, nothing else (ADR 0182).
     readOnly: (action) => action === "get",
     invoke: async ({ material, action, input }) => {
       const operation = named?.find((candidate) => candidate.name === action);

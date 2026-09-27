@@ -15,9 +15,9 @@ import {
 } from "./routes/project-mcp.js";
 
 /**
- * Project tools that make something live for everyone (ADR 0176): only a
- * full-access agent may call them. Output shown in the agent's own chat
- * suits any mode.
+ * Project tools that make something live for everyone (ADR 0182): only an
+ * agent whose sandboxing is `publish` may call them. Output shown in the
+ * agent's own chat suits any sandboxing.
  */
 const PUBLISHING_TOOLS = new Set([
   "program_deploy",
@@ -95,9 +95,9 @@ export async function projectToolCapabilities(args: {
         description: definition.description,
         effect,
         ...(PUBLISHING_TOOLS.has(definition.name)
-          ? { mode: "full-access" as const }
+          ? { sandboxing: "publish" as const }
           : OWN_CHAT_TOOLS.has(definition.name)
-            ? { mode: "read-only" as const }
+            ? { sandboxing: "contained" as const }
             : {}),
         inputSchema: z.fromJSONSchema(definition.inputSchema),
         outputSchema: z.unknown(),

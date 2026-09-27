@@ -9,6 +9,7 @@ import type {
   TurnOptions,
 } from "@catamorphic/sandbox";
 import { narrowingLayer, PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
+import { DESKTOP_DEFAULT_SANDBOXING } from "../../shared/agent-permissions.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { AgentConfig } from "../agents-store.js";
 import {
@@ -85,7 +86,8 @@ export class DesktopAgentMcp {
       if (!mapped) continue;
       servers[key] = mapped;
       connectionIds[key] = connection.id;
-      // Layers: the connection's policy (absent follows the local mode), then the agent's
+      // Layers: the connection's policy (absent follows the agent's
+      // sandboxing: publish allows, otherwise auto), then the agent's
       // (profile agents key by connection id; committed/remote definitions
       // by connector name or server key).
       const agentPolicy =
@@ -98,7 +100,9 @@ export class DesktopAgentMcp {
         ...(connection.ceiling ? [connection.ceiling.policy] : []),
         {
           default:
-            (config.mode ?? "full-access") === "full-access" ? "allow" : "auto",
+            (config.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING) === "publish"
+              ? "allow"
+              : "auto",
           ...connection.toolPolicy,
         },
         ...(agentPolicy ? [narrowingLayer(agentPolicy)] : []),

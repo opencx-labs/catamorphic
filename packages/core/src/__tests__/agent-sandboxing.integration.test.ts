@@ -29,13 +29,14 @@ import { ProjectsService } from "../services/projects-service.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
- * ADR 0176: a committed definition's mode and tool policies hold on any
- * host, enforced by core rather than by the harness.
+ * ADR 0176, ADR 0182: a committed definition's sandboxing and tool policies
+ * hold on any host, enforced by core rather than by the harness; its
+ * harness permission mode reaches the harness as a turn default.
  */
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
-const schema = `catamorphic_agent_modes_${crypto.randomUUID().replaceAll("-", "")}`;
+const schema = `catamorphic_agent_sandboxing_${crypto.randomUUID().replaceAll("-", "")}`;
 const db = connectionString
   ? createDatabase({ connectionString, schema, poolSize: 4 })
   : undefined;
@@ -80,7 +81,7 @@ class RecordingProvider implements CodingAgentProvider {
   async dispose(): Promise<void> {}
 }
 
-describeIf("agent modes and definition policies (ADR 0176)", () => {
+describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
   let tmpDir: string;
   let sessions: AgentSessionsService;
   let capabilities: AgentCapabilitiesService;
@@ -91,14 +92,16 @@ describeIf("agent modes and definition policies (ADR 0176)", () => {
   beforeAll(async () => {
     if (!db) throw new Error("unreachable");
     await migrateToLatest({ db, schema });
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-modes-"));
+    tmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "catamorphic-sandboxing-"),
+    );
     const projectManager = new ProjectManager(
       new FsBackend(path.join(tmpDir, "projects")),
     );
     const projects = new ProjectsService(db, projectManager);
     const rootPath = path.join(tmpDir, "checkout");
     await fs.mkdir(rootPath, { recursive: true });
-    projectId = (await projects.create(root, { name: "modes" })).id;
+    projectId = (await projects.create(root, { name: "sandboxing" })).id;
     const repo = await projectManager.open(root.tenantId, projectId);
     try {
       await repo.writeFile(
@@ -107,7 +110,7 @@ describeIf("agent modes and definition policies (ADR 0176)", () => {
           version: 1,
           name: "Reviewer",
           kind: "builtin",
-          mode: "read-only",
+          sandboxing: "contained",
           toolPolicies: {
             prod: { default: "ask", tools: { query: "allow" } },
             catamorphic: { default: "deny" },
@@ -120,7 +123,17 @@ describeIf("agent modes and definition policies (ADR 0176)", () => {
           version: 1,
           name: "Editor",
           kind: "builtin",
-          mode: "edit",
+          sandboxing: "propose",
+        }),
+      );
+      await repo.writeFile(
+        ".work/agents/publisher.json",
+        JSON.stringify({
+          version: 1,
+          name: "Publisher",
+          kind: "claude-code",
+          sandboxing: "publish",
+          harnessPermissions: { permissionMode: "bypassPermissions" },
         }),
       );
       await repo.commit("Add agents", {
@@ -134,7 +147,7 @@ describeIf("agent modes and definition policies (ADR 0176)", () => {
       defaultAgentId: () => undefined,
       get: () => undefined,
       list: () => [],
-      // The host declares neither mode nor policies: core applies both.
+      // The host declares neither sandboxing nor policies: core applies both.
       projectAgent: ({ id }) => ({ id, provider, topology: "native" }),
     };
     const executionAllocations = new ExecutionAllocationsService(db);
@@ -143,7 +156,7 @@ describeIf("agent modes and definition policies (ADR 0176)", () => {
       testEnvironmentProvider(unusedSandboxProvider),
     );
     sessions = new AgentSessionsService(db, {
-      hostId: "modes-test-host",
+      hostId: "sandboxing-test-host",
       projectManager,
       codingAgents: registry,
       executionEnvironments,
@@ -153,14 +166,14 @@ describeIf("agent modes and definition policies (ADR 0176)", () => {
     const capability = (
       name: string,
       effect: "read" | "write",
-      mode?: "full-access",
+      sandboxing?: "publish",
     ) =>
       defineAgentCapability({
         revision: "1",
         name,
         description: name,
         effect,
-        ...(mode ? { mode } : {}),
+        ...(sandboxing ? { sandboxing } : {}),
         inputSchema: z.object({}).strict(),
         outputSchema: z.object({ ok: z.boolean() }),
         authorize: () => true,
@@ -177,10 +190,10 @@ describeIf("agent modes and definition policies (ADR 0176)", () => {
         capabilities: [
           capability("test.read", "read"),
           capability("test.propose", "write"),
-          capability("test.deploy", "write", "full-access"),
+          capability("test.deploy", "write", "publish"),
         ],
       },
-      sessionMode: (args) => sessions.agentMode(args),
+      sessionSandboxing: (args) => sessions.agentSandboxing(args),
     });
   }, 120_000);
 
@@ -203,12 +216,26 @@ describeIf("agent modes and definition policies (ADR 0176)", () => {
     ]);
     expect(start?.toolPolicies?.catamorphic).toEqual([{ default: "deny" }]);
     expect(provider.turns.at(-1)?.toolPolicies).toEqual(start?.toolPolicies);
-    expect(await sessions.agentMode({ projectId, sessionId: session.id })).toBe(
-      "read-only",
-    );
+    expect(
+      await sessions.agentSandboxing({ projectId, sessionId: session.id }),
+    ).toBe("contained");
+    expect(provider.turns.at(-1)?.harnessPermissions).toBeUndefined();
   });
 
-  it("refuses capabilities above the agent's mode with a readable reason", async () => {
+  it("hands the definition's harness permission mode to the harness per turn", async () => {
+    const session = await sessions.create(root, projectId, {
+      agentId: `project:${projectId}:publisher`,
+    });
+    await sessions.sendMessage(root, projectId, session.id, "ship it");
+    expect(provider.turns.at(-1)?.harnessPermissions).toEqual({
+      permissionMode: "bypassPermissions",
+    });
+    expect(
+      await sessions.agentSandboxing({ projectId, sessionId: session.id }),
+    ).toBe("publish");
+  });
+
+  it("refuses capabilities above the agent's sandboxing with a readable reason", async () => {
     const invoke = (sessionId: string, name: string) =>
       capabilities
         .forSession({ identity: root, projectId, sessionId })
@@ -220,7 +247,7 @@ describeIf("agent modes and definition policies (ADR 0176)", () => {
       ok: true,
     });
     await expect(invoke(reviewer.id, "test.propose")).rejects.toThrow(
-      "read-only mode",
+      "This agent's sandboxing is contained",
     );
     const editor = await sessions.create(root, projectId, {
       agentId: `project:${projectId}:editor`,
@@ -228,7 +255,15 @@ describeIf("agent modes and definition policies (ADR 0176)", () => {
     await expect(invoke(editor.id, "test.propose")).resolves.toEqual({
       ok: true,
     });
-    await expect(invoke(editor.id, "test.deploy")).rejects.toThrow("edit mode");
-    expect(executed).toEqual(["test.read", "test.propose"]);
+    await expect(invoke(editor.id, "test.deploy")).rejects.toThrow(
+      "This agent's sandboxing is propose",
+    );
+    const publisher = await sessions.create(root, projectId, {
+      agentId: `project:${projectId}:publisher`,
+    });
+    await expect(invoke(publisher.id, "test.deploy")).resolves.toEqual({
+      ok: true,
+    });
+    expect(executed).toEqual(["test.read", "test.propose", "test.deploy"]);
   });
 });

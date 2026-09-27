@@ -3,10 +3,10 @@ import { useEffect, useMemo, useState } from "react";
 import {
   type AgentConnectionsSetting,
   type AgentHarness,
-  type AgentMode,
   type ConnectionInfo,
   desktopApi,
   type McpToolPolicy,
+  type Sandboxing,
   type ToolAnnotations,
   type ToolPermission,
 } from "../lib/desktop-api.js";
@@ -91,7 +91,7 @@ export function AgentToolPolicyField({
   connections,
   assignment,
   harness,
-  mode = "full-access",
+  sandboxing = "publish",
   projectId,
 }: {
   value: Record<string, McpToolPolicy>;
@@ -100,7 +100,8 @@ export function AgentToolPolicyField({
   connections: ConnectionInfo[];
   assignment: AgentConnectionsSetting;
   harness: AgentHarness;
-  mode?: AgentMode;
+  /** Unset connection policies allow for `publish`, else resolve `auto`. */
+  sandboxing?: Sandboxing;
   /** The current project — its workflow tools are listed when known. */
   projectId?: string;
 }) {
@@ -176,7 +177,7 @@ export function AgentToolPolicyField({
             ceiling={[
               connection.ceiling?.policy,
               {
-                default: mode === "full-access" ? "allow" : "auto",
+                default: sandboxing === "publish" ? "allow" : "auto",
                 ...connection.toolPolicy,
               },
             ]}

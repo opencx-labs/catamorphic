@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Json, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import { type AgentMode, modeRefusal } from "@catamorphic/sandbox";
+import { type Sandboxing, sandboxingRefusal } from "@catamorphic/sandbox";
 import type { Identity } from "../identity.js";
 import { identityMayUseConnection } from "../identity.js";
 import {
@@ -60,8 +60,8 @@ export interface ConnectionGateway {
   approvals?: ToolPermissionChannel;
   /** The member who owns an agent session, for review and audit. */
   sessionOwner?: (sessionId: string) => Promise<string | undefined>;
-  /** The session agent's mode: read-only agents only read (ADR 0176). */
-  sessionMode?: (sessionId: string) => Promise<AgentMode | undefined>;
+  /** The session agent's sandboxing: contained agents only read (ADR 0182). */
+  sessionSandboxing?: (sessionId: string) => Promise<Sandboxing | undefined>;
 }
 
 export class ConnectionBroker {
@@ -159,7 +159,8 @@ export class ConnectionBroker {
     if (
       args.caller === "agent" &&
       args.agentSessionId &&
-      (await this.gateway.sessionMode?.(args.agentSessionId)) === "read-only" &&
+      (await this.gateway.sessionSandboxing?.(args.agentSessionId)) ===
+        "contained" &&
       !(await this.readsOnly({
         identity: args.identity,
         connectionId: binding.connectionId,
@@ -177,11 +178,11 @@ export class ConnectionBroker {
         outcome: "denied",
         action: args.action,
         argumentsDigest: digest,
-        metadata: { mode: "read-only" },
+        metadata: { sandboxing: "contained" },
       });
       throw new ConnectionActionDeniedError(
-        modeRefusal({
-          mode: "read-only",
+        sandboxingRefusal({
+          sandboxing: "contained",
           action: `call ${args.alias} ${args.action}, which can change ${args.alias}`,
         }),
       );
@@ -344,6 +345,25 @@ export class ConnectionBroker {
             args.access === "write"
               ? `this session may not push through '${args.alias}' (it lacks git:write)`
               : `this session may not fetch through '${args.alias}' (it lacks git:read)`,
+          );
+        }
+        // A contained agent's work never leaves its sandbox (ADR 0182).
+        if (
+          args.review?.action === "push" &&
+          args.review.agentSessionId &&
+          (await this.gateway.sessionSandboxing?.(
+            args.review.agentSessionId,
+          )) === "contained"
+        ) {
+          await record("denied", {
+            sandboxing: "contained",
+            input: args.review.input,
+          });
+          throw new ConnectionActionDeniedError(
+            sandboxingRefusal({
+              sandboxing: "contained",
+              action: `push through ${args.alias}`,
+            }),
           );
         }
         const review = args.review

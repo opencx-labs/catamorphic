@@ -157,7 +157,7 @@ function assistantRegistry(config: {
       return {
         ...assistant,
         id,
-        privilege: definition.mode ?? "edit",
+        sandboxing: definition.sandboxing ?? "propose",
         environment: definition.environment,
         connectionRequirements: definition.connections,
         delegation: definition.delegation,
@@ -193,7 +193,8 @@ function sandboxHarnesses(
     claudeCode: new ClaudeCodeAgent({
       sandbox: {},
       // The sandbox is the boundary: edits and commands run without
-      // prompts, and modes are enforced where changes leave it (ADR 0176).
+      // prompts, and sandboxing is enforced where changes leave it (ADR
+      // 0182). A definition's own permission mode travels per turn.
       permissionMode: "acceptEdits",
       memory: false,
       onToolPermission: toolPermissions.handlerFor("Claude Code"),
@@ -233,7 +234,7 @@ function sandboxProjectAgent(input: {
         ? input.harnesses.codex
         : input.harnesses.claudeCode,
     topology: "controller",
-    privilege: definition.mode ?? "edit",
+    sandboxing: definition.sandboxing ?? "propose",
     environment: definition.environment,
     // The model connection is required like any binding the agent uses.
     connectionRequirements: requirements.some(

@@ -1264,3 +1264,23 @@ desktop to poll: new repository activity arrives as the same deliveries the
 project's `github` webhook receives on a server, marked as fetched by the
 host rather than signed. One trigger library, and the same filters, work in
 both places.
+
+### 2026-09-27: Permission mode and sandboxing are two settings
+
+One word, "mode", had come to mean two things: the harness's own permission
+setting (Claude Code's plan or bypass permissions, Codex's sandbox) and
+Work's rule for what may leave an agent's sandbox. Choosing a harness's
+native mode had quietly disappeared (ADR 0182). Now the configure-agent modal
+shows "Permission mode" in the harness's own words (Claude Code: Default,
+Accept edits, Plan, Auto, Don't ask, Bypass permissions; Codex: its sandbox
+and its approvals) only for harnesses that have one, and "Sandboxing"
+(Contained, Propose, Publish) apart, each with a one-line explanation.
+
+The permission mode is visible where you work: the chat inspector shows it
+beside model and reasoning, the agent pickers name it in each row, and
+"Change permission mode" opens a palette picker in the style of the effort
+picker. It changes the agent, not one chat, because the mode belongs to the
+agent and is part of what a committed definition's consent covers; a
+committed or server definition shows its setting read only and says where it
+is set. Local agents keep ADR 0140's defaults: Publish, Bypass permissions,
+and Codex with full access and approvals on request.

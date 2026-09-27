@@ -61,7 +61,14 @@ export type ChatEvent =
   | { kind: "file"; path: string; modifiers?: OpenModifiers }
   | { kind: "fork"; messageId: string }
   | { kind: "menu"; entry: ChatSessionMenuEntry }
-  | { kind: "forkCurrent" | "archive" | "editModel" | "editEffort" }
+  | {
+      kind:
+        | "forkCurrent"
+        | "archive"
+        | "editModel"
+        | "editEffort"
+        | "editPermissionMode";
+    }
   | { kind: "parent" | "focus" | "unsplit" | "escape" | "reveal" };
 export interface DockCommand {
   projectId: string;

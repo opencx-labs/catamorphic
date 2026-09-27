@@ -8,6 +8,8 @@ import type {
   AgentEvent,
   AgentMcpServerConfig,
   AgentTurnUsage,
+  CodexApprovalPolicy,
+  CodexSandboxMode,
   CodingAgentProvider,
   ExtraToolContext,
   McpServersSource,
@@ -77,11 +79,20 @@ export interface CodexAgentOpts {
   /** Default reasoning effort; maps to the CLI's model_reasoning_effort. */
   effort?: AgentEffort;
   /**
-   * Codex's own OS-level sandbox policy. Defaults to "workspace-write" with
-   * approvals off — the CLI's designed unattended mode: free rein inside the
-   * working directory, everything else read-only.
+   * Codex's own OS-level sandbox policy (ADR 0182), unless a turn names its
+   * own (`TurnOptions.harnessPermissions.sandbox`). Defaults to
+   * "workspace-write" on the host, the CLI's designed unattended mode: free
+   * rein inside the working directory, everything else read-only. Inside a
+   * Work sandbox the default is "danger-full-access" (see `sandbox`).
    */
-  sandboxMode?: "read-only" | "workspace-write" | "danger-full-access";
+  sandboxMode?: CodexSandboxMode;
+  /**
+   * When Codex asks before acting (ADR 0182), unless a turn names its own
+   * (`TurnOptions.harnessPermissions.approvals`). Defaults to "on-request"
+   * when the host can answer (`onToolPermission` or
+   * `mcpElicitationForSession`), else "never".
+   */
+  approvalPolicy?: CodexApprovalPolicy;
   /** Allow network access inside the workspace-write sandbox (default true). */
   networkAccessEnabled?: boolean;
   /** Use the host's first-class subsessions instead of Codex's private agents. */
@@ -516,12 +527,15 @@ export class CodexAgent implements CodingAgentProvider {
       ...(workingDirectory ? { workingDirectory } : {}),
       skipGitRepoCheck: true,
       sandboxMode:
+        turn?.harnessPermissions?.sandbox ??
         this.opts.sandboxMode ??
         (inSandbox ? "danger-full-access" : "workspace-write"),
       approvalPolicy:
-        this.opts.mcpElicitationForSession || this.opts.onToolPermission
+        turn?.harnessPermissions?.approvals ??
+        this.opts.approvalPolicy ??
+        (this.opts.mcpElicitationForSession || this.opts.onToolPermission
           ? "on-request"
-          : "never",
+          : "never"),
       networkAccessEnabled: this.opts.networkAccessEnabled ?? true,
       ...(model ? { model } : {}),
       ...(effort ? { modelReasoningEffort: effort } : {}),

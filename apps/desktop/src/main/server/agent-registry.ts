@@ -24,6 +24,10 @@ import { PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
 import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { AgentDefaultModelResult } from "../../shared/agent-default-model.js";
+import {
+  DESKTOP_DEFAULT_SANDBOXING,
+  effectiveHarnessPermissions,
+} from "../../shared/agent-permissions.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { AgentConfig } from "../agents-store.js";
 import { readableAttachments } from "../composer-files.js";
@@ -154,22 +158,6 @@ function resolveProjectDelegation(
 }
 
 /**
- * Per-harness mapping of the normalized operating mode (ADR 0056).
- * "edit" is each harness's designed unattended default.
- */
-const CLAUDE_PERMISSION_MODES = {
-  "read-only": "plan",
-  edit: "acceptEdits",
-  "full-access": "bypassPermissions",
-} as const;
-
-const CODEX_SANDBOX_MODES = {
-  "read-only": "read-only",
-  edit: "workspace-write",
-  "full-access": "danger-full-access",
-} as const;
-
-/**
  * How long a harness's default-model answer stays fresh. Settings edits
  * (~/.claude/settings.json, ~/.codex/config.toml) show up within this.
  */
@@ -200,7 +188,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       config: AgentConfig;
       provider: RegisteredCodingAgent["provider"];
       topology: RegisteredCodingAgent["topology"];
-      privilege: RegisteredCodingAgent["privilege"];
+      sandboxing: RegisteredCodingAgent["sandboxing"];
     }
   >();
   /** Per-agent resource closers (ai-sdk MCP clients), run on eviction. */
@@ -595,7 +583,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         id,
         provider: cached.provider,
         topology: cached.topology,
-        privilege: config.mode ?? "full-access",
+        sandboxing: config.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
         ...(config.environment ? { environment: config.environment } : {}),
         defaults,
         delegation: config.delegation,
@@ -620,13 +608,13 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       config,
       provider,
       topology: built.topology,
-      privilege: config.mode ?? "full-access",
+      sandboxing: config.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
     });
     return {
       id,
       provider,
       topology: built.topology,
-      privilege: config.mode ?? "full-access",
+      sandboxing: config.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
       ...(config.environment ? { environment: config.environment } : {}),
       defaults,
       delegation: config.delegation,
@@ -824,7 +812,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         : {}),
       model: def.model ?? "",
       effort: def.effort ?? "medium",
-      ...(def.mode ? { mode: def.mode } : {}),
+      ...(def.sandboxing ? { sandboxing: def.sandboxing } : {}),
+      ...(def.harnessPermissions
+        ? { harnessPermissions: def.harnessPermissions }
+        : {}),
       ...(def.coordination ? { coordination: def.coordination } : {}),
       ...(def.memory === true ? { memory: true } : {}),
       auth:
@@ -901,7 +892,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         id,
         provider: cached.provider,
         topology: cached.topology,
-        privilege: def.mode ?? "full-access",
+        sandboxing: def.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
         ...(def.environment ? { environment: def.environment } : {}),
         ...(def.connections ? { connectionRequirements: def.connections } : {}),
         defaults,
@@ -936,13 +927,13 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       config,
       provider,
       topology: registered.topology,
-      privilege: def.mode ?? "full-access",
+      sandboxing: def.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
     });
     return {
       id,
       provider,
       topology: registered.topology,
-      privilege: def.mode ?? "full-access",
+      sandboxing: def.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
       ...(def.environment ? { environment: def.environment } : {}),
       ...(def.connections ? { connectionRequirements: def.connections } : {}),
       defaults,
@@ -1156,8 +1147,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                   ),
                   model: config.model || undefined,
                   effort: config.effort,
-                  permissionMode:
-                    CLAUDE_PERMISSION_MODES[config.mode ?? "full-access"],
+                  permissionMode: effectiveHarnessPermissions({
+                    harness: "claude-code",
+                    permissions: config.harnessPermissions,
+                  }).permissionMode,
                   memory: config.memory === true,
                   env: { ...environment, ...env },
                   pathToClaudeCodeExecutable: component.executablePath,
@@ -1194,6 +1187,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         };
       }
       case "codex": {
+        const codexPermissions = effectiveHarnessPermissions({
+          harness: "codex",
+          permissions: config.harnessPermissions,
+        });
         const provider = new AsyncInitCodingAgent(
           config.harness,
           async () => {
@@ -1214,7 +1211,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                   mcpElicitationForSession: ({ sessionId }) =>
                     createCodexElicitation({
                       allowAppAccess:
-                        (config.mode ?? "full-access") === "full-access",
+                        (config.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING) ===
+                        "publish",
                       askQuestion: () =>
                         this.mcp.questionForSession({ sessionId }),
                       elicit: this.deps.workspaceBridge?.elicit.bind(
@@ -1225,8 +1223,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                   effort: config.effort,
                   disableNativeSubagents: true,
                   disableNativeGoals: true,
-                  sandboxMode:
-                    CODEX_SANDBOX_MODES[config.mode ?? "full-access"],
+                  sandboxMode: codexPermissions.sandbox,
+                  approvalPolicy: codexPermissions.approvals,
                   ...(config.auth === "api-key" && config.apiKey
                     ? { apiKey: config.apiKey }
                     : {}),
@@ -1345,7 +1343,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   }
 
   /** Host configuration paths and state, for the desktop_settings tool. */
-  settingsContext(projectId: string, config?: Pick<AgentConfig, "mode">) {
+  settingsContext(projectId: string, config?: Pick<AgentConfig, "sandboxing">) {
     return desktopSettingsContext({
       config: this.deps.profileConfig,
       profileId: this.deps.profiles.profileForProject(projectId).id,
@@ -1353,7 +1351,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         id: projectId,
         rootPath: this.deps.projectRootPath?.(projectId) ?? null,
       },
-      access: config?.mode === "read-only" ? "read-only" : "native",
+      access: config?.sandboxing === "contained" ? "read-only" : "native",
     });
   }
 
@@ -1381,12 +1379,13 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   }
 
   /**
-   * The workspace toolset for one agent: a read-only agent (ADR 0056)
+   * The workspace toolset for one agent: a contained agent (ADR 0182)
    * loses the tools that run commands, mutate the project, or act on the
-   * user's behalf — its harness-side mode alone can't govern host tools.
+   * user's behalf. Its harness's permission mode governs only the harness,
+   * not host tools.
    */
   private workspaceTools(
-    config: Pick<AgentConfig, "mode">,
+    config: Pick<AgentConfig, "sandboxing">,
     topology: RegisteredCodingAgent["topology"],
     all = false,
   ): WorkspaceTool[] | undefined {
@@ -1396,7 +1395,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       (tool) =>
         (all || tool.eager) &&
         (topology === "native" || !tool.nativeOnly) &&
-        ((config.mode ?? "full-access") !== "read-only" || tool.readOnly),
+        (config.sandboxing !== "contained" || tool.readOnly),
     );
   }
 
@@ -1408,9 +1407,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const { config, profileId } = found;
     const topology = registered.topology;
     return {
-      revision: JSON.stringify([id, config.mode, profileId, topology]),
+      revision: JSON.stringify([id, config.sandboxing, profileId, topology]),
       tools: this.workspaceTools(config, topology, true) ?? [],
-      readOnly: config.mode === "read-only",
+      readOnly: config.sandboxing === "contained",
       profileId,
       mcp: this.mcp.live({ config, profileId }),
       ask: this.mcp.permissionHandler({ config, profileId }),
@@ -1437,7 +1436,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         allowE2eFake: this.deps.e2eFake,
       });
       if ("error" in validated) return undefined;
-      return this.workspaceTools({ mode: validated.definition.mode }, "native");
+      return this.workspaceTools(
+        { sandboxing: validated.definition.sandboxing },
+        "native",
+      );
     } catch {
       return undefined;
     }

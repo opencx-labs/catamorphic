@@ -19,11 +19,14 @@ import {
   type AgentTurnUsage,
   type AttachedPluginForAgent,
   capabilityEventPresenter,
+  type HarnessPermissions,
   type McpToolPolicyLayers,
   messageWithAttachmentNames,
   narrowingLayer,
   PROJECT_TOOLS_SERVER_KEY,
   type ProviderSession,
+  SANDBOXING_LEVELS,
+  type Sandboxing,
   type SandboxModelGateway,
   type SandboxProvider,
   serverKeyOf,
@@ -3150,11 +3153,11 @@ export class AgentSessionsService {
     const targetAgent = await this.resolveAgent(targetAgentId, projectId);
     if (
       route.target === "*" &&
-      privilegeRank(targetAgent.privilege) >
-        privilegeRank(sourceAgent.privilege)
+      sandboxingRank(targetAgent.sandboxing) >
+        sandboxingRank(sourceAgent.sandboxing)
     ) {
       throw new AgentDelegationDeniedError(
-        "A wildcard delegation route cannot grant a more privileged agent",
+        "A wildcard delegation route cannot grant an agent with wider sandboxing",
       );
     }
 
@@ -5219,7 +5222,7 @@ export class AgentSessionsService {
                 projectId,
                 sessionId,
                 workingDirectory: anchor.providerSession.workingDirectory,
-                ...(agent.privilege ? { mode: agent.privilege } : {}),
+                ...(agent.sandboxing ? { sandboxing: agent.sandboxing } : {}),
               }),
             ];
             turnOptions.capabilities = this.agentCapabilities.forSession({
@@ -5437,11 +5440,11 @@ export class AgentSessionsService {
               : anchor.providerSession.workingDirectory;
           anchor.providerSession.workingDirectory = settledWorkingDirectory;
 
-          // A read-only agent may change anything inside its own sandbox;
+          // A contained agent may change anything inside its own sandbox;
           // none of it leaves: no sync back, store ship, or checkpoint to
-          // the origin (ADR 0176).
+          // the origin (ADR 0182).
           const keepsChangesInSandbox = Boolean(
-            anchor.sandboxProviderId && agent.privilege === "read-only",
+            anchor.sandboxProviderId && agent.sandboxing === "contained",
           );
           const changedFiles = keepsChangesInSandbox
             ? []
@@ -6370,6 +6373,10 @@ export class AgentSessionsService {
       available: boolean;
       reason: string | null;
       environments: import("./execution-environments-service.js").EnvironmentDiscovery;
+      /** What may leave its sandbox, when the host or definition says (ADR 0182). */
+      sandboxing?: Sandboxing;
+      /** Its harness's own permission settings, as declared. */
+      harnessPermissions?: HarnessPermissions;
     }> = [];
     for (const candidate of candidates.values()) {
       try {
@@ -6396,6 +6403,10 @@ export class AgentSessionsService {
           ),
           environments,
           reason: null,
+          ...(agent.sandboxing ? { sandboxing: agent.sandboxing } : {}),
+          ...(agent.defaults?.harnessPermissions
+            ? { harnessPermissions: agent.defaults.harnessPermissions }
+            : {}),
         });
       } catch (error) {
         items.push({
@@ -6566,8 +6577,8 @@ export class AgentSessionsService {
         const allowed = accessibleAgents
           .filter(
             (candidate) =>
-              privilegeRank(candidate.privilege) <=
-              privilegeRank(sourceAgent.privilege),
+              sandboxingRank(candidate.sandboxing) <=
+              sandboxingRank(sourceAgent.sandboxing),
           )
           .map((candidate) => candidate.id);
         target =
@@ -7425,13 +7436,13 @@ export class AgentSessionsService {
   }
 
   /**
-   * What the session's agent may change outside its sandbox (ADR 0176):
-   * its definition's `mode`, or undefined when the host declared none.
+   * What may leave the session agent's sandbox (ADR 0182): its
+   * sandboxing, or undefined when the host declared none.
    */
-  async agentMode(args: {
+  async agentSandboxing(args: {
     projectId: string;
     sessionId: string;
-  }): Promise<"read-only" | "edit" | "full-access" | undefined> {
+  }): Promise<Sandboxing | undefined> {
     const session = await this.db
       .selectFrom("agent_sessions")
       .select("agent_id")
@@ -7439,12 +7450,12 @@ export class AgentSessionsService {
       .where("project_id", "=", args.projectId)
       .executeTakeFirst();
     if (!session) return undefined;
-    // An agent that no longer resolves cannot act; the strictest mode holds.
+    // An agent that no longer resolves cannot act; the narrowest level holds.
     const agent = await this.resolveAgent(
       session.agent_id,
       args.projectId,
     ).catch(() => undefined);
-    return agent ? agent.privilege : "read-only";
+    return agent ? agent.sandboxing : "contained";
   }
 
   /** `caller` + `toolPolicies` for {@link StartSessionOpts}. */
@@ -8108,9 +8119,11 @@ function delegationPolicy(
 }
 
 /**
- * A committed definition's own narrowing (ADR 0054 agent scope) and mode,
- * applied by core whatever harness the host built, so they hold on every
- * host (ADR 0176). Aliases name the Environment's connection servers.
+ * A committed definition's own narrowing (ADR 0054 agent scope), sandboxing
+ * and harness permission mode, applied by core whatever harness the host
+ * built, so they hold on every host (ADR 0176, ADR 0182). The permission
+ * mode travels as a turn default the harness reads. Aliases name the
+ * Environment's connection servers.
  */
 function withDefinitionPolicy(
   agent: RegisteredCodingAgent,
@@ -8129,10 +8142,15 @@ function withDefinitionPolicy(
       ],
     ]),
   );
-  const mode = agent.privilege ?? definition.mode;
+  const sandboxing = agent.sandboxing ?? definition.sandboxing;
+  const harnessPermissions =
+    agent.defaults?.harnessPermissions ?? definition.harnessPermissions;
   return {
     ...agent,
-    ...(mode ? { privilege: mode } : {}),
+    ...(sandboxing ? { sandboxing } : {}),
+    ...(harnessPermissions
+      ? { defaults: { ...agent.defaults, harnessPermissions } }
+      : {}),
     ...(Object.keys(layers).length > 0
       ? { toolPolicies: { ...agent.toolPolicies, ...layers } }
       : {}),
@@ -8152,12 +8170,8 @@ function withAgentLayers(
   return merged;
 }
 
-function privilegeRank(
-  privilege: "read-only" | "edit" | "full-access" | undefined,
-): number {
-  if (privilege === "full-access") return 2;
-  if (privilege === "edit") return 1;
-  return 0;
+function sandboxingRank(sandboxing: Sandboxing | undefined): number {
+  return sandboxing ? SANDBOXING_LEVELS.indexOf(sandboxing) : 0;
 }
 
 function resolveDelegationTarget(input: {

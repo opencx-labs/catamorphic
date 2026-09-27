@@ -58,7 +58,7 @@ export function desktopSettingsContext({
     skill: "configuring-catamorphic-desktop",
     note:
       access === "read-only"
-        ? "Inspect only. This agent is read-only; do not edit host configuration."
+        ? "Inspect only. This agent's sandboxing is contained; do not edit host configuration."
         : "These are host paths for the initiating project's owning profile, independent of the foreground window and any session worktree. Edit files directly with ordinary file or shell facilities. Native harness permissions still apply, especially outside the checkout; these paths do not grant access. Load the configuration skill for schemas, precedence and reset. Read affected files before and after editing. Validation errors appear here on the next turn and in Settings; valid changes apply live.",
   };
 }

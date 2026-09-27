@@ -4,6 +4,12 @@ import type { ResourcePreview } from "@catamorphic/react";
 import type { ImportableBrowser } from "../../main/browser-import/types.js";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { AgentDefaultModelResult } from "../../shared/agent-default-model.js";
+import {
+  DESKTOP_DEFAULT_SANDBOXING,
+  effectiveHarnessPermissions,
+  type HarnessPermissions,
+  type Sandboxing,
+} from "../../shared/agent-permissions.js";
 import type { AppPrefs } from "../../shared/app-prefs.js";
 import type { BackgroundCommandView } from "../../shared/background-commands.js";
 import type {
@@ -94,12 +100,10 @@ export type AgentHarness = "ai-sdk" | "claude-code" | "codex";
 export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type AgentAuthMode = "local" | "account" | "api-key";
 
-/**
- * Normalized operating mode (ADR 0056), mapped per harness — Claude Code
- * permission modes, Codex sandbox modes. Not applicable to the sandboxed
- * built-in harness.
- */
-export type AgentMode = "read-only" | "edit" | "full-access";
+export type {
+  HarnessPermissions,
+  Sandboxing,
+} from "../../shared/agent-permissions.js";
 export type AgentCoordinationStrategy =
   | "shared-first"
   | "isolate-on-contention"
@@ -145,7 +149,10 @@ export interface AgentInfo {
   accepts: Array<"image" | "document">;
   /** The agent's own main prompt ("" when none). */
   instructions: string;
-  mode: AgentMode;
+  /** What may leave the agent's sandbox (ADR 0182). */
+  sandboxing: Sandboxing;
+  /** The harness's own permission settings in effect (empty for built-in). */
+  harnessPermissions: HarnessPermissions;
   coordination: AgentCoordinationStrategy;
   /** Claude Code auto-memory — opt-in, default off (others ignore it). */
   memory: boolean;
@@ -178,8 +185,10 @@ export interface ProjectAgentInfo {
   description: string | null;
   model: string | null;
   effort: AgentEffort | null;
-  /** Normalized operating mode; null = the local desktop default (full access). */
-  mode: AgentMode | null;
+  /** What may leave its sandbox (ADR 0182); null = the local default. */
+  sandboxing: Sandboxing | null;
+  /** The harness's own permission settings; null = the local defaults. */
+  harnessPermissions: HarnessPermissions | null;
   /** Checkout-coordination doctrine; null means shared-first. */
   coordination: AgentCoordinationStrategy | null;
   /** Claude Code auto-memory; null = the definition doesn't say (off). */
@@ -226,7 +235,11 @@ export function projectAgentAsInfo(agent: ProjectAgentInfo): AgentInfo {
     apiKeyMasked: null,
     accepts: ["image", "document"],
     instructions: "",
-    mode: agent.mode ?? "full-access",
+    sandboxing: agent.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
+    harnessPermissions: effectiveHarnessPermissions({
+      harness,
+      permissions: agent.harnessPermissions,
+    }),
     coordination: agent.coordination ?? "shared-first",
     memory: agent.memory === true,
     connections: { mode: "all" },
@@ -257,7 +270,9 @@ export interface CreateAgentInput {
   auth?: AgentAuthMode;
   apiKey?: string | null;
   instructions?: string;
-  mode?: AgentMode;
+  sandboxing?: Sandboxing;
+  /** `{}` returns to the local defaults. */
+  harnessPermissions?: HarnessPermissions;
   coordination?: AgentCoordinationStrategy;
   memory?: boolean;
   connections?: AgentConnectionsSetting;
@@ -275,7 +290,9 @@ export interface UpdateAgentInput {
   apiKey?: string | null;
   /** New instructions; "" clears them. */
   instructions?: string;
-  mode?: AgentMode;
+  sandboxing?: Sandboxing;
+  /** `{}` returns to the local defaults. */
+  harnessPermissions?: HarnessPermissions;
   coordination?: AgentCoordinationStrategy;
   memory?: boolean;
   connections?: AgentConnectionsSetting;

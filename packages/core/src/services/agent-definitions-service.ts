@@ -1,7 +1,16 @@
 import { createHash } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
-import type { EnvironmentRequirements } from "@catamorphic/sandbox";
+import {
+  CLAUDE_CODE_PERMISSION_MODES,
+  CODEX_APPROVAL_POLICIES,
+  CODEX_SANDBOX_MODES,
+  type EnvironmentRequirements,
+  type HarnessPermissions,
+  harnessPermissionIssues,
+  SANDBOXING_LEVELS,
+  type Sandboxing,
+} from "@catamorphic/sandbox";
 import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import { z } from "zod";
@@ -273,80 +282,104 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
   const kinds = opts?.allowE2eFake
     ? ([...AGENT_DEFINITION_KINDS, "e2e-fake"] as const)
     : AGENT_DEFINITION_KINDS;
-  return z.object({
-    version: z.literal(1),
-    /** Display name. */
-    name: z.string().min(1),
-    kind: z.enum(kinds as readonly [string, ...string[]]),
-    model: z.string().min(1).optional(),
-    effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
-    /**
-     * Normalized operating mode (ADR 0056), mapped per harness: Claude
-     * Code plan/acceptEdits/bypassPermissions, Codex sandbox read-only/
-     * workspace-write/danger-full-access. Absent = "edit". Sensitive —
-     * part of the consent hash: widening what an agent may touch must
-     * re-earn consent.
-     */
-    mode: z.enum(["read-only", "edit", "full-access"]).optional(),
-    /** Checkout-coordination doctrine. Absent = "shared-first". */
-    coordination: z.enum(AGENT_COORDINATION_STRATEGIES).optional(),
-    /**
-     * Claude Code auto-memory. Absent = OFF — memory is opt-in
-     * (ADR 0056): accumulated memories change an agent's behavior over
-     * time without users seeing it happen. `true` enables it.
-     */
-    memory: z.boolean().optional(),
-    description: z.string().optional(),
-    credentials: AgentDefinitionCredentialsSchema.optional(),
-    environment: AgentEnvironmentPolicySchema.optional(),
-    /**
-     * Environment connection bindings this project agent requires. Project
-     * agents never inherit the running member's desktop profile connectors.
-     */
-    connections: z
-      .array(
-        z.union([
-          z.string().regex(CONNECTION_ALIAS_PATTERN),
+  return z
+    .object({
+      version: z.literal(1),
+      /** Display name. */
+      name: z.string().min(1),
+      kind: z.enum(kinds as readonly [string, ...string[]]),
+      model: z.string().min(1).optional(),
+      effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
+      /**
+       * What may leave the agent's sandbox (ADR 0182): `contained`,
+       * `propose`, or `publish`. Absent = the host's default (`propose` on a
+       * Work server). Sensitive: part of the consent hash.
+       */
+      sandboxing: z.enum(SANDBOXING_LEVELS).optional(),
+      /**
+       * The harness's own permission mode, in its native values (ADR 0182):
+       * Claude Code `permissionMode`; Codex `sandbox` and `approvals`. Other
+       * kinds take none. Absent fields keep the host's default. Sensitive:
+       * part of the consent hash.
+       */
+      harnessPermissions: z
+        .strictObject({
+          permissionMode: z.enum(CLAUDE_CODE_PERMISSION_MODES).optional(),
+          sandbox: z.enum(CODEX_SANDBOX_MODES).optional(),
+          approvals: z.enum(CODEX_APPROVAL_POLICIES).optional(),
+        })
+        .optional(),
+      /** Checkout-coordination doctrine. Absent = "shared-first". */
+      coordination: z.enum(AGENT_COORDINATION_STRATEGIES).optional(),
+      /**
+       * Claude Code auto-memory. Absent = OFF — memory is opt-in
+       * (ADR 0056): accumulated memories change an agent's behavior over
+       * time without users seeing it happen. `true` enables it.
+       */
+      memory: z.boolean().optional(),
+      description: z.string().optional(),
+      credentials: AgentDefinitionCredentialsSchema.optional(),
+      environment: AgentEnvironmentPolicySchema.optional(),
+      /**
+       * Environment connection bindings this project agent requires. Project
+       * agents never inherit the running member's desktop profile connectors.
+       */
+      connections: z
+        .array(
+          z.union([
+            z.string().regex(CONNECTION_ALIAS_PATTERN),
+            z.object({
+              alias: z.string().regex(CONNECTION_ALIAS_PATTERN),
+              principal: z.enum(["member", "service", "either"]).optional(),
+              capabilities: z.array(z.string().min(1)).optional(),
+              optional: z.boolean().optional(),
+            }),
+          ]),
+        )
+        .optional(),
+      /**
+       * Skill names this agent is offered (any tier — project, user,
+       * host). Absent = all. Narrowing only, like toolPolicies: outside
+       * the consent hash.
+       */
+      skills: z.array(z.string().min(1)).optional(),
+      /**
+       * Per-connection tool policies keyed by binding alias. These can narrow
+       * what the Environment broker exposes, never widen it.
+       */
+      toolPolicies: z
+        .record(
+          z.string().min(1),
           z.object({
-            alias: z.string().regex(CONNECTION_ALIAS_PATTERN),
-            principal: z.enum(["member", "service", "either"]).optional(),
-            capabilities: z.array(z.string().min(1)).optional(),
-            optional: z.boolean().optional(),
+            default: z.enum(["allow", "ask", "deny", "auto"]).optional(),
+            tools: z
+              .record(z.string(), z.enum(["allow", "ask", "deny"]))
+              .optional(),
           }),
-        ]),
-      )
-      .optional(),
-    /**
-     * Skill names this agent is offered (any tier — project, user,
-     * host). Absent = all. Narrowing only, like toolPolicies: outside
-     * the consent hash.
-     */
-    skills: z.array(z.string().min(1)).optional(),
-    /**
-     * Per-connection tool policies keyed by binding alias. These can narrow
-     * what the Environment broker exposes, never widen it.
-     */
-    toolPolicies: z
-      .record(
-        z.string().min(1),
-        z.object({
-          default: z.enum(["allow", "ask", "deny", "auto"]).optional(),
-          tools: z
-            .record(z.string(), z.enum(["allow", "ask", "deny"]))
-            .optional(),
-        }),
-      )
-      .optional(),
-    /** Which agents this agent may create as first-class subsessions. */
-    delegation: AgentDelegationPolicySchema.optional(),
-    /** Reserved for kind "acp": how to reach the agent. */
-    acp: z
-      .object({
-        endpoint: z.string().min(1).optional(),
-        command: z.array(z.string().min(1)).optional(),
-      })
-      .optional(),
-  });
+        )
+        .optional(),
+      /** Which agents this agent may create as first-class subsessions. */
+      delegation: AgentDelegationPolicySchema.optional(),
+      /** Reserved for kind "acp": how to reach the agent. */
+      acp: z
+        .object({
+          endpoint: z.string().min(1).optional(),
+          command: z.array(z.string().min(1)).optional(),
+        })
+        .optional(),
+    })
+    .superRefine((definition, ctx) => {
+      for (const issue of harnessPermissionIssues({
+        kind: definition.kind,
+        permissions: definition.harnessPermissions ?? {},
+      })) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["harnessPermissions", issue.field],
+          message: issue.message,
+        });
+      }
+    });
 }
 
 export const AgentDefinitionSchema = agentDefinitionSchema();
@@ -357,7 +390,8 @@ export interface AgentDefinition {
   kind: AgentDefinitionKind;
   model?: string;
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
-  mode?: "read-only" | "edit" | "full-access";
+  sandboxing?: Sandboxing;
+  harnessPermissions?: HarnessPermissions;
   coordination?: AgentCoordinationStrategy;
   memory?: boolean;
   description?: string;
@@ -423,8 +457,9 @@ export function validateAgentDefinition(
  * Deliberately NOT covered: name and description, which are display concerns,
  * plus skills and toolPolicies, which can only narrow what the member's own
  * profile allows. Environment and connection requirements are covered because
- * they select execution and brokered authority. `mode` is covered because
- * widening what the agent may do to the member's machine must re-earn consent.
+ * they select execution and brokered authority. `sandboxing` and
+ * `harnessPermissions` are covered because widening what the agent may do,
+ * inside its harness or past its sandbox, must re-earn consent.
  */
 export function definitionHash(
   definition: AgentDefinition,
@@ -434,8 +469,15 @@ export function definitionHash(
   const sensitive = {
     kind: definition.kind,
     model: definition.model ?? null,
-    // The host chooses its default. Omission and an explicit mode are distinct.
-    mode: definition.mode ?? null,
+    // The host chooses its defaults. Omission and an explicit value are distinct.
+    sandboxing: definition.sandboxing ?? null,
+    harnessPermissions: definition.harnessPermissions
+      ? {
+          permissionMode: definition.harnessPermissions.permissionMode ?? null,
+          sandbox: definition.harnessPermissions.sandbox ?? null,
+          approvals: definition.harnessPermissions.approvals ?? null,
+        }
+      : null,
     credentials: {
       source: credentials.source,
       secret: credentials.secret ?? null,

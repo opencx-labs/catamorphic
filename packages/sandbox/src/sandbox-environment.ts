@@ -89,18 +89,35 @@ export function dockerfileImageReference(digest: string): string {
   return `work.local/images:${digest.slice(0, 40)}`;
 }
 
-/** What an agent may change outside its own sandbox (ADR 0176). */
-export const AGENT_MODES = ["read-only", "edit", "full-access"] as const;
-export type AgentMode = (typeof AGENT_MODES)[number];
+/**
+ * Sandboxing: what may leave an agent's sandbox (ADR 0176, named in ADR 0182).
+ * Ordered from narrowest to widest. An agent may run anything inside its own
+ * sandbox at every level; the level governs what crosses the boundary.
+ * - `contained`: nothing leaves (no checkpoint, store upload, proposal or
+ *   push; connection actions only read).
+ * - `propose`: may propose changes, never deploy or publish.
+ * - `publish`: everything bindings and roles allow.
+ */
+export const SANDBOXING_LEVELS = ["contained", "propose", "publish"] as const;
+export type Sandboxing = (typeof SANDBOXING_LEVELS)[number];
 
-/** Whether an agent in `mode` may take an action that needs `required`. */
-export function modeAllows(mode: AgentMode, required: AgentMode): boolean {
-  return AGENT_MODES.indexOf(mode) >= AGENT_MODES.indexOf(required);
+/** Whether an agent at `sandboxing` may take an action that needs `required`. */
+export function sandboxingAllows(args: {
+  sandboxing: Sandboxing;
+  required: Sandboxing;
+}): boolean {
+  return (
+    SANDBOXING_LEVELS.indexOf(args.sandboxing) >=
+    SANDBOXING_LEVELS.indexOf(args.required)
+  );
 }
 
-/** The readable refusal an agent sees at a boundary its mode does not cross. */
-export function modeRefusal(args: { mode: AgentMode; action: string }): string {
-  return args.mode === "read-only"
-    ? `This agent runs in read-only mode: it may inspect and run anything inside its own sandbox, but not ${args.action}. Report what you found instead.`
-    : `This agent runs in edit mode: it may propose changes, but not ${args.action}. Propose the change for someone who may publish it.`;
+/** The readable refusal an agent sees at a boundary its sandboxing keeps closed. */
+export function sandboxingRefusal(args: {
+  sandboxing: Sandboxing;
+  action: string;
+}): string {
+  return args.sandboxing === "contained"
+    ? `This agent's sandboxing is contained: it may inspect and run anything inside its own sandbox, but not ${args.action}. Report what you found instead.`
+    : `This agent's sandboxing is propose: it may propose changes, but not ${args.action}. Propose the change for someone who may publish it.`;
 }

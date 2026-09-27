@@ -1,7 +1,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  CLAUDE_CODE_PERMISSION_MODES,
+  CODEX_APPROVAL_POLICIES,
+  CODEX_SANDBOX_MODES,
+  SANDBOXING_LEVELS,
+} from "@catamorphic/sandbox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  CLAUDE_PERMISSION_MODE_OPTIONS,
+  CODEX_APPROVAL_OPTIONS,
+  CODEX_SANDBOX_OPTIONS,
+  SANDBOXING_OPTIONS,
+} from "../shared/agent-permissions.js";
 
 // The store encrypts via Electron's safeStorage; unit tests run outside
 // Electron, so exercise a reversible stand-in cipher.
@@ -35,13 +47,14 @@ afterEach(() => {
 const PROJECT = "11111111-1111-4111-8111-111111111111";
 
 describe("AgentsStore — ADR 0056 fields", () => {
-  it("persists instructions, mode, memory, skills, and coordination; defaults stay implicit", () => {
+  it("persists instructions, sandboxing, permission mode, memory, skills, and coordination; defaults stay implicit", () => {
     const file = storeFile();
     const store = new AgentsStore(file);
     const agent = store.create({
       harness: "claude-code",
       instructions: "  You are the reviewer.  ",
-      mode: "read-only",
+      sandboxing: "contained",
+      harnessPermissions: { permissionMode: "plan" },
       memory: true,
       skills: { mode: "picked", names: ["publishing-to-github"] },
       coordination: "isolate-on-contention",
@@ -58,7 +71,8 @@ describe("AgentsStore — ADR 0056 fields", () => {
       },
     });
     expect(agent.instructions).toBe("You are the reviewer.");
-    expect(agent.mode).toBe("read-only");
+    expect(agent.sandboxing).toBe("contained");
+    expect(agent.harnessPermissions).toEqual({ permissionMode: "plan" });
     expect(agent.memory).toBe(true);
     expect(agent.skills).toEqual({
       mode: "picked",
@@ -84,7 +98,8 @@ describe("AgentsStore — ADR 0056 fields", () => {
     const stored = raw.agents.find(
       (candidate: { id: string }) => candidate.id === plain.id,
     );
-    expect(stored.mode).toBeUndefined();
+    expect(stored.sandboxing).toBeUndefined();
+    expect(stored.harnessPermissions).toBeUndefined();
     expect(stored.memory).toBeUndefined();
     expect(stored.skills).toBeUndefined();
     expect(stored.instructions).toBeUndefined();
@@ -93,7 +108,19 @@ describe("AgentsStore — ADR 0056 fields", () => {
     // The public shape materializes them for the renderer. Memory is
     // OPT-IN (ADR 0056): a fresh agent remembers nothing.
     const publicAgent = toPublicAgent(plain);
-    expect(publicAgent.mode).toBe("full-access");
+    // Local agents default to full freedom (ADR 0140), in each setting.
+    expect(publicAgent.sandboxing).toBe("publish");
+    expect(publicAgent.harnessPermissions).toEqual({
+      sandbox: "danger-full-access",
+      approvals: "on-request",
+    });
+    expect(
+      toPublicAgent(store.create({ harness: "claude-code" }))
+        .harnessPermissions,
+    ).toEqual({ permissionMode: "bypassPermissions" });
+    expect(
+      toPublicAgent(store.create({ harness: "ai-sdk" })).harnessPermissions,
+    ).toEqual({});
     expect(publicAgent.memory).toBe(false);
     expect(publicAgent.skills).toEqual({ mode: "all" });
     expect(publicAgent.instructions).toBe("");
@@ -110,7 +137,8 @@ describe("AgentsStore — ADR 0056 fields", () => {
     const agent = store.create({
       harness: "claude-code",
       instructions: "persona",
-      mode: "full-access",
+      sandboxing: "publish",
+      harnessPermissions: { permissionMode: "auto" },
       memory: true,
       skills: { mode: "picked", names: ["a"] },
       coordination: "isolation-required",
@@ -122,7 +150,8 @@ describe("AgentsStore — ADR 0056 fields", () => {
     });
     const updated = store.update(agent.id, {
       instructions: "",
-      mode: "edit",
+      sandboxing: "propose",
+      harnessPermissions: {},
       memory: false,
       skills: { mode: "all" },
       coordination: "shared-first",
@@ -139,7 +168,8 @@ describe("AgentsStore — ADR 0056 fields", () => {
       },
     });
     expect(updated?.instructions).toBeUndefined();
-    expect(updated?.mode).toBe("edit");
+    expect(updated?.sandboxing).toBe("propose");
+    expect(updated?.harnessPermissions).toBeUndefined();
     expect(updated?.memory).toBeUndefined();
     expect(updated?.skills).toBeUndefined();
     expect(updated?.coordination).toBeUndefined();
@@ -147,6 +177,62 @@ describe("AgentsStore — ADR 0056 fields", () => {
       enabled: true,
       maxConcurrentChildren: 10,
     });
+  });
+});
+
+describe("AgentsStore: permission mode and sandboxing (ADR 0182)", () => {
+  it("takes each harness's own settings and refuses another harness's", () => {
+    const store = new AgentsStore(storeFile());
+    const codex = store.create({
+      harness: "codex",
+      harnessPermissions: { sandbox: "workspace-write" },
+    });
+    expect(toPublicAgent(codex).harnessPermissions).toEqual({
+      sandbox: "workspace-write",
+      approvals: "on-request",
+    });
+    expect(
+      store.update(codex.id, {
+        harnessPermissions: { sandbox: "workspace-write", approvals: "never" },
+      })?.harnessPermissions,
+    ).toEqual({ sandbox: "workspace-write", approvals: "never" });
+    expect(() =>
+      store.update(codex.id, {
+        harnessPermissions: { permissionMode: "auto" },
+      }),
+    ).toThrow("A codex agent takes 'sandbox' and 'approvals'");
+    expect(() =>
+      store.create({
+        harness: "ai-sdk",
+        harnessPermissions: { permissionMode: "plan" },
+      }),
+    ).toThrow("has no harness permission settings");
+    // Sandboxing and permission mode are independent: bypassing the
+    // harness's checks inside a contained sandbox is valid.
+    const fast = store.create({
+      harness: "claude-code",
+      sandboxing: "contained",
+      harnessPermissions: { permissionMode: "bypassPermissions" },
+    });
+    expect(toPublicAgent(fast)).toMatchObject({
+      sandboxing: "contained",
+      harnessPermissions: { permissionMode: "bypassPermissions" },
+    });
+  });
+
+  it("mirrors the harness values the sandbox package defines", () => {
+    expect(SANDBOXING_OPTIONS.map((option) => option.value)).toEqual([
+      ...SANDBOXING_LEVELS,
+    ]);
+    expect(
+      CLAUDE_PERMISSION_MODE_OPTIONS.map((option) => option.value).sort(),
+    ).toEqual([...CLAUDE_CODE_PERMISSION_MODES].sort());
+    expect(CODEX_SANDBOX_OPTIONS.map((option) => option.value).sort()).toEqual(
+      [...CODEX_SANDBOX_MODES].sort(),
+    );
+    expect(CODEX_APPROVAL_OPTIONS.map((option) => option.value).sort()).toEqual(
+      [...CODEX_APPROVAL_POLICIES].sort(),
+    );
   });
 });
 

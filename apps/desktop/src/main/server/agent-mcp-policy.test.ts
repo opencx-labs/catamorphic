@@ -53,9 +53,9 @@ it("allows ordinary local connectors by default and honors explicit restrictions
     return resolveToolPermissionAcross(layers, "write_file", {});
   };
   expect(permission()).toBe("allow");
-  stores.agents.update(agent.id, { mode: "edit" });
+  stores.agents.update(agent.id, { sandboxing: "propose" });
   expect(permission()).toBe("ask");
-  stores.agents.update(agent.id, { mode: "full-access" });
+  stores.agents.update(agent.id, { sandboxing: "publish" });
   stores.connections.setToolPermission(connection.id, "write_file", "deny");
   expect(permission()).toBe("deny");
   const layers =

@@ -535,10 +535,17 @@ provide it take the work:
 - \`approvals.waitMinutes\`: how long an unattended chat waits for a person
   to approve before the action is refused (30 by default).
 
-An agent definition's \`mode\` is enforced by the host: \`read-only\` agents may
-do anything inside their sandbox, but nothing they change is saved, proposed
-or published and connections answer reads only; \`edit\` agents may propose
-but not deploy or publish; \`full-access\` agents may do what roles allow.
+An agent definition's \`sandboxing\` says what may leave its sandbox, and the
+host enforces it: \`contained\` agents may do anything inside their sandbox,
+but nothing they change is saved, proposed or published and connections
+answer reads only; \`propose\` agents (the default) may propose but not
+deploy or publish; \`publish\` agents may do what roles allow. Separately,
+\`harnessPermissions\` sets the harness's own permission mode in its native
+values: \`{ "permissionMode": "auto" }\` for \`claude-code\` (\`default\`,
+\`acceptEdits\`, \`plan\`, \`auto\`, \`dontAsk\`, \`bypassPermissions\`), or
+\`{ "sandbox": "workspace-write", "approvals": "on-request" }\` for \`codex\`.
+The two are independent: \`bypassPermissions\` inside a \`contained\`
+sandbox is fast inside and changes nothing outside.
 
 A remote project keeps one authority for membership, connections, and history.
 \`device: "member"\` offers an authenticated member's own computer when the

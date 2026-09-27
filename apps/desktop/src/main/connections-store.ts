@@ -59,8 +59,8 @@ export interface McpConnection {
   oauthClient?: McpOAuthClientHint;
   /**
    * The profile's explicit policy for this connection's tools (see
-   * @catamorphic/sandbox tool-policy). Absent follows the agent mode: full-access
-   * allows tools, restricted modes use auto. Explicit policies only narrow this.
+   * @catamorphic/sandbox tool-policy). Absent follows the agent's sandboxing: publish
+   * allows tools, contained and propose use auto. Explicit policies only narrow this.
    */
   toolPolicy?: McpToolPolicy;
   /**

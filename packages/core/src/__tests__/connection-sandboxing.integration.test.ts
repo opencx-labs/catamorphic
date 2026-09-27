@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { type DB, DEFAULT_SCHEMA, migrateToLatest } from "@catamorphic/db";
-import type { AgentMode } from "@catamorphic/sandbox";
+import type { Sandboxing } from "@catamorphic/sandbox";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
@@ -81,7 +81,7 @@ const annotated: ConnectionProvider = {
   },
 };
 
-describe("connection actions by agent mode (ADR 0176)", () => {
+describe("connection actions by agent sandboxing (ADR 0182)", () => {
   const providers = new ConnectionProviderRegistry([declared, annotated]);
   const connections = new ConnectionsService({
     db,
@@ -104,13 +104,13 @@ describe("connection actions by agent mode (ADR 0176)", () => {
     }),
   });
   const allocations = new ExecutionAllocationsService(db);
-  let mode: AgentMode | undefined = "read-only";
+  let sandboxing: Sandboxing | undefined = "contained";
   const broker = new ConnectionBroker(
     connections,
     providers,
     allocations,
     undefined,
-    { guards: [], sessionMode: async () => mode },
+    { guards: [], sessionSandboxing: async () => sandboxing },
   );
   let allocationId = "";
 
@@ -193,8 +193,8 @@ describe("connection actions by agent mode (ADR 0176)", () => {
       agentSessionId: "session-1",
     });
 
-  it("lets a read-only agent read and refuses what could change the system", async () => {
-    mode = "read-only";
+  it("lets a contained agent read and refuses what could change the system", async () => {
+    sandboxing = "contained";
     invoked.length = 0;
     await expect(call("directory", "users.list")).resolves.toEqual({
       ok: true,
@@ -203,7 +203,9 @@ describe("connection actions by agent mode (ADR 0176)", () => {
     await expect(call("directory", "users.disable")).rejects.toBeInstanceOf(
       ConnectionActionDeniedError,
     );
-    await expect(call("chat", "post")).rejects.toThrow("read-only mode");
+    await expect(call("chat", "post")).rejects.toThrow(
+      "This agent's sandboxing is contained",
+    );
     expect(invoked).toEqual(["declared:users.list", "annotated:search"]);
     const denied = (await connections.listAudit({ identity: admin, projectId }))
       .filter((event) => event.outcome === "denied")
@@ -211,9 +213,9 @@ describe("connection actions by agent mode (ADR 0176)", () => {
     expect(denied).toEqual(expect.arrayContaining(["users.disable", "post"]));
   });
 
-  it("lets edit and full-access agents use what the binding grants", async () => {
-    for (const next of ["edit", "full-access", undefined] as const) {
-      mode = next;
+  it("lets propose and publish agents use what the binding grants", async () => {
+    for (const next of ["propose", "publish", undefined] as const) {
+      sandboxing = next;
       await expect(call("directory", "users.disable")).resolves.toEqual({
         ok: true,
       });

@@ -48,6 +48,10 @@ import {
   KEYBINDING_ACTIONS,
 } from "../shared/actions.js";
 import {
+  type HarnessPermissions,
+  hasPermissionMode,
+} from "../shared/agent-permissions.js";
+import {
   chatBookmarkUrl,
   parseChatBookmarkUrl,
 } from "../shared/bookmark-target.js";
@@ -2912,6 +2916,7 @@ export function App({
       | "switch-agent"
       | "configure-agent"
       | "effort"
+      | "permission-mode"
       | "model";
     nonce: string;
   } | null>(null);
@@ -2921,6 +2926,7 @@ export function App({
       | "switch-agent"
       | "configure-agent"
       | "effort"
+      | "permission-mode"
       | "model",
   ) => {
     setPaletteOpen(true);
@@ -3108,6 +3114,23 @@ export function App({
     ) {
       void desktopApi.agentsUpdate(targetId, { effort });
     }
+  };
+
+  /**
+   * Change a profile agent's harness permission mode (ADR 0182). It is the
+   * agent's setting, so every chat with that agent runs its next turn so.
+   */
+  const pickHarnessPermissions = (
+    agentId: string,
+    patch: HarnessPermissions,
+  ) => {
+    const agent = agentsData?.agents.find(
+      (candidate) => candidate.id === agentId,
+    );
+    if (!agent) return;
+    void desktopApi.agentsUpdate(agentId, {
+      harnessPermissions: { ...agent.harnessPermissions, ...patch },
+    });
   };
 
   // One handler per registry action (shared/actions.ts). Consumed by the
@@ -3648,6 +3671,7 @@ export function App({
     "switch-agent": () => openPalettePicker("switch-agent"),
     "configure-agent": () => openPalettePicker("configure-agent"),
     "change-effort": () => openPalettePicker("effort"),
+    "change-permission-mode": () => openPalettePicker("permission-mode"),
     "switch-model": () => openPalettePicker("model"),
     "manage-connectors": () => setConnectorsModalOpen(true),
     "connect-remote-project": () =>
@@ -5094,6 +5118,12 @@ export function App({
       agentsData?.agents.some((agent) => agent.id === paletteTargetAgentId) ===
       true,
     "change-effort": paletteTargetAgentId != null,
+    // Profile agents only: a definition's permission mode lives in its file.
+    "change-permission-mode":
+      agentsData?.agents.some(
+        (agent) =>
+          agent.id === paletteTargetAgentId && hasPermissionMode(agent.harness),
+      ) === true,
   };
   const paletteProps = {
     projectId,
@@ -5167,6 +5197,7 @@ export function App({
     },
     onPickEffort: pickEffort,
     onPickModel: pickModel,
+    onPickHarnessPermissions: pickHarnessPermissions,
     onHighlightTarget: setPaletteTarget,
   };
 
@@ -6432,6 +6463,10 @@ export function App({
                 onEditEffort={() => {
                   revealChat(entry.localId);
                   openPalettePicker("effort");
+                }}
+                onEditPermissionMode={() => {
+                  revealChat(entry.localId);
+                  openPalettePicker("permission-mode");
                 }}
                 pullSelectionNonce={selectionPulls[entry.localId] ?? 0}
                 onFocusRequest={

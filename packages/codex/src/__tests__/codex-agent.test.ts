@@ -1,5 +1,9 @@
 import { access, readFile } from "node:fs/promises";
-import type { ProviderSession, SandboxProvider } from "@catamorphic/sandbox";
+import type {
+  ProviderSession,
+  SandboxProvider,
+  TurnOptions,
+} from "@catamorphic/sandbox";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -74,9 +78,10 @@ async function collect(
   agent: CodexAgent,
   message: string,
   providerSession: ProviderSession = session,
+  turn?: TurnOptions,
 ) {
   const events = [];
-  for await (const event of agent.sendMessage(providerSession, message)) {
+  for await (const event of agent.sendMessage(providerSession, message, turn)) {
     events.push(event);
   }
   return events;
@@ -101,6 +106,56 @@ describe("CodexAgent", () => {
     expect(resumeThread).toHaveBeenCalledWith(
       "thread-1",
       expect.objectContaining({ approvalPolicy: "on-request" }),
+    );
+    await agent.dispose(session);
+  });
+
+  it("defaults to workspace-write without approvals on the host", async () => {
+    resumeThread.mockReturnValueOnce(
+      scriptedThread([{ type: "turn.completed", usage: dummyUsage() }]),
+    );
+    const agent = new CodexAgent({});
+    await collect(agent, "continue");
+    expect(resumeThread).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        sandboxMode: "workspace-write",
+        approvalPolicy: "never",
+      }),
+    );
+    await agent.dispose(session);
+  });
+
+  it("honors the configured sandbox and approvals, and a turn's own (ADR 0182)", async () => {
+    resumeThread.mockReturnValue(
+      scriptedThread([{ type: "turn.completed", usage: dummyUsage() }]),
+    );
+    const agent = new CodexAgent({
+      sandboxMode: "danger-full-access",
+      approvalPolicy: "untrusted",
+      onToolPermission: async () => ({ decision: "deny" }),
+    });
+    await collect(agent, "continue");
+    expect(resumeThread).toHaveBeenLastCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        sandboxMode: "danger-full-access",
+        approvalPolicy: "untrusted",
+      }),
+    );
+    await collect(agent, "continue", session, {
+      harnessPermissions: {
+        sandbox: "read-only",
+        approvals: "on-failure",
+        permissionMode: "bypassPermissions",
+      },
+    });
+    expect(resumeThread).toHaveBeenLastCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        sandboxMode: "read-only",
+        approvalPolicy: "on-failure",
+      }),
     );
     await agent.dispose(session);
   });

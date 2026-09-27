@@ -27,6 +27,7 @@ import type {
   AgentTask,
   AgentTaskStatus,
   AgentTurnHandle,
+  ClaudeCodePermissionMode,
   ExtraTool,
   ExtraToolContext,
   McpServersSource,
@@ -93,7 +94,7 @@ export interface ClaudeCodeAgentRuntimeOpts {
   mcpToolAnnotations?:
     | Record<string, Record<string, ToolPolicyAnnotations>>
     | (() => Record<string, Record<string, ToolPolicyAnnotations>>);
-  permissionMode?: "default" | "acceptEdits" | "plan" | "bypassPermissions";
+  permissionMode?: ClaudeCodePermissionMode;
   memory?: boolean;
   decideToolUse?: (
     request: ClaudeCodeToolPolicyRequest,
@@ -721,6 +722,9 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
       model: input.model ?? this.opts.model,
       effort: input.effort ?? this.opts.effort,
       permissionMode: this.opts.permissionMode ?? "acceptEdits",
+      ...(this.opts.permissionMode === "bypassPermissions"
+        ? { allowDangerouslySkipPermissions: true }
+        : {}),
       ...(workspaceServer || Object.keys(externalServers).length > 0
         ? {
             mcpServers: {

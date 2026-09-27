@@ -10211,6 +10211,16 @@ export interface paths {
                                     }[];
                                     defaultEnvironment?: string;
                                 };
+                                /** @enum {string} */
+                                sandboxing?: "contained" | "propose" | "publish";
+                                harnessPermissions?: {
+                                    /** @enum {string} */
+                                    permissionMode?: "default" | "acceptEdits" | "plan" | "auto" | "dontAsk" | "bypassPermissions";
+                                    /** @enum {string} */
+                                    sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+                                    /** @enum {string} */
+                                    approvals?: "untrusted" | "on-failure" | "on-request" | "never";
+                                };
                             }[];
                             defaultAgentId?: string;
                             startingActions: {
@@ -10287,7 +10297,15 @@ export interface paths {
                                 /** @enum {string} */
                                 effort?: "low" | "medium" | "high" | "xhigh" | "max";
                                 /** @enum {string} */
-                                mode?: "read-only" | "edit" | "full-access";
+                                sandboxing?: "contained" | "propose" | "publish";
+                                harnessPermissions?: {
+                                    /** @enum {string} */
+                                    permissionMode?: "default" | "acceptEdits" | "plan" | "auto" | "dontAsk" | "bypassPermissions";
+                                    /** @enum {string} */
+                                    sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+                                    /** @enum {string} */
+                                    approvals?: "untrusted" | "on-failure" | "on-request" | "never";
+                                };
                                 memory?: boolean;
                                 description?: string;
                                 credentials?: {

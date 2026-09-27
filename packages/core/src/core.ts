@@ -747,7 +747,8 @@ export class CatamorphicCore {
       resolveMemberIdentity: config.resolveMemberIdentity,
       // Constructed below; read at call time.
       memberRoles: (args) => this.memberships.describeMember(args),
-      sessionMode: async (args) => this.agentSessions?.agentMode(args),
+      sessionSandboxing: async (args) =>
+        this.agentSessions?.agentSandboxing(args),
     });
     const connectionProviders = config.connectionProviders ?? [];
     const credentialVault = config.credentialVault;
@@ -818,14 +819,14 @@ export class CatamorphicCore {
                 .where("id", "=", sessionId)
                 .executeTakeFirst()
             )?.external_user_id,
-          sessionMode: async (sessionId) => {
+          sessionSandboxing: async (sessionId) => {
             const session = await this.db
               .selectFrom("agent_sessions")
               .select("project_id")
               .where("id", "=", sessionId)
               .executeTakeFirst();
             return session
-              ? this.agentSessions?.agentMode({
+              ? this.agentSessions?.agentSandboxing({
                   projectId: session.project_id,
                   sessionId,
                 })
