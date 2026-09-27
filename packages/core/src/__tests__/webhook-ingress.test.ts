@@ -388,7 +388,7 @@ describe("webhook handshakes", () => {
           echo: "query.hub.challenge",
         },
         {
-          when: { query: { validationToken: { exists: true } } },
+          when: { query: { validationToken: { $exists: true } } },
           echo: "query.validationToken",
         },
       ],

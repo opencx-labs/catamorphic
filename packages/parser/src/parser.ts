@@ -3275,6 +3275,11 @@ function findDeclaredSecrets(
           initializer && Node.isObjectLiteralExpression(initializer)
             ? initializer
             : undefined;
+        const use = readSecretUse({ name, options });
+        if (!use.ok) errors.push({ file: filePath, message: use.message });
+        // A secret whose use cannot be read never reaches a run, and a
+        // webhook declaration anywhere wins over a run one of the same name.
+        const previous = byName.get(name);
         byName.set(name, {
           name,
           label: readStringProperty(options, "label"),
@@ -3282,7 +3287,7 @@ function findDeclaredSecrets(
           required: readBooleanProperty(options, "required") ?? true,
           default: readStringProperty(options, "default"),
           use:
-            readStringProperty(options, "use") === "webhook"
+            !use.ok || use.use === "webhook" || previous?.use === "webhook"
               ? "webhook"
               : "run",
           filePath,
@@ -3294,6 +3299,55 @@ function findDeclaredSecrets(
   return [...byName.values()].sort((left, right) =>
     left.name.localeCompare(right.name),
   );
+}
+
+/**
+ * A secret's `use`, read as the constant its declaration evaluates to:
+ * `"run"` (also when absent) or `"webhook"`. Anything the parser cannot
+ * prove is one of the two is an error, because a webhook signing secret
+ * misread as `run` would be injected into every run.
+ */
+function readSecretUse(input: {
+  name: string;
+  options: ObjectLiteralExpression | undefined;
+}): { ok: true; use: "run" | "webhook" } | { ok: false; message: string } {
+  if (
+    !input.options ||
+    input.options
+      .getProperties()
+      .some((property) => !Node.isPropertyAssignment(property))
+  )
+    return {
+      ok: false,
+      message: `defineSecrets: declare '${input.name}' with an inline object of plain 'key: value' properties.`,
+    };
+  const property = input.options.getProperty("use");
+  if (!property) return { ok: true, use: "run" };
+  const initializer = Node.isPropertyAssignment(property)
+    ? property.getInitializer()
+    : undefined;
+  const value = initializer
+    ? evaluateConstantExpression(stripTypeAssertions(initializer), "use")
+    : undefined;
+  if (value?.ok && (value.value === "run" || value.value === "webhook"))
+    return { ok: true, use: value.value };
+  return {
+    ok: false,
+    message: `defineSecrets: '${input.name}' use must be the literal "run" or "webhook".`,
+  };
+}
+
+/** `x as const`, `x satisfies T` and `<T>x` evaluate to `x`. */
+function stripTypeAssertions(node: Node): Node {
+  const inner = unwrapExpression(node);
+  if (
+    Node.isAsExpression(inner) ||
+    Node.isSatisfiesExpression(inner) ||
+    Node.isTypeAssertion(inner) ||
+    Node.isNonNullExpression(inner)
+  )
+    return stripTypeAssertions(inner.getExpression());
+  return inner;
 }
 
 function readPropertyName(nameNode: Node): string | undefined {

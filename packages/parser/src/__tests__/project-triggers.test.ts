@@ -48,7 +48,7 @@ export const onMerged = defineWorkflow(({ defineBoundary }) => ({
 }));
 
 export const onSchedule = defineWorkflow(({ defineBoundary }) => ({
-  triggers: [trigger("schedule", { cron: "0 8 * * *", timezone: "UTC", where: { activationId: { exists: true } } })],
+  triggers: [trigger("schedule", { cron: "0 8 * * *", timezone: "UTC", where: { activationId: { $exists: true } } })],
   steps: [defineBoundary({ run: async ({ input }: BoundaryContext<{ id: string }>) => input })],
 }));
 `;
@@ -111,7 +111,7 @@ describe("project trigger kinds", () => {
     expect(schedule?.graph.triggers[0]).toMatchObject({
       kind: "schedule",
       config: { cron: "0 8 * * *", timezone: "UTC" },
-      where: { activationId: { exists: true } },
+      where: { activationId: { $exists: true } },
     });
   });
 
@@ -281,9 +281,9 @@ describe("where filters", () => {
             body: {
               action: ["opened", "closed"],
               number: 7,
-              pull_request: { merged: true, labels: { exists: true } },
-              draft: { exists: false },
-              missing: { exists: false },
+              pull_request: { merged: true, labels: { $exists: true } },
+              draft: { $exists: false },
+              missing: { $exists: false },
             },
           },
         },
@@ -298,7 +298,7 @@ describe("where filters", () => {
     ).toBe(false);
     expect(
       matchesWhere(
-        { payload: { body: { missing: { exists: true } } } },
+        { payload: { body: { missing: { $exists: true } } } },
         delivery,
       ),
     ).toBe(false);
@@ -317,26 +317,26 @@ describe("where filters", () => {
     };
     expect(
       matchesWhere(
-        { payload: { session: { key: { prefix: "slack:" } } } },
+        { payload: { session: { key: { $prefix: "slack:" } } } },
         chat,
       ),
     ).toBe(true);
     expect(
-      matchesWhere({ payload: { session: { key: { prefix: "pr-" } } } }, chat),
+      matchesWhere({ payload: { session: { key: { $prefix: "pr-" } } } }, chat),
     ).toBe(false);
     // Only strings have prefixes; an absent or null key never matches.
     expect(
-      matchesWhere({ payload: { detail: { status: { prefix: "7" } } } }, chat),
+      matchesWhere({ payload: { detail: { status: { $prefix: "7" } } } }, chat),
     ).toBe(false);
     expect(
       matchesWhere(
-        { payload: { session: { key: { prefix: "slack:" } } } },
+        { payload: { session: { key: { $prefix: "slack:" } } } },
         { payload: { session: { key: null } } },
       ),
     ).toBe(false);
     expect(
       matchesWhere(
-        { payload: { body: { action: { prefix: "clo" } } } },
+        { payload: { body: { action: { $prefix: "clo" } } } },
         delivery,
       ),
     ).toBe(true);
@@ -381,15 +381,53 @@ describe("where filters", () => {
     expect(
       whereErrors({
         a: [1, "x", null, true],
-        b: { exists: false },
-        c: { prefix: "slack:" },
+        b: { $exists: false },
+        c: { $prefix: "slack:" },
       }),
     ).toEqual([]);
-    expect(whereErrors({ key: { prefix: "" } })).toEqual([
-      "where.key.prefix must not be empty; leave the position out instead",
+    expect(whereErrors({ key: { $prefix: "" } })).toEqual([
+      "where.key.$prefix must not be empty; leave the position out instead",
     ]);
     expect(whereErrors({ a: [{ b: 1 }] })).toEqual([
       "where.a lists values to match; each must be a string, number, boolean or null",
     ]);
+    expect(whereErrors({ a: { $exist: true } })).toEqual([
+      "where.a.$exist is not an operator; use $exists or $prefix",
+    ]);
+    expect(whereErrors({ a: { $exists: true, b: 1 } })).toEqual([
+      "where.a must hold one operator alone, without other keys",
+    ]);
+    expect(whereErrors({ a: { $exists: "yes" } })).toEqual([
+      "where.a.$exists must be true or false",
+    ]);
+    expect(whereErrors({ a: { $prefix: 4 } })).toEqual([
+      "where.a.$prefix must be a string",
+    ]);
+  });
+
+  it("matches payload fields named exists or prefix by equality", () => {
+    const event = {
+      payload: { body: { flag: { exists: true }, ref: { prefix: "v1" } } },
+    };
+    expect(whereErrors({ flag: { exists: true }, ref: { prefix: "" } })).toEqual(
+      [],
+    );
+    expect(
+      matchesWhere(
+        { payload: { body: { flag: { exists: true }, ref: { prefix: "v1" } } } },
+        event,
+      ),
+    ).toBe(true);
+    expect(
+      matchesWhere({ payload: { body: { flag: { exists: false } } } }, event),
+    ).toBe(false);
+    // The field named `prefix` is compared, not treated as an operator.
+    expect(
+      matchesWhere({ payload: { body: { ref: { prefix: "v" } } } }, event),
+    ).toBe(false);
+    // A malformed operator fails closed instead of matching everything.
+    expect(
+      matchesWhere({ payload: { body: { flag: { $exist: true } } } }, event),
+    ).toBe(false);
   });
 });

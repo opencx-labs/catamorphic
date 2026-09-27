@@ -137,7 +137,7 @@ export const slackMention = defineTrigger<SlackDelivery>({
   name: "slack.mention",
   description: "A person mentioned the Slack app",
   from: trigger("slack.event"),
-  where: { payload: { body: { event: { type: "app_mention", bot_id: { exists: false } } } } },
+  where: { payload: { body: { event: { type: "app_mention", bot_id: { $exists: false } } } } },
 });
 
 /** A person posted where the app is a member: no edits, joins, or bots. */
@@ -145,7 +145,7 @@ export const slackMessage = defineTrigger<SlackDelivery>({
   name: "slack.message",
   description: "A person posted a message in a conversation the Slack app is in",
   from: trigger("slack.event"),
-  where: { payload: { body: { event: { type: "message", subtype: { exists: false }, bot_id: { exists: false } } } } },
+  where: { payload: { body: { event: { type: "message", subtype: { $exists: false }, bot_id: { $exists: false } } } } },
 });
 \`\`\`
 
@@ -194,7 +194,7 @@ anyone sets search up. Put how it should answer in \`.work/agents/slack.md\`
 
 Only the second automation declares \`chat.postMessage\`. Session events
 carry the chat's key, so its \`where\` selects the Slack threads' chats
-(\`{ prefix: "slack:" }\`) and no other chat's turn starts a run. It reads
+(\`{ $prefix: "slack:" }\`) and no other chat's turn starts a run. It reads
 the settled reply the event names (\`history\` with \`through\`) and posts it
 to the thread.
 
@@ -247,7 +247,7 @@ export const postSlackReplies = defineWorkflow(({ defineBoundary }) => ({
   triggers: [
     trigger("session.turn-changed", {
       statuses: ["completed"],
-      where: { payload: { session: { key: { prefix: "slack:" } } } },
+      where: { payload: { session: { key: { $prefix: "slack:" } } } },
     }),
   ],
   connections: [{ alias: "slack", principal: "service", capabilities: ["chat.postMessage"] }],

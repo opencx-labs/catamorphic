@@ -6,6 +6,7 @@ import {
   type PayloadOf,
   type TriggerPayload,
   trigger,
+  type Where,
 } from "../src/index.js";
 
 // Mirrors the generated work-triggers.d.ts: the host's webhook kind, and
@@ -109,7 +110,7 @@ const anyPayload: TriggerPayload<"webhook"> = {} as PayloadOf<
 void anyPayload;
 
 // Workflows bind project kinds by name and add their own `where`: one
-// value, a list of values, or `{ exists }`.
+// value, a list of values, or `{ $exists }`.
 defineWorkflow(({ defineBoundary }) => ({
   triggers: [
     trigger("github.pull_request", {
@@ -117,7 +118,7 @@ defineWorkflow(({ defineBoundary }) => ({
         payload: {
           body: {
             action: ["opened", "synchronize"],
-            pull_request: { title: { exists: true } },
+            pull_request: { title: { $exists: true } },
           },
         },
       },
@@ -146,17 +147,31 @@ const wrongValue = trigger("github.pull_request", {
 });
 void wrongValue;
 
-// A string position also takes `{ prefix }`; a number position does not.
+// A string position also takes `{ $prefix }`; a number position does not.
 const titled = trigger("github.pull_request", {
-  where: { payload: { body: { pull_request: { title: { prefix: "[db]" } } } } },
+  where: { payload: { body: { pull_request: { title: { $prefix: "[db]" } } } } },
 });
 void titled;
 
 const numberPrefix = trigger("github.pull_request", {
   // @ts-expect-error Only strings have prefixes.
-  where: { payload: { body: { number: { prefix: "4" } } } },
+  where: { payload: { body: { number: { $prefix: "4" } } } },
 });
 void numberPrefix;
+
+// Keys starting with `$` are operators, so a payload field named `exists`
+// or `prefix` is an ordinary position compared by value.
+type Flagged = { flag: { exists: boolean }; ref: { prefix: string } };
+const flaggedWhere: Where<Flagged> = {
+  flag: { exists: true },
+  ref: { prefix: "v1" },
+};
+void flaggedWhere;
+const flaggedOperator: Where<Flagged> = { ref: { prefix: { $prefix: "v" } } };
+void flaggedOperator;
+// @ts-expect-error The field `exists` holds a boolean, compared by value.
+const flaggedWrong: Where<Flagged> = { flag: { exists: "yes" } };
+void flaggedWrong;
 
 const wrongKey = trigger("github.pull_request", {
   // @ts-expect-error A where names only positions the payload has.

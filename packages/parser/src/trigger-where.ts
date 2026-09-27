@@ -5,12 +5,21 @@
  * evaluates filters before a run starts without running project code.
  *
  * A filter mirrors the payload. A leaf is a JSON primitive (equality), an
- * array of primitives (one of), `{ exists: boolean }`, or `{ prefix: string }`
- * (a string value that starts with it); any other object descends. Keys
- * under `headers` match case-insensitively.
+ * array of primitives (one of), `{ $exists: boolean }`, or
+ * `{ $prefix: string }` (a string value that starts with it); any other
+ * object descends. Keys starting with `$` are operators, so a payload field
+ * named `exists` or `prefix` still matches by equality. Keys under
+ * `headers` match case-insensitively.
  */
 
 type Primitive = string | number | boolean | null;
+
+/** The operator keys a filter object may hold, each on its own. */
+const OPERATORS = ["$exists", "$prefix"] as const;
+
+type Operator =
+  | { kind: "exists"; exists: boolean }
+  | { kind: "prefix"; prefix: string };
 
 function isPrimitive(value: unknown): value is Primitive {
   return (
@@ -25,22 +34,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function existsLeaf(value: Record<string, unknown>): boolean | undefined {
-  const keys = Object.keys(value);
-  return keys.length === 1 &&
-    keys[0] === "exists" &&
-    typeof value.exists === "boolean"
-    ? value.exists
-    : undefined;
+function isOperatorKey(key: string): boolean {
+  return key.startsWith("$");
 }
 
-function prefixLeaf(value: Record<string, unknown>): string | undefined {
+/** The operator `value` states, when it is a well-formed operator object. */
+function operatorOf(value: Record<string, unknown>): Operator | undefined {
   const keys = Object.keys(value);
-  return keys.length === 1 &&
-    keys[0] === "prefix" &&
-    typeof value.prefix === "string"
-    ? value.prefix
-    : undefined;
+  if (keys.length !== 1) return undefined;
+  if (keys[0] === "$exists" && typeof value.$exists === "boolean")
+    return { kind: "exists", exists: value.$exists };
+  if (keys[0] === "$prefix" && typeof value.$prefix === "string")
+    return { kind: "prefix", prefix: value.$prefix };
+  return undefined;
 }
 
 /** Why `value` is not a valid filter; empty when it is. */
@@ -54,12 +60,28 @@ export function whereErrors(value: unknown, path = "where"): string[] {
         ];
   }
   if (!isRecord(value)) return [`${path} must be a JSON value`];
-  if (existsLeaf(value) !== undefined) return [];
-  const prefix = prefixLeaf(value);
-  if (prefix !== undefined)
-    return prefix === ""
-      ? [`${path}.prefix must not be empty; leave the position out instead`]
-      : [];
+  const keys = Object.keys(value);
+  if (keys.some(isOperatorKey)) {
+    const operator = operatorOf(value);
+    if (operator?.kind === "exists") return [];
+    if (operator?.kind === "prefix")
+      return operator.prefix === ""
+        ? [`${path}.$prefix must not be empty; leave the position out instead`]
+        : [];
+    const unknown = keys.find(
+      (key) =>
+        isOperatorKey(key) && !OPERATORS.some((operator) => operator === key),
+    );
+    if (unknown)
+      return [
+        `${path}.${unknown} is not an operator; use $exists or $prefix`,
+      ];
+    if (keys.length > 1)
+      return [`${path} must hold one operator alone, without other keys`];
+    return keys[0] === "$exists"
+      ? [`${path}.$exists must be true or false`]
+      : [`${path}.$prefix must be a string`];
+  }
   return Object.entries(value).flatMap(([key, child]) =>
     whereErrors(child, `${path}.${key}`),
   );
@@ -82,12 +104,15 @@ function matches(where: unknown, value: unknown, headers: boolean): boolean {
   if (isPrimitive(where)) return value === where;
   if (Array.isArray(where)) return where.some((option) => value === option);
   if (!isRecord(where)) return false;
-  const exists = existsLeaf(where);
-  if (exists !== undefined)
-    return exists === (value !== undefined && value !== null);
-  const prefix = prefixLeaf(where);
-  if (prefix !== undefined)
-    return typeof value === "string" && value.startsWith(prefix);
+  if (Object.keys(where).some(isOperatorKey)) {
+    // A malformed operator never matches: filters fail closed.
+    const operator = operatorOf(where);
+    if (operator?.kind === "exists")
+      return operator.exists === (value !== undefined && value !== null);
+    if (operator?.kind === "prefix")
+      return typeof value === "string" && value.startsWith(operator.prefix);
+    return false;
+  }
   if (!isRecord(value)) return false;
   return Object.entries(where).every(([key, child]) =>
     matches(

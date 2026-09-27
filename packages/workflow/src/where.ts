@@ -5,12 +5,13 @@
  *
  * - A JSON primitive matches by equality.
  * - An array of primitives matches when the value is one of them.
- * - `{ exists: true }` matches a present, non-null value; `{ exists: false }`
+ * - `{ $exists: true }` matches a present, non-null value; `{ $exists: false }`
  *   an absent or null one.
- * - `{ prefix: "slack:" }` matches a string that starts with it, such as a
+ * - `{ $prefix: "slack:" }` matches a string that starts with it, such as a
  *   namespace of chat keys.
  * - An object descends: every key it names must match. Header names match
- *   case-insensitively.
+ *   case-insensitively. Keys starting with `$` are operators, so a payload
+ *   field named `exists` or `prefix` matches like any other.
  */
 
 /** A JSON value a `where` leaf compares against. */
@@ -18,12 +19,12 @@ export type WherePrimitive = string | number | boolean | null;
 
 /** Matches a present, non-null value (`true`) or an absent or null one. */
 export interface WhereExists {
-  readonly exists: boolean;
+  readonly $exists: boolean;
 }
 
-/** Matches a string that starts with `prefix` (never a non-string). */
+/** Matches a string that starts with `$prefix` (never a non-string). */
 export interface WherePrefix {
-  readonly prefix: string;
+  readonly $prefix: string;
 }
 
 /** A filter over a position whose type is not known: any shape is allowed. */
@@ -54,7 +55,7 @@ type WhereObject<Value> = [
 
 /**
  * A filter typed against a payload: a deep partial whose leaves accept a
- * value, a list of values, `{ exists }`, or `{ prefix }` where the payload
+ * value, a list of values, `{ $exists }`, or `{ $prefix }` where the payload
  * holds a string. Arrays in the payload can only be tested for existence.
  */
 export type Where<Payload> = unknown extends Payload
