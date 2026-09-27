@@ -9,6 +9,10 @@ import {
   projectPrincipalIdentity,
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
+import {
+  parseWorkspaceRequest,
+  type SessionWorkspaceRequest,
+} from "./session-workspaces.js";
 
 /** Whose keyed chat a delivery reaches (ADR 0156). */
 export type ChatAudience = "project" | { member: string };
@@ -69,6 +73,11 @@ type DeliveryMessage = {
   notification?: { title?: string; body?: string };
   idempotencyKey?: string;
   approvers?: ChatApprovers;
+  /**
+   * The ref of the project's linked remote the chat's workspace starts at,
+   * or moves to before its next turn (ADR 0178).
+   */
+  workspace?: SessionWorkspaceRequest;
 };
 
 /** `catamorphic.sessions.deliver`, validated: a chat by id or by key. */
@@ -117,6 +126,10 @@ export function parseChatDelivery(value: unknown): ChatDelivery {
   const notification = parseNotification(input.notification);
   const idempotencyKey = text("idempotencyKey", 500);
   const approvers = parseApprovers(input.approvers);
+  const workspace =
+    input.workspace === undefined
+      ? undefined
+      : parseWorkspaceRequest(input.workspace);
   const common: DeliveryMessage = {
     content,
     mode,
@@ -124,6 +137,7 @@ export function parseChatDelivery(value: unknown): ChatDelivery {
     ...(notification ? { notification } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(approvers ? { approvers } : {}),
+    ...(workspace ? { workspace } : {}),
   };
 
   const hasSession = input.sessionId !== undefined;

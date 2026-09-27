@@ -203,6 +203,10 @@ export {
 export { FsBundleStore } from "./fs-bundle-store.js";
 export { githubCodeHost } from "./github-code-host.js";
 export {
+  defineGitConnectionProvider,
+  type GitConnectionOptions,
+} from "./git-connection-provider.js";
+export {
   defineGithubConnectionProvider,
   GITHUB_CONNECTION_ACTIONS,
   type GithubConnectionOptions,

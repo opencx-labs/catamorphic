@@ -70,6 +70,7 @@ describe("PGlite migrations", () => {
       "030_client_runner_processes.sql",
       "031_session_approvers.sql",
       "032_personal_connections.sql",
+      "033_session_workspaces_and_sandbox_grants.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

@@ -58,6 +58,12 @@ const AllocationPolicySchema = z.object({
         providerKind: z.string(),
         principalKind: z.enum(["member", "project_service", "tenant_service"]),
         capabilities: z.array(z.string()),
+        git: z
+          .object({
+            repositories: z.array(z.string()).optional(),
+            push: z.array(z.string()).optional(),
+          })
+          .optional(),
       }),
     )
     .optional(),

@@ -7,6 +7,7 @@ import type {
 } from "@catamorphic/core";
 import { defineMcpConnectionProvider } from "@catamorphic/mcp";
 import {
+  defineGitConnectionProvider,
   defineHttpApiConnectionProvider,
   definePostgresConnectionProvider,
 } from "@catamorphic/server-sdk";
@@ -103,6 +104,19 @@ const HttpEntry = z
         });
   });
 
+/**
+ * Any Git host reached over HTTPS with a stored username and password or
+ * token (ADR 0175). Sandboxes fetch and push through the gateway; the
+ * credential never leaves the control plane.
+ */
+const GitEntry = z.strictObject({
+  type: z.literal("git"),
+  kind: Kind,
+  displayName: z.string().min(1),
+  /** Remote base URL, e.g. `https://git.example.com/`. */
+  baseUrl: z.url(),
+});
+
 /** A database reached with a stored read-only credential (ADR 0163). */
 const PostgresEntry = z.strictObject({
   type: z.literal("postgres"),
@@ -156,7 +170,7 @@ const ApprovalGuardEntry = z.strictObject({
 
 const GatewayFile = z.strictObject({
   connections: z
-    .array(z.union([HttpEntry, PostgresEntry, McpEntry]))
+    .array(z.union([HttpEntry, PostgresEntry, GitEntry, McpEntry]))
     .default([]),
   guards: z.array(z.union([ModelGuardEntry, ApprovalGuardEntry])).default([]),
 });
@@ -290,6 +304,13 @@ export function gatewayProviders(
     if (entry.type === "postgres") {
       const { type: _type, ...options } = entry;
       return definePostgresConnectionProvider(options);
+    }
+    if (entry.type === "git") {
+      return defineGitConnectionProvider({
+        kind: entry.kind,
+        displayName: entry.displayName,
+        baseUrl: entry.baseUrl,
+      });
     }
     const client = entry.oauth?.client;
     const provider = defineMcpConnectionProvider({

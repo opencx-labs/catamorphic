@@ -24,6 +24,7 @@ import type {
 import {
   bindingPrincipalKinds,
   CONNECTION_NAME_PATTERN,
+  GIT_CAPABILITIES,
 } from "./connection-types.js";
 import type { CredentialVault } from "./credential-vault.js";
 import { requireTenantProject } from "./projects-service.js";
@@ -1098,10 +1099,11 @@ export class ConnectionsService {
         providerKind: binding.provider,
         principalKind: connection.principal_kind as ConnectionPrincipalKind,
         capabilities: intersectCapabilities(
-          stringArray(connection.capabilities),
+          this.connectionCapabilities(connection),
           binding.capabilities,
           use.capabilities,
         ),
+        ...(binding.git ? { git: binding.git } : {}),
       });
     }
     if (missing.length > 0) {
@@ -1191,17 +1193,31 @@ export class ConnectionsService {
           );
         }
       }
+      const { git: _snapshotGit, ...snapshot } = selected;
       resolved.push({
-        ...selected,
+        ...snapshot,
         capabilities: intersectCapabilities(
           selected.capabilities,
           binding.capabilities,
-          stringArray(connection.capabilities),
+          this.connectionCapabilities(connection),
           use.capabilities,
         ),
+        ...(binding.git ? { git: binding.git } : {}),
       });
     }
     return resolved;
+  }
+
+  /**
+   * What a connection itself may do: the capabilities its authorization
+   * recorded, and Git reads and writes when its provider serves Git through
+   * the gateway (ADR 0175). Bindings and roles narrow them.
+   */
+  private connectionCapabilities(connection: ConnectionRow): string[] {
+    const own = stringArray(connection.capabilities);
+    return this.providers.get(connection.provider_kind)?.git
+      ? [...own, ...GIT_CAPABILITIES.filter((git) => !own.includes(git))]
+      : own;
   }
 
   async revoke(args: {

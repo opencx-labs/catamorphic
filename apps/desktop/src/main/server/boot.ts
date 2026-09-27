@@ -453,12 +453,28 @@ export async function startEmbeddedServer(
       }),
     connectionMcpUrl: () =>
       apiBaseUrl ? `${apiBaseUrl}/api/connection-mcp` : undefined,
+    // Sandboxes on this machine reach the Git gateway on loopback (ADR 0175).
+    gatewayUrl: () => (apiBaseUrl ? `${apiBaseUrl}/api/gateway` : undefined),
     codingAgent: agentRegistry,
     // Native agents (Claude Code, Codex) run in the project's user-visible
     // WorkerNode folder.
     nativeAgentCheckout: {
       resolve: async (input) => {
         const current = await sessionCheckouts.describe(input);
+        // A chat at a ref of the project's remote (ADR 0178) always works in
+        // its own worktree, started at that commit from the host's mirror.
+        if (input.workspace && current.kind === "primary") {
+          const created = await sessionCheckouts.createManaged({
+            projectId: input.projectId,
+            sessionId: input.sessionId,
+            start: {
+              repository: input.workspace.repository,
+              ref: input.workspace.pin,
+              commit: input.workspace.commit,
+            },
+          });
+          return created.path;
+        }
         if (
           await requiresIsolatedCheckout(
             input.projectId,

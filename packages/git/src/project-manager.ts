@@ -19,6 +19,11 @@ import type {
   RemoteBackend,
   StorageBackend,
 } from "./types.js";
+import {
+  type BaseMoveOutcome,
+  copyFromMirror,
+  moveCheckoutBase,
+} from "./workspace-mirror.js";
 
 /**
  * Seeded into every new project (unless one exists): mirrors the
@@ -188,6 +193,109 @@ export class ProjectManager {
     } finally {
       await repo.dispose();
     }
+  }
+
+  /**
+   * The host's bare mirror of the project's linked remote, or null when
+   * this storage keeps none (ADR 0178).
+   */
+  mirrorPath(args: { tenantId: string; projectId: string }): string | null {
+    return this.storage.mirrorPath?.(args.tenantId, args.projectId) ?? null;
+  }
+
+  /**
+   * Put a session's copy at a commit pinned in the project mirror and
+   * publish it as the session's branch (ADR 0178). Whatever the copy held is
+   * replaced: callers move the base only between turns, after the last
+   * checkpoint, or on purpose (`reset`).
+   */
+  async setSessionBase(args: {
+    tenantId: string;
+    projectId: string;
+    sessionId: string;
+    pin: string;
+    commit: string;
+  }): Promise<void> {
+    const mirrorPath = this.mirrorPath(args);
+    if (!mirrorPath) throw new Error("This host keeps no project mirror");
+    const repo = await this.openSession({
+      tenantId: args.tenantId,
+      projectId: args.projectId,
+      sessionId: args.sessionId,
+      refresh: true,
+    });
+    try {
+      await copyFromMirror({
+        mirrorPath,
+        pin: args.pin,
+        repoPath: repo.repoPath,
+        into: "refs/work/base",
+      });
+      await repo.moveBranch("main", args.commit);
+      await repo.checkout("main");
+      await repo.resetWorkingTree();
+      await this.publishSession({ ...args, repo, head: args.commit });
+    } finally {
+      await repo.dispose();
+    }
+  }
+
+  /**
+   * Move a session's copy to a new base pinned in the mirror (ADR 0178):
+   * `reset` replaces its checkpoints, `rebase` replays them onto the new
+   * base. A conflicting rebase leaves the copy as it was.
+   */
+  async moveSessionBase(args: {
+    tenantId: string;
+    projectId: string;
+    sessionId: string;
+    pin: string;
+    from: string;
+    to: string;
+    update: "reset" | "rebase";
+  }): Promise<BaseMoveOutcome> {
+    const mirrorPath = this.mirrorPath(args);
+    if (!mirrorPath) throw new Error("This host keeps no project mirror");
+    const repo = await this.openSession({
+      tenantId: args.tenantId,
+      projectId: args.projectId,
+      sessionId: args.sessionId,
+      refresh: true,
+    });
+    try {
+      const outcome = await moveCheckoutBase({
+        repoPath: repo.repoPath,
+        mirrorPath,
+        pin: args.pin,
+        from: args.from,
+        to: args.to,
+        update: args.update,
+      });
+      if (outcome.status === "moved")
+        await this.publishSession({ ...args, repo, head: outcome.head });
+      return outcome;
+    } finally {
+      await repo.dispose();
+    }
+  }
+
+  private async publishSession(args: {
+    tenantId: string;
+    projectId: string;
+    sessionId: string;
+    repo: ProjectRepo;
+    head: string;
+  }): Promise<void> {
+    if (!this.remote) return;
+    await push({
+      dev: args.repo,
+      remote: this.remote,
+      tenantId: args.tenantId,
+      projectId: args.projectId,
+      remoteBranch: `sessions/${args.sessionId}`,
+      localSha: args.head,
+      force: true,
+    });
   }
 
   /**

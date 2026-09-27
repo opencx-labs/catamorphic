@@ -11,6 +11,7 @@ import {
   ChatKeySchema,
   keyedChatOwnerId,
 } from "./chat-delivery.js";
+import { SessionWorkspaceRequestSchema } from "./session-workspaces.js";
 import type { WatchersService } from "./watchers-service.js";
 
 /**
@@ -63,6 +64,8 @@ export const SESSION_ACTION_SCHEMAS = {
     ...mutation,
     agentId: z.string().optional(),
     title: z.string().max(500).optional(),
+    /** Start at a ref of the project's linked remote (ADR 0178). */
+    workspace: SessionWorkspaceRequestSchema.optional(),
   }),
   fork: chat({
     ...mutation,

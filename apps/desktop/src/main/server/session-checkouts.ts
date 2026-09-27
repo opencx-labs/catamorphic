@@ -259,6 +259,12 @@ export class SessionCheckouts {
     projectId: string;
     sessionId: string;
     ensureAvailable?(path: string): Promise<void>;
+    /**
+     * Start the worktree at `commit`, fetched from `ref` of the repository
+     * at `repository` (the host's mirror of the project's remote, ADR 0178),
+     * instead of the primary checkout's HEAD.
+     */
+    start?: { repository: string; ref: string; commit: string };
   }): Promise<SessionCheckoutBinding> {
     const root = this.requireRoot(input.projectId);
     const commonDir = await canonicalCommonDir(root);
@@ -304,7 +310,22 @@ export class SessionCheckouts {
         `${MANAGED_BRANCH_PREFIX}${prefix || "session"}`,
       );
       try {
-        await git(root, ["worktree", "add", "-b", branch, worktreePath]);
+        if (input.start)
+          await git(root, [
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            input.start.repository,
+            input.start.ref,
+          ]);
+        await git(root, [
+          "worktree",
+          "add",
+          "-b",
+          branch,
+          worktreePath,
+          ...(input.start ? [input.start.commit] : []),
+        ]);
         const binding: SessionCheckoutBinding = {
           sessionId: input.sessionId,
           projectId: input.projectId,

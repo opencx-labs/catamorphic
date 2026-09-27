@@ -18,9 +18,10 @@ const SYNC_IGNORED_PREFIXES = [
 ];
 
 /**
- * Diff a sandbox project dir against its git baseline and mirror every
- * change into the user's dev working copy (as an uncommitted draft). The
- * sandbox baseline is then advanced so the next sync diffs incrementally.
+ * Diff a sandbox project dir against what was last synced (`refs/work/synced`,
+ * else HEAD) and mirror every change into the dev or session copy (as an
+ * uncommitted draft). Commits the agent made count like any other change:
+ * the snapshot compares trees, not the agent's status.
  *
  * Shared by the per-turn sync in AgentSessionsService and the pre-build
  * sync in AppsService — anything that needs the dev tree to reflect what
@@ -43,52 +44,128 @@ export async function syncSandboxChanges(opts: {
   // would resolve against the host filesystem.
   const status = await opts.provider.executeCommand(
     opts.sandboxProviderId,
-    "git status --porcelain --untracked-files=all",
+    SNAPSHOT_SCRIPT,
     { cwd: dir },
   );
   if (status.exitCode !== 0) return [];
+  const snapshot = parseSnapshot(status.result);
+  if (!snapshot) return [];
 
-  const changes = parsePorcelain(status.result).filter(
+  const changes = snapshot.changes.filter(
     (change) =>
       !SYNC_IGNORED_PREFIXES.some((prefix) => change.path.startsWith(prefix)),
   );
-  if (changes.length === 0) return [];
-
-  const repo = opts.sessionId
-    ? await opts.projectManager.openSession({
-        tenantId: opts.identity.tenantId,
-        projectId: opts.projectId,
-        sessionId: opts.sessionId,
-      })
-    : await opts.projectManager.openDev(
-        opts.identity.tenantId,
-        opts.projectId,
-        opts.identity.externalUserId,
-      );
-  try {
-    for (const change of changes) {
-      if (change.kind === "deleted") {
-        await repo.deleteFile(change.path).catch(() => {});
-      } else {
-        const content = await opts.provider.downloadFile(
-          opts.sandboxProviderId,
-          `${dir}/${change.path}`,
+  if (changes.length > 0) {
+    const repo = opts.sessionId
+      ? await opts.projectManager.openSession({
+          tenantId: opts.identity.tenantId,
+          projectId: opts.projectId,
+          sessionId: opts.sessionId,
+        })
+      : await opts.projectManager.openDev(
+          opts.identity.tenantId,
+          opts.projectId,
+          opts.identity.externalUserId,
         );
-        await repo.writeFile(change.path, content);
+    try {
+      for (const change of changes) {
+        if (change.kind === "deleted") {
+          await repo.deleteFile(change.path).catch(() => {});
+        } else {
+          const content = await opts.provider.downloadFile(
+            opts.sandboxProviderId,
+            `${dir}/${change.path}`,
+          );
+          await repo.writeFile(change.path, content);
+        }
       }
+    } finally {
+      await repo.dispose();
     }
-  } finally {
-    await repo.dispose();
   }
 
-  // Advance the sandbox baseline so subsequent syncs report only new changes.
-  await opts.provider.executeCommand(
-    opts.sandboxProviderId,
-    "git add -A && (git -c 'user.name=Work Agent' -c user.email=agent@work.software commit -m sync --quiet || true)",
-    { cwd: dir },
-  );
+  // Mark what was copied so the next sync reports only new changes. The
+  // agent's branch, index, and commits are untouched.
+  if (snapshot.changes.length > 0)
+    await opts.provider.executeCommand(
+      opts.sandboxProviderId,
+      `commit=$(git -c 'user.name=Work Agent' -c user.email=agent@work.software commit-tree ${snapshot.tree} -m synced) && git update-ref refs/work/synced "$commit"`,
+      { cwd: dir },
+    );
 
   return changes;
+}
+
+/**
+ * Snapshot the working tree (tracked and untracked, honoring ignores) into
+ * a private index, then list what differs from the last synced tree. The
+ * first line is the snapshot's tree id; name-status pairs follow, NUL
+ * separated.
+ */
+const SNAPSHOT_SCRIPT = [
+  "git_dir=$(git rev-parse --git-dir)",
+  'export GIT_INDEX_FILE="$git_dir/work-sync-index"',
+  'if [ ! -f "$GIT_INDEX_FILE" ] && [ -f "$git_dir/index" ]; then cp "$git_dir/index" "$GIT_INDEX_FILE"; fi',
+  'base=$(git rev-parse -q --verify "refs/work/synced^{tree}" || git rev-parse -q --verify "HEAD^{tree}" || git hash-object -t tree /dev/null)',
+  "git add -A",
+  "tree=$(git write-tree)",
+  'printf "%s\\n" "$tree"',
+  // Not -z: remote workers carry output as JSON text, and Postgres JSON
+  // cannot hold NUL. Unusual paths come back C-quoted instead.
+  'git -c core.quotePath=false diff-tree -r --no-renames --name-status "$base" "$tree"',
+].join(" && ");
+
+/** Parse {@link SNAPSHOT_SCRIPT}'s output. */
+export function parseSnapshot(
+  output: string,
+): { tree: string; changes: SyncedFileChange[] } | null {
+  const [first, ...lines] = output.split("\n");
+  const tree = first?.trim() ?? "";
+  if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(tree)) return null;
+  const changes = lines.flatMap((line): SyncedFileChange[] => {
+    const tab = line.indexOf("\t");
+    if (tab < 0) return [];
+    const status = line.slice(0, tab).trim();
+    const path = unquoteCPath(line.slice(tab + 1));
+    return status && path
+      ? [{ path, kind: status.startsWith("D") ? "deleted" : "modified" }]
+      : [];
+  });
+  return { tree, changes };
+}
+
+/** Git's C-style quoting of unusual paths (`"a\tb"`, octal UTF-8 bytes). */
+export function unquoteCPath(value: string): string {
+  if (!value.startsWith('"') || !value.endsWith('"')) return value;
+  const body = value.slice(1, -1);
+  const bytes: number[] = [];
+  const escapes: Record<string, number> = {
+    a: 7,
+    b: 8,
+    t: 9,
+    n: 10,
+    v: 11,
+    f: 12,
+    r: 13,
+    '"': 34,
+    "\\": 92,
+  };
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index] ?? "";
+    if (char !== "\\") {
+      bytes.push(...new TextEncoder().encode(char));
+      continue;
+    }
+    const next = body[index + 1] ?? "";
+    if (/[0-7]/.test(next)) {
+      bytes.push(Number.parseInt(body.slice(index + 1, index + 4), 8));
+      index += 3;
+    } else {
+      bytes.push(escapes[next] ?? next.charCodeAt(0));
+      index += 1;
+    }
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
 }
 
 interface PorcelainChange {

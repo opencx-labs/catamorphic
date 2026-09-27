@@ -38,6 +38,23 @@ export class FakeEchoAgent implements CodingAgentProvider {
     // Workflow deliveries arrive under a provenance header: act on the last line.
     const request = message.trim().split("\n").at(-1) ?? "";
     const [command, name, ...text] = request.split(" ");
+    if (command === "run") {
+      // `run <shell>`: any command in the workspace; answers
+      // `exit=<code>` then its output (tests of sandbox Git, ADR 0175).
+      const opts = this.sessions.get(session.providerSessionId ?? "");
+      if (!opts?.sandboxProvider) throw new Error("Allocated provider missing");
+      const result = await opts.sandboxProvider.executeCommand(
+        session.sandboxId,
+        request.slice("run ".length),
+        { cwd: session.workingDirectory },
+      );
+      yield {
+        type: "text",
+        content: `exit=${result.exitCode}\n${result.result.trim()}`,
+      };
+      yield { type: "done" };
+      return;
+    }
     const workspaceCommand =
       command === "execution-location"
         ? "pwd"

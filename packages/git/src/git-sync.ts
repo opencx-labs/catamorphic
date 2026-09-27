@@ -36,6 +36,11 @@ export interface PushOpts {
   remoteBranch?: string;
   /** SHA on the dev side to push. Defaults to the tip of the current branch. */
   localSha?: string;
+  /**
+   * Move the branch even when it is not a fast-forward. Only for branches
+   * Work owns outright, such as a session's `sessions/<id>` whose base moved.
+   */
+  force?: boolean;
 }
 
 export interface FetchOpts {
@@ -70,7 +75,7 @@ export async function push(opts: PushOpts): Promise<{ sha: string }> {
         return { sha: localSha };
       }
 
-      if (currentRemote) {
+      if (currentRemote && !opts.force) {
         const fastForward = await isAncestor({
           dev: opts.dev,
           ancestor: currentRemote,

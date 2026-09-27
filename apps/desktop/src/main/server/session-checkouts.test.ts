@@ -106,6 +106,41 @@ describe("SessionCheckouts", () => {
     },
   );
 
+  it("starts a worktree at a commit held by the host's mirror (ADR 0178)", async () => {
+    // A mirror holding a pull request head the project's checkout lacks.
+    const mirror = path.join(tmpDir, "mirror.git");
+    await execFileAsync("git", ["clone", "-q", "--bare", rootPath, mirror]);
+    const work = path.join(tmpDir, "pr-work");
+    await execFileAsync("git", ["clone", "-q", mirror, work]);
+    await fs.writeFile(path.join(work, "README.md"), "pull request\n");
+    await git(work, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-qam",
+      "Change",
+    ]);
+    const head = (await git(work, ["rev-parse", "HEAD"])).trim();
+    await git(work, ["push", "-q", mirror, `HEAD:refs/work/base/${sessionId}`]);
+
+    const created = await checkouts.createManaged({
+      projectId,
+      sessionId,
+      start: {
+        repository: mirror,
+        ref: `refs/work/base/${sessionId}`,
+        commit: head,
+      },
+    });
+    expect((await git(created.path, ["rev-parse", "HEAD"])).trim()).toBe(head);
+    expect(
+      await fs.readFile(path.join(created.path, "README.md"), "utf8"),
+    ).toBe("pull request\n");
+    expect(created.branch).toMatch(/^work\/22222222/);
+  });
+
   it("keeps a new session on primary until it creates a worktree", async () => {
     expect(await checkouts.resolve({ projectId, sessionId })).toBe(rootPath);
 

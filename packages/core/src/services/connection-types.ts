@@ -61,7 +61,25 @@ export interface EnvironmentConnectionBinding {
   service?: string;
   /** Narrows what the alias may do; absent keeps the connection's own. */
   capabilities?: readonly string[];
+  /** What Git through the gateway may reach with this alias (ADR 0175). */
+  git?: ConnectionGitPolicy;
 }
+
+/**
+ * Git policy of one alias, enforced by the gateway (ADR 0175).
+ * `repositories` are remote paths below the provider's base URL
+ * (`org/repo`); absent allows only the project's linked remote. `push`
+ * lists branch patterns a push may update (`work/*`, or a full ref such as
+ * `refs/tags/v*`); absent allows `work/*`. A remote's default branch and
+ * deletions are never allowed, and nothing is pushed without `git:write`.
+ */
+export interface ConnectionGitPolicy {
+  repositories?: readonly string[];
+  push?: readonly string[];
+}
+
+/** Capabilities of every connection whose provider serves Git (ADR 0175). */
+export const GIT_CAPABILITIES = ["git:read", "git:write"] as const;
 
 /** Resolves the bindings of one project Environment, alias to binding. */
 export type ConnectionBindingSource = (args: {
@@ -85,6 +103,7 @@ export interface ResolvedConnectionBinding {
   providerKind: string;
   principalKind: ConnectionPrincipalKind;
   capabilities: readonly string[];
+  git?: ConnectionGitPolicy;
 }
 
 export function normalizeConnectionRequirement(

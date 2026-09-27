@@ -118,11 +118,21 @@ export class FsBackend implements StorageBackend {
     return projectPath;
   }
 
+  mirrorPath(tenantId: string, projectId: string): string {
+    assertUuid(tenantId);
+    assertUuid(projectId);
+    return path.join(this.basePath, ".mirrors", tenantId, `${projectId}.git`);
+  }
+
   async deleteProject(tenantId: string, projectId: string): Promise<void> {
     // Only internal storage is removed. Explicitly-rooted folders belong to
     // the user; the host decides separately whether to trash them.
     const projectRoot = path.join(this.basePath, tenantId, projectId);
     await fs.rm(projectRoot, { recursive: true, force: true });
+    await fs.rm(this.mirrorPath(tenantId, projectId), {
+      recursive: true,
+      force: true,
+    });
     this.initializedRoots.delete(`${tenantId}:${projectId}`);
   }
 

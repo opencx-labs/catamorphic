@@ -13237,6 +13237,22 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 500
+                  },
+                  "workspace": {
+                    "type": "object",
+                    "properties": {
+                      "ref": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255
+                      },
+                      "update": {
+                        "type": "string",
+                        "enum": ["reset", "rebase"]
+                      }
+                    },
+                    "required": ["ref"],
+                    "additionalProperties": false
                   }
                 }
               }
@@ -13521,6 +13537,20 @@
                       "required": ["environment", "reason", "machine"],
                       "additionalProperties": false
                     },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -13578,6 +13608,7 @@
                     "key",
                     "keyWorkflows",
                     "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -14126,6 +14157,20 @@
                             "required": ["environment", "reason", "machine"],
                             "additionalProperties": false
                           },
+                          "workspace": {
+                            "nullable": true,
+                            "type": "object",
+                            "properties": {
+                              "ref": {
+                                "type": "string"
+                              },
+                              "commit": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["ref", "commit"],
+                            "additionalProperties": false
+                          },
                           "baseCommitSha": {
                             "nullable": true,
                             "type": "string",
@@ -14183,6 +14228,7 @@
                           "key",
                           "keyWorkflows",
                           "placement",
+                          "workspace",
                           "baseCommitSha",
                           "createdAt",
                           "updatedAt"
@@ -14784,6 +14830,20 @@
                       "required": ["environment", "reason", "machine"],
                       "additionalProperties": false
                     },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -14841,6 +14901,7 @@
                     "key",
                     "keyWorkflows",
                     "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -15356,6 +15417,20 @@
                       "required": ["environment", "reason", "machine"],
                       "additionalProperties": false
                     },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -15413,6 +15488,7 @@
                     "key",
                     "keyWorkflows",
                     "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -15796,6 +15872,20 @@
                       "required": ["environment", "reason", "machine"],
                       "additionalProperties": false
                     },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -15853,6 +15943,7 @@
                     "key",
                     "keyWorkflows",
                     "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -16338,6 +16429,20 @@
                       "required": ["environment", "reason", "machine"],
                       "additionalProperties": false
                     },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -16719,6 +16824,7 @@
                     "key",
                     "keyWorkflows",
                     "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt",
@@ -17056,6 +17162,20 @@
                       "required": ["environment", "reason", "machine"],
                       "additionalProperties": false
                     },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -17113,6 +17233,7 @@
                     "key",
                     "keyWorkflows",
                     "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -17467,6 +17588,20 @@
                       "required": ["environment", "reason", "machine"],
                       "additionalProperties": false
                     },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -17524,6 +17659,7 @@
                     "key",
                     "keyWorkflows",
                     "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -18080,6 +18216,20 @@
                           "required": ["environment", "reason", "machine"],
                           "additionalProperties": false
                         },
+                        "workspace": {
+                          "nullable": true,
+                          "type": "object",
+                          "properties": {
+                            "ref": {
+                              "type": "string"
+                            },
+                            "commit": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["ref", "commit"],
+                          "additionalProperties": false
+                        },
                         "baseCommitSha": {
                           "nullable": true,
                           "type": "string",
@@ -18137,6 +18287,7 @@
                         "key",
                         "keyWorkflows",
                         "placement",
+                        "workspace",
                         "baseCommitSha",
                         "createdAt",
                         "updatedAt"
@@ -18576,6 +18727,20 @@
                             "required": ["environment", "reason", "machine"],
                             "additionalProperties": false
                           },
+                          "workspace": {
+                            "nullable": true,
+                            "type": "object",
+                            "properties": {
+                              "ref": {
+                                "type": "string"
+                              },
+                              "commit": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["ref", "commit"],
+                            "additionalProperties": false
+                          },
                           "baseCommitSha": {
                             "nullable": true,
                             "type": "string",
@@ -18633,6 +18798,7 @@
                           "key",
                           "keyWorkflows",
                           "placement",
+                          "workspace",
                           "baseCommitSha",
                           "createdAt",
                           "updatedAt"
@@ -19050,6 +19216,20 @@
                             "required": ["environment", "reason", "machine"],
                             "additionalProperties": false
                           },
+                          "workspace": {
+                            "nullable": true,
+                            "type": "object",
+                            "properties": {
+                              "ref": {
+                                "type": "string"
+                              },
+                              "commit": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["ref", "commit"],
+                            "additionalProperties": false
+                          },
                           "baseCommitSha": {
                             "nullable": true,
                             "type": "string",
@@ -19107,6 +19287,7 @@
                           "key",
                           "keyWorkflows",
                           "placement",
+                          "workspace",
                           "baseCommitSha",
                           "createdAt",
                           "updatedAt"
@@ -19563,6 +19744,20 @@
                       "required": ["environment", "reason", "machine"],
                       "additionalProperties": false
                     },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -19620,6 +19815,7 @@
                     "key",
                     "keyWorkflows",
                     "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -19948,6 +20144,22 @@
                   "deliveryMode": {
                     "type": "string",
                     "enum": ["next_turn", "interrupt"]
+                  },
+                  "workspace": {
+                    "type": "object",
+                    "properties": {
+                      "ref": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255
+                      },
+                      "update": {
+                        "type": "string",
+                        "enum": ["reset", "rebase"]
+                      }
+                    },
+                    "required": ["ref"],
+                    "additionalProperties": false
                   }
                 },
                 "required": ["message"]
@@ -20775,6 +20987,20 @@
                       "required": ["environment", "reason", "machine"],
                       "additionalProperties": false
                     },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -20832,6 +21058,7 @@
                     "key",
                     "keyWorkflows",
                     "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -21609,6 +21836,20 @@
                       "required": ["environment", "reason", "machine"],
                       "additionalProperties": false
                     },
+                    "workspace": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "commit"],
+                      "additionalProperties": false
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -21666,6 +21907,7 @@
                     "key",
                     "keyWorkflows",
                     "placement",
+                    "workspace",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -22361,6 +22603,20 @@
                             "required": ["environment", "reason", "machine"],
                             "additionalProperties": false
                           },
+                          "workspace": {
+                            "nullable": true,
+                            "type": "object",
+                            "properties": {
+                              "ref": {
+                                "type": "string"
+                              },
+                              "commit": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["ref", "commit"],
+                            "additionalProperties": false
+                          },
                           "baseCommitSha": {
                             "nullable": true,
                             "type": "string",
@@ -22418,6 +22674,7 @@
                           "key",
                           "keyWorkflows",
                           "placement",
+                          "workspace",
                           "baseCommitSha",
                           "createdAt",
                           "updatedAt"
@@ -22862,6 +23119,20 @@
                         "required": ["environment", "reason", "machine"],
                         "additionalProperties": false
                       },
+                      "workspace": {
+                        "nullable": true,
+                        "type": "object",
+                        "properties": {
+                          "ref": {
+                            "type": "string"
+                          },
+                          "commit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["ref", "commit"],
+                        "additionalProperties": false
+                      },
                       "baseCommitSha": {
                         "nullable": true,
                         "type": "string",
@@ -22919,6 +23190,7 @@
                       "key",
                       "keyWorkflows",
                       "placement",
+                      "workspace",
                       "baseCommitSha",
                       "createdAt",
                       "updatedAt"
@@ -25273,6 +25545,20 @@
                         "required": ["environment", "reason", "machine"],
                         "additionalProperties": false
                       },
+                      "workspace": {
+                        "nullable": true,
+                        "type": "object",
+                        "properties": {
+                          "ref": {
+                            "type": "string"
+                          },
+                          "commit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["ref", "commit"],
+                        "additionalProperties": false
+                      },
                       "baseCommitSha": {
                         "nullable": true,
                         "type": "string",
@@ -25330,6 +25616,7 @@
                       "key",
                       "keyWorkflows",
                       "placement",
+                      "workspace",
                       "baseCommitSha",
                       "createdAt",
                       "updatedAt"

@@ -71,6 +71,7 @@ import { ExecutionAllocationsService } from "./services/execution-allocations-se
 import { ExecutionEnvironmentsService } from "./services/execution-environments-service.js";
 import { ExecutionJobsService } from "./services/execution-jobs-service.js";
 import { ExecutionWorkerService } from "./services/execution-worker-service.js";
+import { GitGatewayService } from "./services/git-gateway.js";
 import { executeHostCall } from "./services/host-calls.js";
 import { MembershipsService } from "./services/memberships-service.js";
 import { PluginsService } from "./services/plugins-service.js";
@@ -105,6 +106,7 @@ import {
 import { SessionArtifactsService } from "./services/session-artifacts-service.js";
 import type { SessionMailboxesService } from "./services/session-mailboxes-service.js";
 import { SessionSyncService } from "./services/session-sync-service.js";
+import { SessionWorkspaces } from "./services/session-workspaces.js";
 import { SkillsService } from "./services/skills-service.js";
 import { TenantPoliciesService } from "./services/tenant-policies-service.js";
 import type { ToolPermissionChannel } from "./services/tool-permission-broker.js";
@@ -197,6 +199,17 @@ export interface CatamorphicCoreConfig {
     projectId: string;
     sessionId: string;
     alias: string;
+  }) => string | undefined;
+  /**
+   * The gateway's base URL as a session's sandbox reaches it (ADR 0175),
+   * e.g. `https://work.example.com/api/gateway`, where the host mounts the
+   * plugin's gateway routes. Sandboxes get Git configured for
+   * `<gatewayUrl>/git/<alias>/`. Absent, Git aliases are not offered to
+   * sandboxes.
+   */
+  gatewayUrl?: (args: {
+    projectId: string;
+    sessionId: string;
   }) => string | undefined;
   pluginResolver?: PluginResolver;
   /**
@@ -378,6 +391,10 @@ export class CatamorphicCore {
   readonly connectionAdmission?: ConnectionAdmissionService;
   readonly connectionBroker?: ConnectionBroker;
   readonly connectionGrants?: ConnectionCapabilityGrantsService;
+  /** Git smart HTTP for sandboxes, authorized by session grants (ADR 0175). */
+  readonly gitGateway?: GitGatewayService;
+  /** Workspaces at a ref of a project's linked remote (ADR 0178). */
+  readonly sessionWorkspaces: SessionWorkspaces;
   /** Committed `.work/roles/*.json` and their expansion into identities (ADR 0055). */
   readonly roles: RolesService;
   /** Stock `user → roles + grants` per project (ADR 0055). */
@@ -395,6 +412,7 @@ export class CatamorphicCore {
   readonly plugins?: PluginsService;
   readonly secrets?: SecretsService;
   readonly runPluginsLoader: RunPluginsLoader;
+  private connectionProviderRegistry?: ConnectionProviderRegistry;
   /** A project member's current identity: the host's resolver, else stock memberships. */
   private readonly resolveMember: (args: {
     tenantId: string;
@@ -593,7 +611,10 @@ export class CatamorphicCore {
               context.caller,
               context.projectId,
               input.sessionId,
-              message,
+              {
+                ...message,
+                ...(input.workspace ? { workspace: input.workspace } : {}),
+              },
             );
             return {
               ...receipt,
@@ -635,6 +656,7 @@ export class CatamorphicCore {
               ...(input.agentSlug ? { agentSlug: input.agentSlug } : {}),
               ...(input.environment ? { environment: input.environment } : {}),
               ...(input.title ? { title: input.title } : {}),
+              ...(input.workspace ? { workspace: input.workspace } : {}),
               origin,
             },
           );
@@ -808,6 +830,15 @@ export class CatamorphicCore {
         this.db,
         this.executionAllocations,
       );
+      this.connectionProviderRegistry = providers;
+      this.gitGateway = new GitGatewayService({
+        db: this.db,
+        grants: this.connectionGrants,
+        allocations: this.executionAllocations,
+        broker: this.connectionBroker,
+        providers,
+        connections: this.connections,
+      });
     }
     this.codeHosts = new CodeHostsService({
       db: this.db,
@@ -824,6 +855,14 @@ export class CatamorphicCore {
       this.projectManager,
       this.codeHosts,
     );
+    this.sessionWorkspaces = new SessionWorkspaces({
+      projectManager: this.projectManager,
+      origin: (input) => this.remoteSync.origin(input),
+      // Constructed later, with the connection providers; read per call.
+      bindingCredentials: (input) =>
+        this.connectionBroker?.mirrorCredentials(input) ??
+        Promise.resolve(undefined),
+    });
     this.deployment = new DeploymentService(this.projectManager, (input) =>
       this.workflowEnablements.markUpdateAvailable(input),
     );
@@ -1072,6 +1111,20 @@ export class CatamorphicCore {
         connectionAdmission: this.connectionAdmission,
         connectionGrants: this.connectionGrants,
         connectionMcpUrl: config.connectionMcpUrl,
+        workspaces: this.sessionWorkspaces,
+        ...(config.gatewayUrl
+          ? {
+              gitGateway: {
+                url: (args: { projectId: string; sessionId: string }) => {
+                  const base = config.gatewayUrl?.(args);
+                  return base ? `${base.replace(/\/+$/, "")}/git` : undefined;
+                },
+                remoteBaseUrls: (providerKind: string) =>
+                  this.connectionProviderRegistry?.get(providerKind)?.git
+                    ?.remoteBaseUrls,
+              },
+            }
+          : {}),
         plugins: this.plugins,
         pluginResolver: this.pluginResolver,
         onTurnSettled: async (event) => {

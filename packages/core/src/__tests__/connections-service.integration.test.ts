@@ -545,6 +545,69 @@ describe("credential connections", () => {
     await grants.revokeAllocation({ allocationId: allocation.id });
     await expect(grants.validate({ token: grant.token })).resolves.toBeNull();
 
+    // A session holds one grant per alias and channel (ADR 0175): renewing
+    // its sandbox grant revokes the previous sandbox grant only, lives at
+    // most an hour, and releasing the Allocation revokes both.
+    const sessionId = crypto.randomUUID();
+    await db
+      .insertInto("agent_sessions")
+      .values({
+        id: sessionId,
+        project_id: projectId,
+        external_user_id: member.externalUserId,
+        provider: "test",
+        source: "api",
+        status: "active",
+        authority_host_id: "test-host",
+      })
+      .execute();
+    const live = await allocations.create({
+      identity: member,
+      projectId,
+      environmentName: "company",
+      workloadKind: "agent",
+      rootWorkloadId: sessionId,
+      policy: allocation.policy,
+    });
+    const session = {
+      identity: member,
+      allocationId: live.id,
+      agentSessionId: sessionId,
+      alias: "directory",
+    };
+    const mcpGrant = await grants.issue(session);
+    const firstSandbox = await grants.issue({
+      ...session,
+      channel: "sandbox",
+      ttlSeconds: 3600,
+    });
+    const renewed = await grants.issue({
+      ...session,
+      channel: "sandbox",
+      ttlSeconds: 7200,
+    });
+    await expect(
+      grants.validate({ token: firstSandbox.token }),
+    ).resolves.toBeNull();
+    await expect(
+      grants.validate({ token: renewed.token }),
+    ).resolves.toMatchObject({
+      channel: "sandbox",
+      agentSessionId: sessionId,
+      alias: "directory",
+    });
+    await expect(
+      grants.validate({ token: mcpGrant.token }),
+    ).resolves.toMatchObject({ channel: "mcp" });
+    expect(Date.parse(renewed.expiresAt) - Date.now()).toBeLessThanOrEqual(
+      3600 * 1000,
+    );
+    await grants.revokeAllocation({ allocationId: live.id });
+    await expect(grants.validate({ token: renewed.token })).resolves.toBeNull();
+    await expect(
+      grants.validate({ token: mcpGrant.token }),
+    ).resolves.toBeNull();
+
     const audit = await connections.listAudit({
       identity: admin,
       projectId,

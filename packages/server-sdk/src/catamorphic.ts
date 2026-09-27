@@ -151,6 +151,11 @@ export interface CatamorphicHostConfig {
     sessionId: string;
     alias: string;
   }) => string | undefined;
+  /**
+   * The plugin's gateway routes (`<api>/gateway`) as sandboxes reach them
+   * (ADR 0175); enables Git through the gateway for Git-capable aliases.
+   */
+  gatewayUrl?: CatamorphicCoreConfig["gatewayUrl"];
   /** Required once the host uses plugins + secrets. */
   pluginResolver?: PluginResolver;
   /**
@@ -379,6 +384,7 @@ export class Catamorphic {
         : {}),
       resolveMemberIdentity: config.resolveMemberIdentity,
       connectionMcpUrl: config.connectionMcpUrl,
+      ...(config.gatewayUrl ? { gatewayUrl: config.gatewayUrl } : {}),
       pluginResolver: config.pluginResolver,
       codingAgent: config.codingAgent,
       nativeAgentCheckout: config.nativeAgentCheckout,

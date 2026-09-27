@@ -42,6 +42,31 @@ const EnvironmentConnectionBindingSchema = z
     principal: z.enum(["member", "service", "either"]),
     service: z.string().regex(CONNECTION_NAME_PATTERN).optional(),
     capabilities: z.array(z.string().min(1)).optional(),
+    /** Git through the gateway (ADR 0175): reachable repositories, push rules. */
+    git: z
+      .strictObject({
+        repositories: z
+          .array(
+            z
+              .string()
+              .min(1)
+              .max(255)
+              .regex(/^[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/),
+          )
+          .min(1)
+          .optional(),
+        push: z
+          .array(
+            z
+              .string()
+              .min(1)
+              .max(255)
+              .regex(/^[A-Za-z0-9._/*-]+$/),
+          )
+          .min(1)
+          .optional(),
+      })
+      .optional(),
   })
   .refine((binding) => binding.principal !== "member" || !binding.service, {
     message: "A member binding does not name a service connection",

@@ -242,6 +242,7 @@ it("the shipped pull-request recipe delivers to one keyed chat per pull request"
       operation: "deliver",
       args: {
         key: "pr-acme/web-7",
+        workspace: { ref: "refs/pull/7/head", update: "reset" },
         title: "Review: Fix login",
         content:
           "Review the changes in https://github.test/pr/7 and summarize risks.",
