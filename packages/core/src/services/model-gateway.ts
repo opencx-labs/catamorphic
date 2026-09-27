@@ -936,6 +936,9 @@ export class ModelGatewayService {
         : Number.POSITIVE_INFINITY,
     );
     if (until > now) {
+      // Renewed grants leave their entries behind: drop what has lapsed.
+      for (const [id, entry] of this.access)
+        if (entry.until <= now) this.access.delete(id);
       if (this.access.size >= ACCESS_CACHE_SIZE) {
         const oldest = this.access.keys().next().value;
         if (oldest !== undefined) this.access.delete(oldest);
