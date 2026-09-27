@@ -34,6 +34,7 @@ import {
 } from "@catamorphic/sandbox";
 import { APP_DATA_ENV } from "@catamorphic/workflow/project-layout";
 import {
+  DOCKER_CLIENT_ENV,
   type DockerProxy,
   removeDockerResources,
   startDockerProxy,
@@ -67,7 +68,7 @@ export interface LocalProcessProviderConfig {
   docker?: {
     socketPath: string;
     /**
-     * Docker CLI plugins (`docker compose`, `docker buildx`) for sandboxes,
+     * Docker CLI plugins (`docker compose`) for sandboxes,
      * whose HOME is their own: linked as `~/.docker/cli-plugins`. Only
      * needed where plugins are installed per user (Docker Desktop).
      */
@@ -370,7 +371,9 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     }
     const { socketPath } = await proxy;
     const entry = this.sandboxes.get(sandboxId) ?? { envVars: {} };
-    entry.envVars.DOCKER_HOST = `unix://${socketPath}`;
+    Object.assign(entry.envVars, DOCKER_CLIENT_ENV, {
+      DOCKER_HOST: `unix://${socketPath}`,
+    });
     this.sandboxes.set(sandboxId, entry);
   }
 

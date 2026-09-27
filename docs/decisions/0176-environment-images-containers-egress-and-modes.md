@@ -31,12 +31,16 @@ overlay root cannot hold overlay storage), so containers, networks and
 volumes die with the VM; the image supplies `dockerd` (`docker:dind`, or a
 Dockerfile from it). A trusted local-process machine (`WORK_DOCKER_SOCKET`)
 gives each sandbox a filtering Docker endpoint on its own socket
-(`DOCKER_HOST`): it labels everything created with the sandbox id, lists and
-touches only labelled objects, refuses privileged containers, added
-capabilities and devices, host namespaces and bind mounts outside the
-sandbox directory, and removes every labelled container, network and volume
-when the sandbox is destroyed. It narrows a trusted daemon; it is not a
-boundary against hostile code.
+(`DOCKER_HOST`). It serves an allowlist of API routes and, for each body it
+forwards, an allowlist of fields and values; anything else is refused. It
+alone sets the owner label, on everything created, and it lists and touches
+only labelled objects. It refuses privileged containers, added capabilities
+and devices, host namespaces, volume drivers other than `local`, and bind
+mounts outside the sandbox directory. Builds go through the classic
+builder's `/build`, whose options it can check, not BuildKit's gRPC session.
+It removes every labelled container, network and volume when the sandbox
+is destroyed. It reduces what a trusted daemon exposes; it is not a boundary
+against hostile code.
 
 **Egress is an Environment policy.** `network: { egress: "open" | "gateway"
 | "allowlist", allow?: [domain | *.suffix | IPv4] }`, default open.

@@ -348,11 +348,16 @@ An Environment chooses its sandbox (ADR 0176) in `.work/project.json`:
   the image must ship `dockerd`: use `docker:dind` or a Dockerfile `FROM` it.
   A trusted local-process machine offers containers with
   `WORK_DOCKER_SOCKET=/var/run/docker.sock`: each sandbox gets its own
-  filtered endpoint as `DOCKER_HOST`, sees only what it started, cannot run
-  privileged containers or mount host paths outside its workspace, and
-  everything it started is removed with it. Where Compose and Buildx are
-  per-user plugins (Docker Desktop), also set `WORK_DOCKER_CLI_PLUGINS` to
-  that plugin directory.
+  endpoint as `DOCKER_HOST` that serves only the API routes and settings the
+  Docker CLI and Compose use. The sandbox sees only what it started, cannot
+  run privileged containers, add capabilities or devices, share host
+  namespaces, use other volume drivers, or mount host paths outside its
+  workspace, and everything it started is removed with it. Images are a
+  cache shared by the machine. Builds use the classic builder
+  (`DOCKER_BUILDKIT=0` is set for the sandbox), so `docker buildx` and
+  BuildKit-only Dockerfile features are not available there. Where Compose
+  is a per-user plugin (Docker Desktop), also set `WORK_DOCKER_CLI_PLUGINS`
+  to that plugin directory.
 - `network.egress` is `open` (default), `gateway` (only this server's public
   host, from `WORK_PUBLIC_URL`, and DNS), or `allowlist`. Only microsandbox
   enforces it, containers inside the VM included. A restricted image must

@@ -22,6 +22,16 @@ export interface DockerProxy {
   close(): Promise<void>;
 }
 
+/**
+ * What a sandbox's Docker CLI needs so its builds use the endpoint's
+ * `/build` route: BuildKit's gRPC and session endpoints carry build options
+ * the endpoint cannot read, so they are not served.
+ */
+export const DOCKER_CLIENT_ENV: Readonly<Record<string, string>> = {
+  DOCKER_BUILDKIT: "0",
+  COMPOSE_BAKE: "false",
+};
+
 class Refusal extends Error {
   constructor(
     readonly status: number,
@@ -38,15 +48,233 @@ function isObject(value: Json | undefined): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function parseJson(text: string, what: string): Json {
+  try {
+    const parsed: Json = JSON.parse(text);
+    return parsed;
+  } catch {
+    throw new Refusal(400, `${what} must be JSON`);
+  }
+}
+
+/** Whether a value is its type's zero value, as clients send unset fields. */
+function isUnset(value: Json | undefined): boolean {
+  if (
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    value === 0 ||
+    value === false
+  )
+    return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (isObject(value)) return Object.values(value).every(isUnset);
+  return false;
+}
+
+function notAvailable(field: string, value?: Json): Refusal {
+  return new Refusal(
+    403,
+    value === undefined
+      ? `${field} is not available in this sandbox`
+      : `${field}=${JSON.stringify(value)} is not available in this sandbox`,
+  );
+}
+
+/** Validates one field; throws a {@link Refusal} to refuse the request. */
+type Check = (value: Json | undefined, field: string) => void | Promise<void>;
+
+const anyValue: Check = () => {};
+const unset: Check = (value, field) => {
+  if (!isUnset(value)) throw notAvailable(field);
+};
+/** Unset, or exactly `null`: an empty list is a setting (MaskedPaths). */
+const absent: Check = (value, field) => {
+  if (value !== undefined && value !== null) throw notAvailable(field);
+};
+const oneOf =
+  (...allowed: string[]): Check =>
+  (value, field) => {
+    if (isUnset(value)) return;
+    if (typeof value !== "string" || !allowed.includes(value))
+      throw notAvailable(field, value);
+  };
+const strings =
+  (each: (value: string, field: string) => void | Promise<void>): Check =>
+  async (value, field) => {
+    if (isUnset(value)) return;
+    if (!Array.isArray(value))
+      throw new Refusal(400, `${field} must be a list`);
+    for (const item of value) {
+      if (typeof item !== "string")
+        throw new Refusal(400, `${field} must list strings`);
+      await each(item, field);
+    }
+  };
+const fields =
+  (checks: Record<string, Check>): Check =>
+  async (value, field) => {
+    // Every nested field is checked: an empty list can be a setting.
+    if (!isObject(value)) {
+      if (isUnset(value)) return;
+      throw new Refusal(400, `${field} must be an object`);
+    }
+    await checkFields({ body: value, checks, prefix: field });
+  };
+const keys = (...names: string[]): Record<string, Check> =>
+  Object.fromEntries(names.map((name) => [name, anyValue]));
+
+/**
+ * Check every field of a request body. A field without a check must be
+ * unset, so nothing this endpoint does not know reaches the daemon with a
+ * value.
+ */
+async function checkFields(args: {
+  body: JsonObject;
+  checks: Record<string, Check>;
+  prefix?: string;
+}): Promise<void> {
+  for (const [key, value] of Object.entries(args.body)) {
+    const field = args.prefix ? `${args.prefix}.${key}` : key;
+    const check = Object.hasOwn(args.checks, key) ? args.checks[key] : unset;
+    await (check ?? unset)(value, field);
+  }
+}
+
+/** A container's resource limits: what `docker update` may change. */
+const RESOURCE_CHECKS: Record<string, Check> = keys(
+  "CpuShares",
+  "Memory",
+  "NanoCpus",
+  "BlkioWeight",
+  "CpuPeriod",
+  "CpuQuota",
+  "CpusetCpus",
+  "CpusetMems",
+  "MemoryReservation",
+  "MemorySwap",
+  "MemorySwappiness",
+  "OomKillDisable",
+  "PidsLimit",
+  "Ulimits",
+  "CpuCount",
+  "CpuPercent",
+  "IOMaximumIOps",
+  "IOMaximumBandwidth",
+  "KernelMemory",
+  "KernelMemoryTCP",
+  "RestartPolicy",
+);
+
+const LOG_CHECKS: Record<string, Check> = {
+  Type: oneOf("json-file", "local", "none"),
+  Config: fields(
+    keys("max-size", "max-file", "compress", "mode", "max-buffer-size"),
+  ),
+};
+
+const EXEC_CHECKS: Record<string, Check> = keys(
+  "AttachStdin",
+  "AttachStdout",
+  "AttachStderr",
+  "ConsoleSize",
+  "DetachKeys",
+  "Tty",
+  "Env",
+  "Cmd",
+  "User",
+  "WorkingDir",
+);
+
+const VOLUME_CREATE_CHECKS: Record<string, Check> = {
+  ...keys("Name", "Labels"),
+  Driver: oneOf("local"),
+};
+
+const NETWORK_CREATE_CHECKS: Record<string, Check> = {
+  ...keys(
+    "Name",
+    "CheckDuplicate",
+    "Internal",
+    "Attachable",
+    "EnableIPv4",
+    "EnableIPv6",
+    "Labels",
+  ),
+  Driver: oneOf("bridge"),
+  Scope: oneOf("local"),
+  IPAM: fields({ Driver: oneOf("default"), Config: anyValue }),
+  Options: fields(
+    keys(
+      "com.docker.network.bridge.enable_icc",
+      "com.docker.network.bridge.enable_ip_masquerade",
+      "com.docker.network.bridge.host_binding_ipv4",
+      "com.docker.network.driver.mtu",
+    ),
+  ),
+};
+
+/** Query parameters a request may carry, each with its check. */
+type QueryChecks = Record<
+  string,
+  (value: string) => boolean | Promise<boolean>
+>;
+const anyParam = () => true;
+const params = (...names: string[]): QueryChecks =>
+  Object.fromEntries(names.map((name) => [name, anyParam]));
+
+async function checkQuery(args: {
+  url: URL;
+  checks: QueryChecks;
+  what: string;
+}): Promise<void> {
+  for (const [name, value] of args.url.searchParams) {
+    const check = Object.hasOwn(args.checks, name)
+      ? args.checks[name]
+      : undefined;
+    if (!check || !(await check(value)))
+      throw new Refusal(
+        403,
+        `${args.what} option '${name}' is not available in this sandbox`,
+      );
+  }
+}
+
+const CONTAINER_ACTIONS: Record<string, readonly string[]> = {
+  GET: ["json", "top", "logs", "changes", "export", "stats", "archive"],
+  HEAD: ["archive"],
+  PUT: ["archive"],
+  POST: [
+    "start",
+    "stop",
+    "restart",
+    "kill",
+    "update",
+    "rename",
+    "pause",
+    "unpause",
+    "attach",
+    "wait",
+    "resize",
+    "exec",
+  ],
+  DELETE: [""],
+};
+
+const DEFAULT_NETWORKS = ["", "default", "bridge", "none"];
+
 /**
  * A Docker Engine API endpoint for one sandbox on a trusted local-process
- * machine (ADR 0176). It forwards to the host daemon, labels everything the
- * sandbox creates, shows and touches only what carries its label, and
- * refuses what would reach the host: privileged containers, added
- * capabilities and devices, host namespaces, and bind mounts outside the
- * sandbox's directory. {@link removeDockerResources} deletes what is left
- * when the sandbox goes. It narrows a trusted machine's daemon; it is not a
- * boundary against a hostile workload (use microsandbox for that).
+ * machine (ADR 0176). It forwards to the host daemon only the routes a
+ * sandbox's CLI and Compose need, each checked against an allowlist of
+ * fields and values; everything else is refused. It labels everything the
+ * sandbox creates (only it sets the owner label), shows and touches only
+ * what carries its label, and keeps the sandbox away from the host:
+ * no privileged containers, added capabilities or devices, host namespaces,
+ * other volume drivers, or bind mounts outside the sandbox's directory.
+ * {@link removeDockerResources} deletes what is left when the sandbox goes.
+ * It reduces what a trusted machine's daemon exposes; it is not a boundary
+ * against a hostile workload (use microsandbox for that).
  */
 export async function startDockerProxy(
   options: DockerProxyOptions,
@@ -55,10 +283,22 @@ export async function startDockerProxy(
   const label = `${DOCKER_OWNER_LABEL}=${options.owner}`;
   const roots = options.bindRoots.map((root) => realpathOrSelf(root));
 
+  /** The caller's labels without any owner label, plus this sandbox's. */
+  const ownerLabels = (labels: Json | undefined): JsonObject =>
+    Object.fromEntries([
+      ...Object.entries(isObject(labels) ? labels : {}).filter(
+        ([key]) =>
+          key !== DOCKER_OWNER_LABEL &&
+          !key.startsWith(`${DOCKER_OWNER_LABEL}.`),
+      ),
+      [DOCKER_OWNER_LABEL, options.owner],
+    ]);
+
   const owned = async (
     kind: "containers" | "networks" | "volumes",
     id: string,
   ) => {
+    if (!id) return false;
     const inspect = await upstream.json(
       "GET",
       `/${kind}/${encodeURIComponent(id)}${kind === "containers" ? "/json" : ""}`,
@@ -78,6 +318,14 @@ export async function startDockerProxy(
   ) => {
     if (!(await owned(kind, id)))
       throw new Refusal(404, `No such ${kind.slice(0, -1)}: ${id}`);
+  };
+  const requireNetwork = async (name: string) => {
+    if (name === "host")
+      throw new Refusal(
+        403,
+        "The host network is not available in this sandbox",
+      );
+    if (!DEFAULT_NETWORKS.includes(name)) await requireOwned("networks", name);
   };
   const requireBindable = (source: string) => {
     const resolved = realpathOrSelf(path.resolve(source));
@@ -99,7 +347,7 @@ export async function startDockerProxy(
     if (inspect.status === 404) {
       const created = await upstream.json("POST", "/volumes/create", {
         Name: name,
-        Labels: { [DOCKER_OWNER_LABEL]: options.owner },
+        Labels: ownerLabels(undefined),
       });
       if (created.status >= 300)
         throw new Refusal(created.status, `Could not create volume ${name}`);
@@ -108,94 +356,233 @@ export async function startDockerProxy(
     await requireOwned("volumes", name);
   };
 
+  const ownedContainer = (value: string) =>
+    requireOwned("containers", value.split(":")[0]?.replace(/^\//, "") ?? "");
+  /** A namespace mode: one of `modes`, or another of this sandbox's containers. */
+  const namespace =
+    (...modes: string[]): Check =>
+    async (value, field) => {
+      if (isUnset(value)) return;
+      if (typeof value === "string" && value.startsWith("container:"))
+        return requireOwned("containers", value.slice("container:".length));
+      if (typeof value !== "string" || !modes.includes(value))
+        throw notAvailable(field, value);
+    };
+  const networkMode: Check = async (value, field) => {
+    if (isUnset(value)) return;
+    if (typeof value !== "string") throw notAvailable(field, value);
+    if (value.startsWith("container:"))
+      return requireOwned("containers", value.slice("container:".length));
+    await requireNetwork(value);
+  };
+  const endpointChecks: Record<string, Check> = {
+    ...keys(
+      "IPAMConfig",
+      "Aliases",
+      "MacAddress",
+      "NetworkID",
+      "EndpointID",
+      "Gateway",
+      "IPAddress",
+      "IPPrefixLen",
+      "IPv6Gateway",
+      "GlobalIPv6Address",
+      "GlobalIPv6PrefixLen",
+      "DNSNames",
+      "GwPriority",
+    ),
+    Links: strings(ownedContainer),
+  };
+  const endpoints: Check = async (value, field) => {
+    if (isUnset(value)) return;
+    if (!isObject(value)) throw new Refusal(400, `${field} must be an object`);
+    for (const [name, settings] of Object.entries(value)) {
+      await requireNetwork(name);
+      await fields(endpointChecks)(settings, `${field}.${name}`);
+    }
+  };
+  const binds = strings(async (bind) => {
+    const source = bind.split(":")[0] ?? "";
+    if (source.startsWith("/")) requireBindable(source);
+    else await ensureVolume(source);
+  });
+  const hostChecks: Record<string, Check> = {
+    ...RESOURCE_CHECKS,
+    ...keys(
+      "ContainerIDFile",
+      "PortBindings",
+      "AutoRemove",
+      "ConsoleSize",
+      "CapDrop",
+      "Dns",
+      "DnsOptions",
+      "DnsSearch",
+      "ExtraHosts",
+      "GroupAdd",
+      "OomScoreAdj",
+      "PublishAllPorts",
+      "ReadonlyRootfs",
+      "ShmSize",
+      "Sysctls",
+      "Tmpfs",
+      "Init",
+    ),
+    Binds: binds,
+    Mounts: anyValue, // checked and rewritten by `mount`
+    LogConfig: fields(LOG_CHECKS),
+    NetworkMode: networkMode,
+    VolumeDriver: oneOf("local"),
+    VolumesFrom: strings(ownedContainer),
+    Links: strings(ownedContainer),
+    CgroupnsMode: oneOf("private"),
+    IpcMode: namespace("none", "private", "shareable"),
+    PidMode: namespace(),
+    SecurityOpt: strings((option, field) => {
+      if (!/^no-new-privileges(?:[:=](?:true|false))?$/.test(option))
+        throw notAvailable(field, option);
+    }),
+    Runtime: oneOf("runc"),
+    Isolation: oneOf("default"),
+    MaskedPaths: absent,
+    ReadonlyPaths: absent,
+  };
+  const containerChecks: Record<string, Check> = {
+    ...keys(
+      "Hostname",
+      "Domainname",
+      "User",
+      "AttachStdin",
+      "AttachStdout",
+      "AttachStderr",
+      "ExposedPorts",
+      "Tty",
+      "OpenStdin",
+      "StdinOnce",
+      "Env",
+      "Cmd",
+      "Healthcheck",
+      "ArgsEscaped",
+      "Image",
+      "Volumes",
+      "WorkingDir",
+      "Entrypoint",
+      "NetworkDisabled",
+      "MacAddress",
+      "OnBuild",
+      "Labels",
+      "StopSignal",
+      "StopTimeout",
+      "Shell",
+    ),
+    HostConfig: fields(hostChecks),
+    NetworkingConfig: fields({ EndpointsConfig: endpoints }),
+  };
+
+  /** Check one mount; anonymous volumes get this sandbox's label. */
+  const mount = async (value: Json, field: string): Promise<Json> => {
+    if (!isObject(value)) throw new Refusal(400, `${field} must be an object`);
+    const base = keys("Type", "Source", "Target", "ReadOnly", "Consistency");
+    const source = typeof value.Source === "string" ? value.Source : "";
+    if (value.Type === "bind") {
+      requireBindable(source);
+      await checkFields({
+        body: value,
+        checks: { ...base, BindOptions: anyValue },
+        prefix: field,
+      });
+      return value;
+    }
+    if (value.Type === "tmpfs") {
+      await checkFields({
+        body: value,
+        checks: { ...base, Source: unset, TmpfsOptions: anyValue },
+        prefix: field,
+      });
+      return value;
+    }
+    if (value.Type === "volume") {
+      await checkFields({
+        body: value,
+        checks: {
+          ...base,
+          VolumeOptions: fields({
+            ...keys("NoCopy", "Labels", "Subpath"),
+            DriverConfig: fields({ Name: oneOf("local") }),
+          }),
+        },
+        prefix: field,
+      });
+      if (source) {
+        await ensureVolume(source);
+        return value;
+      }
+      const volume = isObject(value.VolumeOptions) ? value.VolumeOptions : {};
+      return {
+        ...value,
+        VolumeOptions: { ...volume, Labels: ownerLabels(volume.Labels) },
+      };
+    }
+    throw new Refusal(
+      403,
+      `Mount type ${JSON.stringify(value.Type ?? null)} is not available in this sandbox`,
+    );
+  };
+
   /** Validate and label a container create body. */
   const containerCreate = async (body: JsonObject): Promise<JsonObject> => {
-    const host = isObject(body.HostConfig) ? body.HostConfig : {};
-    if (host.Privileged === true)
-      throw new Refusal(
-        403,
-        "Privileged containers are not available in this sandbox",
-      );
-    for (const key of [
-      "CapAdd",
-      "Devices",
-      "DeviceRequests",
-      "DeviceCgroupRules",
-    ]) {
-      const value = host[key];
-      if (Array.isArray(value) && value.length > 0)
-        throw new Refusal(403, `${key} is not available in this sandbox`);
-    }
-    for (const key of [
-      "PidMode",
-      "IpcMode",
-      "UTSMode",
-      "UsernsMode",
-      "CgroupnsMode",
-    ]) {
-      if (host[key] === "host")
-        throw new Refusal(403, `${key}=host is not available in this sandbox`);
-    }
-    if (typeof host.CgroupParent === "string" && host.CgroupParent)
-      throw new Refusal(403, "CgroupParent is not available in this sandbox");
-    const security = host.SecurityOpt;
-    if (
-      Array.isArray(security) &&
-      security.some(
-        (option) => typeof option === "string" && /unconfined/.test(option),
-      )
-    )
-      throw new Refusal(
-        403,
-        "Unconfined security options are not available in this sandbox",
-      );
-    const network = host.NetworkMode;
-    if (network === "host")
-      throw new Refusal(
-        403,
-        "The host network is not available in this sandbox",
-      );
-    if (typeof network === "string" && network.startsWith("container:"))
-      await requireOwned("containers", network.slice("container:".length));
-    else if (
-      typeof network === "string" &&
-      !["", "default", "bridge", "none"].includes(network)
-    )
-      await requireOwned("networks", network);
-    const endpoints =
-      isObject(body.NetworkingConfig) &&
-      isObject(body.NetworkingConfig.EndpointsConfig)
-        ? Object.keys(body.NetworkingConfig.EndpointsConfig)
-        : [];
-    for (const name of endpoints)
-      if (!["bridge", "default"].includes(name))
-        await requireOwned("networks", name);
-    for (const bind of Array.isArray(host.Binds) ? host.Binds : []) {
-      if (typeof bind !== "string") continue;
-      const source = bind.split(":")[0] ?? "";
-      if (source.startsWith("/")) requireBindable(source);
-      else await ensureVolume(source);
-    }
-    for (const mount of Array.isArray(host.Mounts) ? host.Mounts : []) {
-      if (!isObject(mount)) continue;
-      const source = typeof mount.Source === "string" ? mount.Source : "";
-      if (mount.Type === "bind") requireBindable(source);
-      else if (mount.Type === "volume") {
-        if (source) await ensureVolume(source);
-      } else if (mount.Type !== "tmpfs")
-        throw new Refusal(
-          403,
-          `Mount type ${String(mount.Type)} is not available in this sandbox`,
-        );
-    }
-    for (const from of Array.isArray(host.VolumesFrom) ? host.VolumesFrom : [])
-      if (typeof from === "string")
-        await requireOwned("containers", from.split(":")[0] ?? "");
-    const labels = isObject(body.Labels) ? body.Labels : {};
+    await checkFields({ body, checks: containerChecks });
+    const host = body.HostConfig;
+    if (!isObject(host)) return { ...body, Labels: ownerLabels(body.Labels) };
+    let mounts: Json | undefined = host.Mounts;
+    if (Array.isArray(host.Mounts)) {
+      const checked: Json[] = [];
+      for (const [index, item] of host.Mounts.entries())
+        checked.push(await mount(item, `HostConfig.Mounts[${index}]`));
+      mounts = checked;
+    } else if (!isUnset(host.Mounts))
+      throw new Refusal(400, "HostConfig.Mounts must be a list");
     return {
       ...body,
-      Labels: { ...labels, [DOCKER_OWNER_LABEL]: options.owner },
+      Labels: ownerLabels(body.Labels),
+      HostConfig: {
+        ...host,
+        ...(mounts === undefined ? {} : { Mounts: mounts }),
+      },
     };
+  };
+
+  const buildQuery: QueryChecks = {
+    ...params(
+      "dockerfile",
+      "t",
+      "q",
+      "nocache",
+      "cachefrom",
+      "pull",
+      "rm",
+      "forcerm",
+      "memory",
+      "memswap",
+      "cpushares",
+      "cpusetcpus",
+      "cpusetmems",
+      "cpuperiod",
+      "cpuquota",
+      "buildargs",
+      "shmsize",
+      "squash",
+      "labels",
+      "platform",
+      "target",
+      "ulimits",
+    ),
+    networkmode: async (mode) => {
+      await requireNetwork(mode);
+      return true;
+    },
+    // The classic builder: BuildKit (version 2) runs through a session
+    // whose build options this endpoint cannot read.
+    version: (version) => version === "1",
   };
 
   /** Decide one request: refuse, or forward with an optional new path and body. */
@@ -205,10 +592,8 @@ export async function startDockerProxy(
     body: () => Promise<JsonObject>;
   }): Promise<{ path: string; body?: JsonObject }> => {
     const { method, url } = args;
-    const version = url.pathname.match(/^\/v[0-9.]+(?=\/)/)?.[0] ?? "";
-    const route = url.pathname.slice(version.length);
-    const segments = route.split("/").filter(Boolean).map(decodeURIComponent);
-    const [kind, id, action] = segments;
+    const version = url.pathname.match(/^\/v[0-9]+(?:\.[0-9]+)?(?=\/)/)?.[0];
+    const route = url.pathname.slice(version?.length ?? 0);
     const keep = () => ({ path: url.pathname + url.search });
     const filtered = () => {
       url.searchParams.set(
@@ -217,123 +602,183 @@ export async function startDockerProxy(
       );
       return keep();
     };
-    if (route === "/_ping" || route === "/version" || route === "/info")
-      return keep();
-    if (route === "/events" && method === "GET") return filtered();
-    if (kind === "containers") {
-      if (id === "json" && method === "GET") return filtered();
-      if (id === "prune" && method === "POST") return filtered();
-      if (id === "create" && method === "POST")
-        return { ...keep(), body: await containerCreate(await args.body()) };
-      if (!id) throw new Refusal(403, "Not available in this sandbox");
-      await requireOwned("containers", id);
-      if (action === "exec" && method === "POST") {
+    const id = (raw: string) => {
+      try {
+        return decodeURIComponent(raw);
+      } catch {
+        throw new Refusal(400, `Malformed path ${route}`);
+      }
+    };
+    const get = method === "GET";
+    const post = method === "POST";
+
+    if (route === "/_ping" && (get || method === "HEAD")) return keep();
+    if (get && (route === "/version" || route === "/info")) return keep();
+    if (get && route === "/events") return filtered();
+    if (post && route === "/auth") return keep();
+
+    if (get && route === "/containers/json") return filtered();
+    if (post && route === "/containers/prune") return filtered();
+    if (post && route === "/containers/create") {
+      await checkQuery({
+        url,
+        checks: params("name", "platform"),
+        what: "Container",
+      });
+      return { ...keep(), body: await containerCreate(await args.body()) };
+    }
+    const container = route.match(/^\/containers\/([^/]+)(?:\/([a-z]+))?$/);
+    if (container) {
+      const action = container[2] ?? "";
+      if (!CONTAINER_ACTIONS[method]?.includes(action))
+        throw new Refusal(
+          403,
+          `${method} ${route} is not available in this sandbox`,
+        );
+      await requireOwned("containers", id(container[1] ?? ""));
+      if (action === "exec" || action === "update") {
         const body = await args.body();
-        if (body.Privileged === true)
-          throw new Refusal(
-            403,
-            "Privileged exec is not available in this sandbox",
-          );
+        await checkFields({
+          body,
+          checks: action === "exec" ? EXEC_CHECKS : RESOURCE_CHECKS,
+        });
         return { ...keep(), body };
       }
       return keep();
     }
-    if (kind === "exec" && id) {
+    const exec = route.match(/^\/exec\/([^/]+)\/(start|resize|json)$/);
+    if (exec && (exec[2] === "json" ? get : post)) {
       const inspect = await upstream.json(
         "GET",
-        `/exec/${encodeURIComponent(id)}/json`,
+        `/exec/${encodeURIComponent(id(exec[1] ?? ""))}/json`,
       );
-      const container =
+      const owner =
         isObject(inspect.body) && typeof inspect.body.ContainerID === "string"
           ? inspect.body.ContainerID
           : "";
-      await requireOwned("containers", container);
+      await requireOwned("containers", owner);
       return keep();
     }
-    if (kind === "networks") {
-      if (!id && method === "GET") return filtered();
-      if (id === "prune" && method === "POST") return filtered();
-      if (id === "create" && method === "POST") {
-        const body = await args.body();
-        const driver = body.Driver;
-        if (driver !== undefined && driver !== "" && driver !== "bridge")
-          throw new Refusal(
-            403,
-            "Only bridge networks are available in this sandbox",
-          );
-        const labels = isObject(body.Labels) ? body.Labels : {};
-        return {
-          ...keep(),
-          body: {
-            ...body,
-            Labels: { ...labels, [DOCKER_OWNER_LABEL]: options.owner },
-          },
-        };
-      }
-      if (!id) throw new Refusal(403, "Not available in this sandbox");
-      await requireOwned("networks", id);
-      if (
-        (action === "connect" || action === "disconnect") &&
-        method === "POST"
-      ) {
-        const body = await args.body();
-        if (typeof body.Container === "string")
-          await requireOwned("containers", body.Container);
-        return { ...keep(), body };
-      }
-      return keep();
+
+    if (get && route === "/networks") return filtered();
+    if (post && route === "/networks/prune") return filtered();
+    if (post && route === "/networks/create") {
+      const body = await args.body();
+      await checkFields({ body, checks: NETWORK_CREATE_CHECKS });
+      return { ...keep(), body: { ...body, Labels: ownerLabels(body.Labels) } };
     }
-    if (kind === "volumes") {
-      if (!id && method === "GET") return filtered();
-      if (id === "prune" && method === "POST") return filtered();
-      if (id === "create" && method === "POST") {
-        const body = await args.body();
-        if (
-          isObject(body.DriverOpts) &&
-          Object.keys(body.DriverOpts).length > 0
-        )
-          throw new Refusal(
-            403,
-            "Volume driver options are not available in this sandbox",
-          );
-        const labels = isObject(body.Labels) ? body.Labels : {};
-        return {
-          ...keep(),
-          body: {
-            ...body,
-            Labels: { ...labels, [DOCKER_OWNER_LABEL]: options.owner },
-          },
-        };
-      }
-      if (!id) throw new Refusal(403, "Not available in this sandbox");
-      await requireOwned("volumes", id);
-      return keep();
-    }
-    // Images are a shared cache: pull, list, inspect and tag, never delete or push.
-    if (kind === "images") {
-      if (method === "DELETE" || action === "push" || id === "prune")
+    const network = route.match(
+      /^\/networks\/([^/]+)(?:\/(connect|disconnect))?$/,
+    );
+    if (network) {
+      const action = network[2];
+      if (action ? !post : !(get || method === "DELETE"))
         throw new Refusal(
           403,
-          "Images are shared on this machine; removing or pushing them is not available",
+          `${method} ${route} is not available in this sandbox`,
         );
+      await requireOwned("networks", id(network[1] ?? ""));
+      if (!action) return keep();
+      const body = await args.body();
+      await checkFields({
+        body,
+        checks: {
+          Container: (value, field) => {
+            if (typeof value !== "string")
+              throw new Refusal(400, `${field} must name a container`);
+            return requireOwned("containers", value);
+          },
+          ...(action === "connect"
+            ? { EndpointConfig: fields(endpointChecks) }
+            : { Force: anyValue }),
+        },
+      });
+      return { ...keep(), body };
+    }
+
+    if (get && route === "/volumes") return filtered();
+    if (post && route === "/volumes/prune") return filtered();
+    if (post && route === "/volumes/create") {
+      const body = await args.body();
+      await checkFields({ body, checks: VOLUME_CREATE_CHECKS });
+      return { ...keep(), body: { ...body, Labels: ownerLabels(body.Labels) } };
+    }
+    const volume = route.match(/^\/volumes\/([^/]+)$/);
+    if (volume && (get || method === "DELETE")) {
+      await requireOwned("volumes", id(volume[1] ?? ""));
       return keep();
     }
-    if (kind === "build" && method === "POST") {
-      const mode = url.searchParams.get("networkmode");
-      if (mode === "host")
-        throw new Refusal(
-          403,
-          "Builds cannot use the host network in this sandbox",
+
+    // Images are a shared cache: pull, build, list, inspect and tag; never
+    // delete or push.
+    if (
+      route.startsWith("/images/") &&
+      (method === "DELETE" ||
+        route === "/images/prune" ||
+        route.endsWith("/push"))
+    )
+      throw new Refusal(
+        403,
+        "Images are shared on this machine; removing or pushing them is not available",
+      );
+    if (
+      get &&
+      ["/images/json", "/images/get", "/images/search"].includes(route)
+    )
+      return keep();
+    if (post && route === "/images/load") return keep();
+    if (post && route === "/images/create") {
+      await checkQuery({
+        url,
+        checks: params("fromImage", "tag", "platform"),
+        what: "Image pull",
+      });
+      return keep();
+    }
+    if (get && /^\/images\/.+\/(?:json|history|get)$/.test(route))
+      return keep();
+    if (post && /^\/images\/.+\/tag$/.test(route)) return keep();
+    if (get && /^\/distribution\/.+\/json$/.test(route)) return keep();
+
+    if (post && route === "/build") {
+      await checkQuery({ url, checks: buildQuery, what: "Build" });
+      const labels = url.searchParams.get("labels");
+      if (labels !== null) {
+        const parsed = parseJson(labels, "Build labels");
+        const own = Object.fromEntries(
+          Object.entries(isObject(parsed) ? parsed : {}).filter(
+            ([key]) => key !== DOCKER_OWNER_LABEL,
+          ),
         );
+        url.searchParams.set("labels", JSON.stringify(own));
+      }
       return keep();
     }
-    if (kind === "commit" && method === "POST") {
-      await requireOwned("containers", url.searchParams.get("container") ?? "");
+    if (route === "/grpc" || route === "/session")
+      throw new Refusal(
+        403,
+        "BuildKit sessions are not available in this sandbox; builds use the classic builder (DOCKER_BUILDKIT=0)",
+      );
+    if (post && route === "/commit") {
+      await checkQuery({
+        url,
+        checks: {
+          ...params("repo", "tag", "comment", "author", "pause", "changes"),
+          container: async (container) => {
+            await requireOwned("containers", container);
+            return true;
+          },
+        },
+        what: "Commit",
+      });
+      if (!url.searchParams.get("container"))
+        throw new Refusal(404, "No such container");
       return keep();
     }
-    if (kind === "session" || kind === "distribution" || kind === "auth")
-      return keep();
-    throw new Refusal(403, `${route} is not available in this sandbox`);
+    throw new Refusal(
+      403,
+      `${method} ${route} is not available in this sandbox`,
+    );
   };
 
   const refuse = (response: http.ServerResponse, error: unknown) => {
@@ -352,7 +797,7 @@ export async function startDockerProxy(
       const readBody = async (): Promise<JsonObject> => {
         buffered ??= await readAll(request);
         if (buffered.length === 0) return {};
-        const parsed: Json = JSON.parse(buffered.toString("utf8"));
+        const parsed = parseJson(buffered.toString("utf8"), "The request body");
         if (!isObject(parsed)) throw new Refusal(400, "Expected a JSON object");
         return parsed;
       };
@@ -554,7 +999,7 @@ function dockerClient(socketPath: string) {
 export function withLabel(raw: string | null, label: string): string {
   let filters: JsonObject = {};
   if (raw) {
-    const parsed: Json = JSON.parse(raw);
+    const parsed = parseJson(raw, "filters");
     if (isObject(parsed)) filters = parsed;
   }
   const existing = filters.label;
