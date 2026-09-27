@@ -180,7 +180,12 @@ polling (see \`session-workflows\`), so this library works there too:
 
 \`\`\`typescript
 // .work/triggers/github.ts
-import { defineTrigger, type Narrow, type TriggerPayload, trigger } from "@catamorphic/workflow";
+import { defineSecrets, defineTrigger, type Narrow, type TriggerPayload, trigger } from "@catamorphic/workflow";
+
+/** Verifies deliveries on the control plane; never handed to a run. */
+export const githubSecrets = defineSecrets({
+  GITHUB_WEBHOOK_SECRET: { label: "GitHub webhook secret", use: "webhook" },
+});
 
 type Delivery<Body> = Narrow<TriggerPayload<"webhook">, { payload: { body: Body } }>;
 

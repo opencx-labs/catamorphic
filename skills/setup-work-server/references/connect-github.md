@@ -56,8 +56,10 @@ finishes it in their browser on the server's public URL
 3. GitHub returns to the server, which stores the App's key in the vault and
    connects the installation as the `github` service connection. With a
    project, the webhook secret is stored as that project's
-   `GITHUB_WEBHOOK_SECRET` once the project declares it; otherwise the page
-   shows it once to set after the trigger library lands.
+   `GITHUB_WEBHOOK_SECRET` once the project declares it (the trigger library
+   declares it with `use: "webhook"`, so it verifies deliveries and never
+   reaches a run); otherwise the page shows it once to set after the library
+   lands.
 
 ## Use an existing App
 
@@ -83,8 +85,10 @@ A project receives GitHub events on its `github` webhook URL, verified with
 binding that library is deployed and enabled, `GET
 /api/projects/:projectId/webhooks` shows the URL; set it as the App's webhook
 URL with the App's webhook secret, and store that secret as the project
-secret. The desktop needs no webhook: its watchers poll GitHub with the
-person's own connection and record the same events.
+secret the library declares with `use: "webhook"`: the control plane checks
+deliveries with it, and no run ever receives it. The desktop needs no
+webhook: its watchers poll GitHub with the person's own connection and
+record the same events.
 
 ## Bind it in project.json
 

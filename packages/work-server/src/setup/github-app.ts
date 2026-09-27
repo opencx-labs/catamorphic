@@ -73,7 +73,8 @@ const TTL_MS = 60 * 60 * 1000;
  * App's credentials, the person installs the App, and the installation
  * becomes the `github` service connection. The App's webhook points at a
  * project's `github` webhook URL when a project is named, with its secret
- * stored as that project's `GITHUB_WEBHOOK_SECRET`.
+ * stored as that project's `GITHUB_WEBHOOK_SECRET` (a `use: "webhook"` secret
+ * the trigger library declares: it verifies deliveries, never reaches a run).
  */
 export function registerGithubAppSetup(args: {
   /** Loopback operator listener: starts a registration. */
