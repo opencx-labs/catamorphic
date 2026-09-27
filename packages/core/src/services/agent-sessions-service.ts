@@ -4545,9 +4545,9 @@ export class AgentSessionsService {
     const agent = await this.resolveAgent(input.agentId, projectId).catch(
       () => undefined,
     );
-    // A read-only agent's changes never leave its sandbox (ADR 0176), so
+    // A contained agent's changes never leave its sandbox (ADR 0182), so
     // its workspace is given back without saving them.
-    if (input.sandboxProviderId && agent?.privilege !== "read-only") {
+    if (input.sandboxProviderId && agent?.sandboxing !== "contained") {
       const runtime = await this.executionEnvironments.getRuntimeBinding({
         identity,
         bindingId: allocation.bindingId,

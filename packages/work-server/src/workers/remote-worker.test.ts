@@ -485,7 +485,7 @@ describe("keyed chats on workers (ADR 0173)", () => {
             version: 1,
             name: "Reader",
             kind: "builtin",
-            mode: "read-only",
+            sandboxing: "contained",
             environment: { allowed: ["chats"], preferred: ["chats"] },
           }),
         },
