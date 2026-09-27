@@ -409,12 +409,14 @@ describe("where filters", () => {
     const event = {
       payload: { body: { flag: { exists: true }, ref: { prefix: "v1" } } },
     };
-    expect(whereErrors({ flag: { exists: true }, ref: { prefix: "" } })).toEqual(
-      [],
-    );
+    expect(
+      whereErrors({ flag: { exists: true }, ref: { prefix: "" } }),
+    ).toEqual([]);
     expect(
       matchesWhere(
-        { payload: { body: { flag: { exists: true }, ref: { prefix: "v1" } } } },
+        {
+          payload: { body: { flag: { exists: true }, ref: { prefix: "v1" } } },
+        },
         event,
       ),
     ).toBe(true);

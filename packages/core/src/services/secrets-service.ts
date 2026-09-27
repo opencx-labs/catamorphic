@@ -28,6 +28,22 @@ interface DeclaredSecretEntry {
   /** `webhook` secrets verify deliveries on the control plane only. */
   use: "run" | "webhook";
   source: "project" | "plugin";
+  /** A plugin also declares this project webhook secret's name. */
+  conflict?: true;
+}
+
+/**
+ * A plugin declares a secret the project declares webhook-only: the plugin
+ * would receive the webhook signing key in every run, so neither gets a
+ * value until one of them is renamed.
+ */
+export class SecretDeclarationConflictError extends Error {
+  constructor(readonly secretNames: readonly string[]) {
+    super(
+      `Secret ${secretNames.map((name) => `'${name}'`).join(", ")} is declared webhook-only by the project and also by an attached plugin; rename one of them`,
+    );
+    this.name = "SecretDeclarationConflictError";
+  }
 }
 
 /**
@@ -60,12 +76,14 @@ export type ProjectSecretDeclarationsReader = (args: {
  * A secret must be declared before a value can be stored for it, either by an
  * attached plugin's manifest or by the project's own `defineSecrets` call.
  * Plugin declarations win on name conflict, since the plugin's code reads the
- * value and its manifest states the contract.
+ * value and its manifest states the contract, except over a project webhook
+ * secret: that name stays webhook-only and is refused a value and a run
+ * until the clash is resolved.
  */
 export class SecretsService {
   constructor(
     private readonly db: Kysely<DB>,
-    private readonly plugins?: PluginsService,
+    private readonly plugins?: Pick<PluginsService, "getDeclaredSecrets">,
     private readonly projectDeclarations?: ProjectSecretDeclarationsReader,
     private readonly vault?: CredentialVault,
   ) {}
@@ -197,6 +215,11 @@ export class SecretsService {
     for (const [name, secret] of (await this.plugins?.getDeclaredSecrets(
       projectId,
     )) ?? new Map()) {
+      const project = declared.get(name);
+      if (project?.use === "webhook") {
+        declared.set(name, { ...project, conflict: true });
+        continue;
+      }
       declared.set(name, {
         label: secret.label,
         description: secret.description,
@@ -257,6 +280,7 @@ export class SecretsService {
     if (!entry) {
       throw new UndeclaredSecretError(name);
     }
+    if (entry.conflict) throw new SecretDeclarationConflictError([name]);
 
     const now = new Date();
     await this.store({
@@ -312,16 +336,20 @@ export class SecretsService {
     missingRequired: string[];
   }> {
     const { identity, projectId } = opts;
+    const all = await this.declaredSecrets({
+      identity,
+      projectId,
+      purpose: "run",
+    });
+    const conflicts = [...all]
+      .filter(([, secret]) => secret.conflict)
+      .map(([name]) => name);
+    if (conflicts.length > 0)
+      throw new SecretDeclarationConflictError(conflicts);
     // Webhook signing secrets are checked on the control plane and never
     // reach a run.
     const declared = new Map(
-      [
-        ...(await this.declaredSecrets({
-          identity,
-          projectId,
-          purpose: "run",
-        })),
-      ].filter(([, secret]) => secret.use === "run"),
+      [...all].filter(([, secret]) => secret.use === "run"),
     );
     if (declared.size === 0) {
       return { values: {}, missingRequired: [] };

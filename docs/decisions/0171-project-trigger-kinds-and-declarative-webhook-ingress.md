@@ -18,8 +18,9 @@ GitLab's shared token and every synchronous handshake needed host code.
 
 **Every binding may filter, declaratively.** `where` is a reserved key in any
 `trigger(kind, config)`: a nested object mirroring the payload whose leaves
-are a JSON value (equal), a list of values (one of) or `{ exists }`; header
-names match case-insensitively. The parser splits it off before the kind
+are a JSON value (equal), a list of values (one of) or `{ $exists }`; header
+names match case-insensitively. Operators are `$`-prefixed keys, so a payload
+field named `exists` or `prefix` matches by value like any other. The parser splits it off before the kind
 validates its config, and the host evaluates it on the control plane in the
 one fire path every source uses (the project-event dispatcher, schedules,
 host `fire`), after the kind's `matches`. It never runs project code.
@@ -44,17 +45,24 @@ filtered events carry. Nothing about a project kind exists at runtime beyond
 the resolved definition.
 
 **Webhook ingress stays one primitive, configured.** `verify` is a closed
-union: `hmac` (algorithm, header, prefix, encoding, a capture `pattern` for
-composite headers, a signed-content template over `{body}`, `{timestamp}`
-and `{header:<name>}`, a timestamp source with a tolerance window, and base64
-or prefixed secrets) and `token` (constant-time comparison of a header or
+union: `hmac` (algorithm, header, prefix, encoding, a `separator` that splits
+composite headers into parts whose `prefix` marks a signature, a
+signed-content template over `{body}`, `{timestamp}` and `{header:<name>}`, a
+timestamp source with a tolerance window that the template must sign, and
+base64 or prefixed secrets of at least 16 bytes) and `token` (constant-time comparison of a header or
 query value, never stored). `respond` rules answer handshakes with 200 and an
 echoed value and store nothing; a rule may carry its own token check in
 place of `verify`, which is how GET subscription handshakes are answered.
 `maxBodyBytes` raises the 1 MiB default up to the host's maximum
 (`webhooks.maxBodyBytes`, `WORK_WEBHOOK_MAX_BYTES`). Bindings of one name
-must declare identical settings, so an integration declares its webhook once,
-in a project kind. The schemes are pure functions with provider test vectors.
+in a commit must declare identical settings, so an integration declares its
+webhook once, in a project kind; the deploy scan and each project's local
+check share one checker for these rules. Across commits (one enablement
+updated, another not yet) the active, unexpired binding from the most recently
+deployed commit governs the URL, and every listening workflow still receives
+its events. The schemes are pure functions with provider test vectors. Headers
+are read by splitting, never by project-authored regular expressions, which
+would run on the control plane against attacker-controlled input.
 
 Alternatives: a `payload(event)` mapper in trigger modules (runs project code
 on the control plane); per-integration host kinds (GitHub, Slack) in the

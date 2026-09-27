@@ -73,9 +73,7 @@ export function whereErrors(value: unknown, path = "where"): string[] {
         isOperatorKey(key) && !OPERATORS.some((operator) => operator === key),
     );
     if (unknown)
-      return [
-        `${path}.${unknown} is not an operator; use $exists or $prefix`,
-      ];
+      return [`${path}.${unknown} is not an operator; use $exists or $prefix`];
     if (keys.length > 1)
       return [`${path} must hold one operator alone, without other keys`];
     return keys[0] === "$exists"

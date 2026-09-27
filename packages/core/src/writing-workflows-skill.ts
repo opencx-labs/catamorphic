@@ -100,7 +100,9 @@ Every binding may add \`where\`, a filter the host checks before a run starts:
 \`trigger("schedule", { cron: "0 8 * * 1-5", timezone: "UTC", where: { ... } })\`.
 It mirrors the payload; a leaf is a value (equal), a list of values (one of),
 \`{ $exists: true | false }\`, or \`{ $prefix: "slack:" }\` (a string that starts
-with it, such as a namespace of chat keys). Header names match in any case.
+with it, such as a namespace of chat keys). Keys starting with \`$\` are
+operators, so a payload field named \`exists\` or \`prefix\` matches by value.
+Header names match in any case.
 Filter in \`where\` rather than in code, so unrelated events never start runs.
 
 Webhooks use \`trigger("webhook", { name: "github" })\`: a lowercase name that
@@ -113,13 +115,17 @@ poller). The config declares how the endpoint checks senders, always with a
 project secret's name:
 
 - \`verify: { scheme: "hmac", secret, header, prefix?, encoding?: "hex" | "base64",
-  algorithm?: "sha1" | "sha256" | "sha512", content?, timestamp?, pattern?,
+  algorithm?: "sha1" | "sha256" | "sha512", content?, timestamp?, separator?,
   secretEncoding?, secretPrefix? }\` signs \`content\` (default \`"{body}"\`; also
-  \`{timestamp}\` and \`{header:<name>}\`). \`timestamp: { header, pattern?,
-  toleranceSeconds? }\` rejects replays (default 300 seconds). \`pattern\` is a
-  regex whose capture group finds each signature in a composite header
-  (Stripe \`"v1=([0-9a-f]+)"\`, Standard Webhooks \`"v1,([A-Za-z0-9+/=]+)"\`).
-  Standard Webhooks keys use \`secretEncoding: "base64", secretPrefix: "whsec_"\`.
+  \`{timestamp}\` and \`{header:<name>}\`). \`timestamp: { header, prefix?,
+  separator?, toleranceSeconds? }\` rejects replays (default 300 seconds) and
+  requires \`{timestamp}\` in \`content\`, since an unsigned timestamp can be
+  rewritten. A composite header is split on \`separator\` and its parts that
+  start with \`prefix\` are the values: Stripe is \`separator: ",", prefix: "v1="\`
+  with \`timestamp: { header: "stripe-signature", separator: ",", prefix: "t=" }\`;
+  Standard Webhooks is \`separator: " ", prefix: "v1,"\` with keys in
+  \`secretEncoding: "base64", secretPrefix: "whsec_"\`. Signing keys shorter than
+  16 bytes are rejected.
 - \`verify: { scheme: "token", secret, header | query, prefix? }\` compares a
   shared token (GitLab's \`x-gitlab-token\`); the token is never stored.
 - \`respond: [{ when, echo, token? }]\` answers a handshake with 200 and the
@@ -133,8 +139,12 @@ project secret's name:
   Stripe), so a retried event is stored and run once.
 - \`maxBodyBytes\` raises the 1 MiB body limit up to the server's maximum.
 
-Every binding of one webhook name must declare identical settings, so declare
-an integration's webhook once, in a project trigger kind. Declare the secret
+Every binding of one webhook name in a commit must declare identical settings,
+so declare an integration's webhook once, in a project trigger kind. While
+enablements sit on different commits (one workflow updated, another not yet),
+the URL checks requests by the most recently deployed commit's settings and
+every listening workflow still receives the events; expired enablements do not
+count. Declare the secret
 it names with \`defineSecrets\` in the same file and mark it
 \`use: "webhook"\`, so the project can store its value while runs never
 receive it: signing secrets are checked on the server only. People who manage the

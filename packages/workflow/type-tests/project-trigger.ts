@@ -149,7 +149,9 @@ void wrongValue;
 
 // A string position also takes `{ $prefix }`; a number position does not.
 const titled = trigger("github.pull_request", {
-  where: { payload: { body: { pull_request: { title: { $prefix: "[db]" } } } } },
+  where: {
+    payload: { body: { pull_request: { title: { $prefix: "[db]" } } } },
+  },
 });
 void titled;
 

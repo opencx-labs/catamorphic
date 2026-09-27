@@ -69,7 +69,7 @@ in 0171).
 - A reply workflow runs once per settled turn of every project chat and stays
   quiet unless the chat's key is a Slack thread. Session events do not carry
   the key, so `where` cannot select Slack chats yet. (ADR 0181: they do, and
-  the recipe selects `{ prefix: "slack:" }`.)
+  the recipe selects `{ $prefix: "slack:" }`.)
 - Slack users map to project members only where the project commits a
   mapping; a mapped name is attribution in the delivered message, never the
   member's authority. Staying quiet in busy threads waits on group chats

@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Identity } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import { ProjectEventsService } from "../services/project-events-service.js";
+import { ProjectNotFoundError } from "../services/projects-service.js";
 import {
   WebhookMethodNotAllowedError,
   WebhookNotFoundError,
@@ -80,12 +81,28 @@ async function bind(input: {
   workflowName: string;
   config: Record<string, unknown>;
   enabled: boolean;
+  /** Another deployed commit, scanned at `scannedAt`. */
+  commit?: { sha: string; scannedAt: Date };
+  expiresAt?: Date;
 }) {
+  const sha = input.commit?.sha ?? commitSha;
+  if (input.commit)
+    await db
+      .insertInto("trigger_definition_scans")
+      .values({
+        project_id: projectId,
+        commit_sha: sha,
+        scanned_at: input.commit.scannedAt,
+      })
+      .onConflict((conflict) =>
+        conflict.columns(["project_id", "commit_sha"]).doNothing(),
+      )
+      .execute();
   const definition = await db
     .insertInto("trigger_definitions")
     .values({
       project_id: projectId,
-      commit_sha: commitSha,
+      commit_sha: sha,
       workflow_name: input.workflowName,
       trigger_kind: "webhook",
       config: JSON.stringify(input.config),
@@ -102,8 +119,9 @@ async function bind(input: {
       project_id: projectId,
       workflow_name: input.workflowName,
       deployment_artifact_id: artifactId,
-      commit_sha: commitSha,
+      commit_sha: sha,
       environment_name: "default",
+      expires_at: input.expiresAt ?? null,
       owner_kind: "project",
       owner_external_user_id: null,
       owner_identity: JSON.stringify(builder),
@@ -286,31 +304,97 @@ describe("WebhooksService", () => {
         body,
       });
 
-    await expect(send(signed("key"))).rejects.toThrow(
+    const key = "github-webhook-signing-key";
+    await expect(send(signed(key))).rejects.toThrow(
       "The webhook secret GITHUB_WEBHOOK_SECRET is not set",
     );
-    secrets.set("GITHUB_WEBHOOK_SECRET", "key");
+    secrets.set("GITHUB_WEBHOOK_SECRET", key);
     await expect(send()).rejects.toBeInstanceOf(WebhookRejectedError);
     await expect(send(signed("wrong"))).rejects.toThrow(
       "Signature does not match",
     );
-    expect(await storedPayload(await send(signed("key")))).toMatchObject({
+    expect(await storedPayload(await send(signed(key)))).toMatchObject({
       body: { action: "opened", number: "7" },
     });
+  });
 
-    // Two workflows on one name that disagree on the settings fail closed.
+  it("checks requests by the newest deployed declaration, ignoring expired enablements", async () => {
+    secrets.set("RELEASES_SECRET", "releases-signing-key");
+    const verify = {
+      scheme: "hmac",
+      secret: "RELEASES_SECRET",
+      header: "x-signature",
+    };
+    const older = {
+      sha: "a".repeat(40),
+      scannedAt: new Date(Date.now() - 60_000),
+    };
+    const newer = {
+      sha: "b".repeat(40),
+      scannedAt: new Date(Date.now() - 30_000),
+    };
+    const newest = { sha: "e".repeat(40), scannedAt: new Date() };
+    // Both workflows listened at the older commit; then the kind gained a
+    // body limit and only one workflow was updated.
     await bind({
-      workflowName: "onGithubToo",
-      config: { name: "github" },
+      workflowName: "onRelease",
+      config: { name: "releases", verify },
       enabled: true,
+      commit: older,
     });
-    await expect(send(signed("key"))).rejects.toThrow(
-      "declare different settings",
+    await bind({
+      workflowName: "onReleaseNotes",
+      config: { name: "releases", verify, maxBodyBytes: 16 },
+      enabled: true,
+      commit: newer,
+    });
+    // A newer but expired chat enablement without verification is ignored.
+    await bind({
+      workflowName: "onReleaseChat",
+      config: { name: "releases" },
+      enabled: true,
+      commit: newest,
+      expiresAt: new Date(Date.now() - 1000),
+    });
+    const token = await tokenFor("releases");
+    const send = (body: string, signature?: string) =>
+      receive({
+        name: "releases",
+        token,
+        headers: signature ? { "x-signature": signature } : {},
+        body,
+      });
+    const sign = (body: string) =>
+      crypto
+        .createHmac("sha256", "releases-signing-key")
+        .update(body)
+        .digest("hex");
+    await expect(send('{"v":1}', sign('{"v":1}'))).resolves.toMatchObject({
+      type: "event",
+    });
+    // The newer declaration's limit governs the URL.
+    const large = JSON.stringify({ v: "x".repeat(32) });
+    await expect(send(large, sign(large))).rejects.toBeInstanceOf(
+      WebhookTooLargeError,
     );
+    // The expired enablement's settings do not open the URL.
+    await expect(send('{"v":2}')).rejects.toThrow("Missing signature");
+    const [endpoint] = (
+      await webhooks.list({ identity: builder, projectId })
+    ).filter((item) => item.name === "releases");
+    expect(endpoint).toMatchObject({ listening: true, verified: true });
+
+    // Once only the expired enablement is left, nothing listens.
+    await db
+      .updateTable("workflow_enablements")
+      .set({ status: "disabled" })
+      .where("workflow_name", "in", ["onRelease", "onReleaseNotes"])
+      .execute();
+    await expect(send('{"v":3}')).rejects.toBeInstanceOf(WebhookNotFoundError);
   });
 
   it("answers Slack's url_verification after checking its signature, storing nothing", async () => {
-    secrets.set("SLACK_SIGNING_SECRET", "slack-key");
+    secrets.set("SLACK_SIGNING_SECRET", "slack-signing-key-0001");
     await bind({
       workflowName: "onSlack",
       config: {
@@ -336,7 +420,7 @@ describe("WebhooksService", () => {
     const token = await tokenFor("slack");
     const post = (
       payload: object,
-      key = "slack-key",
+      key = "slack-signing-key-0001",
       headers: Record<string, string> = {},
     ) => {
       const body = JSON.stringify(payload);
@@ -386,7 +470,7 @@ describe("WebhooksService", () => {
     });
     // Slack retries an event it thinks was lost with a fresh signature and
     // x-slack-retry-num; the declared delivery id stores it once.
-    const retried = await post(callback, "slack-key", {
+    const retried = await post(callback, "slack-signing-key-0001", {
       "x-slack-retry-num": "1",
       "x-slack-retry-reason": "http_timeout",
     });
@@ -403,7 +487,7 @@ describe("WebhooksService", () => {
 
   it("answers a GET subscription handshake with its own token check", async () => {
     secrets.set("META_VERIFY_TOKEN", "meta-token");
-    secrets.set("META_APP_SECRET", "meta-secret");
+    secrets.set("META_APP_SECRET", "meta-app-secret-0001");
     await bind({
       workflowName: "onMeta",
       config: {
@@ -508,6 +592,53 @@ describe("WebhooksService", () => {
         body: Buffer.alloc(1024 * 1024 + 1),
       }),
     ).rejects.toBeInstanceOf(WebhookTooLargeError);
+  });
+
+  it("keeps list and rotate within the caller's tenant", async () => {
+    const outsider: Identity = {
+      tenantId: crypto.randomUUID(),
+      externalUserId: "outsider",
+      ...projectAdmin(projectId),
+    };
+    await expect(
+      webhooks.list({ identity: outsider, projectId }),
+    ).rejects.toBeInstanceOf(ProjectNotFoundError);
+    await expect(
+      webhooks.rotate({ identity: outsider, projectId, name: "ping" }),
+    ).rejects.toBeInstanceOf(ProjectNotFoundError);
+    await expect(
+      webhooks.endpointPath({ identity: outsider, projectId, name: "ping" }),
+    ).rejects.toBeInstanceOf(ProjectNotFoundError);
+  });
+
+  it("rotates a URL registered before any workflow binds its name", async () => {
+    const before = await webhooks.endpointPath({
+      identity: builder,
+      projectId,
+      name: "early",
+    });
+    const rotated = await webhooks.rotate({
+      identity: builder,
+      projectId,
+      name: "early",
+    });
+    expect(rotated).toMatchObject({
+      name: "early",
+      workflows: [],
+      listening: false,
+      verified: false,
+    });
+    expect(rotated.path).not.toBe(before);
+    expect(
+      await webhooks.endpointPath({
+        identity: builder,
+        projectId,
+        name: "early",
+      }),
+    ).toBe(rotated.path);
+    await expect(
+      webhooks.rotate({ identity: builder, projectId, name: "never" }),
+    ).rejects.toBeInstanceOf(WebhookNotFoundError);
   });
 
   it("rotates a URL: the old token stops working at once", async () => {

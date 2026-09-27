@@ -7,6 +7,10 @@ import { holeSchemaErrors } from "./holes.js";
 import { validateAgainstSchema } from "./json-schema-validate.js";
 import { parseProject } from "./parser.js";
 import { resolveTriggerBinding } from "./project-triggers.js";
+import {
+  webhookSettingsConflicts,
+  webhookSettingsIssues,
+} from "./webhook-settings.js";
 
 /**
  * Host-independent project validation, the engine behind each project's
@@ -19,6 +23,9 @@ import { resolveTriggerBinding } from "./project-triggers.js";
  *   cycles reported;
  * - trigger bindings validated against the host's kind catalog, when the
  *   caller fetched one (`GET /trigger-kinds` on any Catamorphic host);
+ * - webhook settings checked by the rules the host applies at deploy:
+ *   placeholders, replay protection, header or query, handshake filters,
+ *   and one set of settings per webhook name;
  * - generated-file drift: the committed `work-app-api.d.ts` files
  *   are re-derived from source and compared, so a stale projection fails a
  *   local run or CI instead of silently type-checking app code against the
@@ -104,6 +111,10 @@ export function checkProject(
     }
   }
 
+  // The host's `webhook` kind has rules its JSON Schema cannot state; the
+  // host enforces the same ones at deploy (ADR 0171).
+  const checksWebhooks = !hostKinds || hostKinds.has("webhook");
+  const webhookBindings: { workflowName: string; config: unknown }[] = [];
   for (const workflow of parsed.workflows) {
     for (const binding of workflow.graph.triggers) {
       const resolved = resolveTriggerBinding({
@@ -117,6 +128,18 @@ export function checkProject(
           message: `Workflow '${workflow.functionName}' trigger '${binding.kind}': ${resolved.error}`,
         });
         continue;
+      }
+      if (checksWebhooks && resolved.binding.kind === "webhook") {
+        webhookBindings.push({
+          workflowName: workflow.functionName,
+          config: resolved.binding.config,
+        });
+        for (const issue of webhookSettingsIssues(resolved.binding.config))
+          findings.push({
+            level: "error",
+            file: workflow.filePath,
+            message: `Workflow '${workflow.functionName}' trigger '${binding.kind}': config.${issue.path.join(".")}: ${issue.message}`,
+          });
       }
       if (!hostKinds) continue;
       const kind = hostKinds.get(resolved.binding.kind);
@@ -154,6 +177,9 @@ export function checkProject(
       }
     }
   }
+
+  for (const message of webhookSettingsConflicts(webhookBindings))
+    findings.push({ level: "error", message });
 
   if (parsed.appApi) {
     const content = renderAppApiTypesModule(parsed.appApi.entries);
