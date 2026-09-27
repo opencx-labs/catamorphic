@@ -6,6 +6,7 @@ import {
   type ProviderSession,
   type StartSessionOpts,
 } from "@catamorphic/sandbox";
+import { z } from "zod";
 
 /**
  * A deterministic echo agent (WORK_FAKE_AGENT=1): lets the server
@@ -38,20 +39,21 @@ export class FakeEchoAgent implements CodingAgentProvider {
     // Workflow deliveries arrive under a provenance header: act on the last line.
     const request = message.trim().split("\n").at(-1) ?? "";
     const [command, name, ...text] = request.split(" ");
-    if (command === "run") {
-      // `run <shell>`: any command in the workspace; answers
-      // `exit=<code>` then its output (tests of sandbox Git, ADR 0175).
+    if (command === "run" || command === "mcp") {
+      // `run <shell>`: any command in the workspace, answering `exit=<code>`
+      // then its output (tests of sandbox Git, ADR 0175). `mcp <alias>
+      // <tool> <json>`: a tool of the session's connection MCP server, as a
+      // harness calls it with its grant. ` ;; ` chains steps in one turn.
       const opts = this.sessions.get(session.providerSessionId ?? "");
-      if (!opts?.sandboxProvider) throw new Error("Allocated provider missing");
-      const result = await opts.sandboxProvider.executeCommand(
-        session.sandboxId,
-        request.slice("run ".length),
-        { cwd: session.workingDirectory },
-      );
-      yield {
-        type: "text",
-        content: `exit=${result.exitCode}\n${result.result.trim()}`,
-      };
+      const results: string[] = [];
+      for (const step of request.split(" ;; ")) {
+        results.push(
+          step.startsWith("mcp ")
+            ? await callConnectionTool(opts, step.slice("mcp ".length))
+            : await runInWorkspace(opts, session, step.slice("run ".length)),
+        );
+      }
+      yield { type: "text", content: results.join("\n---\n") };
       yield { type: "done" };
       return;
     }
@@ -139,4 +141,54 @@ export class FakeEchoAgent implements CodingAgentProvider {
       this.sessions.delete(session.providerSessionId);
     }
   }
+}
+
+async function runInWorkspace(
+  opts: StartSessionOpts | undefined,
+  session: ProviderSession,
+  command: string,
+): Promise<string> {
+  if (!opts?.sandboxProvider) throw new Error("Allocated provider missing");
+  const result = await opts.sandboxProvider.executeCommand(
+    session.sandboxId,
+    command,
+    { cwd: session.workingDirectory },
+  );
+  return `exit=${result.exitCode}\n${result.result.trim()}`;
+}
+
+const ToolAnswer = z.object({
+  result: z
+    .object({
+      structuredContent: z.unknown().optional(),
+      isError: z.boolean().optional(),
+    })
+    .optional(),
+  error: z.object({ message: z.string() }).optional(),
+});
+
+/** `<alias> <tool> <json>`: one `tools/call` on the alias's MCP server. */
+async function callConnectionTool(
+  opts: StartSessionOpts | undefined,
+  step: string,
+): Promise<string> {
+  const [alias = "", tool = "", ...rest] = step.split(" ");
+  const server = opts?.mcpServers?.[`connection_${alias}`];
+  if (!server || server.transport === "stdio")
+    return `no connection '${alias}' in this session`;
+  const response = await fetch(server.url, {
+    method: "POST",
+    headers: { ...server.headers, "content-type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: tool, arguments: JSON.parse(rest.join(" ") || "{}") },
+    }),
+  });
+  const answer = ToolAnswer.parse(await response.json());
+  if (answer.error) return `error: ${answer.error.message}`;
+  return `${answer.result?.isError ? "error: " : ""}${JSON.stringify(
+    answer.result?.structuredContent ?? null,
+  )}`;
 }

@@ -548,11 +548,17 @@ verification schemes and handshakes are declared in its config. The host
 skill `slack` is the worked example: a chat per Slack thread, replies posted
 back through a gateway connection whose named operations are its
 capabilities ([Connect Slack](skills/setup-work-server/references/connect-slack.md)).
+The host skill `reviewing-pull-requests` is the larger one: a code and
+security review of every pull request, in a chat per pull request on a
+dedicated review pool, verified by running the change and posted as a review
+and a check run
+([Review pull requests](skills/setup-work-server/references/review-pull-requests.md)).
 See [`INTEGRATION.md`](INTEGRATION.md) and ADRs
 [0039](docs/decisions/0039-custom-trigger-kinds.md) /
 [0042](docs/decisions/0042-parameterized-trigger-kinds-and-workflow-tools-mcp.md) /
 [0171](docs/decisions/0171-project-trigger-kinds-and-declarative-webhook-ingress.md) /
-[0179](docs/decisions/0179-integrations-from-project-code-slack.md).
+[0179](docs/decisions/0179-integrations-from-project-code-slack.md) /
+[0181](docs/decisions/0181-project-chats-use-their-environments-bindings.md).
 
 ### Long-lived journeys: correlation keys, signals, shared rate budgets
 

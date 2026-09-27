@@ -185,9 +185,11 @@ family. See `docs/decisions/0039-custom-trigger-kinds.md`.
 Projects compose their own kinds from the host's (ADR 0171): an export of
 `defineTrigger({ name, from: trigger("webhook", { ... }), where })` in
 `.work/triggers/` is a kind workflows bind by name. Every binding may carry
-`where`, a declarative filter over the payload (value, list of values, or
-`{ exists }`) that core evaluates before a run starts, on every fire path and
-without running project code. At scan a project-kind binding resolves to the
+`where`, a declarative filter over the payload (value, list of values,
+`{ exists }`, or `{ prefix }` for strings) that core evaluates before a run
+starts, on every fire path and without running project code. Session events
+carry the chat's key (`payload.session.key`), so a workflow selects a family of
+keyed chats with `{ prefix: "slack:" }` (ADR 0181). At scan a project-kind binding resolves to the
 host kind it builds on, with all filters along the chain; `list` reports
 `kind` (the host kind), `where`, and `projectKind`. Codegen adds project kinds
 to `work-triggers.d.ts`, so `syncTypes` needs nothing from the host.
@@ -953,8 +955,11 @@ enablement boundary: it must resolve every required alias to a service
 connection, then freezes those ids for dispatch; a later dispatch fails
 closed if the name resolves elsewhere. Member connections are never eligible
 for project automations (schedules, webhooks and events that run while nobody
-is present). To keep a privileged service action out of a local Environment,
-bind that alias only in the managed Environment.
+is present). A project chat (owned by the project, not a member) uses the
+service bindings of the Environment it runs in, whichever automation delivered
+to it, and never a member's connection (ADR 0181). To keep a privileged
+service action out of a local Environment, bind that alias only in the managed
+Environment.
 
 Git through the gateway (ADR 0175): a provider that serves Git sets
 `git: { remoteBaseUrls, credentials({ material, remoteUrl, access }) }`
