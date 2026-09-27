@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  declaredWebhookDeliveryId,
   matchWebhookHandshake,
   verifyWebhookRequest,
   type WebhookRequest,
@@ -337,6 +338,27 @@ describe("webhook verification schemes", () => {
     expect(problems({ respond: [{ when: {}, echo: "challenge" }] })).toEqual([
       "Name a value under body, query or headers",
     ]);
+    expect(problems({ deliveryId: "event_id" })).toEqual([
+      "Name a value under body, query or headers",
+    ]);
+    expect(problems({ deliveryId: "body.event_id" })).toEqual([]);
+  });
+
+  it("reads a sender's event id at the declared delivery id path", () => {
+    const request = {
+      method: "POST",
+      headers: { "x-slack-retry-num": "1" },
+      query: {},
+      body: Buffer.from(""),
+    };
+    const at = (path: string, body: unknown) =>
+      declaredWebhookDeliveryId({ path, request, body });
+    expect(at("body.event_id", { event_id: "Ev01" })).toBe("Ev01");
+    expect(at("body.id", { id: 42 })).toBe("42");
+    expect(at("headers.x-slack-retry-num", {})).toBe("1");
+    expect(at("body.event_id", {})).toBeUndefined();
+    expect(at("body.event_id", { event_id: { nested: true } })).toBeUndefined();
+    expect(at("body.event_id", { event_id: "x".repeat(201) })).toBeUndefined();
   });
 
   it("compares settings independent of key order", () => {
