@@ -112,6 +112,11 @@ root identities do not pass through membership resolution; hosts remain
 responsible for their authority. The stock server resolves memberships live. Identity refresh cannot change the tenant or acting user, or expand the grants
 carried by the original caller. A fresh turn can bind a newly authorized identity.
 
+Before any host hook, core compares the capability with the session agent's
+mode (ADR 0176): `read` effects need `read-only`, `write` effects need `edit`,
+and a capability may ask more with `mode: "full-access"` (deploying or
+publishing). Refusals tell the agent what its mode allows instead.
+
 `beforeInvoke` receives the validated input, current identity, session,
 Allocation, effect, operation ID, cancellation signal, and progress callback.
 Hosts can reject an operation or await their existing approval mechanism there.

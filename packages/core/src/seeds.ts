@@ -512,6 +512,24 @@ machine first, then a team's, then a shared one. \`strict: true\` never falls
 back to a broader machine. Do not invent machine names or treat adding a JSON
 entry as provisioning a machine.
 
+An Environment also says what its sandbox gets, and only machines that
+provide it take the work:
+- \`image\`: an OCI reference (\`"node:22"\`) or a Dockerfile in the project
+  (\`".work/images/review.Dockerfile"\`, reviewed like any code; the file is
+  its own build context). An image that needs Docker starts \`FROM docker:dind\`.
+- \`requirements.containers: true\`: the agent gets its own \`docker\` and
+  \`docker compose\`; everything it starts is removed with its sandbox.
+- \`network\`: \`{ "egress": "open" }\` (default), \`{ "egress": "gateway" }\`
+  (only this server), or \`{ "egress": "allowlist", "allow": ["github.com",
+  "*.npmjs.org"] }\`. A restricted image must already contain git and bash.
+- \`approvals.waitMinutes\`: how long an unattended chat waits for a person
+  to approve before the action is refused (30 by default).
+
+An agent definition's \`mode\` is enforced by the host: \`read-only\` agents may
+do anything inside their sandbox, but nothing they change is saved, proposed
+or published and connections answer reads only; \`edit\` agents may propose
+but not deploy or publish; \`full-access\` agents may do what roles allow.
+
 A remote project keeps one authority for membership, connections, and history.
 \`device: "member"\` offers an authenticated member's own computer when the
 host supports client execution. It never requires the member to receive

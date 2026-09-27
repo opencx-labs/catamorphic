@@ -37,6 +37,8 @@ Environment variables parsed by `workServerConfigFromEnv` in
 | `WORK_GITHUB_CLIENT_ID`, `WORK_GITHUB_TOKEN` | Service account for GitHub-backed projects. |
 | `WORK_GATEWAY_CONFIG` | Connections (MCP, HTTP APIs, databases) and the guards that review them; see [secrets and the gateway](secrets-and-gateway.md). |
 | `WORK_SANDBOX` and budget variables | `local-process` (default) or `microsandbox`; see the machines reference. |
+| `WORK_IMAGE_BUILDER`, `WORK_SANDBOX_CONTAINERS` | Microsandbox: build project Dockerfiles with `docker` or `podman`; `0` turns off Docker inside sandboxes. See [images, containers, and egress](cluster-deployment.md#images-containers-and-egress). |
+| `WORK_DOCKER_SOCKET`, `WORK_DOCKER_CLI_PLUGINS`, `WORK_UNENFORCED_EGRESS` | Local-process: give sandboxes filtered Docker access through this daemon socket; `accept` runs restricted-egress Environments without enforcement. |
 | `WORK_MACHINE_NAME`, `WORK_MACHINE_LABELS` | This machine's name and labels (`pool=agents,class=large`) that Environment pools select; see the machines reference. |
 | `WORK_CONTROL_PLANE_WORKLOADS` | What the server runs itself: `agent,workflow` (default), `workflow`, or empty. Agents then run on enrolled workers. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Telemetry export (`OBSERVABILITY.md`). |
