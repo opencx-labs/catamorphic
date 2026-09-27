@@ -33,7 +33,9 @@ export class FakeEchoAgent implements CodingAgentProvider {
   ): AsyncIterable<AgentEvent> {
     // `execution-location`, `write-file <name> <text>` and `read-file <name>`
     // run in the allocated workspace, so tests can see where and what.
-    const [command, name, ...text] = message.split(" ");
+    // Workflow deliveries arrive under a provenance header: act on the last line.
+    const request = message.trim().split("\n").at(-1) ?? "";
+    const [command, name, ...text] = request.split(" ");
     const workspaceCommand =
       command === "execution-location"
         ? "pwd"

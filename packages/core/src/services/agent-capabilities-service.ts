@@ -18,6 +18,7 @@ import {
   identityMayUseEnvironment,
   intersectProjectPermissions,
   intersectScope,
+  isProjectPrincipal,
 } from "../identity.js";
 import { requireRuntimeSession } from "./agent-runtime-events-service.js";
 import { AccessDeniedError } from "./artifact-scope.js";
@@ -474,8 +475,13 @@ export class AgentCapabilitiesService {
     };
     const original = await check(args.identity);
     // An absent artifact scope is the host's explicit root identity (ADR 0055).
-    // Membership resolution can only refresh identities issued as members.
-    if (args.identity.scope === undefined || !this.deps.resolveMemberIdentity)
+    // Membership resolution can only refresh identities issued as members;
+    // the project principal (project chats, ADR 0156) is nobody's member.
+    if (
+      args.identity.scope === undefined ||
+      isProjectPrincipal(args.identity.externalUserId) ||
+      !this.deps.resolveMemberIdentity
+    )
       return original;
     const identity = await this.deps.resolveMemberIdentity({
       tenantId: args.identity.tenantId,
@@ -538,21 +544,29 @@ export class AgentCapabilitiesService {
     const context = await this.context(args);
     const allocation = await this.deps.allocations.get(context);
     if (!allocation) throw new AccessDeniedError();
+    // A project chat works for the project, not for a person to look up.
+    const projectChat = isProjectPrincipal(context.identity.externalUserId);
     const profile = z
       .object({
         displayName: z.string().max(200).optional(),
         timeZone: z.string().max(100).optional(),
         roles: z.array(RoleSummarySchema).max(20).optional(),
       })
-      .parse((await this.deps.options?.currentUser?.(context)) ?? {});
+      .parse(
+        (projectChat
+          ? { displayName: "the project" }
+          : await this.deps.options?.currentUser?.(context)) ?? {},
+      );
     const access = context.identity.scope === undefined ? "full" : "member";
     const roles =
       profile.roles ??
-      (await this.deps.memberRoles?.({
-        tenantId: context.identity.tenantId,
-        projectId: context.projectId,
-        externalUserId: context.identity.externalUserId,
-      })) ??
+      (projectChat
+        ? undefined
+        : await this.deps.memberRoles?.({
+            tenantId: context.identity.tenantId,
+            projectId: context.projectId,
+            externalUserId: context.identity.externalUserId,
+          })) ??
       [];
     const project = await this.deps.db
       .selectFrom("projects")

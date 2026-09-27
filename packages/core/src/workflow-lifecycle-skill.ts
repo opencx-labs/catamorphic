@@ -77,6 +77,13 @@ who holds every declared permission can turn the workflow on; a member's
 automation pauses when its member loses one, and a project automation keeps
 what was consented to.
 
+The enablement's Environment places the workflow's runs, nothing else. A chat
+a workflow delivers to is placed by its own Environment: the \`environment\`
+the delivery names, else the agent's preferred Environment, else the project
+default. The chat's owner must be allowed that Environment (a member through
+their roles; a project chat may use any project Environment) and the agent's
+\`environment.allowed\` must include it.
+
 ## Saving, sharing, deploying, and enabling
 
 1. Validate source, imports, trigger payloads, and generated app contracts with

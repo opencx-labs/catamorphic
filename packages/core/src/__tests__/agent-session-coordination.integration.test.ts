@@ -1659,14 +1659,16 @@ describe("agent session coordination", () => {
 
     expect(await act("find", { key: "pr-7" })).toBeNull();
     // Closing a key nobody opened has nothing to do.
-    expect(await act("close", { key: "pr-7", idempotencyKey: "early" })).toEqual(
-      { sessionId: null, closed: false },
-    );
-    expect(await sessions.keyedChatId({
-      projectId: project.id,
-      ownerId: identity.externalUserId,
-      key: "pr-7",
-    })).toBeUndefined();
+    expect(
+      await act("close", { key: "pr-7", idempotencyKey: "early" }),
+    ).toEqual({ sessionId: null, closed: false });
+    expect(
+      await sessions.keyedChatId({
+        projectId: project.id,
+        ownerId: identity.externalUserId,
+        key: "pr-7",
+      }),
+    ).toBeUndefined();
 
     const first = await sessions.chatForKey(identity, project.id, {
       key: "pr-7",
@@ -1706,15 +1708,19 @@ describe("agent session coordination", () => {
     );
 
     const closed = { sessionId: first.sessionId, closed: true };
-    expect(await act("close", { key: "pr-7", idempotencyKey: "merged-7" })).toEqual(
-      closed,
-    );
+    expect(
+      await act("close", { key: "pr-7", idempotencyKey: "merged-7" }),
+    ).toEqual(closed);
     // A retry after the chat is gone answers with the recorded result.
-    expect(await act("close", { key: "pr-7", idempotencyKey: "merged-7" })).toEqual(
-      closed,
-    );
+    expect(
+      await act("close", { key: "pr-7", idempotencyKey: "merged-7" }),
+    ).toEqual(closed);
     expect(await act("find", { key: "pr-7" })).toBeNull();
-    const transcript = await sessions.get(identity, project.id, first.sessionId);
+    const transcript = await sessions.get(
+      identity,
+      project.id,
+      first.sessionId,
+    );
     expect(transcript.status).toBe("closed");
     expect(transcript.messages.map((message) => message.content)).toEqual(
       expect.arrayContaining(["Review pull request 7", "Closed this chat"]),
@@ -1724,7 +1730,10 @@ describe("agent session coordination", () => {
       .select(["status", "release_reason"])
       .where("id", "=", transcript.allocationId ?? "")
       .executeTakeFirstOrThrow();
-    expect(allocation).toEqual({ status: "released", release_reason: "retired" });
+    expect(allocation).toEqual({
+      status: "released",
+      release_reason: "retired",
+    });
     await expect(
       sessions.deliver(identity, project.id, first.sessionId, {
         content: "Too late",
@@ -1762,15 +1771,20 @@ describe("agent session coordination", () => {
     expect(
       (await sessions.get(identity, project.id, chat.sessionId)).visibility,
     ).toBe("promoted");
-    const receipt = await sessions.deliver(identity, project.id, chat.sessionId, {
-      content: "The incident fired again",
-      author: {
-        kind: "workflow",
-        runId: crypto.randomUUID(),
-        workflowName: "pageOnCall",
+    const receipt = await sessions.deliver(
+      identity,
+      project.id,
+      chat.sessionId,
+      {
+        content: "The incident fired again",
+        author: {
+          kind: "workflow",
+          runId: crypto.randomUUID(),
+          workflowName: "pageOnCall",
+        },
+        mode: "next_turn",
       },
-      mode: "next_turn",
-    });
+    );
     await vi.waitFor(async () => {
       const turn = await db
         .selectFrom("agent_turns")

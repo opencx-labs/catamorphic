@@ -27,7 +27,8 @@ brain become replicas. Never add a replica just for capacity.
    lowercase letters, digits, and dashes. The code expires in 30 minutes.
    Add placement in the same request (see [placement](#placement-labels-and-access)):
    `labels` (`{ "class": "gpu" }`), `access` (`{ "everyone": true }`, the
-   default, or `{ "people": ["dana@example.com"], "groups": ["eng@example.com"] }`),
+   default, or `{ "people": ["dana@example.com"], "groups": ["eng@example.com"] }`,
+   or `{ "projects": ["<project id>"] }` for one project's own work),
    and `trusted`.
 2. On the worker machine, run the same image version with the worker command
    and its own empty data volume:
@@ -79,23 +80,46 @@ when an Environment should select it.
 
 Every machine carries labels: the server's own `node` and `plane`, plus the
 operator's. An Environment's `pool` selects machines whose labels all match.
-Each worker also has **access**, which only the operator sets: everyone, or
-named people and directory groups by email. The server places a piece of
-work for its owner (the session's member; project chats and workflow runs
-have none and use machines open to everyone):
+Each worker also has **access**, which only the operator sets: everyone,
+named people and directory groups by email, or named projects. The server
+places a piece of work for its owner (the session's member). Project chats
+and automation runs have no owner: they use machines opened to their project
+(`"projects": ["<project id>"]`) and machines open to everyone, never a
+person's machine. A machine opened only to projects takes no member's chat.
 
-1. the owner's own machine (access naming only them),
-2. then a machine shared with named people or their groups,
+1. the owner's own machine (access naming only them), or for a project's own
+   work a machine opened to that project alone,
+2. then a machine shared with named people, their groups, or several projects,
 3. then machines open to everyone.
+
+A dedicated review pool for one project is a labelled worker opened to that
+project: `{ "labels": { "pool": "review" }, "access": { "projects": ["<id>"] },
+"trusted": true }`. The project selects it with an Environment
+(`"review": { "pool": { "pool": "review" }, "workloads": ["agent"] }`) and its
+reviewing agent prefers it (`"environment": { "preferred": ["review"],
+"allowed": ["review"] }`). A workflow on the control plane that delivers to
+that agent's chat places the chat on the review pool: each workload is placed by
+its own Environment, so control-plane machines need no `review` label.
 
 When the narrowest tier is full, work falls back to the next unless the
 Environment sets `"strict": true`. A worker serving more than one person must
 run `WORK_SANDBOX=microsandbox`; the control plane refuses to connect a
 process-isolated shared worker unless the operator vouches for the people it
-serves with `"trusted": true`. Change placement with
+serves with `"trusted": true`. A machine opened to exactly one project counts
+as serving one owner. Change placement with
 `PATCH /_work/operator/workers/:name` (`labels`, `access`, `trusted`); it
 applies to the next placement, and an existing session re-checks it on its
 next turn.
+
+Chats give their workspace back while they wait. An Environment's
+`idleReleaseMinutes` (default 30, `0` keeps it) says how long a chat may go
+without a turn before its sandbox is saved to its session branch and
+destroyed, freeing the slot and CPU and memory reservation. The next turn
+admits a fresh workspace and restores it. Closing a chat
+(`close({ key })` from a workflow, `session_close` over MCP, or
+`DELETE /api/projects/:id/agent/chats/:key`) releases the workspace for good,
+deletes its session branch, and frees the key. Capacity follows activity,
+not open chats.
 
 Groups come from the Google Workspace directory (see [company
 identity](company-identity.md)): the server checks the groups that access

@@ -64,9 +64,12 @@ and session_reopen for new work. Observe session.work-changed with
 
 ## Host calls and authoring shape
 
-context.host["catamorphic.sessions"] provides typed inspect, list, history,
-deliver, create, fork, spawn, archive, unarchive, interrupt,
-complete, reopen, stopWatcher, and stop operations. Every host call is a
+context.host["catamorphic.sessions"] provides typed inspect, list, find, history,
+deliver, create, fork, spawn, archive, unarchive, close, interrupt,
+complete, reopen, stopWatcher, and stop operations. Every operation that names a
+chat takes { sessionId } or { key } (with audience: "project" or { member } where
+the caller is not the chat's owner); find({ key }) returns the open chat or null
+and never starts one. Every host call is a
 boundary transition: RETURN it. Consume its result as the next boundary's input.
 Do not await it, put it inside a use-step helper, or invoke a second host call
 in the same boundary. Put ordinary network/file IO in use-step helpers with
@@ -187,13 +190,14 @@ export const remindUser = defineWorkflow(({ defineBoundary }) => ({
 ### A chat per pull request
 
 A project automation that reviews each pull request in its own chat, shared with
-everyone in the project. Enable it for the project; the key reuses the chat when
-the same pull request changes again. GitHub events arrive as untyped JSON, so
-read the fields you need and skip events without them.
+everyone in the project, and closes that chat when the pull request merges or
+closes. Enable it for the project. The key belongs to the project: any
+automation in it reaches the same chat for "pr-" + number. GitHub events arrive
+as untyped JSON, so read the fields you need and skip events without them.
 
 \`\`\`typescript
 import { type BoundaryContext, defineWorkflow, trigger } from "@catamorphic/workflow";
-type PullRequest = { number: number; title: string; url: string };
+type PullRequest = { number: number; title: string; url: string; closed: boolean };
 
 /**
  * @displayname Read the pull request
@@ -206,7 +210,8 @@ async function readPullRequest({ payload }: { payload: unknown }): Promise<PullR
   if (typeof payload.number !== "number" || !pull || typeof pull !== "object") return null;
   const title = "title" in pull && typeof pull.title === "string" ? pull.title : "Pull request " + payload.number;
   const url = "html_url" in pull && typeof pull.html_url === "string" ? pull.html_url : "";
-  return { number: payload.number, title, url };
+  const closed = "action" in payload && payload.action === "closed";
+  return { number: payload.number, title, url, closed };
 }
 
 /** @displayname Review pull requests */
@@ -219,13 +224,16 @@ export const reviewPullRequests = defineWorkflow(({ defineBoundary }) => ({
         pull: await readPullRequest({ payload: input.payload }),
       }),
     }),
-    /** @displayname Ask for a review */
+    /** @displayname Ask for a review, or close the chat */
     defineBoundary({
       run: ({ input, host }: BoundaryContext<{ pull: PullRequest | null }>) => {
         const pull = input.pull;
         if (!pull) return { skipped: true };
+        const key = "pr-" + pull.number;
+        if (pull.closed)
+          return host["catamorphic.sessions"].close({ key, idempotencyKey: "closed:" + key });
         return host["catamorphic.sessions"].deliver({
-          key: "pr-" + pull.number,
+          key,
           title: "Review: " + pull.title,
           content: "Review the changes in " + pull.url + " and summarize risks.",
           notification: { title: "Review ready", body: pull.title },
@@ -236,6 +244,10 @@ export const reviewPullRequests = defineWorkflow(({ defineBoundary }) => ({
 }));
 \`\`\`
 
+Closing releases the chat's workspace, deletes its session branch, and frees the
+key; the transcript stays readable. If the pull request is reopened, the next
+delivery for its key starts a fresh chat.
+
 ## Session actions and delivery
 
 - inspect/list/history are authorized reads. history is bounded; increase its
@@ -245,10 +257,13 @@ export const reviewPullRequests = defineWorkflow(({ defineBoundary }) => ({
   change. The host preserves origin in model input and in visible history.
   Authoring a workflow message does not grant system/developer instruction rank.
 - deliver names its chat one of two ways. sessionId reaches that exact chat.
-  key reaches the chat this workflow keeps for the key: the first delivery starts
-  it (with agentSlug, title and environment when given) and later ones reuse it,
-  so "pr-" + number gives one chat per pull request and "daily" one recurring
-  chat. A keyed chat alerts its people when the agent's turn settles; pass
+  key reaches the project's open chat for the key (1 to 200 characters): the
+  first delivery starts it (with agentSlug, title and environment when given)
+  and every later delivery from any automation in the project reuses it, so
+  "pr-" + number gives one chat per pull request and "daily" one recurring
+  chat. The chat records which workflows delivered to it. A new chat is placed
+  by its own Environment: the environment you pass, else the agent's preferred
+  Environment, else the project default, never the workflow's own. A keyed chat alerts its people when the agent's turn settles; pass
   notification { title, body } to word that alert, or to alert on a chat named by
   sessionId. Who a keyed chat belongs to follows the enablement: a member's
   automation reaches that member's own chat; a project automation reaches a
@@ -272,7 +287,14 @@ export const reviewPullRequests = defineWorkflow(({ defineBoundary }) => ({
   creates one message and one attention request.
 - archive stops the session tree's work and future temporary activations while
   preserving readable history. Follow archive preview and confirmStop requirements for stopping live work. Tab closure is
-  unrelated. stop stops only the calling temporary activation and retains runs.
+  unrelated. Archive only hides a chat: a later delivery to it brings it back and
+  runs. close ends a chat's life: its work stops, its workspace and session
+  branch are released, and its key is free, so the next delivery for that key
+  starts a new chat. Close a keyed chat when the thing it tracks is finished
+  (a merged pull request, a resolved incident). An idle chat gives back its
+  workspace on its own and restores it on the next turn; do not close chats
+  only to save capacity. stop stops only the calling temporary activation and
+  retains runs.
 
 Use stable idempotencyKey values for operations that take them. deliver
 defaults to one delivery per run, chat and content, so a retried boundary never

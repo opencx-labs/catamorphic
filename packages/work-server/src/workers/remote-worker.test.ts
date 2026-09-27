@@ -443,25 +443,6 @@ describe("keyed chats on workers (ADR 0173)", () => {
         environment_name: "automation",
       })
       .execute();
-    {
-      const t0 = Date.now();
-      const r = await Promise.race([
-        core.triggers
-          .mcpToolNames({
-            identity: {
-              tenantId: SERVER_TENANT_ID,
-              externalUserId: "catamorphic-reader",
-            },
-            projectId,
-          })
-          .then(
-            () => "done",
-            (e) => String(e),
-          ),
-        new Promise((resolve) => setTimeout(() => resolve("timeout"), 15000)),
-      ]);
-      console.error("DEBUG2", r, Date.now() - t0);
-    }
     const delivered = await core.capabilities.call(
       "catamorphic.sessions",
       "deliver",
@@ -486,7 +467,6 @@ describe("keyed chats on workers (ADR 0173)", () => {
         : "";
     await waitFor(async () => {
       const chat = await sessions.get(identity, projectId, sessionId);
-      console.error("DEBUG", JSON.stringify(await core.db.selectFrom("worker_node_jobs").select(["node_id","operation","status","error","response"]).execute()), JSON.stringify(await core.db.selectFrom("execution_allocations").select(["id","worker_node_id","status","sandbox_provider_id","sandbox_creation_started","root_workload_id"]).execute()));
       return chat.messages.some(
         (message) =>
           message.role === "assistant" && message.content.includes(reviewPool),

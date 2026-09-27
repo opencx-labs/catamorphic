@@ -4648,7 +4648,6 @@ export class AgentSessionsService {
             agent,
             runtime,
           );
-          console.error("DEBUG3 anchored", sessionId);
           if (this.agentCapabilities) {
             turnOptions.context = [
               await this.agentCapabilities.prompt({
@@ -4666,7 +4665,6 @@ export class AgentSessionsService {
               allocationId: session.allocation_id ?? undefined,
             });
           }
-          console.error("DEBUG3 capabilities", sessionId);
           // The caller's view of the store, in the folder the agent works in
           // (ADR 0055): pulled before the turn, shipped after it.
           const storeDir = await this.storeSyncDir(
@@ -4700,7 +4698,6 @@ export class AgentSessionsService {
           // latched flag catches it here: the turn settles as interrupted
           // without ever calling the provider. Checked with has() (not
           // delete()) so the finalization below still reads it as interrupted.
-          console.error("DEBUG3 store", sessionId);
           if (extras.leaseLost())
             throw new Error(
               "Execution ownership was lost. Check the last actions before retrying.",
@@ -6185,15 +6182,6 @@ export class AgentSessionsService {
       identity,
       projectId,
     );
-    console.error("DEBUG3 prepared");
-    const d1 = await this.loadAttachedPlugins(projectId);
-    console.error("DEBUG3 plugins");
-    const d2 = await this.transcriptHistory(session.id);
-    console.error("DEBUG3 history");
-    const d3 = await this.connectionMcpServers(identity, session);
-    console.error("DEBUG3 mcp");
-    const d4 = await this.callerOpts(identity, projectId, session.agent_id);
-    console.error("DEBUG3 caller", Boolean(d1 && d2 && d3 && d4));
     const providerSession = await agent.provider.startSession({
       sandboxProvider: runtime.provider,
       projectId,
