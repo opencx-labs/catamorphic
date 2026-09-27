@@ -305,6 +305,60 @@ describe("agents and profiles", () => {
     await run(paletteEscape);
   });
 
+  it("changes a Claude Code agent's own permission mode through the palette (ADR 0182)", async () => {
+    const before = await app.eval<{ defaultAgentId: string | null }>(
+      `window.catamorphicDesktop.agentsList()`,
+    );
+    const created = await app.eval<{
+      id: string;
+      sandboxing: string;
+      harnessPermissions: { permissionMode?: string };
+    }>(
+      `window.catamorphicDesktop.agentsCreate({harness:'claude-code',auth:'local',name:'Claude modes'})`,
+    );
+    // Local agents default to full freedom in both settings (ADR 0140).
+    expect(created.sandboxing).toBe("publish");
+    expect(created.harnessPermissions).toEqual({
+      permissionMode: "bypassPermissions",
+    });
+    const id = JSON.stringify(created.id);
+    await app.eval(`window.catamorphicDesktop.agentsSetDefault(${id})`);
+    // No chat focused: the picker targets the default agent.
+    await openPicker("Change permission mode", "Permission mode");
+    await runWait(
+      `const rows = paletteRows();
+       return rows.length === 6 &&
+              rows[0].textContent.includes('Default') &&
+              rows[5].textContent.includes('Bypass permissions') &&
+              !!rows[5].querySelector('[data-testid="palette-current"]');`,
+      { label: "Claude Code's own modes, bypass current" },
+    );
+    await run(pickOption("Plan"));
+    await runWait(
+      `return window.catamorphicDesktop.agentsList().then((data) =>
+         data.agents.find((agent) => agent.id === ${id})
+           ?.harnessPermissions?.permissionMode === 'plan');`,
+      { label: "permission mode saved on the agent" },
+    );
+    await openPicker("Change permission mode", "Permission mode");
+    await runWait(
+      `return paletteRows().some((el) => el.textContent.includes('Plan') &&
+         el.querySelector('[data-testid="palette-current"]'));`,
+      { label: "current permission mode moved to plan" },
+    );
+    // Agent picker rows name each agent's permission mode.
+    await openPicker("Change default agent", "Default agent");
+    await runWait(
+      `return paletteRows().some((el) =>
+         el.textContent.includes('Claude modes') && el.textContent.includes('Plan'));`,
+      { label: "agent row detail shows the permission mode" },
+    );
+    await run(paletteEscape);
+    await app.eval(
+      `window.catamorphicDesktop.agentsSetDefault(${JSON.stringify(before.defaultAgentId)})`,
+    );
+  });
+
   it("clicking beside the picker panel closes the OVERLAY palette (click-away)", async () => {
     // The overlay specifically (Cmd+P) — the New Tab palette is a page and
     // exempt from click-away. Its input takes focus on open.
