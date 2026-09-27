@@ -195,6 +195,12 @@ export {
 } from "./define-trigger-kind.js";
 export { FsBundleStore } from "./fs-bundle-store.js";
 export {
+  defineGithubConnectionProvider,
+  GITHUB_CONNECTION_ACTIONS,
+  type GithubConnectionOptions,
+  type GithubConnectionProvider,
+} from "./github-connection-provider.js";
+export {
   GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
   githubCheckRun,
   githubCheckSuite,

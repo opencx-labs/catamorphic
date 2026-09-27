@@ -57,9 +57,37 @@ export function isConnectionAuthorizationExpiredError(
   );
 }
 
+/** HTTP Basic credentials for one Git remote, used once by the gateway. */
+export interface GitRemoteCredentials {
+  username: string;
+  password: string;
+  /** When the password stops working, for minted credentials. */
+  expiresAt?: Date;
+}
+
+/**
+ * A provider that can serve Git smart HTTP through the gateway (ADR 0175).
+ * The gateway, never the sandbox, asks for credentials per remote and per
+ * access level, and forwards Git traffic with them. Host-neutral: a code
+ * host provider mints repository-scoped tokens, a plain Git provider may
+ * return a stored password.
+ */
+export interface ConnectionGitRemotes {
+  /** HTTPS URL prefixes of the remotes served, e.g. `https://github.com/`. */
+  readonly remoteBaseUrls: readonly string[];
+  credentials(args: {
+    material: Uint8Array;
+    /** HTTPS remote URL under one of `remoteBaseUrls`. */
+    remoteUrl: string;
+    access: "read" | "write";
+  }): Promise<GitRemoteCredentials>;
+}
+
 export interface ConnectionProvider {
   readonly kind: string;
   readonly displayName: string;
+  /** Present when the gateway may forward Git traffic for this connection. */
+  readonly git?: ConnectionGitRemotes;
   beginAuthorization?(args: {
     tenantId: string;
     projectId: string;

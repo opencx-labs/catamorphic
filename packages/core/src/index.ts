@@ -229,9 +229,12 @@ export {
 export {
   type AuthorizationChallenge,
   type ConnectionActionDefinition,
+  ConnectionAuthorizationExpiredError,
   type ConnectionAuthorizationResult,
+  type ConnectionGitRemotes,
   type ConnectionProvider,
   ConnectionProviderRegistry,
+  type GitRemoteCredentials,
 } from "./services/connection-providers.js";
 export {
   CONNECTION_ALIAS_PATTERN,
