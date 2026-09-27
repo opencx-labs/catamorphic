@@ -33,11 +33,20 @@ API key (`x-api-key` or `Authorization: Bearer`); the gateway checks it, the
 binding's allowlist and turn budget, and the guards (connection kind `model`,
 action = endpoint: `messages`, `count_tokens`, `responses`,
 `chat.completions`, `models`; input = provider, model, stream, output limit,
-never the prompt), then adds the stored key. It reads usage from the answer
-or its server-sent events into `model_usage` (migration 035, ADR 0057's token
-fields, per session and agent turn) and audits each call as
-`connection.model`. Refusals use the calling API's own error shape and never
-a retryable status. When a harness reports no usage for a turn, the settled
+never the prompt), then adds the stored key. The grant is checked before the
+request body is read. A binding with an allowlist requires the request to
+name its model. A session's generating calls (`messages`, `responses`,
+`chat.completions`) belong to its turns: between turns they are refused.
+Each generating call reserves its output limit in `model_usage` before it is
+forwarded; under a budget the reservation is atomic per turn and grants at
+most what the turn has left, lowering the request's own limit (or setting
+one) to match, so concurrent calls cannot overspend. It reads usage from the
+answer or its server-sent events into that row (migration 035, ADR 0057's
+token fields, per session and agent turn); an answer cut short counts its
+reserved limit, since Anthropic streams report output only at the end. Each
+call is audited as `connection.model`. Refusals, including an unavailable
+connection, use the calling API's own error shape and never a retryable
+status; only an unreachable provider answers 502. When a harness reports no usage for a turn, the settled
 reply's `metadata.usage` comes from these rows.
 
 **Grants are one mechanism.** At every sandbox turn the control plane issues

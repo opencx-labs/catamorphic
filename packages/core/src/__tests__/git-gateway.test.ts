@@ -111,9 +111,9 @@ describe("Git gateway protocol (ADR 0175)", () => {
     const first = readPktSection(
       pushBody([[A, B, "refs/heads/work/fix"]], "report-status"),
     );
-    expect(
-      parseReceivePackCommands(first?.lines ?? []).commands[0]?.ref,
-    ).toBe("refs/heads/work/fix");
+    expect(parseReceivePackCommands(first?.lines ?? []).commands[0]?.ref).toBe(
+      "refs/heads/work/fix",
+    );
   });
 
   it("accepts only ref names Git would accept as written", () => {

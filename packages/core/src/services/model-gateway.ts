@@ -75,6 +75,20 @@ const GENERATING_ACTIONS = new Set([
   "chat.completions",
 ]);
 
+/** The body field bounding a generating call's output tokens. */
+function outputLimitField(
+  action: string,
+  body: Record<string, unknown>,
+): string | undefined {
+  if (action === "messages") return "max_tokens";
+  if (action === "responses") return "max_output_tokens";
+  if (action === "chat.completions")
+    return "max_completion_tokens" in body || !("max_tokens" in body)
+      ? "max_completion_tokens"
+      : "max_tokens";
+  return undefined;
+}
+
 /** The gateway action a request names, or undefined for anything else. */
 export function modelEndpointAction(input: {
   api: ModelApi;
@@ -259,8 +273,7 @@ export class ModelGatewayError extends Error {
       | "permission_error"
       | "not_found_error"
       | "invalid_request_error"
-      | "api_error"
-      | "overloaded_error",
+      | "api_error",
     message: string,
   ) {
     super(message);
@@ -290,7 +303,7 @@ function forwardedResponseHeader(name: string): boolean {
   );
 }
 
-/** One model call's usage as the gateway records it. */
+/** The model call a usage row belongs to. */
 export interface ModelUsageRecord {
   tenantId: string;
   projectId: string;
@@ -300,7 +313,7 @@ export interface ModelUsageRecord {
   connectionId: string;
   alias: string;
   endpoint: string;
-  usage: ModelCallUsage;
+  model?: string;
 }
 
 /** What the model gateway reads and writes beside grants (ADR 0180). */
@@ -312,7 +325,20 @@ export interface ModelGatewayStore {
     | { ownerId: string; active: boolean; runningTurnId: string | undefined }
     | undefined
   >;
-  recordUsage(record: ModelUsageRecord): Promise<void>;
+  /**
+   * Record a generating call before it is forwarded, counting
+   * `outputTokens` against its turn until `settle` replaces them with what
+   * the call used. With `budget` (and a turn), the reservation is atomic
+   * across the turn's concurrent calls and grants at most what the turn has
+   * left; nothing is recorded when nothing is left (`id` null).
+   */
+  reserve(args: {
+    record: ModelUsageRecord;
+    outputTokens: number;
+    budget?: number;
+  }): Promise<{ id: string | null; outputTokens: number }>;
+  /** A reservation's final usage, or null to drop it (the call never ran). */
+  settle(args: { id: string; usage: ModelCallUsage | null }): Promise<void>;
   /** Token totals of a session's calls, or of one of its turns. */
   usage(args: {
     sessionId: string;
@@ -343,25 +369,59 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
         runningTurnId: turn?.id,
       };
     },
-    recordUsage: async (record) => {
+    reserve: ({ record, outputTokens, budget }) =>
+      db.transaction().execute(async (trx) => {
+        let granted = outputTokens;
+        if (budget !== undefined && record.turnId) {
+          // One reservation at a time per turn, across replicas.
+          await sql`SELECT pg_advisory_xact_lock(hashtextextended(${`model_usage:${record.turnId}`}, 0))`.execute(
+            trx,
+          );
+          const used = await trx
+            .selectFrom("model_usage")
+            .select(sql<string>`coalesce(sum(output_tokens), 0)`.as("output"))
+            .where("turn_id", "=", record.turnId)
+            .executeTakeFirst();
+          granted = Math.min(
+            outputTokens,
+            Math.max(0, budget - Number(used?.output ?? 0)),
+          );
+          if (granted <= 0) return { id: null, outputTokens: 0 };
+        }
+        const row = await trx
+          .insertInto("model_usage")
+          .values({
+            tenant_id: record.tenantId,
+            project_id: record.projectId,
+            agent_session_id: record.sessionId,
+            turn_id: record.turnId,
+            allocation_id: record.allocationId,
+            connection_id: record.connectionId,
+            alias: record.alias,
+            endpoint: record.endpoint,
+            model: record.model ?? null,
+            output_tokens: granted,
+          })
+          .returning("id")
+          .executeTakeFirstOrThrow();
+        return { id: String(row.id), outputTokens: granted };
+      }),
+    settle: async ({ id, usage }) => {
+      if (!usage) {
+        await db.deleteFrom("model_usage").where("id", "=", id).execute();
+        return;
+      }
       await db
-        .insertInto("model_usage")
-        .values({
-          tenant_id: record.tenantId,
-          project_id: record.projectId,
-          agent_session_id: record.sessionId,
-          turn_id: record.turnId,
-          allocation_id: record.allocationId,
-          connection_id: record.connectionId,
-          alias: record.alias,
-          endpoint: record.endpoint,
-          model: record.usage.model ?? null,
-          input_tokens: record.usage.inputTokens,
-          cached_input_tokens: record.usage.cachedInputTokens,
-          cache_creation_tokens: record.usage.cacheCreationTokens,
-          output_tokens: record.usage.outputTokens,
-          reasoning_tokens: record.usage.reasoningTokens,
+        .updateTable("model_usage")
+        .set({
+          ...(usage.model ? { model: usage.model } : {}),
+          input_tokens: usage.inputTokens,
+          cached_input_tokens: usage.cachedInputTokens,
+          cache_creation_tokens: usage.cacheCreationTokens,
+          output_tokens: usage.outputTokens,
+          reasoning_tokens: usage.reasoningTokens,
         })
+        .where("id", "=", id)
         .execute();
     },
     usage: async (args) => {
@@ -427,12 +487,24 @@ export class ModelGatewayService {
     this.fetch = deps.fetch ?? ((input, init) => fetch(input, init));
   }
 
+  /**
+   * Check a request's grant before its body is read, so an unauthenticated
+   * caller cannot make the host buffer a large body. Null admits it;
+   * otherwise the refusal to send. `handle` checks the grant again.
+   */
+  async admit(
+    request: Pick<ModelGatewayRequest, "alias" | "path" | "headers">,
+  ): Promise<ModelGatewayResponse | null> {
+    try {
+      await this.authorize(request);
+      return null;
+    } catch (error) {
+      return refusalResponse(requestApi(request), error);
+    }
+  }
+
   async handle(request: ModelGatewayRequest): Promise<ModelGatewayResponse> {
-    const api: ModelApi =
-      request.path.replace(/^\/+/, "").startsWith("v1/") ||
-      request.headers["x-api-key"]
-        ? "anthropic"
-        : "openai";
+    const api = requestApi(request);
     try {
       return await withSpan(
         {
@@ -488,37 +560,31 @@ export class ModelGatewayService {
       }
     }
     const model = typeof body?.model === "string" ? body.model : undefined;
-    if (model && !modelAllowed(model, authorized.policy?.allow))
+    const allow = authorized.policy?.allow;
+    if (allow && body && !model)
+      throw new ModelGatewayError(
+        400,
+        "invalid_request_error",
+        `'${request.alias}' serves only ${allow.join(", ")}; name the model`,
+      );
+    if (model && !modelAllowed(model, allow))
       throw new ModelGatewayError(
         403,
         "permission_error",
-        `'${request.alias}' serves only ${authorized.policy?.allow?.join(", ")}; '${model}' is not allowed`,
+        `'${request.alias}' serves only ${allow?.join(", ")}; '${model}' is not allowed`,
       );
     const stream = body?.stream === true;
     const turnId = authorized.turnId;
+    const generates = GENERATING_ACTIONS.has(action);
     const budget = authorized.policy?.maxOutputTokensPerTurn;
-    if (budget && authorized.sessionId && turnId && action !== "count_tokens") {
-      const used = await this.sessionUsage({
-        sessionId: authorized.sessionId,
-        turnId,
-      });
-      if ((used?.outputTokens ?? 0) >= budget)
-        throw new ModelGatewayError(
-          403,
-          "permission_error",
-          `This turn has used its model budget of ${budget} output tokens through '${request.alias}'; finish the turn with what you have`,
-        );
-    }
-    const maxTokens =
-      body?.max_tokens ??
-      body?.max_output_tokens ??
-      body?.max_completion_tokens;
+    const limitField = body ? outputLimitField(action, body) : undefined;
+    const requested = limitField ? count(body?.[limitField]) : 0;
     const input: JsonObject = {
       provider: authorized.providerKind,
       endpoint: action,
       ...(model ? { model } : {}),
       stream,
-      ...(typeof maxTokens === "number" ? { maxOutputTokens: maxTokens } : {}),
+      ...(requested > 0 ? { maxOutputTokens: requested } : {}),
     };
     const access = await this.deps.broker.modelAccess({
       identity: authorized.identity,
@@ -528,6 +594,59 @@ export class ModelGatewayService {
       input,
       ...(authorized.sessionId ? { agentSessionId: authorized.sessionId } : {}),
     });
+    // A session's model calls belong to its turns: between turns nothing
+    // (a background process, a leftover harness) spends on its behalf.
+    if (generates && authorized.sessionId && !turnId)
+      throw new ModelGatewayError(
+        403,
+        "permission_error",
+        `This session has no running turn; model calls through '${request.alias}' belong to a turn`,
+      );
+    // Counting tokens and listing models spend none: audited, not counted.
+    // A generating call reserves its output limit before it is forwarded,
+    // so concurrent calls cannot all pass a budget the first one spends.
+    const budgeted = Boolean(budget && turnId);
+    const reservation = generates
+      ? await this.deps.store.reserve({
+          record: {
+            tenantId: authorized.identity.tenantId,
+            projectId: authorized.projectId,
+            sessionId: authorized.sessionId,
+            turnId: turnId ?? null,
+            allocationId: authorized.allocationId,
+            connectionId: access.binding.connectionId,
+            alias: request.alias,
+            endpoint: action,
+            ...(model ? { model } : {}),
+          },
+          outputTokens: budgeted ? requested || (budget ?? 0) : requested,
+          ...(budgeted && budget ? { budget } : {}),
+        })
+      : undefined;
+    if (reservation && !reservation.id) {
+      throw new ModelGatewayError(
+        403,
+        "permission_error",
+        `This turn has used its model budget of ${budget} output tokens through '${request.alias}'; finish the turn with what you have`,
+      );
+    }
+    // What the turn has left bounds this call's own output limit.
+    if (
+      body &&
+      budgeted &&
+      limitField &&
+      reservation &&
+      reservation.outputTokens !== requested
+    )
+      body[limitField] = reservation.outputTokens;
+    const release = async () => {
+      if (reservation?.id)
+        await this.deps.store
+          .settle({ id: reservation.id, usage: null })
+          .catch((error: unknown) =>
+            console.warn("[catamorphic] Could not release model usage", error),
+          );
+    };
     // Chat Completions streams report usage only when asked to.
     if (
       body &&
@@ -554,6 +673,7 @@ export class ModelGatewayService {
       redirect: "manual",
       ...(body ? { body: JSON.stringify(body) } : {}),
     }).catch(async (error: unknown) => {
+      await release();
       await access.audit("error", { error: "upstream unreachable" });
       throw new ModelGatewayError(
         502,
@@ -566,6 +686,7 @@ export class ModelGatewayService {
       if (forwardedResponseHeader(name.toLowerCase())) out[name] = value;
     });
     if (!upstream.ok || !upstream.body) {
+      await release();
       await access.audit("error", { status: upstream.status });
       // The provider's own error travels: clients know how to read it.
       return {
@@ -574,24 +695,20 @@ export class ModelGatewayService {
         body: new Uint8Array(await upstream.arrayBuffer()),
       };
     }
-    // Counting tokens and listing models spend none: audited, not counted.
-    const generates = GENERATING_ACTIONS.has(action);
-    const settle = async (usage: ModelCallUsage) => {
-      if (generates)
-        await this.deps.store.recordUsage({
-          tenantId: authorized.identity.tenantId,
-          projectId: authorized.projectId,
-          sessionId: authorized.sessionId,
-          turnId: turnId ?? null,
-          allocationId: authorized.allocationId,
-          connectionId: access.binding.connectionId,
-          alias: request.alias,
-          endpoint: action,
-          usage: { ...usage, ...(usage.model || !model ? {} : { model }) },
-        });
+    const reserved = reservation?.outputTokens ?? 0;
+    const settle = async (reported: ModelCallUsage, finished: boolean) => {
+      // An answer cut short may not have reported its output yet (Anthropic
+      // streams do only at the end): count what the call could have spent.
+      const usage =
+        finished || reported.outputTokens >= reserved
+          ? reported
+          : { ...reported, outputTokens: reserved };
+      if (reservation?.id)
+        await this.deps.store.settle({ id: reservation.id, usage });
       await access.audit("allowed", {
         status: upstream.status,
         ...(generates ? { usage: { ...usage } } : {}),
+        ...(finished ? {} : { interrupted: true }),
       });
     };
     const sse = (upstream.headers.get("content-type") ?? "").includes(
@@ -611,7 +728,7 @@ export class ModelGatewayService {
 
   /** The grant, its session and binding. */
   private async authorize(
-    request: ModelGatewayRequest,
+    request: Pick<ModelGatewayRequest, "alias" | "headers">,
   ): Promise<AuthorizedModelRequest> {
     const token = grantFrom(request.headers);
     if (!token)
@@ -676,22 +793,26 @@ export class ModelGatewayService {
 
 /**
  * Pass an answer through unchanged while reading its usage; settles once,
- * when the answer ends or the caller stops reading.
+ * when the answer ends (`finished`) or the caller stops reading.
  */
 async function* tapUsage(args: {
   api: ModelApi;
   sse: boolean;
   source: ReadableStream<Uint8Array>;
-  settle: (usage: ModelCallUsage) => Promise<void>;
+  settle: (usage: ModelCallUsage, finished: boolean) => Promise<void>;
 }): AsyncIterable<Uint8Array> {
   const reader = args.source.getReader();
   const events = args.sse ? new SseUsageReader(args.api) : undefined;
   const whole: Uint8Array[] = [];
   let size = 0;
+  let finished = false;
   try {
     for (;;) {
       const next = await reader.read();
-      if (next.done) break;
+      if (next.done) {
+        finished = true;
+        break;
+      }
       if (events) events.push(next.value);
       else if (size < USAGE_SCAN_MAX_BYTES) {
         whole.push(next.value);
@@ -717,11 +838,21 @@ async function* tapUsage(args: {
       }
     }
     await args
-      .settle(usage)
+      .settle(usage, finished)
       .catch((error: unknown) =>
         console.warn("[catamorphic] Could not record model usage", error),
       );
   }
+}
+
+/** The API family a request speaks, for the shape of its refusals. */
+function requestApi(
+  request: Pick<ModelGatewayRequest, "path" | "headers">,
+): ModelApi {
+  return request.path.replace(/^\/+/, "").startsWith("v1/") ||
+    request.headers["x-api-key"]
+    ? "anthropic"
+    : "openai";
 }
 
 /** The grant a harness sends as its API key. */
@@ -749,15 +880,17 @@ function refusalResponse(api: ModelApi, error: unknown): ModelGatewayResponse {
           ? new ModelGatewayError(403, "permission_error", error.message)
           : error instanceof ConnectionUnavailableError
             ? new ModelGatewayError(
-                503,
-                "overloaded_error",
-                `The connection behind this alias is unavailable: ${error.message}`,
+                403,
+                "permission_error",
+                `The connection behind this alias is unavailable until an administrator reconnects it: ${error.message}`,
               )
             : undefined;
   if (!refusal)
     console.warn("[catamorphic] Model gateway request failed", error);
-  const status = refusal?.status ?? 502;
-  const kind = refusal?.kind ?? "api_error";
+  // Refusals never carry a retryable status: a harness would only retry
+  // into the same answer (ADR 0180). Only an unreachable provider is 502.
+  const status = refusal?.status ?? 403;
+  const kind = refusal?.kind ?? "permission_error";
   const message =
     refusal?.message ?? "The model gateway could not complete this request";
   const body =

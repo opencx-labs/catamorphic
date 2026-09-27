@@ -1,11 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Json, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import {
-  type AgentMode,
-  modeAllows,
-  modeRefusal,
-} from "@catamorphic/sandbox";
+import { type AgentMode, modeAllows, modeRefusal } from "@catamorphic/sandbox";
 import type { Identity } from "../identity.js";
 import { identityMayUseConnection } from "../identity.js";
 import {
