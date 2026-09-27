@@ -25,6 +25,7 @@ import {
   ConnectionUnavailableError,
 } from "./connections-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
+import { bindingRepositories } from "./git-repositories.js";
 import type { ToolPermissionChannel } from "./tool-permission-broker.js";
 import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
 
@@ -62,6 +63,14 @@ export interface ConnectionGateway {
   sessionOwner?: (sessionId: string) => Promise<string | undefined>;
   /** The session agent's sandboxing: contained agents only read (ADR 0182). */
   sessionSandboxing?: (sessionId: string) => Promise<Sandboxing | undefined>;
+  /**
+   * A project's linked remote URL, which scopes a Git-serving binding that
+   * names no repositories (ADR 0175). Without it such a binding reaches none.
+   */
+  projectRemote?: (args: {
+    tenantId: string;
+    projectId: string;
+  }) => Promise<string | null | undefined>;
 }
 
 export class ConnectionBroker {
@@ -215,6 +224,19 @@ export class ConnectionBroker {
         identity: args.identity,
         connectionId: binding.connectionId,
       });
+      const git = provider.git;
+      const repositories = git
+        ? bindingRepositories({
+            policy: binding.git,
+            bases: git.remoteBaseUrls,
+            projectRemote: binding.git?.repositories
+              ? undefined
+              : await this.gateway.projectRemote?.({
+                  tenantId: args.identity.tenantId,
+                  projectId: allocation.projectId,
+                }),
+          })
+        : undefined;
       const result = await this.connections.withCredential({
         identity: args.identity,
         connectionId: binding.connectionId,
@@ -225,6 +247,7 @@ export class ConnectionBroker {
             input: args.input,
             capabilities: binding.capabilities,
             connection: { id: connection.id, revision: connection.revision },
+            ...(repositories ? { repositories } : {}),
           }),
       });
       await this.connections.audit({
@@ -279,8 +302,9 @@ export class ConnectionBroker {
    * (fetch) or `git:write` (push). With `review`, the action passes the
    * guards like any brokered action (kind = the provider, action `fetch` or
    * `push`, input = repository and refs) and the returned `audit` records
-   * how it ended. The credentials serve this one request and never leave
-   * the control plane.
+   * how it ended. Write access for an agent session also needs a mode that
+   * may propose changes: a read-only agent never pushes (ADR 0176). The
+   * credentials serve this one request and never leave the control plane.
    */
   async gitAccess(args: {
     identity: Identity;
@@ -288,6 +312,8 @@ export class ConnectionBroker {
     alias: string;
     access: "read" | "write";
     remoteUrl: string;
+    /** The agent session asking, whose mode bounds write access. */
+    agentSessionId?: string;
     review?: {
       action: "fetch" | "push";
       input: Json;
@@ -347,22 +373,22 @@ export class ConnectionBroker {
               : `this session may not fetch through '${args.alias}' (it lacks git:read)`,
           );
         }
-        // A contained agent's work never leaves its sandbox (ADR 0182).
-        if (
-          args.review?.action === "push" &&
-          args.review.agentSessionId &&
-          (await this.gateway.sessionSandboxing?.(
-            args.review.agentSessionId,
-          )) === "contained"
-        ) {
+        // A contained agent's work never leaves its sandbox (ADR 0182):
+        // refuse the push advertisement and the push itself.
+        const sessionId = args.agentSessionId ?? args.review?.agentSessionId;
+        const sandboxing =
+          args.access === "write" && sessionId
+            ? await this.gateway.sessionSandboxing?.(sessionId)
+            : undefined;
+        if (sandboxing === "contained") {
           await record("denied", {
-            sandboxing: "contained",
-            input: args.review.input,
+            sandboxing,
+            ...(args.review ? { input: args.review.input } : {}),
           });
           throw new ConnectionActionDeniedError(
             sandboxingRefusal({
-              sandboxing: "contained",
-              action: `push through ${args.alias}`,
+              sandboxing,
+              action: `push through '${args.alias}'`,
             }),
           );
         }

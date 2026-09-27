@@ -14,7 +14,10 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import { MANAGED_BRANCH_PREFIX } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import { hasProjectPermission, type Identity } from "../identity.js";
-import { AccessDeniedError } from "./artifact-scope.js";
+import {
+  AccessDeniedError,
+  assertProjectPermission,
+} from "./artifact-scope.js";
 import {
   type CodeHostsService,
   CodeHostUnsupportedError,
@@ -232,6 +235,9 @@ export class RemoteSyncService {
     projectId: string,
     input: { title: string; body?: string; localRef?: string },
   ): Promise<{ url: string; number: number; branch: string }> {
+    // Pushing a branch to the origin changes the program; the connection may
+    // be the organization's, so the caller's own permission decides.
+    assertProjectPermission(identity, projectId, "program:write");
     return withSpan(
       {
         tracer,

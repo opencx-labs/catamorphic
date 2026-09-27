@@ -32,7 +32,12 @@ publishing use it; proposals use only the service connection, so members act
 through the organization (the old `proposalBot` is gone). Push safety stays
 in `packages/git` (ADR 0170). `githubCodeHost(provider)` in the server SDK is
 the GitHub implementation; tokens are minted per call, narrowed to the
-repository and permissions it needs.
+repository and permissions it needs. The provider's own actions (REST and
+typed) keep to the binding's Git policy: the broker passes the repositories
+the binding reaches (`git.repositories`, else the project's linked remote,
+the set the Git gateway enforces), paths outside one repository are refused
+unless the host names them, a `get` mints read-only permissions, and no
+write targets the default branch.
 
 **Providers know whose authority they authorize.** `begin/completeAuthorization`
 receive `principal`. GitHub signs a person in (device or web flow) and asks
@@ -58,7 +63,11 @@ connection, or the operator registers a new App from a manifest
 converts the code, the operator installs the App, and the installation
 becomes the connection; with a project, the App's webhook points at that
 project's `github` URL and its secret is stored as `GITHUB_WEBHOOK_SECRET`
-when the project declares it. Provisioning attaches repositories through the
+when the project declares it. The registration in progress lives in
+`work_github_app_registrations` (migration 036: the state's hash, each step
+claimed once, the App's credentials sealed in the vault until connected), so
+any replica continues it; the App's OAuth client is shown once at the end
+for members' own accounts. Provisioning attaches repositories through the
 service connection; the published-sync loop covers every linked project.
 
 **Desktop.** GitHub sign-in authorizes the personal `github` connection

@@ -74,8 +74,8 @@ and contents, pull requests, issues, and checks write.
 ## Brokered REST
 
 `githubRestRequest({ token, method, path, query?, body?, accept?, offset? })`
-keeps the path below the API base (refusing `..`, `//`, encoded separators,
-and queries in the path), never follows redirects, and returns large bodies in
+keeps the path below the API base (refusing `.` and `..` segments, `//`,
+encoded separators, and queries in the path), never follows redirects, and returns large bodies in
 byte ranges (`truncated`, `nextOffset`) split on UTF-8 boundaries.
 `repositoryFromRestPath` finds the repository a path addresses so a minted
 token can be narrowed to it.
@@ -108,7 +108,14 @@ const service = await github.authorizeApp({ appId, privateKey, owner: "acme" });
 - **Actions**: `get`, `post`, `put`, `patch`, `delete` on the REST API, plus
   `pull_request_files`, `create_review` (with inline comments),
   `create_check_run`, `update_check_run`, and `issue_comment`. Capabilities
-  narrow them, so a role may grant `get` alone.
+  narrow them, so a role may grant `get` alone. Every action reaches only
+  the repositories the broker passes as `repositories` (the binding's
+  `git.repositories`, else the project's linked remote, as for Git); REST
+  paths outside `/repos/{owner}/{name}` (GraphQL, search, organizations) are
+  refused unless named in `unscopedRestPaths`. A `get` mints the
+  installation's permissions at read level. Writes never touch the default
+  branch: contents writes must name another branch, and refs and merges
+  aimed at it are refused.
 - **Git** (ADR 0175): `git.credentials({ material, remoteUrl, access })`
   returns HTTP credentials for one repository under `git.remoteBaseUrls`:
   an installation token with `contents: read` or `write` (username

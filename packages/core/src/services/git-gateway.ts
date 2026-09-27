@@ -17,6 +17,11 @@ import type {
 import type { ConnectionsService } from "./connections-service.js";
 import { ConnectionUnavailableError } from "./connections-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
+import {
+  bindingRepositories,
+  repositoryBelow,
+  repositoryPath,
+} from "./git-repositories.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -108,10 +113,40 @@ export function readPktSection(
 }
 
 /**
+ * Whether `ref` is a full ref name Git itself would accept
+ * (`git check-ref-format`): below `refs/`, no empty, dot-led or `.lock`
+ * component, no `..`, `@{`, control characters, spaces or any of
+ * `~^:?*[\`. The gateway matches push rules against this exact string, so
+ * anything Git could read differently is refused rather than interpreted.
+ */
+export function isValidRefName(ref: string): boolean {
+  if (!ref.startsWith("refs/") || ref.length > 1024) return false;
+  if (ref.endsWith("/") || ref.endsWith(".")) return false;
+  if (ref.includes("..") || ref.includes("@{") || ref.includes("//"))
+    return false;
+  for (const char of ref) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x20 || code === 0x7f || "~^:?*[\\".includes(char))
+      return false;
+  }
+  return ref
+    .split("/")
+    .every(
+      (component) =>
+        component.length > 0 &&
+        !component.startsWith(".") &&
+        !component.endsWith(".lock"),
+    );
+}
+
+/**
  * Parse receive-pack's update commands (`<old> <new> <ref>`, the first one
  * carrying capabilities after a NUL). A shallow client first names its
  * shallow commits (`shallow <id>`); those pass through. Push certificates
  * and anything else are refused: the gateway only forwards what it can read.
+ * Git ends a command's ref at its first NUL, so a NUL after the first
+ * command, or any ref Git would not accept as written, is refused: the ref
+ * the gateway reviews must be the ref the remote updates.
  */
 export function parseReceivePackCommands(lines: readonly Uint8Array[]): {
   commands: RefUpdate[];
@@ -125,10 +160,10 @@ export function parseReceivePackCommands(lines: readonly Uint8Array[]): {
   const commands = updates.map((text, index) => {
     const command = index === 0 ? firstCommand : text;
     const match =
-      /^([0-9a-f]{40}|[0-9a-f]{64}) ([0-9a-f]{40}|[0-9a-f]{64}) (\S+)$/.exec(
+      /^([0-9a-f]{40}|[0-9a-f]{64}) ([0-9a-f]{40}|[0-9a-f]{64}) (refs\/\S+)$/.exec(
         command ?? "",
       );
-    if (!match?.[1] || !match[2] || !match[3])
+    if (!match?.[1] || !match[2] || !match[3] || !isValidRefName(match[3]))
       throw new GitGatewayError(400, "The gateway cannot read this push");
     return { oldId: match[1], newId: match[2], ref: match[3] };
   });
@@ -148,46 +183,19 @@ export function advertisedDefaultBranch(body: Uint8Array): string | null {
   if (!line) return null;
   const caps = decoder.decode(line).split("\0")[1] ?? "";
   const symref = /(?:^| )symref=HEAD:(\S+)/.exec(caps)?.[1];
-  return symref ?? null;
+  return symref && isValidRefName(symref) ? symref : null;
 }
 
 // --- policy ---
 
 /** `org/repo.git/` → `org/repo`; refuses traversal and empty paths. */
 export function normalizeRepositoryPath(value: string): string {
-  const trimmed = value
-    .replace(/^\/+|\/+$/g, "")
-    .replace(/\.git$/, "")
-    .replace(/\/+$/, "");
-  const segments = trimmed.split("/");
-  if (
-    !trimmed ||
-    segments.some(
-      (segment) =>
-        !segment ||
-        segment === "." ||
-        segment === ".." ||
-        !/^[A-Za-z0-9._~-]+$/.test(segment),
-    )
-  ) {
-    throw new GitGatewayError(404, "No such repository");
-  }
-  return trimmed;
+  const path = repositoryPath(value);
+  if (!path) throw new GitGatewayError(404, "No such repository");
+  return path;
 }
 
-/** A remote URL's path below `base`, normalized, or null when outside it. */
-export function repositoryBelow(
-  remoteUrl: string,
-  base: string,
-): string | null {
-  const prefix = base.endsWith("/") ? base : `${base}/`;
-  if (!remoteUrl.startsWith(prefix)) return null;
-  try {
-    return normalizeRepositoryPath(remoteUrl.slice(prefix.length));
-  } catch {
-    return null;
-  }
-}
+export { repositoryBelow };
 
 /** Whether `ref` matches a push rule: `work/*` or a full `refs/...` pattern. */
 export function refMatches(ref: string, pattern: string): boolean {
@@ -204,7 +212,9 @@ export function refMatches(ref: string, pattern: string): boolean {
 /**
  * Decide a push (ADR 0175): every update must match the binding's push
  * rules, none may touch the remote's default branch, and nothing is
- * deleted. Returns the refusal reason for each ref, or null to allow.
+ * deleted. A remote that names no default branch (no `symref=HEAD`, or an
+ * unborn HEAD) is refused outright: the gateway cannot show the push spares
+ * it. Returns the refusal reason for each ref, or null to allow.
  */
 export function reviewPush(input: {
   commands: readonly RefUpdate[];
@@ -213,12 +223,17 @@ export function reviewPush(input: {
 }): Map<string, string> | null {
   const refusals = new Map<string, string>();
   for (const command of input.commands) {
-    if (ZERO.test(command.newId)) {
+    if (!input.defaultBranch) {
+      refusals.set(
+        command.ref,
+        "the remote names no default branch, so the gateway cannot check this push",
+      );
+    } else if (ZERO.test(command.newId)) {
       refusals.set(
         command.ref,
         "Work does not delete refs through the gateway",
       );
-    } else if (input.defaultBranch && command.ref === input.defaultBranch) {
+    } else if (command.ref === input.defaultBranch) {
       refusals.set(
         command.ref,
         "the default branch is never pushed through the gateway; push a work/ branch and open a pull request",
@@ -358,6 +373,9 @@ export class GitGatewayService {
         alias: request.alias,
         access,
         remoteUrl: authorized.remoteUrl,
+        ...(authorized.sessionId
+          ? { agentSessionId: authorized.sessionId }
+          : {}),
       });
       return this.forward({
         method: "GET",
@@ -600,25 +618,18 @@ export class GitGatewayService {
     policy: ConnectionGitPolicy | undefined;
     bases: readonly string[];
   }): Promise<string[]> {
-    if (input.policy?.repositories)
-      return input.policy.repositories.flatMap((path) => {
-        try {
-          return [normalizeRepositoryPath(path)];
-        } catch {
-          return [];
-        }
-      });
-    const project = await this.deps.db
-      .selectFrom("projects")
-      .select("remote_url")
-      .where("id", "=", input.projectId)
-      .where("tenant_id", "=", input.identity.tenantId)
-      .executeTakeFirst();
-    const origin = project?.remote_url;
-    if (!origin) return [];
-    return input.bases.flatMap((base) => {
-      const path = repositoryBelow(origin, base);
-      return path ? [path] : [];
+    const project = input.policy?.repositories
+      ? undefined
+      : await this.deps.db
+          .selectFrom("projects")
+          .select("remote_url")
+          .where("id", "=", input.projectId)
+          .where("tenant_id", "=", input.identity.tenantId)
+          .executeTakeFirst();
+    return bindingRepositories({
+      policy: input.policy,
+      bases: input.bases,
+      projectRemote: project?.remote_url,
     });
   }
 
@@ -645,7 +656,10 @@ export class GitGatewayService {
     });
     const response = await this.fetch(
       `${this.upstreamRepository(authorized, request)}/info/refs?service=git-upload-pack`,
-      { headers: { authorization: basicAuthorization(credentials) } },
+      {
+        headers: { authorization: basicAuthorization(credentials) },
+        redirect: "manual",
+      },
     );
     if (!response.ok)
       throw new GitGatewayError(

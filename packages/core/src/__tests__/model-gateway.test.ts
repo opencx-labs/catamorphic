@@ -6,8 +6,10 @@ import type {
   ConnectionModelPolicy,
   ResolvedConnectionBinding,
 } from "../services/connection-types.js";
+import { ConnectionUnavailableError } from "../services/connections-service.js";
 import type { ExecutionAllocation } from "../services/execution-allocations-service.js";
 import {
+  type ModelCallUsage,
   type ModelGatewayResponse,
   ModelGatewayService,
   type ModelUsageRecord,
@@ -58,6 +60,10 @@ function harness(options: {
   usedOutputTokens?: number;
   upstream?: (url: string, init: RequestInit) => Response;
   sessionActive?: boolean;
+  /** What the broker throws instead of granting access. */
+  fail?: Error;
+  /** The session's running turn; false when none runs. */
+  runningTurn?: string | false;
 }) {
   const binding: ResolvedConnectionBinding = {
     connectionId: "connection-1",
@@ -107,18 +113,56 @@ function harness(options: {
   };
   const upstreamCalls: Array<{ url: string; headers: Headers; body: string }> =
     [];
-  const recorded: ModelUsageRecord[] = [];
+  /** Settled calls, as `model_usage` ends up holding them. */
+  const recorded: Array<ModelUsageRecord & { usage: ModelCallUsage }> = [];
+  /** Every row, reserved or settled, by id. */
+  const rows = new Map<
+    string,
+    { record: ModelUsageRecord; outputTokens: number }
+  >();
+  const reservations: number[] = [];
   const audits: Array<{ outcome: string; metadata: unknown }> = [];
   const reviews: Array<{ action: string; input: JsonObject }> = [];
+  const spent = () =>
+    (options.usedOutputTokens ?? 0) +
+    [...rows.values()].reduce((sum, row) => sum + row.outputTokens, 0);
   const gateway = new ModelGatewayService({
     store: {
       session: async () => ({
         ownerId: "member-1",
         active: options.sessionActive ?? true,
-        runningTurnId: "turn-1",
+        runningTurnId:
+          options.runningTurn === false
+            ? undefined
+            : (options.runningTurn ?? "turn-1"),
       }),
-      recordUsage: async (record) => {
-        recorded.push(record);
+      reserve: async ({ record, outputTokens, budget }) => {
+        const granted =
+          budget === undefined
+            ? outputTokens
+            : Math.min(outputTokens, Math.max(0, budget - spent()));
+        if (budget !== undefined && granted <= 0)
+          return { id: null, outputTokens: 0 };
+        const id = String(rows.size + 1);
+        rows.set(id, { record, outputTokens: granted });
+        reservations.push(granted);
+        return { id, outputTokens: granted };
+      },
+      settle: async ({ id, usage }) => {
+        const row = rows.get(id);
+        if (!row) return;
+        if (!usage) {
+          rows.delete(id);
+          return;
+        }
+        row.outputTokens = usage.outputTokens;
+        recorded.push({
+          ...row.record,
+          usage: {
+            ...usage,
+            ...(usage.model ? {} : { model: row.record.model }),
+          },
+        });
       },
       usage: async () =>
         options.usedOutputTokens === undefined
@@ -155,6 +199,7 @@ function harness(options: {
       modelAccess: async (args) => {
         reviews.push({ action: args.action, input: args.input });
         if (options.deny) throw new ConnectionActionDeniedError(options.deny);
+        if (options.fail) throw options.fail;
         return {
           endpoint,
           binding,
@@ -178,7 +223,15 @@ function harness(options: {
       );
     },
   });
-  return { gateway, upstreamCalls, recorded, audits, reviews };
+  return {
+    gateway,
+    upstreamCalls,
+    recorded,
+    rows,
+    reservations,
+    audits,
+    reviews,
+  };
 }
 
 const anthropicStream = sse([
@@ -515,6 +568,131 @@ describe("the model gateway", () => {
       path: "v1/files",
     });
     expect(unknown.status).toBe(404);
+  });
+
+  it("refuses generating calls between turns but still counts tokens", async () => {
+    const idle = harness({ api: "anthropic", runningTurn: false });
+    const refused = await idle.gateway.handle(
+      messages({ model: "claude-test-1", max_tokens: 10 }),
+    );
+    expect(refused.status).toBe(403);
+    expect(await bodyText(refused)).toContain("no running turn");
+    const counted = await idle.gateway.handle({
+      ...messages({ model: "claude-test-1" }),
+      path: "v1/messages/count_tokens",
+    });
+    expect(counted.status).toBe(200);
+    await bodyText(counted);
+    expect(idle.upstreamCalls.map((call) => call.url)).toEqual([
+      "https://api.anthropic.test/v1/messages/count_tokens",
+    ]);
+  });
+
+  it("reserves each call's output limit so concurrent calls share one budget", async () => {
+    const { gateway, upstreamCalls, reservations } = harness({
+      api: "anthropic",
+      policy: { maxOutputTokensPerTurn: 100 },
+      usedOutputTokens: 10,
+      upstream: () =>
+        new Response(streamOf(anthropicStream), {
+          headers: { "content-type": "text/event-stream" },
+        }),
+    });
+    // Three calls in flight at once, none settled: 64, then the 26 left.
+    const answers = await Promise.all(
+      [1, 2, 3].map(() =>
+        gateway.handle(
+          messages({ model: "claude-test-1", max_tokens: 64, stream: true }),
+        ),
+      ),
+    );
+    expect(answers.map((answer) => answer.status).sort()).toEqual([
+      200, 200, 403,
+    ]);
+    expect(reservations).toEqual([64, 26]);
+    expect(
+      upstreamCalls.map((call) => JSON.parse(call.body).max_tokens),
+    ).toEqual([64, 26]);
+    for (const answer of answers) await bodyText(answer);
+  });
+
+  it("bounds a call that names no output limit by what the turn has left", async () => {
+    const { gateway, upstreamCalls } = harness({
+      api: "openai",
+      policy: { maxOutputTokensPerTurn: 500 },
+      usedOutputTokens: 200,
+    });
+    const response = await gateway.handle({
+      alias: "model",
+      path: "responses",
+      method: "POST",
+      headers: { authorization: `Bearer ${GRANT}` },
+      body: encoder.encode(JSON.stringify({ model: "gpt-test", input: "hi" })),
+    });
+    expect(response.status).toBe(200);
+    await bodyText(response);
+    expect(JSON.parse(upstreamCalls[0]?.body ?? "{}").max_output_tokens).toBe(
+      300,
+    );
+  });
+
+  it("counts a stream the caller abandons at its requested output limit", async () => {
+    const { gateway, recorded, audits } = harness({
+      api: "anthropic",
+      upstream: () =>
+        new Response(streamOf(anthropicStream), {
+          headers: { "content-type": "text/event-stream" },
+        }),
+    });
+    const response = await gateway.handle(
+      messages({ model: "claude-test-1", max_tokens: 4096, stream: true }),
+    );
+    if (response.body instanceof Uint8Array) throw new Error("not a stream");
+    const iterator = response.body[Symbol.asyncIterator]();
+    await iterator.next();
+    await iterator.return?.();
+    // message_delta never arrived: the call could have spent its limit.
+    expect(recorded[0]?.usage.outputTokens).toBe(4096);
+    expect(audits[0]?.metadata).toMatchObject({ interrupted: true });
+  });
+
+  it("requires a named model when the binding allows only some", async () => {
+    const allow = harness({
+      api: "anthropic",
+      policy: { allow: ["claude-*"] },
+    });
+    const unnamed = await allow.gateway.handle(messages({ max_tokens: 5 }));
+    expect(unnamed.status).toBe(400);
+    const numeric = await allow.gateway.handle(messages({ model: 5 }));
+    expect(numeric.status).toBe(400);
+    expect(allow.upstreamCalls).toHaveLength(0);
+  });
+
+  it("never answers a refusal with a retryable status", async () => {
+    for (const fail of [
+      new ConnectionUnavailableError("model", "Connection is unavailable"),
+      new Error("database went away"),
+    ]) {
+      const { gateway } = harness({ api: "anthropic", fail });
+      const response = await gateway.handle(
+        messages({ model: "claude-test-1" }),
+      );
+      expect(response.status).toBe(403);
+      expect(JSON.parse(await bodyText(response)).error.type).toBe(
+        "permission_error",
+      );
+    }
+  });
+
+  it("admits a request by its grant before reading the body", async () => {
+    const { gateway } = harness({ api: "anthropic" });
+    const request = messages({});
+    expect(await gateway.admit(request)).toBeNull();
+    const refused = await gateway.admit({
+      ...request,
+      headers: { "x-api-key": "nope" },
+    });
+    expect(refused?.status).toBe(401);
   });
 
   it("passes the provider's own errors through and audits them", async () => {

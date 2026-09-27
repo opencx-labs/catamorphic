@@ -81,8 +81,36 @@ const annotated: ConnectionProvider = {
   },
 };
 
+/** A Git host, reached only through the Git gateway (ADR 0175). */
+const forge: ConnectionProvider = {
+  kind: "forge",
+  displayName: "Forge",
+  ...pastedToken,
+  completeAuthorization: async ({ callback }) => ({
+    material: new TextEncoder().encode(callback.code ?? ""),
+    capabilities: ["git:read", "git:write", "issues.list"],
+  }),
+  git: {
+    remoteBaseUrls: ["https://forge.test"],
+    credentials: async ({ access }) => ({
+      username: "x-access-token",
+      password: `token-${access}`,
+    }),
+  },
+  readOnly: (action) => action === "issues.list",
+  invoke: async ({ repositories }) => {
+    forgeRepositories.push(repositories);
+    return { ok: true };
+  },
+};
+const forgeRepositories: Array<readonly string[] | undefined> = [];
+
 describe("connection actions by agent sandboxing (ADR 0182)", () => {
-  const providers = new ConnectionProviderRegistry([declared, annotated]);
+  const providers = new ConnectionProviderRegistry([
+    declared,
+    annotated,
+    forge,
+  ]);
   const connections = new ConnectionsService({
     db,
     vault: new MemoryCredentialVault(),
@@ -101,6 +129,12 @@ describe("connection actions by agent sandboxing (ADR 0182)", () => {
         service: "chat",
         capabilities: ["search", "post"],
       },
+      repo: {
+        provider: "forge",
+        principal: "service",
+        service: "repo",
+        capabilities: ["git:read", "git:write", "issues.list"],
+      },
     }),
   });
   const allocations = new ExecutionAllocationsService(db);
@@ -110,7 +144,12 @@ describe("connection actions by agent sandboxing (ADR 0182)", () => {
     providers,
     allocations,
     undefined,
-    { guards: [], sessionSandboxing: async () => sandboxing },
+    {
+      guards: [],
+      sessionSandboxing: async () => sandboxing,
+      // The project's linked remote scopes the forge binding (ADR 0175).
+      projectRemote: async () => "https://forge.test/org/repo.git",
+    },
   );
   let allocationId = "";
 
@@ -127,6 +166,7 @@ describe("connection actions by agent sandboxing (ADR 0182)", () => {
     for (const [name, kind] of [
       ["directory", "declared"],
       ["chat", "annotated"],
+      ["repo", "forge"],
     ] as const) {
       const service = await connections.createService({
         identity: admin,
@@ -150,8 +190,12 @@ describe("connection actions by agent sandboxing (ADR 0182)", () => {
       identity: admin,
       projectId,
       environment: "review",
-      aliases: ["directory", "chat"],
-      principalsByAlias: { directory: "service", chat: "service" },
+      aliases: ["directory", "chat", "repo"],
+      principalsByAlias: {
+        directory: "service",
+        chat: "service",
+        repo: "service",
+      },
     });
     allocationId = (
       await allocations.create({
@@ -221,5 +265,36 @@ describe("connection actions by agent sandboxing (ADR 0182)", () => {
       });
       await expect(call("chat", "post")).resolves.toEqual({ ok: true });
     }
+  });
+
+  const git = (access: "read" | "write") =>
+    broker.gitAccess({
+      identity: admin,
+      allocationId,
+      alias: "repo",
+      access,
+      remoteUrl: "https://forge.test/org/repo",
+      agentSessionId: "session-1",
+    });
+
+  it("lets a contained agent fetch but never push through the Git gateway", async () => {
+    sandboxing = "contained";
+    await expect(git("read")).resolves.toMatchObject({
+      credentials: { password: "token-read" },
+    });
+    await expect(git("write")).rejects.toThrow("sandboxing is contained");
+    for (const next of ["propose", "publish", undefined] as const) {
+      sandboxing = next;
+      await expect(git("write")).resolves.toMatchObject({
+        credentials: { password: "token-write" },
+      });
+    }
+  });
+
+  it("scopes a Git provider's API actions to the binding's repositories", async () => {
+    sandboxing = "publish";
+    forgeRepositories.length = 0;
+    await expect(call("repo", "issues.list")).resolves.toEqual({ ok: true });
+    expect(forgeRepositories).toEqual([["org/repo"]]);
   });
 });

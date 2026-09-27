@@ -7,6 +7,9 @@ import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import type { Identity } from "../identity.js";
+import { AccessDeniedError } from "../services/artifact-scope.js";
+import { CodeHostNotConnectedError } from "../services/code-hosts-service.js";
 import { RemoteSyncService } from "../services/remote-sync-service.js";
 import { fakeCodeHost } from "./code-host-fixture.js";
 
@@ -123,4 +126,52 @@ it("propagates listing failures while unsupported or unconnected hosts remain an
   expect(
     await unrelated.codeHosts.listPullRequests({ identity, projectId }),
   ).toEqual([]);
+});
+// Last: it leaves an organization connection behind.
+it("opens pull requests only for writers and lets readers comment only as themselves", async () => {
+  const forge = fakeCodeHost({ db, projectManager: manager, remoteBase: temp });
+  const admin: Identity = {
+    ...identity,
+    externalUserId: "admin",
+    controlPlanePermissions: ["connections:read", "connections:write"],
+  };
+  await forge.connectService(admin, "org-token");
+  const reader: Identity = {
+    ...identity,
+    externalUserId: "reader",
+    scope: [],
+    projectPermissions: [{ projectId, permission: "program:read" }],
+  };
+  const service = new RemoteSyncService(db, manager, forge.codeHosts);
+  // The organization's connection would push and open it: the caller's own
+  // permission decides.
+  await expect(
+    service.createPullRequest(reader, projectId, { title: "Reader work" }),
+  ).rejects.toBeInstanceOf(AccessDeniedError);
+  expect(forge.gitCalls).toEqual([]);
+  expect(forge.createPullRequest).not.toHaveBeenCalled();
+  const comment = (who: Identity, principal?: "service") =>
+    forge.codeHosts.commentOnPullRequest({
+      identity: who,
+      projectId,
+      number: 1,
+      body: "Looks good",
+      ...(principal ? { principal } : {}),
+    });
+  // A reader never speaks as the organization.
+  await expect(comment(reader)).rejects.toBeInstanceOf(
+    CodeHostNotConnectedError,
+  );
+  await expect(comment(reader, "service")).rejects.toBeInstanceOf(
+    AccessDeniedError,
+  );
+  await forge.connectPersonal(reader, "reader-token");
+  expect((await comment(reader)).author).toEqual({ login: "reader-token" });
+  // A writer may comment through the organization's connection.
+  const writer: Identity = {
+    ...reader,
+    externalUserId: "writer",
+    projectPermissions: [{ projectId, permission: "program:write" }],
+  };
+  expect((await comment(writer)).author).toEqual({ login: "org-token" });
 });

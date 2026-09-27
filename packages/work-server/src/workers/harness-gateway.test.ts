@@ -457,9 +457,11 @@ describe("Claude Code on a worker, with its model through the gateway", () => {
     expect(await forbidden.text()).toContain(
       "claude-forbidden is not for agents",
     );
+    // Between turns the grant spends nothing (ADR 0180).
+    const idle = await gatewayCall(grant, "claude-test");
+    expect(idle.status).toBe(403);
+    expect(await idle.text()).toContain("no running turn");
     expect(upstreamKeys).toHaveLength(calls);
-    // The grant itself works until the chat closes.
-    expect((await gatewayCall(grant, "claude-test")).status).toBe(200);
   }, 60_000);
 
   it("stops honoring the grant once the chat is closed", async () => {

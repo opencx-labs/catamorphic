@@ -127,8 +127,12 @@ export function defineHttpApiConnectionProvider(
     },
     listActions: async ({ capabilities }) =>
       actions.filter((action) => capabilities.includes(action.name)),
-    // Contained agents may GET, nothing else (ADR 0182).
-    readOnly: (action) => action === "get",
+    // Contained agents may GET, nothing else (ADR 0182). A named action
+    // reads when its declared method is GET, whatever it is called.
+    readOnly: (action) =>
+      (named
+        ? named.find((candidate) => candidate.name === action)?.method
+        : methodNamed(action)) === "get",
     invoke: async ({ material, action, input }) => {
       const operation = named?.find((candidate) => candidate.name === action);
       const method = named ? operation?.method : methodNamed(action);

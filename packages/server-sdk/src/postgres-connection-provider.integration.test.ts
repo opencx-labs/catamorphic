@@ -236,6 +236,25 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
       connection,
     });
     expect(settings).toMatchObject({ rows: [{ ro: "on", timeout: "10s" }] });
+    // A session-level advisory lock outlives ROLLBACK; the pooled session
+    // must not carry it into the next call.
+    const lockKey = Number.parseInt(suffix, 16);
+    await provider.invoke({
+      material,
+      action: "query",
+      input: {
+        sql: `SELECT pg_advisory_lock(${lockKey}) IS NULL AS locked`,
+        purpose: "test",
+      },
+      capabilities: ["query"],
+      connection,
+    });
+    const held = await admin.query(
+      `SELECT count(*)::int AS n FROM pg_locks
+        WHERE locktype = 'advisory' AND objid = $1`,
+      [lockKey],
+    );
+    expect(held.rows[0]?.n).toBe(0);
     // A rotated credential (a new revision) closes the old pool.
     const rotated = await backend(2);
     expect(sessions.has(rotated)).toBe(false);

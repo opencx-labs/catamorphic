@@ -234,8 +234,12 @@ export function definePostgresConnectionProvider(
         }
         return await runCursor(client, sql, request.params, limits, plan);
       } finally {
+        // ROLLBACK leaves session state a statement can still take (an
+        // advisory lock survives it); DISCARD ALL returns the session to
+        // how it connected before the next call borrows it.
         reusable = await client
           .query("ROLLBACK")
+          .then(() => client.query("DISCARD ALL"))
           .then(() => true)
           .catch(() => false);
         // A session whose rollback failed is destroyed, never reused.

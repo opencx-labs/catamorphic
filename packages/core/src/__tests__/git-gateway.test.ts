@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   advertisedDefaultBranch,
   FLUSH_PKT,
+  isValidRefName,
   normalizeRepositoryPath,
   parseReceivePackCommands,
   pktLine,
@@ -87,6 +88,89 @@ describe("Git gateway protocol (ADR 0175)", () => {
     expect(() =>
       parseReceivePackCommands([encode("push-cert\0report-status\n")]),
     ).toThrow(/cannot read/);
+  });
+
+  it("refuses a later command whose ref Git would end at a NUL", () => {
+    // Git reads `refs/heads/main` here; the gateway must not review
+    // `refs/heads/main\0...` against `*` or `work/*/done` and let it through.
+    for (const smuggled of [
+      "refs/heads/main\0",
+      "refs/heads/work/x\0/done",
+      "refs/heads/main\0report-status",
+    ]) {
+      const body = pushBody([
+        [A, B, "refs/heads/work/fix"],
+        [A, B, smuggled],
+      ]);
+      const section = readPktSection(body);
+      expect(() => parseReceivePackCommands(section?.lines ?? [])).toThrow(
+        /cannot read/,
+      );
+    }
+    // The first command's capabilities still follow its NUL.
+    const first = readPktSection(
+      pushBody([[A, B, "refs/heads/work/fix"]], "report-status"),
+    );
+    expect(parseReceivePackCommands(first?.lines ?? []).commands[0]?.ref).toBe(
+      "refs/heads/work/fix",
+    );
+  });
+
+  it("accepts only ref names Git would accept as written", () => {
+    for (const ref of [
+      "refs/heads/work/fix",
+      "refs/heads/work/a-b_c.d",
+      "refs/tags/v1.2.3",
+    ])
+      expect(isValidRefName(ref)).toBe(true);
+    for (const ref of [
+      "main",
+      "HEAD",
+      "refs/heads/main\0",
+      "refs/heads/a b",
+      "refs/heads/a\tb",
+      "refs/heads/..",
+      "refs/heads/a..b",
+      "refs/heads/.hidden",
+      "refs/heads/a.lock",
+      "refs/heads/a/",
+      "refs/heads//a",
+      "refs/heads/a.",
+      "refs/heads/a@{1}",
+      "refs/heads/a~1",
+      "refs/heads/a^",
+      "refs/heads/a:b",
+      "refs/heads/a?",
+      "refs/heads/a*",
+      "refs/heads/a[b",
+      "refs/heads/a\\b",
+      "refs/heads/a\u007f",
+    ])
+      expect(isValidRefName(ref), JSON.stringify(ref)).toBe(false);
+    const encode = (text: string) => new TextEncoder().encode(text);
+    expect(() =>
+      parseReceivePackCommands([
+        encode(`${A} ${B} refs/heads/work/x\0report-status\n`),
+        encode(`${A} ${B} refs/heads/work/../main\n`),
+      ]),
+    ).toThrow(/cannot read/);
+  });
+
+  it("refuses every push when the remote names no default branch", () => {
+    const refused = reviewPush({
+      commands: [{ oldId: A, newId: B, ref: "refs/heads/work/fix" }],
+      patterns: ["*"],
+      defaultBranch: null,
+    });
+    expect(refused?.get("refs/heads/work/fix")).toMatch(/no default branch/);
+    // An advertisement without symref=HEAD names none.
+    const bare = new Uint8Array([
+      ...pktLine("# service=git-upload-pack\n"),
+      ...FLUSH_PKT,
+      ...pktLine(`${A} refs/heads/main\0report-status\n`),
+      ...FLUSH_PKT,
+    ]);
+    expect(advertisedDefaultBranch(bare)).toBeNull();
   });
 
   it("allows work/ branches and named patterns, never the default branch or deletes", () => {

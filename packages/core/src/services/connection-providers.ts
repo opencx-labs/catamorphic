@@ -152,6 +152,14 @@ export interface ConnectionProvider {
      * provider can reuse upstream sessions per credential (ADR 0172).
      */
     connection: ConnectionCredentialVersion;
+    /**
+     * For a provider that serves Git: the repositories the binding reaches,
+     * as paths below its remote bases (`org/repo`), the same set the Git
+     * gateway enforces (the binding's `git.repositories`, else the project's
+     * linked remote). A provider whose API addresses repositories refuses
+     * any other; absent reaches none.
+     */
+    repositories?: readonly string[];
   }): Promise<Json>;
   listActions?(args: {
     material: Uint8Array;

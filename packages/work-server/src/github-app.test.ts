@@ -315,6 +315,31 @@ describe("GitHub as the github service connection (ADR 0177)", () => {
     expect(converted.headers.location).toBe(
       `${git.url}/apps/work-acme/installations/new?state=${state}`,
     );
+    // Conversion happens once: a replayed return, or the form again, finds
+    // nothing left to do.
+    const conversions = () =>
+      api.filter((call) => call.path.endsWith("/conversions")).length;
+    expect(conversions()).toBe(1);
+    expect(
+      (
+        await browser(
+          `${link.pathname}/created?code=manifest-code&state=${state}`,
+        )
+      ).statusCode,
+    ).toBe(404);
+    expect((await browser(link.pathname)).statusCode).toBe(404);
+    expect(conversions()).toBe(1);
+    // The registration lives in the database, where any replica continues
+    // it; the state is kept only as its hash, the App's key only sealed.
+    const stored = await server.catamorphic.core.db
+      .selectFrom("work_github_app_registrations")
+      .selectAll()
+      .execute();
+    expect(stored).toEqual([
+      expect.objectContaining({ status: "created", app_slug: "work-acme" }),
+    ]);
+    expect(JSON.stringify(stored)).not.toContain(state);
+    expect(JSON.stringify(stored)).not.toContain("PRIVATE KEY");
 
     const installed = await browser(
       `${link.pathname}/installed?installation_id=77&setup_action=install`,
@@ -323,6 +348,22 @@ describe("GitHub as the github service connection (ADR 0177)", () => {
     expect(installed.body).toContain("GitHub is connected");
     // The project does not declare the secret yet: it is shown once.
     expect(installed.body).toContain("hook-secret");
+    // So is the App's OAuth client, for members' own accounts.
+    expect(installed.body).toContain("Iv1.acme");
+    expect(installed.body).toContain("client-secret");
+    expect(
+      await server.catamorphic.core.db
+        .selectFrom("work_github_app_registrations")
+        .selectAll()
+        .execute(),
+    ).toEqual([]);
+    expect(
+      (
+        await browser(
+          `${link.pathname}/installed?installation_id=77&setup_action=install`,
+        )
+      ).statusCode,
+    ).toBe(404);
     const services =
       (await server.catamorphic.core.connections?.listServices({
         identity: {
