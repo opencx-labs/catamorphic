@@ -5,6 +5,8 @@ import {
   GITHUB_CONNECTION_ACTIONS,
 } from "./github-connection-provider.js";
 
+const TEST_CONNECTION = { id: "connection-1", revision: 1 };
+
 const { privateKey } = generateKeyPairSync("rsa", {
   modulusLength: 2048,
   privateKeyEncoding: { type: "pkcs1", format: "pem" },
@@ -183,6 +185,7 @@ describe("GitHub connections: App installation (service)", () => {
     const { github, provider } = appProvider();
     const material = await appMaterial(provider);
     const result = await provider.invoke({
+      connection: TEST_CONNECTION,
       material,
       action: "get",
       input: { path: "/repos/octo/hello/pulls", query: { state: "open" } },
@@ -201,6 +204,7 @@ describe("GitHub connections: App installation (service)", () => {
     expect(request?.authorization).toBe("Bearer ghs_1");
     // The token is cached for the next call on the same repository.
     await provider.invoke({
+      connection: TEST_CONNECTION,
       material,
       action: "get",
       input: { path: "/repos/octo/hello/pulls" },
@@ -217,6 +221,7 @@ describe("GitHub connections: App installation (service)", () => {
       JSON.stringify({ appId: 12345, privateKey, installationId: "77" }),
     );
     await provider.invoke({
+      connection: TEST_CONNECTION,
       material,
       action: "get",
       input: { path: "/repos/octo/hello/pulls" },
@@ -225,6 +230,7 @@ describe("GitHub connections: App installation (service)", () => {
     expect(github.calls.at(-1)?.authorization).toBe("Bearer ghs_1");
     await expect(
       provider.invoke({
+        connection: TEST_CONNECTION,
         material: new TextEncoder().encode("{}"),
         action: "get",
         input: { path: "/user" },
@@ -250,6 +256,7 @@ describe("GitHub connections: App installation (service)", () => {
     });
     await expect(
       provider.invoke({
+        connection: TEST_CONNECTION,
         material,
         action: "post",
         input: { path: "/repos/octo/hello/issues", body: {} },
@@ -258,6 +265,7 @@ describe("GitHub connections: App installation (service)", () => {
     ).rejects.toThrow(/outside the connection grant/);
     await expect(
       provider.invoke({
+        connection: TEST_CONNECTION,
         material,
         action: "get",
         input: { path: "/repos/../user" },
@@ -270,6 +278,7 @@ describe("GitHub connections: App installation (service)", () => {
     const { github, provider } = appProvider();
     const material = await appMaterial(provider);
     const files = await provider.invoke({
+      connection: TEST_CONNECTION,
       material,
       action: "pull_request_files",
       input: { repository: "octo/hello", number: 7 },
@@ -295,6 +304,7 @@ describe("GitHub connections: App installation (service)", () => {
       ],
     });
     const review = await provider.invoke({
+      connection: TEST_CONNECTION,
       material,
       action: "create_review",
       input: {
@@ -334,6 +344,7 @@ describe("GitHub connections: App installation (service)", () => {
     const { github, provider } = appProvider();
     const material = await appMaterial(provider);
     const run = await provider.invoke({
+      connection: TEST_CONNECTION,
       material,
       action: "create_check_run",
       input: {
@@ -383,6 +394,7 @@ describe("GitHub connections: App installation (service)", () => {
     });
     await expect(
       provider.invoke({
+        connection: TEST_CONNECTION,
         material,
         action: "issue_comment",
         input: { repository: "other/hello", number: 1, body: "hi" },
@@ -391,6 +403,7 @@ describe("GitHub connections: App installation (service)", () => {
     ).rejects.toThrow(/outside the GitHub App installation on octo/);
     await expect(
       provider.invoke({
+        connection: TEST_CONNECTION,
         material,
         action: "create_check_run",
         input: { repository: "octo/hello", name: "x", headSha: "short" },
@@ -521,6 +534,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
     const material = authorized?.material ?? new Uint8Array();
 
     await provider.invoke({
+      connection: TEST_CONNECTION,
       material,
       action: "get",
       input: { path: "/repos/octo/hello/pulls" },
@@ -545,6 +559,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
     const refreshed = await provider.refresh?.({ material });
     const next = refreshed?.material ?? new Uint8Array();
     await provider.invoke({
+      connection: TEST_CONNECTION,
       material: next,
       action: "get",
       input: { path: "/user" },
@@ -555,6 +570,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
     clock += 9 * 3_600_000;
     await expect(
       provider.invoke({
+        connection: TEST_CONNECTION,
         material,
         action: "get",
         input: { path: "/user" },
@@ -603,6 +619,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
     const material = authorized?.material ?? new Uint8Array();
     await expect(
       provider.invoke({
+        connection: TEST_CONNECTION,
         material,
         action: "get",
         input: { path: "/repos/octo/hello" },
