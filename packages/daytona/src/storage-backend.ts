@@ -89,6 +89,18 @@ export class DaytonaBackend implements StorageBackend {
     }
   }
 
+  async deleteCopy(
+    tenantId: string,
+    projectId: string,
+    externalUserId: string,
+  ): Promise<void> {
+    const key = this.key(tenantId, projectId, externalUserId);
+    const sandboxId = this.sandboxIds.get(key);
+    if (!sandboxId) return;
+    await this.client.delete(await this.client.get(sandboxId));
+    this.sandboxIds.delete(key);
+  }
+
   async exists(
     tenantId: string,
     projectId: string,

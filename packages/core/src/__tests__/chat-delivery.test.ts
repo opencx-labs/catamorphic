@@ -8,7 +8,9 @@ import { AccessDeniedError } from "../services/artifact-scope.js";
 import {
   chatOwner,
   defaultDeliveryKey,
+  keyedChatOwnerId,
   parseChatDelivery,
+  parseChatKey,
 } from "../services/chat-delivery.js";
 import { projectAdmin } from "./project-admin.js";
 
@@ -38,8 +40,7 @@ const owner = (
     Parameters<typeof chatOwner>[0],
     "caller" | "audience" | "enablement"
   >,
-) =>
-  chatOwner({ ...input, projectId, environment: "production", resolveMember });
+) => chatOwner({ ...input, projectId, resolveMember });
 
 describe("parseChatDelivery", () => {
   it("names a chat by id or by key, never both or neither", () => {
@@ -78,6 +79,32 @@ describe("parseChatDelivery", () => {
     expect(() =>
       parseChatDelivery({ key: "k", audience: "team", content: "x" }),
     ).toThrow('audience must be "project"');
+  });
+
+  it("keys are the project's names for chats: 1 to 200 characters, no control characters", () => {
+    expect(parseChatKey("pr-42")).toBe("pr-42");
+    expect(parseChatKey("incident/2026-09 #7")).toBe("incident/2026-09 #7");
+    expect(() => parseChatKey("")).toThrow("must not be empty");
+    expect(() => parseChatKey("x".repeat(201))).toThrow("at most 200");
+    expect(() => parseChatKey("pr-\n42")).toThrow("control characters");
+    expect(() => parseChatDelivery({ key: "a\u0000b", content: "x" })).toThrow(
+      "control characters",
+    );
+  });
+
+  it("a key lookup names the caller's chat, the project chat, or a member's", () => {
+    expect(keyedChatOwnerId({ caller: alice, audience: undefined })).toBe(
+      "alice",
+    );
+    expect(keyedChatOwnerId({ caller: alice, audience: "project" })).toBe(
+      PROJECT_PRINCIPAL_ID,
+    );
+    expect(
+      keyedChatOwnerId({ caller: projectCaller, audience: undefined }),
+    ).toBe(PROJECT_PRINCIPAL_ID);
+    expect(
+      keyedChatOwnerId({ caller: alice, audience: { member: "bob" } }),
+    ).toBe("bob");
   });
 
   it("defaults the idempotency key to one delivery per run, chat and content", () => {
@@ -125,9 +152,14 @@ describe("chatOwner", () => {
 
   it("a project automation reaches the project chat with its connections, or a named member", async () => {
     const enablement = { owner_kind: "project", owner_external_user_id: null };
+    // The chat is placed by its own Environment, not the automation's: the
+    // project's own chats may run in any Environment the project declares.
     await expect(
       owner({ caller: projectCaller, audience: undefined, enablement }),
-    ).resolves.toBe(projectCaller);
+    ).resolves.toEqual({
+      ...projectCaller,
+      executionScope: [{ projectId, name: "*" }],
+    });
     expect(projectCaller.connectionScope).toEqual([
       { projectId, environment: "production", alias: "github" },
     ]);
@@ -162,7 +194,7 @@ describe("chatOwner", () => {
     ).resolves.toMatchObject({
       externalUserId: PROJECT_PRINCIPAL_ID,
       scope: [{ kind: "agent", projectId, name: "*" }],
-      executionScope: [{ projectId, name: "production" }],
+      executionScope: [{ projectId, name: "*" }],
       projectPermissions: [],
     });
   });

@@ -190,6 +190,30 @@ export class ProjectManager {
     }
   }
 
+  /**
+   * Forget a closed session's workspace: its `sessions/<id>` branch on the
+   * origin and its `session-<id>` copy on this machine. Commits already
+   * reachable elsewhere stay; missing pieces are no-ops.
+   */
+  async deleteSession(args: {
+    tenantId: string;
+    projectId: string;
+    sessionId: string;
+  }): Promise<void> {
+    if (
+      this.remote &&
+      (await this.remote.exists(args.tenantId, args.projectId))
+    )
+      await this.remote.withOrigin(args.tenantId, args.projectId, (origin) =>
+        origin.deleteRef({ ref: `refs/heads/sessions/${args.sessionId}` }),
+      );
+    await this.storage.deleteCopy(
+      args.tenantId,
+      args.projectId,
+      `session-${args.sessionId}`,
+    );
+  }
+
   async localPath(input: {
     tenantId: string;
     projectId: string;

@@ -39,6 +39,16 @@ export interface StorageBackend {
     opts?: InitProjectOptions,
   ): Promise<string>;
   deleteProject(tenantId: string, projectId: string): Promise<void>;
+  /**
+   * Remove one user's internal working copy (a session's `session-<id>`
+   * copy). A copy that is a user-visible project folder is never removed.
+   * Missing is a no-op.
+   */
+  deleteCopy(
+    tenantId: string,
+    projectId: string,
+    externalUserId: string,
+  ): Promise<void>;
   exists(
     tenantId: string,
     projectId: string,

@@ -11,7 +11,7 @@ import type { EnvironmentBinding, SandboxProvider } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
 import {
-  servesOnePerson,
+  servesOneOwner,
   storedPlacement,
   type WorkerPlacement,
   WorkerPlacementSchema,
@@ -228,7 +228,7 @@ export class WorkWorkerRegistry {
     const policy = await this.placement(args.nodeId);
     if (
       args.offer.isolation === "process" &&
-      !servesOnePerson(policy.access) &&
+      !servesOneOwner(policy.access) &&
       !policy.trusted
     ) {
       throw new WorkerIsolationError(args.name);

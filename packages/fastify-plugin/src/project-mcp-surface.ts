@@ -634,7 +634,7 @@ export function surfaceTools(
         tools.push({
           definition: {
             name: `session_${operation}`,
-            description: `Session ${operation}. Uses the same authorized operation as workflows. Mutations require a stable idempotencyKey; retries return the existing result. Load the session-workflows skill for examples.`,
+            description: `Session ${operation}. Uses the same authorized operation as workflows. Name the chat by sessionId, or by the project's key for it (key, with audience "project" for the project chat). Mutations require a stable idempotencyKey; retries return the existing result. Load the session-workflows skill for examples.`,
             inputSchema: z.toJSONSchema(SESSION_ACTION_SCHEMAS[operation]),
           },
           call: guarded(async (args) => {

@@ -21,7 +21,8 @@ export const NodeLabelsSchema = z
 
 /**
  * Whose work a worker takes: everyone, or named people and directory groups
- * by email. Control-plane state; a worker never declares it.
+ * by email, and the owner-less work (project chats and automations) of named
+ * projects (ADR 0173). Control-plane state; a worker never declares it.
  */
 export const WorkerAccessSchema = z.union([
   z.strictObject({ everyone: z.literal(true) }),
@@ -29,10 +30,13 @@ export const WorkerAccessSchema = z.union([
     .strictObject({
       people: z.array(z.email().toLowerCase()).max(500).default([]),
       groups: z.array(z.email().toLowerCase()).max(100).default([]),
+      projects: z.array(z.uuid()).max(100).default([]),
     })
     .refine(
-      (access) => access.people.length + access.groups.length > 0,
-      "Name at least one person or group, or use { everyone: true }",
+      (access) =>
+        access.people.length + access.groups.length + access.projects.length >
+        0,
+      "Name at least one person, group or project, or use { everyone: true }",
     ),
 ]);
 export type WorkerAccess = z.output<typeof WorkerAccessSchema>;
@@ -51,16 +55,21 @@ export type WorkerPlacement = z.output<typeof WorkerPlacementSchema>;
 export function nodeAccess(access: WorkerAccess): NodeAccess {
   return "everyone" in access
     ? { everyone: true }
-    : { users: access.people, groups: access.groups };
+    : {
+        users: access.people,
+        groups: access.groups,
+        projects: access.projects,
+      };
 }
 
-/** One named person and no groups: nobody else's work lands here. */
-export function servesOnePerson(access: WorkerAccess): boolean {
-  return (
-    !("everyone" in access) &&
-    access.people.length === 1 &&
-    access.groups.length === 0
-  );
+/**
+ * One named person, or one project's own work, and nobody else: no one
+ * else's work lands here, so process isolation is enough.
+ */
+export function servesOneOwner(access: WorkerAccess): boolean {
+  if ("everyone" in access) return false;
+  const { people, groups, projects } = access;
+  return groups.length === 0 && people.length + projects.length === 1;
 }
 
 /** Stored placement, validated on the way out of the database. */

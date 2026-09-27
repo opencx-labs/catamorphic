@@ -80,9 +80,17 @@ export interface ExecutionAllocation {
   workerNodeId: string | null;
   policy: EnvironmentAllocationPolicy;
   status: "active" | "released";
+  /** `idle`: a chat gave its workspace back while waiting (ADR 0173). */
+  releaseReason: AllocationReleaseReason | null;
   createdAt: string;
   releasedAt: string | null;
 }
+
+/**
+ * Why an Allocation ended. Only `idle` invites a fresh admission on the
+ * workload's next turn; every other end is final for that Allocation.
+ */
+export type AllocationReleaseReason = "idle" | "retired";
 
 export class ExecutionAllocationConflictError extends Error {
   constructor(readonly rootWorkloadId: string) {
@@ -208,11 +216,16 @@ export class ExecutionAllocationsService {
   async release(args: {
     identity: Identity;
     allocationId: string;
+    reason?: AllocationReleaseReason;
     transaction?: Transaction<DB>;
   }): Promise<ExecutionAllocation | undefined> {
     const row = await (args.transaction ?? this.db)
       .updateTable("execution_allocations")
-      .set({ status: "released", released_at: new Date() })
+      .set({
+        status: "released",
+        released_at: new Date(),
+        release_reason: args.reason ?? "retired",
+      })
       .where("tenant_id", "=", args.identity.tenantId)
       .where("id", "=", args.allocationId)
       .where("status", "=", "active")
@@ -236,6 +249,10 @@ function mapAllocation(
     workerNodeId: row.worker_node_id,
     policy,
     status: row.status as "active" | "released",
+    releaseReason:
+      row.release_reason === "idle" || row.release_reason === "retired"
+        ? row.release_reason
+        : null,
     createdAt: row.created_at.toISOString(),
     releasedAt: row.released_at?.toISOString() ?? null,
   };

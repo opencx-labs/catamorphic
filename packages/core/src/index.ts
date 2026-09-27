@@ -126,6 +126,7 @@ export {
   type AgentTurnSettledEvent,
   type ArchiveSessionResourcesHandler,
   type NativeAgentCheckout,
+  type SessionPlacement,
   type SyncedFileChange,
   UnsupportedAgentTopologyError,
 } from "./services/agent-sessions-service.js";
@@ -190,6 +191,12 @@ export {
   ReservedCapabilityEnvError,
   UnfulfilledCapabilityError,
 } from "./services/capability-providers.js";
+export {
+  type ChatAudience,
+  ChatKeySchema,
+  keyedChatOwnerId,
+  parseChatKey,
+} from "./services/chat-delivery.js";
 export {
   type ClientRunnerOperation,
   ClientRunnerOperationSchema,
@@ -313,6 +320,7 @@ export {
   vaultKeyId,
 } from "./services/encrypted-credential-vault.js";
 export {
+  type AllocationReleaseReason,
   type EnvironmentAllocationPolicy,
   type ExecutionAllocation,
   ExecutionAllocationConflictError,
@@ -326,6 +334,7 @@ export {
   EnvironmentNotFoundError,
   ExecutionEnvironmentsService,
   NoCompatibleEnvironmentError,
+  type PlacementReason,
 } from "./services/execution-environments-service.js";
 export {
   type ExecutionJob,
@@ -367,6 +376,7 @@ export {
 export { forgetProgramFetch } from "./services/program-reader.js";
 export {
   DEFAULT_ENVIRONMENT,
+  DEFAULT_IDLE_RELEASE_MINUTES,
   type ProjectEnvironmentDefinition,
   type ProjectEnvironmentEntry,
   type ProjectEnvironmentPolicy,
@@ -523,6 +533,7 @@ export {
   SESSION_ACTION_SCHEMAS,
   type SessionActionOperation,
   SessionActionsService,
+  SessionKeyNotFoundError,
 } from "./services/session-actions-service.js";
 export type {
   SessionArtifact,

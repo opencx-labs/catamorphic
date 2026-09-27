@@ -1008,6 +1008,37 @@ export const AgentSessionsQuerySchema = PaginationQuerySchema.extend({
   message: "Choose rootsOnly or parentSessionId, not both.",
 });
 
+/**
+ * A chat named by the project's key (ADR 0173): the caller's own, the
+ * project chat with `audience=project`, or a member's with `member=<id>`.
+ */
+export const KeyedChatParamsSchema = ProjectIdParamsSchema.extend({
+  key: z.string().trim().min(1).max(200),
+});
+export const KeyedChatQuerySchema = z
+  .object({
+    audience: z.literal("project").optional(),
+    member: z.string().min(1).optional(),
+  })
+  .refine((value) => !(value.audience && value.member), {
+    message: "Choose audience=project or member, not both.",
+  });
+export const ClosedKeyedChatSchema = z.object({
+  sessionId: z.string().uuid().nullable(),
+  closed: z.boolean(),
+});
+
+export const AgentSessionPlacementSchema = z.object({
+  environment: z.string(),
+  reason: z.enum([
+    "requested",
+    "agent_preferred",
+    "project_default",
+    "available",
+  ]),
+  machine: z.object({ id: z.string(), label: z.string() }),
+});
+
 export const AgentSessionSchema = z.object({
   workStatus: z.enum(["open", "completed"]),
   stateRevision: z.number().int().nonnegative(),
@@ -1049,6 +1080,12 @@ export const AgentSessionSchema = z.object({
   attentionMessage: z
     .object({ id: z.string().uuid(), content: z.string() })
     .optional(),
+  /** The project's key for this chat (ADR 0173); closing frees it. */
+  key: z.string().nullable(),
+  /** Workflows that delivered to the chat by its key. */
+  keyWorkflows: z.array(z.string()),
+  /** Where the chat runs and why (ADR 0173). */
+  placement: AgentSessionPlacementSchema.nullable(),
   baseCommitSha: z.string().length(40).nullable(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),

@@ -81,7 +81,9 @@ import { DevSandboxService } from "./dev-sandbox-service.js";
 import type { DocumentsService } from "./documents-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
 import {
+  type EnvironmentAdmission,
   type ExecutionEnvironmentsService,
+  type PlacementReason,
   placementOwner,
 } from "./execution-environments-service.js";
 import type { PluginsService } from "./plugins-service.js";
@@ -107,6 +109,7 @@ import {
   shipRemoteProject,
   syncRemoteProject,
 } from "./store-sync.js";
+import { EnvironmentCapacityError } from "./worker-capacity.js";
 
 interface AgentExecutionRuntime {
   bindingId: string;
@@ -210,9 +213,28 @@ export interface AgentSession {
   /** Most recent message explicitly requesting attention. */
   attentionMessage?: { id: string; content: string };
   status: "active" | "closed";
+  /**
+   * The project-scoped key automations reach this chat by (ADR 0173), or
+   * null. Closing the chat frees the key.
+   */
+  key: string | null;
+  /** Workflows that delivered to this chat by its key, first first. */
+  keyWorkflows: string[];
+  /** Where this chat runs and why (ADR 0173); null for chats from before. */
+  placement: SessionPlacement | null;
   baseCommitSha: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * A chat's placement: its Environment, the rule that chose it, and the
+ * machine holding its workspace when the chat was last admitted.
+ */
+export interface SessionPlacement {
+  environment: string;
+  reason: PlacementReason;
+  machine: { id: string; label: string };
 }
 
 export type AgentTodoStatus = "pending" | "in_progress" | "completed";
@@ -639,8 +661,11 @@ export class AgentSessionsService {
       externalUserId: string;
     }) => Promise<Identity | null>;
     pollIntervalMs?: number;
+    /** How often idle chats' workspaces are checked (ADR 0173). */
+    idleReleaseIntervalMs?: number;
   }): { stop(): Promise<void> } {
     let stopped = false;
+    let nextIdleSweep = 0;
     let polling: Promise<void> | undefined;
     const poll = async () => {
       const candidates = await this.db
@@ -728,6 +753,12 @@ export class AgentSessionsService {
         }
       }
       if (!stopped) await this.reconcileDelegations(input.resolveIdentity);
+      if (!stopped && Date.now() >= nextIdleSweep) {
+        nextIdleSweep = Date.now() + (input.idleReleaseIntervalMs ?? 60_000);
+        await this.releaseIdleWorkspaces().catch((error) =>
+          console.warn("[catamorphic] Idle workspace release failed", error),
+        );
+      }
     };
     const tick = () => {
       if (stopped || polling) return;
@@ -1664,6 +1695,8 @@ export class AgentSessionsService {
       environment?: string;
       title?: string;
       chatKey?: string;
+      /** The workflow that started a keyed chat. */
+      chatWorkflow?: string;
       source?: AgentSessionSource;
       parentSessionId?: string;
       forkedFromSessionId?: string;
@@ -1714,6 +1747,8 @@ export class AgentSessionsService {
       environment?: string;
       title?: string;
       chatKey?: string;
+      /** The workflow that started a keyed chat. */
+      chatWorkflow?: string;
       source?: AgentSessionSource;
       parentSessionId?: string;
       forkedFromSessionId?: string;
@@ -1840,9 +1875,11 @@ export class AgentSessionsService {
             sandbox_id: null,
             allocation_id: allocation.id,
             environment_name: admitted.environmentName,
+            placement: toPlacementJson(placementOf(admitted)),
             status: "active",
             title: input.title ?? null,
             chat_key: input.chatKey ?? null,
+            chat_workflows: input.chatWorkflow ? [input.chatWorkflow] : [],
             parent_session_id: input.parentSessionId ?? null,
             forked_from_session_id: input.forkedFromSessionId ?? null,
             base_commit_sha: null,
@@ -1867,15 +1904,22 @@ export class AgentSessionsService {
   }
 
   /**
-   * The chat a workflow keeps for a key: the active one with that key, or a
-   * new one started for it. Concurrent first deliveries converge on one chat
-   * through the partial unique index on `chat_key`.
+   * The project's open chat for a key (ADR 0173): the active chat `identity`
+   * keeps for it, or a new one started for it. Keys belong to the project,
+   * not to one workflow, so every automation reaches the same chat for
+   * `pr-42`; each delivering workflow is recorded on the chat. A chat that
+   * someone archived is restored for everyone who archived it, so the
+   * delivery runs and is seen; a closed chat freed its key, so the next
+   * delivery starts a new chat. Concurrent first deliveries converge on one
+   * chat through the partial unique index on `chat_key`.
    */
   async chatForKey(
     identity: Identity,
     projectId: string,
     input: {
-      chatKey: string;
+      key: string;
+      /** The workflow delivering, recorded on the chat. */
+      workflowName?: string;
       origin?: SessionOperationOrigin;
       agentSlug?: string;
       environment?: string;
@@ -1892,7 +1936,7 @@ export class AgentSessionsService {
         .selectAll()
         .where("project_id", "=", projectId)
         .where("external_user_id", "=", identity.externalUserId)
-        .where("chat_key", "=", input.chatKey)
+        .where("chat_key", "=", input.key)
         .where("status", "=", "active")
         .executeTakeFirst();
 
@@ -1904,7 +1948,8 @@ export class AgentSessionsService {
           ...(agentId ? { agentId } : {}),
           ...(input.environment ? { environment: input.environment } : {}),
           ...(input.title ? { title: input.title } : {}),
-          chatKey: input.chatKey,
+          chatKey: input.key,
+          ...(input.workflowName ? { chatWorkflow: input.workflowName } : {}),
           origin: input.origin,
         });
         row = await this.db
@@ -1924,10 +1969,61 @@ export class AgentSessionsService {
     await this.requireSession(identity, projectId, row.id);
     if (agentId && row.agent_id !== agentId) {
       throw new Error(
-        `The chat for key ${input.chatKey} already belongs to a different agent`,
+        `The chat for key ${input.key} already belongs to a different agent`,
       );
     }
+    if (input.workflowName)
+      await this.db
+        .updateTable("agent_sessions")
+        .set({
+          chat_workflows: sql`chat_workflows || jsonb_build_array(${input.workflowName}::text)`,
+        })
+        .where("id", "=", row.id)
+        .where(
+          sql<boolean>`NOT (chat_workflows @> jsonb_build_array(${input.workflowName}::text))`,
+        )
+        .execute();
+    await this.restoreArchived([row.id]);
     return { sessionId: row.id, sessionCreated };
+  }
+
+  /**
+   * The open chat `ownerId` keeps for a key in this project, if any (ADR
+   * 0173). Never creates one; access is checked by whoever reads it.
+   */
+  async keyedChatId(input: {
+    projectId: string;
+    ownerId: string;
+    key: string;
+  }): Promise<string | undefined> {
+    const row = await this.db
+      .selectFrom("agent_sessions")
+      .select("id")
+      .where("project_id", "=", input.projectId)
+      .where("external_user_id", "=", input.ownerId)
+      .where("chat_key", "=", input.key)
+      .where("status", "=", "active")
+      .executeTakeFirst();
+    return row?.id;
+  }
+
+  /**
+   * Undo archive for everyone who archived these chats: work delivered to
+   * a chat runs and is seen, never silently held (ADR 0173). A released
+   * workspace is admitted again when the chat's next turn is claimed.
+   */
+  private async restoreArchived(sessionIds: readonly string[]): Promise<void> {
+    if (sessionIds.length === 0) return;
+    await this.db
+      .updateTable("agent_session_views")
+      .set(({ ref }) => ({
+        visibility: ref("previous_visibility"),
+        archived_at: null,
+        updated_at: new Date(),
+      }))
+      .where("session_id", "in", [...sessionIds])
+      .where("visibility", "=", "archived")
+      .execute();
   }
 
   /** Acknowledgement-by-interaction shared by desktop and PWA clients. */
@@ -2165,6 +2261,7 @@ export class AgentSessionsService {
       model_effort: string | null;
       allocation_id: string;
       environment_name: string;
+      placement: Json;
       sandbox_id: null;
     }> = {};
     let reallocatedRow: SessionRow | undefined;
@@ -2259,6 +2356,7 @@ export class AgentSessionsService {
           });
           updates.allocation_id = allocation.id;
           updates.environment_name = admission.environmentName;
+          updates.placement = toPlacementJson(placementOf(admission));
           updates.provider_session_id = null;
           updates.sandbox_id = null;
           return transaction
@@ -3115,6 +3213,9 @@ export class AgentSessionsService {
         expectedTurnId: activeTurn.id,
       });
     }
+    // Work delivered to an archived chat runs; the chat comes back into view.
+    if (receipt.created && receipt.turnId)
+      await this.restoreArchived([sessionId]);
     if (receipt.turnId) {
       void this.scheduleDrain(identity, projectId, sessionId).catch(() => {
         // The durable row remains queued or failed and is visible to operators.
@@ -3484,16 +3585,29 @@ export class AgentSessionsService {
         session.authority_host_id !== this.hostId
       )
         return;
-      const presentation = (
-        await this.presentations(identity, [sessionId])
-      ).get(sessionId);
-      if (presentation?.visibility === "archived") return;
       const allocation = session.allocation_id
         ? await this.executionAllocations.get({
             identity,
             allocationId: session.allocation_id,
           })
         : undefined;
+      // A chat whose workspace was released (idle, or archived) gets a fresh
+      // one when work arrives; the turn rehydrates it from the session branch.
+      if (
+        allocation?.status === "released" &&
+        (await this.turns.listPending({ sessionId })).some(
+          (turn) => turn.status === "queued",
+        )
+      ) {
+        try {
+          await this.readmit(identity, projectId, session);
+        } catch (error) {
+          // Full machines retry on the next poll; the turn stays queued.
+          if (error instanceof EnvironmentCapacityError) return;
+          throw error;
+        }
+        continue;
+      }
       // The controller loop runs where the allocation's node lease is held:
       // this instance's own node or a remote worker it serves (ADR 0164).
       const nodeLease = this.workerNode
@@ -3629,7 +3743,324 @@ export class AgentSessionsService {
         heartbeat.stop();
         this.runningTurns.delete(sessionId);
       }
+      // Closed while this turn ran: its checkpoint may have pushed again.
+      const after = await this.db
+        .selectFrom("agent_sessions")
+        .select(["id", "status", "agent_id", "allocation_id"])
+        .where("id", "=", sessionId)
+        .executeTakeFirst();
+      if (after?.status === "closed") {
+        await this.releaseClosedResources({
+          identity,
+          projectId,
+          session: after,
+        });
+        return;
+      }
     }
+  }
+
+  /**
+   * Admit a fresh workspace for a chat whose last one was released, while
+   * it waited (ADR 0173) or by archive: its own Environment, placed again by
+   * owner and pool. The next turn's sandbox rehydrates from the session
+   * branch. A concurrent readmission by another instance wins quietly.
+   */
+  private async readmit(
+    identity: Identity,
+    projectId: string,
+    session: SessionRow,
+  ): Promise<void> {
+    const agent = await this.resolveAgent(session.agent_id, projectId);
+    const admission = await this.executionEnvironments.admit({
+      identity,
+      projectId,
+      owner: placementOwner(session.external_user_id),
+      ...(session.environment_name
+        ? { environment: session.environment_name }
+        : {}),
+      allowed: agent.environment?.allowed,
+      preferred: agent.environment?.preferred,
+      requirements: {
+        ...agent.environment?.requirements,
+        workload: "agent",
+        topology: agent.topology,
+      },
+    });
+    const requirements = agent.connectionRequirements ?? [];
+    const connectionAdmission = this.connectionAdmission;
+    if (requirements.length > 0 && !connectionAdmission) {
+      throw new Error("Connection providers are not configured");
+    }
+    const connections =
+      requirements.length > 0 && connectionAdmission
+        ? await connectionAdmission.admit({
+            identity,
+            projectId,
+            environment: admission.environmentName,
+            requirements,
+          })
+        : [];
+    const previous = parsePlacement(session.placement);
+    await this.db.transaction().execute(async (transaction) => {
+      const current = await transaction
+        .selectFrom("agent_sessions")
+        .select(["status", "allocation_id"])
+        .where("id", "=", session.id)
+        .forUpdate()
+        .executeTakeFirst();
+      if (
+        current?.status !== "active" ||
+        current.allocation_id !== session.allocation_id
+      )
+        return;
+      const allocation = await this.executionAllocations.create({
+        identity,
+        projectId,
+        environmentName: admission.environmentName,
+        workloadKind: "agent",
+        rootWorkloadId: session.id,
+        workerNodeId: admission.runtime.workerNodeId,
+        policy: {
+          binding: admission.binding,
+          requirements: admission.effectiveRequirements,
+          connections,
+        },
+        transaction,
+      });
+      await transaction
+        .updateTable("agent_sessions")
+        .set({
+          allocation_id: allocation.id,
+          environment_name: admission.environmentName,
+          sandbox_id: null,
+          provider_session_id: null,
+          placement: toPlacementJson({
+            ...placementOf(admission),
+            reason: previous?.reason ?? admission.reason,
+          }),
+        })
+        .where("id", "=", session.id)
+        .execute();
+    });
+  }
+
+  /**
+   * Give back the workspaces of chats that have waited without a turn for
+   * their Environment's `idleReleaseMinutes` (ADR 0173). The sandbox's
+   * changes are saved to the session branch first; then the Allocation is
+   * released, and the node destroys the sandbox and frees its slot and
+   * reservation. The chat's next turn admits a fresh workspace and
+   * rehydrates it from the branch, so capacity follows activity rather than
+   * open chats. Runs on the instance holding each node's lease.
+   */
+  async releaseIdleWorkspaces(
+    input: { now?: Date; limit?: number } = {},
+  ): Promise<number> {
+    const held = this.heldWorkerNodes().map((node) => node.id);
+    if (held.length === 0) return 0;
+    const now = input.now ?? new Date();
+    const rows = await this.db
+      .selectFrom("agent_sessions as session")
+      .innerJoin(
+        "execution_allocations as allocation",
+        "allocation.id",
+        "session.allocation_id",
+      )
+      .innerJoin("projects", "projects.id", "session.project_id")
+      .select([
+        "session.id",
+        "session.project_id",
+        "session.environment_name",
+        "session.agent_id",
+        "session.provider_session_id",
+        "projects.tenant_id",
+        "allocation.id as allocation_id",
+        "allocation.created_at as allocated_at",
+        "allocation.sandbox_provider_id",
+      ])
+      .select((eb) =>
+        eb
+          .selectFrom("agent_turns")
+          .select((turn) => turn.fn.max("agent_turns.updated_at").as("at"))
+          .whereRef("agent_turns.session_id", "=", "session.id")
+          .as("last_turn_at"),
+      )
+      .where("session.status", "=", "active")
+      .where("allocation.status", "=", "active")
+      .where("allocation.worker_node_id", "in", held)
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("agent_turns")
+              .select("agent_turns.id")
+              .whereRef("agent_turns.session_id", "=", "session.id")
+              .where("agent_turns.status", "in", ["queued", "held", "running"]),
+          ),
+        ),
+      )
+      .orderBy("allocation.created_at")
+      .limit(input.limit ?? 100)
+      .execute();
+    const limits = new Map<string, number>();
+    const released: string[] = [];
+    for (const row of rows) {
+      if (this.runningTurns.has(row.id) || this.drainers.has(row.id)) continue;
+      const identity: Identity = {
+        tenantId: row.tenant_id,
+        externalUserId: PROJECT_PRINCIPAL_ID,
+        scope: [],
+      };
+      const environment = row.environment_name;
+      if (!environment) continue;
+      const policyKey = `${row.project_id}:${environment}`;
+      const minutes =
+        limits.get(policyKey) ??
+        (await this.executionEnvironments
+          .idleReleaseMinutes({
+            identity,
+            projectId: row.project_id,
+            environment,
+          })
+          .catch(() => 0));
+      limits.set(policyKey, minutes);
+      if (minutes <= 0) continue;
+      const lastTurnAt = row.last_turn_at
+        ? new Date(row.last_turn_at).getTime()
+        : 0;
+      const idleSince = Math.max(row.allocated_at.getTime(), lastTurnAt);
+      if (now.getTime() - idleSince < minutes * 60_000) continue;
+      try {
+        if (
+          await this.releaseIdleWorkspace({
+            identity,
+            projectId: row.project_id,
+            sessionId: row.id,
+            agentId: row.agent_id,
+            providerSessionId: row.provider_session_id,
+            allocationId: row.allocation_id,
+            sandboxProviderId: row.sandbox_provider_id,
+          })
+        )
+          released.push(row.id);
+      } catch (error) {
+        // Nothing is released when the workspace could not be saved first.
+        console.warn(
+          `[catamorphic] Idle workspace of session ${row.id} kept`,
+          error,
+        );
+      }
+    }
+    return released.length;
+  }
+
+  private async releaseIdleWorkspace(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    agentId: string | null;
+    providerSessionId: string | null;
+    allocationId: string;
+    sandboxProviderId: string | null;
+  }): Promise<boolean> {
+    const { identity, projectId, sessionId } = input;
+    const allocation = await this.executionAllocations.get({
+      identity,
+      allocationId: input.allocationId,
+    });
+    if (allocation?.status !== "active") return false;
+    if (input.sandboxProviderId) {
+      const runtime = await this.executionEnvironments.getRuntimeBinding({
+        identity,
+        bindingId: allocation.bindingId,
+        ...(allocation.workerNodeId
+          ? { workerNodeId: allocation.workerNodeId }
+          : {}),
+      });
+      const selected = runtime?.sandboxProvider;
+      // Only the instance that reaches the machine can save its workspace.
+      if (!selected) return false;
+      const provider = allocationSandboxProvider({
+        db: this.db,
+        allocation,
+        provider: selected,
+        workerLeaseToken: () =>
+          this.heldWorkerNodes().find(
+            (node) => node.id === allocation.workerNodeId,
+          )?.token,
+      });
+      const status = await provider.getSandboxStatus(input.sandboxProviderId);
+      if (status === "stopped" || status === "archived")
+        await provider.startSandbox(input.sandboxProviderId);
+      await syncSandboxChanges({
+        provider,
+        projectManager: this.projectManager,
+        identity,
+        projectId,
+        sessionId,
+        sandboxProviderId: input.sandboxProviderId,
+        projectDir: this.projectDir(provider),
+      });
+      await this.projectManager.checkpointSession({
+        tenantId: identity.tenantId,
+        projectId,
+        sessionId,
+        message: "Save the workspace before releasing it while idle",
+        author: CHECKPOINT_AUTHOR,
+      });
+    }
+    const released = await this.db.transaction().execute(async (trx) => {
+      const current = await trx
+        .selectFrom("agent_sessions")
+        .select(["status", "allocation_id"])
+        .where("id", "=", sessionId)
+        .forUpdate()
+        .executeTakeFirst();
+      if (
+        current?.status !== "active" ||
+        current.allocation_id !== allocation.id ||
+        this.runningTurns.has(sessionId)
+      )
+        return false;
+      const busy = await trx
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("session_id", "=", sessionId)
+        .where("status", "in", ["queued", "held", "running"])
+        .executeTakeFirst();
+      if (busy) return false;
+      await this.executionAllocations.release({
+        identity,
+        allocationId: allocation.id,
+        reason: "idle",
+        transaction: trx,
+      });
+      await trx
+        .updateTable("agent_sessions")
+        .set({ provider_session_id: null, sandbox_id: null })
+        .where("id", "=", sessionId)
+        .execute();
+      return true;
+    });
+    if (!released) return false;
+    if (input.providerSessionId) {
+      const agent = await this.resolveAgent(input.agentId, projectId).catch(
+        () => undefined,
+      );
+      await agent?.provider
+        .dispose({
+          providerSessionId: input.providerSessionId,
+          sessionId,
+          projectId,
+          sandboxId: input.sandboxProviderId ?? "",
+          workingDirectory: "",
+        })
+        .catch(() => {});
+    }
+    await this.connectionGrants
+      ?.revokeAllocation({ allocationId: allocation.id })
+      .catch(() => {});
+    return true;
   }
 
   /**
@@ -4217,6 +4648,7 @@ export class AgentSessionsService {
             agent,
             runtime,
           );
+          console.error("DEBUG3 anchored", sessionId);
           if (this.agentCapabilities) {
             turnOptions.context = [
               await this.agentCapabilities.prompt({
@@ -4234,6 +4666,7 @@ export class AgentSessionsService {
               allocationId: session.allocation_id ?? undefined,
             });
           }
+          console.error("DEBUG3 capabilities", sessionId);
           // The caller's view of the store, in the folder the agent works in
           // (ADR 0055): pulled before the turn, shipped after it.
           const storeDir = await this.storeSyncDir(
@@ -4267,6 +4700,7 @@ export class AgentSessionsService {
           // latched flag catches it here: the turn settles as interrupted
           // without ever calling the provider. Checked with has() (not
           // delete()) so the finalization below still reads it as interrupted.
+          console.error("DEBUG3 store", sessionId);
           if (extras.leaseLost())
             throw new Error(
               "Execution ownership was lost. Check the last actions before retrying.",
@@ -4773,10 +5207,19 @@ export class AgentSessionsService {
     );
   }
 
+  /**
+   * The end of a chat's life (ADR 0173), for it and its subsessions: queued
+   * work is cancelled and running work interrupted, watchers stop, the
+   * workspace Allocation is released (its node destroys the sandbox), the
+   * session branch and its repository copy are deleted, connection grants
+   * are revoked, and the chat's key is free for a new chat. The transcript
+   * stays readable.
+   */
   async close(
     identity: Identity,
     projectId: string,
     sessionId: string,
+    input: { origin?: SessionOperationOrigin } = {},
   ): Promise<AgentSession> {
     return withSpan(
       {
@@ -4790,70 +5233,152 @@ export class AgentSessionsService {
         },
       },
       async () => {
-        const session = await this.requireSession(
-          identity,
+        await this.requireSession(identity, projectId, sessionId);
+        const sessionIds = await this.descendantSessionIds(
           projectId,
           sessionId,
         );
-        await this.cancelAutoRetry(sessionId);
-
+        await this.db
+          .updateTable("agent_turns")
+          .set({
+            status: "cancelled",
+            error: "Chat closed",
+            completed_at: new Date(),
+            lease_owner: null,
+            lease_token: null,
+            lease_expires_at: null,
+            updated_at: new Date(),
+          })
+          .where("session_id", "in", sessionIds)
+          .where("status", "in", ["queued", "held"])
+          .execute();
+        for (const id of sessionIds) {
+          await this.cancelAutoRetry(id);
+          await this.interrupt(identity, projectId, id, {
+            notifyParent: false,
+          }).catch(() => {});
+        }
         await this.archiveResources?.stop({
           identity,
           projectId,
-          sessionIds: [sessionId],
+          sessionIds,
         });
+        // A chat closing itself from its own turn cannot wait for that turn.
+        const caller =
+          input.origin?.author.kind === "agent"
+            ? input.origin.author.sessionId
+            : undefined;
+        await this.waitForTurnsToStop(
+          sessionIds.filter((id) => id !== caller),
+          { timeoutMs: 30_000 },
+        );
 
-        if (session.provider_session_id) {
-          const agent = await this.resolveAgent(
-            session.agent_id,
-            projectId,
-          ).catch(() => undefined);
-          await agent?.provider
-            .dispose({
-              providerSessionId: session.provider_session_id,
-              sessionId: session.id,
-              projectId,
-              sandboxId: "",
-              workingDirectory: "",
-            })
-            .catch(() => {});
-        }
-
-        if (!session.allocation_id) {
-          throw new Error("Agent session has no Environment Allocation");
-        }
-        const allocationId = session.allocation_id;
-
-        const row = await this.db.transaction().execute(async (transaction) => {
-          const closed = await transaction
+        const closed = await this.db.transaction().execute(async (trx) => {
+          if (input.origin)
+            await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
+              trx,
+            );
+          const previous = await trx
+            .selectFrom("agent_sessions")
+            .select(["id", "provider_session_id"])
+            .where("id", "in", sessionIds)
+            .forUpdate()
+            .execute();
+          const rows = await trx
             .updateTable("agent_sessions")
-            .set({ status: "closed", updated_at: new Date() })
-            .where("id", "=", sessionId)
+            .set({
+              status: "closed",
+              provider_session_id: null,
+              sandbox_id: null,
+              activity: null,
+              updated_at: new Date(),
+            })
+            .where("id", "in", sessionIds)
             .returningAll()
-            .executeTakeFirstOrThrow();
-          await this.executionAllocations.release({
-            identity,
-            allocationId,
-            transaction,
-          });
-          return closed;
+            .execute();
+          for (const row of rows) {
+            if (row.allocation_id)
+              await this.executionAllocations.release({
+                identity,
+                allocationId: row.allocation_id,
+                transaction: trx,
+              });
+          }
+          return { rows, previous };
         });
-
+        const sessions = await this.db
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "in", sessionIds)
+          .execute();
         // Admission rechecks status under this session's row lock. Sweep any
         // watcher that committed before closure, after further admission is barred.
         await this.archiveResources?.stop({
           identity,
           projectId,
-          sessionIds: [sessionId],
+          sessionIds,
         });
-
-        await this.connectionGrants?.revokeAllocation({
-          allocationId,
-        });
-
-        return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+        for (const row of closed.rows) {
+          await this.releaseClosedResources({
+            identity,
+            projectId,
+            session: row,
+            providerSessionId: closed.previous.find(
+              (candidate) => candidate.id === row.id,
+            )?.provider_session_id,
+          });
+        }
+        const root = sessions.find((row) => row.id === sessionId);
+        if (!root) throw new AgentSessionNotFoundError(sessionId);
+        return mapSession(root, false, this.hostId, this.authorityLeaseMs);
       },
     );
+  }
+
+  /**
+   * What a closed chat still holds outside its row: its provider session,
+   * connection grants, and on hosts that keep session workspaces, the
+   * `sessions/<id>` branch and `session-<id>` copy. Safe to repeat.
+   */
+  private async releaseClosedResources(input: {
+    identity: Identity;
+    projectId: string;
+    session: Pick<SessionRow, "id" | "agent_id" | "allocation_id">;
+    providerSessionId?: string | null;
+  }): Promise<void> {
+    const { session } = input;
+    if (input.providerSessionId) {
+      const agent = await this.resolveAgent(
+        session.agent_id,
+        input.projectId,
+      ).catch(() => undefined);
+      await agent?.provider
+        .dispose({
+          providerSessionId: input.providerSessionId,
+          sessionId: session.id,
+          projectId: input.projectId,
+          sandboxId: "",
+          workingDirectory: "",
+        })
+        .catch(() => {});
+    }
+    if (session.allocation_id)
+      await this.connectionGrants
+        ?.revokeAllocation({ allocationId: session.allocation_id })
+        .catch(() => {});
+    if (this.workerNode)
+      await this.projectManager
+        .deleteSession({
+          tenantId: input.identity.tenantId,
+          projectId: input.projectId,
+          sessionId: session.id,
+        })
+        .catch((error) =>
+          console.warn(
+            `[catamorphic] Could not delete the workspace of closed session ${session.id}`,
+            error,
+          ),
+        );
   }
 
   async archiveImpact(
@@ -5093,8 +5618,16 @@ export class AgentSessionsService {
 
   private async waitForTurnsToStop(
     sessionIds: readonly string[],
+    options: { timeoutMs?: number } = {},
   ): Promise<void> {
-    while (sessionIds.some((id) => this.runningTurns.has(id))) {
+    const deadline =
+      options.timeoutMs === undefined
+        ? Number.POSITIVE_INFINITY
+        : Date.now() + options.timeoutMs;
+    while (
+      sessionIds.some((id) => this.runningTurns.has(id)) &&
+      Date.now() < deadline
+    ) {
       // Do not attach another reaction to each still-pending drainer on
       // every tick. Polling the running set already supplies the wake-up.
       await new Promise<void>((resolve) => setTimeout(resolve, 25));
@@ -5652,6 +6185,15 @@ export class AgentSessionsService {
       identity,
       projectId,
     );
+    console.error("DEBUG3 prepared");
+    const d1 = await this.loadAttachedPlugins(projectId);
+    console.error("DEBUG3 plugins");
+    const d2 = await this.transcriptHistory(session.id);
+    console.error("DEBUG3 history");
+    const d3 = await this.connectionMcpServers(identity, session);
+    console.error("DEBUG3 mcp");
+    const d4 = await this.callerOpts(identity, projectId, session.agent_id);
+    console.error("DEBUG3 caller", Boolean(d1 && d2 && d3 && d4));
     const providerSession = await agent.provider.startSession({
       sandboxProvider: runtime.provider,
       projectId,
@@ -6839,9 +7381,54 @@ function mapSession(
     attentionRequired:
       Number(row.attention_revision) > Number(row.attention_seen_revision),
     status: row.status as "active" | "closed",
+    key: row.chat_key,
+    keyWorkflows: stringList(row.chat_workflows),
+    placement: parsePlacement(row.placement),
     baseCommitSha: row.base_commit_sha,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+function toPlacementJson(placement: SessionPlacement): Json {
+  return {
+    environment: placement.environment,
+    reason: placement.reason,
+    machine: { id: placement.machine.id, label: placement.machine.label },
+  };
+}
+
+function stringList(value: Json): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+const PLACEMENT_REASONS: readonly PlacementReason[] = [
+  "requested",
+  "agent_preferred",
+  "project_default",
+  "available",
+];
+
+function parsePlacement(value: Json | null): SessionPlacement | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const { environment, reason, machine } = value;
+  const known = PLACEMENT_REASONS.find((candidate) => candidate === reason);
+  if (typeof environment !== "string" || !known) return null;
+  if (!machine || typeof machine !== "object" || Array.isArray(machine))
+    return null;
+  const { id, label } = machine;
+  if (typeof id !== "string" || typeof label !== "string") return null;
+  return { environment, reason: known, machine: { id, label } };
+}
+
+/** The placement an admission records on its chat. */
+function placementOf(admission: EnvironmentAdmission): SessionPlacement {
+  return {
+    environment: admission.environmentName,
+    reason: admission.reason,
+    machine: { id: admission.binding.id, label: admission.binding.label },
   };
 }
 
