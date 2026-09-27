@@ -137,6 +137,97 @@ describe("workspace refs (ADR 0178)", () => {
     await reset.dispose();
   });
 
+  it("rebases a session's checkpoints onto a new base, and undoes a conflicting rebase", async () => {
+    await nativeGit(work, ["checkout", "-q", "-b", "feature"]);
+    const first = await commit({ "app.ts": "two\n" }, "First push");
+    await nativeGit(work, ["push", "-q", upstream, "HEAD:refs/pull/7/head"]);
+    const remote = new ObjectRemoteBackend({
+      store: new InMemoryObjectStore(),
+    });
+    const manager = new ProjectManager(
+      new FsBackend(path.join(dir, "a")),
+      remote,
+    );
+    (await manager.create(TENANT, PROJECT)).dispose();
+    const mirrorPath = manager.mirrorPath({
+      tenantId: TENANT,
+      projectId: PROJECT,
+    });
+    if (!mirrorPath) throw new Error("expected a mirror");
+    const pin = "refs/work/base/s2";
+    const args = { tenantId: TENANT, projectId: PROJECT, sessionId: "s2" };
+    await fetchIntoMirror({
+      mirrorPath,
+      url: upstream,
+      ref: "refs/pull/7/head",
+      pin,
+    });
+    await manager.setSessionBase({ ...args, pin, commit: first });
+    const copy = await manager.openSession(args);
+    await copy.writeFile("notes.md", "review notes\n");
+    await copy.dispose();
+    await manager.checkpointSession({
+      ...args,
+      message: "Turn",
+      author: { name: "Agent", email: "agent@example.test" },
+    });
+
+    const second = await commit({ "readme.md": "hello again\n" }, "Second");
+    await nativeGit(work, ["push", "-q", upstream, "HEAD:refs/pull/7/head"]);
+    await fetchIntoMirror({
+      mirrorPath,
+      url: upstream,
+      ref: "refs/pull/7/head",
+      pin,
+    });
+    const rebased = await manager.moveSessionBase({
+      ...args,
+      pin,
+      from: first,
+      to: second,
+      update: "rebase",
+    });
+    expect(rebased.status).toBe("moved");
+    const moved = await manager.openSession(args);
+    expect(await moved.readFile("notes.md")).toBe("review notes\n");
+    expect(await moved.readFile("readme.md")).toBe("hello again\n");
+    await moved.writeFile("readme.md", "session edit\n");
+    await moved.dispose();
+    await manager.checkpointSession({
+      ...args,
+      message: "Edit readme",
+      author: { name: "Agent", email: "agent@example.test" },
+    });
+
+    const third = await commit({ "readme.md": "upstream edit\n" }, "Third");
+    await nativeGit(work, ["push", "-q", upstream, "HEAD:refs/pull/7/head"]);
+    await fetchIntoMirror({
+      mirrorPath,
+      url: upstream,
+      ref: "refs/pull/7/head",
+      pin,
+    });
+    const before = await manager.openSession(args);
+    const headBefore = await before.resolveRef("HEAD");
+    await before.dispose();
+    const conflict = await manager.moveSessionBase({
+      ...args,
+      pin,
+      from: second,
+      to: third,
+      update: "rebase",
+    });
+    expect(conflict).toEqual({
+      status: "conflict",
+      head: headBefore,
+      files: ["readme.md"],
+    });
+    const kept = await manager.openSession(args);
+    expect(await kept.readFile("readme.md")).toBe("session edit\n");
+    expect((await kept.status()).dirty).toBe(false);
+    await kept.dispose();
+  });
+
   it("builds a shallow seed pack a fresh repository can check out", async () => {
     const base = await commit({ "app.ts": "two\n" }, "Base");
     const head = await commit({ "app.ts": "three\n" }, "Session work");

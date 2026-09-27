@@ -141,6 +141,8 @@ export interface AgentSessions {
   todos: Generated<Json>;
   updated_at: Generated<Timestamp>;
   work_status: Generated<string>;
+  workspace: Json | null;
+  workspace_move: Json | null;
 }
 
 export interface AgentSessionViews {
@@ -418,6 +420,7 @@ export interface ConnectionCapabilityGrants {
   alias: string;
   allocation_id: string;
   capabilities: Json;
+  channel: Generated<string>;
   connection_id: string;
   created_at: Generated<Timestamp>;
   expires_at: Timestamp;

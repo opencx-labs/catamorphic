@@ -31,6 +31,24 @@ export interface SessionSnapshot {
     reason: "requested" | "agent_preferred" | "project_default" | "available";
     machine: { id: string; label: string };
   } | null;
+  /**
+   * The base the chat's workspace stands on (ADR 0178): the ref of the
+   * project's remote it started at or last moved to, and that ref's commit
+   * then. Null for a chat started from the project itself.
+   */
+  workspace: { ref: string; commit: string } | null;
+}
+/**
+ * Where a chat's workspace starts (ADR 0178): a branch, tag, commit, or
+ * full ref (`refs/pull/42/head`) of the project's linked remote, fetched by
+ * the host with the remote's own credentials. Delivered again to an open
+ * chat, it moves the workspace before the next turn: `rebase` (default)
+ * replays the agent's commits onto the new base, `reset` discards them. The
+ * agent is told the old and new heads and what changed.
+ */
+interface WorkspaceRef {
+  ref: string;
+  update?: "reset" | "rebase";
 }
 /** One transcript message as `history` returns it. */
 export interface SessionHistoryMessage {
@@ -115,6 +133,8 @@ export interface SessionHostOperations {
       notification?: { title?: string; body?: string };
       /** Defaults to one delivery per run, chat and content. */
       idempotencyKey?: string;
+      /** Start, or move, the chat's workspace at a ref of the project's remote. */
+      workspace?: WorkspaceRef;
     },
     {
       sessionId: string;
@@ -127,7 +147,7 @@ export interface SessionHostOperations {
     }
   >;
   create: Call<
-    Action & { agentId?: string; title?: string },
+    Action & { agentId?: string; title?: string; workspace?: WorkspaceRef },
     SessionSnapshot | QueuedSessionAction
   >;
   fork: Call<

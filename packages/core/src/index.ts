@@ -224,7 +224,12 @@ export {
   ConnectionBroker,
   type ConnectionGateway,
 } from "./services/connection-broker.js";
-export { ConnectionCapabilityGrantsService } from "./services/connection-capability-grants.js";
+export {
+  ConnectionCapabilityGrantsService,
+  type ConnectionGrantChannel,
+  MAX_GRANT_TTL_SECONDS,
+  type ValidConnectionGrant,
+} from "./services/connection-capability-grants.js";
 export {
   type ConnectionActionContext,
   type ConnectionActionGuard,
@@ -249,6 +254,7 @@ export {
   CONNECTION_ALIAS_PATTERN,
   CONNECTION_NAME_PATTERN,
   type ConnectionBindingSource,
+  type ConnectionGitPolicy,
   type ConnectionPrincipalKind,
   type ConnectionRecord,
   type ConnectionRequirement,
@@ -256,6 +262,7 @@ export {
   type ConnectionStatus,
   connectionMcpServerName,
   type EnvironmentConnectionBinding,
+  GIT_CAPABILITIES,
   normalizeConnectionRequirement,
   type ResolvedConnectionBinding,
 } from "./services/connection-types.js";
@@ -359,6 +366,24 @@ export {
   type ExecutionWorkerOptions,
   ExecutionWorkerService,
 } from "./services/execution-worker-service.js";
+export {
+  advertisedDefaultBranch,
+  DEFAULT_PUSH_PATTERNS,
+  GitGatewayError,
+  type GitGatewayOperation,
+  type GitGatewayRequest,
+  type GitGatewayResponse,
+  GitGatewayService,
+  normalizeRepositoryPath,
+  parseReceivePackCommands,
+  pktLine,
+  type RefUpdate,
+  readPktSection,
+  receivePackRefusal,
+  refMatches,
+  repositoryBelow,
+  reviewPush,
+} from "./services/git-gateway.js";
 export { GithubProjectEventSource } from "./services/github-event-source.js";
 export {
   type GithubConnectionStatus,
@@ -537,6 +562,7 @@ export {
   type WorkflowStepAttempt,
   type WorkflowStepAttemptStatus,
 } from "./services/runs-service.js";
+export { parseSnapshot } from "./services/sandbox-sync.js";
 export { SchedulesService } from "./services/schedules-service.js";
 export {
   type SecretStatus,
@@ -574,6 +600,17 @@ export {
   type SessionSyncStatus,
   SessionSyncWatermarkError,
 } from "./services/session-sync-service.js";
+export {
+  basePin,
+  movePin,
+  parseWorkspaceRequest,
+  type SessionWorkspaceBase,
+  type SessionWorkspaceMove,
+  type SessionWorkspaceRequest,
+  SessionWorkspaceRequestSchema,
+  SessionWorkspaces,
+  workspaceMoveNote,
+} from "./services/session-workspaces.js";
 export {
   humanizeSkillName,
   type ProjectSkill,

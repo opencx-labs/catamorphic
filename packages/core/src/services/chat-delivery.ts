@@ -9,6 +9,10 @@ import {
   projectPrincipalIdentity,
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
+import {
+  parseWorkspaceRequest,
+  type SessionWorkspaceRequest,
+} from "./session-workspaces.js";
 
 /** Whose keyed chat a delivery reaches (ADR 0156). */
 export type ChatAudience = "project" | { member: string };
@@ -59,6 +63,11 @@ type DeliveryMessage = {
   attention?: "required" | "none";
   notification?: { title?: string; body?: string };
   idempotencyKey?: string;
+  /**
+   * The ref of the project's linked remote the chat's workspace starts at,
+   * or moves to before its next turn (ADR 0178).
+   */
+  workspace?: SessionWorkspaceRequest;
 };
 
 /** `catamorphic.sessions.deliver`, validated: a chat by id or by key. */
@@ -106,12 +115,17 @@ export function parseChatDelivery(value: unknown): ChatDelivery {
     throw new Error("attention must be none or required");
   const notification = parseNotification(input.notification);
   const idempotencyKey = text("idempotencyKey", 500);
+  const workspace =
+    input.workspace === undefined
+      ? undefined
+      : parseWorkspaceRequest(input.workspace);
   const common: DeliveryMessage = {
     content,
     mode,
     ...(attention ? { attention } : {}),
     ...(notification ? { notification } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(workspace ? { workspace } : {}),
   };
 
   const hasSession = input.sessionId !== undefined;

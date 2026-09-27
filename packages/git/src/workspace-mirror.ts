@@ -202,6 +202,73 @@ export async function copyFromMirror(opts: {
   );
 }
 
+/** How a base move ended (ADR 0178). */
+export type BaseMoveOutcome =
+  | { status: "moved"; head: string }
+  /** The rebase stopped on conflicts and was undone; `head` is unchanged. */
+  | { status: "conflict"; head: string; files: string[] };
+
+const MOVE_AUTHOR = [
+  "-c",
+  "user.name=Work",
+  "-c",
+  "user.email=system@work.software",
+] as const;
+
+/**
+ * Move a checkout from base `from` to base `to`, a commit pinned in the
+ * mirror. `reset` discards the checkout's own commits and changes; `rebase`
+ * replays its commits since `from` onto `to` (keeping uncommitted changes)
+ * and, when that conflicts, puts everything back as it was so the caller
+ * can tell the agent instead of losing work.
+ */
+export async function moveCheckoutBase(opts: {
+  repoPath: string;
+  mirrorPath: string;
+  pin: string;
+  from: string;
+  to: string;
+  update: "reset" | "rebase";
+}): Promise<BaseMoveOutcome> {
+  await copyFromMirror({
+    mirrorPath: opts.mirrorPath,
+    pin: opts.pin,
+    repoPath: opts.repoPath,
+    into: "refs/work/base",
+  });
+  const head = async () =>
+    (await nativeGit(opts.repoPath, ["rev-parse", "HEAD"])).trim();
+  if (opts.update === "reset") {
+    await nativeGit(opts.repoPath, ["reset", "--quiet", "--hard", opts.to]);
+    await nativeGit(opts.repoPath, ["clean", "-fdq"]);
+    return { status: "moved", head: await head() };
+  }
+  try {
+    await nativeGit(opts.repoPath, [
+      ...MOVE_AUTHOR,
+      "rebase",
+      "--quiet",
+      "--autostash",
+      "--onto",
+      opts.to,
+      opts.from,
+    ]);
+    return { status: "moved", head: await head() };
+  } catch {
+    const files = (
+      await nativeGit(opts.repoPath, [
+        "diff",
+        "--name-only",
+        "--diff-filter=U",
+      ]).catch(() => "")
+    )
+      .split("\n")
+      .filter(Boolean);
+    await nativeGit(opts.repoPath, ["rebase", "--abort"]).catch(() => "");
+    return { status: "conflict", head: await head(), files };
+  }
+}
+
 /**
  * A packfile holding `head` and its history back to `base`, and the
  * commits a receiver must record as shallow. A sandbox seeded from it has

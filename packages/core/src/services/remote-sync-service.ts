@@ -1,6 +1,7 @@
 import type { DB } from "@catamorphic/db";
 import {
   fetchFromRemote,
+  type GitCredentials,
   type NetworkSyncResult,
   type ProjectManager,
   PushNotFastForwardError,
@@ -352,6 +353,30 @@ export class RemoteSyncService {
         return host.pullRequestFiles(identity, { remoteUrl, number });
       },
     );
+  }
+
+  /**
+   * The project's linked remote and the credentials this host fetches it
+   * with, for the control plane's own Git traffic (ADR 0178's mirror). The
+   * one place origin credentials are looked up; they never leave the
+   * control plane. Null when the project has no linked remote.
+   */
+  async origin(input: { identity: Identity; projectId: string }): Promise<{
+    url: string;
+    branch: string;
+    credentials?: GitCredentials;
+  } | null> {
+    const row = await this.projectRow(input.identity, input.projectId);
+    if (!row?.remote_url) return null;
+    const credentials = await this.credentialsFor(
+      input.identity,
+      row.remote_url,
+    );
+    return {
+      url: row.remote_url,
+      branch: row.remote_branch ?? row.default_branch ?? "main",
+      ...(credentials ? { credentials } : {}),
+    };
   }
 
   private async credentialsFor(identity: Identity, remoteUrl: string) {
