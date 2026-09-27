@@ -19,6 +19,8 @@ export interface RemoteCapabilities {
   documents: Array<{ path: string; access: "read" | "write" }>;
   /** The member's roles, described, for their agents' context (ADR 0152). */
   roles?: Array<{ name: string; description?: string }>;
+  /** Manages the organization's service connections; absent on older links. */
+  administrator?: boolean;
   features: {
     publications: "public" | "members" | false;
     proposals: boolean;

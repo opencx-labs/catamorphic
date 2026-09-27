@@ -8,6 +8,11 @@ import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
+import {
+  CONNECTION_ALIAS_PATTERN,
+  CONNECTION_NAME_PATTERN,
+  type EnvironmentConnectionBinding,
+} from "./connection-types.js";
 import { readProgramFile, withProgram } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
 
@@ -23,6 +28,27 @@ const ResourcePolicySchema = z.object({
 });
 
 const LABEL = /^[a-z0-9][a-z0-9._-]{0,62}$/;
+
+/**
+ * A connection alias the Environment offers (ADR 0172). Service authority
+ * comes from the named service connection an administrator authorized;
+ * member authority from each member's own connection.
+ */
+const EnvironmentConnectionBindingSchema = z
+  .strictObject({
+    provider: z.string().regex(CONNECTION_NAME_PATTERN),
+    principal: z.enum(["member", "service", "either"]),
+    service: z.string().regex(CONNECTION_NAME_PATTERN).optional(),
+    capabilities: z.array(z.string().min(1)).optional(),
+  })
+  .refine((binding) => binding.principal !== "member" || !binding.service, {
+    message: "A member binding does not name a service connection",
+    path: ["service"],
+  })
+  .refine((binding) => binding.principal !== "service" || binding.service, {
+    message: "A service binding names its service connection",
+    path: ["service"],
+  });
 
 const ProjectEnvironmentDefinitionSchema = z
   .strictObject({
@@ -44,6 +70,13 @@ const ProjectEnvironmentDefinitionSchema = z
         resources: ResourcePolicySchema.optional(),
       })
       .optional(),
+    /** Connection aliases, keyed by alias (ADR 0172). */
+    connections: z
+      .record(
+        z.string().regex(CONNECTION_ALIAS_PATTERN),
+        EnvironmentConnectionBindingSchema,
+      )
+      .optional(),
   })
   .refine((definition) => !(definition.device && definition.pool), {
     message: "An Environment runs on a member's device or on a pool, not both",
@@ -59,6 +92,7 @@ export interface ProjectEnvironmentDefinition {
   device?: "member";
   strict?: boolean;
   requirements?: Omit<EnvironmentRequirements, "workload" | "topology">;
+  connections?: Readonly<Record<string, EnvironmentConnectionBinding>>;
 }
 
 export interface ProjectEnvironmentEntry {

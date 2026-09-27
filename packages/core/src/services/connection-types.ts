@@ -1,4 +1,5 @@
 import type { Json } from "@catamorphic/db";
+import type { Identity } from "../identity.js";
 
 export type ConnectionPrincipalKind =
   | "member"
@@ -24,11 +25,16 @@ export interface ConnectionRequirement {
   optional?: boolean;
 }
 
+/** Names of service connections, like provider kinds. */
+export const CONNECTION_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]{0,62}$/;
+
 export interface ConnectionRecord {
   id: string;
   projectId: string | null;
   providerKind: string;
   principalKind: ConnectionPrincipalKind;
+  /** A service connection's name, which Environment bindings refer to. */
+  name: string | null;
   ownerExternalUserId: string | null;
   label: string;
   status: ConnectionStatus;
@@ -41,32 +47,39 @@ export interface ConnectionRecord {
   updatedAt: string;
 }
 
+/**
+ * One connection alias an Environment declares in `.work/project.json`
+ * (ADR 0172): the provider that backs it, whose authority it accepts, the
+ * named service connection that supplies service authority, and the
+ * capabilities it narrows to. Committed, so access changes are reviewed
+ * like code.
+ */
 export interface EnvironmentConnectionBinding {
-  id: string;
-  projectId: string;
-  environment: string;
-  alias: string;
-  providerKind: string;
-  principalKinds: ConnectionPrincipalKind[];
-  serviceConnectionId: string | null;
-  capabilities: string[];
-  memberConnection: ConnectionBindingPrincipalStatus | null;
-  serviceConnection: ConnectionBindingPrincipalStatus | null;
-  createdAt: string;
-  updatedAt: string;
+  provider: string;
+  principal: ConnectionRequirementPrincipal;
+  /** A service connection's name; required when `principal` is `service`. */
+  service?: string;
+  /** Narrows what the alias may do; absent keeps the connection's own. */
+  capabilities?: readonly string[];
 }
 
-export interface ConnectionBindingPrincipalStatus {
-  connectionId: string | null;
-  principalKind: ConnectionPrincipalKind;
-  label: string;
-  status: ConnectionStatus;
-  account: Json;
-  scopes: string[];
+/** Resolves the bindings of one project Environment, alias to binding. */
+export type ConnectionBindingSource = (args: {
+  identity: Identity;
+  projectId: string;
+  environment: string;
+}) => Promise<Readonly<Record<string, EnvironmentConnectionBinding>>>;
+
+/** The connection principals a binding's `principal` accepts. */
+export function bindingPrincipalKinds(
+  principal: ConnectionRequirementPrincipal,
+): ConnectionPrincipalKind[] {
+  if (principal === "member") return ["member"];
+  if (principal === "service") return ["project_service", "tenant_service"];
+  return ["member", "project_service", "tenant_service"];
 }
 
 export interface ResolvedConnectionBinding {
-  bindingId: string;
   connectionId: string;
   alias: string;
   providerKind: string;

@@ -34,7 +34,6 @@ export function workflowEnablementConsentDigest(input: {
       .sort((left, right) => left.alias.localeCompare(right.alias))
       .map((connection) => ({
         alias: connection.alias,
-        bindingId: connection.bindingId,
         connectionId: connection.connectionId,
         providerKind: connection.providerKind,
         principalKind: connection.principalKind,

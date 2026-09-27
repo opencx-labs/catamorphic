@@ -14,8 +14,11 @@ import {
   type ConnectionProvider,
   ConnectionProviderRegistry,
 } from "../services/connection-providers.js";
+import type { EnvironmentConnectionBinding } from "../services/connection-types.js";
 import {
   AuthenticationRequiredError,
+  ConnectionNameTakenError,
+  ConnectionPermissionDeniedError,
   ConnectionsService,
 } from "../services/connections-service.js";
 import { MemoryCredentialVault } from "../services/credential-vault.js";
@@ -50,6 +53,8 @@ const member: Identity = {
 };
 
 const decodedMaterials: string[] = [];
+const invokedRevisions: string[] = [];
+const released: string[] = [];
 let refreshes = 0;
 let providerRevokeFails = false;
 const provider: ConnectionProvider = {
@@ -60,19 +65,27 @@ const provider: ConnectionProvider = {
     privateState: new TextEncoder().encode("pkce-verifier"),
   }),
   completeAuthorization: async ({ callback, privateState }) => {
-    expect(callback).toEqual({ code: "approved" });
     expect(new TextDecoder().decode(privateState)).toBe("pkce-verifier");
+    if (callback.code === "refused") throw new Error("upstream refused");
     return {
-      material: new TextEncoder().encode("member-token"),
+      material: new TextEncoder().encode(
+        callback.code === "approved" ? "member-token" : `${callback.code}`,
+      ),
       account: { email: "member@example.test" },
       scopes: ["directory.read"],
       capabilities: ["users.list", "users.disable"],
-      expiresAt: new Date(Date.now() + 60_000),
+      ...(callback.code === "approved"
+        ? { expiresAt: new Date(Date.now() + 60_000) }
+        : {}),
     };
   },
-  invoke: async ({ material, action }) => {
+  invoke: async ({ material, action, connection }) => {
     decodedMaterials.push(new TextDecoder().decode(material));
+    invokedRevisions.push(`${connection.id}@${connection.revision}`);
     return { action, ok: true };
+  },
+  release: async ({ connectionId }) => {
+    released.push(connectionId);
   },
   refresh: async () => {
     refreshes += 1;
@@ -87,10 +100,49 @@ const provider: ConnectionProvider = {
   },
 };
 
+/** What `.work/project.json` commits for the `company` Environment. */
+const committed: Record<string, EnvironmentConnectionBinding> = {
+  directory: {
+    provider: "fake",
+    principal: "either",
+    capabilities: ["users.list", "users.disable"],
+  },
+  "service-only": {
+    provider: "fake",
+    principal: "service",
+    service: "directory-bot",
+    capabilities: ["users.list"],
+  },
+};
+
+/** Authorize a named service connection the way an administrator does. */
+async function authorizeService(
+  connections: ConnectionsService,
+  connectionId: string,
+  token: string,
+) {
+  const started = await connections.beginServiceAuthorization({
+    identity: admin,
+    connectionId,
+    redirectUri: "https://work.test/api/connection-authorizations/callback",
+  });
+  return connections.completeAuthorization({
+    identity: admin,
+    state: started.authorizationId,
+    callback: { code: token },
+  });
+}
+
 describe("credential connections", () => {
   const vault = new MemoryCredentialVault();
   const providers = new ConnectionProviderRegistry([provider]);
-  const connections = new ConnectionsService(db, vault, providers);
+  const connections = new ConnectionsService({
+    db,
+    vault,
+    providers,
+    bindings: async ({ environment }) =>
+      environment === "company" ? committed : {},
+  });
   const allocations = new ExecutionAllocationsService(db);
   const broker = new ConnectionBroker(connections, providers, allocations);
   const grants = new ConnectionCapabilityGrantsService(db, allocations);
@@ -108,24 +160,6 @@ describe("credential connections", () => {
       .insertInto("projects")
       .values({ id: projectId, tenant_id: tenantId, name: "Brain" })
       .execute();
-    await connections.bind({
-      identity: admin,
-      projectId,
-      environment: "company",
-      alias: "directory",
-      providerKind: "fake",
-      principalKinds: ["member", "project_service"],
-      capabilities: ["users.list", "users.disable"],
-    });
-    await connections.bind({
-      identity: admin,
-      projectId,
-      environment: "company",
-      alias: "service-only",
-      providerKind: "fake",
-      principalKinds: ["project_service"],
-      capabilities: ["users.list"],
-    });
   }, 120_000);
 
   afterAll(async () => {
@@ -188,10 +222,82 @@ describe("credential connections", () => {
       requirements: [
         {
           alias: "directory",
-          principalKinds: ["project_service"],
+          principalKinds: ["project_service", "tenant_service"],
         },
       ],
     });
+  });
+
+  it("administers named service connections only with connections:write", async () => {
+    await expect(
+      connections.createService({
+        identity: member,
+        name: "directory-bot",
+        providerKind: "fake",
+        principalKind: "tenant_service",
+      }),
+    ).rejects.toBeInstanceOf(ConnectionPermissionDeniedError);
+    await expect(
+      connections.createService({
+        identity: admin,
+        name: "Not A Name",
+        providerKind: "fake",
+        principalKind: "tenant_service",
+      }),
+    ).rejects.toThrow("Invalid service connection name");
+    const created = await connections.createService({
+      identity: admin,
+      name: "tenant-directory",
+      providerKind: "fake",
+      principalKind: "tenant_service",
+    });
+    expect(created).toMatchObject({
+      name: "tenant-directory",
+      principalKind: "tenant_service",
+      projectId: null,
+      status: "pending",
+    });
+    await expect(
+      connections.createService({
+        identity: admin,
+        name: "tenant-directory",
+        providerKind: "fake",
+        principalKind: "tenant_service",
+      }),
+    ).rejects.toBeInstanceOf(ConnectionNameTakenError);
+    await expect(
+      connections.beginServiceAuthorization({
+        identity: member,
+        connectionId: created.id,
+        redirectUri: "https://work.test/callback",
+      }),
+    ).rejects.toBeInstanceOf(ConnectionPermissionDeniedError);
+    // An administrator who starts the challenge and loses the permission
+    // before finishing cannot complete it.
+    const started = await connections.beginServiceAuthorization({
+      identity: { ...admin, externalUserId: "demoted" },
+      connectionId: created.id,
+      redirectUri: "https://work.test/callback",
+    });
+    await expect(
+      connections.completeAuthorization({
+        identity: {
+          tenantId,
+          externalUserId: "demoted",
+          scope: [],
+          controlPlanePermissions: [],
+        },
+        state: started.authorizationId,
+        callback: { code: "tenant-token" },
+      }),
+    ).rejects.toBeInstanceOf(ConnectionPermissionDeniedError);
+    const listed = await connections.listServices({ identity: admin });
+    expect(listed.map((connection) => connection.name)).toContain(
+      "tenant-directory",
+    );
+    await expect(
+      connections.listServices({ identity: member }),
+    ).rejects.toBeInstanceOf(ConnectionPermissionDeniedError);
   });
 
   it("does not fall back from a required service principal to member auth", async () => {
@@ -206,25 +312,21 @@ describe("credential connections", () => {
       }),
     ).rejects.toBeInstanceOf(AuthenticationRequiredError);
 
-    const service = await connections.create({
+    const service = await connections.createService({
       identity: admin,
-      projectId,
+      name: "directory-bot",
       providerKind: "fake",
       principalKind: "project_service",
-      label: "Directory bot",
-      material: new TextEncoder().encode("service-token"),
-      capabilities: ["users.list", "users.disable"],
-    });
-    await connections.bind({
-      identity: admin,
       projectId,
-      environment: "company",
-      alias: "directory",
-      providerKind: "fake",
-      principalKinds: ["member", "project_service"],
-      serviceConnectionId: service.id,
-      capabilities: ["users.list", "users.disable"],
+      label: "Directory bot",
     });
+    await authorizeService(connections, service.id, "service-token");
+    committed.directory = {
+      provider: "fake",
+      principal: "either",
+      service: "directory-bot",
+      capabilities: ["users.list", "users.disable"],
+    };
     const [resolved] = await connections.resolve({
       identity: member,
       projectId,
@@ -237,6 +339,128 @@ describe("credential connections", () => {
       principalKind: "project_service",
     });
     expect(memberConnection.principalKind).toBe("member");
+  });
+
+  it("resolves a binding's service by name, the project's before the tenant's", async () => {
+    const tenantBot = await connections.createService({
+      identity: admin,
+      name: "shared-bot",
+      providerKind: "fake",
+      principalKind: "tenant_service",
+    });
+    await authorizeService(connections, tenantBot.id, "tenant-token");
+    committed.shared = {
+      provider: "fake",
+      principal: "service",
+      service: "shared-bot",
+    };
+    const unattended = {
+      identity: admin,
+      projectId,
+      environment: "company",
+      aliases: ["shared"],
+      unattended: true,
+    };
+    const [fromTenant] = await connections.resolve(unattended);
+    expect(fromTenant).toMatchObject({
+      connectionId: tenantBot.id,
+      principalKind: "tenant_service",
+      // No narrowing in the binding keeps the connection's own capabilities.
+      capabilities: ["users.list", "users.disable"],
+    });
+    const projectBot = await connections.createService({
+      identity: admin,
+      name: "shared-bot",
+      providerKind: "fake",
+      principalKind: "project_service",
+      projectId,
+    });
+    // The project's own connection of that name wins, even while it waits
+    // for authorization: a name never silently falls back to another.
+    await expect(connections.resolve(unattended)).rejects.toBeInstanceOf(
+      AuthenticationRequiredError,
+    );
+    await authorizeService(connections, projectBot.id, "project-token");
+    const [fromProject] = await connections.resolve(unattended);
+    expect(fromProject?.connectionId).toBe(projectBot.id);
+    // A trigger's frozen choice fails closed once the name resolves elsewhere.
+    await expect(
+      connections.resolveSnapshot({
+        identity: admin,
+        projectId,
+        environment: "company",
+        snapshot: [fromTenant!],
+      }),
+    ).rejects.toThrow("Assigned service connection changed");
+    await connections.revoke({ identity: admin, connectionId: projectBot.id });
+    expect(released).toContain(projectBot.id);
+    const [again] = await connections.resolveSnapshot({
+      identity: admin,
+      projectId,
+      environment: "company",
+      snapshot: [fromTenant!],
+    });
+    expect(again?.connectionId).toBe(tenantBot.id);
+    // Revoking frees the name for a new connection.
+    const replacement = await connections.createService({
+      identity: admin,
+      name: "shared-bot",
+      providerKind: "fake",
+      principalKind: "project_service",
+      projectId,
+    });
+    await connections.revoke({
+      identity: admin,
+      connectionId: replacement.id,
+    });
+    delete committed.shared;
+  });
+
+  it("rotates a service credential by authorizing again and drops old sessions", async () => {
+    const service = (await connections.listServices({ identity: admin })).find(
+      (connection) => connection.name === "directory-bot",
+    )!;
+    released.length = 0;
+    const rotated = await authorizeService(
+      connections,
+      service.id,
+      "service-token",
+    );
+    expect(rotated.revision).toBe(service.revision + 1);
+    expect(released).toEqual([service.id]);
+    const audit = await connections.listAudit({ identity: admin });
+    expect(audit).toContainEqual(
+      expect.objectContaining({
+        connectionId: service.id,
+        eventType: "connection.rotated",
+      }),
+    );
+  });
+
+  it("lists an Environment's committed aliases with their authority", async () => {
+    const forMember = await connections.listBindings({
+      identity: member,
+      projectId,
+      environment: "company",
+    });
+    expect(forMember.map((binding) => binding.alias)).toEqual(["directory"]);
+    expect(forMember[0]).toMatchObject({
+      provider: "fake",
+      principal: "either",
+      service: null,
+      memberConnection: { principalKind: "member" },
+      serviceConnection: { connectionId: null, label: "Directory bot" },
+    });
+    const forAdmin = await connections.listBindings({
+      identity: admin,
+      projectId,
+      environment: "company",
+    });
+    expect(forAdmin.map((binding) => binding.alias)).toEqual([
+      "directory",
+      "service-only",
+    ]);
+    expect(forAdmin[0]?.service).toBe("directory-bot");
   });
 
   it("does not offer member authorization for a service-only binding", async () => {
@@ -549,7 +773,6 @@ describe("credential connections", () => {
       identity: member,
       projectId,
       providerKind: "fake",
-      principalKind: "member",
       label: "Expiring",
       material: new TextEncoder().encode("old-token"),
       capabilities: ["users.list"],

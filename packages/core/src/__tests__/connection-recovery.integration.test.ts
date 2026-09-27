@@ -52,11 +52,18 @@ const provider: ConnectionProvider = {
 };
 
 describe("connection action recovery", () => {
-  const connections = new ConnectionsService(
+  const connections = new ConnectionsService({
     db,
-    new MemoryCredentialVault(),
-    new ConnectionProviderRegistry([provider]),
-  );
+    vault: new MemoryCredentialVault(),
+    providers: new ConnectionProviderRegistry([provider]),
+    bindings: async () => ({
+      directory: {
+        provider: "fake",
+        principal: "member",
+        capabilities: ["users.list"],
+      },
+    }),
+  });
   const allocations = new ExecutionAllocationsService(db);
   const jobs = new ExecutionJobsService(db);
 
@@ -70,15 +77,6 @@ describe("connection action recovery", () => {
       .insertInto("projects")
       .values({ id: projectId, tenant_id: tenantId, name: "Brain" })
       .execute();
-    await connections.bind({
-      identity: { tenantId, externalUserId: "admin" },
-      projectId,
-      environment: "company",
-      alias: "directory",
-      providerKind: "fake",
-      principalKinds: ["member"],
-      capabilities: ["users.list"],
-    });
   }, 120_000);
 
   afterAll(async () => {

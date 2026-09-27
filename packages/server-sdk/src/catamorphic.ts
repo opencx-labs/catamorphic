@@ -138,6 +138,11 @@ export interface CatamorphicHostConfig {
   heldWorkerNodes?: CatamorphicCoreConfig["heldWorkerNodes"];
   /** Review every brokered connection action (ADR 0162). */
   connectionGuards?: CatamorphicCoreConfig["connectionGuards"];
+  /**
+   * Connection aliases the host offers beside those committed in each
+   * Environment of `.work/project.json` (ADR 0172).
+   */
+  connectionBindings?: CatamorphicCoreConfig["connectionBindings"];
   /** Re-resolve current member authority before unattended dispatch. */
   resolveMemberIdentity?: CatamorphicCoreConfig["resolveMemberIdentity"];
   /** URL resolver for the Fastify plugin's brokered `/connection-mcp` route. */
@@ -365,6 +370,9 @@ export class Catamorphic {
       connectionProviders: contributions.connectionProviders,
       ...(config.connectionGuards
         ? { connectionGuards: config.connectionGuards }
+        : {}),
+      ...(config.connectionBindings
+        ? { connectionBindings: config.connectionBindings }
         : {}),
       resolveMemberIdentity: config.resolveMemberIdentity,
       connectionMcpUrl: config.connectionMcpUrl,

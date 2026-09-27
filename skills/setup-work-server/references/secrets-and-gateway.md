@@ -46,15 +46,19 @@ print them, or pass them to agents.
 ```json
 {
   "connections": [
-    { "type": "postgres", "kind": "prod-db", "displayName": "Production (replica)",
-      "maxRows": 500, "maxCost": 100000, "statementTimeoutMs": 10000 },
+    { "type": "postgres", "kind": "prod-replica", "displayName": "Production (replica)",
+      "maxRows": 500, "maxCost": 100000, "statementTimeoutMs": 10000, "poolSize": 4 },
+    { "type": "http", "kind": "github", "displayName": "GitHub",
+      "baseUrl": "https://api.github.com", "maxResponseBytes": 4194304, "timeoutMs": 60000 },
     { "type": "http", "kind": "billing", "displayName": "Billing API",
       "baseUrl": "https://api.billing.example/v1", "paths": ["/invoices", "/customers"] },
     { "kind": "company", "displayName": "Company tools",
-      "url": "https://tools.example.com/mcp" }
+      "url": "https://tools.example.com/mcp" },
+    { "kind": "slack", "displayName": "Slack", "url": "https://mcp.slack.com/mcp",
+      "oauth": { "client": { "id": "1234.5678", "secretEnv": "SLACK_CLIENT_SECRET" } } }
   ],
   "guards": [
-    { "type": "model", "name": "query-review", "kinds": ["prod-db"],
+    { "type": "model", "name": "query-review", "kinds": ["prod-replica"],
       "policy": "Read only the rows the stated purpose needs. Never read credentials, tokens, or payment data.",
       "model": { "provider": "anthropic", "id": "claude-haiku-4-5" } },
     { "type": "approval", "name": "billing-writes", "kinds": ["billing"],
@@ -63,12 +67,95 @@ print them, or pass them to agents.
 }
 ```
 
-Connection kinds become connection providers. Commit the project's aliases,
-Environment connection bindings, and role capability grants through ordinary reviewed
-project files; the file above is host policy, not project logic. The first
-person to authorize a connection enters its credential through the
-connection's form (an API key or a read-only connection string); it goes
-straight to the vault.
+Connection kinds become connection providers: what a connection can reach
+and how. The file is host policy, not project logic; it holds no credential.
+
+- `http`: `maxResponseBytes` (at most 16 MiB, default 1 MiB) is the largest
+  part of a body one call returns, and `timeoutMs` (at most 120000, default
+  30000) bounds each request. A larger GET body is read in parts: the result
+  carries `range.nextOffset` and `range.totalBytes`, and the agent asks for
+  the next part with `range: { "offset": … }`, writing parts to files in its
+  workspace rather than into the conversation. A 5 MiB pull request diff is
+  five calls, not a truncated one.
+- `postgres`: each service connection keeps up to `poolSize` sessions (at most
+  16, default 4), closed after `poolIdleTimeoutMs` idle and at once when the
+  credential rotates or is revoked. Every call still gets its own read-only
+  transaction, timeouts, cost ceiling, and cursor budget.
+- `mcp`: `oauth.client` names a client registered in advance with the MCP
+  server's authorization server, for servers that do not register clients
+  dynamically (Slack's). Register the redirect URI
+  `<WORK_PUBLIC_URL>/api/connection-authorizations/callback`; put a
+  confidential client's secret in the variable `secretEnv` names.
+
+## Service connections and administrators
+
+A service connection is a named credential the organization owns, used by
+agents and automations when no person is present. Organization
+administrators create, authorize, rotate, and revoke them; members never see
+the credential and project roles cannot grant this (ADR 0172).
+
+Make the first administrators with the operator API on the loopback
+listener, then administrators promote others in the app:
+
+- `POST /_work/operator/users` with `"administrator": true` for a local user,
+  or `POST /_work/operator/administrators` with `{ "email": … }` for someone
+  who has signed in once. `GET` lists them; `DELETE …/administrators/:userId`
+  removes one.
+- In the app, an administrator sees **Service connections** in a connected
+  project's Server section; `GET/POST /api/work/administrators` and
+  `DELETE /api/work/administrators/:userId` do the same over the API. The
+  last administrator cannot remove themselves there.
+
+Connect a service connection (the operator routes mirror the API):
+
+1. `GET /_work/operator/connection-providers` lists the kinds from the file.
+2. `POST /_work/operator/service-connections` with
+   `{ "name": "prod-replica", "providerKind": "prod-replica" }` creates it,
+   pending. Names are lowercase; add `"principalKind": "project_service"` and
+   `"projectId"` for a connection only one project may bind.
+3. `POST /_work/operator/service-connections/:id/authorize` returns the
+   provider's challenge. A form (an API key, a read-only connection string)
+   completes with `POST …/authorize/complete` and
+   `{ "authorizationId", "fields": { … } }`; the value goes straight to the
+   vault. A URL challenge completes when the administrator signs in at that
+   URL; the provider returns to the server's callback.
+4. Authorizing a ready connection again rotates it. `DELETE
+   /_work/operator/service-connections/:id` revokes it and frees the name.
+
+Never paste a credential into a chat, a repository, or a command line an
+agent can read. Enter it through the form in the app, or have the operator
+enter it on the server machine.
+
+## Bindings are committed
+
+Each Environment in `.work/project.json` declares the aliases its work may
+use, and which service connection backs each by name:
+
+```json
+{
+  "environments": {
+    "review": {
+      "workloads": ["agent"],
+      "pool": { "pool": "review" },
+      "connections": {
+        "github": { "provider": "github", "principal": "service", "service": "github",
+                    "capabilities": ["get", "post"] },
+        "prod": { "provider": "prod-replica", "principal": "service", "service": "prod-replica",
+                  "capabilities": ["query", "explain", "schema"] },
+        "mail": { "provider": "mail", "principal": "member" }
+      }
+    }
+  }
+}
+```
+
+`principal` is `member` (each person's own account), `service` (the named
+service connection), or `either`. `capabilities` narrows the alias; leave it
+out to keep what the connection allows. Agents and workflows name the alias
+(`"connections": ["prod"]` in an agent definition); roles grant it. Changing a
+binding is a reviewed change to the project, published like any other.
+Invalid entries show as an invalid Environment. A project service connection
+of the same name wins over the organization's.
 
 Guards review every action on the connection kinds they name, from agents and
 workflows alike. A deny refuses; an escalation asks the person in the agent's
@@ -93,12 +180,26 @@ a self-hosted classifier; its `apiKeyEnv` is optional. Every decision is in the 
    The gateway refuses superusers, table owners, and roles with any write
    privilege when the credential is entered.
 3. Declare a `postgres` connection and a model or approval guard for it.
-4. Verify as a member: an allowed query returns rows; `DELETE`, two stacked
-   statements, and an unfiltered scan above the cost ceiling are refused with
-   readable reasons; the audit lists each decision.
+4. An administrator creates the named service connection and enters the
+   read-only connection string once; the project commits a binding for the
+   Environment that needs it.
+5. Verify from an unattended project chat or automation in that Environment:
+   an allowed query returns rows; `DELETE`, two stacked statements, and an
+   unfiltered scan above the cost ceiling are refused with readable reasons;
+   the audit lists each decision, and no worker file holds the connection
+   string.
 
-Result rows enter the model's context. Keep sensitive columns out with views
-and grants; the classifier is a second layer, not the boundary.
+Result rows enter the model's context, so keep personal data out before a
+query can reach it:
+
+- Point the connection at a replica and a schema of views that leave out
+  personal and secret columns (`reporting.customers` without email or phone).
+- Grant columns, not tables, where a view is not practical:
+  `GRANT SELECT (id, plan, created_at) ON customers TO work_reader;`.
+- Add a model guard whose policy names what must never be read (for example
+  "refuse queries selecting email, phone, address, or payment columns") as a
+  redaction check before the query runs. It reviews the SQL and purpose, not
+  the rows, so it is a second layer; the views and grants are the boundary.
 
 ## GitHub
 

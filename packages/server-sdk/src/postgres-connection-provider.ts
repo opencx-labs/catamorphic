@@ -22,8 +22,21 @@ export interface PostgresConnectionLimits {
 export interface PostgresConnectionOptions extends PostgresConnectionLimits {
   kind: string;
   displayName: string;
-  /** Test hook: a client factory in place of `new pg.Client`. */
-  client?: (connectionString: string) => pg.Client;
+  /**
+   * Upstream sessions kept per connection and credential revision (ADR
+   * 0172). Default 4. Rotation and revocation close them.
+   */
+  poolSize?: number;
+  /** An idle pooled session closes after this long. Default 30 seconds. */
+  poolIdleTimeoutMs?: number;
+}
+
+/** A pooled provider can also report and close what it holds. */
+export interface PostgresConnectionProvider extends ConnectionProvider {
+  /** Open pools, for tests and health: key, total and idle sessions. */
+  pools(): Array<{ connectionId: string; revision: number; total: number }>;
+  /** Close every pool (host shutdown). */
+  close(): Promise<void>;
 }
 
 const LIMITS = {
@@ -49,19 +62,63 @@ const READ_STATEMENT = /^(select|with|values|table)\b/i;
  */
 export function definePostgresConnectionProvider(
   options: PostgresConnectionOptions,
-): ConnectionProvider {
+): PostgresConnectionProvider {
   const limits = { ...LIMITS, ...definedLimits(options) };
   const connect = async (material: Uint8Array) => {
     const { connectionString } = parseMaterial(material);
-    const client =
-      options.client?.(connectionString) ??
-      new pg.Client({
-        connectionString,
-        connectionTimeoutMillis: 10_000,
-        application_name: "work-gateway",
-      });
+    const client = new pg.Client({
+      connectionString,
+      connectionTimeoutMillis: 10_000,
+      application_name: "work-gateway",
+    });
     await client.connect();
     return client;
+  };
+  // One small pool per connection and credential revision: a rotated or
+  // revoked credential never serves another call (ADR 0172).
+  const pools = new Map<
+    string,
+    { connectionId: string; revision: number; pool: pg.Pool }
+  >();
+  const closePools = async (
+    keep: (entry: { connectionId: string; revision: number }) => boolean,
+  ) => {
+    const closing = [...pools.entries()].filter(([, entry]) => !keep(entry));
+    for (const [key] of closing) pools.delete(key);
+    await Promise.all(
+      closing.map(([, entry]) => entry.pool.end().catch(() => {})),
+    );
+  };
+  const poolFor = async (
+    material: Uint8Array,
+    connection: { id: string; revision: number },
+  ) => {
+    const key = `${connection.id}@${connection.revision}`;
+    const existing = pools.get(key);
+    if (existing) return existing.pool;
+    // Sessions of an earlier credential of this connection end now.
+    await closePools(
+      (entry) =>
+        entry.connectionId !== connection.id ||
+        entry.revision > connection.revision,
+    );
+    const { connectionString } = parseMaterial(material);
+    const pool = new pg.Pool({
+      connectionString,
+      max: options.poolSize ?? 4,
+      idleTimeoutMillis: options.poolIdleTimeoutMs ?? 30_000,
+      connectionTimeoutMillis: 10_000,
+      application_name: "work-gateway",
+      allowExitOnIdle: true,
+    });
+    // An idle session that errors (server restart) is dropped by the pool.
+    pool.on("error", () => {});
+    pools.set(key, {
+      connectionId: connection.id,
+      revision: connection.revision,
+      pool,
+    });
+    return pool;
   };
 
   const actions: ConnectionActionDefinition[] = [
@@ -143,9 +200,13 @@ export function definePostgresConnectionProvider(
     },
     listActions: async ({ capabilities }) =>
       actions.filter((action) => capabilities.includes(action.name)),
-    invoke: async ({ material, action, input }) => {
+    invoke: async ({ material, action, input, connection }) => {
       const request = parseInput(input);
-      const client = await connect(material);
+      const client = await (await poolFor(material, connection)).connect();
+      // Every per-call safety step still runs on a pooled session: a fresh
+      // read-only transaction with its own timeouts, ended by ROLLBACK, which
+      // also closes the cursor and resets every SET LOCAL.
+      let reusable = false;
       try {
         await client.query("BEGIN TRANSACTION READ ONLY");
         await client.query(
@@ -171,10 +232,24 @@ export function definePostgresConnectionProvider(
         }
         return await runCursor(client, sql, request.params, limits, plan);
       } finally {
-        await client.query("ROLLBACK").catch(() => {});
-        await client.end().catch(() => {});
+        reusable = await client
+          .query("ROLLBACK")
+          .then(() => true)
+          .catch(() => false);
+        // A session whose rollback failed is destroyed, never reused.
+        client.release(!reusable);
       }
     },
+    release: async ({ connectionId }) => {
+      await closePools((entry) => entry.connectionId !== connectionId);
+    },
+    pools: () =>
+      [...pools.values()].map((entry) => ({
+        connectionId: entry.connectionId,
+        revision: entry.revision,
+        total: entry.pool.totalCount,
+      })),
+    close: () => closePools(() => false),
   };
 }
 
@@ -240,7 +315,7 @@ function requireReadStatement(sql: string): string {
 }
 
 async function explain(
-  client: pg.Client,
+  client: pg.ClientBase,
   sql: string,
   params: Json[],
 ): Promise<{ totalCost: number; planRows: number; plan: Json }> {
@@ -270,7 +345,7 @@ async function explain(
 }
 
 async function runCursor(
-  client: pg.Client,
+  client: pg.ClientBase,
   sql: string,
   params: Json[],
   limits: Required<PostgresConnectionLimits>,
@@ -337,7 +412,7 @@ async function runCursor(
   };
 }
 
-async function listSchema(client: pg.Client, request: { schema?: string }) {
+async function listSchema(client: pg.ClientBase, request: { schema?: string }) {
   const result = await extendedQuery(
     client,
     `SELECT table_schema, table_name, column_name, data_type
@@ -368,7 +443,7 @@ async function listSchema(client: pg.Client, request: { schema?: string }) {
  * Refuse credentials that could write: superusers, table owners, and roles
  * holding any write privilege. The read-only transaction is a second wall.
  */
-async function assertReadOnlyRole(client: pg.Client): Promise<void> {
+async function assertReadOnlyRole(client: pg.ClientBase): Promise<void> {
   const role = await client.query(
     `SELECT rolsuper, rolcreaterole, rolcreatedb, rolbypassrls
        FROM pg_roles WHERE rolname = current_user`,
@@ -427,7 +502,7 @@ function rowTooLarge(error: unknown): Error | undefined {
  * The extended query protocol parses exactly one statement, so a second
  * statement smuggled into `sql` fails instead of running.
  */
-function extendedQuery(client: pg.Client, text: string, values: unknown[]) {
+function extendedQuery(client: pg.ClientBase, text: string, values: unknown[]) {
   const config: pg.QueryConfig & { queryMode: "extended" } = {
     text,
     values,

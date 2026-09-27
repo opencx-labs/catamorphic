@@ -64,6 +64,7 @@ describe("PGlite migrations", () => {
       "024_remote_workers.sql",
       "025_work_shares.sql",
       "026_remote_ownership.sql",
+      "027_committed_connection_bindings.sql",
       "029_trigger_filters.sql",
       "030_client_runner_processes.sql",
     ]);

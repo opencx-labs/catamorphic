@@ -46,7 +46,10 @@ import { RemoteClientRunners } from "../remote-client-runner.js";
 import { RemoteSessionMirror } from "../remote-mirror.js";
 import { shutdownDesktopServices } from "../shutdown.js";
 import { userSkillFiles, userSkillInfos } from "../user-skills.js";
-import { syncProfileMcpWorkflowConnections } from "../workflow-mcp-connections.js";
+import {
+  profileMcpConnectionBindings,
+  syncProfileMcpWorkflowConnections,
+} from "../workflow-mcp-connections.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
 import { componentRegistryCapability } from "./component-registry.js";
 import { validateDatabaseFiles } from "./database-files.js";
@@ -421,6 +424,13 @@ export async function startEmbeddedServer(
       path.join(paths.root, "credentials.json"),
     ),
     connectionProviders,
+    connectionBindings: async ({ projectId, environment }) =>
+      profileMcpConnectionBindings({
+        profiles,
+        profileConfig,
+        projectId,
+        environment,
+      }),
     connectionMcpUrl: () =>
       apiBaseUrl ? `${apiBaseUrl}/api/connection-mcp` : undefined,
     codingAgent: agentRegistry,

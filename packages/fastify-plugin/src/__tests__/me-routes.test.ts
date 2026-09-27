@@ -59,7 +59,11 @@ describe("GET /me (ADR 0055 introspection)", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       version: 1,
-      identity: { externalUserId: "alice", root: false },
+      identity: {
+        externalUserId: "alice",
+        root: false,
+        controlPlanePermissions: [],
+      },
       projects: [
         {
           projectId: PROJECT_ID,
@@ -145,7 +149,11 @@ describe("GET /me (ADR 0055 introspection)", () => {
   it("enforces namespaced project permissions in the public contract", () => {
     const response = {
       version: 1,
-      identity: { externalUserId: "alice", root: false },
+      identity: {
+        externalUserId: "alice",
+        root: false,
+        controlPlanePermissions: ["connections:read"],
+      },
       projects: [
         {
           projectId: PROJECT_ID,

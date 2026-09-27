@@ -301,7 +301,6 @@ export class WorkflowEnablementsService {
                   preview.connections.map((connection) => ({
                     enablement_id: row.id,
                     alias: connection.alias,
-                    binding_id: connection.bindingId,
                     connection_id: connection.connectionId,
                     provider_kind: connection.providerKind,
                     principal_kind: connection.principalKind,
@@ -479,7 +478,6 @@ export class WorkflowEnablementsService {
             preview.connections.map((connection) => ({
               enablement_id: input.enablementId,
               alias: connection.alias,
-              binding_id: connection.bindingId,
               connection_id: connection.connectionId,
               provider_kind: connection.providerKind,
               principal_kind: connection.principalKind,
@@ -823,7 +821,6 @@ export class WorkflowEnablementsService {
         .orderBy("alias")
         .execute()
     ).map((row) => ({
-      bindingId: row.binding_id,
       connectionId: row.connection_id,
       alias: row.alias,
       providerKind: row.provider_kind,

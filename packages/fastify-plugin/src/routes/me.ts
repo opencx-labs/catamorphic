@@ -1,9 +1,18 @@
-import { effectiveProjectPermissions } from "@catamorphic/core";
+import {
+  type ControlPlanePermission,
+  effectiveProjectPermissions,
+  hasControlPlanePermission,
+} from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import { MeSchema } from "../schemas.js";
+
+const CONTROL_PLANE_PERMISSIONS: readonly ControlPlanePermission[] = [
+  "connections:read",
+  "connections:write",
+];
 
 /**
  * Introspection (ADR 0055): what THIS caller may do, and what THIS host
@@ -81,6 +90,9 @@ export function registerMeRoutes(app: FastifyInstance, ctx: RouteContext) {
         identity: {
           externalUserId: identity.externalUserId,
           root: identity.scope === undefined,
+          controlPlanePermissions: CONTROL_PLANE_PERMISSIONS.filter(
+            (permission) => hasControlPlanePermission(identity, permission),
+          ),
         },
         projects,
         features: {

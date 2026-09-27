@@ -1873,6 +1873,10 @@ export function registerIpcHandlers(
       agents: project?.agents ?? [],
       documents: project?.documents ?? [],
       roles: project?.roles ?? [],
+      administrator:
+        me.identity.root ||
+        (me.identity.controlPlanePermissions?.includes("connections:write") ??
+          false),
       features: me.features,
     };
   };
@@ -2413,6 +2417,96 @@ export function registerIpcHandlers(
         ...(input.email ? { email: input.email } : {}),
         roles: input.roles,
       });
+    },
+  );
+
+  // Organization service connections (ADR 0172), reached through any
+  // project linked to the server; the server refuses non-administrators.
+  ipcMain.handle(
+    "catamorphic:remote-service-connections",
+    async (event, projectId: string) => {
+      const link = requireLink(event, projectId);
+      const client = storedRemoteClient(event, projectId, link);
+      const [providers, connections] = await Promise.all([
+        client.listConnectionProviders(),
+        client.listServiceConnections(),
+      ]);
+      return {
+        providers,
+        connections: connections.filter(
+          (connection) => connection.principalKind === "tenant_service",
+        ),
+      };
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-service-connection-create",
+    async (
+      event,
+      input: { projectId: string; name: string; providerKind: string },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      return storedRemoteClient(
+        event,
+        input.projectId,
+        link,
+      ).createServiceConnection({
+        name: input.name,
+        providerKind: input.providerKind,
+      });
+    },
+  );
+
+  // A url or device challenge opens as a browser tab in the asking window;
+  // the server's own callback finishes a url sign-in.
+  ipcMain.handle(
+    "catamorphic:remote-service-connection-authorize",
+    async (event, input: { projectId: string; connectionId: string }) => {
+      const link = requireLink(event, input.projectId);
+      const result = await storedRemoteClient(
+        event,
+        input.projectId,
+        link,
+      ).authorizeServiceConnection(input.connectionId);
+      if (result.challenge.kind === "url") {
+        openWorkspaceUrl(event.sender, result.challenge.url);
+      } else if (result.challenge.kind === "device") {
+        openWorkspaceUrl(event.sender, result.challenge.verificationUrl);
+      }
+      return result;
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-service-connection-complete",
+    async (
+      event,
+      input: {
+        projectId: string;
+        authorizationId: string;
+        callback: Record<string, string>;
+      },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      return storedRemoteClient(
+        event,
+        input.projectId,
+        link,
+      ).completeConnectionAuthorization({
+        authorizationId: input.authorizationId,
+        callback: input.callback,
+      });
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-service-connection-revoke",
+    async (event, input: { projectId: string; connectionId: string }) => {
+      const link = requireLink(event, input.projectId);
+      await storedRemoteClient(event, input.projectId, link).revokeConnection(
+        input.connectionId,
+      );
     },
   );
 

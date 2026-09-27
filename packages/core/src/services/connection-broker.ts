@@ -177,12 +177,13 @@ export class ConnectionBroker {
       const result = await this.connections.withCredential({
         identity: args.identity,
         connectionId: binding.connectionId,
-        use: (material) =>
+        use: (material, connection) =>
           provider.invoke({
             material,
             action: args.action,
             input: args.input,
             capabilities: binding.capabilities,
+            connection: { id: connection.id, revision: connection.revision },
           }),
       });
       await this.connections.audit({

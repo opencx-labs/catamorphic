@@ -230,11 +230,15 @@ export {
   type AuthorizationChallenge,
   type ConnectionActionDefinition,
   type ConnectionAuthorizationResult,
+  type ConnectionCredentialVersion,
   type ConnectionProvider,
   ConnectionProviderRegistry,
 } from "./services/connection-providers.js";
 export {
+  bindingPrincipalKinds,
   CONNECTION_ALIAS_PATTERN,
+  CONNECTION_NAME_PATTERN,
+  type ConnectionBindingSource,
   type ConnectionPrincipalKind,
   type ConnectionRecord,
   type ConnectionRequirement,
@@ -247,10 +251,13 @@ export {
 } from "./services/connection-types.js";
 export {
   AuthenticationRequiredError,
+  type ConnectionBindingPrincipalStatus,
+  ConnectionNameTakenError,
   ConnectionNotFoundError,
   ConnectionPermissionDeniedError,
   ConnectionsService,
   ConnectionUnavailableError,
+  type EnvironmentConnectionStatus,
 } from "./services/connections-service.js";
 export {
   type CredentialMaterial,

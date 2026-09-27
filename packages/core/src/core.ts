@@ -52,6 +52,7 @@ import {
   type ConnectionProvider,
   ConnectionProviderRegistry,
 } from "./services/connection-providers.js";
+import type { EnvironmentConnectionBinding } from "./services/connection-types.js";
 import { ConnectionsService } from "./services/connections-service.js";
 import type { CredentialVault } from "./services/credential-vault.js";
 import { DbSandboxStore } from "./services/db-sandbox-store.js";
@@ -174,6 +175,16 @@ export interface CatamorphicCoreConfig {
   credentialVault?: CredentialVault;
   /** Host-side external-system drivers. Requires `credentialVault`. */
   connectionProviders?: readonly ConnectionProvider[];
+  /**
+   * Connection aliases the host offers in an Environment beside the ones
+   * committed in `.work/project.json` (ADR 0172), such as a desktop's own
+   * profile MCP servers (ADR 0086). A committed alias of the same name wins.
+   */
+  connectionBindings?: (args: {
+    tenantId: string;
+    projectId: string;
+    environment: string;
+  }) => Promise<Readonly<Record<string, EnvironmentConnectionBinding>>>;
   /**
    * Checks every brokered connection action from agents and workflows (ADR
    * 0162). Escalations ask the agent session's person via `toolPermissions`.
@@ -717,18 +728,37 @@ export class CatamorphicCore {
     }
     if (connectionProviders.length > 0 && credentialVault) {
       const providers = new ConnectionProviderRegistry(connectionProviders);
-      this.connections = new ConnectionsService(
-        this.db,
-        credentialVault,
+      const hostBindings = config.connectionBindings;
+      this.connections = new ConnectionsService({
+        db: this.db,
+        vault: credentialVault,
         providers,
-        async (identity) => {
+        // Committed bindings are read with the Environment they belong to
+        // (ADR 0172); a host may add its own aliases beside them, and a
+        // committed alias wins over a host one of the same name.
+        bindings: async ({ identity, projectId, environment }) => {
+          const [definition, host] = await Promise.all([
+            this.projectEnvironments.get({
+              identity,
+              projectId,
+              name: environment,
+            }),
+            hostBindings?.({
+              tenantId: identity.tenantId,
+              projectId,
+              environment,
+            }),
+          ]);
+          return { ...host, ...definition?.connections };
+        },
+        onMemberConnectionReady: async (identity) => {
           if (this.workflowEnablements) {
             await this.workflowEnablements.reenableEligibleForMember({
               identity,
             });
           }
         },
-        async ({ identity, connectionId }) => {
+        onConnectionUnavailable: async ({ identity, connectionId }) => {
           if (this.workflowEnablements) {
             await this.workflowEnablements.suspendForConnection({
               identity,
@@ -736,7 +766,7 @@ export class CatamorphicCore {
             });
           }
         },
-      );
+      });
       this.connectionAdmission = new ConnectionAdmissionService(
         this.connections,
       );

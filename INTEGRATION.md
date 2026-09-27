@@ -903,25 +903,42 @@ connection access. Projects cannot declare physical endpoints, OAuth clients,
 credential values, or service identities.
 
 Member connections use the authorization flow supported by the provider.
-Project and tenant service connections are created only by a host identity
-with `connections:write` (`connections:read` reads them and their audit).
-These are host-issued; project roles cannot grant `connections:*`. An
-Environment binding chooses allowed principal kinds, capabilities, and any assigned service connection. A trigger
-scan is the unattended enablement boundary: it must resolve every required
-alias to an assigned service connection, then freezes those ids for dispatch.
-Member connections are never eligible for project automations (schedules,
-webhooks and events that run while nobody is present). To prevent a
-privileged service action from running in a local Environment, do not create
-that alias binding there and grant it only in the managed Environment.
+Project and tenant service connections are named (ADR 0172) and created only
+by an identity with `connections:write` (`connections:read` reads them and
+their audit): `POST /service-connections` creates one pending, and
+`POST /service-connections/:id/authorize` runs the provider's own challenge
+(form, URL returning to this API's `/connection-authorizations/callback`, or
+device), which also rotates a ready one. These permissions are host-issued
+(`Identity.controlPlanePermissions`, reported by `/me`); project roles cannot
+grant `connections:*`. The Work server gives them to organization
+administrators.
+
+Environment bindings are committed in `.work/project.json`:
+`environments.<name>.connections.<alias>` is
+`{ provider, principal: "member" | "service" | "either", service?, capabilities? }`,
+where `service` names a service connection (the project's own name first,
+then the tenant's) and `capabilities` narrows the alias. Core reads them with
+the Environment on demand; there is no binding table or API. A host may offer
+extra aliases beside the committed ones with the `connectionBindings` option
+of `createCatamorphic` (the desktop offers its profile MCP servers this way);
+a committed alias of the same name wins. A trigger scan is the unattended
+enablement boundary: it must resolve every required alias to a service
+connection, then freezes those ids for dispatch; a later dispatch fails
+closed if the name resolves elsewhere. Member connections are never eligible
+for project automations (schedules, webhooks and events that run while nobody
+is present). To keep a privileged service action out of a local Environment,
+bind that alias only in the managed Environment.
 
 Long-lived API keys and service-account material use service connections, not
-project secrets. The service-credential API accepts provider-defined opaque
-text. For `defineMcpConnectionProvider`, that text is a JSON
-`McpConnectionCredential`, for example
-`{"headers":{"Authorization":"Bearer ..."}}`. The broker opens it only for
-the provider call. A workflow step that will later invoke an agent inherits the
-workflow's Environment, Allocation, and narrowed grants; it must not create a
-second credential selection path.
+project secrets. A provider's `completeAuthorization` turns the challenge's
+answer into vault material, so its checks (the Postgres provider's read-only
+role check, an MCP OAuth exchange) always run. The broker opens the material
+only for the provider call and passes `connection: { id, revision }` so a
+provider can reuse upstream sessions per credential; a provider that does
+implements `release({ connectionId })`, which core calls after rotation,
+refresh, and revocation. A workflow step that will later invoke an agent
+inherits the workflow's Environment, Allocation, and narrowed grants; it must
+not create a second credential selection path.
 
 Vault backup and rotation are host responsibilities. Back up encrypted records
 and their wrapping key together, restrict both to the server account, rotate

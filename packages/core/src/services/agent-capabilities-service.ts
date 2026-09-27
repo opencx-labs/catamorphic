@@ -18,6 +18,7 @@ import {
   identityMayUseEnvironment,
   intersectProjectPermissions,
   intersectScope,
+  isProjectPrincipal,
 } from "../identity.js";
 import { requireRuntimeSession } from "./agent-runtime-events-service.js";
 import { AccessDeniedError } from "./artifact-scope.js";
@@ -474,8 +475,14 @@ export class AgentCapabilitiesService {
     };
     const original = await check(args.identity);
     // An absent artifact scope is the host's explicit root identity (ADR 0055).
-    // Membership resolution can only refresh identities issued as members.
-    if (args.identity.scope === undefined || !this.deps.resolveMemberIdentity)
+    // Membership resolution can only refresh identities issued as members;
+    // the project principal (ADR 0156) is never one, and its authority is
+    // the enablement that consented to it.
+    if (
+      args.identity.scope === undefined ||
+      isProjectPrincipal(args.identity.externalUserId) ||
+      !this.deps.resolveMemberIdentity
+    )
       return original;
     const identity = await this.deps.resolveMemberIdentity({
       tenantId: args.identity.tenantId,

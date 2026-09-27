@@ -15,7 +15,6 @@ const tenantId = crypto.randomUUID();
 const projectId = crypto.randomUUID();
 const artifactId = crypto.randomUUID();
 const connectionId = crypto.randomUUID();
-const bindingId = crypto.randomUUID();
 
 beforeAll(async () => {
   await migrateToLatest({ db, schema });
@@ -46,18 +45,6 @@ beforeAll(async () => {
       principal_kind: "member",
       owner_external_user_id: "member-a",
       label: "Mail",
-    })
-    .execute();
-  await db
-    .insertInto("environment_connection_bindings")
-    .values({
-      id: bindingId,
-      tenant_id: tenantId,
-      project_id: projectId,
-      environment_name: "default",
-      alias: "mail",
-      provider_kind: "mcp",
-      principal_kinds: ["member"],
     })
     .execute();
 });
@@ -122,7 +109,6 @@ describe("workflow enablement schema", () => {
     const selection = {
       enablement_id: enablement.id,
       alias: "mail",
-      binding_id: bindingId,
       connection_id: connectionId,
       provider_kind: "mcp",
       principal_kind: "member" as const,

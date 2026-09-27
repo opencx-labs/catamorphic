@@ -77,7 +77,8 @@ disagree with the installed source, the source wins.
   there is no silent default role.
 - **No super-admin.** The operator credential is machine access, not a user.
   A setup agent provisions the first ordinary user and membership through the
-  server's own operations.
+  server's own operations. Organization administrators manage only the named
+  service connections (ADR 0172); they gain nothing inside projects.
 - **After setup, configuration is project code.** Roles, agents,
   `.work/sidebar.js`, and `.work/project.json` change through
   ordinary review. Do not create a parallel bootstrap config.
@@ -96,7 +97,9 @@ disagree with the installed source, the source wins.
   execution uses their project connection, never database credentials.
 - **Credentials reach systems only through the gateway** (ADR 0162): agents
   and workflows get reviewed actions, never keys. Workflow runs, which receive
-  project secrets, stay on the control plane.
+  project secrets, stay on the control plane. An administrator enters each
+  service credential once; projects bind it by name to an Environment in
+  `.work/project.json` (ADR 0172).
 - **Isolation matches trust.** Local-process execution is for trusted
   single-tenant use. For remote development use microsandbox with explicit
   budgets; a live heartbeat is not spare capacity.

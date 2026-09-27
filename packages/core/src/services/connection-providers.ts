@@ -60,16 +60,21 @@ export function isConnectionAuthorizationExpiredError(
 export interface ConnectionProvider {
   readonly kind: string;
   readonly displayName: string;
+  /**
+   * Start authorizing a member's or a service connection. `projectId` is
+   * absent for a tenant service connection; `externalUserId` is whoever
+   * authorizes (the member, or the administrator for a service).
+   */
   beginAuthorization?(args: {
     tenantId: string;
-    projectId: string;
+    projectId?: string;
     externalUserId: string;
     redirectUri: string;
     state: string;
   }): Promise<{ challenge: AuthorizationChallenge; privateState?: Uint8Array }>;
   completeAuthorization?(args: {
     tenantId: string;
-    projectId: string;
+    projectId?: string;
     externalUserId: string;
     callback: Readonly<Record<string, string>>;
     privateState?: Uint8Array;
@@ -79,6 +84,11 @@ export interface ConnectionProvider {
     action: string;
     input: Json;
     capabilities: readonly string[];
+    /**
+     * The connection and credential revision the material belongs to, so a
+     * provider can reuse upstream sessions per credential (ADR 0172).
+     */
+    connection: ConnectionCredentialVersion;
   }): Promise<Json>;
   listActions?(args: {
     material: Uint8Array;
@@ -88,6 +98,17 @@ export interface ConnectionProvider {
     material: Uint8Array;
   }): Promise<ConnectionAuthorizationResult>;
   revoke?(args: { material: Uint8Array }): Promise<void>;
+  /**
+   * Drop anything held for a connection's earlier credentials (pooled
+   * sessions). Called after rotation, refresh, and revocation.
+   */
+  release?(args: { connectionId: string }): Promise<void>;
+}
+
+export interface ConnectionCredentialVersion {
+  id: string;
+  /** Increments whenever the stored credential changes. */
+  revision: number;
 }
 
 export class ConnectionProviderRegistry {

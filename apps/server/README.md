@@ -109,16 +109,31 @@ connections, plus guards (a model classifier or a required approval) that
 review every action. See
 [secrets and the gateway](../../skills/setup-work-server/references/secrets-and-gateway.md).
 
-Rotate a service credential with the authenticated
-`PUT /connections/:connectionId/credential` endpoint. Rotation writes a new
-encrypted record, atomically advances the connection revision, deletes the old
-record, and wakes workflow calls parked on that connection. Keep old vault
-wrapping keys available until all stored records have been re-encrypted.
+Service connections are named and administered (ADR 0172). Organization
+administrators (made by the operator with `POST /_work/operator/users`
+`"administrator": true` or `POST /_work/operator/administrators`, then by each
+other from the app) create them with `POST /api/service-connections`,
+authorize them through the provider's own challenge with
+`POST /api/service-connections/:id/authorize` (form fields complete with
+`POST /api/connection-authorizations/complete`; OAuth returns to
+`/api/connection-authorizations/callback`), rotate them by authorizing again,
+and revoke them with `DELETE /api/connections/:id`. The loopback operator
+listener offers the same operations under `/_work/operator/service-connections`.
+Rotation writes a new encrypted record, advances the connection revision,
+closes pooled sessions of the old credential, deletes the old record, and
+wakes workflow calls parked on that connection. Keep old vault wrapping keys
+available until all stored records have been re-encrypted.
+
+Projects commit which Environment may use which named connection in
+`.work/project.json` (`environments.<name>.connections`); there is no binding
+API. Members see an Environment's aliases and authorize their own accounts at
+`/api/projects/:id/environments/:environment/connections`.
 
 Provider drivers and OAuth application details are deployment configuration.
 The stock image does not ship a shared Slack or Google OAuth identity. Register
-your own provider applications, configure their HTTPS callback URLs, and inject
-their connection providers when embedding `buildStockServer`. Service accounts
+your own provider applications (an `mcp` gateway entry takes a pre-registered
+`oauth.client`), configure their HTTPS callback URLs, and inject further
+connection providers with the `connectionProviders` hook. Service accounts
 are explicit project or tenant service connections and are never inferred from
 a member login. Unattended workflows use the connections authorized by their
 explicit enablement, including member connections for member-owned enablements.

@@ -89,8 +89,9 @@ not a human CLI.
    server created), `repository` (the repository's own roles, used as they
    are), or `proposed` (with `branch` and `pullRequest.url`, see below).
 4. For local sign-in, `POST /_work/operator/users` with `username`,
-   `name`, `password`, optional `email`, and `memberships`
-   (`[{ projectId, roles, grants? }]`).
+   `name`, `password`, optional `email`, optional `administrator: true` (an
+   organization administrator, who manages service connections), and
+   `memberships` (`[{ projectId, roles, grants? }]`).
 5. Verify sign-in, OAuth discovery, membership, and revocation through the
    normal application paths.
 

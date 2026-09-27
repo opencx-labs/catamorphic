@@ -37,7 +37,7 @@ export class ConnectionCapabilityGrantsService {
         .updateTable("connection_capability_grants")
         .set({ revoked_at: new Date() })
         .where("agent_session_id", "=", args.agentSessionId)
-        .where("binding_id", "=", binding.bindingId)
+        .where("alias", "=", binding.alias)
         .where("revoked_at", "is", null)
         .execute();
     }
@@ -48,7 +48,7 @@ export class ConnectionCapabilityGrantsService {
         project_id: allocation.projectId,
         allocation_id: allocation.id,
         agent_session_id: args.agentSessionId ?? null,
-        binding_id: binding.bindingId,
+        alias: binding.alias,
         connection_id: binding.connectionId,
         token_hash: hashBearer(token),
         capabilities: toJson(binding.capabilities),
@@ -63,7 +63,7 @@ export class ConnectionCapabilityGrantsService {
     projectId: string;
     allocationId: string;
     agentSessionId: string | null;
-    bindingId: string;
+    alias: string;
   } | null> {
     const row = await this.db
       .selectFrom("connection_capability_grants")
@@ -78,7 +78,7 @@ export class ConnectionCapabilityGrantsService {
           projectId: row.project_id,
           allocationId: row.allocation_id,
           agentSessionId: row.agent_session_id,
-          bindingId: row.binding_id,
+          alias: row.alias,
         }
       : null;
   }

@@ -381,6 +381,8 @@ describe("Work server", () => {
     expect(me.identity).toEqual({
       externalUserId: memberUserId,
       root: false,
+      // A member is not an organization administrator (ADR 0172).
+      controlPlanePermissions: [],
     });
     expect(me.projects).toHaveLength(1);
     expect(me.projects[0].projectId).toBe(projectId);

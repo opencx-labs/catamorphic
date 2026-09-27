@@ -16,13 +16,35 @@ import { defineApprovalGuard, defineModelGuard } from "./guards.js";
 
 const Kind = z.string().regex(/^[a-z0-9][a-z0-9._-]*$/);
 
+const EnvName = z.string().regex(/^[A-Z][A-Z0-9_]*$/);
+
+/**
+ * A remote MCP server. `oauth.client` names a client registered with the
+ * server's authorization server in advance, for servers without dynamic
+ * client registration; its redirect URI is this server's
+ * `<public origin>/api/connection-authorizations/callback` (ADR 0172).
+ */
 const McpEntry = z.strictObject({
   type: z.literal("mcp").default("mcp"),
   kind: Kind,
   displayName: z.string().min(1),
   url: z.url(),
   transport: z.enum(["http", "sse"]).default("http"),
+  oauth: z
+    .strictObject({
+      client: z.strictObject({
+        id: z.string().min(1),
+        /** Environment variable holding a confidential client's secret. */
+        secretEnv: EnvName.optional(),
+        scopes: z.array(z.string().min(1)).optional(),
+      }),
+    })
+    .optional(),
 });
+
+/** The host's ceilings on what a gateway file may configure. */
+export const HTTP_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+export const HTTP_MAX_TIMEOUT_MS = 120_000;
 
 /** An API reached through the gateway with a stored key (ADR 0162). */
 const HttpEntry = z.strictObject({
@@ -34,6 +56,14 @@ const HttpEntry = z.strictObject({
     .strictObject({ header: z.string().min(1), scheme: z.string().optional() })
     .optional(),
   paths: z.array(z.string().startsWith("/")).optional(),
+  /** Largest part of a body one call returns; larger GETs read in ranges. */
+  maxResponseBytes: z
+    .number()
+    .int()
+    .positive()
+    .max(HTTP_MAX_RESPONSE_BYTES)
+    .optional(),
+  timeoutMs: z.number().int().positive().max(HTTP_MAX_TIMEOUT_MS).optional(),
 });
 
 /** A database reached with a stored read-only credential (ADR 0163). */
@@ -47,6 +77,9 @@ const PostgresEntry = z.strictObject({
   maxPlanRows: z.number().positive().optional(),
   statementTimeoutMs: z.number().int().positive().max(120_000).optional(),
   lockTimeoutMs: z.number().int().positive().max(30_000).optional(),
+  /** Sessions kept per service connection credential (ADR 0172). */
+  poolSize: z.number().int().positive().max(16).optional(),
+  poolIdleTimeoutMs: z.number().int().positive().max(600_000).optional(),
 });
 
 const Scope = {
@@ -91,9 +124,15 @@ const GatewayFile = z.strictObject({
   guards: z.array(z.union([ModelGuardEntry, ApprovalGuardEntry])).default([]),
 });
 
-export type GatewayConnectionConfig = z.infer<
-  typeof GatewayFile
->["connections"][number];
+type ParsedConnection = z.infer<typeof GatewayFile>["connections"][number];
+type ParsedMcp = Extract<ParsedConnection, { type: "mcp" }>;
+
+/** A gateway connection, with any client secret read from the environment. */
+export type GatewayConnectionConfig =
+  | Exclude<ParsedConnection, { type: "mcp" }>
+  | (Omit<ParsedMcp, "oauth"> & {
+      oauth?: { client: { id: string; secret?: string; scopes?: string[] } };
+    });
 
 export type GatewayGuardConfig =
   | (Omit<z.infer<typeof ModelGuardEntry>, "model"> & {
@@ -143,7 +182,22 @@ export function gatewayConfigFromFile(args: {
     );
   }
   return {
-    connections: parsed.data.connections,
+    connections: parsed.data.connections.map(
+      (entry): GatewayConnectionConfig => {
+        if (entry.type !== "mcp" || !entry.oauth) return entry;
+        const { secretEnv, ...client } = entry.oauth.client;
+        const secret = secretEnv ? args.env[secretEnv] : undefined;
+        if (secretEnv && !secret) {
+          throw new Error(
+            `Connection '${entry.kind}' needs its OAuth client secret in ${secretEnv}`,
+          );
+        }
+        return {
+          ...entry,
+          oauth: { client: { ...client, ...(secret ? { secret } : {}) } },
+        };
+      },
+    ),
     guards: parsed.data.guards.map((guard): GatewayGuardConfig => {
       if (guard.type !== "model") return guard;
       const keyEnv =
@@ -173,10 +227,15 @@ export function gatewayConfigFromFile(args: {
   };
 }
 
+/** A gateway provider; pooled ones close what they hold on shutdown. */
+export type GatewayProvider = ConnectionProvider & {
+  close?: () => Promise<void>;
+};
+
 export function gatewayProviders(
   config: GatewayConfig,
-): readonly ConnectionProvider[] {
-  return config.connections.map((entry): ConnectionProvider => {
+): readonly GatewayProvider[] {
+  return config.connections.map((entry): GatewayProvider => {
     if (entry.type === "http") {
       return defineHttpApiConnectionProvider({
         kind: entry.kind,
@@ -184,16 +243,32 @@ export function gatewayProviders(
         baseUrl: entry.baseUrl,
         ...(entry.auth ? { auth: entry.auth } : {}),
         ...(entry.paths ? { paths: entry.paths } : {}),
+        ...(entry.maxResponseBytes
+          ? { maxResponseBytes: entry.maxResponseBytes }
+          : {}),
+        ...(entry.timeoutMs ? { timeoutMs: entry.timeoutMs } : {}),
       });
     }
     if (entry.type === "postgres") {
       const { type: _type, ...options } = entry;
       return definePostgresConnectionProvider(options);
     }
+    const client = entry.oauth?.client;
     const provider = defineMcpConnectionProvider({
       kind: entry.kind,
       displayName: entry.displayName,
       server: { transport: entry.transport, url: entry.url },
+      ...(client
+        ? {
+            oauth: {
+              client: {
+                clientId: client.id,
+                ...(client.secret ? { clientSecret: client.secret } : {}),
+                ...(client.scopes ? { scopes: client.scopes } : {}),
+              },
+            },
+          }
+        : {}),
     });
     return {
       ...provider,
