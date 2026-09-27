@@ -6,7 +6,7 @@ import {
   useConnectionAuthorizationStatus,
 } from "@catamorphic/react";
 import { KeyRound } from "lucide-react";
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { PendingButton } from "./pending-button.js";
 
 type Requirement = AgentAuthenticationRequired["requirements"][number];
@@ -32,6 +32,7 @@ export function AuthenticationRequiredCard({
     alias: requirement.alias,
   });
   const complete = useCompleteConnectionAuthorization();
+  const fieldId = useId();
   const [started, setStarted] = useState<{
     authorizationId: string;
     challenge: AuthorizationChallenge;
@@ -64,10 +65,17 @@ export function AuthenticationRequiredCard({
 
   const finish = async (callback: Record<string, string>) => {
     if (!started) return;
-    await complete.mutateAsync({
-      authorizationId: started.authorizationId,
-      callback,
-    });
+    try {
+      await complete.mutateAsync({
+        authorizationId: started.authorizationId,
+        callback,
+      });
+    } catch (cause) {
+      // The server cancels an attempt whose completion failed; a retry
+      // needs a fresh one, and the form keeps what was typed.
+      await start().catch(() => setStarted(null));
+      throw cause;
+    }
     setValues({});
     setStarted(null);
     onAuthorized();
@@ -162,24 +170,47 @@ export function AuthenticationRequiredCard({
           {challenge?.kind === "form" && (
             <form onSubmit={submitForm} className="mt-2 space-y-2">
               {challenge.fields.map((field) => (
-                <label key={field.name} className="block">
-                  <span className="mb-1 block text-fg-muted">
+                <div key={field.name}>
+                  <label
+                    htmlFor={`${fieldId}-${field.name}`}
+                    className="mb-1 block text-fg-muted"
+                  >
                     {field.label}
-                  </span>
-                  <input
-                    name={field.name}
-                    type={field.secret ? "password" : "text"}
-                    required={field.required}
-                    value={values[field.name] ?? ""}
-                    onChange={(event) =>
-                      setValues((current) => ({
-                        ...current,
-                        [field.name]: event.target.value,
-                      }))
-                    }
-                    className="h-8 w-full rounded-md border border-border bg-bg-inset px-2 outline-none transition-colors duration-150 focus:border-border-strong"
-                  />
-                </label>
+                  </label>
+                  {field.multiline ? (
+                    // A PEM key or JSON document keeps its line breaks.
+                    <textarea
+                      id={`${fieldId}-${field.name}`}
+                      name={field.name}
+                      required={field.required}
+                      spellCheck={false}
+                      rows={6}
+                      value={values[field.name] ?? ""}
+                      onChange={(event) =>
+                        setValues((current) => ({
+                          ...current,
+                          [field.name]: event.target.value,
+                        }))
+                      }
+                      className="w-full resize-y rounded-md border border-border bg-bg-inset px-2 py-1.5 font-mono outline-none transition-colors duration-150 focus:border-border-strong"
+                    />
+                  ) : (
+                    <input
+                      id={`${fieldId}-${field.name}`}
+                      name={field.name}
+                      type={field.secret ? "password" : "text"}
+                      required={field.required}
+                      value={values[field.name] ?? ""}
+                      onChange={(event) =>
+                        setValues((current) => ({
+                          ...current,
+                          [field.name]: event.target.value,
+                        }))
+                      }
+                      className="h-8 w-full rounded-md border border-border bg-bg-inset px-2 outline-none transition-colors duration-150 focus:border-border-strong"
+                    />
+                  )}
+                </div>
               ))}
               <PendingButton
                 type="submit"

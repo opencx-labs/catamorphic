@@ -99,6 +99,7 @@ export type RemoteAuthorizationChallenge =
         label: string;
         secret: boolean;
         required: boolean;
+        multiline?: boolean;
       }>;
     }
   | { kind: "url"; url: string; expiresAt?: string }

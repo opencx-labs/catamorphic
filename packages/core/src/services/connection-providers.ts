@@ -15,6 +15,8 @@ export type AuthorizationChallenge =
         label: string;
         secret: boolean;
         required: boolean;
+        /** Keeps line breaks, as a PEM key or a JSON document needs. */
+        multiline?: boolean;
       }[];
     };
 

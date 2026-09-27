@@ -3271,6 +3271,9 @@
                                   },
                                   "required": {
                                     "type": "boolean"
+                                  },
+                                  "multiline": {
+                                    "type": "boolean"
                                   }
                                 },
                                 "required": [
@@ -3905,6 +3908,9 @@
                                     "type": "boolean"
                                   },
                                   "required": {
+                                    "type": "boolean"
+                                  },
+                                  "multiline": {
                                     "type": "boolean"
                                   }
                                 },
@@ -34229,6 +34235,9 @@
                                     "type": "boolean"
                                   },
                                   "required": {
+                                    "type": "boolean"
+                                  },
+                                  "multiline": {
                                     "type": "boolean"
                                   }
                                 },
