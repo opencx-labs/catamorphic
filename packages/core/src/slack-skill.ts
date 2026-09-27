@@ -168,11 +168,32 @@ rather than guessing. Everyone in the thread shares one chat and the agent
 answers each mention; staying quiet while people talk among themselves is
 group chat work that has not landed yet.
 
-The chat's agent may read Slack but not post: its \`slack\` capabilities
-leave out \`chat.postMessage\`, which only the second automation declares. It
-runs when any project chat's turn settles, reads the settled reply the event
-names (\`history\` with \`through\`), and posts it to the thread when the
-chat's key is a Slack thread; for every other chat it stays quiet.
+The threads' chats run a project agent of their own, \`.work/agents/slack.json\`,
+that may read Slack but not post: its \`slack\` capabilities leave out
+\`chat.postMessage\`, and \`slackSearch\` is optional so it works before
+anyone sets search up. Put how it should answer in \`.work/agents/slack.md\`
+(read the thread first, answer briefly, cite with permalinks).
+
+\`\`\`json
+{
+  "version": 1,
+  "name": "Slack",
+  "kind": "builtin",
+  "connections": [
+    {
+      "alias": "slack",
+      "principal": "service",
+      "capabilities": ["conversations.history", "conversations.replies", "users.info", "chat.getPermalink"]
+    },
+    { "alias": "slackSearch", "principal": "service", "optional": true }
+  ]
+}
+\`\`\`
+
+Only the second automation declares \`chat.postMessage\`. It runs when any
+project chat's turn settles, reads the settled reply the event names
+(\`history\` with \`through\`), and posts it to the thread when the chat's key
+is a Slack thread; for every other chat it stays quiet.
 
 \`\`\`typescript
 import {
@@ -190,7 +211,7 @@ const SLACK_MEMBERS: Record<string, string> = {};
 export const answerSlackMentions = defineWorkflow(({ defineBoundary }) => ({
   triggers: [trigger("slack.mention")],
   connections: [
-    { alias: "slack", principal: "service", capabilities: ["conversations.replies", "users.info", "chat.getPermalink"] },
+    { alias: "slack", principal: "service", capabilities: ["conversations.history", "conversations.replies", "users.info", "chat.getPermalink"] },
   ],
   steps: [
     /** @displayname Hand the mention to the thread's chat */
@@ -202,6 +223,7 @@ export const answerSlackMentions = defineWorkflow(({ defineBoundary }) => ({
         const author = member ? "Project member " + member : "Slack user <@" + (event.user ?? "unknown") + ">";
         return host["catamorphic.sessions"].deliver({
           key: "slack:" + event.channel + ":" + thread,
+          agentSlug: "slack",
           title: "Slack: " + (event.text ?? "mention").slice(0, 60),
           content: [
             author + " mentioned you in Slack (channel " + event.channel + ", thread " + thread + "):",

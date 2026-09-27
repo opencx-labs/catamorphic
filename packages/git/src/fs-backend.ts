@@ -162,9 +162,20 @@ export class FsBackend implements StorageBackend {
   }
 }
 
+/**
+ * One directory name per identity. Principals such as the project's own
+ * (`catamorphic:project`, ADR 0156) carry characters that are not safe in
+ * every filesystem, so anything outside `[A-Za-z0-9._-]` is percent-encoded;
+ * plain ids keep their existing directory.
+ */
 function sanitizeUserId(value: string): string {
-  if (!/^[A-Za-z0-9._-]+$/.test(value)) {
+  const encoded = encodeURIComponent(value);
+  if (
+    !/^[A-Za-z0-9._%-]+$/.test(encoded) ||
+    encoded === "." ||
+    encoded === ".."
+  ) {
     throw new Error(`Invalid externalUserId: ${value}`);
   }
-  return value;
+  return encoded;
 }

@@ -107,6 +107,7 @@ it("the Slack library parses as three project kinds on one signed webhook", () =
       alias: "slack",
       principal: "service",
       capabilities: [
+        "conversations.history",
         "conversations.replies",
         "users.info",
         "chat.getPermalink",
@@ -114,7 +115,11 @@ it("the Slack library parses as three project kinds on one signed webhook", () =
     },
   ]);
   expect(workflows.postSlackReplies?.graph.connections).toEqual([
-    { alias: "slack", principal: "service", capabilities: ["chat.postMessage"] },
+    {
+      alias: "slack",
+      principal: "service",
+      capabilities: ["chat.postMessage"],
+    },
   ]);
 });
 
@@ -141,6 +146,7 @@ it("keeps one chat per Slack thread and one message per event", async () => {
       operation: "deliver",
       args: {
         key: "slack:C1:100.1",
+        agentSlug: "slack",
         title: "Slack: <@UAPP> summarize this thread",
         content,
         idempotencyKey: "slack:Ev1",
@@ -150,6 +156,7 @@ it("keeps one chat per Slack thread and one message per event", async () => {
       operation: "deliver",
       args: {
         key: "slack:C1:100.1",
+        agentSlug: "slack",
         title: "Slack: <@UAPP> summarize this thread",
         content,
         idempotencyKey: "slack:Ev2",

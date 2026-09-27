@@ -301,22 +301,24 @@ describe("gateway configuration", () => {
       "conversations.replies",
       "chat.postMessage",
     ]);
-    const invalid = (actions: unknown, extra: object = {}) => () =>
-      gatewayConfigFromFile({
-        path: write({
-          connections: [
-            {
-              type: "http",
-              kind: "slack",
-              displayName: "Slack",
-              baseUrl: "https://slack.com/api",
-              actions,
-              ...extra,
-            },
-          ],
-        }),
-        env: {},
-      });
+    const invalid =
+      (actions: unknown, extra: object = {}) =>
+      () =>
+        gatewayConfigFromFile({
+          path: write({
+            connections: [
+              {
+                type: "http",
+                kind: "slack",
+                displayName: "Slack",
+                baseUrl: "https://slack.com/api",
+                actions,
+                ...extra,
+              },
+            ],
+          }),
+          env: {},
+        });
     const post = { name: "chat.postMessage", method: "post" };
     expect(
       invalid([{ ...post, path: "/chat.postMessage" }], { paths: ["/chat"] }),
