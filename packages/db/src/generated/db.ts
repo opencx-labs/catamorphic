@@ -107,6 +107,7 @@ export interface AgentSessions {
   activity: string | null;
   agent_id: string | null;
   allocation_id: string | null;
+  approvers: Json | null;
   attention_revision: Generated<Int8>;
   attention_seen_revision: Generated<Int8>;
   authority_host_id: Generated<string>;

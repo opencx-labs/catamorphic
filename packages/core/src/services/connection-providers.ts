@@ -84,6 +84,12 @@ export interface ConnectionProvider {
     material: Uint8Array;
     capabilities: readonly string[];
   }): Promise<readonly ConnectionActionDefinition[]>;
+  /**
+   * Whether an action only reads (ADR 0176): a read-only agent may call
+   * nothing else. Without it, an action's `readOnlyHint` annotation from
+   * `listActions` decides, and an action without one counts as a write.
+   */
+  readOnly?(action: string): boolean;
   refresh?(args: {
     material: Uint8Array;
   }): Promise<ConnectionAuthorizationResult>;

@@ -14,6 +14,18 @@ import {
   toolDefinition,
 } from "./routes/project-mcp.js";
 
+/**
+ * Project tools that make something live for everyone (ADR 0176): only a
+ * full-access agent may call them. Output shown in the agent's own chat
+ * suits any mode.
+ */
+const PUBLISHING_TOOLS = new Set([
+  "program_deploy",
+  "publish_document",
+  "revoke_publication",
+]);
+const OWN_CHAT_TOOLS = new Set(["session_artifact", "set_app_presentation"]);
+
 const Definition = z.object({
   name: z.string(),
   description: z.string().default(""),
@@ -82,6 +94,11 @@ export async function projectToolCapabilities(args: {
         name: `project.${definition.name}`,
         description: definition.description,
         effect,
+        ...(PUBLISHING_TOOLS.has(definition.name)
+          ? { mode: "full-access" as const }
+          : OWN_CHAT_TOOLS.has(definition.name)
+            ? { mode: "read-only" as const }
+            : {}),
         inputSchema: z.fromJSONSchema(definition.inputSchema),
         outputSchema: z.unknown(),
         authorize: () => true,

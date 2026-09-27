@@ -157,6 +157,11 @@ export interface AgentRuntimeRequestOrigin {
 export interface AgentApprovalRequest extends AgentRuntimeRequestBase {
   kind: "approval";
   toolRequest?: ToolPermissionRequest;
+  /**
+   * People who may answer besides those who may change the chat: an
+   * unattended chat's approvers (ADR 0176).
+   */
+  approvers?: string[];
   approval: {
     action: string;
     details?: string;

@@ -11,6 +11,7 @@ import {
   canonicalRuntimeJson,
   sameCanonicalRuntimeJson,
 } from "./agent-runtime-json.js";
+import { AccessDeniedError } from "./artifact-scope.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -116,6 +117,37 @@ export class AgentRuntimeRequestsService {
             sessionId: args.sessionId,
             lock: true,
             intent: "change",
+          }).catch(async (error: unknown) => {
+            // An unattended chat's approvers answer its approvals without
+            // otherwise holding the chat (ADR 0176).
+            if (!(error instanceof AccessDeniedError)) throw error;
+            const named = await trx
+              .selectFrom("agent_runtime_requests")
+              .innerJoin(
+                "agent_sessions",
+                "agent_sessions.id",
+                "agent_runtime_requests.session_id",
+              )
+              .innerJoin("projects", "projects.id", "agent_sessions.project_id")
+              .select([
+                "agent_runtime_requests.payload",
+                "agent_sessions.project_id",
+              ])
+              .where("agent_runtime_requests.session_id", "=", args.sessionId)
+              .where("agent_runtime_requests.request_id", "=", args.requestId)
+              .where("projects.tenant_id", "=", args.identity.tenantId)
+              .executeTakeFirst();
+            const stored = named
+              ? requestFromPayload(named.payload)
+              : undefined;
+            if (
+              !named ||
+              stored?.kind !== "approval" ||
+              args.response.kind !== "approval" ||
+              !stored.approvers?.includes(args.identity.externalUserId)
+            )
+              throw error;
+            return { projectId: named.project_id };
           });
           setSpanCorrelation({
             span,

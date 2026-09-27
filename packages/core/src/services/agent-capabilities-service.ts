@@ -3,10 +3,13 @@ import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import {
   type AgentCapabilityGateway,
+  type AgentMode,
   CapabilityPageSchema,
   DiscoverCapabilitiesSchema,
   extraToolResult,
   InvokeCapabilitySchema,
+  modeAllows,
+  modeRefusal,
   type TurnContextFragment,
 } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
@@ -88,6 +91,8 @@ const ContextSchema = z.object({
   allocationId: z.string(),
   environment: z.string(),
   agentLoopHost: z.string().nullable(),
+  /** What the agent may change outside its sandbox (ADR 0176). */
+  mode: z.enum(["read-only", "edit", "full-access"]).optional(),
   execution: z.object({
     bindingId: z.string(),
     workerNodeId: z.string().nullable(),
@@ -123,6 +128,11 @@ export interface AgentCapability {
   consent?: string;
   description: string;
   effect: "read" | "write";
+  /**
+   * The least agent mode that may invoke it (ADR 0176). Default: `read-only`
+   * for read effects, `edit` for writes. Publishing asks `full-access`.
+   */
+  mode?: AgentMode;
   inputSchema: z.ZodType;
   outputSchema: z.ZodType;
   authorize(context: AgentCapabilityContext): boolean | Promise<boolean>;
@@ -144,6 +154,8 @@ export function defineAgentCapability<
   consent?: string;
   description: string;
   effect: "read" | "write";
+  /** The least agent mode that may invoke it (ADR 0176). */
+  mode?: AgentMode;
   inputSchema: I;
   outputSchema: O;
   authorize(context: AgentCapabilityContext): boolean | Promise<boolean>;
@@ -223,6 +235,14 @@ export class AgentCapabilitiesService {
       allocations: ExecutionAllocationsService;
       environments: ExecutionEnvironmentsService;
       options?: AgentCapabilityOptions;
+      /**
+       * The session agent's mode (ADR 0176). Capabilities above it are
+       * refused with a reason the agent can read.
+       */
+      sessionMode?: (args: {
+        projectId: string;
+        sessionId: string;
+      }) => Promise<AgentMode | undefined>;
       /** The stock membership's described roles; `null` for non-members. */
       memberRoles?: (args: {
         tenantId: string;
@@ -297,6 +317,14 @@ export class AgentCapabilitiesService {
         ).get(command.name);
         if (!capability || !(await capability.authorize(context)))
           throw new AccessDeniedError();
+        const mode = await this.deps.sessionMode?.(args);
+        const required =
+          capability.mode ??
+          (capability.effect === "read" ? "read-only" : "edit");
+        if (mode && !modeAllows(mode, required))
+          throw new AccessDeniedError(
+            modeRefusal({ mode, action: `use ${command.name}` }),
+          );
         const prepared = capability.prepare(command.input);
         const approvalDefinition = (entry: AgentCapability) =>
           JSON.stringify({
@@ -534,6 +562,7 @@ export class AgentCapabilitiesService {
     workingDirectory?: string;
     agentLoopHost?: string;
     allocationId?: string;
+    mode?: AgentMode;
   }) {
     const context = await this.context(args);
     const allocation = await this.deps.allocations.get(context);
@@ -576,6 +605,7 @@ export class AgentCapabilitiesService {
       allocationId: context.allocationId,
       environment: allocation.environmentName,
       agentLoopHost: args.agentLoopHost ?? null,
+      ...(args.mode ? { mode: args.mode } : {}),
       execution: {
         bindingId: allocation.bindingId,
         workerNodeId,
@@ -715,6 +745,14 @@ export function formatSessionContext(
       ? `Commands and file edits run directly in the project folder${where}.`
       : `Commands and file edits run in an isolated sandbox copy of the project${where}; localhost there is the sandbox, not the person's computer.`,
   );
+  if (snapshot.mode === "read-only")
+    lines.push(
+      "Mode: read-only. Run and change anything inside your sandbox to investigate; none of it is saved, proposed, or published, and connections answer reads only. Report what you found.",
+    );
+  else if (snapshot.mode === "edit")
+    lines.push(
+      "Mode: edit. Your changes are saved and you may propose them; publishing and deploying are for someone else.",
+    );
   lines.push(`Now: ${snapshot.observedAt}`);
   return lines.join("\n");
 }

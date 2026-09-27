@@ -1,4 +1,5 @@
 import {
+  AccessDeniedError,
   AgentDelegationDeniedError,
   AgentNotConfiguredError,
   AgentRequestAlreadyResolvedError,
@@ -925,23 +926,37 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           .status(503)
           .send({ error: "Tool permissions are not configured" });
       }
-      try {
-        await agentSessions.assertSession(
-          resolveIdentity(request),
+      const identity = resolveIdentity(request);
+      const approverOnly = await agentSessions
+        .assertSession(
+          identity,
           request.params.projectId,
           request.params.sessionId,
-        );
-      } catch (err) {
-        if (
-          err instanceof ProjectNotFoundError ||
-          err instanceof AgentSessionNotFoundError
-        ) {
-          return reply.status(404).send({ error: "Session not found" });
-        }
-        throw err;
-      }
+        )
+        .then(() => false)
+        .catch((err: unknown) => {
+          // An unattended chat's approvers see the asks they may answer
+          // (ADR 0176), and nothing else of the chat.
+          if (err instanceof AccessDeniedError) return true;
+          throw err;
+        })
+        .catch((err: unknown) => {
+          if (
+            err instanceof ProjectNotFoundError ||
+            err instanceof AgentSessionNotFoundError
+          )
+            return undefined;
+          throw err;
+        });
+      if (approverOnly === undefined)
+        return reply.status(404).send({ error: "Session not found" });
+      const permissions = await broker.list(request.params.sessionId);
       return reply.send({
-        permissions: await broker.list(request.params.sessionId),
+        permissions: approverOnly
+          ? permissions.filter((permission) =>
+              permission.approvers?.includes(identity.externalUserId),
+            )
+          : permissions,
       });
     },
   });
@@ -962,9 +977,11 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           .status(503)
           .send({ error: "Tool permissions are not configured" });
       }
+      const identity = resolveIdentity(request);
+      const pending = await broker.get(request.params.permissionId);
       try {
         await agentSessions.assertSession(
-          resolveIdentity(request),
+          identity,
           request.params.projectId,
           request.params.sessionId,
         );
@@ -975,9 +992,13 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         ) {
           return reply.status(404).send({ error: "Session not found" });
         }
-        throw err;
+        // A named approver answers without otherwise holding the chat.
+        if (
+          !(err instanceof AccessDeniedError) ||
+          !pending?.approvers?.includes(identity.externalUserId)
+        )
+          throw err;
       }
-      const pending = await broker.get(request.params.permissionId);
       // An ask belongs to the session it was raised in — answering it from
       // another session's URL is a 404, not a hijack.
       if (!pending || pending.sessionId !== request.params.sessionId) {
