@@ -273,7 +273,8 @@ describe("agent session coordination", () => {
       },
       nativeAgentCheckout: {
         resolve: ({ projectId, sessionId }) => ({
-          path: checkoutBySession.get(sessionId) ?? path.join(tmpDir, projectId),
+          path:
+            checkoutBySession.get(sessionId) ?? path.join(tmpDir, projectId),
           owned: checkoutBySession.has(sessionId),
         }),
         checkpoint: ({ sessionId, workingDirectory }) => {

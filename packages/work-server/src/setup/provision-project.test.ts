@@ -25,6 +25,7 @@ function project(over: Partial<Project> = {}): Project {
     storageType: "managed",
     remoteUrl: null,
     remoteOwnership: null,
+    remoteDivergedAt: null,
     defaultBranch: "main",
     createdAt: "2026-08-26T00:00:00.000Z",
     updatedAt: "2026-08-26T00:00:00.000Z",

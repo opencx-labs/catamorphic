@@ -319,7 +319,11 @@ describe("CodeHostsService", () => {
   it("links one repository when publishes race, here or on another replica", async () => {
     const frank: Identity = { tenantId, externalUserId: "frank" };
     const replica = async (name: string) => {
-      const forge = fakeCodeHost({ db, projectManager: manager, remoteBase: temp });
+      const forge = fakeCodeHost({
+        db,
+        projectManager: manager,
+        remoteBase: temp,
+      });
       await forge.connectPersonal(frank, "frank-token");
       const bare = await bareRepository(name, {});
       const created: string[] = [];

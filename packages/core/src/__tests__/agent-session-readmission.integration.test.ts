@@ -317,12 +317,13 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
     await expect(act("inspect", aliceKey)).rejects.toThrow(
       "No open chat has the key pr-9",
     );
-    expect(await act("close", { ...aliceKey, idempotencyKey: "m-1" })).toEqual(
-      { sessionId: null, closed: false },
+    expect(await act("close", { ...aliceKey, idempotencyKey: "m-1" })).toEqual({
+      sessionId: null,
+      closed: false,
+    });
+    expect((await sessions.get(alice, projectId, chat.sessionId)).status).toBe(
+      "active",
     );
-    expect(
-      (await sessions.get(alice, projectId, chat.sessionId)).status,
-    ).toBe("active");
   });
 
   it("reports closing a closed chat as nothing closed, and a retried close finishes its cleanup", async () => {
@@ -369,9 +370,9 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
     });
     const merged = { key: "pr-12", idempotencyKey: "merged-12" };
     await expect(act(merged)).rejects.toThrow("host crashed");
-    expect(
-      (await sessions.get(alice, projectId, chat.sessionId)).status,
-    ).toBe("closed");
+    expect((await sessions.get(alice, projectId, chat.sessionId)).status).toBe(
+      "closed",
+    );
     expect(provider.disposed).not.toContain(providerSessionId);
     // Retrying finishes it, though the key no longer names the chat.
     expect(await act(merged)).toEqual({

@@ -4,9 +4,9 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
-import { AccessDeniedError } from "./artifact-scope.js";
 import type { AgentSessionsService } from "./agent-sessions-service.js";
 import type { SessionMessageAuthor } from "./agent-turns-service.js";
+import { AccessDeniedError } from "./artifact-scope.js";
 import {
   ChatAudienceSchema,
   ChatKeySchema,
@@ -172,7 +172,13 @@ export class SessionActionsService {
           !open && "idempotencyKey" in parsed
             ? await this.db
                 .selectFrom("session_actions")
-                .select(["operation", "input", "result", "status", "session_id"])
+                .select([
+                  "operation",
+                  "input",
+                  "result",
+                  "status",
+                  "session_id",
+                ])
                 .where("project_id", "=", input.projectId)
                 .where(
                   "idempotency_key",

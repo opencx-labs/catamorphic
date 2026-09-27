@@ -128,7 +128,6 @@ import {
 import {
   basePin,
   movePin,
-  workspaceMoveRefusedNote,
   parseWorkspaceBase,
   parseWorkspaceMove,
   type SessionWorkspaceBase,
@@ -138,6 +137,7 @@ import {
   workspaceJson,
   workspaceMoveJson,
   workspaceMoveNote,
+  workspaceMoveRefusedNote,
 } from "./session-workspaces.js";
 import {
   documentsClientFor,
@@ -581,10 +581,7 @@ export interface NativeAgentCheckout {
       repository: string;
       pin: string;
     };
-  }):
-    | Promise<NativeCheckout | undefined>
-    | NativeCheckout
-    | undefined;
+  }): Promise<NativeCheckout | undefined> | NativeCheckout | undefined;
   checkpoint?(input: {
     projectId: string;
     sessionId: string;
@@ -2138,9 +2135,7 @@ export class AgentSessionsService {
     const workspaces = this.requireWorkspaces();
     // Settle only the move this call applies: a delivery that asked for
     // another base meanwhile keeps its move for the next turn.
-    const settleMove = (
-      workspace?: SessionWorkspaceBase,
-    ): Promise<unknown> =>
+    const settleMove = (workspace?: SessionWorkspaceBase): Promise<unknown> =>
       this.db
         .updateTable("agent_sessions")
         .set({

@@ -55,6 +55,7 @@ function app(overrides: Record<string, unknown> = {}) {
       storageType: "managed",
       remoteUrl: "https://github.com/octo/hello.git",
       remoteOwnership: "attached",
+      remoteDivergedAt: null,
       defaultBranch: "main",
       createdAt: "2026-09-27T00:00:00.000Z",
       updatedAt: "2026-09-27T00:00:00.000Z",
@@ -130,6 +131,7 @@ describe("code host routes (ADR 0177)", () => {
     expect(imported.json()).toMatchObject({
       remoteUrl: "https://github.com/octo/hello.git",
       remoteOwnership: "attached",
+      remoteDivergedAt: null,
     });
     expect(codeHosts.importRepository).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "github", fullName: "octo/hello" }),
