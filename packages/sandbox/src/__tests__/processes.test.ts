@@ -207,7 +207,7 @@ describe("stdio processes in a sandbox (ADR 0180)", () => {
   it("writes input to a process started with stdin, and ends it", async () => {
     const started = await processes.startProcess({
       sandboxId,
-      command: "while read -r line; do echo \"got $line\"; done; echo eof",
+      command: 'while read -r line; do echo "got $line"; done; echo eof',
       stdin: true,
     });
     await processes.writeProcessInput({
@@ -290,7 +290,9 @@ describe("stdio processes in a sandbox (ADR 0180)", () => {
         command: "claude",
         args: ["--print", "it's"],
         cwd: "/workspace/project",
-        pathEnv: { WORK_MODEL_KEY_FILE: "/workspace/.work-session/grants/model" },
+        pathEnv: {
+          WORK_MODEL_KEY_FILE: "/workspace/.work-session/grants/model",
+        },
         stderrPath: "/workspace/.work-session/claude.stderr",
       }),
     ).toBe(

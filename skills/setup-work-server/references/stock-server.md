@@ -26,7 +26,7 @@ Environment variables parsed by `workServerConfigFromEnv` in
 | `PORT` | Public listener (default 4700). |
 | `WORK_DATA_DIR` | Data directory (default `/data`). Back up all of it. |
 | `WORK_PUBLIC_URL` | Public origin for OAuth, invitations, and webhook URLs. Must be HTTPS unless loopback. |
-| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` | Model for the built-in agent. `WORK_MODEL`, `WORK_EFFORT` tune it. `WORK_FAKE_AGENT=1` runs a deterministic echo agent. |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` | Model for the built-in agent. `WORK_MODEL`, `WORK_EFFORT` tune it. `WORK_FAKE_AGENT=1` runs a deterministic echo agent. Claude Code and Codex agents never see these; they use model connections ([Harnesses on the server](harnesses.md)). |
 | `WORK_AUTH_CONFIG` | Path to the auth config (default `<data>/auth-config.json`). |
 | `WORK_OPERATOR_PORT` | Loopback-only setup listener (default 4701). |
 | `WORK_OPERATOR_SECRET` | Supplies the operator credential instead of the generated `<data>/operator-secret`. |

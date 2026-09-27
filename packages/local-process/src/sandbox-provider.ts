@@ -23,8 +23,8 @@ import type {
 } from "@catamorphic/sandbox";
 import {
   assertProcessId,
-  assertWriteSize,
   assertSandboxResources,
+  assertWriteSize,
   decodeUtf8Prefix,
   newProcessId,
   PROCESS_SIGNALS,

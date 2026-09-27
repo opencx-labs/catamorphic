@@ -144,7 +144,9 @@ export class CodexAppServer {
     const env = {
       ...this.options.env,
       ...(this.options.apiKey ? { CODEX_API_KEY: this.options.apiKey } : {}),
-      ...(this.options.baseUrl ? { OPENAI_BASE_URL: this.options.baseUrl } : {}),
+      ...(this.options.baseUrl
+        ? { OPENAI_BASE_URL: this.options.baseUrl }
+        : {}),
     };
     this.child = this.spawnElsewhere
       ? this.spawnElsewhere({ command, args, env })

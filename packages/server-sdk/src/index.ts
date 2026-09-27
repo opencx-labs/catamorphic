@@ -207,11 +207,6 @@ export {
 } from "./git-connection-provider.js";
 export { githubCodeHost } from "./github-code-host.js";
 export {
-  builtinModelConnectionProviders,
-  defineModelConnectionProvider,
-  type ModelConnectionOptions,
-} from "./model-connection-provider.js";
-export {
   defineGithubConnectionProvider,
   GITHUB_CONNECTION_ACTIONS,
   type GithubConnectionOptions,
@@ -223,6 +218,11 @@ export {
   type HttpApiConnectionOptions,
   type HttpMethod,
 } from "./http-connection-provider.js";
+export {
+  builtinModelConnectionProviders,
+  defineModelConnectionProvider,
+  type ModelConnectionOptions,
+} from "./model-connection-provider.js";
 export {
   definePostgresConnectionProvider,
   type PostgresConnectionLimits,

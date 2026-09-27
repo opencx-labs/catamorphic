@@ -16,13 +16,13 @@ import {
   type AgentMcpServerConfig,
   type AgentQuestionRequest,
   type AgentRuntimeRequestResponse,
+  type AgentTurnUsage,
   type AttachedPluginForAgent,
   capabilityEventPresenter,
   type McpToolPolicyLayers,
   messageWithAttachmentNames,
   narrowingLayer,
   PROJECT_TOOLS_SERVER_KEY,
-  type AgentTurnUsage,
   type ProviderSession,
   type SandboxModelGateway,
   type SandboxProvider,
@@ -6836,7 +6836,9 @@ export class AgentSessionsService {
     // An alias that only serves Git or a model is reached from the
     // sandbox through the gateway, not as tools (ADRs 0175, 0180).
     const bindings = (allocation?.policy.connections ?? []).filter((binding) =>
-      binding.capabilities.some((capability) => !isProtocolCapability(capability)),
+      binding.capabilities.some(
+        (capability) => !isProtocolCapability(capability),
+      ),
     );
     if (bindings.length === 0) return {};
     if (!this.connectionMcpUrl) {

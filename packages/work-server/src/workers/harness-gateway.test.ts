@@ -78,7 +78,10 @@ function fakeAnthropic(): http.Server {
         response.end(
           JSON.stringify({
             type: "error",
-            error: { type: "authentication_error", message: "invalid x-api-key" },
+            error: {
+              type: "authentication_error",
+              message: "invalid x-api-key",
+            },
           }),
         );
         return;
@@ -87,10 +90,14 @@ function fakeAnthropic(): http.Server {
       const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
       const last = record(messages.at(-1));
       const blocks = Array.isArray(last.content) ? last.content : [];
-      const result = blocks.map(record).find((block) => block.type === "tool_result");
+      const result = blocks
+        .map(record)
+        .find((block) => block.type === "tool_result");
       response.writeHead(200, { "content-type": "text/event-stream" });
       const send = (event: Json) =>
-        response.write(`event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`);
+        response.write(
+          `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`,
+        );
       send({
         type: "message_start",
         message: {
@@ -108,19 +115,30 @@ function fakeAnthropic(): http.Server {
         send({
           type: "content_block_delta",
           index: 0,
-          delta: { type: "text_delta", text: `Done: ${String(result.content)}` },
+          delta: {
+            type: "text_delta",
+            text: `Done: ${String(result.content)}`,
+          },
         });
       } else {
         const command = String(last.content).replace(/^run:\s*/, "");
         send({
           type: "content_block_start",
           index: 0,
-          content_block: { type: "tool_use", id: `toolu_${randomUUID()}`, name: "Bash", input: {} },
+          content_block: {
+            type: "tool_use",
+            id: `toolu_${randomUUID()}`,
+            name: "Bash",
+            input: {},
+          },
         });
         send({
           type: "content_block_delta",
           index: 0,
-          delta: { type: "input_json_delta", partial_json: JSON.stringify({ command }) },
+          delta: {
+            type: "input_json_delta",
+            partial_json: JSON.stringify({ command }),
+          },
         });
       }
       send({ type: "content_block_stop", index: 0 });
@@ -166,7 +184,9 @@ const nightGuard: ConnectionActionGuard = {
 beforeAll(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "work-harness-gateway-"));
   upstream = fakeAnthropic();
-  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) =>
+    upstream.listen(0, "127.0.0.1", resolve),
+  );
   const upstreamAddress = upstream.address();
   if (!upstreamAddress || typeof upstreamAddress === "string")
     throw new Error("No upstream address");

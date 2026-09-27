@@ -401,6 +401,11 @@ export {
 } from "./services/git-gateway.js";
 export { executeHostCall, type HostCallInput } from "./services/host-calls.js";
 export {
+  type GrantMembershipInput,
+  type Membership,
+  MembershipsService,
+} from "./services/memberships-service.js";
+export {
   dbModelGatewayStore,
   MODEL_REQUEST_MAX_BYTES,
   type ModelCallUsage,
@@ -415,11 +420,6 @@ export {
   SseUsageReader,
   usageFromJson,
 } from "./services/model-gateway.js";
-export {
-  type GrantMembershipInput,
-  type Membership,
-  MembershipsService,
-} from "./services/memberships-service.js";
 export {
   type AttachedPluginInfo,
   type PluginInfo,

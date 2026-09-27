@@ -138,7 +138,8 @@ export const AgentDefinitionCredentialsSchema = z
       ctx.addIssue({
         code: "custom",
         path: ["connection"],
-        message: 'credentials.source "connection" requires a "connection" alias',
+        message:
+          'credentials.source "connection" requires a "connection" alias',
       });
     }
     if (value.source !== "connection" && value.connection) {
@@ -439,9 +440,7 @@ export function definitionHash(
       source: credentials.source,
       secret: credentials.secret ?? null,
       // Only when named, so existing consent hashes stay valid.
-      ...(credentials.connection
-        ? { connection: credentials.connection }
-        : {}),
+      ...(credentials.connection ? { connection: credentials.connection } : {}),
     },
     environment: definition.environment ?? null,
     connections: (definition.connections ?? []).map((connection) =>

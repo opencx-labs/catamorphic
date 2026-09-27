@@ -117,14 +117,6 @@ export {
 } from "./coding-agent/types.js";
 export { CommandDeploymentRuntimeProvider } from "./command-deployment-runtime.js";
 export {
-  type SandboxStdioProcess,
-  type SandboxStdioSpawnArgs,
-  sandboxCommandLine,
-  shellWord,
-  spawnInSandbox,
-  splitUtf8,
-} from "./sandbox-stdio.js";
-export {
   type AgentExecutionTopology,
   accessTier,
   type EnvironmentBinding,
@@ -189,6 +181,14 @@ export {
 } from "./sandbox-environment.js";
 export type { SandboxStore } from "./sandbox-manager.js";
 export { SandboxManagerImpl } from "./sandbox-manager.js";
+export {
+  type SandboxStdioProcess,
+  type SandboxStdioSpawnArgs,
+  sandboxCommandLine,
+  shellWord,
+  spawnInSandbox,
+  splitUtf8,
+} from "./sandbox-stdio.js";
 export type {
   StdioSupervisorTransport,
   SupervisorProcessHandle,

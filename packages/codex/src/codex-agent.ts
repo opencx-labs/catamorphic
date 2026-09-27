@@ -625,7 +625,11 @@ function sandboxRunFor(
     return "Codex reaches its model through the gateway, and this chat has no model connection: bind one in the agent's Environment and name it in the agent's credentials.";
   if (gateway.api !== "openai")
     return `Codex speaks the OpenAI API; the connection '${gateway.alias}' is an ${gateway.api} API.`;
-  return { sandbox: turn.sandbox, gateway, command: options.command ?? "codex" };
+  return {
+    sandbox: turn.sandbox,
+    gateway,
+    command: options.command ?? "codex",
+  };
 }
 
 /**

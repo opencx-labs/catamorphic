@@ -223,7 +223,11 @@ describe("model usage", () => {
         model: "claude-test-1",
         usage: { input_tokens: 9, output_tokens: 4 },
       }),
-    ).toMatchObject({ model: "claude-test-1", inputTokens: 9, outputTokens: 4 });
+    ).toMatchObject({
+      model: "claude-test-1",
+      inputTokens: 9,
+      outputTokens: 4,
+    });
   });
 
   it("reads OpenAI Responses and Chat Completions, streamed or not", () => {
@@ -357,7 +361,9 @@ describe("the model gateway", () => {
     expect(response.headers["set-cookie"]).toBeUndefined();
     expect(await bodyText(response)).toBe(anthropicStream);
     expect(upstreamCalls).toHaveLength(1);
-    expect(upstreamCalls[0]?.url).toBe("https://api.anthropic.test/v1/messages");
+    expect(upstreamCalls[0]?.url).toBe(
+      "https://api.anthropic.test/v1/messages",
+    );
     expect(upstreamCalls[0]?.headers.get("x-api-key")).toBe(REAL_KEY);
     expect(upstreamCalls[0]?.headers.get("anthropic-version")).toBe(
       "2023-06-01",
@@ -449,9 +455,9 @@ describe("the model gateway", () => {
       (await gateway.handle(messages({ model: "x" }, REAL_KEY))).status,
     ).toBe(401);
     const closed = harness({ api: "anthropic", sessionActive: false });
-    expect(
-      (await closed.gateway.handle(messages({ model: "x" }))).status,
-    ).toBe(401);
+    expect((await closed.gateway.handle(messages({ model: "x" }))).status).toBe(
+      401,
+    );
     const openai = harness({ api: "openai" });
     const refused = await openai.gateway.handle({
       alias: "model",

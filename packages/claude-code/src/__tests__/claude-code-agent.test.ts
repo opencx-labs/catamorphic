@@ -266,7 +266,8 @@ describe("ClaudeCodeAgent", () => {
     }
     const options = queryMock.mock.calls[0]?.[0].options;
     expect(options?.env).toMatchObject({
-      ANTHROPIC_BASE_URL: "https://work.example.test/api/gateway/model/anthropic",
+      ANTHROPIC_BASE_URL:
+        "https://work.example.test/api/gateway/model/anthropic",
     });
     expect(options?.env?.HOST_ONLY_SECRET).toBeUndefined();
     expect(options?.env?.ANTHROPIC_API_KEY).toBeUndefined();

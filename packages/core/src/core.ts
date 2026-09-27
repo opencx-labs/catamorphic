@@ -72,12 +72,12 @@ import { ExecutionEnvironmentsService } from "./services/execution-environments-
 import { ExecutionJobsService } from "./services/execution-jobs-service.js";
 import { ExecutionWorkerService } from "./services/execution-worker-service.js";
 import { GitGatewayService } from "./services/git-gateway.js";
+import { executeHostCall } from "./services/host-calls.js";
+import { MembershipsService } from "./services/memberships-service.js";
 import {
   dbModelGatewayStore,
   ModelGatewayService,
 } from "./services/model-gateway.js";
-import { executeHostCall } from "./services/host-calls.js";
-import { MembershipsService } from "./services/memberships-service.js";
 import { PluginsService } from "./services/plugins-service.js";
 import { ProjectEnvironmentsService } from "./services/project-environments-service.js";
 import { ProjectEventDispatcher } from "./services/project-event-dispatcher.js";

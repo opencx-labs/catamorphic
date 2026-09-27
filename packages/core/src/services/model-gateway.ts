@@ -214,8 +214,7 @@ export class SseUsageReader {
     if (this.api === "anthropic") {
       if (event.type === "message_start") {
         const message = record(event.message);
-        if (typeof message.model === "string")
-          this.usage.model = message.model;
+        if (typeof message.model === "string") this.usage.model = message.model;
         mergeAnthropicUsage(this.usage, record(message.usage));
       } else if (event.type === "message_delta") {
         mergeAnthropicUsage(this.usage, record(event.usage));
@@ -300,7 +299,9 @@ export interface ModelUsageRecord {
 /** What the model gateway reads and writes beside grants (ADR 0180). */
 export interface ModelGatewayStore {
   /** A session's owner, whether it is open, and the turn running now. */
-  session(sessionId: string): Promise<
+  session(
+    sessionId: string,
+  ): Promise<
     | { ownerId: string; active: boolean; runningTurnId: string | undefined }
     | undefined
   >;
@@ -468,7 +469,9 @@ export class ModelGatewayService {
     let body: Record<string, unknown> | undefined;
     if (request.method === "POST") {
       try {
-        body = record(JSON.parse(decoder.decode(request.body ?? new Uint8Array())));
+        body = record(
+          JSON.parse(decoder.decode(request.body ?? new Uint8Array())),
+        );
       } catch {
         throw new ModelGatewayError(
           400,
@@ -500,7 +503,9 @@ export class ModelGatewayService {
         );
     }
     const maxTokens =
-      body?.max_tokens ?? body?.max_output_tokens ?? body?.max_completion_tokens;
+      body?.max_tokens ??
+      body?.max_output_tokens ??
+      body?.max_completion_tokens;
     const input: JsonObject = {
       provider: authorized.providerKind,
       endpoint: action,
@@ -514,9 +519,7 @@ export class ModelGatewayService {
       alias: request.alias,
       action,
       input,
-      ...(authorized.sessionId
-        ? { agentSessionId: authorized.sessionId }
-        : {}),
+      ...(authorized.sessionId ? { agentSessionId: authorized.sessionId } : {}),
     });
     // Chat Completions streams report usage only when asked to.
     if (
@@ -659,7 +662,6 @@ export class ModelGatewayService {
       policy: binding.model,
     };
   }
-
 }
 
 /**
@@ -704,9 +706,11 @@ async function* tapUsage(args: {
         usage = emptyUsage();
       }
     }
-    await args.settle(usage).catch((error: unknown) =>
-      console.warn("[catamorphic] Could not record model usage", error),
-    );
+    await args
+      .settle(usage)
+      .catch((error: unknown) =>
+        console.warn("[catamorphic] Could not record model usage", error),
+      );
   }
 }
 
@@ -753,8 +757,7 @@ function refusalResponse(api: ModelApi, error: unknown): ModelGatewayResponse {
           error: {
             message,
             type: kind === "api_error" ? "server_error" : kind,
-            code:
-              kind === "authentication_error" ? "invalid_api_key" : kind,
+            code: kind === "authentication_error" ? "invalid_api_key" : kind,
           },
         };
   return {
