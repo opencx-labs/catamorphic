@@ -100,7 +100,7 @@ function harness(options: {
       options.api === "anthropic"
         ? "https://api.anthropic.test"
         : "https://api.openai.test/v1",
-    headers: () =>
+    headers: (): Record<string, string> =>
       options.api === "anthropic"
         ? { "x-api-key": REAL_KEY }
         : { authorization: `Bearer ${REAL_KEY}` },
