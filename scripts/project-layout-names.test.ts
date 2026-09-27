@@ -21,7 +21,7 @@ const HISTORY = [
 const RETIRED: Array<{ name: string; pattern: RegExp }> = [
   {
     name: "project folder `.catamorphic/` (now `.work/`)",
-    pattern: /(?<![\w@-])\.catamorphic(?![\w.-])/,
+    pattern: /(?<![\w@?)\]-])\.catamorphic(?![\w.-])/,
   },
   {
     name: "published ref `refs/catamorphic/` (now `refs/work/`)",
