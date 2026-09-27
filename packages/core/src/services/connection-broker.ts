@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import type { Json, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import { type AgentMode, modeRefusal } from "@catamorphic/sandbox";
+import {
+  type AgentMode,
+  modeAllows,
+  modeRefusal,
+} from "@catamorphic/sandbox";
 import type { Identity } from "../identity.js";
 import { identityMayUseConnection } from "../identity.js";
 import {
@@ -278,8 +282,9 @@ export class ConnectionBroker {
    * (fetch) or `git:write` (push). With `review`, the action passes the
    * guards like any brokered action (kind = the provider, action `fetch` or
    * `push`, input = repository and refs) and the returned `audit` records
-   * how it ended. The credentials serve this one request and never leave
-   * the control plane.
+   * how it ended. Write access for an agent session also needs a mode that
+   * may propose changes: a read-only agent never pushes (ADR 0176). The
+   * credentials serve this one request and never leave the control plane.
    */
   async gitAccess(args: {
     identity: Identity;
@@ -287,6 +292,8 @@ export class ConnectionBroker {
     alias: string;
     access: "read" | "write";
     remoteUrl: string;
+    /** The agent session asking, whose mode bounds write access. */
+    agentSessionId?: string;
     review?: {
       action: "fetch" | "push";
       input: Json;
@@ -344,6 +351,20 @@ export class ConnectionBroker {
             args.access === "write"
               ? `this session may not push through '${args.alias}' (it lacks git:write)`
               : `this session may not fetch through '${args.alias}' (it lacks git:read)`,
+          );
+        }
+        const sessionId = args.agentSessionId ?? args.review?.agentSessionId;
+        const mode =
+          args.access === "write" && sessionId
+            ? await this.gateway.sessionMode?.(sessionId)
+            : undefined;
+        if (mode && !modeAllows(mode, "edit")) {
+          await record("denied", {
+            mode,
+            ...(args.review ? { input: args.review.input } : {}),
+          });
+          throw new ConnectionActionDeniedError(
+            modeRefusal({ mode, action: `push through '${args.alias}'` }),
           );
         }
         const review = args.review
