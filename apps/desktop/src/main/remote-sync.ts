@@ -65,10 +65,64 @@ export interface RemoteAccessRequest {
   requestedAt: string;
 }
 
+/** A connection provider the server offers (`GET /connection-providers`). */
+export interface RemoteConnectionProvider {
+  kind: string;
+  displayName: string;
+}
+
+/** A named service connection on the server (ADR 0172). */
+export interface RemoteServiceConnection {
+  id: string;
+  projectId: string | null;
+  providerKind: string;
+  principalKind: "tenant_service" | "project_service" | "member";
+  name: string | null;
+  ownerExternalUserId: string | null;
+  label: string;
+  status: "pending" | "ready" | "expired" | "revoked";
+  account: unknown;
+  scopes: string[];
+  capabilities: string[];
+  expiresAt: string | null;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** What a provider asks for to authorize a connection. */
+export type RemoteAuthorizationChallenge =
+  | {
+      kind: "form";
+      fields: Array<{
+        name: string;
+        label: string;
+        secret: boolean;
+        required: boolean;
+      }>;
+    }
+  | { kind: "url"; url: string; expiresAt?: string }
+  | {
+      kind: "device";
+      verificationUrl: string;
+      userCode: string;
+      expiresAt?: string;
+    };
+
+export interface RemoteServiceAuthorization {
+  authorizationId: string;
+  challenge: RemoteAuthorizationChallenge;
+}
+
 /** `GET /me` on the host (ADR 0055). */
 export interface RemoteMe {
   version: number;
-  identity: { externalUserId: string; root: boolean };
+  identity: {
+    externalUserId: string;
+    root: boolean;
+    /** Organization-wide grants; absent on older servers. */
+    controlPlanePermissions?: string[];
+  };
   projects: Array<{
     projectId: string;
     name: string;
@@ -126,6 +180,20 @@ export interface RemoteProjectClient extends RemoteDocumentsClient {
     email?: string;
     roles: string[];
   }): Promise<RemoteInvitation>;
+  listConnectionProviders(): Promise<RemoteConnectionProvider[]>;
+  listServiceConnections(): Promise<RemoteServiceConnection[]>;
+  createServiceConnection(input: {
+    name: string;
+    providerKind: string;
+  }): Promise<RemoteServiceConnection>;
+  authorizeServiceConnection(
+    connectionId: string,
+  ): Promise<RemoteServiceAuthorization>;
+  completeConnectionAuthorization(input: {
+    authorizationId: string;
+    callback: Record<string, string>;
+  }): Promise<RemoteServiceConnection>;
+  revokeConnection(connectionId: string): Promise<void>;
   publish(input: {
     path: string;
     audience: "public" | "members";
@@ -293,6 +361,66 @@ export function httpDocumentsClient(args: {
       );
       if (!response.ok) return fail(response, "Inviting project member");
       return (await response.json()) as RemoteInvitation;
+    },
+    async listConnectionProviders() {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/connection-providers`,
+      );
+      if (!response.ok) return fail(response, "Listing connection providers");
+      return (await response.json()) as RemoteConnectionProvider[];
+    },
+    async listServiceConnections() {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/service-connections`,
+      );
+      if (!response.ok) return fail(response, "Listing service connections");
+      return (await response.json()) as RemoteServiceConnection[];
+    },
+    async createServiceConnection(input) {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/service-connections`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: input.name,
+            providerKind: input.providerKind,
+            principalKind: "tenant_service",
+          }),
+        },
+      );
+      if (!response.ok) return fail(response, "Adding the connection");
+      return (await response.json()) as RemoteServiceConnection;
+    },
+    async authorizeServiceConnection(connectionId) {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/service-connections/${encodeURIComponent(connectionId)}/authorize`,
+        { method: "POST" },
+      );
+      if (!response.ok) return fail(response, "Connecting");
+      return (await response.json()) as RemoteServiceAuthorization;
+    },
+    async completeConnectionAuthorization(input) {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/connection-authorizations/complete`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            state: input.authorizationId,
+            callback: input.callback,
+          }),
+        },
+      );
+      if (!response.ok) return fail(response, "Connecting");
+      return (await response.json()) as RemoteServiceConnection;
+    },
+    async revokeConnection(connectionId) {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/connections/${encodeURIComponent(connectionId)}`,
+        { method: "DELETE" },
+      );
+      if (!response.ok) return fail(response, "Revoking the connection");
     },
     async list() {
       const response = await authorizedFetch(base);

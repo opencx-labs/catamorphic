@@ -522,6 +522,16 @@ const api = {
     invoke("catamorphic:remote-member-set-roles", input),
   remoteMemberInvite: (input: unknown): Promise<unknown> =>
     invoke("catamorphic:remote-member-invite", input),
+  remoteServiceConnections: (projectId: string): Promise<unknown> =>
+    invoke("catamorphic:remote-service-connections", projectId),
+  remoteServiceConnectionCreate: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-service-connection-create", input),
+  remoteServiceConnectionAuthorize: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-service-connection-authorize", input),
+  remoteServiceConnectionComplete: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-service-connection-complete", input),
+  remoteServiceConnectionRevoke: (input: unknown): Promise<void> =>
+    invoke("catamorphic:remote-service-connection-revoke", input),
   remoteDisconnect: (projectId: string): Promise<void> =>
     invoke("catamorphic:remote-disconnect", projectId),
   remoteTakePendingLink: (): Promise<string | null> =>

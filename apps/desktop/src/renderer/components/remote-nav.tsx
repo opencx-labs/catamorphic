@@ -1,4 +1,4 @@
-import { Download, Upload, Users } from "lucide-react";
+import { Download, KeyRound, Upload, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   desktopApi,
@@ -19,6 +19,7 @@ export type RemoteFeatures = RemoteCapabilities["features"];
 
 import { PendingButton } from "./pending-button.js";
 import { RemoteMembersModal } from "./remote-members-modal.js";
+import { RemoteServiceConnectionsModal } from "./remote-service-connections-modal.js";
 
 /**
  * The sidebar's Server section for a remote project (ADR 0055): where the
@@ -49,6 +50,7 @@ export function RemoteNav({
   const [busy, setBusy] = useState<"sync" | "ship" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
 
   const refresh = useCallback(async () => {
@@ -124,6 +126,8 @@ export function RemoteNav({
   const canPropose = features ? features.proposals : true;
   const canManageMembers =
     status.capabilities?.permissions.includes("memberships:write") ?? false;
+  // Organization administrators manage service connections (ADR 0172).
+  const canManageConnections = status.capabilities?.administrator ?? false;
   const reconnectNeeded =
     status.connection.state === "sign_in_required" ||
     status.connection.state === "access_removed" ||
@@ -191,6 +195,17 @@ export function RemoteNav({
           >
             <Users className="size-3.5" />
             Members and invites
+          </button>
+        )}
+        {canManageConnections && (
+          <button
+            type="button"
+            onClick={() => setConnectionsOpen(true)}
+            data-testid="remote-service-connections"
+            className="flex h-7 items-center justify-center gap-1.5 rounded-md border border-border text-xs text-fg-muted hover:bg-bg-overlay hover:text-fg"
+          >
+            <KeyRound className="size-3.5" />
+            Service connections
           </button>
         )}
         {visibleMessage && (
@@ -281,6 +296,11 @@ export function RemoteNav({
         open={membersOpen}
         projectId={projectId}
         onClose={() => setMembersOpen(false)}
+      />
+      <RemoteServiceConnectionsModal
+        open={connectionsOpen}
+        projectId={projectId}
+        onClose={() => setConnectionsOpen(false)}
       />
     </>
   );

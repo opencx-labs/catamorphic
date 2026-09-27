@@ -467,6 +467,8 @@ export interface RemoteCapabilities {
   permissions: string[];
   agents: string[];
   documents: Array<{ path: string; access: "read" | "write" }>;
+  /** Manages the organization's service connections; absent on older links. */
+  administrator?: boolean;
   features: {
     publications: "public" | "members" | false;
     proposals: boolean;
@@ -544,6 +546,47 @@ export interface RemoteProjectAccessRequest {
   status: string;
   requestedAt: string;
 }
+
+export interface RemoteConnectionProvider {
+  kind: string;
+  displayName: string;
+}
+
+export interface RemoteServiceConnection {
+  id: string;
+  projectId: string | null;
+  providerKind: string;
+  principalKind: "tenant_service" | "project_service" | "member";
+  name: string | null;
+  ownerExternalUserId: string | null;
+  label: string;
+  status: "pending" | "ready" | "expired" | "revoked";
+  account: unknown;
+  scopes: string[];
+  capabilities: string[];
+  expiresAt: string | null;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type RemoteAuthorizationChallenge =
+  | {
+      kind: "form";
+      fields: Array<{
+        name: string;
+        label: string;
+        secret: boolean;
+        required: boolean;
+      }>;
+    }
+  | { kind: "url"; url: string; expiresAt?: string }
+  | {
+      kind: "device";
+      verificationUrl: string;
+      userCode: string;
+      expiresAt?: string;
+    };
 
 export type GithubConnectResult =
   | { connected: true; login: string }
@@ -865,6 +908,33 @@ export interface CatamorphicDesktopApi {
     connectLinks: string[];
     webLinks: string[];
   }>;
+  /** Organization service connections; administrators only (ADR 0172). */
+  remoteServiceConnections: (projectId: string) => Promise<{
+    providers: RemoteConnectionProvider[];
+    connections: RemoteServiceConnection[];
+  }>;
+  remoteServiceConnectionCreate: (input: {
+    projectId: string;
+    name: string;
+    providerKind: string;
+  }) => Promise<RemoteServiceConnection>;
+  /** Starts authorization; a url or device challenge opens in a browser tab. */
+  remoteServiceConnectionAuthorize: (input: {
+    projectId: string;
+    connectionId: string;
+  }) => Promise<{
+    authorizationId: string;
+    challenge: RemoteAuthorizationChallenge;
+  }>;
+  remoteServiceConnectionComplete: (input: {
+    projectId: string;
+    authorizationId: string;
+    callback: Record<string, string>;
+  }) => Promise<RemoteServiceConnection>;
+  remoteServiceConnectionRevoke: (input: {
+    projectId: string;
+    connectionId: string;
+  }) => Promise<void>;
   remoteSync: (projectId: string) => Promise<RemoteSyncReport>;
   remoteShip: (input: {
     projectId: string;
