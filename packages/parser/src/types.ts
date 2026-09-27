@@ -421,5 +421,7 @@ export interface DeclaredSecret {
   description?: string;
   required: boolean;
   default?: string;
+  /** `webhook`: verifies incoming webhooks only and never reaches a run. */
+  use: "run" | "webhook";
   filePath: string;
 }

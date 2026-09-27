@@ -432,6 +432,7 @@ import { defineSecrets } from "@catamorphic/workflow";
 export const secrets = defineSecrets({
   STRIPE_API_KEY: { description: "Stripe secret key" },
   REGION: { required: false, default: "eu-west-1" },
+  SIGNING_SECRET: { use: "webhook" },
 });
 `,
     };
@@ -446,6 +447,16 @@ export const secrets = defineSecrets({
         description: undefined,
         required: false,
         default: "eu-west-1",
+        use: "run",
+        filePath: ".work/workflows/src/secrets.ts",
+      },
+      {
+        name: "SIGNING_SECRET",
+        label: undefined,
+        description: undefined,
+        required: true,
+        default: undefined,
+        use: "webhook",
         filePath: ".work/workflows/src/secrets.ts",
       },
       {
@@ -454,6 +465,7 @@ export const secrets = defineSecrets({
         description: "Stripe secret key",
         required: true,
         default: undefined,
+        use: "run",
         filePath: ".work/workflows/src/secrets.ts",
       },
     ]);

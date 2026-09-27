@@ -48,7 +48,11 @@ export type {
   SecretDeclarations,
   Secrets,
 } from "./secrets.js";
-export { defineSecrets, MissingSecretError } from "./secrets.js";
+export {
+  defineSecrets,
+  MissingSecretError,
+  WebhookOnlySecretError,
+} from "./secrets.js";
 export type {
   Narrow,
   Where,

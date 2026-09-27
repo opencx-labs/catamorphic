@@ -25,6 +25,7 @@ describe("sealed project secrets (ADR 0162)", () => {
     async () => [
       { name: "API_KEY", required: true },
       { name: "WEBHOOK_SECRET", required: false },
+      { name: "SIGNING_SECRET", required: true, use: "webhook" as const },
     ],
     vault,
   );
@@ -72,6 +73,21 @@ describe("sealed project secrets (ADR 0162)", () => {
       values: { API_KEY: "sk-live-123" },
       missingRequired: [],
     });
+  });
+
+  it("keeps webhook signing secrets out of runs but readable for verification", async () => {
+    await secrets.upsert({
+      identity: owner,
+      projectId,
+      name: "SIGNING_SECRET",
+      value: "whsec-456",
+    });
+    const loaded = await secrets.loadForRun({ identity: owner, projectId });
+    expect(loaded.values).not.toHaveProperty("SIGNING_SECRET");
+    expect(loaded.missingRequired).not.toContain("SIGNING_SECRET");
+    await expect(
+      secrets.value({ tenantId, projectId, name: "SIGNING_SECRET" }),
+    ).resolves.toBe("whsec-456");
   });
 
   it("drops the replaced vault record on overwrite and delete", async () => {

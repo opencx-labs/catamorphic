@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { type Identity, PROJECT_PRINCIPAL_ID } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import { DurableToolPermissionBroker } from "../services/durable-tool-permission-broker.js";
@@ -131,26 +131,29 @@ describeIf("unattended approvals (ADR 0176)", () => {
       Date.parse(pending.expiresAt) - Date.parse(pending.createdAt),
     ).toBeGreaterThan(29 * 60_000);
 
-    const notified = await db
-      .selectFrom("user_notification_events")
-      .select(["external_user_id", "kind", "route"])
-      .where("session_id", "=", sessionId)
-      .orderBy("external_user_id")
-      .execute();
-    expect(notified.map((row) => [row.external_user_id, row.kind])).toEqual([
-      ["alice", "approval_requested"],
-      ["bob", "approval_requested"],
-    ]);
-    const views = await db
-      .selectFrom("agent_session_views")
-      .select(["external_user_id", "visibility"])
-      .where("session_id", "=", sessionId)
-      .orderBy("external_user_id")
-      .execute();
-    expect(views).toEqual([
-      { external_user_id: "alice", visibility: "promoted" },
-      { external_user_id: "bob", visibility: "promoted" },
-    ]);
+    // Approvers are notified right after the request is recorded.
+    await vi.waitFor(async () => {
+      const notified = await db
+        .selectFrom("user_notification_events")
+        .select(["external_user_id", "kind", "route"])
+        .where("session_id", "=", sessionId)
+        .orderBy("external_user_id")
+        .execute();
+      expect(notified.map((row) => [row.external_user_id, row.kind])).toEqual([
+        ["alice", "approval_requested"],
+        ["bob", "approval_requested"],
+      ]);
+      const views = await db
+        .selectFrom("agent_session_views")
+        .select(["external_user_id", "visibility"])
+        .where("session_id", "=", sessionId)
+        .orderBy("external_user_id")
+        .execute();
+      expect(views).toEqual([
+        { external_user_id: "alice", visibility: "promoted" },
+        { external_user_id: "bob", visibility: "promoted" },
+      ]);
+    });
 
     // Someone who is not an approver cannot answer it.
     await expect(

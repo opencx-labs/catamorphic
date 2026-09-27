@@ -84,7 +84,8 @@ import { defineSecrets, defineTrigger, type Narrow, type TriggerPayload, trigger
 
 /** The Slack app's signing secret (Basic Information, App Credentials). */
 export const slackSecrets = defineSecrets({
-  SLACK_SIGNING_SECRET: { label: "Slack signing secret" },
+  // Verifies Slack's deliveries on the server; runs never receive it.
+  SLACK_SIGNING_SECRET: { label: "Slack signing secret", use: "webhook" },
 });
 
 /** A message as Slack sends it in app_mention and message events. */

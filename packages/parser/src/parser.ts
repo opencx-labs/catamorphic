@@ -3281,6 +3281,10 @@ function findDeclaredSecrets(
           description: readStringProperty(options, "description"),
           required: readBooleanProperty(options, "required") ?? true,
           default: readStringProperty(options, "default"),
+          use:
+            readStringProperty(options, "use") === "webhook"
+              ? "webhook"
+              : "run",
           filePath,
         });
       }

@@ -130,8 +130,9 @@ senders, always with a project secret's name:
 
 Every binding of one webhook name must declare identical settings, so declare
 an integration's webhook once, in a project trigger kind. Declare the secret
-it names with \`defineSecrets\` in the same file, so the project can store its
-value. People who manage the
+it names with \`defineSecrets\` in the same file and mark it
+\`use: "webhook"\`, so the project can store its value while runs never
+receive it: signing secrets are checked on the server only. People who manage the
 project copy the URL from the workflow's **Automatic** view after enabling it.
 Webhooks reach servers that are online, so enable them on a brain server.
 

@@ -25,6 +25,8 @@ interface DeclaredSecretEntry {
   description?: string;
   required: boolean;
   default?: string;
+  /** `webhook` secrets verify deliveries on the control plane only. */
+  use: "run" | "webhook";
   source: "project" | "plugin";
 }
 
@@ -44,6 +46,7 @@ export type ProjectSecretDeclarationsReader = (args: {
     description?: string;
     required: boolean;
     default?: string;
+    use?: "run" | "webhook";
   }[]
 >;
 
@@ -186,6 +189,7 @@ export class SecretsService {
         description: secret.description,
         required: secret.required,
         default: secret.default,
+        use: secret.use ?? "run",
         source: "project",
       });
     }
@@ -198,6 +202,7 @@ export class SecretsService {
         description: secret.description,
         required: secret.required,
         default: secret.default,
+        use: "run",
         source: "plugin",
       });
     }
@@ -307,11 +312,17 @@ export class SecretsService {
     missingRequired: string[];
   }> {
     const { identity, projectId } = opts;
-    const declared = await this.declaredSecrets({
-      identity,
-      projectId,
-      purpose: "run",
-    });
+    // Webhook signing secrets are checked on the control plane and never
+    // reach a run.
+    const declared = new Map(
+      [
+        ...(await this.declaredSecrets({
+          identity,
+          projectId,
+          purpose: "run",
+        })),
+      ].filter(([, secret]) => secret.use === "run"),
+    );
     if (declared.size === 0) {
       return { values: {}, missingRequired: [] };
     }
