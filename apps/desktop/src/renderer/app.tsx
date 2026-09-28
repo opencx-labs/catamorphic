@@ -110,6 +110,7 @@ import {
 import { FloatingPanelBar } from "./components/floating-panel-bar.js";
 import { MobilePairingModal } from "./components/mobile-pairing-modal.js";
 import { Modal } from "./components/modal.js";
+import { PasskeyHost } from "./components/passkey-sheet.js";
 import { PendingButton } from "./components/pending-button.js";
 import { ProfileBar } from "./components/profile-bar.js";
 import { ProjectAgentConsentDialog } from "./components/project-agent-consent.js";
@@ -5562,6 +5563,7 @@ export function App({
         onClose={() => setSiteSettingsOrigin(null)}
       />
       <ScreenShareHost />
+      <PasskeyHost />
       <UpdateBanner
         hasActiveWork={hasActiveWork}
         onOpenRelease={(url) => openBrowserTab(url)}

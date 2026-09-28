@@ -7,6 +7,12 @@ import {
   isUsernameCandidate,
 } from "../shared/login-fields.js";
 import { openModeFromEvent } from "../shared/open-mode.js";
+import {
+  PASSKEY_TIMEOUT_DEFAULT_MS,
+  PASSKEY_TIMEOUT_MAX_MS,
+  PASSKEY_TIMEOUT_MIN_MS,
+  type PasskeyRequestKind,
+} from "../shared/passkeys.js";
 
 /**
  * Guest preload for browser-tab webviews. Runs inside untrusted pages with
@@ -16,7 +22,8 @@ import { openModeFromEvent } from "../shared/open-mode.js";
  *  - present Chrome's client-hint brands to JS (see below),
  *  - place password suggestions under login fields and report submitted
  *    logins (offer-to-save, auto-save of generated passwords),
- *  - fill saved or generated passwords on command.
+ *  - fill saved or generated passwords on command,
+ *  - keep passkey requests answerable: a deadline, a cancel, and a sheet.
  */
 
 /**
@@ -250,6 +257,184 @@ if (typeof contextBridge.executeInMainWorld === "function") {
       });
     },
     args: [],
+  });
+}
+
+/**
+ * Passkeys (Web Authentication, see shared/passkeys.ts). Electron gives a
+ * request no UI and no timer, so a request nothing can answer never
+ * settles and holds the page's only request slot: the page spins, and
+ * every retry fails as already pending. Each modal request here keeps
+ * Chrome's deadline, can be cancelled from the window, and is shown there
+ * while it waits. Capabilities Electron cannot deliver (passkeys from a
+ * phone, a platform passkey provider, autofill) read as unavailable, so
+ * sites offer their other ways in. Only the top frame is wrapped.
+ */
+const passkeyCancelListeners = new Set<(id: string) => void>();
+ipcRenderer.on("catamorphic:passkey-cancel", (_event, id: unknown) => {
+  if (typeof id !== "string") return;
+  for (const listener of passkeyCancelListeners) listener(id);
+});
+/** The icon the tab shows: the page's last icon link for this theme. */
+function pageIcon(): string | undefined {
+  const links = [
+    ...document.querySelectorAll<HTMLLinkElement>('link[rel~="icon" i]'),
+  ].filter((link) => !link.media || matchMedia(link.media).matches);
+  return links.at(-1)?.href || undefined;
+}
+contextBridge.exposeInMainWorld("__workPasskeys", {
+  start: (kind: PasskeyRequestKind): string => {
+    const id = crypto.randomUUID();
+    ipcRenderer.send("catamorphic:passkey-start", {
+      id,
+      kind,
+      icon: pageIcon(),
+    });
+    return id;
+  },
+  settle: (id: string): void => {
+    ipcRenderer.send("catamorphic:passkey-settle", { id });
+  },
+  subscribe: (listener: (id: string) => void): void => {
+    passkeyCancelListeners.add(listener);
+  },
+});
+if (typeof contextBridge.executeInMainWorld === "function") {
+  contextBridge.executeInMainWorld({
+    func: (defaultMs: number, minMs: number, maxMs: number) => {
+      interface Bridge {
+        start: (kind: "get" | "create") => string;
+        settle: (id: string) => void;
+        subscribe: (listener: (id: string) => void) => void;
+      }
+      type Options = {
+        publicKey?: { timeout?: unknown };
+        mediation?: string;
+        signal?: AbortSignal;
+      };
+      type Call = (
+        this: CredentialsContainer,
+        options?: Options,
+      ) => Promise<Credential | null>;
+      const bridge = (window as Window & { __workPasskeys?: Bridge })
+        .__workPasskeys;
+      const container = window.CredentialsContainer?.prototype;
+      if (!bridge || !container) return;
+      const nativeGet = container.get as Call;
+      const nativeCreate = container.create as Call;
+      const cancels = new Map<string, () => void>();
+      bridge.subscribe((id) => cancels.get(id)?.());
+      // Chrome's words for a cancelled or expired request.
+      const notAllowed = () =>
+        new DOMException(
+          "The operation either timed out or was not allowed. See: https://www.w3.org/TR/webauthn-2/#sctn-privacy-considerations-client.",
+          "NotAllowedError",
+        );
+      const deadline = (value: unknown) =>
+        typeof value === "number" && Number.isFinite(value)
+          ? Math.min(maxMs, Math.max(minMs, value))
+          : defaultMs;
+      // Autofill (conditional mediation) waits for a pick from a list
+      // Electron does not draw. Waiting here, off Chromium's single slot,
+      // keeps the page's own passkey button working; the page's signal
+      // still ends it.
+      const idle = (signal?: AbortSignal) =>
+        new Promise<never>((_resolve, reject) => {
+          if (!signal) return;
+          if (signal.aborted) reject(signal.reason);
+          else
+            signal.addEventListener("abort", () => reject(signal.reason), {
+              once: true,
+            });
+        });
+      const run = (
+        kind: "get" | "create",
+        native: Call,
+        self: CredentialsContainer,
+        options: Options,
+      ): Promise<Credential | null> => {
+        const signal = options.signal;
+        if (signal?.aborted) return Promise.reject(signal.reason);
+        const controller = new AbortController();
+        let ended: "page" | "stopped" | null = null;
+        const stop = (why: "page" | "stopped") => {
+          if (ended) return;
+          ended = why;
+          controller.abort();
+        };
+        const onPageAbort = () => stop("page");
+        signal?.addEventListener("abort", onPageAbort, { once: true });
+        const id = bridge.start(kind);
+        cancels.set(id, () => stop("stopped"));
+        const timer = setTimeout(
+          () => stop("stopped"),
+          deadline(options.publicKey?.timeout),
+        );
+        return native
+          .call(self, { ...options, signal: controller.signal })
+          .catch((error: unknown) => {
+            if (ended === "page") throw signal?.reason;
+            throw ended ? notAllowed() : error;
+          })
+          .finally(() => {
+            clearTimeout(timer);
+            cancels.delete(id);
+            signal?.removeEventListener("abort", onPageAbort);
+            bridge.settle(id);
+          });
+      };
+      Object.defineProperty(container, "get", {
+        value: function get(this: CredentialsContainer, options?: Options) {
+          if (!options?.publicKey) return nativeGet.call(this, options);
+          if (options.mediation === "conditional") return idle(options.signal);
+          return run("get", nativeGet, this, options);
+        },
+        configurable: true,
+        writable: true,
+      });
+      Object.defineProperty(container, "create", {
+        value: function create(this: CredentialsContainer, options?: Options) {
+          if (!options?.publicKey) return nativeCreate.call(this, options);
+          // Creating a passkey quietly after a password sign-in needs a
+          // platform passkey provider; there is none to create it in.
+          if (options.mediation === "conditional")
+            return Promise.reject(notAllowed());
+          return run("create", nativeCreate, this, options);
+        },
+        configurable: true,
+        writable: true,
+      });
+      const Credential = window.PublicKeyCredential as
+        | (typeof PublicKeyCredential & {
+            getClientCapabilities?: () => Promise<Record<string, boolean>>;
+          })
+        | undefined;
+      if (!Credential) return;
+      Object.defineProperty(Credential, "isConditionalMediationAvailable", {
+        value: () => Promise.resolve(false),
+        configurable: true,
+        writable: true,
+      });
+      const capabilities = Credential.getClientCapabilities;
+      if (typeof capabilities === "function")
+        Object.defineProperty(Credential, "getClientCapabilities", {
+          value: () =>
+            capabilities.call(Credential).then((found) => ({
+              ...found,
+              conditionalCreate: false,
+              conditionalGet: false,
+              hybridTransport: false,
+              passkeyPlatformAuthenticator: false,
+            })),
+          configurable: true,
+          writable: true,
+        });
+    },
+    args: [
+      PASSKEY_TIMEOUT_DEFAULT_MS,
+      PASSKEY_TIMEOUT_MIN_MS,
+      PASSKEY_TIMEOUT_MAX_MS,
+    ],
   });
 }
 

@@ -744,6 +744,21 @@ const api = {
         handler,
       );
   },
+  onPasskeyRequest: (listener: (request: unknown) => void) => {
+    const handler = (_event: unknown, request: unknown) => listener(request);
+    ipcRenderer.on("catamorphic:passkey-request", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:passkey-request", handler);
+  },
+  onPasskeySettled: (listener: (payload: { ids: string[] }) => void) => {
+    const handler = (_event: unknown, payload: { ids: string[] }) =>
+      listener(payload);
+    ipcRenderer.on("catamorphic:passkey-settled", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:passkey-settled", handler);
+  },
+  passkeyCancel: (input: { id: string }): Promise<boolean> =>
+    invoke("catamorphic:passkey-cancel", input),
   onSiteSystemRefusal: (listener: (notice: unknown) => void) => {
     const handler = (_event: unknown, notice: unknown) => listener(notice);
     ipcRenderer.on("catamorphic:site-permission-system-refused", handler);
