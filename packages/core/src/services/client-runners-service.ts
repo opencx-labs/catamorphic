@@ -4,6 +4,8 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import {
   type EnvironmentRuntimeBinding,
   PROCESS_SIGNALS,
+  SANDBOX_CAPABILITIES,
+  type SandboxCapability,
   type SandboxProcessProvider,
   type SandboxProvider,
 } from "@catamorphic/sandbox";
@@ -28,6 +30,14 @@ const resourceLimitsSchema = z.array(
   z.enum(["cpuMillis", "memoryMb", "storageMb", "gpu"]),
 );
 const isolationSchema = z.enum(["none", "process", "sandbox"]);
+const capabilitiesSchema = z.array(
+  z.enum([
+    SANDBOX_CAPABILITIES.images,
+    SANDBOX_CAPABILITIES.imageBuild,
+    SANDBOX_CAPABILITIES.containers,
+    SANDBOX_CAPABILITIES.egressPolicy,
+  ]),
+);
 const stringMap = z.record(z.string(), z.string());
 export const ClientRunnerOperationSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -285,6 +295,8 @@ export class ClientRunnersService {
     isolation?: "none" | "process" | "sandbox";
     /** The runner's provider runs background processes (ADR 0174). */
     processes?: boolean;
+    /** What its sandboxes can be given: images, image builds (ADR 0176). */
+    capabilities?: readonly SandboxCapability[];
   }) {
     if (
       !args.workspaceRoot.startsWith("/") ||
@@ -310,6 +322,7 @@ export class ClientRunnersService {
         ),
         isolation: isolationSchema.parse(args.isolation ?? "none"),
         processes: args.processes ?? false,
+        capabilities: toJson(capabilitiesSchema.parse(args.capabilities ?? [])),
         lease_token: token,
         lease_expires_at: sql`now() + interval '45 seconds'`,
       })
@@ -327,6 +340,9 @@ export class ClientRunnersService {
             ),
             isolation: isolationSchema.parse(args.isolation ?? "none"),
             processes: args.processes ?? false,
+            capabilities: toJson(
+              capabilitiesSchema.parse(args.capabilities ?? []),
+            ),
             environment_name: args.environment,
           })
           .where("client_runners.tenant_id", "=", args.identity.tenantId)
@@ -502,17 +518,24 @@ export class ClientRunnersService {
           },
         },
         async () => {
+          // A first sandbox from a Dockerfile builds its image on the
+          // member's computer, which may take up to the builder's 30 minutes.
+          const minutes =
+            operation.kind === "create" &&
+            operation.options.image?.kind === "dockerfile"
+              ? 35
+              : 5;
           const row = await this.db
             .insertInto("client_runner_jobs")
             .values({
               runner_id: runner.id,
               lease_token: runner.lease_token,
               operation: toJson(operation),
-              expires_at: sql`now() + interval '5 minutes'`,
+              expires_at: sql`now() + make_interval(mins => ${minutes})`,
             })
             .returning("id")
             .executeTakeFirstOrThrow();
-          const deadline = Date.now() + 300000;
+          const deadline = Date.now() + minutes * 60_000;
           while (Date.now() < deadline) {
             const job = await this.db
               .selectFrom("client_runner_jobs")
@@ -561,7 +584,10 @@ export class ClientRunnersService {
         resourceLimits: resourceLimitsSchema.parse(runner.resource_limits),
         workloads: ["agent"],
         agentTopologies: ["controller"],
-        capabilities: ["network.egress"],
+        capabilities: [
+          "network.egress",
+          ...capabilitiesSchema.parse(runner.capabilities),
+        ],
         resources: {},
       },
       workerNodeId: args.workerNodeId,

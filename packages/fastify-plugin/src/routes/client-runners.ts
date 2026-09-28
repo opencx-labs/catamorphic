@@ -32,6 +32,17 @@ export function registerClientRunnerRoutes(
           isolation: z.enum(["none", "process", "sandbox"]).optional(),
           /** The runner's provider runs background processes (ADR 0174). */
           processes: z.boolean().optional(),
+          /** What its sandboxes can be given (ADR 0176). */
+          capabilities: z
+            .array(
+              z.enum([
+                "images",
+                "images.build",
+                "containers",
+                "network.policy",
+              ]),
+            )
+            .optional(),
         }),
         response: {
           200: Lease,

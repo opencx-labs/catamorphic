@@ -8,6 +8,35 @@ import type {
 import { type Kysely, sql } from "kysely";
 import type { ExecutionAllocation } from "./execution-allocations-service.js";
 
+/**
+ * The Allocation's image, containers and egress (ADR 0176) on a provider
+ * that keeps its own sandbox lifecycle, such as a member's computer: the
+ * Environment decides what its sandboxes boot, wherever they run.
+ */
+export function withAllocationSandboxPolicy(args: {
+  allocation: ExecutionAllocation;
+  provider: SandboxProvider;
+}): SandboxProvider {
+  const { provider } = args;
+  const sandbox = args.allocation.policy.sandbox;
+  if (!sandbox?.image && !sandbox?.containers && !sandbox?.egress)
+    return provider;
+  const createSandbox = (opts: CreateSandboxOpts) =>
+    provider.createSandbox({
+      ...opts,
+      ...(sandbox.image ? { image: sandbox.image } : {}),
+      ...(sandbox.containers ? { containers: true } : {}),
+      ...(sandbox.egress ? { egress: sandbox.egress } : {}),
+    });
+  return new Proxy(provider, {
+    get(target, property) {
+      if (property === "createSandbox") return createSandbox;
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
 /** One sandbox per Allocation. Never reuse another workload's filesystem or budget. */
 export function allocationSandboxProvider(args: {
   db: Kysely<DB>;

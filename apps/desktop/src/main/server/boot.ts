@@ -14,7 +14,10 @@ import {
   catamorphicPlugin,
   instrumentHttpServer,
 } from "@catamorphic/fastify-plugin";
-import { MicrosandboxSandboxProvider } from "@catamorphic/microsandbox";
+import {
+  dockerImageBuilder,
+  MicrosandboxSandboxProvider,
+} from "@catamorphic/microsandbox";
 import {
   type Catamorphic,
   connectionAuthorizationPage,
@@ -34,6 +37,7 @@ import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { ConnectorsService } from "../connectors.js";
 import { DesktopCredentialVault } from "../credential-vault.js";
+import { findImageBuilderCommand } from "../image-builder-command.js";
 import type { IncognitoSessionsStore } from "../incognito-sessions.js";
 import { localPerson } from "../local-person.js";
 import {
@@ -174,10 +178,20 @@ export async function startEmbeddedServer(
     const root = projectRoots.getSync(projectId);
     return root ? projectDataDirectory({ root }) : undefined;
   };
+  const imageBuilderCommand = findImageBuilderCommand();
   const sandboxProvider = e2eFakeAgent
     ? new E2eLocalSandboxProvider(resolveProjectData)
     : new MicrosandboxSandboxProvider({
         projectDataDirectory: resolveProjectData,
+        // Environments that name a Dockerfile run here when Docker or
+        // Podman is installed (ADR 0176).
+        ...(imageBuilderCommand
+          ? {
+              imageBuilder: dockerImageBuilder({
+                command: imageBuilderCommand,
+              }),
+            }
+          : {}),
         // Development only: builds fetch @catamorphic/* from the local
         // registry, which a sandbox can only reach through the host network.
         ...(process.env.CATAMORPHIC_SANDBOX_HOST_NETWORK === "1"

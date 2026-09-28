@@ -610,6 +610,11 @@ export const EnvironmentListSchema = z.object({
       description: z.string().optional(),
       available: z.boolean(),
       clientRequired: z.boolean().optional(),
+      machineOnline: z
+        .boolean()
+        .describe(
+          "False when no machine for it is online and open to this work, such as a member's computer that is not connected",
+        ),
       compatible: z.boolean(),
       preferred: z.boolean(),
       allowed: z.boolean(),

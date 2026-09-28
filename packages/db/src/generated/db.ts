@@ -351,6 +351,7 @@ export interface ClientRunnerJobs {
 }
 
 export interface ClientRunners {
+  capabilities: Generated<Json>;
   environment_name: string;
   external_user_id: string;
   id: string;

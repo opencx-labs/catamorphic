@@ -171,6 +171,8 @@ export interface EnvironmentDiscoveryItem {
   description?: string;
   available: boolean;
   clientRequired?: boolean;
+  /** False when no machine for it is online and open to this work. */
+  machineOnline: boolean;
   compatible: boolean;
   preferred: boolean;
   allowed: boolean;
@@ -372,6 +374,9 @@ export class ExecutionEnvironmentsService {
               ? { description: definition.description }
               : {}),
             available: Boolean(admission),
+            machineOnline: !(
+              "bindingUnavailable" in evaluated && evaluated.bindingUnavailable
+            ),
             compatible: Boolean(admission) && allowed,
             preferred: args.preferred?.includes(name) ?? false,
             allowed,

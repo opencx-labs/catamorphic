@@ -1546,6 +1546,8 @@ export interface paths {
                                 description?: string;
                                 available: boolean;
                                 clientRequired?: boolean;
+                                /** @description False when no machine for it is online and open to this work, such as a member's computer that is not connected */
+                                machineOnline: boolean;
                                 compatible: boolean;
                                 preferred: boolean;
                                 allowed: boolean;
@@ -10474,6 +10476,8 @@ export interface paths {
                                         description?: string;
                                         available: boolean;
                                         clientRequired?: boolean;
+                                        /** @description False when no machine for it is online and open to this work, such as a member's computer that is not connected */
+                                        machineOnline: boolean;
                                         compatible: boolean;
                                         preferred: boolean;
                                         allowed: boolean;
@@ -10678,6 +10682,7 @@ export interface paths {
                         /** @enum {string} */
                         isolation?: "none" | "process" | "sandbox";
                         processes?: boolean;
+                        capabilities?: ("images" | "images.build" | "containers" | "network.policy")[];
                     };
                 };
             };

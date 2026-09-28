@@ -2541,6 +2541,10 @@
                           "clientRequired": {
                             "type": "boolean"
                           },
+                          "machineOnline": {
+                            "type": "boolean",
+                            "description": "False when no machine for it is online and open to this work, such as a member's computer that is not connected"
+                          },
                           "compatible": {
                             "type": "boolean"
                           },
@@ -2604,6 +2608,7 @@
                           "name",
                           "label",
                           "available",
+                          "machineOnline",
                           "compatible",
                           "preferred",
                           "allowed",
@@ -24052,6 +24057,10 @@
                                     "clientRequired": {
                                       "type": "boolean"
                                     },
+                                    "machineOnline": {
+                                      "type": "boolean",
+                                      "description": "False when no machine for it is online and open to this work, such as a member's computer that is not connected"
+                                    },
                                     "compatible": {
                                       "type": "boolean"
                                     },
@@ -24115,6 +24124,7 @@
                                     "name",
                                     "label",
                                     "available",
+                                    "machineOnline",
                                     "compatible",
                                     "preferred",
                                     "allowed",
@@ -24515,6 +24525,18 @@
                   },
                   "processes": {
                     "type": "boolean"
+                  },
+                  "capabilities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "images",
+                        "images.build",
+                        "containers",
+                        "network.policy"
+                      ]
+                    }
                   }
                 },
                 "required": ["id", "environment", "label", "workspaceRoot"]

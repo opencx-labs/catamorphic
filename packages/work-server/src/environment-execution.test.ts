@@ -270,6 +270,7 @@ it("an authenticated member executes on this machine and loses execution immedia
       label: "Laptop",
       workspaceRoot: provider.workspaceRoot,
       processes: true,
+      capabilities: ["images", "images.build"],
     });
     await expect(
       service.poll({
@@ -309,6 +310,12 @@ it("an authenticated member executes on this machine and loses execution immedia
       projectId: project.id,
       clientRunnerId: identity.clientRunnerId,
     });
+    // What its sandboxes can be given places image Environments there.
+    expect(member?.descriptor.capabilities).toEqual([
+      "network.egress",
+      "images",
+      "images.build",
+    ]);
     const processes = member?.sandboxProvider?.processes;
     const sandboxId = agent.sessions.get(session.id)?.sandboxId;
     if (!processes || !sandboxId) throw new Error("Member processes missing");

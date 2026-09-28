@@ -75,7 +75,10 @@ import {
   type SessionDeliveryReceipt,
   type SessionMessageAuthor,
 } from "./agent-turns-service.js";
-import { allocationSandboxProvider } from "./allocation-sandbox-provider.js";
+import {
+  allocationSandboxProvider,
+  withAllocationSandboxPolicy,
+} from "./allocation-sandbox-provider.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import { AccessDeniedError, resolveScope } from "./artifact-scope.js";
 import { projectChatIdentity } from "./chat-delivery.js";
@@ -7197,7 +7200,11 @@ export class AgentSessionsService {
                 (node) => node.id === allocation.workerNodeId,
               )?.token ?? admitted.runtime.workerLeaseToken,
           })
-        : selectedProvider;
+        : selectedProvider &&
+          withAllocationSandboxPolicy({
+            allocation,
+            provider: selectedProvider,
+          });
     if (!provider)
       throw new Error("The selected Environment has no execution provider");
     const commandTimeoutSeconds =

@@ -11,6 +11,10 @@ export class RemoteClientRunners {
     string,
     Promise<ReturnType<typeof startClientRunner>>
   >();
+  /** The Environment each project's member asked this machine to serve. */
+  private readonly wanted = new Map<string, string>();
+  private readonly retries = new Map<string, NodeJS.Timeout>();
+  private stopping = false;
   constructor(
     private readonly profiles: ProfileConfigManager,
     private readonly provider: SandboxProvider,
@@ -22,6 +26,7 @@ export class RemoteClientRunners {
     const store = this.profiles.forProject(args.projectId).remoteProjects;
     const inspected = store.inspect(args.projectId);
     if (!inspected) throw new Error("Project has no remote server");
+    this.wanted.set(args.projectId, args.environment);
     const link = inspected.link;
     const client = createApiClient({
       baseUrl: link.serverUrl.replace(/\/api\/?$/, ""),
@@ -49,6 +54,7 @@ export class RemoteClientRunners {
               resourceLimits: [...(this.provider.resourceLimits ?? [])],
               isolation: this.provider.isolation ?? "none",
               processes: Boolean(this.provider.processes),
+              capabilities: [...(this.provider.capabilities ?? [])],
             },
           },
         );
@@ -105,6 +111,9 @@ export class RemoteClientRunners {
           onError: (error) => {
             this.runners.delete(args.projectId);
             console.warn("[desktop] Local runner stopped", error);
+            // A server restart or a network drop ends the connection;
+            // this machine keeps serving once the server answers again.
+            this.reconnect(args, 1);
           },
         });
       })();
@@ -114,7 +123,39 @@ export class RemoteClientRunners {
     await runner;
     return { id: link.connectionId };
   }
+  private reconnect(
+    args: { projectId: string; environment: string },
+    attempt: number,
+  ) {
+    if (
+      this.stopping ||
+      this.wanted.get(args.projectId) !== args.environment ||
+      this.retries.has(args.projectId)
+    )
+      return;
+    if (
+      !this.profiles
+        .forProject(args.projectId)
+        .remoteProjects.inspect(args.projectId)
+    ) {
+      this.wanted.delete(args.projectId);
+      return;
+    }
+    const timer = setTimeout(
+      () => {
+        this.retries.delete(args.projectId);
+        void this.connect(args).catch(() => this.reconnect(args, attempt + 1));
+      },
+      Math.min(60_000, 2_000 * 2 ** (attempt - 1)),
+    );
+    timer.unref();
+    this.retries.set(args.projectId, timer);
+  }
+
   async stop() {
+    this.stopping = true;
+    for (const timer of this.retries.values()) clearTimeout(timer);
+    this.retries.clear();
     await Promise.allSettled(
       [...this.runners.values()].map(async (runner) => (await runner).stop()),
     );
