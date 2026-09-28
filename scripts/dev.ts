@@ -1,11 +1,11 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { migrateDevData } from "./dev-data.js";
-import { createDevPlan, type DevTarget } from "./dev-plan.js";
+import { createDevPlan, type DevPorts, type DevTarget } from "./dev-plan.js";
 import {
   type DevChildExit,
   type DevPortAllocation,
@@ -49,11 +49,44 @@ function bundledMsbPath(rootPath: string): string | undefined {
 
 const DEV_STARTUP_ATTEMPTS = 3;
 
-export async function reserveLoopbackPort(): Promise<number> {
+function readPreviousPorts(portsPath: string): Partial<DevPorts> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(portsPath, "utf8"));
+    if (!parsed || typeof parsed !== "object") return undefined;
+    const ports: Partial<DevPorts> = {};
+    for (const key of [
+      "desktopCdp",
+      "desktopVite",
+      "server",
+      "operator",
+    ] as const) {
+      const value = Reflect.get(parsed, key);
+      if (Number.isInteger(value) && value > 1024 && value < 65_536)
+        ports[key] = value;
+    }
+    return ports;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Reserve a loopback port: `preferred` when it is free, otherwise any. */
+export async function reserveLoopbackPort(preferred?: number): Promise<number> {
+  if (preferred !== undefined) {
+    try {
+      return await listenOnce(preferred);
+    } catch {
+      // Taken since the last run: fall back to any free port.
+    }
+  }
+  return listenOnce(0);
+}
+
+async function listenOnce(requested: number): Promise<number> {
   const server = createServer();
   const port = await new Promise<number>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(requested, "127.0.0.1", () => {
       const address = server.address();
       if (!address || typeof address === "string") {
         reject(new Error("Loopback port reservation returned no numeric port"));
@@ -133,6 +166,11 @@ if (import.meta.main) {
     ports: { desktopCdp: 1, desktopVite: 2, server: 3, operator: 4 },
   });
   const allocatorLockPath = devPortAllocatorLockPath({ tempPath });
+  // The instance keeps its ports across runs so linked clients keep working.
+  const portsPath = path.join(
+    path.dirname(placeholderPlan.lockPath),
+    "ports.json",
+  );
 
   if (printOnly) {
     const allocatorAbort = new AbortController();
@@ -211,7 +249,9 @@ if (import.meta.main) {
             const ports = await reserveDevPorts({
               reservePort: reserveLoopbackPort,
               excludedPorts,
+              preferred: readPreviousPorts(portsPath),
             });
+            writeFileSync(portsPath, `${JSON.stringify(ports)}\n`);
             const allocation: DevPortAllocation = {
               ports,
               release: () => allocatorLock.release(),

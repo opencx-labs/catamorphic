@@ -57,6 +57,26 @@ describe("devListenerPorts", () => {
     ]);
   });
 
+  it("reuses the previous run's ports and skips any a failed attempt excluded", async () => {
+    let nextPort = 20_000;
+    const requested: Array<number | undefined> = [];
+    const allocated = await reserveDevPorts({
+      excludedPorts: new Set([4706]),
+      preferred: ports,
+      reservePort: async (preferred) => {
+        requested.push(preferred);
+        return preferred ?? nextPort++;
+      },
+    });
+    expect(allocated).toEqual({
+      desktopCdp: 9311,
+      desktopVite: 5178,
+      server: 4705,
+      operator: 20_000,
+    });
+    expect(requested).toEqual([9311, 5178, 4705, undefined]);
+  });
+
   it("confirms a focused server without waiting for desktop listeners", async () => {
     const first = await reserveDevPorts({
       reservePort: async () => {
