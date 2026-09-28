@@ -1,4 +1,4 @@
-import { createApiClient } from "@catamorphic/api-client";
+import { createApiClient, type paths } from "@catamorphic/api-client";
 import type {
   PullRequestComment,
   PullRequestDiscussion,
@@ -146,38 +146,21 @@ export interface RemoteMe {
   };
 }
 
+type PersonalEnvironmentRoute =
+  paths["/api/projects/{projectId}/personal-environment"];
+
 /**
  * `PUT /projects/:projectId/personal-environment` (ADR 0184): replaces the
  * caller's own sign-ins and files for the project. Logins carry no refresh
  * token; file contents are base64.
  */
-export interface RemotePersonalEnvironmentUpload {
-  logins: {
-    "claude-code"?: { credentials: string; expiresAt?: string };
-    codex?: { auth: string; expiresAt?: string };
-  };
-  files: Array<{ path: string; content: string }>;
-}
+export type RemotePersonalEnvironmentUpload = NonNullable<
+  PersonalEnvironmentRoute["put"]["requestBody"]
+>["content"]["application/json"];
 
 /** `GET /projects/:projectId/personal-environment`: never any contents. */
-export interface RemotePersonalEnvironment {
-  /** Some Environment of the project allows it for this member. */
-  allowed: boolean;
-  logins: {
-    [harness in "claude-code" | "codex"]?: {
-      fingerprint: string;
-      expiresAt?: string;
-      updatedAt: string;
-      needsRefresh: boolean;
-    };
-  };
-  files: Array<{
-    path: string;
-    fingerprint: string;
-    bytes: number;
-    updatedAt: string;
-  }>;
-}
+export type RemotePersonalEnvironment =
+  PersonalEnvironmentRoute["get"]["responses"][200]["content"]["application/json"];
 
 /** Reads the status defensively: sync decisions depend on it. */
 export function parseRemotePersonalEnvironment(

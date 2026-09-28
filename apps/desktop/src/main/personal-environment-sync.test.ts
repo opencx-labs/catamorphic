@@ -318,7 +318,7 @@ describe("PersonalEnvironmentSync", () => {
             server = {
               ...server,
               logins: Object.fromEntries(
-                Object.entries(body.logins).map(([harness, entry]) => [
+                Object.entries(body.logins ?? {}).map(([harness, entry]) => [
                   harness,
                   {
                     fingerprint: "s",
@@ -328,7 +328,7 @@ describe("PersonalEnvironmentSync", () => {
                   },
                 ]),
               ),
-              files: body.files.map((entry) => ({
+              files: (body.files ?? []).map((entry) => ({
                 path: entry.path,
                 fingerprint: "s",
                 bytes: Buffer.from(entry.content, "base64").length,
@@ -517,7 +517,7 @@ describe("PersonalEnvironmentSync", () => {
     });
     await env.sync.syncNow(env.target);
     expect(env.refreshLogin).toHaveBeenCalledWith("codex");
-    expect(env.puts.at(-1)?.logins.codex).toEqual({
+    expect(env.puts.at(-1)?.logins?.codex).toEqual({
       auth: JSON.stringify({ tokens: { access_token: "new" } }),
       expiresAt: at(14_400),
     });
