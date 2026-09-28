@@ -214,6 +214,44 @@ describe("browser passwords", () => {
     );
   });
 
+  it("fills even when the page reports its blur before the press lands", async () => {
+    // Pressing the list takes focus from the page. On macOS the page's
+    // blur report can reach the window before the press does; the list
+    // must still take the click (it used to close first, flakily).
+    await navigate("/login", "Sign in");
+    await focusInPage("#email");
+    await pressUntil(
+      "ArrowDown",
+      `document.querySelector('[data-testid="password-suggestions"]')?.dataset.open === 'true'`,
+      "suggestions open",
+    );
+    await inGuest("document.activeElement.blur(); true");
+    await clickInApp('[data-testid="password-suggestion"]');
+    await app.waitFor(
+      `${guest}.executeJavaScript("document.querySelector('#pw').value === 'correct horse' && document.querySelector('#email').value === 'alice@example.com'")`,
+      { label: "filled after an early blur" },
+    );
+    await app.waitFor(
+      `!document.querySelector('[data-testid="password-suggestions"]')`,
+      { label: "suggestions closed" },
+    );
+  });
+
+  it("closes the list when the page's field loses focus for good", async () => {
+    await navigate("/login", "Sign in");
+    await focusInPage("#email");
+    await pressUntil(
+      "ArrowDown",
+      `document.querySelector('[data-testid="password-suggestions"]')?.dataset.open === 'true'`,
+      "suggestions open",
+    );
+    await inGuest("document.activeElement.blur(); true");
+    await app.waitFor(
+      `!document.querySelector('[data-testid="password-suggestions"]')`,
+      { label: "suggestions closed after the blur" },
+    );
+  });
+
   it("suggests a strong password for a new account and saves it on submit", async () => {
     await navigate("/signup", "Create account");
     await typeInPage("#email", "carol@example.com");

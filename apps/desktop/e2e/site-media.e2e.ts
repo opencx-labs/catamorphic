@@ -49,6 +49,17 @@ afterAll(() => {
 
 const guest = `document.querySelector('webview')`;
 const modal = `document.querySelector('[data-testid="site-settings-modal"]')`;
+/**
+ * Escape once the modal can hear it: it takes focus in the same effect
+ * that starts listening for keys, a moment after it appears.
+ */
+const escapeModal = async (app: AppHandle) => {
+  await app.waitFor(
+    `!!${modal}?.closest('[role="dialog"]')?.contains(document.activeElement)`,
+    { label: "modal focused" },
+  );
+  await app.press("Escape");
+};
 
 function helpers(app: () => AppHandle) {
   const inGuest = <T>(code: string) =>
@@ -171,7 +182,7 @@ describe("site microphone the OS refuses", () => {
   });
 
   it("says it once per page, not on every retry", async () => {
-    await app.press("Escape");
+    await escapeModal(app);
     await app.waitFor(`!${modal}`, { label: "notice closed" });
     // Mark the page first so the retry's own failure is what settles.
     await inGuest("document.title = 'retry'; true");
@@ -191,7 +202,7 @@ describe("site microphone the OS refuses", () => {
       `!!document.querySelector('[data-testid="site-system-refusal"]')`,
       { label: "notice after reload" },
     );
-    await app.press("Escape");
+    await escapeModal(app);
     await app.waitFor(`!${modal}`, { label: "notice closed again" });
     expect(app.getRendererErrors()).toEqual([]);
   });
