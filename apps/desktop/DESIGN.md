@@ -485,6 +485,30 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-09-28: Your own sign-ins and files follow you to the server
+
+A linked project's sessions on a Work server can use the person's own
+Claude Code and Codex sign-ins and files the repository lacks, such as
+`.env` (ADR 0184). One private file says what goes:
+`.work/personal/environment.json`, inside the Git-excluded personal folder,
+so neither it nor the files it lists are ever committed. People edit it
+through Remote environment (the sidebar's Server section, or "Remote
+environment settings" in the palette); agents edit it with ordinary file
+tools, taught by the `remote-environment` host skill. The dialog only
+edits that file: Add files picks inside the project folder, Remove and the
+sign-in checkboxes rewrite it, and Edit config opens it in the editor.
+
+The desktop reads logins itself (Keychain, then `~/.claude/.credentials.json`;
+`~/.codex/auth.json`), strips every refresh token, and sends the set when a
+login, the config or a listed file changes, every two minutes, and on focus.
+Only this computer's CLIs ever refresh a login. When the server says a copy
+in use expires within the hour, Codex refreshes through its app-server
+(`account/read` with `refreshToken`, no model request). Claude Code has no
+refresh command (`claude auth status` only reads cached account data) and
+refreshes only within five minutes of expiry, so the desktop waits for that
+window and then makes one Haiku request with no tools, hooks or MCP
+servers. A secret-free `.work/personal/environment-status.json` lets agents
+check what reached the server without asking the person.
 ### 2026-09-26: Opening other apps asks where you can see it; layout motion stays smooth over pages
 
 A page that wants to open another app now names it ("github.com wants to

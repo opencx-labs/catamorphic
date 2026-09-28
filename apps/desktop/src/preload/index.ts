@@ -532,6 +532,32 @@ const api = {
     invoke("catamorphic:remote-service-connection-complete", input),
   remoteServiceConnectionRevoke: (input: unknown): Promise<void> =>
     invoke("catamorphic:remote-service-connection-revoke", input),
+  personalEnvironment: (projectId: string): Promise<unknown> =>
+    invoke("catamorphic:personal-environment", projectId),
+  personalEnvironmentSync: (projectId: string): Promise<unknown> =>
+    invoke("catamorphic:personal-environment-sync", projectId),
+  personalEnvironmentAddFiles: (projectId: string): Promise<unknown> =>
+    invoke("catamorphic:personal-environment-add-files", projectId),
+  personalEnvironmentRemoveFile: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:personal-environment-remove-file", input),
+  personalEnvironmentSetLogin: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:personal-environment-set-login", input),
+  personalEnvironmentConfigFile: (projectId: string): Promise<string> =>
+    invoke("catamorphic:personal-environment-config-file", projectId),
+  onPersonalEnvironmentChanged: (
+    listener: (change: { profileId: string; projectId: string }) => void,
+  ): (() => void) => {
+    const handler = (
+      _event: unknown,
+      change: { profileId: string; projectId: string },
+    ) => listener(change);
+    ipcRenderer.on("catamorphic:personal-environment-changed", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:personal-environment-changed",
+        handler,
+      );
+  },
   remoteDisconnect: (projectId: string): Promise<void> =>
     invoke("catamorphic:remote-disconnect", projectId),
   remoteTakePendingLink: (): Promise<string | null> =>

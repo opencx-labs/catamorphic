@@ -745,6 +745,9 @@ app.whenReady().then(async () => {
       url: server.url,
       hasCodingAgent: server.hasCodingAgent,
     });
+    server.personalEnvironment.subscribe((change) =>
+      state.broadcast("catamorphic:personal-environment-changed", change),
+    );
     // Don't hold job leases through OS sleep. A lease held by a frozen
     // process expires on the wall clock, so the step's work is discarded on
     // wake; releasing before the freeze parks the job cleanly and resume
@@ -753,8 +756,12 @@ app.whenReady().then(async () => {
     powerMonitor.on("resume", () => {
       server?.resumeExecution();
       server?.syncSessionMailboxes();
+      server?.personalEnvironment.nudge();
     });
-    app.on("browser-window-focus", () => server?.syncSessionMailboxes());
+    app.on("browser-window-focus", () => {
+      server?.syncSessionMailboxes();
+      server?.personalEnvironment.nudge();
+    });
     // OAuth-backed connections hand their token to harnesses as a plain
     // header, so the app keeps it fresh: at boot, after sleep, and on a
     // slow tick (refresh only fires when a token is near expiry).

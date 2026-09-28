@@ -1,9 +1,8 @@
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import {
   definitionHash,
   formatProjectAgentId,
@@ -39,6 +38,11 @@ import type {
 import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
+import {
+  isPersonalHarness,
+  PERSONAL_HARNESSES,
+  type PersonalEnvironmentView,
+} from "../shared/personal-environment.js";
 import {
   prCommentInputSchema,
   prDecisionInputSchema,
@@ -94,6 +98,7 @@ import {
   type HarnessExecutable,
   harnessPathEnvironment,
 } from "./harness-components.js";
+import { readClaudeKeychain } from "./harness-logins.js";
 import type { IncognitoSessionsStore } from "./incognito-sessions.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { type Keybindings, normalizeKeybindings } from "./keybindings.js";
@@ -104,6 +109,13 @@ import {
   fetchOpenRouterModels,
   openRouterPkceLogin,
 } from "./openrouter.js";
+import {
+  ensurePersonalEnvironmentConfig,
+  PERSONAL_ENVIRONMENT_PATH,
+  type PersonalEnvironmentConfig,
+  projectRelativePath,
+  updatePersonalEnvironmentConfig,
+} from "./personal-environment-config.js";
 import { listPersonalFiles } from "./personal-files.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
@@ -148,7 +160,6 @@ import { THEME_PRESETS } from "./theme.js";
 import { createUsageScanner } from "./usage-scan.js";
 import { watchSidebarEdge } from "./window-sidebar-edge.js";
 
-const execFileAsync = promisify(execFile);
 /** A remote root holds every permission; `/me` lists projects only for members. */
 const ROOT_REMOTE_PROJECT_PERMISSIONS: RemoteMe["projects"][number]["permissions"] =
   [...PROJECT_PERMISSIONS];
@@ -1210,31 +1221,9 @@ export function registerIpcHandlers(
    * credentials in the KEYCHAIN — there is no .credentials.json to stat.
    * The fingerprint doubles as a change detector: the terminal /login flow
    * gives no exit signal, so completion is "the credentials changed".
+   * The read is shared with the remote environment sync (harness-logins).
    */
-  // Focus/wake/login probes cluster, and the 2s login watcher must still
-  // observe fresh credentials within a beat — so the keychain answer is
-  // held for 3s, never longer.
-  let keychainCache: { at: number; value: string | null } | null = null;
-  const claudeKeychainRaw = async (): Promise<string | null> => {
-    if (process.platform !== "darwin") return null;
-    if (keychainCache && Date.now() - keychainCache.at < 3000) {
-      return keychainCache.value;
-    }
-    let value: string | null;
-    try {
-      const { stdout } = await execFileAsync("security", [
-        "find-generic-password",
-        "-s",
-        "Claude Code-credentials",
-        "-w",
-      ]);
-      value = stdout;
-    } catch {
-      value = null;
-    }
-    keychainCache = { at: Date.now(), value };
-    return value;
-  };
+  const claudeKeychainRaw = readClaudeKeychain;
 
   const claudeKeychainFingerprint = (raw: string): string => {
     try {
@@ -2529,6 +2518,116 @@ export function registerIpcHandlers(
       await storedRemoteClient(event, input.projectId, link).revokeConnection(
         input.connectionId,
       );
+    },
+  );
+
+  // Remote environment (ADR 0184): the member's own sign-ins and listed
+  // files for their sessions on the linked server. Edits change
+  // `.work/personal/environment.json`, then send at once.
+  const personalEnvironment = () => {
+    const service = state.current?.personalEnvironment;
+    if (!service) throw new Error("The local server is starting");
+    return service;
+  };
+  const personalEnvironmentTarget = (
+    event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+  ) => {
+    requireLink(event, projectId);
+    return { profileId: windows.profileFor(event.sender), projectId };
+  };
+  const editPersonalEnvironment = async (
+    event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+    update: (config: PersonalEnvironmentConfig) => PersonalEnvironmentConfig,
+  ) => {
+    const target = personalEnvironmentTarget(event, projectId);
+    await updatePersonalEnvironmentConfig({
+      root: await requireRoot(projectId),
+      update,
+    });
+    return personalEnvironment().syncNow(target);
+  };
+  ipcMain.handle(
+    "catamorphic:personal-environment",
+    (event, projectId: string): PersonalEnvironmentView =>
+      personalEnvironment().view(personalEnvironmentTarget(event, projectId)),
+  );
+  ipcMain.handle(
+    "catamorphic:personal-environment-sync",
+    (event, projectId: string): Promise<PersonalEnvironmentView> =>
+      personalEnvironment().syncNow(
+        personalEnvironmentTarget(event, projectId),
+      ),
+  );
+  ipcMain.handle(
+    "catamorphic:personal-environment-add-files",
+    async (
+      event,
+      projectId: string,
+    ): Promise<PersonalEnvironmentView | null> => {
+      personalEnvironmentTarget(event, projectId);
+      const root = await requireRoot(projectId);
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (!window) return null;
+      const picked = await dialog.showOpenDialog(window, {
+        title: "Add files to your remote environment",
+        buttonLabel: "Add",
+        defaultPath: root,
+        properties: ["openFile", "multiSelections", "showHiddenFiles"],
+      });
+      if (picked.canceled || picked.filePaths.length === 0) return null;
+      const paths: string[] = [];
+      for (const absolute of picked.filePaths)
+        paths.push(await projectRelativePath({ root, absolute }));
+      return editPersonalEnvironment(event, projectId, (config) => ({
+        ...config,
+        files: [...new Set([...config.files, ...paths])],
+      }));
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:personal-environment-remove-file",
+    (
+      event,
+      input: { projectId: string; path: string },
+    ): Promise<PersonalEnvironmentView> =>
+      editPersonalEnvironment(event, input.projectId, (config) => ({
+        ...config,
+        files: config.files.filter((file) => file !== input.path),
+      })),
+  );
+  ipcMain.handle(
+    "catamorphic:personal-environment-set-login",
+    (
+      event,
+      input: { projectId: string; harness: string; included: boolean },
+    ): Promise<PersonalEnvironmentView> => {
+      const harness = input.harness;
+      if (!isPersonalHarness(harness))
+        throw new Error("Choose Claude Code or Codex");
+      return editPersonalEnvironment(event, input.projectId, (config) => {
+        const current = config.logins ?? [...PERSONAL_HARNESSES];
+        return {
+          ...config,
+          logins: input.included
+            ? PERSONAL_HARNESSES.filter(
+                (entry) => entry === harness || current.includes(entry),
+              )
+            : current.filter((entry) => entry !== harness),
+        };
+      });
+    },
+  );
+  // Creates the file with its defaults so the editor has something to open.
+  ipcMain.handle(
+    "catamorphic:personal-environment-config-file",
+    async (event, projectId: string): Promise<string> => {
+      personalEnvironmentTarget(event, projectId);
+      await ensurePersonalEnvironmentConfig({
+        root: await requireRoot(projectId),
+      });
+      return PERSONAL_ENVIRONMENT_PATH;
     },
   );
 
