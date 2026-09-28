@@ -66,7 +66,7 @@ export async function reserveDevPorts(input: {
   };
 }
 
-function loopbackPortIsListening(port: number): Promise<boolean> {
+export function loopbackPortIsListening(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = connect({ host: "127.0.0.1", port });
     const settle = (listening: boolean): void => {

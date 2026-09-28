@@ -11,6 +11,7 @@ import {
   type DevPortAllocation,
   DevStartupAttemptError,
   devPortAllocatorLockPath,
+  loopbackPortIsListening,
   reserveDevPorts,
   runDevStartupAttempts,
   waitForDevListeners,
@@ -72,7 +73,9 @@ function readPreviousPorts(portsPath: string): Partial<DevPorts> | undefined {
 
 /** Reserve a loopback port: `preferred` when it is free, otherwise any. */
 export async function reserveLoopbackPort(preferred?: number): Promise<number> {
-  if (preferred !== undefined) {
+  // A loopback bind can succeed beside another process's wildcard listener,
+  // so a port anything still answers on is taken, whatever bind says.
+  if (preferred !== undefined && !(await loopbackPortIsListening(preferred))) {
     try {
       return await listenOnce(preferred);
     } catch {

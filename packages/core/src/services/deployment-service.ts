@@ -268,6 +268,17 @@ export class DeploymentService {
         );
       }
       if (opts?.files) {
+        // Publishing chosen files never carries along other drafts waiting
+        // in this person's server copy (an agent's or an MCP client's).
+        const drafts = (await repo.status()).modifiedFiles.filter(
+          (file) => !opts.files?.[file],
+        );
+        if (drafts.length > 0)
+          throw new DeploymentBlockedError(
+            `Your server copy has other unpublished changes (${drafts
+              .slice(0, 5)
+              .join(", ")}). Publish or discard them first.`,
+          );
         for (const [path, content] of Object.entries(opts.files)) {
           await repo.writeFile(path, content);
         }

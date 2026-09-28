@@ -60,6 +60,33 @@ describe("DeploymentService", () => {
     expect(result.remoteSha).toBe(result.commitSha);
   });
 
+  it("publishing chosen files refuses other drafts waiting in the server copy", async () => {
+    const repo = await manager.openDev(TENANT, PROJECT, ALICE);
+    try {
+      await repo.writeFile("drafts/agent.ts", "unfinished");
+    } finally {
+      await repo.dispose();
+    }
+    await expect(
+      service.deploy(TENANT, PROJECT, ALICE, {
+        message: "publish one file",
+        files: { ".work/project.json": "{}" },
+      }),
+    ).rejects.toThrow("drafts/agent.ts");
+    // The chosen file alone publishes once the draft is gone.
+    const cleaned = await manager.openDev(TENANT, PROJECT, ALICE);
+    try {
+      await cleaned.deleteFile("drafts/agent.ts");
+    } finally {
+      await cleaned.dispose();
+    }
+    const result = await service.deploy(TENANT, PROJECT, ALICE, {
+      message: "publish one file",
+      files: { ".work/project.json": "{}" },
+    });
+    expect(result.status).toBe("deployed");
+  });
+
   it("tells enablements about each published revision", async () => {
     const published: Array<{ projectId: string; commitSha: string }> = [];
     const notified = new DeploymentService(manager, async (input) => {

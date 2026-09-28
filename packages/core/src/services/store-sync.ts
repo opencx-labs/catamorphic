@@ -310,8 +310,57 @@ function walkStore(root: string): string[] {
   return out.sort();
 }
 
-/** Build output and dependencies a project workspace never shares. */
-const UNSHARED_DIRECTORIES = new Set(["node_modules", "dist", ".turbo"]);
+/**
+ * The workspace's ignore rules (its `.work/.gitignore`, and the defaults a
+ * missing one would have), as a test on paths relative to `.work/`. Plain
+ * names, `*` and `?` globs, trailing `/` for folders, and a leading or
+ * inner `/` to anchor; negations are not needed by the defaults.
+ */
+function workspaceIgnore(
+  root: string,
+): (path: string, dir: boolean) => boolean {
+  let own = "";
+  try {
+    own = fs.readFileSync(
+      path.join(root, PROJECT_WORKSPACE_ROOT, ".gitignore"),
+      "utf8",
+    );
+  } catch {
+    // No ignore file of its own: the defaults still apply.
+  }
+  const rules = `${own}\n${PROJECT_WORKSPACE_IGNORE}`
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#") && !line.startsWith("!"))
+    .map((line) => {
+      const dirOnly = line.endsWith("/");
+      const body = line.replace(/^\/+|\/+$/g, "");
+      const anchored = line.startsWith("/") || body.includes("/");
+      const pattern = new RegExp(
+        `^${body
+          .split("")
+          .map((char) =>
+            char === "*"
+              ? "[^/]*"
+              : char === "?"
+                ? "[^/]"
+                : char.replace(/[.+^${}()|[\]\\]/g, "\\$&"),
+          )
+          .join("")}$`,
+      );
+      return { dirOnly, anchored, pattern };
+    });
+  return (relative, dir) =>
+    rules.some(
+      (rule) =>
+        (!rule.dirOnly || dir) &&
+        rule.pattern.test(
+          rule.anchored
+            ? relative
+            : relative.slice(relative.lastIndexOf("/") + 1),
+        ),
+    );
+}
 
 /**
  * Program files created in this folder's `.work/` that no sync has seen:
@@ -320,6 +369,8 @@ const UNSHARED_DIRECTORIES = new Set(["node_modules", "dist", ".turbo"]);
  */
 function newProgramFiles(root: string, known: Manifest["files"]): string[] {
   const out: string[] = [];
+  const ignored = workspaceIgnore(root);
+  const prefix = `${PROJECT_WORKSPACE_ROOT}/`;
   const walk = (relative: string) => {
     let entries: fs.Dirent[];
     try {
@@ -332,9 +383,9 @@ function newProgramFiles(root: string, known: Manifest["files"]): string[] {
     for (const entry of entries) {
       const child = `${relative}/${entry.name}`;
       if (!isProjectSourcePath(child) || isPersonalFile(child)) continue;
-      if (entry.isDirectory()) {
-        if (!UNSHARED_DIRECTORIES.has(entry.name)) walk(child);
-      } else if (entry.isFile() && !known[child] && !generatedIgnore(child))
+      if (ignored(child.slice(prefix.length), entry.isDirectory())) continue;
+      if (entry.isDirectory()) walk(child);
+      else if (entry.isFile() && !known[child] && !generatedIgnore(child))
         out.push(child);
     }
   };

@@ -202,7 +202,20 @@ describe("remote project sync (ADR 0055)", () => {
     write(root, ".work/personal/environment.json", "{}\n");
     write(root, ".work/node_modules/pkg/index.js", "\n");
     write(root, "notes/scratch.md", "mine\n");
+    write(root, ".work/.DS_Store", "\n");
+    write(root, ".work/workflows/.DS_Store", "\n");
     expect(localStatus(root).programEdits).toEqual([
+      ".work/images/harness.Dockerfile",
+    ]);
+    // The folder's own ignore rules count too.
+    write(
+      root,
+      ".work/.gitignore",
+      "/app-data/\nnode_modules/\ndist/\n.turbo/\n.DS_Store\n*.local\n",
+    );
+    write(root, ".work/config.local", "secret\n");
+    expect(localStatus(root).programEdits).toEqual([
+      ".work/.gitignore",
       ".work/images/harness.Dockerfile",
     ]);
   });

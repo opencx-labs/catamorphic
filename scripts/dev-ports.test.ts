@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
+import { reserveLoopbackPort } from "./dev.js";
 import {
   DevStartupAttemptError,
   devListenerPorts,
@@ -75,6 +76,22 @@ describe("devListenerPorts", () => {
       operator: 20_000,
     });
     expect(requested).toEqual([9311, 5178, 4705, undefined]);
+  });
+
+  it("never reuses a remembered port another process still listens on", async () => {
+    const other = createServer();
+    servers.push(other);
+    const taken = await new Promise<number>((resolve, reject) => {
+      other.once("error", reject);
+      // Another instance's server on every interface.
+      other.listen(0, "0.0.0.0", () => {
+        const address = other.address();
+        if (!address || typeof address === "string")
+          reject(new Error("No numeric port"));
+        else resolve(address.port);
+      });
+    });
+    expect(await reserveLoopbackPort(taken)).not.toBe(taken);
   });
 
   it("confirms a focused server without waiting for desktop listeners", async () => {
