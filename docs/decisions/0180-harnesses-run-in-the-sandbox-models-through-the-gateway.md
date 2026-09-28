@@ -1,6 +1,6 @@
 # 0180: Harnesses run in the sandbox; models through the gateway
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0184](0184-personal-credentials-reach-a-members-own-sessions.md): harnesses may run on the chat owner's own login)
 - **Date:** 2026-09-27
 - **Refines:** 0050, 0057, 0162, 0164, 0174, 0175, 0176
 

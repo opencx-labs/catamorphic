@@ -240,7 +240,14 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
       params: AgentSessionIdParamsSchema,
       body: MirrorAgentSessionSchema,
       response: {
-        200: AgentSessionSchema,
+        200: AgentSessionSchema.extend({
+          agentNotice: z
+            .string()
+            .optional()
+            .describe(
+              "Why a newly mirrored chat continues with another agent than the one it ran (ADR 0184)",
+            ),
+        }),
         403: EnvironmentAccessErrorSchema,
         404: ErrorSchema,
         409: z.union([MirrorConflictSchema, EnvironmentErrorSchema]),

@@ -167,7 +167,10 @@ export interface ClaudeCodeAgentOpts {
    * `claude`). The CLI's environment is exactly the gateway's base URL and
    * the harness switches: no host variable reaches it, and its key is the
    * session's grant, read from the grant file by `apiKeyHelper` at each use
-   * so renewals apply without a restart.
+   * so renewals apply without a restart. A turn that carries the owner's
+   * own login (`TurnOptions.personalLogin`, ADR 0184) runs with
+   * `CLAUDE_CONFIG_DIR` at that login instead, with no gateway address and
+   * no key helper: the CLI talks to Anthropic as that member.
    */
   sandbox?: { command?: string };
   /**
@@ -244,10 +247,16 @@ const denyUnlistedTools: CanUseTool = async () => ({
   message: "This tool is not available in the Catamorphic desktop harness.",
 });
 
-/** Where a sandbox-resident turn runs and how it reaches its model. */
+/**
+ * Where a sandbox-resident turn runs and how it reaches its model: through
+ * the gateway with the session's grant (ADR 0180), or directly with the
+ * owner's own login in `CLAUDE_CONFIG_DIR` (ADR 0184).
+ */
 interface SandboxRun {
   sandbox: TurnSandbox;
-  gateway: SandboxModelGateway;
+  auth:
+    | { kind: "gateway"; gateway: SandboxModelGateway }
+    | { kind: "personal"; home: string };
   command: string;
 }
 
@@ -919,7 +928,9 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
             // A native binary: the SDK runs the command itself, which the
             // sandbox resolves on its own PATH.
             pathToClaudeCodeExecutable: sandboxRun.command,
-            settings: { apiKeyHelper: 'cat "$WORK_MODEL_KEY_FILE"' },
+            ...(sandboxRun.auth.kind === "gateway"
+              ? { settings: { apiKeyHelper: 'cat "$WORK_MODEL_KEY_FILE"' } }
+              : {}),
             spawnClaudeCodeProcess: (spawn) =>
               sandboxSpawn({ run: sandboxRun, spawn }),
           }
@@ -1029,16 +1040,19 @@ function sandboxRunFor(
 ): SandboxRun | string {
   if (!turn?.sandbox?.provider.processes)
     return "Claude Code runs inside this chat's sandbox, and this Environment's sandboxes cannot run it (they do not run processes).";
+  const command = options.command ?? "claude";
+  if (turn.personalLogin?.harness === "claude-code")
+    return {
+      sandbox: turn.sandbox,
+      auth: { kind: "personal", home: turn.personalLogin.home },
+      command,
+    };
   const gateway = turn.modelGateway;
   if (!gateway)
     return "Claude Code reaches its model through the gateway, and this chat has no model connection: bind one in the agent's Environment and name it in the agent's credentials.";
   if (gateway.api !== "anthropic")
     return `Claude Code speaks the Anthropic API; the connection '${gateway.alias}' is an ${gateway.api} API.`;
-  return {
-    sandbox: turn.sandbox,
-    gateway,
-    command: options.command ?? "claude",
-  };
+  return { sandbox: turn.sandbox, auth: { kind: "gateway", gateway }, command };
 }
 
 /** The CLI's whole environment in the sandbox, beside the SDK's own. */
@@ -1047,8 +1061,14 @@ function sandboxEnv(args: {
   permissionMode: ClaudeCodePermissionMode;
 }): Record<string, string> {
   return {
-    ANTHROPIC_BASE_URL: args.run.gateway.baseUrl,
-    CLAUDE_CODE_API_KEY_HELPER_TTL_MS: String(API_KEY_HELPER_TTL_MS),
+    // With the owner's own login the CLI talks to Anthropic itself; its
+    // login is in CLAUDE_CONFIG_DIR (a path variable, see sandboxSpawn).
+    ...(args.run.auth.kind === "gateway"
+      ? {
+          ANTHROPIC_BASE_URL: args.run.auth.gateway.baseUrl,
+          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: String(API_KEY_HELPER_TTL_MS),
+        }
+      : {}),
     DISABLE_AUTOUPDATER: "1",
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     // The CLI refuses to bypass its checks as root outside a sandbox; this
@@ -1069,6 +1089,15 @@ function claudePermissionMode(args: {
   );
 }
 
+/** Path variables of the CLI in the sandbox: its key file or its login. */
+export function sandboxPathEnv(run: {
+  auth: SandboxRun["auth"];
+}): Record<string, string> {
+  return run.auth.kind === "gateway"
+    ? { WORK_MODEL_KEY_FILE: run.auth.gateway.keyFile }
+    : { CLAUDE_CONFIG_DIR: run.auth.home };
+}
+
 /** The SDK's spawn, carried out in the sandbox over process operations. */
 function sandboxSpawn(input: {
   run: SandboxRun;
@@ -1085,7 +1114,7 @@ function sandboxSpawn(input: {
     args: spawn.args,
     cwd: spawn.cwd ?? run.sandbox.stateDirectory,
     env: spawn.env,
-    pathEnv: { WORK_MODEL_KEY_FILE: run.gateway.keyFile },
+    pathEnv: sandboxPathEnv(run),
     stderrPath: stderr,
     name: "Claude Code",
     signal: spawn.signal,

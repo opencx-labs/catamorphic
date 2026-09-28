@@ -1026,6 +1026,33 @@ the sandbox (the same `sandbox`-channel grants as Git) and passes the turn
 process started with `stdin: true`), with the gateway as their only model
 endpoint. Harness binaries come from the Environment image.
 
+Personal credentials (ADR 0184): a member's own harness logins and listed
+files may reach sandboxes that run only that member's work. The member's
+client calls `PUT /projects/:id/personal-environment` with `{ logins:
+{ "claude-code"?: { credentials, expiresAt? }, codex?: { auth, expiresAt? } },
+files: [{ path, content /* base64 */ }] }` (refresh tokens refused, at most
+50 files of 256 KiB, repository-relative paths); `GET` answers `{ allowed,
+logins: { [kind]: { fingerprint, expiresAt?, updatedAt, needsRefresh } },
+files: [{ path, fingerprint, bytes, updatedAt }] }` and `DELETE` forgets them.
+Values are sealed in `credentialVault` (required) as
+`core.personalEnvironments`. An Environment opts in with
+`personalCredentials: true`; admission then requires the chat's owner to be a
+member (not the project principal) and the placement to isolate them:
+binding isolation `sandbox`, a `device: "member"` Environment, an
+`EnvironmentRuntimeBinding.servesOnlyOwner` from the host's provider, or the
+machine capability `credentials.personal` (`MACHINE_CAPABILITIES` in
+`@catamorphic/sandbox`). Register an agent with `personalLogin:
+"claude-code" | "codex"` to run on the owner's login: admission and
+discovery pass it through (refusals are `EnvironmentIncompatibleError`
+reasons; without an Environment image the machine must advertise
+`harness.claude-code` or `harness.codex`), core writes the login under
+`.work-session/home/` each turn and on grant renewal and passes
+`TurnOptions.personalLogin`, and the harnesses run with `CLAUDE_CONFIG_DIR` or
+`CODEX_HOME` instead of the gateway. Listed files are delivered to any of the
+owner's chats in such an Environment, excluded from Git through
+`.git/info/exclude`, and removed on close and idle release. Discovery items
+carry `personalCredentials` when an Environment allows them.
+
 Workspaces at a ref (ADR 0178): `create` and `deliver` accept
 `workspace: { ref, update? }`. The control plane fetches the ref from the
 project's linked remote (`projects.remote_url`) into a per-project bare mirror

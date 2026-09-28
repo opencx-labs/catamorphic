@@ -131,11 +131,14 @@ export type AgentCoordinationStrategy =
  *    the alias `connection` (ADR 0180). The harness runs in the session's
  *    sandbox and reaches the model through the gateway with its session
  *    grant; the key stays on the control plane. The mode for servers.
+ *  - `personal`: on a server, the chat owner's own harness login, sent
+ *    by their desktop and delivered into their own chats' sandboxes in
+ *    Environments that allow personal credentials (ADR 0184).
  */
 export const AgentDefinitionCredentialsSchema = z
   .object({
     source: z
-      .enum(["profile", "secret", "local", "connection"])
+      .enum(["profile", "secret", "local", "connection", "personal"])
       .default("profile"),
     /** Project-secret name holding the API key (source: "secret" only). */
     secret: z.string().min(1).optional(),

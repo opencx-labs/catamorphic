@@ -1549,6 +1549,8 @@ export interface paths {
                                 compatible: boolean;
                                 preferred: boolean;
                                 allowed: boolean;
+                                /** @description Present when the Environment allows personal credentials (ADR 0184): whether the caller's own chats placed there would carry their logins and files */
+                                personalCredentials?: boolean;
                                 reasons: string[];
                                 binding?: {
                                     /** @enum {string} */
@@ -1603,6 +1605,274 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/personal-environment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Some Environment of the project gives the caller's own chats their personal credentials */
+                            allowed: boolean;
+                            logins: {
+                                "claude-code"?: {
+                                    fingerprint: string;
+                                    expiresAt?: string;
+                                    updatedAt: string;
+                                    /** @description Expires within the hour while the caller has live chats using it: refresh locally and send it again */
+                                    needsRefresh: boolean;
+                                };
+                                codex?: {
+                                    fingerprint: string;
+                                    expiresAt?: string;
+                                    updatedAt: string;
+                                    /** @description Expires within the hour while the caller has live chats using it: refresh locally and send it again */
+                                    needsRefresh: boolean;
+                                };
+                            };
+                            files: {
+                                path: string;
+                                fingerprint: string;
+                                bytes: number;
+                                updatedAt: string;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            /** @description The caller's personal logins and files for this project; replaces what the server holds */
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @default {} */
+                        logins?: {
+                            "claude-code"?: {
+                                /** @description Claude Code's .credentials.json as JSON text, refresh token removed */
+                                credentials: string;
+                                expiresAt?: string;
+                            };
+                            codex?: {
+                                /** @description Codex's auth.json as JSON text, refresh token removed */
+                                auth: string;
+                                expiresAt?: string;
+                            };
+                        };
+                        /** @default [] */
+                        files?: {
+                            /** @description Repository-relative path, / separated */
+                            path: string;
+                            /** @description The file's bytes, base64 */
+                            content: string;
+                        }[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Some Environment of the project gives the caller's own chats their personal credentials */
+                            allowed: boolean;
+                            logins: {
+                                "claude-code"?: {
+                                    fingerprint: string;
+                                    expiresAt?: string;
+                                    updatedAt: string;
+                                    /** @description Expires within the hour while the caller has live chats using it: refresh locally and send it again */
+                                    needsRefresh: boolean;
+                                };
+                                codex?: {
+                                    fingerprint: string;
+                                    expiresAt?: string;
+                                    updatedAt: string;
+                                    /** @description Expires within the hour while the caller has live chats using it: refresh locally and send it again */
+                                    needsRefresh: boolean;
+                                };
+                            };
+                            files: {
+                                path: string;
+                                fingerprint: string;
+                                bytes: number;
+                                updatedAt: string;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "personal_environment_invalid";
+                            issues: string[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": null;
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -6747,6 +7017,8 @@ export interface paths {
                             createdAt: string;
                             /** Format: date-time */
                             updatedAt: string;
+                            /** @description Why a newly mirrored chat continues with another agent than the one it ran (ADR 0184) */
+                            agentNotice?: string;
                         };
                     };
                 };
@@ -10205,6 +10477,8 @@ export interface paths {
                                         compatible: boolean;
                                         preferred: boolean;
                                         allowed: boolean;
+                                        /** @description Present when the Environment allows personal credentials (ADR 0184): whether the caller's own chats placed there would carry their logins and files */
+                                        personalCredentials?: boolean;
                                         reasons: string[];
                                         binding?: {
                                             /** @enum {string} */
@@ -10318,7 +10592,7 @@ export interface paths {
                                 description?: string;
                                 credentials?: {
                                     /** @enum {string} */
-                                    source: "profile" | "secret" | "local" | "connection";
+                                    source: "profile" | "secret" | "local" | "connection" | "personal";
                                     secret?: string;
                                     connection?: string;
                                 };

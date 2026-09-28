@@ -1,6 +1,6 @@
 # 0175: Grants reach sandboxes; credentials never do
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0184](0184-personal-credentials-reach-a-members-own-sessions.md): a member's own logins and files may reach sandboxes that run only their work)
 - **Date:** 2026-09-27
 - **Refines:** 0065, 0162, 0164
 - **Models implemented by:** [0180](0180-harnesses-run-in-the-sandbox-models-through-the-gateway.md)
