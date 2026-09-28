@@ -4,6 +4,7 @@ import {
   RemoteWorkerJobsService,
   type WorkerCapacity,
   type WorkerNodeLease,
+  WorkerNodeLeaseHeldError,
   type WorkerNodesService,
 } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
@@ -289,7 +290,7 @@ export class WorkWorkerRegistry {
         defaults: args.offer.defaults,
       });
     } catch (error) {
-      if (error instanceof Error && /already running/.test(error.message))
+      if (error instanceof WorkerNodeLeaseHeldError)
         throw new WorkerConnectConflictError();
       throw error;
     }

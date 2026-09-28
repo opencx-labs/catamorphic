@@ -740,8 +740,10 @@ export {
   EnvironmentCapacityError,
 } from "./services/worker-capacity.js";
 export {
+  WORKER_NODE_LEASE_MS,
   type WorkerNode,
   type WorkerNodeLease,
+  WorkerNodeLeaseHeldError,
   WorkerNodesService,
 } from "./services/worker-nodes-service.js";
 export { workflowEnablementConsentDigest } from "./services/workflow-enablement-consent.js";

@@ -3,7 +3,9 @@ import {
   capacityFits,
   cleanupWorkerAllocations,
   EnvironmentCapacityError,
+  WORKER_NODE_LEASE_MS,
   type WorkerCapacity,
+  WorkerNodeLeaseHeldError,
   WorkerNodesService,
 } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
@@ -84,13 +86,26 @@ export async function registerWorkMachine(args: {
     resourceLimits: args.sandboxProvider.resourceLimits,
     labels: { ...args.labels, node: args.nodeId, plane: "control" },
   };
-  const lease = await nodes.register({
-    tenantId: args.tenantId,
-    authorityId: args.authorityId,
-    descriptor,
-    capacity: args.capacity,
-    defaults: args.defaults,
-  });
+  // A server that died without releasing its lease restarts into that
+  // lease: wait for it to lapse rather than refuse to boot.
+  const deadline = Date.now() + WORKER_NODE_LEASE_MS + 5_000;
+  const register = async (): Promise<{ id: string; token: string }> => {
+    try {
+      return await nodes.register({
+        tenantId: args.tenantId,
+        authorityId: args.authorityId,
+        descriptor,
+        capacity: args.capacity,
+        defaults: args.defaults,
+      });
+    } catch (error) {
+      if (!(error instanceof WorkerNodeLeaseHeldError) || Date.now() > deadline)
+        throw error;
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      return register();
+    }
+  };
+  const lease = await register();
   const environmentProvider: EnvironmentProvider = {
     get: async ({
       tenantId,
