@@ -5,15 +5,15 @@ import {
 } from "@catamorphic/server-sdk";
 
 /**
- * The GitHub App people sign in with (ADR 0177). Only the OAuth client id
- * ships with the desktop: the device flow needs no secret. The default is
- * the current app until an organization owner registers the Work-branded
- * one (#107); forks and self-hosters point at their own with
+ * The public Work Desktop App people sign in with (ADR 0177). Only its
+ * OAuth client id ships with the desktop: the device flow needs no secret,
+ * and the App has no private key. Work servers never use it; each connects
+ * its own private App. Forks point at their own with
  * `WORK_GITHUB_CLIENT_ID` and `WORK_GITHUB_APP_SLUG`.
  */
 export const GITHUB_APP: GithubAppConfig = {
   clientId: process.env.WORK_GITHUB_CLIENT_ID ?? "Iv23ctJpmtmboLcXS2rE",
-  appSlug: process.env.WORK_GITHUB_APP_SLUG ?? "catamorphic-ai",
+  appSlug: process.env.WORK_GITHUB_APP_SLUG ?? "work-desktop",
 };
 
 /**

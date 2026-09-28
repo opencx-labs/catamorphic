@@ -37,8 +37,9 @@ Start small and add only what the situation needs:
   credentials only through the gateway, with guards in a small custom server
   on anything touching production
   ([secrets and the gateway](references/secrets-and-gateway.md));
-  the company's GitHub App as the `github` service connection
-  ([Connect GitHub](references/connect-github.md)), with pull request reviews
+  a private GitHub App you register for the company from the server, as the
+  `github` service connection ([Connect GitHub](references/connect-github.md)),
+  with pull request reviews
   on a review pool ([Review pull requests](references/review-pull-requests.md));
   agent sandboxes on enrolled workers with `WORK_CONTROL_PLANE_WORKLOADS=workflow`
   on the control plane ([machines](references/cluster-deployment.md)); and
@@ -118,6 +119,11 @@ disagree with the installed source, the source wins.
   the `github` service connection; sync, proposals, and agents' GitHub
   actions all go through it (ADR 0177). There is no GitHub token variable
   and no second clone or API implementation.
+- **Each server has its own private GitHub App.** Register one from the
+  server's manifest flow for every company brain you set up, owned by that
+  organization. The public Work Desktop App only signs people in on the
+  desktop: a shared App's key would reach every organization that installed
+  it, and it has one webhook URL.
 
 ## Common mistakes
 

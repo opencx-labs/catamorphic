@@ -77,6 +77,15 @@ exact repository, and local pull request reads fall back to it. Local pull
 request reads, reviews, merges and comments use the code host first.
 `WORK_GITHUB_CLIENT_ID` / `WORK_GITHUB_APP_SLUG` override the App.
 
+**Two kinds of App.** The public **Work Desktop** App (`work-desktop`, owned
+by `opencx-labs`) only
+signs people in to their own GitHub accounts from the desktop: it needs just
+its client ID, and no key leaves its owners. Each Work server connects its
+own **private** App, owned by the organization it serves and registered from
+the server's manifest, as the `github` service connection. A shared public
+App would put a key that mints tokens for every installing organization on
+each server, and could deliver webhooks to only one server.
+
 Considered: keeping a GitHub service beside connections (two credential
 paths), per-integration host kinds for polling (a second event model), and a
 separate GitHub-shaped polled payload (the trigger library would need two
@@ -89,5 +98,5 @@ with audited, narrowed tokens; other code hosts are a provider plus a code
 host. Polled events arrive at most one poll interval late and approximate
 webhook actions for snapshots; pushes are delivered without per-commit
 detail when GitHub's Events API omits it. SSH origins still fall back to the
-CLI for pull request reads. Registering and installing the Work-branded App
-(#107) needs an organization owner in a browser.
+CLI for pull request reads. Creating a server's private App and installing
+it needs an organization owner in a browser.

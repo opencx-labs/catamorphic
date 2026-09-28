@@ -11,11 +11,27 @@ personal token, and no credential reaches an agent or a sandbox.
 
 ## Choose an App
 
-- **Register your own App from a manifest** (below): the server creates it
-  with the right permissions and events, and points its webhook at a
-  project. Best for a self-hosted server.
-- **Use an existing App** your organization already owns: connect its App
-  ID, private key, and installation (below).
+Every Work server gets its **own private App**, owned by the organization
+whose repositories it serves and installed only there. Create one for each
+person setting up a company brain; never connect the public **Work Desktop** App
+(the one the desktop signs people in with) as a server's `github`
+connection, and never ask its owners for its key. Two reasons:
+
+- A server acts through installation tokens minted with the App's private
+  key. Anyone can install a public App, so its key reaches every
+  organization that did; a private App's key reaches only this one.
+- An App has one webhook URL. A private App delivers straight to this
+  server; a shared one could reach only a single server.
+
+Two ways to get the private App:
+
+- **Register it from a manifest** (below, recommended): the server creates
+  it with the right permissions and events, keeps its key in the vault
+  without anyone handling it, and points its webhook at a project.
+- **Connect a private App the organization already created** (below): its
+  App ID, a private key generated for this server, and its installation.
+  Generate the key on the App's settings page and hand it only to the
+  server; delete keys that are no longer in use.
 
 The App needs these repository permissions: contents (write), pull requests
 (write), checks (write), issues (write), metadata (read); and members (read)
