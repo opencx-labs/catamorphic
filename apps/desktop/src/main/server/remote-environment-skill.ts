@@ -77,9 +77,46 @@ the person's remote sessions use:
 Changing \`.work/project.json\` changes shared project source, unlike the
 personal config. In a repository Work did not create, commit it on a work/
 branch and open a pull request with create_pull_request; in a company brain,
-propose it for review. Say that a reviewer must accept it before it applies.
-The server also decides whether a machine may hold personal credentials: a
-per-session microVM, or a machine that serves only this person.
+the person shares it from the Server section: members who may publish the
+project publish it at once, everyone else proposes it for a reviewer to
+accept. The server also decides whether a machine may hold personal
+credentials: a per-session microVM, or a machine that serves only this
+person.
+
+## Running on this computer, then moving to the server
+
+A chat's **Run on** choice (the chat's status panel) picks its Environment.
+An Environment with \`"device": "member"\` is **This machine**: the chat's
+history stays on the server while its work runs here. The person connects
+this computer once from the chat ("Connect this device"). To continue a
+chat on the server, they pick a server Environment in that same control;
+the chat keeps its history and its next turn runs there with their own
+sign-in.
+
+Claude Code and Codex run inside the chat's sandbox, so an Environment
+they use must provide the \`claude\` or \`codex\` command: on This machine,
+name a Dockerfile image that installs them (this computer builds it when
+Docker or Podman is installed):
+
+\`\`\`json
+"laptop": {
+  "device": "member",
+  "workloads": ["agent"],
+  "personalCredentials": true,
+  "image": ".work/images/harness.Dockerfile"
+}
+\`\`\`
+
+\`\`\`dockerfile
+FROM node:22-bookworm
+RUN apt-get update \\
+  && apt-get install -y --no-install-recommends git ca-certificates \\
+  && rm -rf /var/lib/apt/lists/*
+RUN npm install -g @anthropic-ai/claude-code @openai/codex
+\`\`\`
+
+If an Environment is unavailable, the chat says why (for example that the
+machine lacks the command or cannot build images); relay that reason.
 
 ## Checking status
 

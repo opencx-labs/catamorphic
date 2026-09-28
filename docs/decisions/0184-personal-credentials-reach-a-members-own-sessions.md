@@ -69,6 +69,19 @@ moved to the server continues on the matching agent when the member sent
 that login; otherwise on the default agent, and the mirror answer's
 `agentNotice` says why.
 
+**Local, then remote.** In a connected project every chat is a server
+chat (ADR 0098), so "start on my computer, continue on the server" is an
+Environment move: a chat on This machine (`device: "member"`) moves to a
+server Environment with the chat's Environment control, and the next turn
+re-anchors from the saved transcript. A sandbox-resident harness gets the
+earlier turns in its instructions, since its own transcript stayed in the
+old sandbox. On This machine the CLI comes from the Environment's image:
+the member's runner advertises its provider's capabilities (images, image
+builds; migration 039), the desktop builds Dockerfile images when Docker or
+Podman is installed, and a create that builds an image may take up to 35
+minutes. Every placement boots the Allocation's image, containers and
+egress, a member's computer included.
+
 Considered: short-lived copies minted per turn on the member's computer.
 Rejected: the desktop is often offline while its chats run.
 

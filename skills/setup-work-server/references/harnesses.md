@@ -159,6 +159,11 @@ What the machines need:
 - The CLI: on the machine's `PATH` for local-process (the server advertises
   `harness.claude-code` / `harness.codex` when it finds `claude` / `codex`),
   or in the Environment's `image` for microsandbox (see step 3 above).
+- On a member's own computer (**This machine**, `"device": "member"`), the
+  Environment's `image`: the desktop runs chats in microsandbox VMs and
+  builds a Dockerfile image when Docker or Podman is installed (the first
+  build takes minutes). A chat started there moves to a server Environment
+  from the chat's Environment control and continues with its history.
 - Egress to the providers: `api.anthropic.com` (and `claude.ai`,
   `console.anthropic.com` for account checks) for Claude Code;
   `chatgpt.com` and `api.openai.com` (and `auth.openai.com`) for Codex. With
