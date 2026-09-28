@@ -3207,6 +3207,9 @@ export class AgentSessionsService {
               unattended: isProjectPrincipal(session.external_user_id),
             })
           : [];
+      // The old workspace is given back: personal files and logins leave
+      // it now, and the next turn delivers them to the new one (ADR 0184).
+      await this.withdrawFromSessionSandbox({ identity, projectId, sessionId });
       reallocatedRow = await this.db
         .transaction()
         .execute(async (transaction) => {

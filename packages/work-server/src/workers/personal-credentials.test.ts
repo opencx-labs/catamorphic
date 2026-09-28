@@ -491,6 +491,11 @@ describe("a member's personal environment (ADR 0184)", () => {
     await sessions().update(alice, projectId, sessionId, {
       environment: "mine2",
     });
+    // The workspace it left no longer holds them.
+    expect(holding(workerDirs["alice-box"] ?? "", SECRET_ENV.trim())).toEqual(
+      [],
+    );
+    expect(holding(workerDirs["alice-box"] ?? "", ACCESS_TOKEN)).toEqual([]);
     const moved = await sessions().sendMessage(
       alice,
       projectId,
