@@ -16,6 +16,10 @@ import type { ConnectionRequirement } from "./connection-types.js";
 export interface RegisteredCodingAgent {
   /** Stable registry key persisted on sessions (`agent_sessions.agent_id`). */
   id: string;
+  /** How pickers name a host agent; its id when absent. */
+  name?: string;
+  /** One line for pickers. */
+  description?: string;
   provider: CodingAgentProvider;
   topology: AgentExecutionTopology;
   /**

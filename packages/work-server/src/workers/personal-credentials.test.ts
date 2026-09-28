@@ -407,7 +407,7 @@ describe("a member's personal environment (ADR 0184)", () => {
     const claude = catalog.items.find(
       (item) => item.id === `project:${projectId}:claude-code`,
     );
-    expect(claude?.available).toBe(true);
+    expect(claude).toMatchObject({ name: "Claude Code", available: true });
     expect(
       claude?.environments.items.find((item) => item.name === "mine"),
     ).toMatchObject({ personalCredentials: true, available: true });

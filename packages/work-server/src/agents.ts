@@ -150,6 +150,8 @@ function assistantRegistry(config: {
   // harness instances as project agents; the turn's login decides.
   const personal = (kind: PersonalLoginKind): RegisteredCodingAgent => ({
     id: kind,
+    name: PERSONAL_HARNESS_AGENTS[kind].name,
+    description: PERSONAL_HARNESS_AGENTS[kind].description,
     provider:
       kind === "codex" ? config.harnesses.codex : config.harnesses.claudeCode,
     topology: "controller",

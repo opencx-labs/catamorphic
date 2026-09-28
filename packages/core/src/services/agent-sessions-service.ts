@@ -6829,8 +6829,8 @@ export class AgentSessionsService {
         agent.id,
         {
           id: agent.id,
-          name: agent.id,
-          description: undefined as string | undefined,
+          name: agent.name ?? agent.id,
+          description: agent.description,
         },
       ]),
     );
