@@ -6,12 +6,28 @@ import { type AppHandle, launchApp } from "./harness.js";
  * Site settings (ADR 0150): a page's permission request opens the site
  * settings modal centered with the question first; Allow is remembered
  * for the site; the toolbar gear reopens the same modal with everything
- * laid out; the Sites page lists the site; Delete data clears its cookies.
+ * laid out; the Sites page lists the site; Delete data clears its cookies;
+ * the site shows the icon its tab shows.
  */
 let app: AppHandle;
 let origin: string;
-const server = http.createServer((_request, response) => {
+// The sign-in page's light and dark icons: 1x1 PNGs, inline because the
+// app shows only https and data images and this lab is plain http.
+const ICONS = {
+  light:
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMQEREBAAB8AD2SgCfbAAAAAElFTkSuQmCC",
+  dark: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP48OEDAAWkAtFabOJuAAAAAElFTkSuQmCC",
+};
+const server = http.createServer((request, response) => {
   response.setHeader("Content-Type", "text/html");
+  // A sign-in page never reaches history; its icons differ by scheme,
+  // as GitHub's do.
+  if (request.url?.startsWith("/login")) {
+    response.end(`<title>Sign in</title>
+      <link rel="icon" href="${ICONS.light}" media="(prefers-color-scheme: light)">
+      <link rel="icon" href="${ICONS.dark}" media="(prefers-color-scheme: dark)">`);
+    return;
+  }
   response.end(`<title>Lab</title><script>
     document.cookie = "lab=1; path=/";
     window.askNotifications = () => {
@@ -219,6 +235,34 @@ describe("site settings", () => {
       `!document.querySelector('[data-testid="site-permission-prompt"]')`,
       { label: "prompt withdrawn on navigation" },
     );
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+
+  it("shows the site's icon for this scheme, even from a sign-in page", async () => {
+    await inGuest("location.href = '/login'; true");
+    await app.waitFor(
+      `(() => { const view = ${guest}; try { return view.getTitle() === 'Sign in' && !view.isLoading(); } catch { return false; } })()`,
+      { label: "sign-in page" },
+    );
+    const scheme: keyof typeof ICONS = (await inGuest(
+      "matchMedia('(prefers-color-scheme: dark)').matches",
+    ))
+      ? "dark"
+      : "light";
+    // The tab shows the page's icon for the scheme; wait for it to land.
+    await app.waitFor(
+      `[...document.querySelectorAll('[data-point-key^="browser:"] img')].some((img) => img.src === ${JSON.stringify(ICONS[scheme])})`,
+      { label: "tab icon" },
+    );
+    await click('[data-testid="site-settings-button"]');
+    await app.waitFor(`!!${modal}`, { label: "modal from gear" });
+    // Not the site's /favicon.ico, which history's gap used to fall back to.
+    await app.waitFor(
+      `${modal}.querySelector('img')?.src === ${JSON.stringify(ICONS[scheme])}`,
+      { label: `modal shows the ${scheme} icon` },
+    );
+    await app.press("Escape");
+    await app.waitFor(`!${modal}`, { label: "modal closed" });
     expect(app.getRendererErrors()).toEqual([]);
   });
 });

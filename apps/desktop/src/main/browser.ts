@@ -10,6 +10,7 @@ import {
   ipcMain,
   Menu,
   Notification,
+  nativeTheme,
   type Session,
   screen,
   session,
@@ -85,6 +86,7 @@ import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
 import { DEFAULT_SIDEBAR_FILE } from "./sidebar-config.js";
 import { registerSidebarSources } from "./sidebar-source-ipc.js";
+import { SiteIcons } from "./site-icons.js";
 import {
   cookieCoversHost,
   PromptBroker,
@@ -365,6 +367,15 @@ export function registerBrowserSupport(
   );
   const permissionBroker = new SitePermissionBroker();
   const disposePasskeys = registerPasskeys();
+  const siteIcons = new SiteIcons();
+  // Pages pick their icon by the scheme they see, which follows the OS.
+  const colorScheme = () =>
+    nativeTheme.shouldUseDarkColors ? "dark" : "light";
+  const siteIcon = (
+    profileId: string,
+    origin: string,
+    historyIcon?: string | null,
+  ) => siteIcons.get(profileId, origin, colorScheme()) ?? historyIcon ?? null;
   // Guest id → OS refusals already explained for the page it shows.
   const mediaRefusalsShown = new Map<number, Set<string>>();
   const screenShareBroker = new PromptBroker<
@@ -426,6 +437,7 @@ export function registerBrowserSupport(
   });
   const unsubscribeRemoved = profiles.onRemoved((profileId) => {
     history.releaseProfile(profileId);
+    siteIcons.releaseProfile(profileId);
     vault.releaseProfile(profileId);
     siteSettings.releaseProfile(profileId);
     preparedSessions.delete(partitionFor(profileId));
@@ -1331,7 +1343,11 @@ export function registerBrowserSupport(
                   kind: "tab",
                   name: contents.getTitle() || url,
                   thumbnail,
-                  icon: visits?.get(siteOrigin(url) ?? "")?.faviconUrl ?? null,
+                  icon: siteIcon(
+                    profileId,
+                    siteOrigin(url) ?? "",
+                    visits?.get(siteOrigin(url) ?? "")?.faviconUrl,
+                  ),
                   url,
                   current: contents.id === guestId,
                 };
@@ -1424,7 +1440,7 @@ export function registerBrowserSupport(
       permissions: siteSettings.get(profileId, origin),
       cookies: (await siteCookies(profileId, host)).length,
       lastVisitAt: visit?.lastVisitAt ?? null,
-      faviconUrl: visit?.faviconUrl ?? null,
+      faviconUrl: siteIcon(profileId, origin, visit?.faviconUrl),
     };
   };
 
@@ -1534,7 +1550,7 @@ export function registerBrowserSupport(
             cookieCoversHost(cookie.domain ?? "", host),
           ).length,
           lastVisitAt: visit?.lastVisitAt ?? null,
-          faviconUrl: visit?.faviconUrl ?? null,
+          faviconUrl: siteIcon(profileId, origin, visit?.faviconUrl),
         };
       });
       return sites
@@ -1682,6 +1698,14 @@ export function registerBrowserSupport(
     (event, input: { url: string; faviconUrl: string }) => {
       const profileId = windows.profileFor(event.sender);
       history.setFavicon(profileId, input.url, input.faviconUrl);
+      // Sign-in pages never reach history; the site's icon is still known.
+      const site = siteIcons.observe({
+        profileId,
+        pageUrl: input.url,
+        iconUrl: input.faviconUrl,
+        scheme: colorScheme(),
+      });
+      if (site) siteSettingsChanged(profileId, site);
       // Bookmarks of the page (imported ones have no icon) learn it too.
       const projectIds = profiles.get(profileId)?.projectIds ?? [];
       const changed = bookmarks.observeFavicon({

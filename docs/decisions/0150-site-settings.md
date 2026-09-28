@@ -100,6 +100,12 @@ app name token is matched without spaces, as Chromium writes it.
   still had no microphone. Every device a request opens passes the OS
   gate, and a refusal after the site's Allow opens the site's modal to
   explain it, once per page load.
+- (2026-09-28) A site shows the icon its tabs show, for the color scheme
+  the page saw. History keeps one icon per page and skips sign-in pages, so
+  site settings, the Sites page and the share picker fell back to the
+  site's `/favicon.ico`, often a dark mark that vanished on a dark surface
+  (GitHub's). The main process keeps each site's tab icon per scheme in
+  memory and prefers it over history.
 - The dialog owns the whole surface: a request never shows a bare prompt.
 - No per-site storage size (Electron has no per-origin quota API); HTTP
   cache is not cleared per site.
