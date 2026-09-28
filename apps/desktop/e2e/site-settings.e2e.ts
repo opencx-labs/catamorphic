@@ -55,6 +55,17 @@ const inGuest = (code: string) =>
   app.eval(`${guest}.executeJavaScript(${JSON.stringify(code)}, true)`);
 const guestTitle = () => app.eval<string>(`${guest}.getTitle()`);
 const modal = `document.querySelector('[data-testid="site-settings-modal"]')`;
+/**
+ * Escape once the modal can hear it: it takes focus in the same effect
+ * that starts listening for keys, a moment after it appears.
+ */
+const escapeModal = async () => {
+  await app.waitFor(
+    `!!${modal}?.closest('[role="dialog"]')?.contains(document.activeElement)`,
+    { label: "modal focused" },
+  );
+  await app.press("Escape");
+};
 const click = (selector: string) =>
   app.eval(`document.querySelector(${JSON.stringify(selector)}).click(); true`);
 const setSelect = (kind: string, value: string) =>
@@ -133,7 +144,7 @@ describe("site settings", () => {
       `document.querySelector('[data-testid="site-permission-notifications"] select')?.value === 'block'`,
       { label: "notifications blocked" },
     );
-    await app.press("Escape");
+    await escapeModal();
     await app.waitFor(`!${modal}`, { label: "modal closed" });
     await inGuest("askNotifications(); true");
     await app.waitFor(`${guest}.getTitle() === 'perm:denied'`, {
@@ -160,7 +171,7 @@ describe("site settings", () => {
       { label: "cookies gone" },
     );
     expect(await inGuest("document.cookie")).toBe("");
-    await app.press("Escape");
+    await escapeModal();
     await app.waitFor(`!${modal}`, { label: "modal closed" });
   });
 
@@ -206,7 +217,7 @@ describe("site settings", () => {
   });
 
   it("asks before a page opens another app, names it, and withdraws when the page moves on", async () => {
-    await app.press("Escape");
+    await escapeModal();
     await app.waitFor(`!${modal}`, { label: "site settings closed" });
     // Back to the lab page from the Sites page.
     await app.eval(
@@ -261,7 +272,7 @@ describe("site settings", () => {
       `${modal}.querySelector('img')?.src === ${JSON.stringify(ICONS[scheme])}`,
       { label: `modal shows the ${scheme} icon` },
     );
-    await app.press("Escape");
+    await escapeModal();
     await app.waitFor(`!${modal}`, { label: "modal closed" });
     expect(app.getRendererErrors()).toEqual([]);
   });
