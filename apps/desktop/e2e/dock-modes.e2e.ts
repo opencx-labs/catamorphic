@@ -475,9 +475,10 @@ describe("dock modes", () => {
     expect(rows).toContain("writing-workflows");
     expect(rows).not.toContain("compact");
     expect(rows).not.toContain("review");
+    // No row comes from the Claude Code harness (descriptions may name it).
     expect(
       await run<boolean>(
-        `return $('[data-testid="slash-menu"]').textContent.includes('Claude Code');`,
+        `return [...$('[data-testid="slash-menu"]').querySelectorAll('[role="option"]')].some((row) => row.dataset.source === 'Claude Code');`,
       ),
     ).toBe(false);
     // The panel pops in (and pops out when the token dissolves).

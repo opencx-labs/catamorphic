@@ -113,7 +113,12 @@ export function RemoteNav({
       setMessage(describe(verb, report));
       setSelected([]);
     } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : String(cause));
+      const text = cause instanceof Error ? cause.message : String(cause);
+      setMessage(
+        /fetch failed|Failed to fetch|ECONNREFUSED/.test(text)
+          ? `Could not reach ${host}. Check that it is running and try again.`
+          : text,
+      );
     } finally {
       setBusy(null);
       void refresh();

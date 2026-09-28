@@ -2355,7 +2355,9 @@ function ChatDockContent({
                     : (moveState.reason ?? "Session cannot move to a server")
                 }
                 onMove={
-                  activeSessionId
+                  // A connected project's chats already live on its server;
+                  // moving them is the Environment control (ADR 0098).
+                  activeSessionId && !authority
                     ? () => {
                         if (!moveState.canMove || moveState.moving) return;
                         setMoveState((current) => ({
@@ -2700,6 +2702,7 @@ function ChatDockContent({
                   <p>No assistant is ready for this project.</p>
                   {catalog.data.items.map((agent) => (
                     <p key={agent.id} className="mt-1">
+                      {catalog.data.items.length > 1 ? `${agent.name}: ` : ""}
                       {agent.reason ??
                         (agent.environments.items.some((item) => item.allowed)
                           ? "An allowed place to run is unavailable. Connect this device below if offered, or ask the project builder to check execution settings."
@@ -2730,48 +2733,61 @@ function ChatDockContent({
                   (item) =>
                     item.clientRequired && item.allowed && !item.available,
                 )
-                .map((item) => (
-                  <div
-                    key={item.name}
-                    className="mx-3 mb-2 text-xs text-fg-muted"
-                  >
-                    <PendingButton
-                      type="button"
-                      pending={connectingRunner}
-                      onClick={() => {
-                        setConnectingRunner(true);
-                        setLocalRunnerError(undefined);
-                        void desktopApi
-                          .remoteEnableLocalExecution({
-                            projectId,
-                            environment: item.name,
-                          })
-                          .then(async () => {
-                            await Promise.all([
-                              catalog.refetch(),
-                              environmentQuery.refetch(),
-                            ]);
-                            setSelectedEnvironment(item.name);
-                          })
-                          .catch((error) =>
-                            setLocalRunnerError(
-                              error instanceof Error
-                                ? error.message
-                                : "Could not connect local execution",
-                            ),
-                          )
-                          .finally(() => setConnectingRunner(false));
-                      }}
-                      className="rounded border border-border px-2 py-1"
+                .map((item) =>
+                  // Connected but still unavailable: say why, rather than
+                  // offering to connect again.
+                  item.machineOnline ? (
+                    <p
+                      key={item.name}
+                      role="status"
+                      className="mx-3 mb-2 text-xs text-fg-muted"
                     >
-                      Connect this device
-                    </PendingButton>
-                    <p className="mt-1">
-                      Let the assistant work on this device. Project permissions
-                      and conversation history stay on the company server.
+                      {item.label}: {item.reasons.join(" ")}
                     </p>
-                  </div>
-                ))}
+                  ) : (
+                    <div
+                      key={item.name}
+                      className="mx-3 mb-2 text-xs text-fg-muted"
+                    >
+                      <PendingButton
+                        type="button"
+                        pending={connectingRunner}
+                        onClick={() => {
+                          setConnectingRunner(true);
+                          setLocalRunnerError(undefined);
+                          void desktopApi
+                            .remoteEnableLocalExecution({
+                              projectId,
+                              environment: item.name,
+                            })
+                            .then(async () => {
+                              await Promise.all([
+                                catalog.refetch(),
+                                environmentQuery.refetch(),
+                              ]);
+                              setSelectedEnvironment(item.name);
+                            })
+                            .catch((error) =>
+                              setLocalRunnerError(
+                                error instanceof Error
+                                  ? error.message
+                                  : "Could not connect local execution",
+                              ),
+                            )
+                            .finally(() => setConnectingRunner(false));
+                        }}
+                        className="rounded border border-border px-2 py-1"
+                      >
+                        Connect this device
+                      </PendingButton>
+                      <p className="mt-1">
+                        Let the assistant work on this device. Project
+                        permissions and conversation history stay on the company
+                        server.
+                      </p>
+                    </div>
+                  ),
+                )}
             {pendingTransfers > 0 && (
               <p role="status" className="mx-3 text-xs text-muted">
                 Preparing attachments…

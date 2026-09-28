@@ -51,7 +51,7 @@ export function PendingButton({
       <span className="catamorphic-pending-stack grid min-w-max shrink-0 place-items-center whitespace-nowrap">
         <span
           aria-hidden={!showIdle}
-          className={`catamorphic-pending-label col-start-1 row-start-1 whitespace-nowrap transition-opacity duration-150 motion-reduce:transition-none ${showIdle ? "opacity-100" : "opacity-0"}`}
+          className={`catamorphic-pending-label col-start-1 row-start-1 inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-opacity duration-150 motion-reduce:transition-none ${showIdle ? "opacity-100" : "opacity-0"}`}
         >
           {children}
         </span>
@@ -69,7 +69,7 @@ export function PendingButton({
         {doneLabel !== undefined && (
           <span
             aria-hidden={!showDone}
-            className={`catamorphic-pending-label col-start-1 row-start-1 whitespace-nowrap transition-opacity duration-150 motion-reduce:transition-none ${showDone ? "opacity-100" : "opacity-0"}`}
+            className={`catamorphic-pending-label col-start-1 row-start-1 inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-opacity duration-150 motion-reduce:transition-none ${showDone ? "opacity-100" : "opacity-0"}`}
           >
             {doneLabel}
           </span>

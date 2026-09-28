@@ -66,6 +66,7 @@ export function SlashMenu({
             role="option"
             aria-selected={index === selected}
             data-skill-name={entry.name}
+            data-source={entry.source}
             tabIndex={-1}
             onMouseDown={(event) => {
               event.preventDefault();

@@ -105,8 +105,8 @@ export function RemoteEnvironmentModal({
   const statusIsError = Boolean(error ?? view?.configError ?? view?.error);
 
   return (
-    <Modal open={open} onClose={onClose}>
-      <div className="flex max-h-[min(680px,80vh)] w-[520px] flex-col">
+    <Modal open={open} onClose={onClose} width={520}>
+      <div className="flex max-h-[min(680px,80vh)] flex-col">
         <header className="border-b border-border px-5 py-4">
           <div className="flex items-center gap-2">
             <ServerCog className="size-4 text-fg-muted" />
