@@ -273,6 +273,58 @@ describeIf("personal environments (ADR 0184)", () => {
     expect(JSON.stringify(audits)).not.toContain(SECRET.trim());
   });
 
+  it("leaves no sealed record behind when replacements race", async () => {
+    const live = new Set<string>();
+    class CountingVault extends MemoryCredentialVault {
+      override async put(
+        args: Parameters<MemoryCredentialVault["put"]>[0],
+      ): ReturnType<MemoryCredentialVault["put"]> {
+        const ref = await super.put(args);
+        live.add(ref.id);
+        return ref;
+      }
+      override async delete(
+        args: Parameters<MemoryCredentialVault["delete"]>[0],
+      ): Promise<void> {
+        live.delete(args.ref.id);
+        await super.delete(args);
+      }
+    }
+    const racing = new PersonalEnvironmentService({
+      db: db!,
+      vault: new CountingVault(),
+      environments: new ProjectEnvironmentsService(
+        db!,
+        new ProjectManager(new FsBackend(path.join(tmpDir, "projects"))),
+      ),
+    });
+    const cara: Identity = { tenantId, externalUserId: "cara" };
+    await Promise.all(
+      Array.from({ length: 6 }, (_, index) =>
+        racing.replace({
+          identity: cara,
+          projectId,
+          input: {
+            logins: {},
+            files: [
+              { path: ".env", content: base64(`N=${index}\n`) },
+              { path: `only-${index}.env`, content: base64("x") },
+            ],
+          },
+        }),
+      ),
+    );
+    const rows = await db!
+      .selectFrom("personal_environment_entries")
+      .select("credential_ref")
+      .where("external_user_id", "=", "cara")
+      .execute();
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((row) => row.credential_ref))).toEqual(live);
+    await racing.remove({ identity: cara, projectId });
+    expect(live.size).toBe(0);
+  });
+
   it("refuses to hold anything without a vault", async () => {
     const unsealed = new PersonalEnvironmentService({
       db: db!,

@@ -22,6 +22,12 @@ member's work:**
 - the chat's owner is that member: never a project chat or the project
   principal (so never an automation's delivery into one), and never another
   member's chat; a member's subsessions are theirs;
+- the turn's author is the owner: a message they sent, or one that came of
+  their own doing through their own call (their chats' agents, a workflow
+  they enabled or ran for themselves, their watchers). A message from
+  another member, an administrator, or a project automation runs without
+  their files, and a chat on their login refuses it: "This chat runs on its
+  owner's own Claude Code sign-in, so only they can send it messages.";
 - the Environment says `"personalCredentials": true` in
   `.work/project.json` (the implicit `default` Environment does not);
 - the placement isolates the member: a microsandbox VM, their own device,
@@ -32,7 +38,9 @@ member's work:**
 Admission checks this with the rest of placement: an agent that runs on a
 personal login is refused an Environment that does not allow it, with the
 reason and the fix (`EnvironmentIncompatibleError`). Every turn re-admits,
-so removing the flag or a machine's access stops delivery on the next turn.
+so removing the flag or a machine's access stops delivery on the next turn,
+and a turn that may not have them (or finds nothing on the server after
+`DELETE`) first takes out whatever an earlier turn placed.
 
 **Storage.** A member's desktop sends, per project, their logins (refresh
 tokens removed; the server refuses any it finds) and listed files to
@@ -48,7 +56,9 @@ agent runs with goes beside the project in the session directory
 `.work-session/home/codex/auth.json`, mode 0600) and is rewritten on grant
 renewal; files go to their repository paths and into a block Work owns in
 `.git/info/exclude`, so sync-back, checkpoints, proposals, and pushes never
-carry them. A path the repository tracks is left alone and the agent is told.
+carry them. A path the repository tracks, or one reached through a
+symbolic link or not a plain file, is left alone and the agent is told;
+removal skips such paths too.
 A file whose content did not change is not rewritten, so the agent's edits
 stay. Close and idle release take everything out; the next sandbox (after
 readmission or a move to another Environment) receives it again.
@@ -77,7 +87,8 @@ re-anchors from the saved transcript. A sandbox-resident harness gets the
 earlier turns in its instructions, since its own transcript stayed in the
 old sandbox. On This machine the CLI comes from the Environment's image:
 the member's runner advertises its provider's capabilities (images, image
-builds; migration 039), the desktop builds Dockerfile images when Docker or
+builds; migration 039; self-reported, which widens nothing since the runner
+only takes that member's own work), the desktop builds Dockerfile images when Docker or
 Podman is installed, and a create that builds an image may take up to 35
 minutes. Every placement boots the Allocation's image, containers and
 egress, a member's computer included.

@@ -536,6 +536,116 @@ describe("a member's personal environment (ADR 0184)", () => {
     expect(fresh.statusCode).toBe(200);
   }, 120_000);
 
+  it("runs on the owner's login only for the owner's own messages", async () => {
+    const alice = await memberIdentity("alice");
+    const box = workerDirs["alice-box-2"] ?? "";
+    const answers = async () =>
+      (await sessions().get(alice, projectId, sessionId)).messages
+        .filter(
+          (message) =>
+            message.role === "assistant" &&
+            message.metadata?.status !== "in_progress",
+        )
+        .map((message) => message.content);
+    const answerAfter = async (before: number, what: string) => {
+      await waitFor(async () => (await answers()).length > before, what);
+      return (await answers()).at(-1) ?? "";
+    };
+    const report = await sessions().sendMessage(
+      alice,
+      projectId,
+      sessionId,
+      "report",
+    );
+    expect(JSON.parse(report.content)).toMatchObject({ credentials: true });
+    expect(holding(box, ACCESS_TOKEN).length).toBeGreaterThan(0);
+
+    // An administrator's message (the host's root identity) is refused, and
+    // what the sandbox held leaves it.
+    const admin: Identity = {
+      tenantId: SERVER_TENANT_ID,
+      externalUserId: `admin-${crypto.randomUUID()}`,
+    };
+    let before = (await answers()).length;
+    await sessions().deliver(admin, projectId, sessionId, {
+      content: "report",
+      author: { kind: "user", externalUserId: admin.externalUserId },
+      mode: "next_turn",
+    });
+    expect(await answerAfter(before, "the administrator's turn")).toContain(
+      "This chat runs on its owner's own Claude Code sign-in, so only they can send it messages.",
+    );
+    expect(holding(box, ACCESS_TOKEN)).toEqual([]);
+    expect(holding(box, SECRET_ENV.trim())).toEqual([]);
+
+    // So is an automation's delivery into her chat, even on her behalf.
+    const runId = crypto.randomUUID();
+    await server.catamorphic.core.db
+      .insertInto("workflow_runs")
+      .values({
+        id: runId,
+        project_id: projectId,
+        workflow_name: "nudge",
+        provenance: {},
+        status: "running",
+        environment_name: "mine",
+      })
+      .execute();
+    before = (await answers()).length;
+    await server.catamorphic.core.capabilities.call(
+      "catamorphic.sessions",
+      "deliver",
+      { caller: alice, projectId, runId, workflowName: "nudge" },
+      {
+        sessionId,
+        content: `run: ${hashes([".env"])}`,
+        mode: "next_turn",
+        idempotencyKey: crypto.randomUUID(),
+      },
+    );
+    expect(await answerAfter(before, "the automation's turn")).toContain(
+      "only they can send it messages",
+    );
+    expect(holding(box, ACCESS_TOKEN)).toEqual([]);
+    expect(holding(box, SECRET_ENV.trim())).toEqual([]);
+
+    // Her own next message has them again.
+    const again = await sessions().sendMessage(
+      alice,
+      projectId,
+      sessionId,
+      "report",
+    );
+    expect(JSON.parse(again.content)).toMatchObject({
+      credentials: true,
+      accessTokenSha256: sha256(ACCESS_TOKEN),
+    });
+    expect(holding(box, SECRET_ENV.trim()).length).toBeGreaterThan(0);
+  }, 120_000);
+
+  it("takes everything out of the sandbox once the member forgets it", async () => {
+    const alice = await memberIdentity("alice");
+    const box = workerDirs["alice-box-2"] ?? "";
+    expect(holding(box, SECRET_ENV.trim()).length).toBeGreaterThan(0);
+    expect((await personal("alice", "DELETE")).statusCode).toBe(204);
+    const refused = await sessions().sendMessage(
+      alice,
+      projectId,
+      sessionId,
+      "report",
+    );
+    expect(refused.content).toContain(
+      "Your Claude Code login is not on this server yet.",
+    );
+    expect(holding(box, SECRET_ENV.trim())).toEqual([]);
+    expect(holding(box, ACCESS_TOKEN)).toEqual([]);
+    const restored = await personal("alice", "PUT", {
+      logins: { "claude-code": { credentials: claudeLoginText } },
+      files: [{ path: ".env", content: base64(SECRET_ENV) }],
+    });
+    expect(restored.statusCode).toBe(200);
+  }, 120_000);
+
   it("takes the files and the login out when the chat closes", async () => {
     const alice = await memberIdentity("alice");
     const box = workerDirs["alice-box-2"] ?? "";

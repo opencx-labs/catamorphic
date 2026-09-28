@@ -4,7 +4,7 @@ import {
   PERSONAL_LOGIN_KINDS,
   type PersonalLoginKind,
 } from "@catamorphic/sandbox";
-import type { Kysely } from "kysely";
+import { type Kysely, sql, type Transaction } from "kysely";
 import {
   type Identity,
   identityMayUseEnvironment,
@@ -284,6 +284,18 @@ export function validatePersonalEnvironment(
   return entries;
 }
 
+/** Serialize one member's changes to their set for a project. */
+async function lockMember(input: {
+  trx: Transaction<DB>;
+  identity: Identity;
+  projectId: string;
+}): Promise<void> {
+  const lock = `personal-environment:${input.identity.tenantId}:${input.projectId}:${input.identity.externalUserId}`;
+  await sql`select pg_advisory_xact_lock(hashtextextended(${lock}, 0))`.execute(
+    input.trx,
+  );
+}
+
 export class PersonalEnvironmentService {
   constructor(
     private readonly deps: {
@@ -326,81 +338,109 @@ export class PersonalEnvironmentService {
       project_id: projectId,
       external_user_id: identity.externalUserId,
     };
-    const current = await this.deps.db
-      .selectFrom("personal_environment_entries")
-      .selectAll()
-      .where("tenant_id", "=", owner.tenant_id)
-      .where("project_id", "=", projectId)
-      .where("external_user_id", "=", owner.external_user_id)
-      .execute();
     const key = (entry: { kind: string; name: string }) =>
       `${entry.kind}\u0000${entry.name}`;
-    const existing = new Map(current.map((row) => [key(row), row]));
-    const released: string[] = [];
-    const changed: Array<{ kind: string; name: string; fingerprint: string }> =
-      [];
-    for (const entry of entries) {
-      const fingerprint = personalFingerprint(entry.content);
-      const previous = existing.get(key(entry));
-      if (
-        previous?.fingerprint === fingerprint &&
-        (previous.expires_at?.getTime() ?? null) ===
-          (entry.expiresAt?.getTime() ?? null)
-      )
-        continue;
-      const sealed = await vault.put({
-        tenantId: identity.tenantId,
-        // A plain copy: a Buffer's slices share its memory, and vaults
-        // zero what they hand out.
-        material: new Uint8Array(entry.content),
-      });
-      await this.deps.db
-        .insertInto("personal_environment_entries")
-        .values({
-          ...owner,
-          kind: entry.kind,
-          name: entry.name,
-          credential_ref: sealed.id,
-          fingerprint,
-          bytes: entry.content.byteLength,
-          expires_at: entry.expiresAt,
-          updated_at: new Date(),
-        })
-        .onConflict((conflict) =>
-          conflict
-            .columns([
-              "tenant_id",
-              "project_id",
-              "external_user_id",
-              "kind",
-              "name",
-            ])
-            .doUpdateSet({
-              credential_ref: sealed.id,
+    // One member's replacements take turns, so each releases exactly the
+    // records it displaced and none is left sealed without a row.
+    const sealed: string[] = [];
+    let outcome: {
+      released: string[];
+      changed: Array<{ kind: string; name: string; fingerprint: string }>;
+      removed: Array<{ kind: string; name: string }>;
+    };
+    try {
+      outcome = await this.deps.db.transaction().execute(async (trx) => {
+        await lockMember({ trx, identity, projectId });
+        const current = await trx
+          .selectFrom("personal_environment_entries")
+          .selectAll()
+          .where("tenant_id", "=", owner.tenant_id)
+          .where("project_id", "=", projectId)
+          .where("external_user_id", "=", owner.external_user_id)
+          .execute();
+        const existing = new Map(current.map((row) => [key(row), row]));
+        const released: string[] = [];
+        const changed: Array<{
+          kind: string;
+          name: string;
+          fingerprint: string;
+        }> = [];
+        for (const entry of entries) {
+          const fingerprint = personalFingerprint(entry.content);
+          const previous = existing.get(key(entry));
+          if (
+            previous?.fingerprint === fingerprint &&
+            (previous.expires_at?.getTime() ?? null) ===
+              (entry.expiresAt?.getTime() ?? null)
+          )
+            continue;
+          const record = await vault.put({
+            tenantId: identity.tenantId,
+            // A plain copy: a Buffer's slices share its memory, and vaults
+            // zero what they hand out.
+            material: new Uint8Array(entry.content),
+          });
+          sealed.push(record.id);
+          await trx
+            .insertInto("personal_environment_entries")
+            .values({
+              ...owner,
+              kind: entry.kind,
+              name: entry.name,
+              credential_ref: record.id,
               fingerprint,
               bytes: entry.content.byteLength,
               expires_at: entry.expiresAt,
               updated_at: new Date(),
-            }),
-        )
-        .execute();
-      if (previous) released.push(previous.credential_ref);
-      changed.push({ kind: entry.kind, name: entry.name, fingerprint });
+            })
+            .onConflict((conflict) =>
+              conflict
+                .columns([
+                  "tenant_id",
+                  "project_id",
+                  "external_user_id",
+                  "kind",
+                  "name",
+                ])
+                .doUpdateSet({
+                  credential_ref: record.id,
+                  fingerprint,
+                  bytes: entry.content.byteLength,
+                  expires_at: entry.expiresAt,
+                  updated_at: new Date(),
+                }),
+            )
+            .execute();
+          if (previous) released.push(previous.credential_ref);
+          changed.push({ kind: entry.kind, name: entry.name, fingerprint });
+        }
+        const kept = new Set(entries.map(key));
+        const removed = current.filter((row) => !kept.has(key(row)));
+        for (const row of removed) {
+          await trx
+            .deleteFrom("personal_environment_entries")
+            .where("tenant_id", "=", row.tenant_id)
+            .where("project_id", "=", row.project_id)
+            .where("external_user_id", "=", row.external_user_id)
+            .where("kind", "=", row.kind)
+            .where("name", "=", row.name)
+            .execute();
+          released.push(row.credential_ref);
+        }
+        return {
+          released,
+          changed,
+          removed: removed.map((row) => ({ kind: row.kind, name: row.name })),
+        };
+      });
+    } catch (error) {
+      for (const id of sealed)
+        await vault
+          .delete({ tenantId: identity.tenantId, ref: { id } })
+          .catch(() => {});
+      throw error;
     }
-    const kept = new Set(entries.map(key));
-    const removed = current.filter((row) => !kept.has(key(row)));
-    for (const row of removed) {
-      await this.deps.db
-        .deleteFrom("personal_environment_entries")
-        .where("tenant_id", "=", row.tenant_id)
-        .where("project_id", "=", row.project_id)
-        .where("external_user_id", "=", row.external_user_id)
-        .where("kind", "=", row.kind)
-        .where("name", "=", row.name)
-        .where("credential_ref", "=", row.credential_ref)
-        .execute();
-      released.push(row.credential_ref);
-    }
+    const { released, changed, removed } = outcome;
     for (const ref of released)
       await vault
         .delete({ tenantId: identity.tenantId, ref: { id: ref } })
@@ -416,7 +456,7 @@ export class PersonalEnvironmentService {
             name,
             fingerprint,
           })),
-          removed: removed.map((row) => ({ kind: row.kind, name: row.name })),
+          removed,
         },
       });
     return this.status({ identity, projectId });
@@ -484,13 +524,16 @@ export class PersonalEnvironmentService {
   async remove(args: { identity: Identity; projectId: string }): Promise<void> {
     const { identity, projectId } = args;
     await this.requireMember(identity, projectId);
-    const rows = await this.deps.db
-      .deleteFrom("personal_environment_entries")
-      .where("tenant_id", "=", identity.tenantId)
-      .where("project_id", "=", projectId)
-      .where("external_user_id", "=", identity.externalUserId)
-      .returning(["kind", "name", "credential_ref"])
-      .execute();
+    const rows = await this.deps.db.transaction().execute(async (trx) => {
+      await lockMember({ trx, identity, projectId });
+      return trx
+        .deleteFrom("personal_environment_entries")
+        .where("tenant_id", "=", identity.tenantId)
+        .where("project_id", "=", projectId)
+        .where("external_user_id", "=", identity.externalUserId)
+        .returning(["kind", "name", "credential_ref"])
+        .execute();
+    });
     for (const row of rows)
       await this.deps.vault
         ?.delete({
@@ -507,23 +550,6 @@ export class PersonalEnvironmentService {
           removed: rows.map((row) => ({ kind: row.kind, name: row.name })),
         },
       });
-  }
-
-  /** Whether the member has sent anything for the project. Host-only. */
-  async holds(args: {
-    tenantId: string;
-    projectId: string;
-    owner: string;
-  }): Promise<boolean> {
-    const row = await this.deps.db
-      .selectFrom("personal_environment_entries")
-      .select("kind")
-      .where("tenant_id", "=", args.tenantId)
-      .where("project_id", "=", args.projectId)
-      .where("external_user_id", "=", args.owner)
-      .limit(1)
-      .executeTakeFirst();
-    return Boolean(row);
   }
 
   /** Whether the member sent this harness login for the project. Host-only. */

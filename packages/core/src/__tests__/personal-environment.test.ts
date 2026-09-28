@@ -476,4 +476,127 @@ describe("personal files in a sandbox (ADR 0184)", () => {
       projectDir: "/workspace/project",
     });
   });
+  it("never removes or replaces a path the repository came to track", async () => {
+    const deliver = (files: Record<string, string>) =>
+      deliverPersonalEnvironment({
+        provider,
+        sandboxId: "s",
+        projectDir: "/workspace/project",
+        environment: environment(files),
+      });
+    await deliver({ ".env": "A=1\n" });
+    // A teammate commits the same path.
+    await fs.writeFile(path.join(project(), ".env"), "SHARED=1\n");
+    await nativeGit(project(), ["add", "-f", ".env"]);
+    await nativeGit(project(), [
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@example.test",
+      "commit",
+      "-m",
+      "Share .env",
+    ]);
+    const again = await deliver({ ".env": "A=1\n" });
+    expect(again.refused).toEqual([".env"]);
+    expect(await fs.readFile(path.join(project(), ".env"), "utf8")).toBe(
+      "SHARED=1\n",
+    );
+    await deliver({});
+    await removePersonalEnvironment({
+      provider,
+      sandboxId: "s",
+      projectDir: "/workspace/project",
+    });
+    expect(await fs.readFile(path.join(project(), ".env"), "utf8")).toBe(
+      "SHARED=1\n",
+    );
+  });
+
+  it("refuses paths through symbolic links and never writes or removes outside", async () => {
+    const outside = path.join(root, "outside");
+    await fs.mkdir(outside, { recursive: true });
+    await fs.writeFile(path.join(outside, "target.txt"), "KEEP\n");
+    await fs.symlink(outside, path.join(project(), "linked"));
+    await fs.symlink(
+      path.join(outside, "target.txt"),
+      path.join(project(), ".env.local"),
+    );
+    const deliver = (files: Record<string, string>) =>
+      deliverPersonalEnvironment({
+        provider,
+        sandboxId: "s",
+        projectDir: "/workspace/project",
+        environment: environment(files),
+      });
+    const result = await deliver({
+      "linked/.env": "X=1\n",
+      ".env.local": "Y=1\n",
+      "sub/.env": "Z=1\n",
+    });
+    expect(result.unsafe.sort()).toEqual([".env.local", "linked/.env"]);
+    expect(result.delivered.map((entry) => entry.name)).toEqual(["sub/.env"]);
+    await expect(fs.stat(path.join(outside, ".env"))).rejects.toThrow();
+    expect(await fs.readFile(path.join(outside, "target.txt"), "utf8")).toBe(
+      "KEEP\n",
+    );
+    // A delivered path whose folder becomes a link is left alone.
+    await fs.writeFile(path.join(outside, ".env"), "OUTSIDE=1\n");
+    await fs.rm(path.join(project(), "sub"), { recursive: true });
+    await fs.symlink(outside, path.join(project(), "sub"));
+    await deliver({});
+    await removePersonalEnvironment({
+      provider,
+      sandboxId: "s",
+      projectDir: "/workspace/project",
+    });
+    expect(await fs.readFile(path.join(outside, ".env"), "utf8")).toBe(
+      "OUTSIDE=1\n",
+    );
+  });
+
+  it("takes out a login dropped from the set, and the exclude block on removal", async () => {
+    const login = JSON.stringify({ claudeAiOauth: { accessToken: "at" } });
+    const credentials = path.join(
+      root,
+      "workspace",
+      ".work-session",
+      "home",
+      "claude",
+      ".credentials.json",
+    );
+    // Nothing delivered yet: removal leaves the repository alone.
+    await removePersonalEnvironment({
+      provider,
+      sandboxId: "s",
+      projectDir: "/workspace/project",
+    });
+    await deliverPersonalEnvironment({
+      provider,
+      sandboxId: "s",
+      projectDir: "/workspace/project",
+      environment: environment({ ".env": "A=1\n" }, login),
+    });
+    expect(await fs.readFile(credentials, "utf8")).toBe(login);
+    await deliverPersonalEnvironment({
+      provider,
+      sandboxId: "s",
+      projectDir: "/workspace/project",
+      environment: environment({ ".env": "A=1\n" }),
+    });
+    await expect(fs.stat(credentials)).rejects.toThrow();
+    expect(await fs.readFile(path.join(project(), ".env"), "utf8")).toBe(
+      "A=1\n",
+    );
+    await removePersonalEnvironment({
+      provider,
+      sandboxId: "s",
+      projectDir: "/workspace/project",
+    });
+    const exclude = await fs.readFile(
+      path.join(project(), ".git", "info", "exclude"),
+      "utf8",
+    );
+    expect(exclude).not.toContain("Work personal files");
+  });
 });

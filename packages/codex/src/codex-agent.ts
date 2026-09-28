@@ -302,7 +302,11 @@ export class CodexAgent implements CodingAgentProvider {
     return client;
   }
 
-  private readonly sandboxDirectories = new Map<string, string>();
+  /** Per session: the sandbox directory last resolved, and its answer. */
+  private readonly sandboxDirectories = new Map<
+    string,
+    { sandboxId: string; directory: string; resolved: string }
+  >();
 
   /**
    * The working directory as the sandbox's own processes name it. Codex
@@ -310,21 +314,28 @@ export class CodexAgent implements CodingAgentProvider {
    * that maps the virtual `/workspace` onto a host folder (local-process)
    * must hand Codex the mapped path; a VM answers `/workspace` itself.
    */
-  private async sandboxDirectory(
-    run: SandboxRun,
-    directory: string,
-  ): Promise<string> {
-    const key = `${run.sandbox.sandboxId}\0${directory}`;
-    const known = this.sandboxDirectories.get(key);
-    if (known) return known;
+  private async sandboxDirectory(input: {
+    sessionId: string;
+    run: SandboxRun;
+    directory: string;
+  }): Promise<string> {
+    const { run, directory } = input;
+    const sandboxId = run.sandbox.sandboxId;
+    const known = this.sandboxDirectories.get(input.sessionId);
+    if (known?.sandboxId === sandboxId && known.directory === directory)
+      return known.resolved;
     const { exitCode, result } = await run.sandbox.provider.executeCommand(
-      run.sandbox.sandboxId,
+      sandboxId,
       "pwd -P",
       { cwd: directory },
     );
     const resolved = result.trim();
     if (exitCode !== 0 || !resolved.startsWith("/")) return directory;
-    this.sandboxDirectories.set(key, resolved);
+    this.sandboxDirectories.set(input.sessionId, {
+      sandboxId,
+      directory,
+      resolved,
+    });
     return resolved;
   }
 
@@ -468,7 +479,11 @@ export class CodexAgent implements CodingAgentProvider {
     );
     const threadOptions = this.threadOptions(
       sandboxRun
-        ? await this.sandboxDirectory(sandboxRun, session.workingDirectory)
+        ? await this.sandboxDirectory({
+            sessionId: session.sessionId,
+            run: sandboxRun,
+            directory: session.workingDirectory,
+          })
         : session.workingDirectory,
       opts,
       sandboxRun !== undefined,
@@ -559,6 +574,7 @@ export class CodexAgent implements CodingAgentProvider {
     this.callerPolicies.delete(session.sessionId);
     this.sessionContexts.delete(session.sessionId);
     this.sessionMcpServers.delete(session.sessionId);
+    this.sandboxDirectories.delete(session.sessionId);
   }
 
   private clearAbortController(controller: AbortController): void {

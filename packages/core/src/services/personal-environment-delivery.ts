@@ -1,5 +1,9 @@
 import { shellQuote } from "@catamorphic/git";
-import type { PersonalLoginKind, SandboxProvider } from "@catamorphic/sandbox";
+import {
+  PERSONAL_LOGIN_KINDS,
+  type PersonalLoginKind,
+  type SandboxProvider,
+} from "@catamorphic/sandbox";
 import type { UnsealedPersonalEnvironment } from "./personal-environment-service.js";
 import { SESSION_DIRECTORY } from "./sandbox-git.js";
 
@@ -10,7 +14,8 @@ import { SESSION_DIRECTORY } from "./sandbox-git.js";
  * their repository paths after the sandbox's Git baseline and are listed
  * in the repository's `.git/info/exclude`, so sync-back, checkpoints,
  * proposals and pushes never carry them. A path the repository tracks is
- * refused rather than replaced.
+ * refused rather than replaced, and so is one that would be written
+ * through a symbolic link.
  */
 
 /** Where one harness's login lives in a sandbox. */
@@ -18,8 +23,14 @@ export function personalLoginHome(input: {
   provider: Pick<SandboxProvider, "workspaceRoot">;
   kind: PersonalLoginKind;
 }): string {
-  return `${input.provider.workspaceRoot}/${SESSION_DIRECTORY}/home/${input.kind === "codex" ? "codex" : "claude"}`;
+  return `${input.provider.workspaceRoot}/${SESSION_DIRECTORY}/home/${LOGIN_HOMES[input.kind]}`;
 }
+
+/** Each harness's home, under the session directory's `home/`. */
+const LOGIN_HOMES: Record<PersonalLoginKind, string> = {
+  "claude-code": "claude",
+  codex: "codex",
+};
 
 /** The file each harness reads its login from, inside its home. */
 const LOGIN_FILES: Record<PersonalLoginKind, string> = {
@@ -29,11 +40,51 @@ const LOGIN_FILES: Record<PersonalLoginKind, string> = {
 
 /** From the project folder (a command's cwd), the session's own directory. */
 const SESSION_FROM_PROJECT = `../${SESSION_DIRECTORY}`;
+
+/** From the project folder, where a harness's login lies. */
+function loginFileFromProject(kind: PersonalLoginKind): string {
+  return `${SESSION_FROM_PROJECT}/home/${LOGIN_HOMES[kind]}/${LOGIN_FILES[kind]}`;
+}
+
 const PERSONAL = `${SESSION_FROM_PROJECT}/personal`;
 const INCOMING = `${PERSONAL}/incoming`;
 
 const EXCLUDE_BEGIN = "# BEGIN Work personal files (ADR 0184)";
 const EXCLUDE_END = "# END Work personal files";
+
+/**
+ * Shell functions (POSIX sh) run from the project folder. `work_tracked`
+ * says whether the repository tracks a path (the index, the synced
+ * baseline, or HEAD). `work_unsafe` says whether writing or removing it
+ * could reach anything but its own place in the project: a symbolic link
+ * anywhere on the way (the path itself included), a folder that resolves
+ * elsewhere, a file where a folder must be, or something other than a
+ * plain file at the end.
+ */
+const PATH_CHECKS = [
+  `work_tracked() { git ls-files --error-unmatch -- ":(literal)$1" >/dev/null 2>&1 || git cat-file -e "refs/work/synced:$1" 2>/dev/null || git cat-file -e "HEAD:$1" 2>/dev/null; }`,
+  "work_root=$(pwd -P)",
+  "work_unsafe() {",
+  '  work_rest=$1; work_at=""',
+  '  while [ -n "$work_rest" ]; do',
+  "    case $work_rest in",
+  // biome-ignore-start lint/suspicious/noTemplateCurlyInString: shell parameter expansions
+  "      */*) work_part=${work_rest%%/*}; work_rest=${work_rest#*/} ;;",
+  '      *) work_part=$work_rest; work_rest="" ;;',
+  "    esac",
+  "    work_at=${work_at:+$work_at/}$work_part",
+  // biome-ignore-end lint/suspicious/noTemplateCurlyInString: shell parameter expansions
+  '    if [ -L "$work_at" ]; then return 0; fi',
+  '    if [ -d "$work_at" ]; then',
+  '      [ "$(cd -P -- "$work_at" 2>/dev/null && pwd -P)" = "$work_root/$work_at" ] || return 0',
+  '    elif [ -e "$work_at" ] && [ -n "$work_rest" ]; then',
+  "      return 0",
+  "    fi",
+  "  done",
+  '  if [ -e "$work_at" ] && [ ! -f "$work_at" ]; then return 0; fi',
+  "  return 1",
+  "}",
+].join("\n");
 
 /** One repository path as a gitignore pattern that matches only itself. */
 export function gitignoreLiteral(path: string): string {
@@ -150,7 +201,7 @@ export async function writePersonalLogins(input: {
     command: [...input.logins.keys()]
       .map(
         (kind) =>
-          `chmod 600 ${shellQuote(`home/${kind === "codex" ? "codex" : "claude"}/${LOGIN_FILES[kind]}`)}`,
+          `chmod 600 ${shellQuote(`home/${LOGIN_HOMES[kind]}/${LOGIN_FILES[kind]}`)}`,
       )
       .join(" && "),
   });
@@ -159,9 +210,10 @@ export async function writePersonalLogins(input: {
 /**
  * Deliver the member's logins and files into the sandbox. Files already
  * there with the same content are left alone (the agent may have edited
- * its copy); files dropped from the member's set are removed. Returns what
- * changed (for the audit) and which paths were refused because the
- * repository tracks them.
+ * its copy); files and logins dropped from the member's set are removed.
+ * Returns what changed (for the audit), the paths refused because the
+ * repository tracks them, and those refused because writing them could
+ * land anywhere but their own place in the project.
  */
 export async function deliverPersonalEnvironment(input: {
   provider: SandboxProvider;
@@ -176,6 +228,7 @@ export async function deliverPersonalEnvironment(input: {
     fingerprint: string;
   }>;
   refused: string[];
+  unsafe: string[];
 }> {
   const { provider, sandboxId, projectDir, environment } = input;
   const paths = environment.files.map((file) => file.path);
@@ -187,25 +240,37 @@ export async function deliverPersonalEnvironment(input: {
     command: [
       `cat ${PERSONAL}/manifest.json 2>/dev/null || true`,
       "printf '\\n'",
+      PATH_CHECKS,
       ...paths.map(
         (path) =>
-          `if git ls-files --error-unmatch -- ${shellQuote(`:(literal)${path}`)} >/dev/null 2>&1 || git cat-file -e ${shellQuote(`refs/work/synced:${path}`)} 2>/dev/null || git cat-file -e ${shellQuote(`HEAD:${path}`)} 2>/dev/null; then printf 'tracked\\t%s\\n' ${shellQuote(path)}; fi`,
+          `if work_tracked ${shellQuote(path)}; then printf 'tracked\\t%s\\n' ${shellQuote(path)}; elif work_unsafe ${shellQuote(path)}; then printf 'unsafe\\t%s\\n' ${shellQuote(path)}; fi`,
       ),
     ].join("\n"),
   });
   const lines = state.split("\n");
   const previous = parseManifest(lines[0] ?? "");
-  const tracked = new Set(
-    lines
-      .filter((line) => line.startsWith("tracked\t"))
-      .map((line) => line.slice("tracked\t".length)),
+  const marked = (mark: string) =>
+    new Set(
+      lines
+        .filter((line) => line.startsWith(`${mark}\t`))
+        .map((line) => line.slice(mark.length + 1)),
+    );
+  const tracked = marked("tracked");
+  const unsafe = marked("unsafe");
+  const files = environment.files.filter(
+    (file) => !tracked.has(file.path) && !unsafe.has(file.path),
   );
-  const files = environment.files.filter((file) => !tracked.has(file.path));
   const changed = files.filter(
     (file) => previous.files[file.path] !== file.fingerprint,
   );
+  const placed = new Set(files.map((file) => file.path));
+  // A path the repository now tracks (a teammate committed it) or that now
+  // leads elsewhere is never removed; removal checks again below.
   const stale = Object.keys(previous.files).filter(
-    (path) => !files.some((file) => file.path === path),
+    (path) => !placed.has(path) && !tracked.has(path) && !unsafe.has(path),
+  );
+  const staleLogins = PERSONAL_LOGIN_KINDS.filter(
+    (kind) => kind in previous.logins && !environment.logins.has(kind),
   );
   const manifest: Manifest = {
     files: Object.fromEntries(
@@ -242,12 +307,20 @@ export async function deliverPersonalEnvironment(input: {
     what: "place your personal files in the sandbox",
     command: [
       "set -e",
-      ...stale.map((path) => `rm -f -- ${shellQuote(path)}`),
-      ...changed.flatMap((file, index) => [
-        `mkdir -p -- "$(dirname -- ${shellQuote(file.path)})"`,
-        `base64 -d < ${INCOMING}/${index}.b64 > ${shellQuote(file.path)}`,
-        `chmod 600 ${shellQuote(file.path)}`,
-      ]),
+      PATH_CHECKS,
+      ...staleLogins.map(
+        (kind) => `rm -f -- ${shellQuote(loginFileFromProject(kind))}`,
+      ),
+      ...stale.map(
+        (path) =>
+          `if ! work_tracked ${shellQuote(path)} && ! work_unsafe ${shellQuote(path)}; then rm -f -- ${shellQuote(path)}; fi`,
+      ),
+      // Checked again right before writing; a fresh file breaks any link
+      // the old one had, and is the sandbox user's alone from the start.
+      ...changed.map(
+        (file, index) =>
+          `if ! work_unsafe ${shellQuote(file.path)}; then mkdir -p -- "$(dirname -- ${shellQuote(file.path)})" && rm -f -- ${shellQuote(file.path)} && (umask 077 && base64 -d < ${INCOMING}/${index}.b64 > ${shellQuote(file.path)}); fi`,
+      ),
       "ex=$(git rev-parse --git-path info/exclude)",
       'mkdir -p "$(dirname "$ex")"',
       'touch "$ex"',
@@ -273,13 +346,13 @@ export async function deliverPersonalEnvironment(input: {
       fingerprint: file.fingerprint,
     })),
   ];
-  return { delivered, refused: [...tracked] };
+  return { delivered, refused: [...tracked], unsafe: [...unsafe] };
 }
 
 /**
- * Take the member's logins and files back out of the sandbox: on close and
- * idle release (ADR 0184). Safe to repeat, and a no-op where nothing was
- * delivered.
+ * Take the member's logins and files back out of the sandbox: on close,
+ * idle release, and moves, and before a turn that may not have them (ADR
+ * 0184). Safe to repeat, and a no-op where nothing was delivered.
  */
 export async function removePersonalEnvironment(input: {
   provider: SandboxProvider;
@@ -292,9 +365,15 @@ export async function removePersonalEnvironment(input: {
     cwd: input.projectDir,
     what: "remove your personal files from the sandbox",
     command: [
-      `if [ -f ${PERSONAL}/files ]; then while IFS= read -r p; do [ -n "$p" ] && rm -f -- "$p"; done < ${PERSONAL}/files; fi`,
+      // Most sandboxes never received anything.
+      `if [ ! -d ${PERSONAL} ]${PERSONAL_LOGIN_KINDS.map((kind) => ` && [ ! -e ${loginFileFromProject(kind)} ]`).join("")}; then exit 0; fi`,
+      PATH_CHECKS,
+      // Never a path the repository tracks by now, or one leading elsewhere.
+      `if [ -f ${PERSONAL}/files ]; then while IFS= read -r p; do if [ -n "$p" ] && ! work_tracked "$p" && ! work_unsafe "$p"; then rm -f -- "$p"; fi; done < ${PERSONAL}/files; fi`,
+      // Git sees those paths again, should the agent make its own.
+      `if ex=$(git rev-parse --git-path info/exclude 2>/dev/null) && [ -f "$ex" ]; then awk -v begin=${shellQuote(EXCLUDE_BEGIN)} -v end=${shellQuote(EXCLUDE_END)} '$0 == begin { skip = 1; next } $0 == end { skip = 0; next } !skip' "$ex" > "$ex.work" && mv "$ex.work" "$ex"; fi`,
       `rm -rf ${PERSONAL}`,
-      `rm -f ${SESSION_FROM_PROJECT}/home/claude/.credentials.json ${SESSION_FROM_PROJECT}/home/codex/auth.json`,
+      `rm -f ${PERSONAL_LOGIN_KINDS.map(loginFileFromProject).join(" ")}`,
     ].join("\n"),
   });
 }
