@@ -80,6 +80,7 @@ import type {
   SitePermissionState,
   SitePermissions,
   SiteSummary,
+  SiteSystemRefusal,
 } from "../../shared/site-settings.js";
 import type { TerminalAppearanceResult } from "../../shared/terminal-appearance.js";
 import type { ThemeFonts } from "../../shared/theme-fonts.js";
@@ -1368,6 +1369,9 @@ export interface CatamorphicDesktopApi {
   ) => () => void;
   onSitePermissionWithdrawn: (
     listener: (payload: { ids: string[] }) => void,
+  ) => () => void;
+  onSiteSystemRefusal: (
+    listener: (notice: SiteSystemRefusal) => void,
   ) => () => void;
   onSiteSettingsChanged: (
     listener: (change: { profileId: string; origin: string | null }) => void,

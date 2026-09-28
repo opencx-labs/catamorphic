@@ -64,6 +64,8 @@ mac:
   notarize: true
   extendInfo:
     NSLocalNetworkUsageDescription: Work uses your local network so your phone can continue this workspace.
+    NSMicrophoneUsageDescription: Work uses your microphone when a site you allow asks for it, such as a video call.
+    NSCameraUsageDescription: Work uses your camera when a site you allow asks for it, such as a video call.
   target:
     - target: dmg
       arch:

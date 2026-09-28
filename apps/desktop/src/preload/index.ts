@@ -744,6 +744,15 @@ const api = {
         handler,
       );
   },
+  onSiteSystemRefusal: (listener: (notice: unknown) => void) => {
+    const handler = (_event: unknown, notice: unknown) => listener(notice);
+    ipcRenderer.on("catamorphic:site-permission-system-refused", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:site-permission-system-refused",
+        handler,
+      );
+  },
   onSiteSettingsChanged: (
     listener: (change: { profileId: string; origin: string | null }) => void,
   ) => {

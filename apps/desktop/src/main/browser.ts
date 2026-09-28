@@ -44,10 +44,11 @@ import {
 import {
   ALWAYS_GRANTED_PERMISSIONS,
   decideSitePermission,
+  type MediaDeviceKind,
   permissionKindsFor,
   type SiteDetails,
-  type SitePermissionKind,
   type SiteSummary,
+  type SiteSystemRefusal,
   type SystemMediaAccess,
   siteHost,
   siteOrigin,
@@ -362,6 +363,8 @@ export function registerBrowserSupport(
       callback(permission !== "openExternal"),
   );
   const permissionBroker = new SitePermissionBroker();
+  // Guest id → OS refusals already explained for the page it shows.
+  const mediaRefusalsShown = new Map<number, Set<string>>();
   const screenShareBroker = new PromptBroker<
     ScreenShareRequest,
     ScreenShareAnswer
@@ -1016,6 +1019,7 @@ export function registerBrowserSupport(
     // Only a committed navigation counts (as in Chrome): downloads, 204s and
     // "open the app" fallbacks that never load a page keep the question.
     contents.on("did-navigate", () => {
+      mediaRefusalsShown.delete(contents.id);
       const ids = permissionBroker.withdrawExternalApps(contents.id);
       const host = contents.hostWebContents;
       if (ids.length > 0 && host && !host.isDestroyed())
@@ -1027,6 +1031,7 @@ export function registerBrowserSupport(
     contents.once("destroyed", () => {
       loginCapture.forget(contents.id);
       suggestedPasswords.delete(contents.id);
+      mediaRefusalsShown.delete(contents.id);
       // Posted notifications stay in Notification Center as in Chrome; the
       // bookkeeping for them goes with the tab.
       for (const [id, entry] of guestNotifications)
@@ -1057,9 +1062,20 @@ export function registerBrowserSupport(
     }
   };
 
+  // E2E: CDP cannot answer the macOS access sheet and Linux has no such
+  // gate, so a seeded answer stands in for the OS on every platform.
+  const seededMediaAccess = (): "granted" | "denied" | null => {
+    if (!process.env.CATAMORPHIC_E2E_DATA_DIR) return null;
+    return process.env.CATAMORPHIC_E2E_SYSTEM_MEDIA_ACCESS === "denied"
+      ? "denied"
+      : "granted";
+  };
+
   const systemMediaAccess = (
     kind: "camera" | "microphone",
   ): SystemMediaAccess => {
+    const seeded = seededMediaAccess();
+    if (seeded) return seeded;
     if (process.platform !== "darwin") return null;
     const status = systemPreferences.getMediaAccessStatus(kind);
     if (status === "granted" || status === "not-determined") return status;
@@ -1069,20 +1085,53 @@ export function registerBrowserSupport(
   /**
    * macOS gates the camera and microphone per app on top of the site's
    * choice. Prompt the OS the first time, and let the site fail cleanly
-   * (rather than hang) when the app itself has been denied.
+   * (rather than hang) when the app itself has been denied. Returns the
+   * devices the OS refused.
    */
   const ensureSystemMediaAccess = async (
-    kinds: readonly SitePermissionKind[],
-  ): Promise<boolean> => {
-    if (process.platform !== "darwin") return true;
+    kinds: readonly MediaDeviceKind[],
+  ): Promise<MediaDeviceKind[]> => {
+    const refused: MediaDeviceKind[] = [];
     for (const kind of kinds) {
-      if (kind !== "camera" && kind !== "microphone") continue;
-      const status = systemPreferences.getMediaAccessStatus(kind);
-      if (status === "granted") continue;
-      if (status !== "not-determined") return false;
-      if (!(await systemPreferences.askForMediaAccess(kind))) return false;
+      const status = systemMediaAccess(kind);
+      if (status === null || status === "granted") continue;
+      if (
+        status === "not-determined" &&
+        (await systemPreferences.askForMediaAccess(kind))
+      )
+        continue;
+      refused.push(kind);
     }
-    return true;
+    return refused;
+  };
+
+  /**
+   * Hand a granted camera or microphone request to the OS gate. A refusal
+   * would otherwise read to the person as a site that ignores their Allow,
+   * so the window says why, once per page.
+   */
+  const grantMedia = async (input: {
+    guest: WebContents;
+    origin: string;
+    kinds: readonly MediaDeviceKind[];
+  }): Promise<boolean> => {
+    const refused = await ensureSystemMediaAccess(input.kinds);
+    if (refused.length === 0) return true;
+    const { guest, origin } = input;
+    const host = guest.isDestroyed() ? null : guest.hostWebContents;
+    const told = mediaRefusalsShown.get(guest.id) ?? new Set<string>();
+    const key = `${origin} ${refused.join(" ")}`;
+    if (host && !host.isDestroyed() && !told.has(key)) {
+      told.add(key);
+      mediaRefusalsShown.set(guest.id, told);
+      const notice: SiteSystemRefusal = {
+        origin,
+        guestId: guest.id,
+        kinds: refused,
+      };
+      host.send("catamorphic:site-permission-system-refused", notice);
+    }
+    return false;
   };
 
   /**
@@ -1141,19 +1190,14 @@ export function registerBrowserSupport(
         pendingShares.set(guest.id, streams);
         return true;
       }
-      if (decision.outcome === "allow") {
-        return ensureSystemMediaAccess(
-          permission === "media"
-            ? (details.mediaTypes ?? []).flatMap((type) =>
-                type === "audio"
-                  ? ["microphone" as const]
-                  : type === "video"
-                    ? ["camera" as const]
-                    : [],
-              )
-            : [],
-        );
-      }
+      // Every device the request opens goes past the OS gate, including
+      // ones the site was already allowed.
+      const devices = permissionKindsFor(permission, details).filter(
+        (kind): kind is MediaDeviceKind =>
+          kind === "camera" || kind === "microphone",
+      );
+      if (decision.outcome === "allow")
+        return grantMedia({ guest, origin, kinds: devices });
       const host = guest.hostWebContents;
       if (!host || host.isDestroyed()) return false;
       const answer = await permissionBroker.askPermission(
@@ -1179,7 +1223,7 @@ export function registerBrowserSupport(
         siteSettingsChanged(profileId, origin);
       }
       if (answer.decision === "block") return false;
-      return ensureSystemMediaAccess(decision.kinds);
+      return grantMedia({ guest, origin, kinds: devices });
     },
     check: (profileId, permission, requestingOrigin, details) => {
       const origin = siteOrigin(details.requestingUrl ?? requestingOrigin);

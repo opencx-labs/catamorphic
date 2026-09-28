@@ -11,6 +11,7 @@ import {
   customizedKinds,
   describeRequest,
   effectivePermission,
+  type MediaDeviceKind,
   SITE_PERMISSION_KINDS,
   SITE_PERMISSION_STATES,
   SITE_PERMISSIONS,
@@ -18,6 +19,7 @@ import {
   type SitePermissionKind,
   type SitePermissionRequest,
   type SitePermissionState,
+  type SiteSystemRefusal,
   siteHost,
 } from "../../shared/site-settings.js";
 import { desktopApi } from "../lib/desktop-api.js";
@@ -48,6 +50,7 @@ export function SiteSettingsHost({
   onClose: () => void;
 }) {
   const [requests, setRequests] = useState<SitePermissionRequest[]>([]);
+  const [refusal, setRefusal] = useState<SiteSystemRefusal | null>(null);
   useEffect(() => {
     const stopRequests = desktopApi.onSitePermissionRequest((request) =>
       setRequests((queue) => [...queue, request]),
@@ -57,13 +60,31 @@ export function SiteSettingsHost({
         queue.filter((request) => !ids.includes(request.id)),
       ),
     );
+    // A page asking for the camera and then the microphone can be refused
+    // twice in a row; one notice names both.
+    const stopRefusals = desktopApi.onSiteSystemRefusal((notice) =>
+      setRefusal((shown) =>
+        shown?.origin === notice.origin
+          ? {
+              ...notice,
+              kinds: MEDIA_DEVICE_ORDER.filter(
+                (kind) =>
+                  shown.kinds.includes(kind) || notice.kinds.includes(kind),
+              ),
+            }
+          : notice,
+      ),
+    );
     return () => {
       stopRequests();
       stopWithdrawn();
+      stopRefusals();
     };
   }, []);
   const request = requests[0] ?? null;
-  const shown = request?.origin ?? origin;
+  // A question waits on the page, so it leads; an explanation of what just
+  // failed comes next; a site opened by hand, last.
+  const shown = request?.origin ?? refusal?.origin ?? origin;
   const answer = (decision: "allow" | "block", remember: boolean) => {
     if (!request) return;
     setRequests((queue) => queue.filter((entry) => entry.id !== request.id));
@@ -75,7 +96,10 @@ export function SiteSettingsHost({
     // Dismissing a prompt refuses it once, like closing Chrome's bubble;
     // nothing is remembered.
     if (request) answer("block", false);
-    else onClose();
+    else {
+      setRefusal(null);
+      onClose();
+    }
   };
   return (
     <Modal
@@ -89,6 +113,7 @@ export function SiteSettingsHost({
           key={shown}
           origin={shown}
           request={request}
+          refused={!request && refusal?.origin === shown ? refusal.kinds : null}
           queued={Math.max(0, requests.length - 1)}
           onAnswer={answer}
           onClose={close}
@@ -101,12 +126,15 @@ export function SiteSettingsHost({
 function SiteSettingsCard({
   origin,
   request,
+  refused,
   queued,
   onAnswer,
   onClose,
 }: {
   origin: string;
   request: SitePermissionRequest | null;
+  /** Devices the site was allowed and the OS just refused to Work. */
+  refused: MediaDeviceKind[] | null;
   queued: number;
   onAnswer: (decision: "allow" | "block", remember: boolean) => void;
   onClose: () => void;
@@ -114,9 +142,11 @@ function SiteSettingsCard({
   const { details, error } = useSiteDetails(origin);
   const host = siteHost(origin);
   const secure = origin.startsWith("https:");
-  // With a question on the table everything else starts folded.
-  const [permissionsOpen, setPermissionsOpen] = useState(request === null);
-  const [dataOpen, setDataOpen] = useState(request === null);
+  // With a question or a refusal on the table everything else starts
+  // folded.
+  const leading = request !== null || refused !== null;
+  const [permissionsOpen, setPermissionsOpen] = useState(!leading);
+  const [dataOpen, setDataOpen] = useState(!leading);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -209,6 +239,9 @@ function SiteSettingsCard({
           details={details}
           onAnswer={onAnswer}
         />
+      )}
+      {!request && refused && (
+        <SystemRefusal host={host} kinds={refused} onClose={onClose} />
       )}
 
       <Section
@@ -485,6 +518,81 @@ function PermissionPrompt({
         {queued > 0 &&
           ` ${queued} more ${queued === 1 ? "request is" : "requests are"} waiting.`}
       </p>
+    </div>
+  );
+}
+
+const MEDIA_DEVICE_ORDER: readonly MediaDeviceKind[] = ["microphone", "camera"];
+
+/**
+ * The site has its Allow, but macOS keeps the device from Work itself, so
+ * the page's request failed. Say so where the Allow was given, with the
+ * way out, instead of leaving a site that seems to ignore the choice.
+ */
+function SystemRefusal({
+  host,
+  kinds,
+  onClose,
+}: {
+  host: string;
+  kinds: MediaDeviceKind[];
+  onClose: () => void;
+}) {
+  const devices = kinds
+    .map((kind) => SITE_PERMISSIONS[kind].label.toLowerCase())
+    .join(" and ");
+  return (
+    <div
+      role="alert"
+      className="mt-4 rounded-lg border border-warning/30 bg-warning/8 p-4 animate-fade-in"
+      data-testid="site-system-refusal"
+    >
+      <div className="flex items-start gap-3">
+        <span className="flex shrink-0 -space-x-1">
+          {kinds.map((kind) => {
+            const Icon = SITE_PERMISSION_ICONS[kind];
+            return (
+              <span
+                key={kind}
+                className="grid size-8 place-items-center rounded-full border border-border bg-bg-raised"
+              >
+                <Icon className="size-4 text-warning" />
+              </span>
+            );
+          })}
+        </span>
+        <p className="min-w-0 flex-1 pt-1 text-[13px] leading-5 text-fg">
+          <span className="font-medium">{host}</span> is allowed, but this Mac
+          keeps your {devices} from Work.
+        </p>
+      </div>
+      <p className="mt-3 text-[12px] leading-4 text-fg-muted">
+        Turn on Work under Privacy &amp; Security, then try again on the page.
+      </p>
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        {kinds.map((kind, index) => (
+          <button
+            key={kind}
+            type="button"
+            onClick={() =>
+              void desktopApi.siteSettingsOpenSystemPrivacy({ kind })
+            }
+            className={index === 0 ? "button-primary" : "button-secondary"}
+            data-testid={`site-system-refusal-open-${kind}`}
+          >
+            {kinds.length === 1
+              ? "Open System Settings"
+              : `${SITE_PERMISSIONS[kind].label} settings`}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={onClose}
+          className="button-ghost ml-auto"
+        >
+          Not now
+        </button>
+      </div>
     </div>
   );
 }

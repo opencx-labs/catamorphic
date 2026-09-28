@@ -94,6 +94,12 @@ app name token is matched without spaces, as Chromium writes it.
   attention (a critical Dock bounce, a flashing frame elsewhere) until it
   settles. The app's own windows use the default session, which refuses to
   open other apps.
+- (2026-09-28) The signed app claims the microphone and camera
+  (`com.apple.security.device.audio-input` and `.camera`). Without them the
+  hardened runtime refused both without asking, so an allowed call site
+  still had no microphone. Every device a request opens passes the OS
+  gate, and a refusal after the site's Allow opens the site's modal to
+  explain it, once per page load.
 - The dialog owns the whole surface: a request never shows a bare prompt.
 - No per-site storage size (Electron has no per-origin quota API); HTTP
   cache is not cleared per site.

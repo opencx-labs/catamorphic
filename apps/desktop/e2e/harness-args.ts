@@ -12,6 +12,9 @@ export function electronLaunchArgs({
   return [
     ".",
     `--remote-debugging-port=${cdpPort}`,
+    // Pages get a synthetic camera and microphone; the permission prompt
+    // stays real (the fake-UI switch would skip it).
+    "--use-fake-device-for-media-stream",
     ...(platform === "darwin" && useMockKeychain
       ? ["--use-mock-keychain"]
       : []),
