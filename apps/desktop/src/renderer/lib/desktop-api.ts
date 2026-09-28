@@ -1000,6 +1000,7 @@ export interface CatamorphicDesktopApi {
   updateCheck: () => Promise<void>;
   updateDownload: () => Promise<void>;
   updateInstall: () => Promise<void>;
+  updateMove: () => Promise<void>;
   onUpdateStateChanged: (
     listener: (state: DesktopUpdateState) => void,
   ) => () => void;

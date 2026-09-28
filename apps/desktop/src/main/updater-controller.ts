@@ -48,6 +48,22 @@ export interface DesktopUpdaterControllerOptions {
   logger?: Pick<Console, "error" | "info" | "warn">;
   prepareInstall?: () => Promise<void>;
   canInstall?: () => Promise<boolean>;
+  /**
+   * Whether the app runs from a place macOS can update in place. An app
+   * opened from its disk image or from Downloads runs from a read-only
+   * copy, and Squirrel refuses to replace it.
+   */
+  installedInPlace?: () => boolean;
+  /** Moves the app into Applications and relaunches; false when declined. */
+  moveToApplications?: () => Promise<boolean>;
+}
+
+/** Squirrel.Mac's refusal for a translocated or disk-image copy. */
+function needsMove(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /read-only volume|move the application/i.test(error.message)
+  );
 }
 
 function releaseUrl(version: string): string {
@@ -114,6 +130,10 @@ export class DesktopUpdaterController {
     });
     updater.on("error", (error) => {
       if (this.preparing) return;
+      if (needsMove(error)) {
+        this.moveRequired(true);
+        return;
+      }
       this.handleError(error);
     });
   }
@@ -152,6 +172,10 @@ export class DesktopUpdaterController {
         manual,
         message: "Updates are checked by installed macOS builds.",
       });
+      return;
+    }
+    if (this.options.installedInPlace && !this.options.installedInPlace()) {
+      this.moveRequired(manual);
       return;
     }
     if (
@@ -234,12 +258,54 @@ export class DesktopUpdaterController {
       this.options.updater.quitAndInstall(false, true);
     } catch (error) {
       this.logger.error("[desktop] update preparation failed:", error);
+      if (needsMove(error)) {
+        this.moveRequired(true);
+        return;
+      }
       this.setState({
         ...downloaded,
         manual: true,
         message: messageFor(error),
       });
     }
+  }
+
+  /** Moves Work into Applications; Electron relaunches it from there. */
+  async move(): Promise<void> {
+    if (
+      this.state.phase !== "move-required" ||
+      !this.options.moveToApplications
+    )
+      return;
+    try {
+      // Moving relaunches Work, which ends running agents and terminals.
+      if (this.options.canInstall && !(await this.options.canInstall()))
+        throw new Error("Finish active agents and terminals first");
+      const moved = await this.options.moveToApplications();
+      if (!moved)
+        this.setState({
+          ...this.state,
+          manual: true,
+          message:
+            "Work stayed where it is. Move it to Applications to get updates.",
+        });
+    } catch (error) {
+      this.logger.error("[desktop] moving to Applications failed:", error);
+      this.setState({
+        ...this.state,
+        manual: true,
+        message: `Work could not move itself (${messageFor(error)}). Drag Work into Applications, then open it from there.`,
+      });
+    }
+  }
+
+  private moveRequired(manual: boolean): void {
+    this.setState({
+      phase: "move-required",
+      currentVersion: this.options.currentVersion,
+      channel: this.state.channel,
+      manual,
+    });
   }
 
   private setReleaseState(

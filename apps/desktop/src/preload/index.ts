@@ -148,6 +148,7 @@ const api = {
   updateCheck: (): Promise<void> => invoke("catamorphic:update-check"),
   updateDownload: (): Promise<void> => invoke("catamorphic:update-download"),
   updateInstall: (): Promise<void> => invoke("catamorphic:update-install"),
+  updateMove: (): Promise<void> => invoke("catamorphic:update-move"),
   onUpdateStateChanged: (
     listener: (state: DesktopUpdateState) => void,
   ): (() => void) => {

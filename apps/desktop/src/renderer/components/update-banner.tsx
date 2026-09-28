@@ -43,7 +43,8 @@ export function UpdateBanner({
     (state.manual ||
       state.phase === "available" ||
       state.phase === "downloading" ||
-      state.phase === "downloaded");
+      state.phase === "downloaded" ||
+      state.phase === "move-required");
   const content = useMemo(
     () => updateContent(state, hasActiveWork),
     [state, hasActiveWork],
@@ -143,6 +144,27 @@ export function UpdateBanner({
               >
                 Download update
               </button>
+            )}
+            {state.phase === "move-required" && (
+              <ShortcutHint
+                label={
+                  hasActiveWork
+                    ? "Finish active agents and terminals before moving"
+                    : "Move Work to Applications and reopen it"
+                }
+              >
+                <span tabIndex={hasActiveWork ? 0 : undefined}>
+                  <button
+                    type="button"
+                    onClick={() => void desktopApi.updateMove()}
+                    disabled={hasActiveWork}
+                    data-disabled-reason="Finish active agents and terminals before moving"
+                    className="button-primary button-sm"
+                  >
+                    Move to Applications
+                  </button>
+                </span>
+              </ShortcutHint>
             )}
             {state.phase === "downloaded" && (
               <ShortcutHint
@@ -246,6 +268,13 @@ function updateContent(
       return {
         title: "Could not complete the update",
         description: state.message ?? "Try again when you are back online.",
+      };
+    case "move-required":
+      return {
+        title: "Move Work to Applications",
+        description:
+          state.message ??
+          "Work is running from its download, where macOS cannot update it. Move it to Applications and it reopens from there.",
       };
     case "unsupported":
       return {
