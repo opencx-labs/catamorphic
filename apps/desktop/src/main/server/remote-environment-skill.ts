@@ -51,8 +51,8 @@ Edit the file with ordinary file tools: read it first (a missing file means
 the defaults above), change only what was asked, keep valid JSON, and write
 the whole object. Work notices the change within a second and sends it. Never
 copy a file's secret values into chat, a commit, or another file, and never
-list a file that the repository already tracks: the server refuses tracked
-paths rather than overwrite them. To change a tracked file on the server,
+list a file that the repository already tracks: sessions leave tracked
+paths alone rather than overwrite them. To change a tracked file on the server,
 change it in the repository instead.
 
 ## Who receives it

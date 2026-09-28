@@ -241,9 +241,22 @@ export class PersonalEnvironmentSync {
 
   async checkAll(): Promise<void> {
     this.lastFullCheck = this.now();
-    await Promise.all(
-      this.deps.links().map((link) => this.sync(link).catch(() => {})),
+    const links = this.deps.links();
+    this.forgetUnlinked(links);
+    await Promise.all(links.map((link) => this.sync(link).catch(() => {})));
+  }
+
+  /** A disconnected project stops watching and forgets what it sent. */
+  private forgetUnlinked(links: readonly PersonalEnvironmentLink[]): void {
+    const live = new Set(
+      links.map((link) => linkKey(link.profileId, link.localProjectId)),
     );
+    for (const [id, state] of this.states) {
+      if (live.has(id)) continue;
+      if (state.debounce) clearTimeout(state.debounce);
+      for (const { watcher } of state.watchers.values()) watcher.close();
+      this.states.delete(id);
+    }
   }
 
   /** Current view, starting a check when this link was never checked. */
@@ -274,7 +287,9 @@ export class PersonalEnvironmentSync {
   }
 
   private async checkLocal(): Promise<void> {
-    for (const link of this.deps.links()) {
+    const links = this.deps.links();
+    this.forgetUnlinked(links);
+    for (const link of links) {
       const state = this.states.get(
         linkKey(link.profileId, link.localProjectId),
       );
@@ -319,7 +334,14 @@ export class PersonalEnvironmentSync {
       try {
         do {
           state.again = false;
-          await this.run(link, state);
+          try {
+            await this.run(link, state);
+          } finally {
+            // Every outcome reaches agents, including sign-in and
+            // unreachable states that end a run early.
+            const root = await this.deps.projectRoot(link.localProjectId);
+            if (root) await this.writeStatus(root, state);
+          }
         } while (state.again && !this.stopped);
       } finally {
         state.running = null;
@@ -455,8 +477,6 @@ export class PersonalEnvironmentSync {
       }
     } catch (cause) {
       this.fail(state, cause);
-    } finally {
-      await this.writeStatus(root, state);
     }
   }
 
@@ -669,7 +689,13 @@ export class PersonalEnvironmentSync {
           if (state.debounce) clearTimeout(state.debounce);
           state.debounce = setTimeout(() => {
             state.debounce = null;
-            void this.sync(link).catch(() => {});
+            // The link as it is now: the project may have been reconnected
+            // to another server, or disconnected, since this watch began.
+            const current = this.link({
+              profileId: link.profileId,
+              projectId: link.localProjectId,
+            });
+            if (current) void this.sync(current).catch(() => {});
           }, 750);
         });
         watcher.on("error", () => {

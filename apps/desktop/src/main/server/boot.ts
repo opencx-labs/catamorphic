@@ -37,7 +37,10 @@ import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { ConnectorsService } from "../connectors.js";
 import { DesktopCredentialVault } from "../credential-vault.js";
-import { findImageBuilderCommand } from "../image-builder-command.js";
+import {
+  findImageBuilderCommand,
+  imageBuilderEnvironment,
+} from "../image-builder-command.js";
 import type { IncognitoSessionsStore } from "../incognito-sessions.js";
 import { localPerson } from "../local-person.js";
 import {
@@ -189,6 +192,7 @@ export async function startEmbeddedServer(
           ? {
               imageBuilder: dockerImageBuilder({
                 command: imageBuilderCommand,
+                env: imageBuilderEnvironment({ command: imageBuilderCommand }),
               }),
             }
           : {}),
@@ -1241,7 +1245,9 @@ export async function startEmbeddedServer(
     await current?.stop().catch(() => {});
   };
   const resumeExecution = () => {
-    if (shutdownDone || worker) return;
+    if (shutdownDone) return;
+    clientRunners.resume();
+    if (worker) return;
     worker = startWorker();
   };
 

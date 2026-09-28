@@ -194,7 +194,7 @@ export function RemoteProposeModal({
   const [selected, setSelected] = useState<string[]>(
     files.length === 1 ? files : [],
   );
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState<"propose" | "publish" | null>(null);
   const [result, setResult] = useState<
     | { branch: string; pullRequest?: { url: string; number: number } }
     | { published: true }
@@ -213,16 +213,15 @@ export function RemoteProposeModal({
     if (!open) return;
     setTitle("");
     setBody("");
-    setPending(false);
+    setPending(null);
     setResult(null);
     setError(null);
     setSelected(files.length === 1 ? files : []);
   }, [open, files]);
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!title.trim() || selected.length === 0) return;
-    setPending(true);
+  const propose = async () => {
+    if (!title.trim() || selected.length === 0 || pending) return;
+    setPending("propose");
     setError(null);
     try {
       setResult(
@@ -236,12 +235,12 @@ export function RemoteProposeModal({
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setPending(false);
+      setPending(null);
     }
   };
   const publish = async () => {
-    if (!title.trim() || selected.length === 0) return;
-    setPending(true);
+    if (!title.trim() || selected.length === 0 || pending) return;
+    setPending("publish");
     setError(null);
     try {
       const deployed = await desktopApi.remotePublishProgram({
@@ -263,8 +262,13 @@ export function RemoteProposeModal({
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setPending(false);
+      setPending(null);
     }
+  };
+  // Enter takes the dialog's primary action.
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    void (canPublish ? publish() : propose());
   };
 
   return (
@@ -367,10 +371,13 @@ export function RemoteProposeModal({
           )}
           {!result && (
             <PendingButton
-              type="submit"
-              pending={pending}
+              type={canPublish ? "button" : "submit"}
+              onClick={canPublish ? () => void propose() : undefined}
+              pending={pending === "propose"}
               pendingLabel="Proposing…"
-              disabled={!title.trim() || selected.length === 0}
+              disabled={
+                !title.trim() || selected.length === 0 || pending === "publish"
+              }
               data-disabled-reason="Enter a title and select at least one file"
               data-testid="propose-submit"
               className={
@@ -384,13 +391,14 @@ export function RemoteProposeModal({
           )}
           {!result && canPublish && (
             <PendingButton
-              type="button"
-              pending={pending}
+              type="submit"
+              pending={pending === "publish"}
               pendingLabel="Publishing…"
-              disabled={!title.trim() || selected.length === 0}
+              disabled={
+                !title.trim() || selected.length === 0 || pending === "propose"
+              }
               data-disabled-reason="Enter a title and select at least one file"
               data-testid="propose-publish"
-              onClick={() => void publish()}
               className="button-primary"
             >
               Publish

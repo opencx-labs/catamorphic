@@ -96,7 +96,9 @@ export function RemoteEnvironmentModal({
     view?.configError ??
     view?.error ??
     (view?.syncing
-      ? "Sending…"
+      ? busy === "sync"
+        ? "Sending…"
+        : "Checking…"
       : view?.lastSyncAt
         ? `Sent ${ago(view.lastSyncAt, now)}`
         : view?.lastCheckedAt

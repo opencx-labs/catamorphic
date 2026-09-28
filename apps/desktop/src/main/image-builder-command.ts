@@ -40,3 +40,26 @@ export function findImageBuilderCommand({
     }
   return undefined;
 }
+
+/**
+ * PATH for the builder: the CLI's own folder and the usual tool folders
+ * first, so Docker Desktop's credential helpers resolve. Relative entries
+ * never reach it.
+ */
+export function imageBuilderEnvironment({
+  command,
+  env = process.env,
+  knownDirectories = KNOWN_DIRECTORIES,
+}: {
+  command: string;
+  env?: NodeJS.ProcessEnv;
+  knownDirectories?: readonly string[];
+}): NodeJS.ProcessEnv {
+  const entries = [
+    path.dirname(command),
+    ...knownDirectories,
+    ...(env.HOME ? [path.join(env.HOME, ".docker", "bin")] : []),
+    ...(env.PATH ?? "").split(path.delimiter),
+  ].filter((entry) => path.isAbsolute(entry));
+  return { ...env, PATH: [...new Set(entries)].join(path.delimiter) };
+}

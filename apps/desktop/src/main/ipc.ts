@@ -2133,6 +2133,13 @@ export function registerIpcHandlers(
     },
   );
 
+  /** A folder joined as a git checkout of the project's repository. */
+  const joinedAsCheckout = (projectId: string): boolean => {
+    const server = state.current;
+    if (!server) throw new Error("Server not running");
+    return !server.projectRoots.checkpointsEnabled(projectId);
+  };
+
   ipcMain.handle(
     "catamorphic:remote-sync",
     async (event, projectId: string) => {
@@ -2141,8 +2148,9 @@ export function registerIpcHandlers(
       const client = storedRemoteClient(event, projectId, link);
       const capabilities = await introspect(client, link.remoteProjectId);
       // A builder's GitHub checkout gets its program through git; every
-      // other folder, an admin's included, syncs program files here.
-      const builderCheckout = isBuilderCheckout(capabilities);
+      // other folder, an admin's included, syncs program files here. The
+      // folder's kind was fixed when it joined, whatever roles say now.
+      const builderCheckout = joinedAsCheckout(projectId);
       const report = await syncRemoteProject(
         rootPath,
         builderCheckout ? storeOnlyDocumentsClient(client) : client,
@@ -2338,11 +2346,25 @@ export function registerIpcHandlers(
       input: { projectId: string; message: string; paths: string[] },
     ) => {
       const link = requireLink(event, input.projectId);
-      const changes = readProgramChanges(
-        await requireRoot(input.projectId),
-        input.paths,
-      );
-      return storedRemoteClient(event, input.projectId, link).publishProgram({
+      const rootPath = await requireRoot(input.projectId);
+      const client = storedRemoteClient(event, input.projectId, link);
+      // Download first: a file someone else published since this folder's
+      // last sync must be reconciled here, never overwritten by a publish.
+      if (joinedAsCheckout(input.projectId))
+        throw new Error(
+          "This folder is a checkout of the project's repository. Commit and open a pull request instead.",
+        );
+      const report = await syncRemoteProject(rootPath, client);
+      notifyGitChanged(input.projectId);
+      const changedThere = report.conflicts
+        .map((conflict) => conflict.path)
+        .filter((conflicted) => input.paths.includes(conflicted));
+      if (changedThere.length > 0)
+        throw new Error(
+          `${changedThere.join(", ")} changed on the server since your last download. Compare your version with the server copy beside it, then publish again.`,
+        );
+      const changes = readProgramChanges(rootPath, input.paths);
+      return client.publishProgram({
         message: input.message,
         files: Object.fromEntries(
           changes.map((change) => [change.path, change.content]),
@@ -2354,6 +2376,17 @@ export function registerIpcHandlers(
   ipcMain.handle(
     "catamorphic:remote-disconnect",
     async (event, projectId: string) => {
+      // Leaving a server takes the member's sign-ins and private files with
+      // them (ADR 0184). Best effort: an unreachable server keeps its sealed
+      // copies (logins stop working when they expire).
+      const linked = storesFor(event).remoteProjects.get(projectId);
+      if (linked?.credentials)
+        await Promise.race([
+          storedRemoteClient(event, projectId, linked)
+            .deletePersonalEnvironment()
+            .catch(() => undefined),
+          new Promise((resolve) => setTimeout(resolve, 5_000)),
+        ]);
       storesFor(event).remoteProjects.delete(projectId);
       const rootPath = await requireRoot(projectId);
       fs.rmSync(path.join(rootPath, REMOTE_PROJECT_LOCATOR_PATH), {

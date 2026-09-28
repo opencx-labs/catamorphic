@@ -486,6 +486,18 @@ describe("PersonalEnvironmentSync", () => {
     expect(view.error).toBe("The project's server could not be reached");
   });
 
+  it("tells agents when the server needs signing in again", async () => {
+    const signedOut = setup({ signedOut: true });
+    await signedOut.sync.syncNow(signedOut.target);
+    const status = JSON.parse(
+      fs.readFileSync(
+        path.join(signedOut.root, PERSONAL_ENVIRONMENT_STATUS_PATH),
+        "utf8",
+      ),
+    );
+    expect(status.server).toBe("sign-in");
+  });
+
   it("does not send while the config file is broken", async () => {
     const env = setup({
       config: '{"files": ["../outside"]}',

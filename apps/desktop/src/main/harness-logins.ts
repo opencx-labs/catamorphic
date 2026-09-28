@@ -213,6 +213,8 @@ export async function refreshCodexLogin(args: {
       }
     }
   });
+  // A write racing Codex's exit fails with EPIPE; the exit rejects the run.
+  child.stdin.on("error", () => {});
   let sequence = 0;
   const request = (method: string, params: unknown) =>
     new Promise<Record<string, unknown>>((resolve) => {

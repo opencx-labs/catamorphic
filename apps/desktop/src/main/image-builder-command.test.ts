@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { findImageBuilderCommand } from "./image-builder-command.js";
+import {
+  findImageBuilderCommand,
+  imageBuilderEnvironment,
+} from "./image-builder-command.js";
 
 const roots: string[] = [];
 function directoryWith(...commands: string[]): string {
@@ -37,5 +40,19 @@ describe("findImageBuilderCommand", () => {
     expect(find({ PATH: "", HOME: home })).toBe(
       path.join(home, ".docker", "bin", "docker"),
     );
+  });
+
+  it("puts the CLI's folder on PATH and drops relative entries", () => {
+    const env = imageBuilderEnvironment({
+      command: "/Applications/Docker.app/Contents/Resources/bin/docker",
+      env: { PATH: `.${path.delimiter}/usr/bin`, HOME: "/Users/ada" },
+      knownDirectories: ["/usr/local/bin"],
+    });
+    expect(env.PATH?.split(path.delimiter)).toEqual([
+      "/Applications/Docker.app/Contents/Resources/bin",
+      "/usr/local/bin",
+      "/Users/ada/.docker/bin",
+      "/usr/bin",
+    ]);
   });
 });

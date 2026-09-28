@@ -23,6 +23,11 @@ export function dockerImageBuilder(options?: {
   command?: string;
   /** Seconds one build may take. Default 30 minutes. */
   timeoutSeconds?: number;
+  /**
+   * The CLI's environment. An app opened from the Finder has a short PATH;
+   * Docker's credential helpers must still be found on it.
+   */
+  env?: NodeJS.ProcessEnv;
 }): ImageBuilder {
   const command = options?.command ?? "docker";
   const timeout = (options?.timeoutSeconds ?? 30 * 60) * 1000;
@@ -33,6 +38,7 @@ export function dockerImageBuilder(options?: {
         await writeFile(path.join(directory, "Dockerfile"), dockerfile);
         await run(command, ["build", "-t", reference, directory], {
           timeout,
+          ...(options?.env ? { env: options.env } : {}),
           maxBuffer: 64 * 1024 * 1024,
         }).catch((error: unknown) => {
           throw new Error(
@@ -40,7 +46,10 @@ export function dockerImageBuilder(options?: {
           );
         });
         const archive = path.join(directory, "image.tar");
-        await run(command, ["save", "-o", archive, reference], { timeout });
+        await run(command, ["save", "-o", archive, reference], {
+          timeout,
+          ...(options?.env ? { env: options.env } : {}),
+        });
         await Image.load(archive, { tag: reference });
       } finally {
         await rm(directory, { recursive: true, force: true });
