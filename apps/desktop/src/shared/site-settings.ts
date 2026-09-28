@@ -290,6 +290,24 @@ export interface SiteSummary {
 /** OS-level access the app itself has, where the OS gates it (macOS). */
 export type SystemMediaAccess = "granted" | "denied" | "not-determined" | null;
 
+/** The kinds the OS gates per app on top of the site's choice. */
+export type MediaDeviceKind = Extract<
+  SitePermissionKind,
+  "camera" | "microphone"
+>;
+
+/**
+ * A site was allowed a device, but the OS refused it to the app, so the
+ * page's request failed anyway. The window explains instead of leaving
+ * the person to guess why the site ignored their Allow.
+ */
+export interface SiteSystemRefusal {
+  origin: string;
+  /** The requesting guest's webContents id (the tab it belongs to). */
+  guestId: number;
+  kinds: MediaDeviceKind[];
+}
+
 export interface SiteDetails extends SiteSummary {
   system: { camera: SystemMediaAccess; microphone: SystemMediaAccess };
 }
