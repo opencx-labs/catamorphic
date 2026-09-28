@@ -101,6 +101,23 @@ describe("project Environment policy", () => {
     expect(parsed.entries[0]?.invalid?.error).toContain(message);
   });
 
+  it("parses personalCredentials; the implicit default does not allow them (ADR 0184)", () => {
+    const policy = parseProjectEnvironmentPolicy({
+      environments: {
+        dev: { workloads: ["agent"], personalCredentials: true },
+        bad: { workloads: ["agent"], personalCredentials: "yes" },
+      },
+    });
+    expect(policy.environments.dev?.personalCredentials).toBe(true);
+    expect(
+      policy.entries.find((entry) => entry.name === "bad")?.invalid,
+    ).toBeDefined();
+    expect(
+      parseProjectEnvironmentPolicy({}).environments.default
+        ?.personalCredentials,
+    ).toBeUndefined();
+  });
+
   it("rejects a malformed Environments container", () => {
     const parsed = parseProjectEnvironmentPolicy({ environments: null });
     expect(parsed.invalid?.error).toContain("must declare environments");

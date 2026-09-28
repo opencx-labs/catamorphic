@@ -350,7 +350,9 @@ export class PersonalEnvironmentService {
         continue;
       const sealed = await vault.put({
         tenantId: identity.tenantId,
-        material: entry.content,
+        // A plain copy: a Buffer's slices share its memory, and vaults
+        // zero what they hand out.
+        material: new Uint8Array(entry.content),
       });
       await this.deps.db
         .insertInto("personal_environment_entries")
@@ -440,9 +442,11 @@ export class PersonalEnvironmentService {
       .where("tenant_id", "=", identity.tenantId)
       .where("project_id", "=", projectId)
       .where("external_user_id", "=", identity.externalUserId)
-      .orderBy("kind")
-      .orderBy("name")
       .execute();
+    // Byte order, whatever the database's collation.
+    rows.sort((left, right) =>
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+    );
     const inUse = rows.some((row) => row.kind === "login")
       ? ((await this.deps.loginsInUse?.({ identity, projectId })) ?? new Set())
       : new Set<PersonalLoginKind>();
@@ -563,8 +567,10 @@ export class PersonalEnvironmentService {
       .where("tenant_id", "=", args.tenantId)
       .where("project_id", "=", args.projectId)
       .where("external_user_id", "=", args.owner)
-      .orderBy("name")
       .execute();
+    rows.sort((left, right) =>
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+    );
     for (const row of rows) {
       const kind =
         row.kind === "login"

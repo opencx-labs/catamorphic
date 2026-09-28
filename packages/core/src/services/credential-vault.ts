@@ -26,7 +26,8 @@ export class MemoryCredentialVault implements CredentialVault {
     material: CredentialMaterial;
   }): Promise<CredentialRef> {
     const ref = { id: crypto.randomUUID() };
-    this.records.set(key(args.tenantId, ref), args.material.slice());
+    // Copies: a Buffer's `slice` shares its memory.
+    this.records.set(key(args.tenantId, ref), new Uint8Array(args.material));
     return ref;
   }
 
@@ -37,7 +38,7 @@ export class MemoryCredentialVault implements CredentialVault {
   }): Promise<T> {
     const stored = this.records.get(key(args.tenantId, args.ref));
     if (!stored) throw new Error("Credential not found");
-    const material = stored.slice();
+    const material = new Uint8Array(stored);
     try {
       return await args.use(material);
     } finally {
