@@ -370,10 +370,26 @@ An Environment chooses its sandbox (ADR 0176) in `.work/project.json`:
   `WORK_UNENFORCED_EGRESS=accept`, which runs them with open egress.
 
 Machines advertise `images`, `images.build`, `containers`, and
-`network.policy`; `GET /_work/operator/machines` shows them. An Environment
+`network.policy`, and a local-process machine `harness.claude-code` and
+`harness.codex` when those CLIs are on its `PATH`;
+`GET /_work/operator/machines` shows them. An Environment
 no machine satisfies reports which capability is missing. VM budgets include
 nested containers; the Docker disk has its own size, and local-process
 containers are not budgeted.
+
+## Members' own logins and files
+
+An Environment with `"personalCredentials": true` lets a member's own
+Claude Code or Codex login and listed files reach that member's own chats
+(ADR 0184, [harnesses](harnesses.md#members-own-logins)). Only placements
+that isolate the member qualify: microsandbox, a worker whose access names
+only that person, or the member's device. A local-process machine that
+serves several people (a `trusted` worker, or the control plane itself)
+refuses them unless its operator sets `WORK_PERSONAL_CREDENTIALS=accept` on
+that machine (the worker's own environment, like `WORK_UNENFORCED_EGRESS`),
+which advertises `credentials.personal`. Give such Environments egress to
+`api.anthropic.com`, `chatgpt.com`, and `api.openai.com` when they restrict
+it, and the CLIs on the path or in the image.
 
 ## Unattended agents
 

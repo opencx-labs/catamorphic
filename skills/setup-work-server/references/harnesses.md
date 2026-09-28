@@ -6,6 +6,9 @@ control plane, and reaches its model through the gateway with the chat's
 grant. The model key stays in the control plane's vault; the sandbox holds
 only the grant, which stops working when the chat closes.
 
+Members can also run Claude Code and Codex on **their own accounts**
+(ADR 0184): see [Members' own logins](#members-own-logins) below.
+
 ## 1. Connect the model key
 
 `anthropic` and `openai` are built-in connection kinds. An administrator
@@ -115,9 +118,64 @@ the sandbox shows `ANTHROPIC_BASE_URL` (or the Codex provider) pointing at
 `connection.model` calls; after closing the chat, its grant is refused. If an
 Environment restricts egress, the gateway's host is always reachable.
 
+## Members' own logins
+
+A developer can use their own Claude Code or Codex account in their own
+remote chats, and bring files the repository never tracks (`.env`,
+`apps/api/.env.local`), without logging in on the server (ADR 0184). Work on
+their computer sends the login (with its refresh token removed, so only
+their computer ever renews it) and the files listed in the project's
+`.work/personal/environment.json`:
+
+```json
+{ "logins": ["claude-code", "codex"], "files": [".env", "apps/api/.env.local"] }
+```
+
+The server seals them in its vault and delivers them only into that
+member's own chats, where all of this holds:
+
+1. The Environment allows it:
+   `"environments": { "dev": { "workloads": ["agent"], "personalCredentials": true } }`.
+   The implicit `default` Environment does not.
+2. The chat is the member's own: never a project chat or an automation's.
+3. The machine isolates the member: `WORK_SANDBOX=microsandbox`, a worker
+   whose access names only that person (`{ "people": ["ada@example.com"] }`),
+   the member's own device, or a local-process machine whose operator sets
+   `WORK_PERSONAL_CREDENTIALS=accept` (a single person's server, or
+   development).
+
+Members then see the host agents **Claude Code** and **Codex** (ids
+`project:<projectId>:claude-code` and `…:codex`; a role must name them or
+`*`). A committed definition can use the member's login too:
+`"credentials": { "source": "personal" }` with `kind` `claude-code` or
+`codex`. The CLI runs in the sandbox with `CLAUDE_CONFIG_DIR` (or
+`CODEX_HOME`) at the member's login under `.work-session/home/`, and talks
+to the provider directly: no gateway, no organization key. Files land at
+their repository paths, listed in `.git/info/exclude`, so nothing commits,
+syncs, or pushes them; a path the repository tracks is left alone.
+
+What the machines need:
+
+- The CLI: on the machine's `PATH` for local-process (the server advertises
+  `harness.claude-code` / `harness.codex` when it finds `claude` / `codex`),
+  or in the Environment's `image` for microsandbox (see step 3 above).
+- Egress to the providers: `api.anthropic.com` (and `claude.ai`,
+  `console.anthropic.com` for account checks) for Claude Code;
+  `chatgpt.com` and `api.openai.com` (and `auth.openai.com`) for Codex. With
+  `network.egress: "allowlist"`, list them.
+
+Check a member's state with `GET /api/projects/:id/personal-environment`
+(their own token): whether an Environment allows it, each login's
+fingerprint, expiry and `needsRefresh`, and each file's path and size, never
+a value. `DELETE` forgets everything. When a login expires, the member's
+chat says "Your Claude Code login on this server has expired. Open Work on
+your computer so it can refresh it."
+
 ## Limits
 
 - Codex in a sandbox runs without Work's capability tools (documents,
   proposals); Claude Code has them.
 - A server without a control-plane model (`ANTHROPIC_API_KEY` or
-  `WORK_FAKE_AGENT`) still reports chat off.
+  `WORK_FAKE_AGENT`) still reports chat off, members' own logins included.
+- Model usage on a member's own login comes from the harness's reports, not
+  from gateway rows.
