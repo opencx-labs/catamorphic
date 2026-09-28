@@ -351,6 +351,7 @@ export interface ClientRunnerJobs {
 }
 
 export interface ClientRunners {
+  capabilities: Generated<Json>;
   environment_name: string;
   external_user_id: string;
   id: string;
@@ -580,6 +581,19 @@ export interface NotificationDeliveries {
   next_attempt_at: Generated<Timestamp>;
   status: Generated<string>;
   subscription_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface PersonalEnvironmentEntries {
+  bytes: number;
+  credential_ref: string;
+  expires_at: Timestamp | null;
+  external_user_id: string;
+  fingerprint: string;
+  kind: string;
+  name: string;
+  project_id: string;
+  tenant_id: string;
   updated_at: Generated<Timestamp>;
 }
 
@@ -1332,6 +1346,7 @@ export interface DB {
   memberships: Memberships;
   model_usage: ModelUsage;
   notification_deliveries: NotificationDeliveries;
+  personal_environment_entries: PersonalEnvironmentEntries;
   project_event_deliveries: ProjectEventDeliveries;
   project_event_monitors: ProjectEventMonitors;
   project_events: ProjectEvents;

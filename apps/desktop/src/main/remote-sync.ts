@@ -1,4 +1,4 @@
-import { createApiClient } from "@catamorphic/api-client";
+import { createApiClient, type paths } from "@catamorphic/api-client";
 import type {
   PullRequestComment,
   PullRequestDiscussion,
@@ -146,6 +146,72 @@ export interface RemoteMe {
   };
 }
 
+type DeployRoute = paths["/api/projects/{projectId}/deploy"];
+type DeployBody = NonNullable<
+  DeployRoute["post"]["requestBody"]
+>["content"]["application/json"];
+type DeployResult =
+  DeployRoute["post"]["responses"][200]["content"]["application/json"];
+type PersonalEnvironmentRoute =
+  paths["/api/projects/{projectId}/personal-environment"];
+
+/**
+ * `PUT /projects/:projectId/personal-environment` (ADR 0184): replaces the
+ * caller's own sign-ins and files for the project. Logins carry no refresh
+ * token; file contents are base64.
+ */
+export type RemotePersonalEnvironmentUpload = NonNullable<
+  PersonalEnvironmentRoute["put"]["requestBody"]
+>["content"]["application/json"];
+
+/** `GET /projects/:projectId/personal-environment`: never any contents. */
+export type RemotePersonalEnvironment =
+  PersonalEnvironmentRoute["get"]["responses"][200]["content"]["application/json"];
+
+/** Reads the status defensively: sync decisions depend on it. */
+export function parseRemotePersonalEnvironment(
+  value: unknown,
+): RemotePersonalEnvironment {
+  const object = (item: unknown): Record<string, unknown> | null =>
+    typeof item === "object" && item !== null && !Array.isArray(item)
+      ? Object.fromEntries(Object.entries(item))
+      : null;
+  const body = object(value);
+  if (!body || typeof body.allowed !== "boolean")
+    throw new Error("The server sent an unreadable remote environment");
+  const logins: RemotePersonalEnvironment["logins"] = {};
+  const rawLogins = object(body.logins) ?? {};
+  for (const harness of ["claude-code", "codex"] as const) {
+    const entry = object(rawLogins[harness]);
+    if (!entry) continue;
+    logins[harness] = {
+      fingerprint:
+        typeof entry.fingerprint === "string" ? entry.fingerprint : "",
+      ...(typeof entry.expiresAt === "string"
+        ? { expiresAt: entry.expiresAt }
+        : {}),
+      updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
+      needsRefresh: entry.needsRefresh === true,
+    };
+  }
+  const files = (Array.isArray(body.files) ? body.files : []).flatMap(
+    (item) => {
+      const entry = object(item);
+      if (!entry || typeof entry.path !== "string") return [];
+      return [
+        {
+          path: entry.path,
+          fingerprint:
+            typeof entry.fingerprint === "string" ? entry.fingerprint : "",
+          bytes: typeof entry.bytes === "number" ? entry.bytes : 0,
+          updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
+        },
+      ];
+    },
+  );
+  return { allowed: body.allowed, logins, files };
+}
+
 /** A 401 from the host: the token no longer works. */
 export class RemoteAuthError extends Error {
   constructor(what: string) {
@@ -195,6 +261,10 @@ export interface RemoteProjectClient extends RemoteDocumentsClient {
     callback: Record<string, string>;
   }): Promise<RemoteServiceConnection>;
   revokeConnection(connectionId: string): Promise<void>;
+  /** The member's remote environment, or null on a server without it. */
+  personalEnvironment(): Promise<RemotePersonalEnvironment | null>;
+  putPersonalEnvironment(input: RemotePersonalEnvironmentUpload): Promise<void>;
+  deletePersonalEnvironment(): Promise<void>;
   publish(input: {
     path: string;
     audience: "public" | "members";
@@ -204,6 +274,8 @@ export interface RemoteProjectClient extends RemoteDocumentsClient {
     body?: string;
     changes: Array<{ path: string; content?: string; delete?: boolean }>;
   }): Promise<RemoteProposalResult>;
+  /** Deploy program files directly; the member must hold `program:publish`. */
+  publishProgram(input: DeployBody): Promise<DeployResult>;
 }
 
 /** Builder clones own program files; remote sync may only materialize store. */
@@ -252,6 +324,7 @@ export function httpDocumentsClient(args: {
 }): RemoteProjectClient {
   const doFetch = args.fetch ?? fetch;
   const base = `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/documents`;
+  const personalEnvironmentUrl = `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/personal-environment`;
   const authorizedFetch = async (url: string, init: RequestInit = {}) => {
     const request = async (forceRefresh: boolean) =>
       doFetch(url, {
@@ -423,6 +496,34 @@ export function httpDocumentsClient(args: {
       );
       if (!response.ok) return fail(response, "Revoking the connection");
     },
+    async personalEnvironment() {
+      const response = await authorizedFetch(personalEnvironmentUrl);
+      if (response.status === 404) {
+        await response.body?.cancel();
+        return null;
+      }
+      if (!response.ok)
+        return fail(response, "Reading your remote environment");
+      return parseRemotePersonalEnvironment(await response.json());
+    },
+    async putPersonalEnvironment(input) {
+      const response = await authorizedFetch(personalEnvironmentUrl, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      if (!response.ok)
+        return fail(response, "Sending your remote environment");
+      await response.body?.cancel();
+    },
+    async deletePersonalEnvironment() {
+      const response = await authorizedFetch(personalEnvironmentUrl, {
+        method: "DELETE",
+      });
+      if (!response.ok && response.status !== 404)
+        return fail(response, "Removing your remote environment");
+      await response.body?.cancel();
+    },
     async list() {
       const response = await authorizedFetch(base);
       if (!response.ok) return fail(response, "Listing documents");
@@ -537,6 +638,17 @@ export function httpDocumentsClient(args: {
       );
       if (!response.ok) return fail(response, "Proposing changes");
       return (await response.json()) as RemoteProposalResult;
+    },
+    async publishProgram(input) {
+      const { data, response } = await proposalClient.POST(
+        "/api/projects/{projectId}/deploy",
+        {
+          params: { path: { projectId: args.projectId } },
+          body: input,
+        },
+      );
+      if (!data) return fail(response, "Publishing project files");
+      return data;
     },
     async proposalReview(number) {
       const { data, response } = await proposalClient.GET(

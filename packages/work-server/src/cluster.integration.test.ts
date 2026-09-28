@@ -334,3 +334,55 @@ async function crossInstanceToken(
   expect(refreshed.statusCode).toBe(200);
   return refreshed.json().access_token;
 }
+
+it.skipIf(!process.env.DATABASE_URL)(
+  "a server restarting into its own lapsed lease waits for it instead of failing to boot",
+  async () => {
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "catamorphic-restart-"),
+    );
+    const options = testServerOptions({
+      // One deployment per database: the same origin and secrets as above.
+      publicBases: ["https://cluster.example.test"],
+      dataDir: dir,
+      env: {
+        DATABASE_URL: process.env.DATABASE_URL,
+        WORK_SECRET: "cluster-test-secret-with-at-least-32-characters",
+        WORK_VAULT_KEY: Buffer.alloc(32, 7).toString("base64"),
+        WORK_MACHINE_NAME: `restart-${randomUUID().slice(0, 8)}`,
+        WORK_TRUST_CONTROL_PLANE_AGENTS: "1",
+        WORK_FAKE_AGENT: "1",
+        PATH: process.env.PATH,
+      },
+    });
+    const first = await createWorkServer(options);
+    let second: WorkServer | undefined;
+    try {
+      const { machine } = (
+        await first.app.inject({ method: "GET", url: "/healthz" })
+      ).json();
+      // The first process "dies": its lease is still live for two seconds
+      // under a token its shutdown can no longer release.
+      await first.catamorphic.core.db
+        .updateTable("worker_nodes")
+        .set({
+          lease_token: randomUUID(),
+          lease_expires_at: new Date(Date.now() + 2_000),
+        })
+        .where("id", "=", machine.id)
+        .execute();
+      await first.shutdown();
+      const started = Date.now();
+      second = await createWorkServer(options);
+      expect(Date.now() - started).toBeGreaterThanOrEqual(1_000);
+      expect(
+        (await second.app.inject({ method: "GET", url: "/healthz" })).json()
+          .machine.id,
+      ).toBe(machine.id);
+    } finally {
+      await second?.shutdown();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  },
+  30_000,
+);

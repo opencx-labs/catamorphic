@@ -326,4 +326,72 @@ describe("httpDocumentsClient", () => {
       "Reading your access failed (503): Capabilities unavailable",
     );
   });
+  it("reads, replaces and removes the member's remote environment", async () => {
+    const calls: Array<{ method: string; path: string; body?: unknown }> = [];
+    let supported = true;
+    const client = httpDocumentsClient({
+      serverUrl: base,
+      accessToken: async () => "member-token",
+      projectId,
+      fetch: async (input, init) => {
+        const url = new URL(String(input));
+        calls.push({
+          method: init?.method ?? "GET",
+          path: url.pathname,
+          ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}),
+        });
+        if (!supported)
+          return Response.json({ message: "Route not found" }, { status: 404 });
+        if ((init?.method ?? "GET") === "GET")
+          return Response.json({
+            allowed: true,
+            logins: {
+              codex: {
+                fingerprint: "f",
+                expiresAt: "2026-10-01T00:00:00.000Z",
+                updatedAt: "2026-09-28T00:00:00.000Z",
+                needsRefresh: true,
+              },
+              other: { fingerprint: "ignored" },
+            },
+            files: [
+              { path: ".env", fingerprint: "g", bytes: 4, updatedAt: "x" },
+              { nope: true },
+            ],
+          });
+        return new Response(null, { status: 204 });
+      },
+    });
+    await expect(client.personalEnvironment()).resolves.toEqual({
+      allowed: true,
+      logins: {
+        codex: {
+          fingerprint: "f",
+          expiresAt: "2026-10-01T00:00:00.000Z",
+          updatedAt: "2026-09-28T00:00:00.000Z",
+          needsRefresh: true,
+        },
+      },
+      files: [{ path: ".env", fingerprint: "g", bytes: 4, updatedAt: "x" }],
+    });
+    await client.putPersonalEnvironment({
+      logins: { codex: { auth: "{}" } },
+      files: [{ path: ".env", content: "QT0x" }],
+    });
+    await client.deletePersonalEnvironment();
+    expect(calls).toEqual([
+      { method: "GET", path: "/api/projects/p-1/personal-environment" },
+      {
+        method: "PUT",
+        path: "/api/projects/p-1/personal-environment",
+        body: {
+          logins: { codex: { auth: "{}" } },
+          files: [{ path: ".env", content: "QT0x" }],
+        },
+      },
+      { method: "DELETE", path: "/api/projects/p-1/personal-environment" },
+    ]);
+    supported = false;
+    await expect(client.personalEnvironment()).resolves.toBeNull();
+  });
 });

@@ -55,6 +55,17 @@ export interface WorkerNode {
   acceptingWork: boolean;
 }
 
+/** Every node lease lasts this long unless renewed (the SQL's 45 seconds). */
+export const WORKER_NODE_LEASE_MS = 45_000;
+
+/** Another process holds this node's lease, or the node is disabled. */
+export class WorkerNodeLeaseHeldError extends Error {
+  constructor() {
+    super("This machine identity is already running or disabled");
+    this.name = "WorkerNodeLeaseHeldError";
+  }
+}
+
 /** Host/operator surface. Project access is granted separately by roles. */
 export class WorkerNodesService {
   constructor(private readonly db: Kysely<DB>) {}
@@ -132,10 +143,7 @@ export class WorkerNodesService {
             )
             .returning("id")
             .executeTakeFirst();
-          if (!node)
-            throw new Error(
-              "This machine identity is already running or disabled",
-            );
+          if (!node) throw new WorkerNodeLeaseHeldError();
           return { id: node.id, token };
         });
       },

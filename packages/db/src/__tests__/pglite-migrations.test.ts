@@ -75,6 +75,8 @@ describe("PGlite migrations", () => {
       "035_model_usage.sql",
       "036_project_remote_divergence.sql",
       "037_work_github_app_registrations.sql",
+      "038_personal_environments.sql",
+      "039_client_runner_capabilities.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
@@ -100,7 +102,7 @@ describe("PGlite migrations", () => {
       WHERE table_schema = ${DEFAULT_SCHEMA}
         AND table_type = 'BASE TABLE'
     `.execute(db);
-    expect(tables.rows[0]?.count).toBe(88);
+    expect(tables.rows[0]?.count).toBe(89);
   });
 
   it("supports the runtime primitives core relies on", {

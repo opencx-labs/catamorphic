@@ -48,6 +48,10 @@ import type {
 } from "../../shared/history.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import type {
+  PersonalEnvironmentView,
+  PersonalHarness,
+} from "../../shared/personal-environment.js";
+import type {
   PrComment,
   PrCommentInput,
   PrDecisionInput,
@@ -193,7 +197,7 @@ export interface ProjectAgentInfo {
   coordination: AgentCoordinationStrategy | null;
   /** Claude Code auto-memory; null = the definition doesn't say (off). */
   memory: boolean | null;
-  credentialsSource: "profile" | "secret" | "local" | "connection";
+  credentialsSource: "profile" | "secret" | "local" | "connection" | "personal";
   secretName: string | null;
   /** Declared connector names — enforced by name match (ADR 0056). */
   connections: string[];
@@ -953,6 +957,29 @@ export interface CatamorphicDesktopApi {
     projectId: string;
     connectionId: string;
   }) => Promise<void>;
+  /** The member's remote environment for a linked project (ADR 0184). */
+  personalEnvironment: (projectId: string) => Promise<PersonalEnvironmentView>;
+  personalEnvironmentSync: (
+    projectId: string,
+  ) => Promise<PersonalEnvironmentView>;
+  /** Opens a file picker in the project folder; null when cancelled. */
+  personalEnvironmentAddFiles: (
+    projectId: string,
+  ) => Promise<PersonalEnvironmentView | null>;
+  personalEnvironmentRemoveFile: (input: {
+    projectId: string;
+    path: string;
+  }) => Promise<PersonalEnvironmentView>;
+  personalEnvironmentSetLogin: (input: {
+    projectId: string;
+    harness: PersonalHarness;
+    included: boolean;
+  }) => Promise<PersonalEnvironmentView>;
+  /** Creates the config when absent; returns its project path. */
+  personalEnvironmentConfigFile: (projectId: string) => Promise<string>;
+  onPersonalEnvironmentChanged: (
+    listener: (change: { profileId: string; projectId: string }) => void,
+  ) => () => void;
   remoteSync: (projectId: string) => Promise<RemoteSyncReport>;
   remoteShip: (input: {
     projectId: string;
@@ -989,6 +1016,15 @@ export interface CatamorphicDesktopApi {
   }) => Promise<{
     branch: string;
     pullRequest?: { url: string; number: number };
+  }>;
+  remotePublishProgram: (input: {
+    projectId: string;
+    message: string;
+    paths: string[];
+  }) => Promise<{
+    status: "deployed" | "nothing-to-deploy" | "conflict";
+    commitSha: string | null;
+    conflicts: Array<{ path: string }>;
   }>;
   remoteReconnect: (projectId: string) => Promise<{ ok: true }>;
   remoteDisconnect: (projectId: string) => Promise<void>;

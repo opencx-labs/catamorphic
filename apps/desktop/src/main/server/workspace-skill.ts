@@ -138,6 +138,10 @@ to a repository it did not create: sync only pulls there, and local commits are
 shared as a work/ branch with create_pull_request. Do not substitute raw push/pull
 for managed sync. Unrelated repository tasks may use ordinary git.
 
+The person's own Claude Code and Codex sign-ins and private files (such as
+.env) reach their sessions on a linked Work server through their remote
+environment; read remote-environment before adding or checking one.
+
 Discover the required connection by service name, then its tools. Authentication
 stays in the host UI. Discover request_connection for a missing service; never ask
 for credentials in chat. If installation needs another turn, follow its returned

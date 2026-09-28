@@ -411,6 +411,7 @@ async function createWorkServerInner(
     defaults: execution.defaults,
     isolation: execution.isolation,
     workloads: config.execution.workloads,
+    capabilities: execution.machineCapabilities,
     sandboxProvider,
     workers,
     placement: {

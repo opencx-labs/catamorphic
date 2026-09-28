@@ -14,7 +14,10 @@ import {
   catamorphicPlugin,
   instrumentHttpServer,
 } from "@catamorphic/fastify-plugin";
-import { MicrosandboxSandboxProvider } from "@catamorphic/microsandbox";
+import {
+  dockerImageBuilder,
+  MicrosandboxSandboxProvider,
+} from "@catamorphic/microsandbox";
 import {
   type Catamorphic,
   connectionAuthorizationPage,
@@ -34,6 +37,10 @@ import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { ConnectorsService } from "../connectors.js";
 import { DesktopCredentialVault } from "../credential-vault.js";
+import {
+  findImageBuilderCommand,
+  imageBuilderEnvironment,
+} from "../image-builder-command.js";
 import type { IncognitoSessionsStore } from "../incognito-sessions.js";
 import { localPerson } from "../local-person.js";
 import {
@@ -41,6 +48,8 @@ import {
   mcpAppViewCsp,
   mcpAppViewDocument,
 } from "../mcp-apps.js";
+import { desktopPersonalEnvironment } from "../personal-environment-host.js";
+import type { PersonalEnvironmentSync } from "../personal-environment-sync.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
 import { forwardRemoteApi } from "../remote-api.js";
@@ -66,6 +75,7 @@ import {
 } from "./host-skills.js";
 import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
+import { REMOTE_ENVIRONMENT_SKILL } from "./remote-environment-skill.js";
 import { SessionCheckouts } from "./session-checkouts.js";
 import { syncReport } from "./sync-report.js";
 import {
@@ -126,6 +136,8 @@ export interface EmbeddedServer {
   resumeExecution: () => void;
   /** Poll linked remote hosts for messages addressed to local sessions. */
   syncSessionMailboxes: () => void;
+  /** The member's remote environment per linked project (ADR 0184). */
+  personalEnvironment: PersonalEnvironmentSync;
   sessionMoveEligibility: (
     projectId: string,
     sessionId: string,
@@ -169,10 +181,21 @@ export async function startEmbeddedServer(
     const root = projectRoots.getSync(projectId);
     return root ? projectDataDirectory({ root }) : undefined;
   };
+  const imageBuilderCommand = findImageBuilderCommand();
   const sandboxProvider = e2eFakeAgent
     ? new E2eLocalSandboxProvider(resolveProjectData)
     : new MicrosandboxSandboxProvider({
         projectDataDirectory: resolveProjectData,
+        // Environments that name a Dockerfile run here when Docker or
+        // Podman is installed (ADR 0176).
+        ...(imageBuilderCommand
+          ? {
+              imageBuilder: dockerImageBuilder({
+                command: imageBuilderCommand,
+                env: imageBuilderEnvironment({ command: imageBuilderCommand }),
+              }),
+            }
+          : {}),
         // Development only: builds fetch @catamorphic/* from the local
         // registry, which a sandbox can only reach through the host network.
         ...(process.env.CATAMORPHIC_SANDBOX_HOST_NETWORK === "1"
@@ -419,6 +442,7 @@ export async function startEmbeddedServer(
       ...defaults,
       "configuring-catamorphic-desktop/SKILL.md": DESKTOP_SETTINGS_SKILL,
       "desktop-workspace/SKILL.md": DESKTOP_WORKSPACE_SKILL,
+      "remote-environment/SKILL.md": REMOTE_ENVIRONMENT_SKILL,
     }),
     hostId,
     toolPermissions,
@@ -1221,7 +1245,9 @@ export async function startEmbeddedServer(
     await current?.stop().catch(() => {});
   };
   const resumeExecution = () => {
-    if (shutdownDone || worker) return;
+    if (shutdownDone) return;
+    clientRunners.resume();
+    if (worker) return;
     worker = startWorker();
   };
 
@@ -1288,6 +1314,17 @@ export async function startEmbeddedServer(
     () => sessionMirror.syncMailboxesInBackground(),
     5_000,
   );
+  // Remote environments (ADR 0184): the member's own sign-ins and chosen
+  // files, sent to each linked server whose Environments allow them.
+  const personalEnvironment = desktopPersonalEnvironment({
+    profiles,
+    profileConfig,
+    projectRoot: (projectId) => projectRoots.get(projectId),
+    ensureHarnessExecutable: (harness) =>
+      agentRegistry.ensureHarnessExecutable(harness),
+    isolated: e2eFakeAgent || Boolean(process.env.CATAMORPHIC_E2E_DATA_DIR),
+  });
+  personalEnvironment.start();
   sessionMirror.syncMirrorsInBackground();
   const sessionMirrorTimer = setInterval(
     () => sessionMirror.syncMirrorsInBackground(),
@@ -1297,6 +1334,7 @@ export async function startEmbeddedServer(
   const shutdown = () => {
     shutdownDone ??= (async () => {
       await clientRunners.stop();
+      personalEnvironment.stop();
       clearInterval(remoteSyncTimer);
       clearInterval(notificationTimer);
       clearInterval(sessionMailboxTimer);
@@ -1346,6 +1384,7 @@ export async function startEmbeddedServer(
     suspendExecution,
     resumeExecution,
     syncSessionMailboxes: () => sessionMirror.syncMailboxesInBackground(),
+    personalEnvironment,
     sessionMoveEligibility: (projectId, sessionId) =>
       sessionMirror.eligibility(projectId, sessionId),
     moveSessionToServer: (projectId, sessionId) =>

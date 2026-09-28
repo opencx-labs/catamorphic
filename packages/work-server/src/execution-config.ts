@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { WorkerCapacity } from "@catamorphic/core";
@@ -6,6 +7,10 @@ import {
   dockerImageBuilder,
   MicrosandboxSandboxProvider,
 } from "@catamorphic/microsandbox";
+import {
+  MACHINE_CAPABILITIES,
+  type MachineCapability,
+} from "@catamorphic/sandbox";
 
 /** How this machine executes agent and workflow sandboxes. */
 export interface WorkExecutionSettings {
@@ -41,6 +46,12 @@ export interface WorkExecutionSettings {
    * although nothing enforces it (ADR 0176).
    */
   acceptUnenforcedEgress?: boolean;
+  /**
+   * The operator accepts members' personal credentials in this machine's
+   * process sandboxes although it may run several people's work (ADR
+   * 0184, `WORK_PERSONAL_CREDENTIALS=accept`).
+   */
+  acceptPersonalCredentials?: boolean;
 }
 
 /** Parse and validate the `WORK_SANDBOX` and capacity variables. */
@@ -112,6 +123,7 @@ function imageAndContainerSettings(args: {
   | "dockerSocket"
   | "dockerCliPlugins"
   | "acceptUnenforcedEgress"
+  | "acceptPersonalCredentials"
 > {
   const { backend, env } = args;
   const builder = env.WORK_IMAGE_BUILDER;
@@ -131,6 +143,13 @@ function imageAndContainerSettings(args: {
     throw new Error("WORK_UNENFORCED_EGRESS must be accept");
   if (egress && backend !== "local-process")
     throw new Error("WORK_UNENFORCED_EGRESS applies to local-process only");
+  const personal = env.WORK_PERSONAL_CREDENTIALS;
+  if (personal !== undefined && personal !== "accept")
+    throw new Error("WORK_PERSONAL_CREDENTIALS must be accept");
+  if (personal && backend !== "local-process")
+    throw new Error(
+      "WORK_PERSONAL_CREDENTIALS applies to local-process only: microsandbox gives each chat its own VM",
+    );
   return {
     ...(builder ? { images: { builder } } : {}),
     ...(backend === "microsandbox"
@@ -141,7 +160,47 @@ function imageAndContainerSettings(args: {
       ? { dockerCliPlugins: env.WORK_DOCKER_CLI_PLUGINS }
       : {}),
     ...(egress ? { acceptUnenforcedEgress: true } : {}),
+    ...(personal ? { acceptPersonalCredentials: true } : {}),
   };
+}
+
+/** Whether an executable of this name is on a search path. */
+function onPath(command: string, searchPath: string): boolean {
+  return searchPath
+    .split(path.delimiter)
+    .filter(Boolean)
+    .some((directory) => {
+      try {
+        fs.accessSync(path.join(directory, command), fs.constants.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+}
+
+/**
+ * What this machine offers beside its sandbox provider (ADR 0184): the
+ * operator's acceptance of personal credentials, and the harness CLIs a
+ * process sandbox finds on its path. A microsandbox VM gets its CLIs from
+ * the Environment's image instead.
+ */
+export function machineCapabilities(
+  settings: Pick<
+    WorkExecutionSettings,
+    "backend" | "path" | "acceptPersonalCredentials"
+  >,
+): MachineCapability[] {
+  if (settings.backend !== "local-process") return [];
+  return [
+    ...(settings.acceptPersonalCredentials
+      ? [MACHINE_CAPABILITIES.personalCredentials]
+      : []),
+    ...(onPath("claude", settings.path)
+      ? [MACHINE_CAPABILITIES.claudeCode]
+      : []),
+    ...(onPath("codex", settings.path) ? [MACHINE_CAPABILITIES.codex] : []),
+  ];
 }
 
 function workloadsFromEnv(raw: string | undefined): ("agent" | "workflow")[] {
@@ -231,5 +290,6 @@ export function workExecution(args: {
       settings.backend === "microsandbox"
         ? ("sandbox" as const)
         : ("process" as const),
+    machineCapabilities: machineCapabilities(settings),
   };
 }

@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { PROJECT_APP_DATA_DIR } from "@catamorphic/workflow/project-layout";
+import { isPersonalFile } from "@catamorphic/git";
+import {
+  isProjectSourcePath,
+  PROJECT_APP_DATA_DIR,
+  PROJECT_WORKSPACE_ROOT,
+} from "@catamorphic/workflow/project-layout";
 import type { Identity } from "../identity.js";
 import {
   DocumentConflictError,
@@ -14,6 +19,7 @@ import {
 import {
   ensureProjectWorkspace,
   localDocumentRelativePath,
+  PROJECT_WORKSPACE_IGNORE,
   projectDataDirectory,
 } from "./project-workspace.js";
 
@@ -304,6 +310,94 @@ function walkStore(root: string): string[] {
   return out.sort();
 }
 
+/**
+ * The workspace's ignore rules (its `.work/.gitignore`, and the defaults a
+ * missing one would have), as a test on paths relative to `.work/`. Plain
+ * names, `*` and `?` globs, trailing `/` for folders, and a leading or
+ * inner `/` to anchor; negations are not needed by the defaults.
+ */
+function workspaceIgnore(
+  root: string,
+): (path: string, dir: boolean) => boolean {
+  let own = "";
+  try {
+    own = fs.readFileSync(
+      path.join(root, PROJECT_WORKSPACE_ROOT, ".gitignore"),
+      "utf8",
+    );
+  } catch {
+    // No ignore file of its own: the defaults still apply.
+  }
+  const rules = `${own}\n${PROJECT_WORKSPACE_IGNORE}`
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#") && !line.startsWith("!"))
+    .map((line) => {
+      const dirOnly = line.endsWith("/");
+      const body = line.replace(/^\/+|\/+$/g, "");
+      const anchored = line.startsWith("/") || body.includes("/");
+      const pattern = new RegExp(
+        `^${body
+          .split("")
+          .map((char) =>
+            char === "*"
+              ? "[^/]*"
+              : char === "?"
+                ? "[^/]"
+                : char.replace(/[.+^${}()|[\]\\]/g, "\\$&"),
+          )
+          .join("")}$`,
+      );
+      return { dirOnly, anchored, pattern };
+    });
+  return (relative, dir) =>
+    rules.some(
+      (rule) =>
+        (!rule.dirOnly || dir) &&
+        rule.pattern.test(
+          rule.anchored
+            ? relative
+            : relative.slice(relative.lastIndexOf("/") + 1),
+        ),
+    );
+}
+
+/**
+ * Program files created in this folder's `.work/` that no sync has seen:
+ * new workflows, agents, roles, images. Files elsewhere in the folder are
+ * the member's own until a builder commits them.
+ */
+function newProgramFiles(root: string, known: Manifest["files"]): string[] {
+  const out: string[] = [];
+  const ignored = workspaceIgnore(root);
+  const prefix = `${PROJECT_WORKSPACE_ROOT}/`;
+  const walk = (relative: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(path.join(root, relative), {
+        withFileTypes: true,
+      });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const child = `${relative}/${entry.name}`;
+      if (!isProjectSourcePath(child) || isPersonalFile(child)) continue;
+      if (ignored(child.slice(prefix.length), entry.isDirectory())) continue;
+      if (entry.isDirectory()) walk(child);
+      else if (entry.isFile() && !known[child] && !generatedIgnore(child))
+        out.push(child);
+    }
+  };
+  // The default ignore file this folder writes for itself is nobody's edit.
+  const generatedIgnore = (child: string) =>
+    child === `${PROJECT_WORKSPACE_ROOT}/.gitignore` &&
+    fs.readFileSync(path.join(root, child), "utf8") ===
+      PROJECT_WORKSPACE_IGNORE;
+  walk(PROJECT_WORKSPACE_ROOT);
+  return out.sort();
+}
+
 /** What changed locally since the last sync, without touching the network. */
 export function localStatus(root: string): LocalStatus {
   const manifest = readManifest(root);
@@ -334,6 +428,10 @@ export function localStatus(root: string): LocalStatus {
       programEdits.push(relative);
     }
   }
+  // Only a folder that receives program files through sync shares new ones
+  // here; a builder's checkout shares them through git.
+  if (Object.values(manifest.files).some((entry) => entry.source === "program"))
+    programEdits.push(...newProgramFiles(root, manifest.files));
   const conflicts = Object.entries(manifest.files).flatMap(([path, entry]) =>
     entry.conflict ? [{ path, ...entry.conflict }] : [],
   );

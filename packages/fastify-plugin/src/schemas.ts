@@ -610,9 +610,20 @@ export const EnvironmentListSchema = z.object({
       description: z.string().optional(),
       available: z.boolean(),
       clientRequired: z.boolean().optional(),
+      machineOnline: z
+        .boolean()
+        .describe(
+          "False when no machine for it is online and open to this work, such as a member's computer that is not connected",
+        ),
       compatible: z.boolean(),
       preferred: z.boolean(),
       allowed: z.boolean(),
+      personalCredentials: z
+        .boolean()
+        .optional()
+        .describe(
+          "Present when the Environment allows personal credentials (ADR 0184): whether the caller's own chats placed there would carry their logins and files",
+        ),
       reasons: z.array(z.string()),
       binding: z
         .object({
@@ -1643,7 +1654,7 @@ export const ProjectAgentDefinitionSchema = z.object({
   description: z.string().optional(),
   credentials: z
     .object({
-      source: z.enum(["profile", "secret", "local", "connection"]),
+      source: z.enum(["profile", "secret", "local", "connection", "personal"]),
       secret: z.string().optional(),
       /** The Environment alias of the agent's model connection (ADR 0180). */
       connection: z.string().optional(),
@@ -2078,4 +2089,91 @@ export const AgentCatalogSchema = z.object({
       agentId: z.string().optional(),
     }),
   ),
+});
+
+// --- Personal environments (ADR 0184) ---
+
+export const PersonalLoginKindSchema = z.enum(["claude-code", "codex"]);
+
+export const PutPersonalEnvironmentSchema = z
+  .object({
+    logins: z
+      .object({
+        "claude-code": z
+          .object({
+            credentials: z
+              .string()
+              .min(2)
+              .describe(
+                "Claude Code's .credentials.json as JSON text, refresh token removed",
+              ),
+            expiresAt: z.string().optional(),
+          })
+          .optional(),
+        codex: z
+          .object({
+            auth: z
+              .string()
+              .min(2)
+              .describe(
+                "Codex's auth.json as JSON text, refresh token removed",
+              ),
+            expiresAt: z.string().optional(),
+          })
+          .optional(),
+      })
+      .default({}),
+    files: z
+      .array(
+        z.object({
+          path: z
+            .string()
+            .min(1)
+            .max(512)
+            .describe("Repository-relative path, / separated"),
+          content: z.string().describe("The file's bytes, base64"),
+        }),
+      )
+      .max(50)
+      .default([]),
+  })
+  .describe(
+    "The caller's personal logins and files for this project; replaces what the server holds",
+  );
+
+export const PersonalLoginStatusSchema = z.object({
+  fingerprint: z.string(),
+  expiresAt: z.string().optional(),
+  updatedAt: z.string(),
+  needsRefresh: z
+    .boolean()
+    .describe(
+      "Expires within the hour while the caller has live chats using it: refresh locally and send it again",
+    ),
+});
+
+export const PersonalEnvironmentSchema = z.object({
+  allowed: z
+    .boolean()
+    .describe(
+      "Some Environment of the project gives the caller's own chats their personal credentials",
+    ),
+  logins: z.object({
+    "claude-code": PersonalLoginStatusSchema.optional(),
+    codex: PersonalLoginStatusSchema.optional(),
+  }),
+  files: z.array(
+    z.object({
+      path: z.string(),
+      fingerprint: z.string(),
+      bytes: z.number().int().nonnegative(),
+      updatedAt: z.string(),
+    }),
+  ),
+});
+
+export const PersonalEnvironmentInvalidSchema = z.object({
+  error: z.string(),
+  code: z.literal("personal_environment_invalid"),
+  issues: z.array(z.string()),
 });

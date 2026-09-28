@@ -25,7 +25,7 @@ vi.mock("../app-server.js", () => ({
   },
 }));
 
-import { CodexAgent } from "../codex-agent.js";
+import { CodexAgent, sandboxPathEnv } from "../codex-agent.js";
 
 /** A sandbox whose operations are never reached in these tests. */
 function fakeSandboxProvider(withProcesses: boolean): SandboxProvider {
@@ -37,7 +37,14 @@ function fakeSandboxProvider(withProcesses: boolean): SandboxProvider {
     stopSandbox: never,
     destroySandbox: never,
     getSandboxStatus: never,
-    executeCommand: never,
+    // A process provider maps the virtual workspace onto a host folder.
+    executeCommand: async (_sandboxId, command, opts) =>
+      command === "pwd -P" && opts?.cwd
+        ? {
+            exitCode: 0,
+            result: `${opts.cwd.replace("/workspace", "/host/sandbox-1/workspace")}\n`,
+          }
+        : never(),
     uploadFiles: never,
     downloadFile: never,
     gitClone: never,
@@ -212,6 +219,89 @@ describe("CodexAgent", () => {
         },
       },
     });
+  });
+
+  it("runs the app server with the owner's own login and Codex's own provider (ADR 0184)", async () => {
+    startThread.mockReturnValue(
+      scriptedThread([
+        { type: "thread.started", thread_id: "thread-10" },
+        {
+          type: "turn.completed",
+          usage: {
+            input_tokens: 1,
+            cached_input_tokens: 0,
+            output_tokens: 1,
+            reasoning_output_tokens: 0,
+            cache_write_input_tokens: 0,
+          },
+        },
+      ]),
+    );
+    const agent = new CodexAgent({ sandbox: {}, apiKey: "host-key" });
+    const events = [];
+    for await (const event of agent.sendMessage(
+      { ...session, providerSessionId: null },
+      "hello",
+      {
+        sandbox: {
+          provider: fakeSandboxProvider(true),
+          sandboxId: "sandbox-1",
+          stateDirectory: "/workspace/.work-session",
+        },
+        personalLogin: {
+          harness: "codex",
+          home: "/workspace/.work-session/home/codex",
+        },
+      },
+    ))
+      events.push(event);
+    expect(events.at(-1)).toMatchObject({ type: "done" });
+    // Codex hears the directory as the sandbox's processes name it.
+    expect(startThread.mock.calls[0]?.[0]).toMatchObject({
+      workingDirectory: "/host/sandbox-1/workspace/project",
+    });
+    const options = codexCtor.mock.calls[0]?.[0];
+    expect(options).not.toHaveProperty("apiKey");
+    expect(options).not.toHaveProperty("env");
+    expect(options.config?.model_provider).toBeUndefined();
+    expect(options.config?.model_providers).toBeUndefined();
+    expect(
+      sandboxPathEnv({
+        auth: { kind: "personal", home: "/workspace/.work-session/home/codex" },
+      }),
+    ).toEqual({ CODEX_HOME: "/workspace/.work-session/home/codex" });
+  });
+
+  it("continues a moved sandbox session from the host's transcript", async () => {
+    startThread.mockReturnValue(
+      scriptedThread([{ type: "turn.completed", usage: dummyUsage() }]),
+    );
+    const agent = new CodexAgent({ sandbox: {} });
+    const started = await agent.startSession({
+      projectId: "project-1",
+      userId: "member",
+      sandboxId: "sandbox-2",
+      workingDirectory: "/workspace/project",
+      sessionId: "chat-moved",
+      history: [
+        { role: "user", content: "Remember the word OSPREY." },
+        { role: "assistant", content: "Remembered: OSPREY." },
+      ],
+    });
+    await collect(agent, "What word?", started, {
+      sandbox: {
+        provider: fakeSandboxProvider(true),
+        sandboxId: "sandbox-2",
+        stateDirectory: "/workspace/.work-session",
+      },
+      personalLogin: {
+        harness: "codex",
+        home: "/workspace/.work-session/home/codex",
+      },
+    });
+    expect(setContext).toHaveBeenCalledWith(
+      expect.stringContaining("User: Remember the word OSPREY."),
+    );
   });
 
   it("refuses a sandbox turn whose sandbox cannot run processes", async () => {

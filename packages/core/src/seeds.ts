@@ -13,6 +13,7 @@ import {
 } from "@catamorphic/workflow/project-layout";
 import { BATCH_WORKFLOWS_SKILL } from "./batch-workflows-skill.js";
 import { DURABLE_WORKFLOWS_SKILL } from "./durable-workflows-skill.js";
+import { PERSONAL_ENVIRONMENT_SKILL } from "./personal-environment-skill.js";
 import { REVIEWING_PULL_REQUESTS_SKILL } from "./reviewing-pull-requests-skill.js";
 import { PROJECT_WORKSPACE_IGNORE } from "./services/project-workspace.js";
 import { SESSION_ARTIFACTS_SKILL } from "./session-artifacts-skill.js";
@@ -1232,6 +1233,7 @@ export const HOST_SKILLS: Record<string, string> = {
   "session-workflows/SKILL.md": SESSION_WORKFLOWS_SKILL,
   "searching-documents/SKILL.md": SEARCHING_DOCUMENTS_SKILL,
   "slack/SKILL.md": SLACK_SKILL,
+  "personal-environment/SKILL.md": PERSONAL_ENVIRONMENT_SKILL,
   "reviewing-pull-requests/SKILL.md": REVIEWING_PULL_REQUESTS_SKILL,
   "publishing-to-github/SKILL.md": `---
 name: publishing-to-github

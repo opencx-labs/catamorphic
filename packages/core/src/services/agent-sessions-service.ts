@@ -23,11 +23,14 @@ import {
   type McpToolPolicyLayers,
   messageWithAttachmentNames,
   narrowingLayer,
+  PERSONAL_LOGIN_KINDS,
+  type PersonalLoginKind,
   PROJECT_TOOLS_SERVER_KEY,
   type ProviderSession,
   SANDBOXING_LEVELS,
   type Sandboxing,
   type SandboxModelGateway,
+  type SandboxPersonalLogin,
   type SandboxProvider,
   serverKeyOf,
   type ToolPermission,
@@ -72,7 +75,10 @@ import {
   type SessionDeliveryReceipt,
   type SessionMessageAuthor,
 } from "./agent-turns-service.js";
-import { allocationSandboxProvider } from "./allocation-sandbox-provider.js";
+import {
+  allocationSandboxProvider,
+  withAllocationSandboxPolicy,
+} from "./allocation-sandbox-provider.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import { AccessDeniedError, resolveScope } from "./artifact-scope.js";
 import { projectChatIdentity } from "./chat-delivery.js";
@@ -91,14 +97,26 @@ import {
 import { DbSandboxStore } from "./db-sandbox-store.js";
 import { DevSandboxService } from "./dev-sandbox-service.js";
 import type { DocumentsService } from "./documents-service.js";
-import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
+import type {
+  ExecutionAllocation,
+  ExecutionAllocationsService,
+} from "./execution-allocations-service.js";
 import {
   admissionPolicy,
   type EnvironmentAdmission,
+  EnvironmentIncompatibleError,
   type ExecutionEnvironmentsService,
+  NoCompatibleEnvironmentError,
   type PlacementReason,
   placementOwner,
 } from "./execution-environments-service.js";
+import {
+  deliverPersonalEnvironment,
+  personalLoginHome,
+  removePersonalEnvironment,
+  writePersonalLogins,
+} from "./personal-environment-delivery.js";
+import type { PersonalEnvironmentService } from "./personal-environment-service.js";
 import type { PluginsService } from "./plugins-service.js";
 import {
   PROGRAM_READER,
@@ -156,6 +174,8 @@ interface AgentExecutionRuntime {
   devSandboxes?: DevSandboxService;
   /** The Allocation's budget for one foreground command (ADR 0174). */
   commandTimeoutSeconds?: number;
+  /** This turn's placement may hold the owner's personal credentials (ADR 0184). */
+  personalCredentials?: boolean;
 }
 
 type SessionRow = Selectable<DB["agent_sessions"]>;
@@ -636,6 +656,11 @@ interface AgentSessionsDeps {
       turnId: string;
     }) => Promise<AgentTurnUsage | undefined>;
   };
+  /**
+   * Members' personal logins and files (ADR 0184), delivered into their
+   * own chats' sandboxes where the Environment and placement allow.
+   */
+  personalEnvironments?: PersonalEnvironmentService;
   plugins?: PluginsService;
   pluginResolver?: PluginResolver;
   /**
@@ -724,8 +749,11 @@ export class AgentSessionsService {
   private readonly connectionMcpUrl?: AgentSessionsDeps["connectionMcpUrl"];
   private readonly workspaces?: SessionWorkspaces;
   private readonly sandboxGateway?: AgentSessionsDeps["sandboxGateway"];
+  private readonly personalEnvironments?: PersonalEnvironmentService;
   /** Sandbox grant renewals of the turns running in this process. */
   private readonly grantRenewals = new Map<string, NodeJS.Timeout>();
+  /** A renewal's login write still in flight, per session (ADR 0184). */
+  private readonly loginRenewals = new Map<string, Promise<void>>();
   private readonly plugins?: PluginsService;
   private readonly pluginResolver?: PluginResolver;
   private readonly onTurnSettled?: AgentSessionsDeps["onTurnSettled"];
@@ -921,6 +949,7 @@ export class AgentSessionsService {
     this.connectionMcpUrl = deps.connectionMcpUrl;
     this.workspaces = deps.workspaces;
     this.sandboxGateway = deps.sandboxGateway;
+    this.personalEnvironments = deps.personalEnvironments;
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
     this.onTurnSettled = deps.onTurnSettled;
@@ -1948,6 +1977,7 @@ export class AgentSessionsService {
         workload: "agent",
         topology: agent.topology,
       },
+      ...(agent.personalLogin ? { personalLogin: agent.personalLogin } : {}),
     });
     const requirements = agent.connectionRequirements ?? [];
     if (requirements.length > 0 && !this.connectionAdmission) {
@@ -2381,9 +2411,13 @@ export class AgentSessionsService {
     );
   }
 
-  /** Keep a running turn's sandbox grants fresh (ADRs 0175, 0180). */
+  /**
+   * Keep a running turn's sandbox grants fresh (ADRs 0175, 0180), and the
+   * owner's login it runs with, which their desktop refreshes (ADR 0184).
+   */
   private startGrantRenewal(
     input: Parameters<AgentSessionsService["configureSandboxGateway"]>[0],
+    personal?: { kind: PersonalLoginKind; owner: string },
   ): void {
     this.stopGrantRenewal(input.sessionId);
     const timer = setInterval(() => {
@@ -2394,6 +2428,35 @@ export class AgentSessionsService {
             error,
           ),
       );
+      if (!personal || !this.personalEnvironments) return;
+      const write: Promise<void> = this.personalEnvironments
+        .unseal({
+          tenantId: input.identity.tenantId,
+          projectId: input.projectId,
+          owner: personal.owner,
+          logins: [personal.kind],
+        })
+        .then((environment) =>
+          // Stopped meanwhile: the login may already have left.
+          this.grantRenewals.get(input.sessionId) === timer
+            ? writePersonalLogins({
+                provider: input.provider,
+                sandboxId: input.sandboxProviderId,
+                logins: environment.logins,
+              })
+            : undefined,
+        )
+        .catch((error: unknown) =>
+          console.warn(
+            `[catamorphic] Could not renew the personal login of session ${input.sessionId}`,
+            error,
+          ),
+        )
+        .finally(() => {
+          if (this.loginRenewals.get(input.sessionId) === write)
+            this.loginRenewals.delete(input.sessionId);
+        });
+      this.loginRenewals.set(input.sessionId, write);
     }, GRANT_RENEWAL_MS);
     timer.unref?.();
     this.grantRenewals.set(input.sessionId, timer);
@@ -2403,6 +2466,343 @@ export class AgentSessionsService {
     const timer = this.grantRenewals.get(sessionId);
     if (timer) clearInterval(timer);
     this.grantRenewals.delete(sessionId);
+  }
+
+  /** Stop renewals and wait out a login write already under way. */
+  private async settleGrantRenewal(sessionId: string): Promise<void> {
+    this.stopGrantRenewal(sessionId);
+    await this.loginRenewals.get(sessionId);
+  }
+
+  /**
+   * The owner's personal environment in a sandbox turn (ADR 0184): the
+   * login this agent runs with and the files they listed, where the turn's
+   * placement allows personal credentials and the owner wrote the message
+   * it answers. Anything a turn may not have is taken back out of the
+   * sandbox. Throws a readable error when the agent needs a login it
+   * cannot have. Returns the login for the harness and a note for the
+   * agent about files it did not place.
+   */
+  private async preparePersonalEnvironment(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    agent: RegisteredCodingAgent;
+    allowed: boolean;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+    author: SessionMessageAuthor;
+    requestMetadata?: JsonObject | null;
+  }): Promise<{ login?: SandboxPersonalLogin; note?: string }> {
+    const { agent, session, identity, projectId } = input;
+    const kind = agent.personalLogin;
+    const name = kind ? PERSONAL_HARNESS_NAMES[kind] : "";
+    const service = this.personalEnvironments;
+    const owner = session.external_user_id;
+    // Idempotent, and a no-op in a sandbox that never received anything.
+    const withdraw = async () => {
+      await this.settleGrantRenewal(session.id);
+      await removePersonalEnvironment({
+        provider: input.provider,
+        sandboxId: input.sandboxProviderId,
+        projectDir: this.projectDir(input.provider),
+      });
+    };
+    if (!service || isProjectPrincipal(owner)) {
+      if (kind)
+        throw new PersonalLoginUnavailableError(
+          `${name} with your own login cannot run in this chat's Environment. Move the chat to an Environment that allows personal credentials.`,
+        );
+      return {};
+    }
+    if (!input.allowed) {
+      await withdraw();
+      if (kind)
+        throw new PersonalLoginUnavailableError(
+          `${name} with your own login cannot run in this chat's Environment. Move the chat to an Environment that allows personal credentials.`,
+        );
+      return {};
+    }
+    if (
+      !(await this.authoredByOwner({
+        projectId,
+        owner,
+        author: input.author,
+        metadata: input.requestMetadata,
+      }))
+    ) {
+      await withdraw();
+      if (kind)
+        throw new PersonalLoginUnavailableError(
+          `This chat runs on its owner's own ${name} sign-in, so only they can send it messages.`,
+        );
+      return {};
+    }
+    const environment = await service.unseal({
+      tenantId: identity.tenantId,
+      projectId,
+      owner,
+      logins: kind ? [kind] : [],
+    });
+    if (kind) {
+      const login = environment.logins.get(kind);
+      if (!login) {
+        await withdraw();
+        throw new PersonalLoginUnavailableError(
+          `Your ${name} login is not on this server yet. Open Work on your computer with this project so it can send it.`,
+        );
+      }
+      if (login.expiresAt && login.expiresAt.getTime() <= Date.now())
+        throw new PersonalLoginUnavailableError(
+          `Your ${name} login on this server has expired. Open Work on your computer so it can refresh it.`,
+        );
+    }
+    if (environment.logins.size === 0 && environment.files.length === 0) {
+      await withdraw();
+      return {};
+    }
+    const result = await deliverPersonalEnvironment({
+      provider: input.provider,
+      sandboxId: input.sandboxProviderId,
+      projectDir: this.projectDir(input.provider),
+      environment,
+    });
+    if (result.delivered.length > 0)
+      await service.auditDelivery({
+        identity,
+        projectId,
+        sessionId: session.id,
+        ...(session.allocation_id
+          ? { allocationId: session.allocation_id }
+          : {}),
+        delivered: result.delivered,
+        refused: [...result.refused, ...result.unsafe],
+      });
+    const notes: string[] = [];
+    const { refused, unsafe } = result;
+    if (refused.length > 0) {
+      const one = refused.length === 1;
+      notes.push(
+        `Work did not place the user's personal ${one ? "copy" : "copies"} of ${refused.join(", ")} in this workspace: the repository tracks ${one ? "that path" : "those paths"}, and Work never replaces tracked files with personal ones. Tell the user, and suggest removing ${one ? "it" : "them"} from .work/personal/environment.json or no longer tracking ${one ? "it" : "them"}.`,
+      );
+    }
+    if (unsafe.length > 0) {
+      const one = unsafe.length === 1;
+      notes.push(
+        `Work did not place the user's personal ${one ? "copy" : "copies"} of ${unsafe.join(", ")} in this workspace: ${one ? "that path goes" : "those paths go"} through a symbolic link or ${one ? "is not a plain file" : "are not plain files"}, and Work writes personal files only at their own place in the project. Tell the user, and suggest replacing the link with a folder or removing ${one ? "the path" : "those paths"} from .work/personal/environment.json.`,
+      );
+    }
+    return {
+      ...(kind
+        ? {
+            login: {
+              harness: kind,
+              home: personalLoginHome({ provider: input.provider, kind }),
+            },
+          }
+        : {}),
+      ...(notes.length > 0 ? { note: notes.join("\n\n") } : {}),
+    };
+  }
+
+  /**
+   * Whether the chat's owner wrote the message a turn answers (ADR 0184),
+   * the condition for their login and files. The owner sent it, or it came
+   * from their own doing through a call they made: one of their chats'
+   * agents (a subsession reporting back), a workflow they enabled or ran
+   * for themselves, a watcher of theirs, or Work's notice about their own
+   * subsessions. Another member, an administrator, and the project's
+   * automations never run on the owner's login.
+   */
+  private async authoredByOwner(input: {
+    projectId: string;
+    owner: string;
+    author: SessionMessageAuthor;
+    metadata?: JsonObject | null;
+  }): Promise<boolean> {
+    const { author, owner, projectId } = input;
+    if (author.kind === "user") return author.externalUserId === owner;
+    // Stamped by `deliver` with the identity whose call delivered it.
+    if (input.metadata?.deliveredBy !== owner) return false;
+    switch (author.kind) {
+      case "system":
+        return true;
+      case "agent": {
+        const source = await this.db
+          .selectFrom("agent_sessions")
+          .select("external_user_id")
+          .where("id", "=", author.sessionId)
+          .where("project_id", "=", projectId)
+          .executeTakeFirst();
+        return source?.external_user_id === owner;
+      }
+      case "watcher": {
+        const watcher = await this.db
+          .selectFrom("watchers")
+          .select("owner_external_user_id")
+          .where("id", "=", author.watcherId)
+          .where("project_id", "=", projectId)
+          .executeTakeFirst();
+        return watcher?.owner_external_user_id === owner;
+      }
+      case "workflow": {
+        const run = await this.db
+          .selectFrom("workflow_runs")
+          .leftJoin(
+            "workflow_enablements",
+            "workflow_enablements.id",
+            "workflow_runs.workflow_enablement_id",
+          )
+          .select([
+            "workflow_runs.external_user_id",
+            "workflow_runs.workflow_enablement_id",
+            "workflow_enablements.owner_kind",
+            "workflow_enablements.owner_external_user_id",
+          ])
+          .where("workflow_runs.id", "=", author.runId)
+          .where("workflow_runs.project_id", "=", projectId)
+          .executeTakeFirst();
+        if (!run) return false;
+        return run.workflow_enablement_id
+          ? run.owner_kind === "member" && run.owner_external_user_id === owner
+          : run.external_user_id === owner;
+      }
+    }
+  }
+
+  /**
+   * Take the owner's personal environment back out of a chat's sandbox
+   * (ADR 0184), on close, idle release, and moves. Best effort: the
+   * sandbox is given back right after. Removal is idempotent, so it runs
+   * whether or not the owner still holds anything on the server.
+   */
+  private async withdrawPersonalEnvironment(input: {
+    projectId: string;
+    session: Pick<SessionRow, "id" | "external_user_id">;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+  }): Promise<void> {
+    if (
+      !this.personalEnvironments ||
+      isProjectPrincipal(input.session.external_user_id)
+    )
+      return;
+    await removePersonalEnvironment({
+      provider: input.provider,
+      sandboxId: input.sandboxProviderId,
+      projectDir: this.projectDir(input.provider),
+    }).catch((error: unknown) =>
+      console.warn(
+        `[catamorphic] Could not remove the personal environment of session ${input.session.id}`,
+        error,
+      ),
+    );
+  }
+
+  /**
+   * Withdraw the owner's personal environment from a chat's current
+   * sandbox, wherever it runs (ADR 0184). Best effort, and a no-op for
+   * chats without a sandbox and for project chats.
+   */
+  private async withdrawFromSessionSandbox(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    allocation?: ExecutionAllocation;
+    sandboxProviderId?: string;
+  }): Promise<void> {
+    if (!this.personalEnvironments) return;
+    try {
+      const row = await this.db
+        .selectFrom("agent_sessions")
+        .leftJoin(
+          "project_sandboxes",
+          "project_sandboxes.id",
+          "agent_sessions.sandbox_id",
+        )
+        .select([
+          "agent_sessions.external_user_id",
+          "agent_sessions.allocation_id",
+          "project_sandboxes.provider_id",
+        ])
+        .where("agent_sessions.id", "=", input.sessionId)
+        .executeTakeFirst();
+      const sandboxProviderId = input.sandboxProviderId ?? row?.provider_id;
+      if (!row || !sandboxProviderId) return;
+      if (isProjectPrincipal(row.external_user_id)) return;
+      // A renewal tick must not write the login back after it leaves.
+      await this.settleGrantRenewal(input.sessionId);
+      const allocation =
+        input.allocation ??
+        (row.allocation_id
+          ? await this.executionAllocations.get({
+              identity: input.identity,
+              allocationId: row.allocation_id,
+            })
+          : undefined);
+      if (allocation?.status !== "active") return;
+      const runtime = await this.executionEnvironments.getRuntimeBinding({
+        identity: input.identity,
+        bindingId: allocation.bindingId,
+        ...(allocation.workerNodeId
+          ? { workerNodeId: allocation.workerNodeId }
+          : {}),
+        owner: placementOwner(row.external_user_id),
+      });
+      const selected = runtime?.sandboxProvider;
+      if (!selected) return;
+      const provider = allocationSandboxProvider({
+        db: this.db,
+        allocation,
+        provider: selected,
+        workerLeaseToken: () =>
+          this.heldWorkerNodes().find(
+            (node) => node.id === allocation.workerNodeId,
+          )?.token,
+      });
+      await this.withdrawPersonalEnvironment({
+        projectId: input.projectId,
+        session: {
+          id: input.sessionId,
+          external_user_id: row.external_user_id,
+        },
+        provider,
+        sandboxProviderId,
+      });
+    } catch (error) {
+      console.warn(
+        `[catamorphic] Could not withdraw the personal environment of session ${input.sessionId}`,
+        error,
+      );
+    }
+  }
+
+  /**
+   * The harness logins this member's live chats in the project run with
+   * (ADR 0184): the server asks their desktop to refresh a login that is
+   * about to expire only while one is in use.
+   */
+  async personalLoginsInUse(args: {
+    identity: Identity;
+    projectId: string;
+  }): Promise<ReadonlySet<PersonalLoginKind>> {
+    const rows = await this.db
+      .selectFrom("agent_sessions")
+      .select("agent_id")
+      .distinct()
+      .where("project_id", "=", args.projectId)
+      .where("external_user_id", "=", args.identity.externalUserId)
+      .where("status", "=", "active")
+      .where("agent_id", "is not", null)
+      .execute();
+    const inUse = new Set<PersonalLoginKind>();
+    for (const row of rows) {
+      const agent = await this.resolveAgent(row.agent_id, args.projectId).catch(
+        () => undefined,
+      );
+      if (agent?.personalLogin) inUse.add(agent.personalLogin);
+    }
+    return inUse;
   }
 
   private async linkedRemoteUrl(
@@ -2590,7 +2990,7 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
     input: SessionMirrorInput,
-  ): Promise<AgentSession> {
+  ): Promise<AgentSession & { agentNotice?: string }> {
     return withSpan(
       {
         tracer,
@@ -2602,11 +3002,9 @@ export class AgentSessionsService {
       },
       async () => {
         await this.requireProject(identity, projectId);
-        const agentId = this.mirrorAgentId(
-          identity,
-          projectId,
-          input.agentSlug,
-        );
+        const choice = await this.mirrorAgentChoice(identity, projectId, input);
+        let agentId = choice.agentId;
+        let agentNotice = choice.notice;
         this.assertAgentAccess(identity, projectId, agentId);
 
         const existing = await this.db
@@ -2635,22 +3033,61 @@ export class AgentSessionsService {
         if (existing && !existing.allocation_id) {
           throw new Error("Agent session has no Environment Allocation");
         }
-        const mirrorAgent = existing
+        let mirrorAgent = existing
           ? undefined
           : await this.resolveAgent(agentId, projectId);
-        const mirrorAdmission = mirrorAgent
-          ? await this.executionEnvironments.admit({
-              identity,
-              projectId,
-              allowed: mirrorAgent.environment?.allowed,
-              preferred: mirrorAgent.environment?.preferred,
-              requirements: {
-                ...mirrorAgent.environment?.requirements,
-                workload: "agent",
-                topology: mirrorAgent.topology,
-              },
-            })
-          : undefined;
+        const admitMirror = (agent: RegisteredCodingAgent) =>
+          this.executionEnvironments.admit({
+            identity,
+            projectId,
+            allowed: agent.environment?.allowed,
+            preferred: agent.environment?.preferred,
+            requirements: {
+              ...agent.environment?.requirements,
+              workload: "agent",
+              topology: agent.topology,
+            },
+            ...(agent.personalLogin
+              ? { personalLogin: agent.personalLogin }
+              : {}),
+          });
+        let mirrorAdmission: EnvironmentAdmission | undefined;
+        if (mirrorAgent) {
+          try {
+            mirrorAdmission = await admitMirror(mirrorAgent);
+          } catch (error) {
+            // A chat moved from a harness on the user's own login falls
+            // back to the default agent where no Environment allows
+            // personal credentials, and says why (ADR 0184).
+            if (
+              !mirrorAgent.personalLogin ||
+              !(
+                error instanceof NoCompatibleEnvironmentError ||
+                error instanceof EnvironmentIncompatibleError
+              )
+            )
+              throw error;
+            const reasons =
+              error instanceof NoCompatibleEnvironmentError
+                ? Object.values(error.reasons).flat()
+                : [...error.reasons];
+            const refusal = `${PERSONAL_HARNESS_NAMES[mirrorAgent.personalLogin]} with your own login cannot run here (${[...new Set(reasons)].join("; ")})`;
+            const fallback =
+              this.codingAgents.defaultAgentId(projectId) ?? null;
+            const fallbackAgent = await this.resolveAgent(fallback, projectId);
+            // The default is itself a harness on a personal login (a server
+            // without an organization model): nothing else can continue it.
+            if (fallbackAgent.personalLogin) {
+              error.message = `${refusal}, and this server has no other agent to continue the chat.`;
+              throw error;
+            }
+            this.assertAgentAccess(identity, projectId, fallback);
+            agentNotice = `This chat continues with the server's default agent: ${refusal}.`;
+            agentId = fallback;
+            mirrorAgent = fallbackAgent;
+            mirrorAdmission = await admitMirror(mirrorAgent);
+          }
+        }
         const mirrorRequirements = mirrorAgent?.connectionRequirements ?? [];
         if (mirrorRequirements.length > 0 && !this.connectionAdmission) {
           throw new Error("Connection providers are not configured");
@@ -2677,27 +3114,63 @@ export class AgentSessionsService {
           mirrorAdmission,
           mirrorConnections,
         });
-        return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+        return {
+          ...mapSession(row, false, this.hostId, this.authorityLeaseMs),
+          ...(agentNotice && !existing ? { agentNotice } : {}),
+        };
       },
     );
   }
 
-  /** The agent a mirrored session lands on: the source's project-agent
-   * slug when this registry has it AND the caller may use it, else the
-   * registry default. */
-  private mirrorAgentId(
+  /**
+   * The agent a mirrored session lands on: the source's project-agent
+   * slug when this registry has it AND the caller may use it; else, for a
+   * Claude Code or Codex chat, this host's harness on the user's own login
+   * when the user sent that login (ADR 0184); else the registry default,
+   * with a notice saying why when the source ran a harness.
+   */
+  private async mirrorAgentChoice(
     identity: Identity,
     projectId: string,
-    agentSlug: string | undefined,
-  ): string | null {
-    if (agentSlug) {
-      const preferred = formatProjectAgentId(projectId, agentSlug);
-      const usable =
-        this.codingAgents.get(preferred) !== undefined &&
-        this.coveringAgentRef(identity, projectId, preferred) !== undefined;
-      if (usable) return preferred;
+    input: Pick<SessionMirrorInput, "agentSlug" | "provider">,
+  ): Promise<{ agentId: string | null; notice?: string }> {
+    const usable = (id: string) =>
+      this.codingAgents.get(id) !== undefined &&
+      this.coveringAgentRef(identity, projectId, id) !== undefined;
+    if (input.agentSlug) {
+      const preferred = formatProjectAgentId(projectId, input.agentSlug);
+      if (usable(preferred)) return { agentId: preferred };
     }
-    return this.codingAgents.defaultAgentId(projectId) ?? null;
+    const fallback = this.codingAgents.defaultAgentId(projectId) ?? null;
+    const kind = PERSONAL_LOGIN_KINDS.find((name) => name === input.provider);
+    if (!kind || input.agentSlug) return { agentId: fallback };
+    const name = PERSONAL_HARNESS_NAMES[kind];
+    const harness = formatProjectAgentId(projectId, kind);
+    if (this.codingAgents.get(harness)?.personalLogin !== kind)
+      return {
+        agentId: fallback,
+        notice: `This chat continues with the server's default agent: this server does not run ${name} with your own login.`,
+      };
+    if (
+      identity.scope !== undefined &&
+      this.coveringAgentRef(identity, projectId, harness) === undefined
+    )
+      return {
+        agentId: fallback,
+        notice: `This chat continues with the server's default agent: your role in this project does not include ${name}.`,
+      };
+    const hasLogin = await this.personalEnvironments?.holdsLogin({
+      tenantId: identity.tenantId,
+      projectId,
+      owner: identity.externalUserId,
+      kind,
+    });
+    if (!hasLogin)
+      return {
+        agentId: fallback,
+        notice: `This chat continues with the server's default agent: your ${name} login is not on this server yet. Open Work on your computer with this project so it can send it, then switch the chat's agent.`,
+      };
+    return { agentId: harness };
   }
 
   /**
@@ -2838,6 +3311,9 @@ export class AgentSessionsService {
           workload: "agent",
           topology: nextAgent.topology,
         },
+        ...(nextAgent.personalLogin
+          ? { personalLogin: nextAgent.personalLogin }
+          : {}),
       });
       const requirements = nextAgent.connectionRequirements ?? [];
       if (requirements.length > 0 && !this.connectionAdmission) {
@@ -2853,6 +3329,9 @@ export class AgentSessionsService {
               unattended: isProjectPrincipal(session.external_user_id),
             })
           : [];
+      // The old workspace is given back: personal files and logins leave
+      // it now, and the next turn delivers them to the new one (ADR 0184).
+      await this.withdrawFromSessionSandbox({ identity, projectId, sessionId });
       reallocatedRow = await this.db
         .transaction()
         .execute(async (transaction) => {
@@ -3319,6 +3798,7 @@ export class AgentSessionsService {
         metadata: {
           causation: origin.causation ?? [],
           provenance: origin.provenance ?? {},
+          deliveredBy: identity.externalUserId,
         },
         mode: "next_turn",
         idempotencyKey: `delegation:${delegation.id}:task`,
@@ -3708,11 +4188,16 @@ export class AgentSessionsService {
       const { workspace: _workspace, ...rest } = input;
       input = rest;
     }
-    if (input.attention)
-      input = {
-        ...input,
-        metadata: { ...input.metadata, attention: input.attention },
-      };
+    // Whose call delivered it, whatever author it names: a chat's owner's
+    // own login and files answer only their own doing (ADR 0184).
+    input = {
+      ...input,
+      metadata: {
+        ...input.metadata,
+        deliveredBy: identity.externalUserId,
+        ...(input.attention ? { attention: input.attention } : {}),
+      },
+    };
     if (input.author.kind === "agent" && !input.metadata?.causation) {
       input = {
         ...input,
@@ -4275,6 +4760,7 @@ export class AgentSessionsService {
                 attachments,
                 persistedUserMessageId: turn.messageId,
                 requestMetadata: message.metadata,
+                author: message.author,
                 ...(turn.resultMessageId
                   ? { retryOfAssistantId: turn.resultMessageId }
                   : {}),
@@ -4362,6 +4848,7 @@ export class AgentSessionsService {
         workload: "agent",
         topology: agent.topology,
       },
+      ...(agent.personalLogin ? { personalLogin: agent.personalLogin } : {}),
     });
     const requirements = agent.connectionRequirements ?? [];
     const connectionAdmission = this.connectionAdmission;
@@ -4447,6 +4934,7 @@ export class AgentSessionsService {
         "session.environment_name",
         "session.agent_id",
         "session.provider_session_id",
+        "session.external_user_id",
         "projects.tenant_id",
         "allocation.id as allocation_id",
         "allocation.created_at as allocated_at",
@@ -4513,6 +5001,7 @@ export class AgentSessionsService {
             providerSessionId: row.provider_session_id,
             allocationId: row.allocation_id,
             sandboxProviderId: row.sandbox_provider_id,
+            owner: placementOwner(row.external_user_id),
           })
         )
           released.push(row.id);
@@ -4535,6 +5024,8 @@ export class AgentSessionsService {
     providerSessionId: string | null;
     allocationId: string;
     sandboxProviderId: string | null;
+    /** The session's owner, whose machine may be open only to them. */
+    owner?: string | null;
   }): Promise<boolean> {
     const { identity, projectId, sessionId } = input;
     const allocation = await this.executionAllocations.get({
@@ -4554,6 +5045,7 @@ export class AgentSessionsService {
         ...(allocation.workerNodeId
           ? { workerNodeId: allocation.workerNodeId }
           : {}),
+        ...(input.owner !== undefined ? { owner: input.owner } : {}),
       });
       const selected = runtime?.sandboxProvider;
       // Only the instance that reaches the machine can save its workspace.
@@ -4588,6 +5080,16 @@ export class AgentSessionsService {
         author: CHECKPOINT_AUTHOR,
       });
     }
+    // Personal logins and files leave with the workspace (ADR 0184); the
+    // next turn delivers them again into its new one.
+    if (input.sandboxProviderId)
+      await this.withdrawFromSessionSandbox({
+        identity,
+        projectId,
+        sessionId,
+        allocation,
+        sandboxProviderId: input.sandboxProviderId,
+      });
     const released = await this.db.transaction().execute(async (trx) => {
       const current = await trx
         .selectFrom("agent_sessions")
@@ -4871,6 +5373,8 @@ export class AgentSessionsService {
       persistedUserMessageId?: string;
       /** Metadata on the request that caused this turn. */
       requestMetadata?: JsonObject | null;
+      /** Who wrote the message this turn answers. */
+      author: SessionMessageAuthor;
     },
   ): Promise<AgentMessage> {
     return withSpan(
@@ -5251,6 +5755,7 @@ export class AgentSessionsService {
                   native: { checkout: anchor.checkout },
                 })
               : undefined);
+          let personalNote: string | undefined;
           if (anchor.sandboxProviderId && runtime.provider) {
             const models = await this.prepareSandboxGit({
               identity,
@@ -5271,20 +5776,43 @@ export class AgentSessionsService {
               ? models.find((model) => model.alias === agent.modelConnection)
               : undefined;
             if (modelGateway) turnOptions.modelGateway = modelGateway;
+            // The owner's own logins and files (ADR 0184), after the Git
+            // baseline so they stay out of everything that leaves.
+            const personal = await this.preparePersonalEnvironment({
+              identity,
+              projectId,
+              session,
+              agent,
+              allowed: runtime.personalCredentials === true,
+              provider: runtime.provider,
+              sandboxProviderId: anchor.sandboxProviderId,
+              author: extras.author,
+              requestMetadata: extras.requestMetadata,
+            });
+            if (personal.login) turnOptions.personalLogin = personal.login;
+            if (personal.note) personalNote = personal.note;
             if (session.allocation_id)
-              this.startGrantRenewal({
-                identity,
-                projectId,
-                sessionId,
-                allocationId: session.allocation_id,
-                provider: runtime.provider,
-                sandboxProviderId: anchor.sandboxProviderId,
-                renewOnly: true,
-              });
+              this.startGrantRenewal(
+                {
+                  identity,
+                  projectId,
+                  sessionId,
+                  allocationId: session.allocation_id,
+                  provider: runtime.provider,
+                  sandboxProviderId: anchor.sandboxProviderId,
+                  renewOnly: true,
+                },
+                personal.login
+                  ? {
+                      kind: personal.login.harness,
+                      owner: session.external_user_id,
+                    }
+                  : undefined,
+              );
           }
-          const turnMessage = workspaceNote
-            ? `${workspaceNote}\n\n${message}`
-            : message;
+          const turnMessage = [workspaceNote, personalNote, message]
+            .filter(Boolean)
+            .join("\n\n");
           if (this.agentCapabilities) {
             turnOptions.context = [
               await this.agentCapabilities.prompt({
@@ -5948,6 +6476,14 @@ export class AgentSessionsService {
           sessionIds.filter((id) => id !== caller),
           { timeoutMs: 30_000 },
         );
+        // Personal logins and files leave before the workspace is given
+        // back (ADR 0184).
+        for (const id of sessionIds)
+          await this.withdrawFromSessionSandbox({
+            identity,
+            projectId,
+            sessionId: id,
+          });
 
         const closed = await this.db.transaction().execute(async (trx) => {
           if (input.origin)
@@ -6429,8 +6965,8 @@ export class AgentSessionsService {
         agent.id,
         {
           id: agent.id,
-          name: agent.id,
-          description: undefined as string | undefined,
+          name: agent.name ?? agent.id,
+          description: agent.description,
         },
       ]),
     );
@@ -6450,6 +6986,27 @@ export class AgentSessionsService {
         name: unqualified?.name ?? qualifiedDefault.slug,
         description: unqualified?.description,
       });
+    }
+    // Other host agents a registry also serves project-qualified (the Work
+    // server's personal harnesses, ADR 0184) are listed that way, so a
+    // member's role can name them; a committed definition of the same
+    // slug stays the project's own.
+    for (const agent of this.codingAgents.list()) {
+      if (parseProjectAgentId(agent.id)) continue;
+      const qualified = formatProjectAgentId(args.projectId, agent.id);
+      if (
+        candidates.has(agent.id) &&
+        !entries.some((entry) => entry.slug === agent.id) &&
+        this.codingAgents.get(qualified)?.id === qualified
+      ) {
+        const listed = candidates.get(agent.id);
+        candidates.delete(agent.id);
+        candidates.set(qualified, {
+          id: qualified,
+          name: listed?.name ?? agent.id,
+          description: listed?.description,
+        });
+      }
     }
     for (const entry of entries)
       candidates.set(formatProjectAgentId(args.projectId, entry.slug), {
@@ -6484,9 +7041,21 @@ export class AgentSessionsService {
             workload: "agent",
             topology: agent.topology,
           },
+          ...(agent.personalLogin
+            ? { personalLogin: agent.personalLogin }
+            : {}),
           allowed: agent.environment?.allowed,
           preferred: agent.environment?.preferred,
         });
+        // A harness on its user's own login is offered only in projects
+        // with an Environment that allows personal credentials (ADR 0184).
+        if (
+          agent.personalLogin &&
+          !environments.items.some(
+            (item) => item.personalCredentials !== undefined,
+          )
+        )
+          continue;
         items.push({
           ...candidate,
           available: environments.items.some(
@@ -6723,6 +7292,7 @@ export class AgentSessionsService {
         workload: "agent",
         topology: agent.topology,
       },
+      ...(agent.personalLogin ? { personalLogin: agent.personalLogin } : {}),
     });
     for (const key of ["cpuMillis", "memoryMb", "storageMb", "gpu"] as const) {
       const required = admitted.effectiveRequirements.resources?.[key];
@@ -6760,7 +7330,11 @@ export class AgentSessionsService {
                 (node) => node.id === allocation.workerNodeId,
               )?.token ?? admitted.runtime.workerLeaseToken,
           })
-        : selectedProvider;
+        : selectedProvider &&
+          withAllocationSandboxPolicy({
+            allocation,
+            provider: selectedProvider,
+          });
     if (!provider)
       throw new Error("The selected Environment has no execution provider");
     const commandTimeoutSeconds =
@@ -6770,6 +7344,7 @@ export class AgentSessionsService {
       bindingId: allocation.bindingId,
       environmentName: allocation.environmentName,
       ...(commandTimeoutSeconds ? { commandTimeoutSeconds } : {}),
+      personalCredentials: admitted.personalCredentials,
       devSandboxes: new DevSandboxService({
         projectManager: this.projectManager,
         provider,
@@ -8489,4 +9064,21 @@ function parseMessageAuthor(row: MessageRow): SessionMessageAuthor {
     return { kind: "system", code: payload.code };
   }
   throw new Error(`Agent message '${row.id}' has an invalid author payload`);
+}
+
+const PERSONAL_HARNESS_NAMES: Record<PersonalLoginKind, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+};
+
+/**
+ * An agent that runs with its owner's own harness login cannot have it this
+ * turn (ADR 0184): missing, expired, or not allowed here. The message says
+ * what to do.
+ */
+export class PersonalLoginUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PersonalLoginUnavailableError";
+  }
 }

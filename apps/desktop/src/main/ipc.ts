@@ -1,9 +1,8 @@
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import {
   definitionHash,
   formatProjectAgentId,
@@ -39,6 +38,11 @@ import type {
 import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
+import {
+  isPersonalHarness,
+  PERSONAL_HARNESSES,
+  type PersonalEnvironmentView,
+} from "../shared/personal-environment.js";
 import {
   prCommentInputSchema,
   prDecisionInputSchema,
@@ -94,6 +98,7 @@ import {
   type HarnessExecutable,
   harnessPathEnvironment,
 } from "./harness-components.js";
+import { readClaudeKeychain } from "./harness-logins.js";
 import type { IncognitoSessionsStore } from "./incognito-sessions.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { type Keybindings, normalizeKeybindings } from "./keybindings.js";
@@ -104,6 +109,13 @@ import {
   fetchOpenRouterModels,
   openRouterPkceLogin,
 } from "./openrouter.js";
+import {
+  ensurePersonalEnvironmentConfig,
+  PERSONAL_ENVIRONMENT_PATH,
+  type PersonalEnvironmentConfig,
+  projectRelativePath,
+  updatePersonalEnvironmentConfig,
+} from "./personal-environment-config.js";
 import { listPersonalFiles } from "./personal-files.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
@@ -148,7 +160,6 @@ import { THEME_PRESETS } from "./theme.js";
 import { createUsageScanner } from "./usage-scan.js";
 import { watchSidebarEdge } from "./window-sidebar-edge.js";
 
-const execFileAsync = promisify(execFile);
 /** A remote root holds every permission; `/me` lists projects only for members. */
 const ROOT_REMOTE_PROJECT_PERMISSIONS: RemoteMe["projects"][number]["permissions"] =
   [...PROJECT_PERMISSIONS];
@@ -192,7 +203,7 @@ export interface ProjectAgentInfo {
     | null;
   /** Claude Code auto-memory; null = the definition doesn't say (off). */
   memory: boolean | null;
-  credentialsSource: "profile" | "secret" | "local" | "connection";
+  credentialsSource: "profile" | "secret" | "local" | "connection" | "personal";
   secretName: string | null;
   /** Declared connector names — enforced by name match (ADR 0056). */
   connections: string[];
@@ -1210,31 +1221,9 @@ export function registerIpcHandlers(
    * credentials in the KEYCHAIN — there is no .credentials.json to stat.
    * The fingerprint doubles as a change detector: the terminal /login flow
    * gives no exit signal, so completion is "the credentials changed".
+   * The read is shared with the remote environment sync (harness-logins).
    */
-  // Focus/wake/login probes cluster, and the 2s login watcher must still
-  // observe fresh credentials within a beat — so the keychain answer is
-  // held for 3s, never longer.
-  let keychainCache: { at: number; value: string | null } | null = null;
-  const claudeKeychainRaw = async (): Promise<string | null> => {
-    if (process.platform !== "darwin") return null;
-    if (keychainCache && Date.now() - keychainCache.at < 3000) {
-      return keychainCache.value;
-    }
-    let value: string | null;
-    try {
-      const { stdout } = await execFileAsync("security", [
-        "find-generic-password",
-        "-s",
-        "Claude Code-credentials",
-        "-w",
-      ]);
-      value = stdout;
-    } catch {
-      value = null;
-    }
-    keychainCache = { at: Date.now(), value };
-    return value;
-  };
+  const claudeKeychainRaw = readClaudeKeychain;
 
   const claudeKeychainFingerprint = (raw: string): string => {
     try {
@@ -2020,9 +2009,7 @@ export function registerIpcHandlers(
       const githubFullName = capabilities.source?.remoteUrl
         ? repoFullNameFromUrl(capabilities.source.remoteUrl)
         : null;
-      const builderCheckout = Boolean(
-        writesProgram(capabilities) && githubFullName,
-      );
+      const builderCheckout = isBuilderCheckout(capabilities);
       const project = await server.projectRoots.register({
         rootPath: input.rootPath,
         existing: false,
@@ -2146,6 +2133,13 @@ export function registerIpcHandlers(
     },
   );
 
+  /** A folder joined as a git checkout of the project's repository. */
+  const joinedAsCheckout = (projectId: string): boolean => {
+    const server = state.current;
+    if (!server) throw new Error("Server not running");
+    return !server.projectRoots.checkpointsEnabled(projectId);
+  };
+
   ipcMain.handle(
     "catamorphic:remote-sync",
     async (event, projectId: string) => {
@@ -2153,16 +2147,20 @@ export function registerIpcHandlers(
       const rootPath = await requireRoot(projectId);
       const client = storedRemoteClient(event, projectId, link);
       const capabilities = await introspect(client, link.remoteProjectId);
+      // A builder's GitHub checkout gets its program through git; every
+      // other folder, an admin's included, syncs program files here. The
+      // folder's kind was fixed when it joined, whatever roles say now.
+      const builderCheckout = joinedAsCheckout(projectId);
       const report = await syncRemoteProject(
         rootPath,
-        writesProgram(capabilities) ? storeOnlyDocumentsClient(client) : client,
+        builderCheckout ? storeOnlyDocumentsClient(client) : client,
       );
       storesFor(event).remoteProjects.touch(
         projectId,
         new Date().toISOString(),
         capabilities,
       );
-      if (!writesProgram(capabilities)) {
+      if (!builderCheckout) {
         await checkpointProgramSync(projectId, report);
       }
       notifyGitChanged(projectId);
@@ -2271,6 +2269,48 @@ export function registerIpcHandlers(
     },
   );
 
+  // Program files leave the folder only as a proposal or, for members who
+  // may publish the program, a deploy (ADR 0055).
+  const readProgramChanges = (rootPath: string, paths: unknown) => {
+    if (!Array.isArray(paths) || paths.length === 0 || paths.length > 200)
+      throw new Error("Choose the project files to share");
+    const selected = [
+      ...new Set(paths.map((entry) => normalizeDocumentPath(String(entry)))),
+    ];
+    const root = fs.realpathSync(rootPath);
+    return selected.map((relative) => {
+      if (isPersonalFile(relative) || isProjectDataPath(relative))
+        throw new Error(
+          "Choose project files to share. Personal files must be prepared for sharing first.",
+        );
+      const absolute = fs.realpathSync(path.join(root, relative));
+      const contained = path.relative(root, absolute);
+      const canonical = contained.split(path.sep).join("/");
+      if (
+        isPersonalFile(canonical) ||
+        canonical === ".git" ||
+        canonical.startsWith(".git/") ||
+        isProjectDataPath(canonical)
+      )
+        throw new Error(
+          "Shared project changes cannot include a link to personal files, the store, or repository internals",
+        );
+      if (contained.startsWith("..") || path.isAbsolute(contained))
+        throw new Error("Project files must be inside the project folder");
+      if (
+        !fs.statSync(absolute).isFile() ||
+        fs.statSync(absolute).size > 1024 * 1024
+      )
+        throw new Error("Only text files up to 1 MB each can be shared");
+      return {
+        path: relative,
+        content: new TextDecoder("utf-8", { fatal: true }).decode(
+          fs.readFileSync(absolute),
+        ),
+      };
+    });
+  };
+
   // Propose (ADR 0055): the folder's edits to program files become a
   // branch/PR on the member's behalf.
   ipcMain.handle(
@@ -2285,47 +2325,10 @@ export function registerIpcHandlers(
       },
     ) => {
       const link = requireLink(event, input.projectId);
-      const rootPath = await requireRoot(input.projectId);
-      if (
-        !Array.isArray(input.paths) ||
-        input.paths.length === 0 ||
-        input.paths.length > 200
-      ) {
-        throw new Error("Choose the files to include in your proposal");
-      }
-      const selected = [...new Set(input.paths.map(normalizeDocumentPath))];
-      const root = fs.realpathSync(rootPath);
-      const changes = selected.map((relative) => {
-        if (isPersonalFile(relative) || isProjectDataPath(relative))
-          throw new Error(
-            "Choose project files for this proposal. Personal files must be prepared for sharing first.",
-          );
-        const absolute = fs.realpathSync(path.join(root, relative));
-        const contained = path.relative(root, absolute);
-        const canonical = contained.split(path.sep).join("/");
-        if (
-          isPersonalFile(canonical) ||
-          canonical === ".git" ||
-          canonical.startsWith(".git/") ||
-          isProjectDataPath(canonical)
-        )
-          throw new Error(
-            "A proposal cannot include a link to personal files, the store, or repository internals",
-          );
-        if (contained.startsWith("..") || path.isAbsolute(contained))
-          throw new Error("Proposal files must be inside the project folder");
-        if (
-          !fs.statSync(absolute).isFile() ||
-          fs.statSync(absolute).size > 1024 * 1024
-        )
-          throw new Error("Proposals support text files up to 1 MB each");
-        return {
-          path: relative,
-          content: new TextDecoder("utf-8", { fatal: true }).decode(
-            fs.readFileSync(absolute),
-          ),
-        };
-      });
+      const changes = readProgramChanges(
+        await requireRoot(input.projectId),
+        input.paths,
+      );
       return storedRemoteClient(event, input.projectId, link).propose({
         title: input.title,
         ...(input.body ? { body: input.body } : {}),
@@ -2334,9 +2337,56 @@ export function registerIpcHandlers(
     },
   );
 
+  // A member holding `program:publish` ships the folder's program edits
+  // directly; the server still guards role files and attached repositories.
+  ipcMain.handle(
+    "catamorphic:remote-publish-program",
+    async (
+      event,
+      input: { projectId: string; message: string; paths: string[] },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      const rootPath = await requireRoot(input.projectId);
+      const client = storedRemoteClient(event, input.projectId, link);
+      // Download first: a file someone else published since this folder's
+      // last sync must be reconciled here, never overwritten by a publish.
+      if (joinedAsCheckout(input.projectId))
+        throw new Error(
+          "This folder is a checkout of the project's repository. Commit and open a pull request instead.",
+        );
+      const report = await syncRemoteProject(rootPath, client);
+      notifyGitChanged(input.projectId);
+      const changedThere = report.conflicts
+        .map((conflict) => conflict.path)
+        .filter((conflicted) => input.paths.includes(conflicted));
+      if (changedThere.length > 0)
+        throw new Error(
+          `${changedThere.join(", ")} changed on the server since your last download. Compare your version with the server copy beside it, then publish again.`,
+        );
+      const changes = readProgramChanges(rootPath, input.paths);
+      return client.publishProgram({
+        message: input.message,
+        files: Object.fromEntries(
+          changes.map((change) => [change.path, change.content]),
+        ),
+      });
+    },
+  );
+
   ipcMain.handle(
     "catamorphic:remote-disconnect",
     async (event, projectId: string) => {
+      // Leaving a server takes the member's sign-ins and private files with
+      // them (ADR 0184). Best effort: an unreachable server keeps its sealed
+      // copies (logins stop working when they expire).
+      const linked = storesFor(event).remoteProjects.get(projectId);
+      if (linked?.credentials)
+        await Promise.race([
+          storedRemoteClient(event, projectId, linked)
+            .deletePersonalEnvironment()
+            .catch(() => undefined),
+          new Promise((resolve) => setTimeout(resolve, 5_000)),
+        ]);
       storesFor(event).remoteProjects.delete(projectId);
       const rootPath = await requireRoot(projectId);
       fs.rmSync(path.join(rootPath, REMOTE_PROJECT_LOCATOR_PATH), {
@@ -2529,6 +2579,116 @@ export function registerIpcHandlers(
       await storedRemoteClient(event, input.projectId, link).revokeConnection(
         input.connectionId,
       );
+    },
+  );
+
+  // Remote environment (ADR 0184): the member's own sign-ins and listed
+  // files for their sessions on the linked server. Edits change
+  // `.work/personal/environment.json`, then send at once.
+  const personalEnvironment = () => {
+    const service = state.current?.personalEnvironment;
+    if (!service) throw new Error("The local server is starting");
+    return service;
+  };
+  const personalEnvironmentTarget = (
+    event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+  ) => {
+    requireLink(event, projectId);
+    return { profileId: windows.profileFor(event.sender), projectId };
+  };
+  const editPersonalEnvironment = async (
+    event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+    update: (config: PersonalEnvironmentConfig) => PersonalEnvironmentConfig,
+  ) => {
+    const target = personalEnvironmentTarget(event, projectId);
+    await updatePersonalEnvironmentConfig({
+      root: await requireRoot(projectId),
+      update,
+    });
+    return personalEnvironment().syncNow(target);
+  };
+  ipcMain.handle(
+    "catamorphic:personal-environment",
+    (event, projectId: string): PersonalEnvironmentView =>
+      personalEnvironment().view(personalEnvironmentTarget(event, projectId)),
+  );
+  ipcMain.handle(
+    "catamorphic:personal-environment-sync",
+    (event, projectId: string): Promise<PersonalEnvironmentView> =>
+      personalEnvironment().syncNow(
+        personalEnvironmentTarget(event, projectId),
+      ),
+  );
+  ipcMain.handle(
+    "catamorphic:personal-environment-add-files",
+    async (
+      event,
+      projectId: string,
+    ): Promise<PersonalEnvironmentView | null> => {
+      personalEnvironmentTarget(event, projectId);
+      const root = await requireRoot(projectId);
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (!window) return null;
+      const picked = await dialog.showOpenDialog(window, {
+        title: "Add files to your remote environment",
+        buttonLabel: "Add",
+        defaultPath: root,
+        properties: ["openFile", "multiSelections", "showHiddenFiles"],
+      });
+      if (picked.canceled || picked.filePaths.length === 0) return null;
+      const paths: string[] = [];
+      for (const absolute of picked.filePaths)
+        paths.push(await projectRelativePath({ root, absolute }));
+      return editPersonalEnvironment(event, projectId, (config) => ({
+        ...config,
+        files: [...new Set([...config.files, ...paths])],
+      }));
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:personal-environment-remove-file",
+    (
+      event,
+      input: { projectId: string; path: string },
+    ): Promise<PersonalEnvironmentView> =>
+      editPersonalEnvironment(event, input.projectId, (config) => ({
+        ...config,
+        files: config.files.filter((file) => file !== input.path),
+      })),
+  );
+  ipcMain.handle(
+    "catamorphic:personal-environment-set-login",
+    (
+      event,
+      input: { projectId: string; harness: string; included: boolean },
+    ): Promise<PersonalEnvironmentView> => {
+      const harness = input.harness;
+      if (!isPersonalHarness(harness))
+        throw new Error("Choose Claude Code or Codex");
+      return editPersonalEnvironment(event, input.projectId, (config) => {
+        const current = config.logins ?? [...PERSONAL_HARNESSES];
+        return {
+          ...config,
+          logins: input.included
+            ? PERSONAL_HARNESSES.filter(
+                (entry) => entry === harness || current.includes(entry),
+              )
+            : current.filter((entry) => entry !== harness),
+        };
+      });
+    },
+  );
+  // Creates the file with its defaults so the editor has something to open.
+  ipcMain.handle(
+    "catamorphic:personal-environment-config-file",
+    async (event, projectId: string): Promise<string> => {
+      personalEnvironmentTarget(event, projectId);
+      await ensurePersonalEnvironmentConfig({
+        root: await requireRoot(projectId),
+      });
+      return PERSONAL_ENVIRONMENT_PATH;
     },
   );
 
@@ -3391,6 +3551,19 @@ export function registerIpcHandlers(
         project,
       });
     },
+  );
+}
+
+/** A builder of a GitHub-backed project works in a git checkout of it;
+ * everyone else's folder receives program files through remote sync. */
+function isBuilderCheckout(capabilities: {
+  permissions: readonly string[];
+  source?: { remoteUrl?: string | null } | null;
+}): boolean {
+  return Boolean(
+    writesProgram(capabilities) &&
+      capabilities.source?.remoteUrl &&
+      repoFullNameFromUrl(capabilities.source.remoteUrl),
   );
 }
 

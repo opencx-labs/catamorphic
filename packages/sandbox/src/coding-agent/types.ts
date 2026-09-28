@@ -2,6 +2,7 @@ import type {
   AgentCapabilityGateway,
   TurnContextFragment,
 } from "../agent-capabilities.js";
+import type { PersonalLoginKind } from "../execution-environment.js";
 import type { AgentEvent, AgentQuestion, SandboxProvider } from "../types.js";
 import type { HarnessPermissions } from "./harness-permissions.js";
 import type { McpToolPolicyLayers } from "./tool-policy.js";
@@ -263,12 +264,29 @@ export interface TurnSandbox {
   stateDirectory: string;
 }
 
+/**
+ * The session owner's own harness login, delivered into the sandbox (ADR
+ * 0184). A sandbox-resident harness given one talks to its provider
+ * directly with that login instead of through the gateway.
+ */
+export interface SandboxPersonalLogin {
+  harness: PersonalLoginKind;
+  /**
+   * Absolute sandbox directory holding the login: Claude Code's
+   * `CLAUDE_CONFIG_DIR` (with `.credentials.json`) or Codex's `CODEX_HOME`
+   * (with `auth.json`).
+   */
+  home: string;
+}
+
 /** Per-turn overrides; anything unset falls back to the provider's defaults. */
 export interface TurnOptions {
   /** The session's sandbox, for sandbox-resident harnesses (ADR 0180). */
   sandbox?: TurnSandbox;
   /** The agent's model through the gateway (ADR 0180). */
   modelGateway?: SandboxModelGateway;
+  /** The owner's own harness login in the sandbox (ADR 0184). */
+  personalLogin?: SandboxPersonalLogin;
   /** Host-owned question persistence and answer delivery. */
   askQuestion?: (input: {
     requestId: string;

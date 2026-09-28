@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { WorkerNodesService } from "@catamorphic/core";
 import { expect, it } from "vitest";
-import { executionSettingsFromEnv, workExecution } from "./execution-config.js";
+import {
+  executionSettingsFromEnv,
+  machineCapabilities,
+  workExecution,
+} from "./execution-config.js";
 import { createWorkServer, SERVER_TENANT_ID } from "./server.js";
 import { testServerOptions } from "./test-support.js";
 
@@ -73,8 +77,44 @@ it("configures images, containers and unenforced egress per backend (ADR 0176)",
       "local-process only",
     ],
     [{ WORK_UNENFORCED_EGRESS: "yes" }, "must be accept"],
+    [{ WORK_PERSONAL_CREDENTIALS: "yes" }, "must be accept"],
+    [
+      { WORK_SANDBOX: "microsandbox", WORK_PERSONAL_CREDENTIALS: "accept" },
+      "microsandbox gives each chat its own VM",
+    ],
   ] as const)
     expect(() => executionSettingsFromEnv(env)).toThrow(message);
+});
+
+it("advertises accepted personal credentials and the harness CLIs on its path (ADR 0184)", async () => {
+  const bin = await fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-bin-"));
+  try {
+    await fs.writeFile(path.join(bin, "claude"), "#!/bin/sh\n", {
+      mode: 0o755,
+    });
+    // Not executable: not a CLI.
+    await fs.writeFile(path.join(bin, "codex"), "", { mode: 0o644 });
+    const settings = executionSettingsFromEnv({
+      PATH: bin,
+      WORK_PERSONAL_CREDENTIALS: "accept",
+    });
+    expect(settings.acceptPersonalCredentials).toBe(true);
+    expect(machineCapabilities(settings)).toEqual([
+      "credentials.personal",
+      "harness.claude-code",
+    ]);
+    expect(
+      machineCapabilities(executionSettingsFromEnv({ PATH: bin })),
+    ).toEqual(["harness.claude-code"]);
+    // A VM gets its CLIs from the Environment's image.
+    expect(
+      machineCapabilities(
+        executionSettingsFromEnv({ PATH: bin, WORK_SANDBOX: "microsandbox" }),
+      ),
+    ).toEqual([]);
+  } finally {
+    await fs.rm(bin, { recursive: true, force: true });
+  }
 });
 
 it("a full managed machine preserves existing work and restores an archived session with fresh capacity", async () => {

@@ -151,15 +151,18 @@ export class RemoteWorkerJobsService {
           .skipLocked()
           .executeTakeFirst();
         if (!next) return null;
+        const operation = ClientRunnerOperationSchema.parse(next.operation);
+        // Once taken, the payload leaves Postgres: uploads may carry a
+        // member's personal login (ADR 0184) or project content.
         await trx
           .updateTable("worker_node_jobs")
-          .set({ status: "running" })
+          .set({
+            status: "running",
+            operation: toJson({ kind: operation.kind, taken: true }),
+          })
           .where("id", "=", next.id)
           .execute();
-        return {
-          id: next.id,
-          operation: ClientRunnerOperationSchema.parse(next.operation),
-        };
+        return { id: next.id, operation };
       });
       if (job || Date.now() >= deadline) return job;
       await new Promise((resolve) => setTimeout(resolve, 250));

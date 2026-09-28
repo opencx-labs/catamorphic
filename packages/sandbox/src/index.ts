@@ -22,6 +22,7 @@ export {
   type HarnessPermissions,
   harnessPermissionIssues,
 } from "./coding-agent/harness-permissions.js";
+export { transcriptHistoryPreamble } from "./coding-agent/history.js";
 export {
   buildPluginsPreamble,
   PLUGIN_STAGE_DIR,
@@ -116,6 +117,7 @@ export type {
   McpServersSource,
   ProviderSession,
   SandboxModelGateway,
+  SandboxPersonalLogin,
   SessionCaller,
   StartSessionOpts,
   TurnOptions,
@@ -138,7 +140,12 @@ export {
   type EnvironmentRuntimeBinding,
   type EnvironmentTrust,
   environmentSatisfies,
+  harnessCapability,
+  MACHINE_CAPABILITIES,
+  type MachineCapability,
   type NodeAccess,
+  PERSONAL_LOGIN_KINDS,
+  type PersonalLoginKind,
   placementOrder,
   poolMatches,
   type WorkloadKind,

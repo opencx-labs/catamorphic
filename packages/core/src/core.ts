@@ -78,6 +78,7 @@ import {
   dbModelGatewayStore,
   ModelGatewayService,
 } from "./services/model-gateway.js";
+import { PersonalEnvironmentService } from "./services/personal-environment-service.js";
 import { PluginsService } from "./services/plugins-service.js";
 import { ProjectEnvironmentsService } from "./services/project-environments-service.js";
 import { ProjectEventDispatcher } from "./services/project-event-dispatcher.js";
@@ -425,6 +426,8 @@ export class CatamorphicCore {
   readonly retention: RetentionService;
   readonly plugins?: PluginsService;
   readonly secrets?: SecretsService;
+  /** Members' own logins and files for their own chats (ADR 0184). */
+  readonly personalEnvironments: PersonalEnvironmentService;
   readonly runPluginsLoader: RunPluginsLoader;
   private connectionProviderRegistry?: ConnectionProviderRegistry;
   /** A project member's current identity: the host's resolver, else stock memberships. */
@@ -942,6 +945,14 @@ export class CatamorphicCore {
           : this.workflows.listDeclaredSecrets(args),
       config.credentialVault,
     );
+    this.personalEnvironments = new PersonalEnvironmentService({
+      db: this.db,
+      ...(config.credentialVault ? { vault: config.credentialVault } : {}),
+      environments: this.projectEnvironments,
+      loginsInUse: (args) =>
+        this.agentSessions?.personalLoginsInUse(args) ??
+        Promise.resolve(new Set()),
+    });
     this.runPluginsLoader = new RunPluginsLoader(
       this.secrets,
       this.plugins && this.pluginResolver
@@ -1143,6 +1154,7 @@ export class CatamorphicCore {
         connectionGrants: this.connectionGrants,
         connectionMcpUrl: config.connectionMcpUrl,
         workspaces: this.sessionWorkspaces,
+        personalEnvironments: this.personalEnvironments,
         ...(config.gatewayUrl
           ? {
               sandboxGateway: {

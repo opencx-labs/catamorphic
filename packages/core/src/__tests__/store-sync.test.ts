@@ -195,6 +195,36 @@ describe("remote project sync (ADR 0055)", () => {
     expect(localStatus(root).modified).toEqual([]);
   });
 
+  it("lists new files under .work as program edits, never app data, personal files, or dependencies", async () => {
+    await syncRemoteProject(root, server);
+    write(root, ".work/images/harness.Dockerfile", "FROM node:22\n");
+    write(root, ".work/app-data/cache.json", "{}\n");
+    write(root, ".work/personal/environment.json", "{}\n");
+    write(root, ".work/node_modules/pkg/index.js", "\n");
+    write(root, "notes/scratch.md", "mine\n");
+    write(root, ".work/.DS_Store", "\n");
+    write(root, ".work/workflows/.DS_Store", "\n");
+    expect(localStatus(root).programEdits).toEqual([
+      ".work/images/harness.Dockerfile",
+    ]);
+    // The folder's own ignore rules count too.
+    write(
+      root,
+      ".work/.gitignore",
+      "/app-data/\nnode_modules/\ndist/\n.turbo/\n.DS_Store\n*.local\n",
+    );
+    write(root, ".work/config.local", "secret\n");
+    expect(localStatus(root).programEdits).toEqual([
+      ".work/.gitignore",
+      ".work/images/harness.Dockerfile",
+    ]);
+  });
+
+  it("a folder that gets no program files through sync lists no new ones", () => {
+    write(root, ".work/images/harness.Dockerfile", "FROM node:22\n");
+    expect(localStatus(root).programEdits).toEqual([]);
+  });
+
   it("ship conflict: someone wrote first → their copy lands beside ours, ours stays, explicit resolution is required", async () => {
     await syncRemoteProject(root, server);
     write(root, "store/customers/acme/notes.md", "my edit\n");

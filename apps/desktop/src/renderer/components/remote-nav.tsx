@@ -1,4 +1,4 @@
-import { Download, KeyRound, Upload, Users } from "lucide-react";
+import { Download, KeyRound, ServerCog, Upload, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   desktopApi,
@@ -18,6 +18,7 @@ import { SidebarTree } from "./sidebar-tree.js";
 export type RemoteFeatures = RemoteCapabilities["features"];
 
 import { PendingButton } from "./pending-button.js";
+import { RemoteEnvironmentModal } from "./remote-environment-modal.js";
 import { RemoteMembersModal } from "./remote-members-modal.js";
 import { RemoteServiceConnectionsModal } from "./remote-service-connections-modal.js";
 
@@ -51,6 +52,7 @@ export function RemoteNav({
   const [message, setMessage] = useState<string | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
+  const [environmentOpen, setEnvironmentOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
 
   const refresh = useCallback(async () => {
@@ -111,7 +113,12 @@ export function RemoteNav({
       setMessage(describe(verb, report));
       setSelected([]);
     } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : String(cause));
+      const text = cause instanceof Error ? cause.message : String(cause);
+      setMessage(
+        /fetch failed|Failed to fetch|ECONNREFUSED/.test(text)
+          ? `Could not reach ${host}. Check that it is running and try again.`
+          : text,
+      );
     } finally {
       setBusy(null);
       void refresh();
@@ -187,6 +194,15 @@ export function RemoteNav({
             </span>
           </PendingButton>
         </div>
+        <button
+          type="button"
+          onClick={() => setEnvironmentOpen(true)}
+          data-testid="remote-environment"
+          className="flex h-7 items-center justify-center gap-1.5 rounded-md border border-border text-xs text-fg-muted hover:bg-bg-overlay hover:text-fg"
+        >
+          <ServerCog className="size-3.5" />
+          Remote environment
+        </button>
         {canManageMembers && (
           <button
             type="button"
@@ -301,6 +317,12 @@ export function RemoteNav({
         open={connectionsOpen}
         projectId={projectId}
         onClose={() => setConnectionsOpen(false)}
+      />
+      <RemoteEnvironmentModal
+        open={environmentOpen}
+        projectId={projectId}
+        onClose={() => setEnvironmentOpen(false)}
+        onOpenFile={onOpenFile}
       />
     </>
   );

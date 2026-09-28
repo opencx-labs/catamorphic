@@ -121,6 +121,7 @@ import {
 } from "./components/remote-actions-modals.js";
 import { RemoteConnectModal } from "./components/remote-connect-modal.js";
 import { RemoteConnectionIndicator } from "./components/remote-connection-indicator.js";
+import { RemoteEnvironmentModal } from "./components/remote-environment-modal.js";
 import { RemoteHistoryModal } from "./components/remote-history-modal.js";
 import type { RemoteFeatures } from "./components/remote-nav.js";
 import { ScreenShareHost } from "./components/screen-share-picker.js";
@@ -477,6 +478,9 @@ export function App({
     null,
   );
   // Continue on mobile: the QR pairing modal + the chat it should open.
+  // Remote environment (ADR 0184): the palette's way into the same dialog
+  // the sidebar's Server section opens.
+  const [remoteEnvironmentOpen, setRemoteEnvironmentOpen] = useState(false);
   const [mobilePairing, setMobilePairing] = useState<{
     open: boolean;
     context: { projectId?: string; sessionId?: string } | null;
@@ -3678,6 +3682,9 @@ export function App({
       setRemoteConnect({ open: true, link: null }),
     // Capture the focused chat NOW: the QR should land the phone in the
     // exact conversation that was on screen when the action ran.
+    "remote-environment": () => {
+      if (remoteSurfaceStatus) setRemoteEnvironmentOpen(true);
+    },
     "continue-on-mobile": () =>
       setMobilePairing({
         open: true,
@@ -5082,6 +5089,7 @@ export function App({
   }
   const paletteActionAvailability: Partial<Record<ActionId, boolean>> = {
     "reopen-tab": workspace.closedTabs.length > 0,
+    "remote-environment": remoteSurfaceStatus !== null,
     "toggle-chat-minimized": paletteTargetChat !== undefined,
     "chat-to-tab":
       paletteTargetChat !== undefined &&
@@ -5579,6 +5587,22 @@ export function App({
         context={mobilePairing.context}
         onClose={() => setMobilePairing({ open: false, context: null })}
       />
+      {projectId && (
+        <RemoteEnvironmentModal
+          open={remoteEnvironmentOpen && remoteSurfaceStatus !== null}
+          projectId={projectId}
+          onClose={() => setRemoteEnvironmentOpen(false)}
+          onOpenFile={(filePath) => {
+            void openLinkedSurface(`file:${filePath}`).catch((cause: unknown) =>
+              setLinkError(
+                cause instanceof Error
+                  ? cause.message
+                  : "Could not open this file",
+              ),
+            );
+          }}
+        />
+      )}
       {/* Project-agent consent (ADR 0050): approve, then complete the
           original pick and refresh the roster's consent state. */}
       <ProjectAgentConsentDialog

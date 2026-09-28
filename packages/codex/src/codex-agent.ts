@@ -34,6 +34,7 @@ import {
   spawnInSandbox,
   stagedPluginFiles,
   stagePluginDocs,
+  transcriptHistoryPreamble,
 } from "@catamorphic/sandbox";
 import type {
   CodexOptions,
@@ -128,16 +129,24 @@ export interface CodexAgentOpts {
    * process operations. `command` is the CLI in the sandbox image (default
    * `codex`). Its model provider is the gateway, authenticated by a command
    * that reads the session's current grant file; no host variable reaches
-   * it. Codex's own OS sandbox is off there: the Work sandbox is the
+   * it. A turn carrying the owner's own login (`TurnOptions.personalLogin`,
+   * ADR 0184) runs with `CODEX_HOME` at that login and Codex's own OpenAI
+   * provider instead of the gateway. Codex's own OS sandbox is off there: the Work sandbox is the
    * boundary, and modes are enforced where changes leave it (ADR 0176).
    */
   sandbox?: { command?: string };
 }
 
-/** Where a sandbox-resident turn runs and how it reaches its model. */
+/**
+ * Where a sandbox-resident turn runs and how it reaches its model: through
+ * the gateway with the session's grant (ADR 0180), or directly with the
+ * owner's own login in `CODEX_HOME` (ADR 0184).
+ */
 interface SandboxRun {
   sandbox: TurnSandbox;
-  gateway: SandboxModelGateway;
+  auth:
+    | { kind: "gateway"; gateway: SandboxModelGateway }
+    | { kind: "personal"; home: string };
   command: string;
 }
 
@@ -188,7 +197,12 @@ export class CodexAgent implements CodingAgentProvider {
       return new CodexAppServer(
         {
           codexPathOverride: sandboxRun.command,
-          config: { ...config, ...gatewayProviderConfig(sandboxRun.gateway) },
+          config: {
+            ...config,
+            ...(sandboxRun.auth.kind === "gateway"
+              ? gatewayProviderConfig(sandboxRun.auth.gateway)
+              : {}),
+          },
         },
         this.opts.mcpElicitationForSession?.({ sessionId }),
         this.opts.onToolPermission,
@@ -269,7 +283,10 @@ export class CodexAgent implements CodingAgentProvider {
       ...(sandboxRun
         ? {
             sandboxId: sandboxRun.sandbox.sandboxId,
-            model: sandboxRun.gateway.baseUrl,
+            model:
+              sandboxRun.auth.kind === "gateway"
+                ? sandboxRun.auth.gateway.baseUrl
+                : `personal:${sandboxRun.auth.home}`,
           }
         : {}),
     });
@@ -283,6 +300,43 @@ export class CodexAgent implements CodingAgentProvider {
     client.setContext(contextPrompt);
     this.clients.set(session.sessionId, { signature, client });
     return client;
+  }
+
+  /** Per session: the sandbox directory last resolved, and its answer. */
+  private readonly sandboxDirectories = new Map<
+    string,
+    { sandboxId: string; directory: string; resolved: string }
+  >();
+
+  /**
+   * The working directory as the sandbox's own processes name it. Codex
+   * receives it over its protocol, not as its process's cwd, so a provider
+   * that maps the virtual `/workspace` onto a host folder (local-process)
+   * must hand Codex the mapped path; a VM answers `/workspace` itself.
+   */
+  private async sandboxDirectory(input: {
+    sessionId: string;
+    run: SandboxRun;
+    directory: string;
+  }): Promise<string> {
+    const { run, directory } = input;
+    const sandboxId = run.sandbox.sandboxId;
+    const known = this.sandboxDirectories.get(input.sessionId);
+    if (known?.sandboxId === sandboxId && known.directory === directory)
+      return known.resolved;
+    const { exitCode, result } = await run.sandbox.provider.executeCommand(
+      sandboxId,
+      "pwd -P",
+      { cwd: directory },
+    );
+    const resolved = result.trim();
+    if (exitCode !== 0 || !resolved.startsWith("/")) return directory;
+    this.sandboxDirectories.set(input.sessionId, {
+      sandboxId,
+      directory,
+      resolved,
+    });
+    return resolved;
   }
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
@@ -304,7 +358,13 @@ export class CodexAgent implements CodingAgentProvider {
     const preamble = buildPluginsPreamble(opts.attachedPlugins, {
       directory: this.opts.pluginDirectory,
     });
-    const instructions = [preamble, opts.systemPrompt ?? ""]
+    const instructions = [
+      preamble,
+      opts.systemPrompt ?? "",
+      // A sandbox-resident session re-anchored in a new sandbox has no
+      // thread there: it continues from the host's transcript.
+      this.opts.sandbox ? transcriptHistoryPreamble(opts.history) : "",
+    ]
       .filter(Boolean)
       .join("\n\n");
     if (instructions) {
@@ -418,7 +478,13 @@ export class CodexAgent implements CodingAgentProvider {
       sandboxRun,
     );
     const threadOptions = this.threadOptions(
-      session.workingDirectory,
+      sandboxRun
+        ? await this.sandboxDirectory({
+            sessionId: session.sessionId,
+            run: sandboxRun,
+            directory: session.workingDirectory,
+          })
+        : session.workingDirectory,
       opts,
       sandboxRun !== undefined,
     );
@@ -508,6 +574,7 @@ export class CodexAgent implements CodingAgentProvider {
     this.callerPolicies.delete(session.sessionId);
     this.sessionContexts.delete(session.sessionId);
     this.sessionMcpServers.delete(session.sessionId);
+    this.sandboxDirectories.delete(session.sessionId);
   }
 
   private clearAbortController(controller: AbortController): void {
@@ -634,16 +701,31 @@ function sandboxRunFor(
 ): SandboxRun | string {
   if (!turn?.sandbox?.provider.processes)
     return "Codex runs inside this chat's sandbox, and this Environment's sandboxes cannot run it (they do not run processes).";
+  const command = options.command ?? "codex";
+  if (turn.personalLogin?.harness === "codex")
+    return {
+      sandbox: turn.sandbox,
+      auth: { kind: "personal", home: turn.personalLogin.home },
+      command,
+    };
   const gateway = turn.modelGateway;
   if (!gateway)
     return "Codex reaches its model through the gateway, and this chat has no model connection: bind one in the agent's Environment and name it in the agent's credentials.";
   if (gateway.api !== "openai")
     return `Codex speaks the OpenAI API; the connection '${gateway.alias}' is an ${gateway.api} API.`;
-  return {
-    sandbox: turn.sandbox,
-    gateway,
-    command: options.command ?? "codex",
-  };
+  return { sandbox: turn.sandbox, auth: { kind: "gateway", gateway }, command };
+}
+
+/**
+ * Path variables of the app server in the sandbox: the gateway grant file,
+ * or `CODEX_HOME` holding the owner's own `auth.json` (ADR 0184).
+ */
+export function sandboxPathEnv(run: {
+  auth: SandboxRun["auth"];
+}): Record<string, string> {
+  return run.auth.kind === "gateway"
+    ? { WORK_MODEL_KEY_FILE: run.auth.gateway.keyFile }
+    : { CODEX_HOME: run.auth.home };
 }
 
 /**
@@ -687,7 +769,7 @@ function sandboxSpawn(input: {
       args,
       cwd: input.cwd || run.sandbox.stateDirectory,
       env,
-      pathEnv: { WORK_MODEL_KEY_FILE: run.gateway.keyFile },
+      pathEnv: sandboxPathEnv(run),
       stderrPath: stderr,
       name: "Codex",
       readStderr: async () =>

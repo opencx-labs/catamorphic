@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { Check, Copy } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
@@ -12,7 +13,8 @@ import type { RemoteFeatures } from "./remote-nav.js";
  *   link always shows what you see.
  * - Propose: this folder's edits to program files (outside store/) become
  *   a branch, and a pull request on your behalf when the project is on
- *   GitHub. The program changes by review, never by ship.
+ *   GitHub. The program changes by review, never by ship. A member who
+ *   may publish the program can instead publish the files directly.
  */
 
 export function RemotePublishModal({
@@ -192,27 +194,34 @@ export function RemoteProposeModal({
   const [selected, setSelected] = useState<string[]>(
     files.length === 1 ? files : [],
   );
-  const [pending, setPending] = useState(false);
-  const [result, setResult] = useState<{
-    branch: string;
-    pullRequest?: { url: string; number: number };
-  } | null>(null);
+  const [pending, setPending] = useState<"propose" | "publish" | null>(null);
+  const [result, setResult] = useState<
+    | { branch: string; pullRequest?: { url: string; number: number } }
+    | { published: true }
+    | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
+  const access = useQuery({
+    queryKey: ["proposal-review-access", projectId],
+    queryFn: () => desktopApi.remoteStatus(projectId),
+    enabled: open,
+  });
+  const canPublish =
+    access.data?.capabilities?.permissions.includes("program:publish") === true;
 
   useEffect(() => {
     if (!open) return;
     setTitle("");
     setBody("");
-    setPending(false);
+    setPending(null);
     setResult(null);
     setError(null);
     setSelected(files.length === 1 ? files : []);
   }, [open, files]);
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!title.trim() || selected.length === 0) return;
-    setPending(true);
+  const propose = async () => {
+    if (!title.trim() || selected.length === 0 || pending) return;
+    setPending("propose");
     setError(null);
     try {
       setResult(
@@ -226,8 +235,40 @@ export function RemoteProposeModal({
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setPending(false);
+      setPending(null);
     }
+  };
+  const publish = async () => {
+    if (!title.trim() || selected.length === 0 || pending) return;
+    setPending("publish");
+    setError(null);
+    try {
+      const deployed = await desktopApi.remotePublishProgram({
+        projectId,
+        message: body.trim()
+          ? `${title.trim()}\n\n${body.trim()}`
+          : title.trim(),
+        paths: selected,
+      });
+      if (deployed.status === "conflict")
+        setError(
+          `The shared project changed ${deployed.conflicts.map((entry) => entry.path).join(", ")} since you downloaded it. Download updates, then publish again.`,
+        );
+      else {
+        // Pull the published version so this folder records it as shared.
+        await desktopApi.remoteSync(projectId).catch(() => undefined);
+        setResult({ published: true });
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPending(null);
+    }
+  };
+  // Enter takes the dialog's primary action.
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    void (canPublish ? publish() : propose());
   };
 
   return (
@@ -236,12 +277,16 @@ export function RemoteProposeModal({
         <div className="flex flex-col gap-4 px-5 pt-5 pb-4">
           <div>
             <h2 className="text-[15px] font-semibold text-fg">
-              Propose these changes
+              {canPublish ? "Share these changes" : "Propose these changes"}
             </h2>
             <p className="mt-1 text-xs text-fg-muted">
               {result
-                ? "Your proposal is ready for the project reviewers."
-                : "Choose the files to send for review. The shared project changes only after approval."}
+                ? "published" in result
+                  ? "The shared project now has these changes."
+                  : "Your proposal is ready for the project reviewers."
+                : canPublish
+                  ? "Choose the files to share. Publish them to the project now, or propose them for review."
+                  : "Choose the files to send for review. The shared project changes only after approval."}
             </p>
           </div>
           {!result ? (
@@ -290,7 +335,9 @@ export function RemoteProposeModal({
             </>
           ) : (
             <p className="text-[13px] text-fg" data-testid="propose-result">
-              {result.pullRequest ? (
+              {"published" in result ? (
+                <>Published: {title}</>
+              ) : result.pullRequest ? (
                 <>
                   Proposal #{result.pullRequest.number}: {title}
                 </>
@@ -309,11 +356,11 @@ export function RemoteProposeModal({
           >
             {result ? "Done" : "Cancel"}
           </button>
-          {result?.pullRequest && (
+          {result && "pullRequest" in result && result.pullRequest && (
             <button
               type="button"
               onClick={() => {
-                if (!result.pullRequest) return;
+                if (!("pullRequest" in result) || !result.pullRequest) return;
                 onOpenProposal({ number: result.pullRequest.number, title });
                 onClose();
               }}
@@ -324,15 +371,37 @@ export function RemoteProposeModal({
           )}
           {!result && (
             <PendingButton
-              type="submit"
-              pending={pending}
+              type={canPublish ? "button" : "submit"}
+              onClick={canPublish ? () => void propose() : undefined}
+              pending={pending === "propose"}
               pendingLabel="Proposing…"
-              disabled={!title.trim() || selected.length === 0}
+              disabled={
+                !title.trim() || selected.length === 0 || pending === "publish"
+              }
               data-disabled-reason="Enter a title and select at least one file"
               data-testid="propose-submit"
+              className={
+                canPublish
+                  ? "h-8 cursor-pointer rounded-md border border-border px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+                  : "button-primary"
+              }
+            >
+              {canPublish ? "Propose instead" : "Propose"}
+            </PendingButton>
+          )}
+          {!result && canPublish && (
+            <PendingButton
+              type="submit"
+              pending={pending === "publish"}
+              pendingLabel="Publishing…"
+              disabled={
+                !title.trim() || selected.length === 0 || pending === "propose"
+              }
+              data-disabled-reason="Enter a title and select at least one file"
+              data-testid="propose-publish"
               className="button-primary"
             >
-              Propose
+              Publish
             </PendingButton>
           )}
         </footer>
