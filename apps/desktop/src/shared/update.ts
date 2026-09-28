@@ -1,6 +1,8 @@
 export type DesktopUpdatePhase =
   | "idle"
   | "unsupported"
+  /** Running outside Applications (a disk image, Downloads): macOS cannot replace it. */
+  | "move-required"
   | "checking"
   | "available"
   | "downloading"

@@ -84,7 +84,17 @@ class FakeUpdater implements UpdaterAdapter {
   }
 }
 
-function setup() {
+function setup(
+  options: Partial<
+    Pick<
+      ConstructorParameters<typeof DesktopUpdaterController>[0],
+      | "installedInPlace"
+      | "moveToApplications"
+      | "prepareInstall"
+      | "canInstall"
+    >
+  > = {},
+) {
   const updater = new FakeUpdater();
   const states: DesktopUpdateState[] = [];
   const controller = new DesktopUpdaterController({
@@ -94,6 +104,7 @@ function setup() {
     updater,
     broadcast: (state) => states.push(state),
     logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    ...options,
   });
   return { updater, states, controller };
 }
@@ -265,6 +276,58 @@ describe("DesktopUpdaterController", () => {
     updater.downloaded("0.1.0-alpha.2");
     await controller.install();
     expect(updater.quitAndInstall).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks to move Work to Applications instead of downloading an update it cannot install", async () => {
+    const moveToApplications = vi.fn(async () => true);
+    const { controller, updater } = setup({
+      installedInPlace: () => false,
+      moveToApplications,
+    });
+    await controller.check(false);
+    expect(updater.checkForUpdates).not.toHaveBeenCalled();
+    expect(controller.current()).toMatchObject({ phase: "move-required" });
+    await controller.move();
+    expect(moveToApplications).toHaveBeenCalledTimes(1);
+  });
+
+  it("turns Squirrel's read-only volume refusal into the move request", async () => {
+    const { controller, updater } = setup({
+      prepareInstall: async () => {
+        throw new Error(
+          "Cannot update while running on a read-only volume. The application is on a read-only volume. Please move the application and try again.",
+        );
+      },
+    });
+    updater.downloaded("0.1.0-alpha.2");
+    await controller.install();
+    expect(controller.current()).toMatchObject({
+      phase: "move-required",
+      manual: true,
+    });
+    expect(controller.current().message).toBeUndefined();
+    expect(updater.quitAndInstall).not.toHaveBeenCalled();
+  });
+
+  it("keeps Work where it is when the person declines the move or work is running", async () => {
+    let active = true;
+    const moveToApplications = vi.fn(async () => false);
+    const { controller } = setup({
+      installedInPlace: () => false,
+      moveToApplications,
+      canInstall: async () => !active,
+    });
+    await controller.check(true);
+    await controller.move();
+    expect(moveToApplications).not.toHaveBeenCalled();
+    expect(controller.current().message).toMatch(/Finish active agents/);
+    active = false;
+    await controller.move();
+    expect(moveToApplications).toHaveBeenCalledTimes(1);
+    expect(controller.current()).toMatchObject({
+      phase: "move-required",
+      message: expect.stringMatching(/stayed where it is/),
+    });
   });
 
   it("holds channel selection while the current feed is being checked", async () => {

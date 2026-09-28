@@ -44,6 +44,10 @@ export function registerDesktopUpdater(options: {
   const controller = new DesktopUpdaterController({
     prepareInstall: () => preparation.prepare(),
     canInstall: options.canInstall,
+    installedInPlace: () => app.isInApplicationsFolder(),
+    // Electron moves the bundle (out of a disk image or App Translocation
+    // too) and relaunches from Applications; false when the person declines.
+    moveToApplications: async () => app.moveToApplicationsFolder(),
     currentVersion: app.getVersion(),
     channel,
     supported: app.isPackaged && process.platform === "darwin",
@@ -56,6 +60,7 @@ export function registerDesktopUpdater(options: {
   ipcMain.handle("catamorphic:update-check", () => controller.check(true));
   ipcMain.handle("catamorphic:update-download", () => controller.download());
   ipcMain.handle("catamorphic:update-install", () => controller.install());
+  ipcMain.handle("catamorphic:update-move", () => controller.move());
 
   const supported = app.isPackaged && process.platform === "darwin";
   // The installer relaunches the app in the background; the next launch
@@ -99,6 +104,7 @@ export function registerDesktopUpdater(options: {
         "catamorphic:update-check",
         "catamorphic:update-download",
         "catamorphic:update-install",
+        "catamorphic:update-move",
       ]) {
         ipcMain.removeHandler(channel);
       }

@@ -12,6 +12,7 @@ vi.mock("../lib/desktop-api.js", () => ({
     updateState: vi.fn(),
     updateDownload: vi.fn(),
     updateInstall: vi.fn(),
+    updateMove: vi.fn(),
     updateCheck: vi.fn(),
     onUpdateStateChanged: vi.fn(() => () => {}),
   },
@@ -54,6 +55,22 @@ describe("UpdateBanner", () => {
     });
     expect(container.textContent).toContain("Preparing to restart");
     expect(container.textContent).not.toContain("Restart to update");
+  });
+
+  it("asks to move Work to Applications, even after a background check", async () => {
+    const container = await mount({
+      phase: "move-required",
+      currentVersion: "0.1.0-alpha.1",
+      channel: "preview",
+      manual: false,
+    });
+    expect(container.textContent).toContain("Move Work to Applications");
+    expect(container.textContent).not.toContain("Restart to update");
+    const button = [...container.querySelectorAll("button")].find(
+      (element) => element.textContent === "Move to Applications",
+    );
+    await act(async () => button?.click());
+    expect(desktopApi.updateMove).toHaveBeenCalledTimes(1);
   });
 
   it("does not overwrite an update event with a stale initial snapshot", async () => {
