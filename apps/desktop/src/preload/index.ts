@@ -371,6 +371,9 @@ const api = {
     invoke("catamorphic:history-record", input),
   historyRemove: (id: string) => invoke("catamorphic:history-remove", id),
   historyClear: () => invoke("catamorphic:history-clear"),
+  paletteRecord: (input: unknown) =>
+    invoke("catamorphic:palette-record", input),
+  paletteSignals: () => invoke("catamorphic:palette-signals"),
   onHistoryChanged: (listener: () => void) => {
     const handler = () => listener();
     ipcRenderer.on("catamorphic:history-changed", handler);

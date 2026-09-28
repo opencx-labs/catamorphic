@@ -69,6 +69,7 @@ import {
   type OpenModifiers,
   openModeFromEvent,
 } from "../shared/open-mode.js";
+import { PALETTE_SURFACE_KINDS, surfaceUsageKey } from "../shared/palette.js";
 import {
   type ProjectExperienceContext,
   writesProgram,
@@ -97,7 +98,8 @@ import type { ChatDockEntry, ChatSurface } from "./components/chat-dock.js";
 import { ChatRegistration } from "./components/chat-registration.js";
 import {
   CommandPalette,
-  type PaletteSearchRequest,
+  type PaletteChoiceMode,
+  type PaletteModeRequest,
 } from "./components/command-palette.js";
 import { ConfigureAgentModal } from "./components/configure-agent-modal.js";
 import { ConnectorsModal } from "./components/connectors-modal.js";
@@ -759,14 +761,21 @@ export function App({
     ? true
     : remoteSurfaceStatus !== null &&
       !writesProgram(remoteSurfaceStatus.capabilities);
-  const projectExperienceContext: ProjectExperienceContext = {
-    root: remoteSurfaceResolved && remoteSurfaceStatus === null,
-    permissions: remoteSurfaceStatus?.capabilities?.permissions ?? [],
-  };
-  const visibleSidebars = visibleSidebarConfig({
-    config: sidebarConfig,
-    context: projectExperienceContext,
-  });
+  const experienceRoot = remoteSurfaceResolved && remoteSurfaceStatus === null;
+  const experiencePermissions = remoteSurfaceStatus?.capabilities?.permissions;
+  // Stable between renders: the palette and sidebars derive indexes from it.
+  const projectExperienceContext = useMemo<ProjectExperienceContext>(
+    () => ({ root: experienceRoot, permissions: experiencePermissions ?? [] }),
+    [experienceRoot, experiencePermissions],
+  );
+  const visibleSidebars = useMemo(
+    () =>
+      visibleSidebarConfig({
+        config: sidebarConfig,
+        context: projectExperienceContext,
+      }),
+    [sidebarConfig, projectExperienceContext],
+  );
 
   const sidebarScope = `${activeProfile?.id}:${projectId}`;
   useEffect(() => {
@@ -1873,11 +1882,11 @@ export function App({
     });
   };
   const historySearch = () => {
-    setSearchRequest({ mode: "history", nonce: crypto.randomUUID() });
+    setModeRequest({ mode: "history", nonce: crypto.randomUUID() });
     setPaletteOpen(true);
   };
   const settingsSearch = () => {
-    setSearchRequest({ mode: "settings", nonce: crypto.randomUUID() });
+    setModeRequest({ mode: "settings", nonce: crypto.randomUUID() });
     setPaletteOpen(true);
   };
 
@@ -2913,32 +2922,15 @@ export function App({
         ? chatTabKey(focusedChat.localId)
         : undefined;
 
-  // Overlay palette opened straight into a picker (Cmd+P commands run
-  // from anywhere; palette tabs enter pickers through their own rows).
-  const [pickerRequest, setPickerRequest] = useState<{
-    kind:
-      | "default-agent"
-      | "switch-agent"
-      | "configure-agent"
-      | "effort"
-      | "permission-mode"
-      | "model";
-    nonce: string;
-  } | null>(null);
-  const openPalettePicker = (
-    kind:
-      | "default-agent"
-      | "switch-agent"
-      | "configure-agent"
-      | "effort"
-      | "permission-mode"
-      | "model",
-  ) => {
+  // Overlay palette opened straight into a mode (commands run from
+  // anywhere, sidebar searches; palette tabs enter modes through rows).
+  const [modeRequest, setModeRequest] = useState<PaletteModeRequest | null>(
+    null,
+  );
+  const openPalettePicker = (mode: PaletteChoiceMode) => {
     setPaletteOpen(true);
-    setPickerRequest({ kind, nonce: crypto.randomUUID() });
+    setModeRequest({ mode, nonce: crypto.randomUUID() });
   };
-  const [searchRequest, setSearchRequest] =
-    useState<PaletteSearchRequest | null>(null);
   const focusSearch = (action: string, mode?: "files" | "content") => {
     const button = findSidebarSearchButton(action);
     if (button) {
@@ -2951,7 +2943,7 @@ export function App({
       input.select();
     } else if (mode) {
       setPaletteOpen(true);
-      setSearchRequest({ mode, nonce: crypto.randomUUID() });
+      setModeRequest({ mode, nonce: crypto.randomUUID() });
     }
   };
 
@@ -4622,6 +4614,28 @@ export function App({
       current = false;
     };
   }, [projectId]);
+  // Surfaces the palette offers count a visit whenever they come to the
+  // front, however they were opened (ADR 0186).
+  const lastSurfaceVisit = useRef<string | null>(null);
+  const frontTabKey = workspace.floatingKey ?? workspace.activeTabKey;
+  const frontSurface = workspace.tabs.find(
+    (item) => tabKey(item) === frontTabKey,
+  )?.kind;
+  useEffect(() => {
+    const kind = PALETTE_SURFACE_KINDS.find((item) => item === frontSurface);
+    const visit =
+      runtime.visible && workspaceReady && kind ? `${frontTabKey}` : null;
+    if (visit === lastSurfaceVisit.current) return;
+    lastSurfaceVisit.current = visit;
+    if (visit && kind)
+      void desktopApi
+        .paletteRecord({
+          key: surfaceUsageKey(kind),
+          visit: true,
+          ...(projectId ? { projectId } : {}),
+        })
+        .catch(() => {});
+  }, [runtime.visible, workspaceReady, frontTabKey, frontSurface, projectId]);
   const lastHistoryVisit = useRef<HistoryVisit | null>(null);
   useEffect(() => {
     if (!runtime.visible || !workspaceReady) {
@@ -5208,6 +5222,8 @@ export function App({
     onPickModel: pickModel,
     onPickHarnessPermissions: pickHarnessPermissions,
     onHighlightTarget: setPaletteTarget,
+    memberShell,
+    onError: setLinkError,
   };
 
   const [sidebarCustomization, setSidebarCustomization] = useState<{
@@ -5370,7 +5386,7 @@ export function App({
         observeEmpty={observeEmpty}
         onCustomize={() => customizeSidebar("left")}
         onSearch={(request) => {
-          setSearchRequest({ ...request, nonce: crypto.randomUUID() });
+          setModeRequest({ ...request, nonce: crypto.randomUUID() });
           setPaletteOpen(true);
         }}
         section={section}
@@ -6677,8 +6693,7 @@ export function App({
           variant="overlay"
           open={paletteOpen}
           onClose={() => setPaletteOpen(false)}
-          pickerRequest={pickerRequest}
-          searchRequest={searchRequest}
+          modeRequest={modeRequest}
           {...paletteProps}
         />
       )}

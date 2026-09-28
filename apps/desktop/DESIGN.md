@@ -1322,3 +1322,22 @@ the request settles, the site's deadline passes, or the page moves on.
 During a Work sign-in it also offers "Continue in your browser". The sheet
 shows the site's icon exactly as its tab does, so a dark-theme icon stays
 visible.
+
+### 2026-09-29: The palette learns what you use
+
+The palette ranked by text alone, so a page title could outrank the command
+you meant, and the focused site's settings topped any query that matched its
+host. Now a row's score is its match, what kind of row it is, and how much
+you use it (ADR 0186). Commands and app surfaces come before pages unless a
+page matches clearly better or you visit it far more. Pages keep their
+history counts; Settings, Usage, Sites and the other surfaces count a visit
+however you open them; commands count when picked from the palette. Picking
+a row after typing teaches that query, so "se" lands on what you chose last
+time. The empty palette shows up to six Frequent rows under the starting
+actions and the current site's settings, with pages held to half.
+
+Every mode is one shape: a chip, the names that enter it, and its rows.
+Pickers, sidebar searches, the new Sites and Commands modes and your own
+modes share it, with one set of loading, empty and retry rows. Your agent
+adds a mode in sidebar.js under palette.modes, from the same sources
+sections use, so one module can be a sidebar list and a palette mode.

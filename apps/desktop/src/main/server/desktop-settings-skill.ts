@@ -12,7 +12,7 @@ import { THEME_PRESETS } from "../theme.js";
 export const DESKTOP_SETTINGS_SKILL = `---
 name: configuring-catamorphic-desktop
 title: Configure desktop settings
-description: Edit Work desktop configuration files to customize theme, fonts, shortcuts, sidebar sections, tabs, notifications or terminal macros, including project overrides and reset.
+description: Edit Work desktop configuration files to customize theme, fonts, shortcuts, sidebar sections, command palette modes, tabs, notifications or terminal macros, including project overrides and reset.
 ---
 
 # Configure the desktop
@@ -119,4 +119,7 @@ setup flows. Never edit credential stores or invent scalar preference keys for
 those flows. Committed agent behavior follows the project's agent-authoring guide.
 The palette searches settings normally; type settings then Space or Tab to search
 only settings. Enter opens and highlights the target without changing its value.
+The palette ranks by match, kind and use: commands and app surfaces before pages,
+frequently used destinations first, and rows the user picked for a query earlier.
+It learns from use on its own; do not try to tune ranking through configuration.
 `;

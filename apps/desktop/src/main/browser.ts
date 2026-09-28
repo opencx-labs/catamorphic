@@ -33,6 +33,7 @@ import {
 } from "../shared/history.js";
 import { matchesShortcut } from "../shared/keybindings.js";
 import { OPEN_ACTIONS } from "../shared/open-mode.js";
+import { paletteUseSchema } from "../shared/palette.js";
 import {
   type ScreenShareAnswer,
   type ScreenShareRequest,
@@ -80,6 +81,7 @@ import { PasswordVault } from "./browser-vault.js";
 import { DownloadsManager, DownloadsStore } from "./downloads.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { LoginCapture, type LoginSubmission } from "./login-capture.js";
+import { PaletteUsageStore } from "./palette-usage.js";
 import { registerPasskeys } from "./passkeys.js";
 import { generateStrongPassword } from "./password-generator.js";
 import type { ProfileConfigManager } from "./profile-config.js";
@@ -356,6 +358,7 @@ export function registerBrowserSupport(
   const userData = app.getPath("userData");
   const profilesDir = path.join(userData, "profiles");
   const history = new HistoryStore(profilesDir);
+  const paletteUsage = new PaletteUsageStore(profilesDir);
   const vault = new PasswordVault(profilesDir);
   const siteSettings = new SiteSettingsStore(profilesDir);
   // The app's own windows use the default session, which Electron grants
@@ -437,6 +440,7 @@ export function registerBrowserSupport(
   });
   const unsubscribeRemoved = profiles.onRemoved((profileId) => {
     history.releaseProfile(profileId);
+    paletteUsage.releaseProfile(profileId);
     siteIcons.releaseProfile(profileId);
     vault.releaseProfile(profileId);
     siteSettings.releaseProfile(profileId);
@@ -1656,13 +1660,37 @@ export function registerBrowserSupport(
   });
   ipcMain.handle("catamorphic:history-remove", (event, id: unknown) => {
     const profileId = windows.profileFor(event.sender);
-    history.remove({ profileId, id: z.string().parse(id) });
+    const entry = z.string().parse(id);
+    history.remove({ profileId, id: entry });
+    paletteUsage.forget(profileId, entry);
     historyChanged(profileId);
   });
   ipcMain.handle("catamorphic:history-clear", (event) => {
     const profileId = windows.profileFor(event.sender);
     history.clear(profileId);
+    paletteUsage.clear(profileId);
     historyChanged(profileId);
+  });
+  ipcMain.handle("catamorphic:palette-record", (event, input: unknown) => {
+    const use = paletteUseSchema.parse(input);
+    const profileId = windows.profileFor(event.sender);
+    paletteUsage.record({
+      profileId,
+      use: {
+        ...use,
+        projectId: ownedProject(
+          profileId,
+          use.projectId ? { id: use.projectId, name: "" } : undefined,
+        )?.id,
+      },
+    });
+  });
+  ipcMain.handle("catamorphic:palette-signals", (event) => {
+    const profileId = windows.profileFor(event.sender);
+    return paletteUsage.signals({
+      profileId,
+      history: history.entries(profileId),
+    });
   });
 
   ipcMain.handle(
@@ -2439,6 +2467,7 @@ export function registerBrowserSupport(
       suggestedPasswords.clear();
       unsubscribeRemoved();
       history.dispose();
+      paletteUsage.dispose();
       vault.dispose();
       sitePermissionPolicy = null;
       downloadHook = null;

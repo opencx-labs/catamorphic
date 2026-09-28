@@ -76,6 +76,8 @@ export interface SidebarSource {
 export interface SidebarItemPresentation {
   label?: string;
   description?: string;
+  /** Extra words the palette matches this row by (synonyms, ids). */
+  keywords?: string[];
   icon?: string;
   badges?: string[];
   progress?: number;
@@ -180,10 +182,61 @@ export interface SidebarTabConfig {
   when?: SidebarWhen;
 }
 
+/**
+ * A palette mode (ADR 0186): a typed trigger that scopes palette search to
+ * one list of rows. Rows come from the same primitives sidebar sections use,
+ * so a list can be a section, a mode, or both.
+ */
+export interface SidebarPaletteMode {
+  id: string;
+  /** Typed name that enters the mode, with or without a leading @. */
+  trigger: string;
+  aliases?: string[];
+  /** Chip text and the name in the @ list. */
+  title: string;
+  /** One line in the @ list saying what the mode finds. */
+  description?: string;
+  /** Lucide icon name for the chip and rows without their own icon. */
+  icon?: string;
+  placeholder?: string;
+  /** An executable source module, the same contract as a section's. */
+  source?: SidebarSource;
+  /** Reuse a custom section's rows (its module or items) by section id. */
+  section?: string;
+  /** Static rows; nested items are listed flat. */
+  items?: SidebarItem[];
+  /**
+   * "palette" (default) loads rows once and ranks them as the user types.
+   * "source" passes the typed query to the module's load, for APIs that
+   * search server-side.
+   */
+  search?: "palette" | "source";
+  /** Also rank this mode's rows in the unscoped palette (palette search only). */
+  topLevel?: boolean;
+  when?: SidebarWhen;
+}
+
 export type SidebarSide = "left" | "right";
 export interface SidebarConfig {
   left: SidebarTabConfig[];
   right: SidebarTabConfig[];
+  palette?: { modes: SidebarPaletteMode[] };
+}
+
+/** The executable module behind a section or palette mode id, if any. */
+export function executableSourceModule(
+  config: SidebarConfig | null | undefined,
+  id: string,
+): string | undefined {
+  const sections = sidebarSections(config);
+  const section = sections.find((item) => item.id === id);
+  if (section) return section.source?.module;
+  const mode = config?.palette?.modes.find((item) => item.id === id);
+  if (!mode) return undefined;
+  return (
+    mode.source?.module ??
+    sections.find((item) => item.id === mode.section)?.source?.module
+  );
 }
 
 export function sidebarSections(config: SidebarConfig | null | undefined) {
@@ -248,5 +301,12 @@ export function visibleSidebarConfig({
           .map((section) => ({ ...section, items: items(section.items) })),
       }))
       .filter((tab) => tab.sections.length > 0);
-  return { left: tabs(config.left), right: tabs(config.right) };
+  const modes = config.palette?.modes
+    .filter((mode) => matchesProjectExperience(mode.when, context))
+    .map((mode) => ({ ...mode, items: items(mode.items) }));
+  return {
+    left: tabs(config.left),
+    right: tabs(config.right),
+    ...(modes?.length ? { palette: { modes } } : {}),
+  };
 }

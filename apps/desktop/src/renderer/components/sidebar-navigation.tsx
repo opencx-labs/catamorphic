@@ -52,7 +52,7 @@ import { BookmarksNav } from "./bookmarks-nav.js";
 import { ChatGlyph } from "./chat-icon.js";
 import { SignalBadge, SignalGlyph } from "./chat-signals.js";
 import { Collapsible } from "./collapsible.js";
-import type { PaletteItem, PaletteSearchRequest } from "./command-palette.js";
+import type { PaletteItem, PaletteModeRequest } from "./command-palette.js";
 import { FilesNav } from "./files-nav.js";
 import { GitNav } from "./git-nav.js";
 import { PrsNav } from "./prs-nav.js";
@@ -140,7 +140,7 @@ export function ConfiguredSection({
   onCustomize: () => void;
   onSearch: (
     request:
-      | Omit<Extract<PaletteSearchRequest, { mode: "section" }>, "nonce">
+      | Omit<Extract<PaletteModeRequest, { mode: "section" }>, "nonce">
       | { mode: "files" },
   ) => void;
   experienceContext: ProjectExperienceContext;

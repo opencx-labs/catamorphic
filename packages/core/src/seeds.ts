@@ -597,6 +597,11 @@ module.exports = {
 };
 \`\`\`
 
+The same file may add \`palette: { modes: [...] }\`: typed command palette
+modes (\`tickets\` then Space) over a custom section's module or items, for
+lists worth finding but not worth permanent sidebar space. The desktop
+configuration skill has the full contract and design guidance.
+
 These are project-owned presentation files, not a stock-server bootstrap
 format and not workflow logic. Embedders may provide a different presentation
 contract while using the same resolved permission vocabulary.

@@ -3,6 +3,10 @@ import path from "node:path";
 import vm from "node:vm";
 import { PROJECT_SIDEBAR_PATH } from "@catamorphic/workflow/project-layout";
 import type { OpenMode } from "../shared/open-mode.js";
+import {
+  normalizePaletteTrigger,
+  RESERVED_PALETTE_TRIGGERS,
+} from "../shared/palette.js";
 import { sanitizeProjectExperienceWhen } from "../shared/project-experience.js";
 import type { SidebarSourceItem } from "../shared/sidebar-source.js";
 import { SIDEBAR_AUTHORING_GUIDE } from "./sidebar-authoring.js";
@@ -19,18 +23,21 @@ import { SIDEBAR_AUTHORING_GUIDE } from "./sidebar-authoring.js";
  * `action` rather than carrying a callback.
  */
 
-import type {
-  SidebarAction,
-  SidebarConfig,
-  SidebarItem,
-  SidebarItemPresentation,
-  SidebarMenuEntry,
-  SidebarPreview,
-  SidebarPreviewMetadata,
-  SidebarSectionConfig,
-  SidebarSource,
-  SidebarTabConfig,
-  SidebarWhen,
+import {
+  resolveSidebarSection,
+  type SidebarAction,
+  type SidebarConfig,
+  type SidebarItem,
+  type SidebarItemPresentation,
+  type SidebarMenuEntry,
+  type SidebarPaletteMode,
+  type SidebarPreview,
+  type SidebarPreviewMetadata,
+  type SidebarSectionConfig,
+  type SidebarSource,
+  type SidebarTabConfig,
+  type SidebarWhen,
+  sidebarSections,
 } from "../shared/sidebar.js";
 
 export type { SidebarConfig, SidebarSectionConfig } from "../shared/sidebar.js";
@@ -359,6 +366,11 @@ function sanitizePresentation(
     label: typeof record.label === "string" ? record.label : undefined,
     description:
       typeof record.description === "string" ? record.description : undefined,
+    keywords: Array.isArray(record.keywords)
+      ? record.keywords
+          .filter((word): word is string => typeof word === "string")
+          .slice(0, 32)
+      : undefined,
     icon: typeof record.icon === "string" ? record.icon : undefined,
     badges: Array.isArray(record.badges)
       ? record.badges.filter(
@@ -584,10 +596,127 @@ function sanitize(raw: unknown): SidebarConfig {
   if (!isRecord(raw)) throw new Error("Export a sidebar configuration object.");
   const ids = new Set<string>();
   const sectionIds = new Set<string>();
-  return {
-    left: sanitizeTabs({ raw: raw.left, ids, sectionIds }),
-    right: sanitizeTabs({ raw: raw.right, ids, sectionIds }),
-  };
+  const left = sanitizeTabs({ raw: raw.left, ids, sectionIds });
+  const right = sanitizeTabs({ raw: raw.right, ids, sectionIds });
+  const modes = sanitizePaletteModes({
+    raw: raw.palette,
+    sections: sidebarSections({ left, right }),
+    ids: sectionIds,
+  });
+  return { left, right, ...(modes ? { palette: { modes } } : {}) };
+}
+
+/**
+ * palette.modes (ADR 0186). Ids share the section namespace because both
+ * address executable sources; triggers must not shadow built-in modes.
+ */
+function sanitizePaletteModes({
+  raw,
+  sections,
+  ids,
+}: {
+  raw: unknown;
+  sections: SidebarSectionConfig[];
+  ids: Set<string>;
+}): SidebarPaletteMode[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!isRecord(raw) || !Array.isArray(raw.modes))
+    throw new Error("palette must be { modes: [...] }.");
+  const names = new Set<string>();
+  return raw.modes.map((mode): SidebarPaletteMode => {
+    if (!isRecord(mode) || !stableId(mode.id) || ids.has(mode.id))
+      throw new Error(
+        "Each palette mode needs a unique id, distinct from section ids.",
+      );
+    ids.add(mode.id);
+    const where = `Palette mode ${mode.id}`;
+    if (typeof mode.title !== "string" || !mode.title.trim())
+      throw new Error(`${where} needs a title.`);
+    const triggers = [
+      mode.trigger,
+      ...(Array.isArray(mode.aliases) ? mode.aliases : []),
+    ].map((value) => {
+      const name =
+        typeof value === "string" ? normalizePaletteTrigger(value) : null;
+      if (!name)
+        throw new Error(
+          `${where}: triggers are 1 to 32 lowercase letters, digits or dashes.`,
+        );
+      if (RESERVED_PALETTE_TRIGGERS.has(name))
+        throw new Error(`${where}: "${name}" is a built-in mode.`);
+      if (names.has(name))
+        throw new Error(`${where}: "${name}" is already another mode's name.`);
+      names.add(name);
+      return name;
+    });
+    if (mode.aliases !== undefined && !Array.isArray(mode.aliases))
+      throw new Error(`${where}: aliases must be an array of names.`);
+    const source = sanitizeSource(mode.source);
+    if (source && (source.type !== "custom" || !source.module))
+      throw new Error(
+        `${where}: a mode source is an executable module ({ type: "custom", module }).`,
+      );
+    const section =
+      typeof mode.section === "string"
+        ? sections.find((item) => item.id === mode.section)
+        : undefined;
+    if (mode.section !== undefined) {
+      if (!section) throw new Error(`${where}: no section ${mode.section}.`);
+      if (
+        resolveSidebarSection(section).type !== "custom" ||
+        (!section.source?.module && !section.items?.length)
+      )
+        throw new Error(
+          `${where}: only custom sections with a module or items can back a mode.`,
+        );
+    }
+    const items = sanitizeItems(mode.items);
+    if ([source, section, items].filter(Boolean).length !== 1)
+      throw new Error(
+        `${where} needs exactly one of source, section or items.`,
+      );
+    if (
+      mode.search !== undefined &&
+      mode.search !== "palette" &&
+      mode.search !== "source"
+    )
+      throw new Error(`${where}: search is "palette" or "source".`);
+    const module = source?.module ?? section?.source?.module;
+    if (mode.search === "source" && !module)
+      throw new Error(`${where}: search "source" needs an executable module.`);
+    if (mode.search === "source" && mode.topLevel === true)
+      throw new Error(
+        `${where}: topLevel rows must be loaded once; use search "palette".`,
+      );
+    let when: SidebarWhen | undefined;
+    if (mode.when !== undefined) {
+      if (
+        !isRecord(mode.when) ||
+        Object.keys(mode.when).some((key) => key !== "permissions")
+      )
+        throw new Error(`${where}: when supports permissions only.`);
+      const sanitized = sanitizeSidebarWhen(mode.when);
+      if (!sanitized) throw new Error(`${where}: invalid when.permissions.`);
+      when = sanitized;
+    }
+    return {
+      id: mode.id,
+      trigger: triggers[0] ?? "",
+      ...(triggers.length > 1 ? { aliases: triggers.slice(1) } : {}),
+      title: mode.title.trim(),
+      description:
+        typeof mode.description === "string" ? mode.description : undefined,
+      icon: typeof mode.icon === "string" ? mode.icon : undefined,
+      placeholder:
+        typeof mode.placeholder === "string" ? mode.placeholder : undefined,
+      source,
+      section: section?.id,
+      items,
+      search: mode.search === "source" ? "source" : "palette",
+      topLevel: mode.topLevel === true,
+      when,
+    };
+  });
 }
 
 /** Evaluate a sidebar.js source in the isolated vm context. Throws. */

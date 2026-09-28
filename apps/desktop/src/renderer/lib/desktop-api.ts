@@ -1212,6 +1212,13 @@ export interface CatamorphicDesktopApi {
   }) => Promise<void>;
   historyRemove: (id: string) => Promise<void>;
   historyClear: () => Promise<void>;
+  /** Learn from a palette pick or a surface visit (ADR 0186). */
+  paletteRecord: (
+    input: import("../../shared/palette.js").PaletteUse,
+  ) => Promise<void>;
+  paletteSignals: () => Promise<
+    import("../../shared/palette.js").PaletteSignals
+  >;
   onHistoryChanged: (listener: () => void) => () => void;
   defaultBrowserState: () => Promise<
     import("../../shared/default-browser.js").DefaultBrowserState

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { app, ipcMain } from "electron";
 import { z } from "zod";
-import { sidebarSections } from "../shared/sidebar.js";
+import { executableSourceModule } from "../shared/sidebar.js";
 import type { WindowProfileRegistry } from "./index.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
@@ -20,6 +20,7 @@ const requestSchema = identity
     method: z.enum(["load", "action", "move", "drop"]),
     parentId: z.string().nullable().optional(),
     cursor: z.string().optional(),
+    query: z.string().max(4096).optional(),
     itemId: z.string().optional(),
     action: z.string().optional(),
     beforeId: z.string().optional(),
@@ -109,10 +110,8 @@ export function registerSidebarSources(deps: {
       id: input.projectId,
       rootPath: root,
     });
-    const section = sidebarSections(resolved.config).find(
-      (item) => item.id === input.sectionId,
-    );
-    const module = section?.source?.module;
+    // Sections and palette modes share one id namespace (ADR 0186).
+    const module = executableSourceModule(resolved.config, input.sectionId);
     if (!module) throw new Error("This section has no executable source.");
     const modulePath = path.resolve(root, module);
     const key = JSON.stringify([profileId, input.projectId, modulePath]);

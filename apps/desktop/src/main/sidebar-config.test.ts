@@ -440,3 +440,101 @@ describe("shared sidebar contributions", () => {
     expect(loadSidebarConfigFile(file).right[0]?.sections[0]).toEqual(section);
   });
 });
+
+describe("palette modes", () => {
+  const layout = (palette: string) =>
+    `module.exports = { left: [{ id: "project", title: "Project", sections: [
+      { id: "todos", type: "custom", title: "Todos", source: { type: "custom", module: ".work/todos.ts" } },
+      { id: "links", type: "custom", title: "Links", items: [{ label: "Docs", url: "https://example.com/docs" }] },
+      { id: "chats", type: "chats" }
+    ] }], right: [], palette: ${palette} };\n`;
+  const resolve = (palette: string) =>
+    resolveSidebarConfig(makeLayers({ profile: layout(palette) }));
+
+  it("keeps modes backed by a module, a custom section or static items", () => {
+    const { config, error } = resolve(`{ modes: [
+      { id: "issues", trigger: "@Issues", aliases: ["bugs"], title: "Issues", icon: "Bug",
+        source: { type: "custom", module: ".work/issues.ts" }, search: "source" },
+      { id: "todo-mode", trigger: "todo", title: "Todos", section: "todos", topLevel: true },
+      { id: "docs", trigger: "docs", title: "Docs", items: [{ label: "Guide", url: "https://example.com/guide" }] }
+    ] }`);
+    expect(error).toBeUndefined();
+    expect(config.palette?.modes).toMatchObject([
+      {
+        id: "issues",
+        trigger: "issues",
+        aliases: ["bugs"],
+        search: "source",
+        topLevel: false,
+        source: { type: "custom", module: ".work/issues.ts" },
+      },
+      { id: "todo-mode", section: "todos", search: "palette", topLevel: true },
+      { id: "docs", items: [{ label: "Guide" }] },
+    ]);
+  });
+
+  it.each([
+    [
+      "a built-in trigger",
+      `{ modes: [{ id: "s", trigger: "settings", title: "S", items: [{ label: "A", url: "https://a.test" }] }] }`,
+      "built-in mode",
+    ],
+    [
+      "an id shared with a section",
+      `{ modes: [{ id: "todos", trigger: "t", title: "T", section: "todos" }] }`,
+      "distinct from section ids",
+    ],
+    [
+      "a built-in collection source",
+      `{ modes: [{ id: "m", trigger: "m", title: "M", source: { type: "chats" } }] }`,
+      "executable module",
+    ],
+    [
+      "a section that is not custom",
+      `{ modes: [{ id: "m", trigger: "m", title: "M", section: "chats" }] }`,
+      "only custom sections",
+    ],
+    [
+      "two row sources",
+      `{ modes: [{ id: "m", trigger: "m", title: "M", section: "links", items: [{ label: "A", url: "https://a.test" }] }] }`,
+      "exactly one of",
+    ],
+    [
+      "server-side search over static rows",
+      `{ modes: [{ id: "m", trigger: "m", title: "M", section: "links", search: "source" }] }`,
+      "needs an executable module",
+    ],
+    [
+      "topLevel with server-side search",
+      `{ modes: [{ id: "m", trigger: "m", title: "M", section: "todos", search: "source", topLevel: true }] }`,
+      "topLevel rows must be loaded once",
+    ],
+    [
+      "a duplicate name",
+      `{ modes: [{ id: "a", trigger: "x", title: "A", section: "todos" }, { id: "b", trigger: "y", aliases: ["x"], title: "B", section: "links" }] }`,
+      "already another mode",
+    ],
+    [
+      "surface relevance",
+      `{ modes: [{ id: "m", trigger: "m", title: "M", section: "todos", when: { surface: ["chat"] } }] }`,
+      "permissions only",
+    ],
+  ])("rejects %s", (_name, palette, message) => {
+    const { error } = resolve(palette);
+    expect(error).toContain(message);
+  });
+
+  it("resolves executable modules for sections and modes in one namespace", async () => {
+    const { executableSourceModule } = await import("../shared/sidebar.js");
+    const { config } = resolve(`{ modes: [
+      { id: "own", trigger: "own", title: "Own", source: { type: "custom", module: ".work/own.ts" } },
+      { id: "reuse", trigger: "reuse", title: "Reuse", section: "todos" },
+      { id: "static", trigger: "static", title: "Static", section: "links" }
+    ] }`);
+    expect(executableSourceModule(config, "todos")).toBe(".work/todos.ts");
+    expect(executableSourceModule(config, "own")).toBe(".work/own.ts");
+    expect(executableSourceModule(config, "reuse")).toBe(".work/todos.ts");
+    expect(executableSourceModule(config, "static")).toBeUndefined();
+    expect(executableSourceModule(config, "missing")).toBeUndefined();
+  });
+});

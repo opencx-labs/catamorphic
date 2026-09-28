@@ -54,7 +54,6 @@ import {
 import {
   Fragment,
   type KeyboardEvent,
-  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -69,9 +68,17 @@ import {
   type KeybindingAction,
 } from "../../shared/actions.js";
 import { permissionModeLabel } from "../../shared/agent-permissions.js";
-import type { FileSearchResult } from "../../shared/file-search.js";
-import type { HistoryEntry } from "../../shared/history.js";
+import { type HistoryEntry, historyIdentity } from "../../shared/history.js";
 import type { OpenMode as CommitMode } from "../../shared/open-mode.js";
+import {
+  BUILTIN_PALETTE_TRIGGERS,
+  type BuiltinPaletteMode,
+  EMPTY_PALETTE_SIGNALS,
+  type PaletteSignals,
+  paletteCountsVisit,
+  surfaceUsageKey,
+  webUsageKey,
+} from "../../shared/palette.js";
 import { SETTINGS_CATALOG } from "../../shared/settings-catalog.js";
 import { sidebarSections } from "../../shared/sidebar.js";
 import type { TerminalMacro } from "../../shared/terminal-macros.js";
@@ -81,7 +88,7 @@ import {
 } from "../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
 import { permissionModeChoices } from "../lib/agent-permissions.js";
-import { commandScore } from "../lib/command-score.js";
+import { commandScore, normalizeCommandQuery } from "../lib/command-score.js";
 import {
   type AgentEffort,
   type AgentInfo,
@@ -101,9 +108,20 @@ import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
 import {
+  customPaletteModes,
+  isFullPaletteModeName,
+  matchPaletteMode,
+  type PaletteItem,
+  type PaletteMode,
+  usePaletteLoad,
+  useTopLevelModeRows,
+} from "../lib/palette-modes.js";
+import {
   createPaletteIndex,
+  frequentItems,
   PALETTE_RESULT_LIMIT,
 } from "../lib/palette-search.js";
+import { summarizePermissions } from "../lib/site-settings.js";
 import { skillsForAgent, useProjectSkills } from "../lib/skills.js";
 import { NEW_WORKFLOW_PROMPT } from "../lib/workflow-authoring.js";
 import { useApps } from "../screens/app-screen.js";
@@ -188,11 +206,11 @@ const ACTION_ICONS: Partial<Record<ActionId, LucideIcon>> = {
 };
 
 /**
- * Pickers: palette-local flows where a command narrows the list to one
- * question ("which agent?", "which effort?"). Same chip visual as the @
- * modes; Backspace on empty input pops back out.
+ * Choice modes: a command narrows the palette to one question ("which
+ * agent?", "which effort?"). They are ordinary palette modes; picking a row
+ * answers the question and puts the palette away.
  */
-export type PaletteInPicker =
+export type PaletteChoiceMode =
   | "default-agent"
   | "switch-agent"
   | "configure-agent"
@@ -200,9 +218,9 @@ export type PaletteInPicker =
   | "permission-mode"
   | "model";
 
-const PICKER_CHIPS: Record<
-  PaletteInPicker,
-  { chip: string; icon: LucideIcon; placeholder: string }
+const CHOICE_CHIPS: Record<
+  PaletteChoiceMode,
+  { chip: string; icon: LucideIcon; placeholder: string; description?: string }
 > = {
   "default-agent": {
     chip: "Default agent",
@@ -223,21 +241,27 @@ const PICKER_CHIPS: Record<
     chip: "Effort",
     icon: Gauge,
     placeholder: "Pick reasoning effort…",
+    description: "Change how deeply the agent reasons",
   },
   "permission-mode": {
     chip: "Permission mode",
     icon: ShieldCheck,
     placeholder: "Pick the agent's permission mode…",
+    description: "Change what the agent may do without asking",
   },
   model: {
     chip: "Model",
     icon: Cpu,
     placeholder: "Type or pick a model…",
+    description: "Change the model the agent runs on",
   },
 };
 
-/** Action rows that open a picker instead of running an app handler. */
-const PICKER_ACTIONS: Partial<Record<ActionId, PaletteInPicker>> = {
+const isChoiceMode = (id: string): id is PaletteChoiceMode =>
+  Object.hasOwn(CHOICE_CHIPS, id);
+
+/** Action rows that enter a choice mode instead of running an app handler. */
+const PICKER_ACTIONS: Partial<Record<ActionId, PaletteChoiceMode>> = {
   "default-agent": "default-agent",
   "switch-agent": "switch-agent",
   "configure-agent": "configure-agent",
@@ -325,35 +349,7 @@ const EFFORT_LEVELS: Array<{
   },
 ];
 
-export interface PaletteItem {
-  id: string;
-  icon: LucideIcon;
-  iconNode?: ReactNode;
-  label: string;
-  /** Muted inline text, e.g. a URL host or the item's type. */
-  detail?: string;
-  keywords: string[];
-  /** Preformatted chip, e.g. "⌘B". */
-  shortcut?: string;
-  /**
-   * Picker rows: this row IS the active choice (current model/agent/
-   * effort). Renders a quiet check + "current" chip on the right, and the
-   * unfiltered picker list pins it first (normal ranking while searching).
-   */
-  current?: boolean;
-  /** Web rows saved as bookmarks carry a star at the right edge. */
-  bookmarked?: boolean;
-  /**
-   * Scope label rendered above this row when the previous row carries a
-   * different group (e.g. "Project agents" in the agent pickers).
-   */
-  group?: string;
-  /** Unusable rows (invalid project agents): visible, never committable. */
-  disabled?: boolean;
-  /** Navigate items load something tab-shaped and honor the commit mode. */
-  kind: "action" | "navigate";
-  run: (mode: CommitMode) => void;
-}
+export type { PaletteItem } from "../lib/palette-modes.js";
 
 /**
  * Unfiltered picker lists open with the active choice on top — "what runs
@@ -366,6 +362,10 @@ const pinCurrentFirst = (rows: PaletteItem[]): PaletteItem[] =>
     (a, b) => Number(b.current ?? false) - Number(a.current ?? false),
   );
 
+/** Choice rows answer the active question and put the palette away. */
+const asAnswer = (row: PaletteItem): PaletteItem =>
+  row.commit ? row : { ...row, commit: "answer" };
+
 /** The whole input is URL-shaped: scheme, or domain(+path) with no spaces. */
 const URLISH =
   /^(https?:\/\/\S+|[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?|localhost(:\d+)?(\/\S*)?)$/i;
@@ -373,120 +373,16 @@ const LONG_QUERY = 60;
 const LIST_MAX_HEIGHT = 350;
 
 /**
- * Explicit intent modes (Chrome omnibox @-shortcuts pattern): typing the
- * trigger then Tab/Space — or picking the zero-state row — commits the
- * mode as a chip; the input then only feeds that mode. Backspace on empty
- * input pops the chip (cmdk convention).
+ * Built-in modes by id, plus the choice modes. Explicit intent modes follow
+ * the Chrome omnibox @-shortcut pattern: typing a name then Tab/Space, or
+ * picking its row from the @ list, commits the mode as a chip; the input
+ * then only feeds that mode. Backspace on empty input pops the chip.
  */
-export type PaletteSearchRequest = { nonce: string } & (
-  | { mode: "files" | "content" | "history" | "settings" }
+export type PaletteModeId = BuiltinPaletteMode | PaletteChoiceMode;
+export type PaletteModeRequest = { nonce: string } & (
+  | { mode: PaletteModeId }
   | { mode: "section"; label: string; load: () => Promise<PaletteItem[]> }
 );
-
-export interface PaletteMode {
-  id:
-    | "agent"
-    | "web"
-    | "settings"
-    | "files"
-    | "content"
-    | "section"
-    | "history";
-  /** Typed trigger, matched with or without the leading @. */
-  trigger: string;
-  /** Alternate typed names that commit the same mode (e.g. "chat"). */
-  aliases?: string[];
-  /** Chip text once committed. */
-  chip: string;
-  icon: LucideIcon;
-  /** Zero-state row label + description. */
-  label: string;
-  description: string;
-  placeholder: string;
-}
-
-export const PALETTE_MODES: PaletteMode[] = [
-  {
-    id: "history",
-    trigger: "history",
-    chip: "History",
-    icon: History,
-    label: "Search history",
-    description: "Find pages and work you opened",
-    placeholder: "Search history…",
-  },
-  {
-    id: "files",
-    trigger: "files",
-    aliases: ["file"],
-    chip: "Files",
-    icon: FileCode,
-    label: "Find files",
-    description: "Find a filename in this project",
-    placeholder: "Search filenames…",
-  },
-  {
-    id: "content",
-    trigger: "content",
-    aliases: ["grep"],
-    chip: "File content",
-    icon: Search,
-    label: "Search file content",
-    description: "Find text and open its matching line",
-    placeholder: "Search inside files…",
-  },
-  {
-    id: "settings",
-    trigger: "settings",
-    aliases: ["preferences"],
-    chip: "Settings",
-    icon: SettingsIcon,
-    label: "Search settings",
-    description: "Find a setting and open its control",
-    placeholder: "Search settings…",
-  },
-  {
-    id: "agent",
-    trigger: "agent",
-    aliases: ["chat"],
-    chip: "Ask agent",
-    icon: Bot,
-    label: "Ask the agent",
-    description: "Send everything you type to a new chat",
-    placeholder: "Message the agent…",
-  },
-  {
-    id: "web",
-    trigger: "web",
-    chip: "Search web",
-    icon: Search,
-    label: "Search the web",
-    description: "Google search in a browser tab",
-    placeholder: "Search the web…",
-  },
-];
-
-/** A mode's typed names: the trigger plus any aliases. */
-const modeNames = (mode: PaletteMode): string[] => [
-  mode.trigger,
-  ...(mode.aliases ?? []),
-];
-
-/** "@age", "age", or "chat" → the agent mode, once unambiguous. */
-const matchMode = (input: string): PaletteMode | undefined => {
-  const raw = (input.startsWith("@") ? input.slice(1) : input).toLowerCase();
-  if (raw.length === 0) return undefined;
-  const matches = PALETTE_MODES.filter((mode) =>
-    modeNames(mode).some((name) => name.startsWith(raw)),
-  );
-  return matches.length === 1 ? matches[0] : undefined;
-};
-
-/** The input IS a full mode name (trigger or alias), no @ needed. */
-const isFullModeName = (input: string): boolean => {
-  const raw = input.toLowerCase();
-  return PALETTE_MODES.some((mode) => modeNames(mode).includes(raw));
-};
 
 /**
  * The New Tab page's quiet cheat sheet: the workhorse shortcuts that have
@@ -594,12 +490,13 @@ export function CommandPalette({
   onPickModel,
   onPickHarnessPermissions,
   onHighlightTarget,
-  pickerRequest,
-  searchRequest,
+  modeRequest,
   onOpenHistory,
   focusedSite = null,
   onOpenSiteSettings,
   incognitoAllowed = true,
+  memberShell = false,
+  onError,
 }: {
   variant: "overlay" | "tab";
   /**
@@ -682,15 +579,18 @@ export function CommandPalette({
    * app can accent that surface's border while the row is highlighted.
    */
   onHighlightTarget?: (target: "chat" | "close" | null) => void;
-  /** Overlay only: open straight into a picker (Cmd+P agent commands). */
-  pickerRequest?: { kind: PaletteInPicker; nonce: string } | null;
-  searchRequest?: PaletteSearchRequest | null;
+  /** Overlay only: open straight into a mode (agent commands, sidebar search). */
+  modeRequest?: PaletteModeRequest | null;
   onOpenHistory: (entry: HistoryEntry, mode: CommitMode) => void;
   /** The site of the focused browser tab; its settings command leads. */
   focusedSite?: { origin: string; host: string } | null;
   onOpenSiteSettings?: (origin: string) => void;
   /** Project policy (ADR 0062): hide the incognito command when false. */
   incognitoAllowed?: boolean;
+  /** Connected projects never run local source modules (ADR 0140). */
+  memberShell?: boolean;
+  /** A committed row failed after the palette closed (a mode's action). */
+  onError?: (message: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -719,98 +619,29 @@ export function CommandPalette({
       navigation.current.onOpenSession(...args),
     [],
   );
-  const [mode, setMode] = useState<PaletteMode | null>(null);
-  const [sectionItems, setSectionItems] = useState<PaletteItem[]>([]);
-  const [sectionError, setSectionError] = useState<string | null>(null);
-  const [sectionLoading, setSectionLoading] = useState(false);
-  const [sectionRetry, setSectionRetry] = useState(0);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: retry explicitly reloads the same scoped source
-  useEffect(() => {
-    if (!open || searchRequest?.mode !== "section") return;
-    let active = true;
-    setSectionItems([]);
-    setSectionError(null);
-    setSectionLoading(true);
-    void searchRequest
-      .load()
-      .then((items) => {
-        if (active) setSectionItems(items);
-      })
-      .catch((error: unknown) => {
-        if (active)
-          setSectionError(
-            error instanceof Error
-              ? error.message
-              : "Could not load this section.",
-          );
-      })
-      .finally(() => {
-        if (active) setSectionLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [open, searchRequest, sectionRetry]);
-  const [fileSearch, setFileSearch] = useState<FileSearchResult | null>(null);
-  const [fileSearchError, setFileSearchError] = useState<string | null>(null);
-  useEffect(() => {
-    setFileSearch(null);
-    setFileSearchError(null);
-    if (
-      !open ||
-      !projectId ||
-      (mode?.id !== "files" && mode?.id !== "content") ||
-      !query.trim()
-    )
-      return;
-    let cancelled = false;
-    const searchMode = mode.id;
-    const timer = window.setTimeout(() => {
-      void desktopApi
-        .fileSearch({ projectId, query, mode: searchMode })
-        .then((result) => {
-          if (!cancelled) setFileSearch(result);
-        })
-        .catch((error: unknown) => {
-          if (!cancelled)
-            setFileSearchError(
-              error instanceof Error
-                ? error.message
-                : "Search failed. Try again.",
-            );
-        });
-    }, 150);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-      void desktopApi.cancelFileSearch().catch(() => {});
-    };
-  }, [open, projectId, mode?.id, query]);
+  // The active mode by id. Modes are built further down from live data;
+  // a sidebar search carries its own rows in the request.
+  const [modeId, setModeId] = useState<string | null>(null);
+  const [sectionSearch, setSectionSearch] = useState<Extract<
+    PaletteModeRequest,
+    { mode: "section" }
+  > | null>(null);
   // Exiting chip lingers to play chip-out; removed on animationend.
-  const [exitingMode, setExitingMode] = useState<PaletteMode | null>(null);
-  const [picker, setPicker] = useState<PaletteInPicker | null>(null);
-  const [exitingPicker, setExitingPicker] = useState<PaletteInPicker | null>(
-    null,
-  );
+  const [exitingChip, setExitingChip] = useState<{
+    icon: LucideIcon;
+    label: string;
+  } | null>(null);
+  const picker = modeId && isChoiceMode(modeId) ? modeId : null;
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const sizerRef = useRef<HTMLDivElement>(null);
 
-  const enterMode = useCallback((next: PaletteMode) => {
-    setMode(next);
-    setExitingMode(null);
-    setPicker(null);
-    setExitingPicker(null);
+  const enterMode = useCallback((next: string) => {
+    setModeId(next);
+    setExitingChip(null);
     setQuery("");
     setSelectedIndex(0);
     inputRef.current?.focus();
-  }, []);
-
-  const exitMode = useCallback(() => {
-    setMode((current) => {
-      if (current) setExitingMode(current);
-      return null;
-    });
   }, []);
 
   // OpenRouter catalog for the model picker, fetched when first needed
@@ -824,39 +655,13 @@ export function CommandPalette({
     error?: string;
   } | null>(null);
 
-  const enterPicker = useCallback((next: PaletteInPicker) => {
-    setPicker(next);
-    setExitingPicker(null);
-    setMode(null);
-    setExitingMode(null);
-    setQuery("");
-    setSelectedIndex(0);
-    inputRef.current?.focus();
-  }, []);
-
-  const exitPicker = useCallback(() => {
-    setPicker((current) => {
-      if (current) setExitingPicker(current);
-      return null;
-    });
-  }, []);
-
   // The ACTIVE project's committed agent definitions (ADR 0050), fetched
   // fresh on every entry into an agent picker — definitions are files a
   // collaborator (or an agent) may have just written, and consent state
   // changes with approvals; a stale snapshot would show the wrong rows.
   const [projectAgents, setProjectAgents] = useState<ProjectAgentInfo[]>([]);
   useEffect(() => {
-    if (!projectId) return;
-    if (
-      picker !== "default-agent" &&
-      picker !== "switch-agent" &&
-      picker !== "configure-agent" &&
-      picker !== "model" &&
-      picker !== "effort"
-    ) {
-      return;
-    }
+    if (!projectId || !picker || picker === "permission-mode") return;
     let cancelled = false;
     void desktopApi
       .projectAgentsList(projectId)
@@ -939,15 +744,13 @@ export function CommandPalette({
 
   // Keep the exiting list intact, but always start a fresh opening even if
   // the user reopens before its exit animation has finished. This precedes
-  // pickerRequest so an explicit picker can initialize the fresh palette.
+  // modeRequest so an explicit mode can initialize the fresh palette.
   useLayoutEffect(() => {
     const reset = () => {
       setQuery("");
       setSelectedIndex(0);
-      setMode(null);
-      setExitingMode(null);
-      setPicker(null);
-      setExitingPicker(null);
+      setModeId(null);
+      setExitingChip(null);
       listMotionRef.current.reset();
     };
     if (open) {
@@ -978,27 +781,12 @@ export function CommandPalette({
     };
   }, [open, variant]);
 
-  // Cmd+P agent commands open the overlay already inside a picker.
+  // Commands run from anywhere open the overlay already inside their mode.
   useEffect(() => {
-    if (variant !== "overlay" || !pickerRequest) return;
-    enterPicker(pickerRequest.kind);
-  }, [variant, pickerRequest, enterPicker]);
-  useEffect(() => {
-    if (variant !== "overlay" || !searchRequest) return;
-    const next: PaletteMode | undefined =
-      searchRequest.mode === "section"
-        ? {
-            id: "section",
-            trigger: "",
-            chip: searchRequest.label,
-            label: searchRequest.label,
-            icon: Search,
-            description: "",
-            placeholder: `Search ${searchRequest.label.toLowerCase()}…`,
-          }
-        : PALETTE_MODES.find((mode) => mode.id === searchRequest.mode);
-    if (next) enterMode(next);
-  }, [variant, searchRequest, enterMode]);
+    if (variant !== "overlay" || !modeRequest) return;
+    if (modeRequest.mode === "section") setSectionSearch(modeRequest);
+    enterMode(modeRequest.mode);
+  }, [variant, modeRequest, enterMode]);
 
   const keybindings = useKeybindings();
 
@@ -1022,6 +810,27 @@ export function CommandPalette({
     variant === "tab" || open,
     skillsRefresh,
   );
+  // Ranking signals (ADR 0186), on the same beat as skills: every opening
+  // and every new query session, so use elsewhere shows up next time.
+  const [signals, setSignals] = useState<PaletteSignals>(EMPTY_PALETTE_SIGNALS);
+  useEffect(() => {
+    if (!profileId || skillsRefresh === 0) return;
+    let cancelled = false;
+    void desktopApi
+      .paletteSignals()
+      .then((next) => {
+        // Unchanged signals keep their identity, so rows do not re-rank
+        // (and glide) on every opening.
+        if (!cancelled)
+          setSignals((current) =>
+            JSON.stringify(current) === JSON.stringify(next) ? current : next,
+          );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [profileId, skillsRefresh]);
 
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   useEffect(() => {
@@ -1052,10 +861,11 @@ export function CommandPalette({
     };
   }, [projectId, profileId]);
 
+  // The unscoped palette's history rows; the History mode loads its own.
   const historyResults = useHistory({
     query,
     limit: 80,
-    enabled: Boolean(profileId) && (variant === "tab" || open),
+    enabled: Boolean(profileId) && (variant === "tab" || open) && !modeId,
     profileId,
   });
   const historyOpenRef = useRef(onOpenHistory);
@@ -1124,10 +934,13 @@ export function CommandPalette({
             ? formatBinding(keybindings[action.id as KeybindingAction])
             : undefined,
         kind: "action" as const,
-        // Picker commands swap palette state in place (like mode rows);
+        category: "command",
+        usage: `action:${action.id}`,
+        // Choice commands swap palette state in place (like mode rows);
         // everything else runs the shared handler.
+        ...(targetPicker ? { commit: "stay" as const } : {}),
         run: targetPicker
-          ? () => enterPicker(targetPicker)
+          ? () => enterMode(targetPicker)
           : (mode) => actionHandlersRef.current[action.id](mode),
       };
     });
@@ -1142,6 +955,8 @@ export function CommandPalette({
           keywords: ["macro", "terminal", macro.command],
           shortcut: formatBinding(macro.shortcut),
           kind: "action",
+          category: "command",
+          usage: `macro:${macro.id}`,
           run: (mode) => macroHandlerRef.current(macro, mode),
         }),
       ),
@@ -1149,7 +964,7 @@ export function CommandPalette({
   }, [
     keybindings,
     hasFocusedChat,
-    enterPicker,
+    enterMode,
     incognitoAllowed,
     terminalMacros,
     actionAvailability,
@@ -1165,6 +980,8 @@ export function CommandPalette({
           detail: "Start with your project agent",
           keywords: [action.label, "start", "project", "agent"],
           kind: "navigate",
+          category: "command",
+          usage: `starter:${action.label}`,
           run: (mode) =>
             onSendToAgent(
               action.prompt,
@@ -1196,6 +1013,8 @@ export function CommandPalette({
           ...skill.description.split(/\s+/).slice(0, 12),
         ],
         kind: hasFocusedChat ? ("action" as const) : ("navigate" as const),
+        category: "resource" as const,
+        usage: `skill:${skill.name}`,
         run: (mode) => onRunSkill(skill.name, mode === "tab" ? "tab" : "float"),
       })),
     [skills, targetAgent?.skills, hasFocusedChat, onRunSkill],
@@ -1212,6 +1031,8 @@ export function CommandPalette({
           detail: "Project",
           keywords: [project.name, "go to", "project", "switch", "open"],
           kind: "action" as const,
+          category: "resource" as const,
+          usage: `project:${project.id}`,
           run: () => onSelectProject(project.id),
         })),
     [projects, activeProjectId, onSelectProject],
@@ -1228,11 +1049,21 @@ export function CommandPalette({
           detail: "Profile",
           keywords: [profile.name, "switch to", "profile", "account"],
           kind: "action" as const,
+          category: "resource" as const,
+          usage: `profile:${profile.id}`,
           run: () => onSwitchProfile(profile),
         })),
     [profiles, activeProfileId, onSwitchProfile],
   );
 
+  // Project resources rank by their history counts (ADR 0186).
+  const projectUsage = useCallback(
+    (kind: "workflow" | "app" | "chat", resource: string) =>
+      projectId
+        ? historyIdentity({ kind, projectId, resource })
+        : `${kind}:${resource}`,
+    [projectId],
+  );
   const sidebarItems = useMemo<PaletteItem[]>(() => {
     const items: PaletteItem[] = [];
     if (canCreateWorkflows)
@@ -1243,6 +1074,8 @@ export function CommandPalette({
         detail: "Describe it to your agent",
         keywords: ["new", "workflow", "automation", "build"],
         kind: "action",
+        category: "command",
+        usage: "create-workflow",
         run: (mode) =>
           onSendToAgent(NEW_WORKFLOW_PROMPT, mode === "tab" ? "tab" : "float"),
       });
@@ -1255,6 +1088,8 @@ export function CommandPalette({
         detail: "Workflow",
         keywords: [workflow.name, "workflow", "go to", "open"],
         kind: "navigate",
+        category: "resource",
+        usage: projectUsage("workflow", workflow.name),
         run: (mode) =>
           onOpenTab({ kind: "workflow", name: workflow.name, label }, mode),
       });
@@ -1267,6 +1102,8 @@ export function CommandPalette({
         detail: "App",
         keywords: [app.name, "app", "go to", "open"],
         kind: "navigate",
+        category: "resource",
+        usage: projectUsage("app", app.name),
         run: (mode) => onOpenTab({ kind: "app", name: app.name }, mode),
       });
     }
@@ -1289,6 +1126,8 @@ export function CommandPalette({
           ...(session.visibility === "archived" ? ["archived"] : []),
         ],
         kind: "navigate",
+        category: "resource",
+        usage: projectUsage("chat", session.id),
         run: (mode) => onOpenSession(session, mode),
       });
     }
@@ -1312,6 +1151,8 @@ export function CommandPalette({
           "bookmark",
         ],
         kind: "navigate",
+        category: "bookmark",
+        usage: webUsageKey(bookmark.url),
         bookmarked: true,
         run: (mode) => onOpenUrl(bookmark.url, mode),
       });
@@ -1330,6 +1171,8 @@ export function CommandPalette({
             detail: hostOf(url),
             keywords: [item.label, hostOf(url), bareUrl(url), "link"],
             kind: "navigate",
+            category: "bookmark",
+            usage: webUsageKey(url),
             run: (mode) => onOpenUrl(url, mode),
           });
         }
@@ -1347,6 +1190,8 @@ export function CommandPalette({
       detail: "Open settings",
       keywords: ["settings", "preferences", "shortcuts", "theme", "keys"],
       kind: "navigate",
+      category: "surface",
+      usage: surfaceUsageKey("settings"),
       run: (mode) =>
         onOpenTab(
           { kind: "settings", name: "settings", label: "Settings" },
@@ -1360,6 +1205,8 @@ export function CommandPalette({
       detail: "Tokens and cost across agents",
       keywords: ["usage", "cost", "tokens", "spend", "billing", "consumption"],
       kind: "navigate",
+      category: "surface",
+      usage: surfaceUsageKey("usage"),
       run: (mode) =>
         onOpenTab({ kind: "usage", name: "usage", label: "Usage" }, mode),
     });
@@ -1367,6 +1214,7 @@ export function CommandPalette({
   }, [
     canCreateWorkflows,
     onSendToAgent,
+    projectUsage,
     workflows,
     apps,
     sessions,
@@ -1377,34 +1225,47 @@ export function CommandPalette({
     onOpenUrl,
   ]);
 
-  const historyItems = useMemo<PaletteItem[]>(
-    () =>
-      historyResults.entries.map((entry) => ({
-        id: `history:${entry.id}`,
-        icon: historyIcon(entry),
-        iconNode:
-          entry.target.kind === "web" && entry.faviconUrl ? (
-            <SiteFavicon
-              url={entry.target.url}
-              faviconUrl={entry.faviconUrl}
-              className="size-4"
-            />
-          ) : undefined,
-        bookmarked:
-          entry.target.kind === "web" &&
-          bookmarks.some(
-            (bookmark) =>
-              entry.target.kind === "web" &&
-              bookmark.url.replace(/\/$/, "") ===
-                entry.target.url.replace(/\/$/, ""),
-          ),
-        label: entry.title,
-        detail: historyDetail(entry),
-        keywords: [historyDetail(entry)],
-        kind: "navigate",
-        run: (mode) => historyOpenRef.current(entry, mode),
-      })),
-    [historyResults.entries, bookmarks],
+  const historyRow = useCallback(
+    (entry: HistoryEntry): PaletteItem => ({
+      id: `history:${entry.id}`,
+      icon: historyIcon(entry),
+      iconNode:
+        entry.target.kind === "web" && entry.faviconUrl ? (
+          <SiteFavicon
+            url={entry.target.url}
+            faviconUrl={entry.faviconUrl}
+            className="size-4"
+          />
+        ) : undefined,
+      bookmarked:
+        entry.target.kind === "web" &&
+        bookmarks.some(
+          (bookmark) =>
+            entry.target.kind === "web" &&
+            bookmark.url.replace(/\/$/, "") ===
+              entry.target.url.replace(/\/$/, ""),
+        ),
+      label: entry.title,
+      detail: historyDetail(entry),
+      keywords:
+        entry.target.kind === "web"
+          ? [hostOf(entry.target.url)]
+          : entry.project
+            ? [entry.project.name]
+            : [],
+      kind: "navigate",
+      category:
+        entry.target.kind === "web" || entry.target.kind === "local"
+          ? "page"
+          : "resource",
+      usage: entry.id,
+      run: (mode) => historyOpenRef.current(entry, mode),
+    }),
+    [bookmarks],
+  );
+  const historyItems = useMemo(
+    () => historyResults.entries.map(historyRow),
+    [historyResults.entries, historyRow],
   );
   const sitePageItems = useMemo<PaletteItem[]>(() => {
     const items: PaletteItem[] = [];
@@ -1414,6 +1275,8 @@ export function CommandPalette({
         id: "site-settings",
         icon: Settings2,
         label: "Site settings",
+        // The host is where it applies, not what it is: typing a site's
+        // name should find its pages first.
         detail: host,
         keywords: [
           "site",
@@ -1423,9 +1286,10 @@ export function CommandPalette({
           "location",
           "notifications",
           "cookies",
-          host,
         ],
         kind: "action",
+        category: "command",
+        usage: "site-settings",
         run: () => onOpenSiteSettings(origin),
       });
     }
@@ -1437,6 +1301,8 @@ export function CommandPalette({
         detail: "Saved logins and notes",
         keywords: ["passwords", "logins", "credentials", "keychain", "notes"],
         kind: "navigate",
+        category: "surface",
+        usage: surfaceUsageKey("passwords"),
         run: (mode) =>
           onOpenTab(
             { kind: "passwords", name: profileId, label: "Passwords" },
@@ -1450,6 +1316,8 @@ export function CommandPalette({
       detail: "Files saved from pages",
       keywords: ["downloads", "files", "saved", "download"],
       kind: "navigate",
+      category: "surface",
+      usage: surfaceUsageKey("downloads"),
       run: (mode) =>
         onOpenTab(
           { kind: "downloads", name: "downloads", label: "Downloads" },
@@ -1463,6 +1331,8 @@ export function CommandPalette({
       detail: "Permissions and data per site",
       keywords: ["sites", "permissions", "cookies", "site settings", "data"],
       kind: "navigate",
+      category: "surface",
+      usage: surfaceUsageKey("sites"),
       run: (mode) =>
         onOpenTab({ kind: "sites", name: "sites", label: "Sites" }, mode),
     });
@@ -1476,6 +1346,8 @@ export function CommandPalette({
       detail: "Pages and work you've opened",
       keywords: ["history", "recent", "visited"],
       kind: "navigate",
+      category: "surface",
+      usage: surfaceUsageKey("history"),
       run: (mode) =>
         onOpenTab({ kind: "history", name: "history", label: "History" }, mode),
     }),
@@ -1496,6 +1368,8 @@ export function CommandPalette({
           ...setting.keywords,
         ],
         kind: "navigate",
+        category: "setting",
+        usage: `setting:${setting.id}`,
         run: (mode) =>
           onOpenTab(
             {
@@ -1509,42 +1383,14 @@ export function CommandPalette({
       })),
     [onOpenTab],
   );
-  const searchSettings = useMemo(
-    () => createPaletteIndex(settingItems),
-    [settingItems],
+  const commandItems = useMemo(
+    () => [...actionItems, ...skillItems, ...projectItems, ...profileItems],
+    [actionItems, skillItems, projectItems, profileItems],
   );
-  const searchEverything = useMemo(
-    () =>
-      createPaletteIndex([
-        ...startingActionItems,
-        ...actionItems,
-        ...skillItems,
-        ...projectItems,
-        ...profileItems,
-        ...sidebarItems,
-        ...historyItems,
-        historyPageItem,
-        ...sitePageItems,
-        ...settingItems,
-      ]),
-    [
-      startingActionItems,
-      actionItems,
-      skillItems,
-      projectItems,
-      profileItems,
-      sidebarItems,
-      historyItems,
-      historyPageItem,
-      sitePageItems,
-      settingItems,
-    ],
-  );
-  const trimmed = query.trim();
-  const allResults = useMemo<PaletteItem[]>(() => {
-    // Picker active: the list IS the question. Agent rows or effort rows,
-    // narrowed by whatever is typed; picking answers and closes.
-    if (picker === "model") {
+
+  const modelRows = useCallback(
+    (query: string): PaletteItem[] => {
+      const trimmed = query.trim();
       if (!targetAgent) {
         return [
           {
@@ -1667,6 +1513,7 @@ export function CommandPalette({
       ) {
         rows.push({
           id: "pick:model:catalog-status",
+          commit: "stay",
           icon: Cpu,
           label:
             harnessModels?.agentId !== agent.id
@@ -1744,9 +1591,20 @@ export function CommandPalette({
         });
       }
       return trimmed ? rows : pinCurrentFirst(rows);
-    }
-
-    if (picker) {
+    },
+    [
+      targetAgent,
+      focusedChat,
+      catalog,
+      harnessModels,
+      harnessDefault.data?.model,
+      onPickModel,
+      onOpenTab,
+    ],
+  );
+  const choiceItems = useMemo<PaletteItem[]>(() => {
+    if (!picker || picker === "model") return [];
+    const build = (): PaletteItem[] => {
       const rows: PaletteItem[] =
         picker === "permission-mode"
           ? permissionModeChoices(targetAgent).map((choice) => ({
@@ -1920,110 +1778,69 @@ export function CommandPalette({
           },
         ];
       }
-      // Agent pickers pin the current agent first while unfiltered; the
-      // effort picker keeps its low→high order (three fixed rows).
-      if (!trimmed)
-        return picker === "effort" || picker === "permission-mode"
-          ? rows
-          : pinCurrentFirst(rows);
-      return rows
-        .map((item) => ({
-          item,
-          score: commandScore(item.label, trimmed, item.keywords),
-        }))
-        .filter((entry) => entry.score > 0)
-        .sort((a, b) => b.score - a.score)
-        .map((entry) => entry.item);
-    }
+      return rows;
+    };
+    return build().map(asAnswer);
+  }, [
+    picker,
+    targetAgent,
+    focusedChat,
+    effortModel,
+    agents,
+    projectAgents,
+    defaultAgentId,
+    defaultAgentOverridden,
+    onPickHarnessPermissions,
+    onPickEffort,
+    onPickDefaultAgent,
+    onPickSessionAgent,
+    onPickProjectAgent,
+    onConfigureAgent,
+    onClearDefaultOverride,
+    onOpenTab,
+  ]);
 
-    // Chip mode active: the whole input belongs to that mode. One row —
-    // Enter commits it — so typing never drifts into unrelated matches.
-    if (mode) {
-      if (mode.id === "history") {
-        if (
-          historyResults.error ||
-          (historyResults.loading && !historyItems.length)
+  const loadSites = useCallback(async () => {
+    const sites = await desktopApi.siteSettingsList();
+    const focused = focusedSite?.origin;
+    return {
+      items: [...sites]
+        .sort(
+          (a, b) =>
+            Number(b.origin === focused) - Number(a.origin === focused) ||
+            (b.lastVisitAt ?? 0) - (a.lastVisitAt ?? 0),
         )
-          return [
-            {
-              id: "history:status",
-              icon: History,
-              label: historyResults.error ?? "Searching…",
-              keywords: [],
-              kind: "action",
-              disabled: !historyResults.error,
-              run: historyResults.refresh,
-            },
-          ];
-        return historyItems;
-      }
-      if (mode.id === "section" && searchRequest?.mode === "section") {
-        if (sectionLoading || sectionError)
-          return [
-            {
-              id: "section:status",
-              icon: Search,
-              label: sectionError ?? "Loading…",
-              detail: sectionError ? "Press Enter to retry" : undefined,
-              keywords: [],
-              kind: "action",
-              disabled: !sectionError,
-              run: () => setSectionRetry((value) => value + 1),
-            },
-          ];
-        return sectionItems
-          .map((item) => ({
-            item,
-            score: trimmed
-              ? commandScore(item.label, trimmed, [
-                  item.detail ?? "",
-                  ...item.keywords,
-                ])
-              : 1,
-          }))
-          .filter(({ score }) => score > 0)
-          .sort((a, b) => b.score - a.score)
-          .map(({ item }) => item);
-      }
-      if (mode.id === "settings") return searchSettings(trimmed);
-      if (mode.id === "files" || mode.id === "content") {
-        if (!fileSearch?.matches.length)
-          return [
-            {
-              id: "files:status",
-              disabled: true,
-              icon: Search,
-              label:
-                fileSearchError ??
-                (!trimmed
-                  ? "Type to search this project"
-                  : fileSearch
-                    ? "No matches"
-                    : "Searching…"),
-              detail: fileSearch?.truncated
-                ? "Search limit reached. Refine your query."
-                : undefined,
-              keywords: [],
-              kind: "action",
-              run: () => {},
-            },
-          ];
-        return fileSearch.matches.map((match) => ({
-          id: `file:${match.path}:${match.line ?? 0}`,
-          icon: FileCode,
-          label: match.line ? `${match.path}:${match.line}` : match.path,
-          detail: match.text ?? "File",
-          keywords: [],
-          kind: "navigate",
-          run: (commitMode) =>
-            onOpenUrl(
-              `file:${match.path}${match.line ? `:${match.line}` : ""}`,
-              commitMode,
+        .map(
+          (site): PaletteItem => ({
+            id: `site:${site.origin}`,
+            icon: Globe,
+            iconNode: (
+              <SiteFavicon
+                url={site.origin}
+                faviconUrl={site.faviconUrl}
+                className="size-4"
+              />
             ),
-        }));
-      }
-      const modeQuery = trimmed;
-      if (mode.id === "agent") {
+            label: site.host,
+            detail:
+              summarizePermissions(site.permissions).join(" · ") ||
+              (site.cookies
+                ? `${site.cookies} cookie${site.cookies === 1 ? "" : "s"}`
+                : "Default settings"),
+            keywords: [site.origin],
+            kind: "action",
+            usage: `site:${site.origin}`,
+            run: () => onOpenSiteSettings?.(site.origin),
+          }),
+        ),
+    };
+  }, [focusedSite?.origin, onOpenSiteSettings]);
+
+  // One row that sends the whole input somewhere: the agent or the web.
+  const inputRows = useCallback(
+    (target: "agent" | "web", query: string): PaletteItem[] => {
+      const typed = query.trim();
+      if (target === "agent")
         return [
           {
             id: "mode:agent",
@@ -2032,97 +1849,460 @@ export function CommandPalette({
             detail:
               [...agents, ...projectAgents.map(projectAgentAsInfo)].find(
                 (agent) => agent.id === defaultAgentId,
-              )?.name ?? (modeQuery ? undefined : "Type a message"),
+              )?.name ?? (typed ? undefined : "Type a message"),
             keywords: [],
             kind: "navigate",
+            ...(typed ? {} : { commit: "stay" as const }),
             run: (commitMode) => {
-              if (!modeQuery) return;
-              onSendToAgent(query, commitMode === "tab" ? "tab" : "float");
+              if (typed)
+                onSendToAgent(query, commitMode === "tab" ? "tab" : "float");
             },
           },
         ];
-      }
       return [
         {
           id: "mode:web",
           icon: Search,
-          label: modeQuery
-            ? `Search the web for "${modeQuery}"`
-            : "Search the web",
-          detail: modeQuery ? "Google Search" : "Type a query",
+          label: typed ? `Search the web for "${typed}"` : "Search the web",
+          detail: typed ? "Google Search" : "Type a query",
           keywords: [],
           kind: "navigate",
+          ...(typed ? {} : { commit: "stay" as const }),
           run: (commitMode) => {
-            if (!modeQuery) return;
-            onOpenUrl(
-              `https://www.google.com/search?q=${encodeURIComponent(modeQuery)}`,
-              commitMode,
-            );
+            if (typed)
+              onOpenUrl(
+                `https://www.google.com/search?q=${encodeURIComponent(typed)}`,
+                commitMode,
+              );
           },
         },
       ];
+    },
+    [agents, projectAgents, defaultAgentId, onSendToAgent, onOpenUrl],
+  );
+
+  const errorRef = useRef(onError);
+  errorRef.current = onError;
+  const customModes = useMemo(
+    () =>
+      customPaletteModes({
+        config: sidebarConfig,
+        projectId,
+        memberShell,
+        onOpenUrl,
+        onError: (message) => errorRef.current?.(message),
+      }),
+    [sidebarConfig, projectId, memberShell, onOpenUrl],
+  );
+
+  /**
+   * Every mode the palette offers (ADR 0186). A new built-in mode is one
+   * entry here: its chip, its typed names, and where its rows come from.
+   */
+  const modes = useMemo<PaletteMode[]>(() => {
+    const names = (id: BuiltinPaletteMode) => BUILTIN_PALETTE_TRIGGERS[id];
+    const choice = (
+      id: PaletteChoiceMode,
+      rows: PaletteMode["rows"],
+      typed?: readonly string[],
+    ): PaletteMode => ({
+      id,
+      ...CHOICE_CHIPS[id],
+      label: CHOICE_CHIPS[id].chip,
+      names: typed,
+      rows,
+    });
+    // Typed names follow the commands' availability (a project agent has no
+    // editable model; some harnesses have no permission modes).
+    const hasAgent = agents.length > 0 || Boolean(defaultAgentId);
+    const typedChoice = (action: ActionId, id: BuiltinPaletteMode) =>
+      hasAgent && actionAvailability?.[action] !== false
+        ? names(id)
+        : undefined;
+    const list: PaletteMode[] = [
+      {
+        id: "history",
+        chip: "History",
+        icon: History,
+        label: "Search history",
+        description: "Find pages and work you opened",
+        placeholder: "Search history…",
+        names: profileId ? names("history") : undefined,
+        rows: {
+          kind: "load",
+          key: `history:${profileId}`,
+          filtered: true,
+          debounceMs: 120,
+          empty: "No history matches",
+          load: async (typed) => ({
+            items: (
+              await desktopApi.historyQuery({ query: typed, limit: 80 })
+            ).entries.map(historyRow),
+          }),
+        },
+      },
+      ...(["files", "content"] as const).map(
+        (id): PaletteMode => ({
+          id,
+          chip: id === "files" ? "Files" : "File content",
+          icon: id === "files" ? FileCode : Search,
+          label: id === "files" ? "Find files" : "Search file content",
+          description:
+            id === "files"
+              ? "Find a filename in this project"
+              : "Find text and open its matching line",
+          placeholder:
+            id === "files" ? "Search filenames…" : "Search inside files…",
+          names: projectId ? names(id) : undefined,
+          rows: {
+            kind: "load",
+            key: `${id}:${projectId}`,
+            filtered: true,
+            idle: "Type to search this project",
+            empty: "No matches",
+            load: async (typed, signal) => {
+              if (!projectId) throw new Error("Open a project to search it.");
+              signal.addEventListener(
+                "abort",
+                () => void desktopApi.cancelFileSearch().catch(() => {}),
+                { once: true },
+              );
+              const result = await desktopApi.fileSearch({
+                projectId,
+                query: typed,
+                mode: id,
+              });
+              return {
+                notice:
+                  result.truncated ||
+                  result.matches.length > PALETTE_RESULT_LIMIT
+                    ? `Showing the first ${Math.min(result.matches.length, PALETTE_RESULT_LIMIT)} matches. Refine your query to see more.`
+                    : undefined,
+                items: result.matches.map(
+                  (match): PaletteItem => ({
+                    id: `file:${match.path}:${match.line ?? 0}`,
+                    icon: FileCode,
+                    label: match.line
+                      ? `${match.path}:${match.line}`
+                      : match.path,
+                    detail: match.text ?? "File",
+                    keywords: [],
+                    kind: "navigate",
+                    run: (commitMode) =>
+                      onOpenUrl(
+                        `file:${match.path}${match.line ? `:${match.line}` : ""}`,
+                        commitMode,
+                      ),
+                  }),
+                ),
+              };
+            },
+          },
+        }),
+      ),
+      {
+        id: "settings",
+        chip: "Settings",
+        icon: SettingsIcon,
+        label: "Search settings",
+        description: "Find a setting and open its control",
+        placeholder: "Search settings…",
+        names: names("settings"),
+        rows: { kind: "list", items: settingItems },
+      },
+      {
+        id: "sites",
+        chip: "Sites",
+        icon: SlidersHorizontal,
+        label: "Search sites",
+        description: "Open a site's permissions and data",
+        placeholder: "Search sites…",
+        names: profileId ? names("sites") : undefined,
+        rows: {
+          kind: "load",
+          key: `sites:${profileId}`,
+          filtered: false,
+          empty: "No sites yet",
+          load: loadSites,
+        },
+      },
+      {
+        id: "commands",
+        chip: "Commands",
+        icon: Command,
+        label: "Search commands",
+        description: "Only commands, skills, projects and profiles",
+        placeholder: "Search commands…",
+        names: names("commands"),
+        rows: { kind: "list", items: commandItems },
+      },
+      choice(
+        "model",
+        { kind: "compute", rows: (typed) => modelRows(typed).map(asAnswer) },
+        typedChoice("switch-model", "model"),
+      ),
+      choice(
+        "effort",
+        { kind: "list", items: picker === "effort" ? choiceItems : [] },
+        typedChoice("change-effort", "effort"),
+      ),
+      choice(
+        "permission-mode",
+        {
+          kind: "list",
+          items: picker === "permission-mode" ? choiceItems : [],
+        },
+        typedChoice("change-permission-mode", "permission-mode"),
+      ),
+      ...(["default-agent", "switch-agent", "configure-agent"] as const).map(
+        (id) =>
+          choice(id, {
+            kind: "list",
+            items: picker === id ? choiceItems : [],
+            zero: id === "configure-agent" ? "given" : "pin-current",
+          }),
+      ),
+      {
+        id: "agent",
+        chip: "Ask agent",
+        icon: Bot,
+        label: "Ask the agent",
+        description: "Send everything you type to a new chat",
+        placeholder: "Message the agent…",
+        names: projectId ? names("agent") : undefined,
+        rows: { kind: "compute", rows: (typed) => inputRows("agent", typed) },
+      },
+      {
+        id: "web",
+        chip: "Search web",
+        icon: Search,
+        label: "Search the web",
+        description: "Google search in a browser tab",
+        placeholder: "Search the web…",
+        names: names("web"),
+        rows: { kind: "compute", rows: (typed) => inputRows("web", typed) },
+      },
+      ...customModes,
+    ];
+    if (sectionSearch)
+      list.push({
+        id: "section",
+        chip: sectionSearch.label,
+        icon: Search,
+        placeholder: `Search ${sectionSearch.label.toLowerCase()}…`,
+        rows: {
+          kind: "load",
+          key: sectionSearch.nonce,
+          filtered: false,
+          load: async () => ({ items: await sectionSearch.load() }),
+        },
+      });
+    return list;
+  }, [
+    agents.length,
+    defaultAgentId,
+    actionAvailability,
+    profileId,
+    projectId,
+    historyRow,
+    onOpenUrl,
+    settingItems,
+    loadSites,
+    commandItems,
+    modelRows,
+    picker,
+    choiceItems,
+    inputRows,
+    customModes,
+    sectionSearch,
+  ]);
+  const namedModes = useMemo(
+    () => modes.filter((candidate) => candidate.names?.length),
+    [modes],
+  );
+  const activeMode = modes.find((candidate) => candidate.id === modeId) ?? null;
+  // A mode can vanish while active (sidebar.js edited, project switched):
+  // fall back to the ordinary palette rather than a chipless dead end.
+  useEffect(() => {
+    if (modeId && !activeMode) setModeId(null);
+  }, [modeId, activeMode]);
+  const exitMode = () => {
+    if (activeMode)
+      setExitingChip({ icon: activeMode.icon, label: activeMode.chip });
+    setModeId(null);
+  };
+  const modeLoad = usePaletteLoad(
+    activeMode?.rows,
+    query,
+    (variant === "tab" || open) && Boolean(activeMode),
+  );
+  const rankContext = useMemo(
+    () => ({ signals, projectId }),
+    [signals, projectId],
+  );
+  const activeRows = activeMode?.rows;
+  const modeItems =
+    activeRows?.kind === "list"
+      ? activeRows.items
+      : activeRows?.kind === "load" && !activeRows.filtered
+        ? modeLoad.items
+        : null;
+  const searchMode = useMemo(
+    () => (modeItems ? createPaletteIndex(modeItems) : null),
+    [modeItems],
+  );
+  const searchCommands = useMemo(
+    () => createPaletteIndex(commandItems),
+    [commandItems],
+  );
+
+  const topLevelModeRows = useTopLevelModeRows(
+    customModes,
+    (variant === "tab" || open) && !modeId,
+  );
+  // Rows everything else already lists: a bookmarked page or a workflow
+  // appears once, as its own row, ranked with its history counts.
+  const nativeRows = useMemo(
+    () => [
+      ...actionItems,
+      ...skillItems,
+      ...projectItems,
+      ...profileItems,
+      ...sidebarItems,
+      ...topLevelModeRows,
+      historyPageItem,
+      ...sitePageItems,
+    ],
+    [
+      actionItems,
+      skillItems,
+      projectItems,
+      profileItems,
+      sidebarItems,
+      topLevelModeRows,
+      historyPageItem,
+      sitePageItems,
+    ],
+  );
+  const nativeUsage = useMemo(
+    () => new Set(nativeRows.flatMap((item) => item.usage ?? [])),
+    [nativeRows],
+  );
+  const searchEverything = useMemo(
+    () =>
+      createPaletteIndex([
+        ...startingActionItems,
+        ...nativeRows,
+        ...historyItems.filter((item) => !nativeUsage.has(item.usage ?? "")),
+        ...settingItems,
+      ]),
+    [startingActionItems, nativeRows, nativeUsage, historyItems, settingItems],
+  );
+  const trimmed = query.trim();
+  const allResults = useMemo<PaletteItem[]>(() => {
+    // Mode active: the whole input belongs to that mode's rows.
+    if (activeRows) {
+      const status = (label: string, retry: boolean): PaletteItem[] => [
+        {
+          id: `${modeId}:status`,
+          icon: Search,
+          label,
+          detail: retry ? "Press Enter to retry" : undefined,
+          keywords: [],
+          kind: "action",
+          commit: "stay",
+          disabled: !retry,
+          run: modeLoad.retry,
+        },
+      ];
+      if (activeRows.kind === "compute") return activeRows.rows(query);
+      if (activeRows.kind === "load") {
+        if (modeLoad.idle) return status(activeRows.idle ?? "", false);
+        if (modeLoad.error) return status(modeLoad.error, true);
+        if (modeLoad.loading && !modeLoad.items.length)
+          return status("Loading…", false);
+        if (!modeLoad.items.length)
+          return activeRows.empty ? status(activeRows.empty, false) : [];
+        if (activeRows.filtered) return modeLoad.items;
+      }
+      const items = modeItems ?? [];
+      if (!trimmed)
+        return activeRows.kind === "list" && activeRows.zero === "pin-current"
+          ? pinCurrentFirst([...items])
+          : [...items];
+      return searchMode?.(trimmed, rankContext) ?? [];
     }
 
     // "@" zero-state: list the modes as selectable rows (Chrome's
     // @-shortcut pills). Narrows as the trigger is typed.
     if (trimmed.startsWith("@")) {
       const partial = trimmed.slice(1).toLowerCase();
-      const modeRows = PALETTE_MODES.filter(
-        (candidate) =>
-          (projectId || candidate.id !== "agent") &&
-          modeNames(candidate).some((name) => name.startsWith(partial)),
-      ).map(
-        (candidate): PaletteItem => ({
-          id: `mode-row:${candidate.id}`,
-          icon: candidate.icon,
-          label: candidate.label,
-          detail: candidate.description,
-          shortcut: "Tab",
-          keywords: [],
-          kind: "action",
-          run: () => enterMode(candidate),
-        }),
-      );
+      const modeRows = namedModes
+        .filter((candidate) =>
+          candidate.names?.some((name) => name.startsWith(partial)),
+        )
+        .map(
+          (candidate): PaletteItem => ({
+            id: `mode-row:${candidate.id}`,
+            icon: candidate.icon,
+            label: candidate.label ?? candidate.chip,
+            detail: candidate.description,
+            shortcut: "Tab",
+            keywords: [],
+            kind: "action",
+            commit: "stay",
+            run: () => enterMode(candidate.id),
+          }),
+        );
       if (modeRows.length > 0) return modeRows;
     }
 
-    // ">" filters to command rows only (VS Code quick-open convention).
+    // ">" filters to command rows only (VS Code quick-open convention),
+    // the Commands mode without its chip.
     if (trimmed.startsWith(">")) {
       const commandQuery = trimmed.slice(1).trim();
-      const commands = [
-        ...actionItems,
-        ...skillItems,
-        ...projectItems,
-        ...profileItems,
-      ];
-      if (!commandQuery) return commands;
-      return commands
-        .map((item) => ({
-          item,
-          score: commandScore(item.label, commandQuery, item.keywords),
-        }))
-        .filter((entry) => entry.score > 0)
-        .sort((a, b) => b.score - a.score)
-        .map((entry) => entry.item);
+      return commandQuery
+        ? searchCommands(commandQuery, rankContext)
+        : commandItems;
     }
 
     if (!trimmed) {
+      // A focused site's settings lead its zero state, like chat commands.
+      const siteSettings = sitePageItems.filter(
+        (item) => item.id === "site-settings",
+      );
+      const rest = nativeRows.filter(
+        (item) =>
+          item.id !== "site-settings" && !topLevelModeRows.includes(item),
+      );
+      const byUsage = new Map(
+        nativeRows.flatMap((item) => (item.usage ? [[item.usage, item]] : [])),
+      );
+      const frequent = frequentItems(
+        [
+          ...rest,
+          ...topLevelModeRows,
+          ...signals.frequentHistory.map(
+            (entry) => byUsage.get(entry.id) ?? historyRow(entry),
+          ),
+        ],
+        rankContext,
+      ).map((item) => ({ ...item, group: "Frequent" }));
+      const taken = new Set(frequent.map((item) => item.id));
       return [
         ...startingActionItems,
-        // A focused site's settings lead its zero state, like chat commands.
-        ...sitePageItems.filter((item) => item.id === "site-settings"),
-        ...actionItems,
-        ...skillItems,
-        ...projectItems,
-        ...profileItems,
-        ...sidebarItems,
-        historyPageItem,
-        ...sitePageItems.filter((item) => item.id !== "site-settings"),
-        ...historyItems.slice(0, 8),
+        ...siteSettings,
+        ...frequent,
+        ...rest.filter((item) => !taken.has(item.id)),
+        ...historyItems
+          .filter(
+            (item) => !taken.has(item.id) && !nativeUsage.has(item.usage ?? ""),
+          )
+          .slice(0, 8),
       ];
     }
 
-    const scored = searchEverything(trimmed);
+    const scored = searchEverything(trimmed, rankContext);
 
     const multiline = query.includes("\n");
     const sendItem: PaletteItem = {
@@ -2158,53 +2338,30 @@ export function CommandPalette({
     }
     return [...scored, ...(webItem ? [webItem] : []), ...sendItems];
   }, [
+    activeRows,
+    modeId,
+    modeLoad,
+    modeItems,
+    searchMode,
+    rankContext,
+    namedModes,
+    enterMode,
+    searchCommands,
+    commandItems,
     trimmed,
-    searchRequest,
-    sectionItems,
-    sectionError,
-    sectionLoading,
-    fileSearch,
-    fileSearchError,
-    searchSettings,
+    query,
+    startingActionItems,
+    sitePageItems,
+    nativeRows,
+    nativeUsage,
+    topLevelModeRows,
+    signals.frequentHistory,
+    historyRow,
+    historyItems,
     searchEverything,
     projectId,
-    query,
-    mode,
-    picker,
-    agents,
-    projectAgents,
-    defaultAgentId,
-    focusedChat,
-    enterMode,
-    actionItems,
-    startingActionItems,
-    skillItems,
-    projectItems,
-    profileItems,
-    sidebarItems,
-    historyItems,
-    historyPageItem,
-    sitePageItems,
-    historyResults.error,
-    historyResults.loading,
-    historyResults.refresh,
     onSendToAgent,
     onOpenUrl,
-    onOpenTab,
-    onPickDefaultAgent,
-    onPickSessionAgent,
-    onPickProjectAgent,
-    onConfigureAgent,
-    defaultAgentOverridden,
-    onClearDefaultOverride,
-    onPickEffort,
-    onPickModel,
-    onPickHarnessPermissions,
-    targetAgent,
-    catalog,
-    harnessModels,
-    effortModel,
-    harnessDefault.data?.model,
   ]);
 
   const results = useMemo(
@@ -2275,6 +2432,35 @@ export function CommandPalette({
     return () => onHighlightTargetRef.current?.(null);
   }, [highlightTarget]);
 
+  // What the palette learns from a pick (ADR 0186): the typed query, and a
+  // visit for destinations nothing else counts.
+  const record = (item: PaletteItem) => {
+    const key = item.usage;
+    if (!key || !profileId) return;
+    // Keyed exactly as the ranker looks picks up ("gpt-4o" → "gpt 4o").
+    const typed = normalizeCommandQuery(
+      trimmed.startsWith(">") ? trimmed.slice(1) : trimmed,
+    ).trim();
+    const use = {
+      key,
+      ...(typed ? { query: typed } : {}),
+      visit: paletteCountsVisit(key),
+      ...(projectId ? { projectId } : {}),
+    };
+    // Incognito chats stay out of what the palette remembers, as they
+    // stay out of history.
+    const chat = key.startsWith('["chat",') ? item.id.slice(8) : null;
+    void (
+      chat && item.id.startsWith("session:")
+        ? desktopApi.sessionIsIncognito(chat)
+        : Promise.resolve(false)
+    )
+      .then((incognito) => {
+        if (!incognito) return desktopApi.paletteRecord(use);
+      })
+      .catch(() => {});
+  };
+
   const commit = (
     item: PaletteItem,
     withCmd: boolean,
@@ -2283,36 +2469,18 @@ export function CommandPalette({
   ) => {
     // Disabled rows (invalid project agents) are informational only.
     if (item.disabled) return;
-    if (
-      item.id === "pick:model:catalog-status" ||
-      item.id === "section:status" ||
-      item.id === "history:status"
-    ) {
+    // Entering a mode, retrying a load: palette state changes in place.
+    if (item.commit === "stay") {
       item.run("replace");
       return;
     }
-    // Entering a chip mode swaps palette state — the palette stays open.
-    if (item.id.startsWith("mode-row:")) {
-      item.run("replace");
-      return;
-    }
-    // Picker-opening commands likewise swap palette state in place.
-    if (
-      item.id.startsWith("action:") &&
-      PICKER_ACTIONS[item.id.slice("action:".length) as ActionId]
-    ) {
-      item.run("replace");
-      return;
-    }
-    // Picking an answer runs it and puts the palette away.
-    if (item.id.startsWith("pick:")) {
+    // Answering a mode's question runs it and puts the palette away.
+    if (item.commit === "answer") {
       if (variant === "overlay") onClose();
       item.run("replace");
-      exitPicker();
+      exitMode();
       return;
     }
-    // A chip-mode row with nothing typed has nothing to do yet.
-    if (item.id.startsWith("mode:") && trimmed === "") return;
     const inTab = variant === "tab";
     const commitMode: CommitMode = floating
       ? "floating"
@@ -2323,6 +2491,7 @@ export function CommandPalette({
           : "replace";
     if (variant === "overlay") onClose();
     item.run(commitMode);
+    record(item);
     // A palette tab is consumed by whatever it opened; pure actions
     // (toggle sidebar, …) leave it in place.
     if (inTab && item.kind === "navigate") onClose();
@@ -2334,8 +2503,13 @@ export function CommandPalette({
         Math.max(Math.min(current, results.length - 1) + delta, 0),
         results.length - 1,
       );
+      const id = results[next]?.id;
       requestAnimationFrame(() => {
-        sizerRef.current?.children[next]?.scrollIntoView({ block: "nearest" });
+        // Group labels and notices share the list, so find the row itself.
+        if (id)
+          sizerRef.current
+            ?.querySelector(`[data-item-id="${CSS.escape(id)}"]`)
+            ?.scrollIntoView({ block: "nearest" });
       });
       return next;
     });
@@ -2347,27 +2521,22 @@ export function CommandPalette({
     // [Ask agent]). Both keys, deliberately — Chrome removed Space once
     // and had to bring it back.
     if (
-      !mode &&
+      !activeMode &&
       (event.key === "Tab" || event.key === " ") &&
       trimmed.length > 1 &&
-      (trimmed.startsWith("@") || isFullModeName(trimmed))
+      (trimmed.startsWith("@") || isFullPaletteModeName(namedModes, trimmed))
     ) {
-      const candidate = matchMode(trimmed);
-      if (candidate && (projectId || candidate.id !== "agent")) {
+      const candidate = matchPaletteMode(namedModes, trimmed);
+      if (candidate) {
         event.preventDefault();
-        enterMode(candidate);
+        enterMode(candidate.id);
         return;
       }
     }
     // Backspace on empty input pops the chip (cmdk convention).
-    if (mode && event.key === "Backspace" && query === "") {
+    if (activeMode && event.key === "Backspace" && query === "") {
       event.preventDefault();
       exitMode();
-      return;
-    }
-    if (picker && event.key === "Backspace" && query === "") {
-      event.preventDefault();
-      exitPicker();
       return;
     }
     if (event.key === "ArrowDown") {
@@ -2411,25 +2580,12 @@ export function CommandPalette({
       window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, [variant, open, onClose]);
 
-  // The rendered chip: the live mode/picker, or the exiting one mid
-  // chip-out. Pickers reuse the mode chip's exact visual vocabulary.
-  const chip = mode
-    ? { icon: mode.icon, label: mode.chip, live: true }
-    : picker
-      ? {
-          icon: PICKER_CHIPS[picker].icon,
-          label: PICKER_CHIPS[picker].chip,
-          live: true,
-        }
-      : exitingMode
-        ? { icon: exitingMode.icon, label: exitingMode.chip, live: false }
-        : exitingPicker
-          ? {
-              icon: PICKER_CHIPS[exitingPicker].icon,
-              label: PICKER_CHIPS[exitingPicker].chip,
-              live: false,
-            }
-          : null;
+  // The rendered chip: the live mode, or the exiting one mid chip-out.
+  const chip = activeMode
+    ? { icon: activeMode.icon, label: activeMode.chip, live: true }
+    : exitingChip
+      ? { ...exitingChip, live: false }
+      : null;
 
   const panel = (
     <div
@@ -2442,10 +2598,7 @@ export function CommandPalette({
           <span
             data-testid={chip.live ? "palette-mode-chip" : undefined}
             onAnimationEnd={(event) => {
-              if (event.animationName === "chip-out") {
-                setExitingMode(null);
-                setExitingPicker(null);
-              }
+              if (event.animationName === "chip-out") setExitingChip(null);
             }}
             className={`mt-[9px] flex shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap py-1 pl-1.5 pr-2 ${PILL_SURFACE} ${
               chip.live ? "animate-chip-in" : "animate-chip-out"
@@ -2466,13 +2619,7 @@ export function CommandPalette({
           onKeyDown={onInputKeyDown}
           rows={1}
           spellCheck={false}
-          placeholder={
-            mode
-              ? mode.placeholder
-              : picker
-                ? PICKER_CHIPS[picker].placeholder
-                : "Search or ask anything…"
-          }
+          placeholder={activeMode?.placeholder ?? "Search or ask anything…"}
           aria-label="Search commands, pages, and more"
           className="field-sizing-content max-h-40 w-full resize-none bg-transparent px-1 py-3 text-sm outline-none placeholder:text-fg-faint"
           style={{ outline: "none" }}
@@ -2485,16 +2632,11 @@ export function CommandPalette({
         aria-label="Results"
       >
         <div ref={sizerRef} className="p-2">
-          {(mode?.id === "files" || mode?.id === "content") &&
-            fileSearch &&
-            (fileSearch.truncated ||
-              fileSearch.matches.length > PALETTE_RESULT_LIMIT) && (
-              <p role="status" className="px-4 py-2 text-xs text-fg-muted">
-                Showing the first{" "}
-                {Math.min(fileSearch.matches.length, PALETTE_RESULT_LIMIT)}{" "}
-                matches. Refine your query to see more.
-              </p>
-            )}
+          {activeMode && modeLoad.notice && (
+            <p role="status" className="px-4 py-2 text-xs text-fg-muted">
+              {modeLoad.notice}
+            </p>
+          )}
           {results.map((item, index) => {
             const Icon = item.icon;
             const isSelected = index === selected;
@@ -2591,7 +2733,7 @@ export function CommandPalette({
         data-testid="palette-footer"
         className="flex shrink-0 items-center gap-3 border-t border-border px-4 py-1.5 text-[11px] text-fg-faint"
       >
-        {mode || picker ? (
+        {activeMode ? (
           <FooterHint keycap="⌫" label="exit mode" />
         ) : (
           <>
