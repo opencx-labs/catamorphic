@@ -22,6 +22,7 @@ export {
   type HarnessPermissions,
   harnessPermissionIssues,
 } from "./coding-agent/harness-permissions.js";
+export { transcriptHistoryPreamble } from "./coding-agent/history.js";
 export {
   buildPluginsPreamble,
   PLUGIN_STAGE_DIR,

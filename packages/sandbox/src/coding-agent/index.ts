@@ -1,3 +1,4 @@
+export { transcriptHistoryPreamble } from "./history.js";
 export {
   buildPluginsPreamble,
   PLUGIN_STAGE_DIR,

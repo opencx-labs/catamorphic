@@ -34,6 +34,7 @@ import {
   spawnInSandbox,
   stagedPluginFiles,
   stagePluginDocs,
+  transcriptHistoryPreamble,
 } from "@catamorphic/sandbox";
 import type {
   CodexOptions,
@@ -301,6 +302,32 @@ export class CodexAgent implements CodingAgentProvider {
     return client;
   }
 
+  private readonly sandboxDirectories = new Map<string, string>();
+
+  /**
+   * The working directory as the sandbox's own processes name it. Codex
+   * receives it over its protocol, not as its process's cwd, so a provider
+   * that maps the virtual `/workspace` onto a host folder (local-process)
+   * must hand Codex the mapped path; a VM answers `/workspace` itself.
+   */
+  private async sandboxDirectory(
+    run: SandboxRun,
+    directory: string,
+  ): Promise<string> {
+    const key = `${run.sandbox.sandboxId}\0${directory}`;
+    const known = this.sandboxDirectories.get(key);
+    if (known) return known;
+    const { exitCode, result } = await run.sandbox.provider.executeCommand(
+      run.sandbox.sandboxId,
+      "pwd -P",
+      { cwd: directory },
+    );
+    const resolved = result.trim();
+    if (exitCode !== 0 || !resolved.startsWith("/")) return directory;
+    this.sandboxDirectories.set(key, resolved);
+    return resolved;
+  }
+
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
     if (this.opts.sandbox) {
       // The working directory is the sandbox's: plugin docs go there.
@@ -320,7 +347,13 @@ export class CodexAgent implements CodingAgentProvider {
     const preamble = buildPluginsPreamble(opts.attachedPlugins, {
       directory: this.opts.pluginDirectory,
     });
-    const instructions = [preamble, opts.systemPrompt ?? ""]
+    const instructions = [
+      preamble,
+      opts.systemPrompt ?? "",
+      // A sandbox-resident session re-anchored in a new sandbox has no
+      // thread there: it continues from the host's transcript.
+      this.opts.sandbox ? transcriptHistoryPreamble(opts.history) : "",
+    ]
       .filter(Boolean)
       .join("\n\n");
     if (instructions) {
@@ -434,7 +467,9 @@ export class CodexAgent implements CodingAgentProvider {
       sandboxRun,
     );
     const threadOptions = this.threadOptions(
-      session.workingDirectory,
+      sandboxRun
+        ? await this.sandboxDirectory(sandboxRun, session.workingDirectory)
+        : session.workingDirectory,
       opts,
       sandboxRun !== undefined,
     );

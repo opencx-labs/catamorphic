@@ -52,6 +52,7 @@ import {
   stagedPluginFiles,
   stagePluginDocs,
   ToolGate,
+  transcriptHistoryPreamble,
 } from "@catamorphic/sandbox";
 import type { ZodRawShape } from "zod";
 import { turnContextHooks } from "./turn-context.js";
@@ -410,7 +411,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         opts.systemPrompt ?? "",
         // A sandbox-resident session re-anchored in a new sandbox has no
         // transcript there: it continues from the host's.
-        this.opts.sandbox ? historyPreamble(opts.history) : "",
+        this.opts.sandbox ? transcriptHistoryPreamble(opts.history) : "",
       ]
         .filter(Boolean)
         .join("\n\n") || undefined;
@@ -1126,18 +1127,6 @@ function sandboxSpawn(input: {
         )
       ).result,
   });
-}
-
-/** Earlier turns, for a session that continues in a new sandbox. */
-function historyPreamble(history: StartSessionOpts["history"]): string {
-  if (!history || history.length === 0) return "";
-  const turns = history
-    .map(
-      (turn) =>
-        `${turn.role === "user" ? "User" : "You"}: ${turn.content.slice(0, 4000)}`,
-    )
-    .join("\n\n");
-  return `This conversation continues from earlier turns, which you no longer hold in your transcript:\n\n${turns.slice(-60_000)}`;
 }
 
 /**
