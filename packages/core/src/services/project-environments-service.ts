@@ -172,6 +172,11 @@ const ProjectEnvironmentDefinitionSchema = z
           .max(7 * 24 * 60),
       })
       .optional(),
+    /**
+     * A member's own chats here may carry that member's personal
+     * credentials: harness logins and listed files (ADR 0184).
+     */
+    personalCredentials: z.boolean().optional(),
     /** Connection aliases, keyed by alias (ADR 0172). */
     connections: z
       .record(
@@ -209,6 +214,8 @@ export interface ProjectEnvironmentDefinition {
   image?: EnvironmentImage;
   network?: EnvironmentNetworkPolicy;
   approvals?: { waitMinutes: number };
+  /** Members' own chats here may carry their personal credentials (ADR 0184). */
+  personalCredentials?: boolean;
 }
 
 /** Parse an Environment's `image`: a Dockerfile path or an OCI reference. */

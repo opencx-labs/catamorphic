@@ -7,11 +7,14 @@ import type {
   EnvironmentResourcePolicy,
   EnvironmentRuntimeBinding,
   EnvironmentTrust,
+  PersonalLoginKind,
   SandboxCapability,
 } from "@catamorphic/sandbox";
 import {
   dockerfileDigest,
   environmentSatisfies,
+  harnessCapability,
+  MACHINE_CAPABILITIES,
   resolveEgress,
   SANDBOX_CAPABILITIES,
 } from "@catamorphic/sandbox";
@@ -58,7 +61,60 @@ export interface EnvironmentAdmission {
   sandbox: EnvironmentSandbox;
   /** How long unattended escalations wait for a person (ADR 0176). */
   approvals?: { waitMinutes: number };
+  /**
+   * This placement may hold the owner's personal credentials (ADR 0184):
+   * the Environment allows them, the work is a member's own, and the
+   * machine isolates it.
+   */
+  personalCredentials: boolean;
 }
+
+/**
+ * Whether one placement may hold a member's personal credentials (ADR
+ * 0184), and if not, what is missing and how to fix it. The Environment
+ * must allow them, the work must be a member's own (never a project
+ * chat's), and the placement must isolate that member: a sandbox VM, the
+ * member's own device, a machine only they use, or a machine whose
+ * operator accepted personal credentials on shared processes.
+ */
+export function personalCredentialsDecision(input: {
+  environment: string;
+  definition: Pick<
+    ProjectEnvironmentDefinition,
+    "personalCredentials" | "device"
+  >;
+  owner: string | null;
+  runtime: Pick<EnvironmentRuntimeBinding, "descriptor" | "servesOnlyOwner">;
+}): { allowed: true } | { allowed: false; reason: string } {
+  if (!input.definition.personalCredentials)
+    return {
+      allowed: false,
+      reason: `Environment '${input.environment}' does not allow personal credentials. Add "personalCredentials": true to it in ${PROJECT_MANIFEST_PATH}`,
+    };
+  if (!input.owner)
+    return {
+      allowed: false,
+      reason:
+        "Personal credentials reach only a member's own chats, and this is the project's own work. Use an agent with a model connection instead",
+    };
+  const { descriptor } = input.runtime;
+  if (
+    input.definition.device === "member" ||
+    descriptor.isolation === "sandbox" ||
+    input.runtime.servesOnlyOwner === true ||
+    descriptor.capabilities.includes(MACHINE_CAPABILITIES.personalCredentials)
+  )
+    return { allowed: true };
+  return {
+    allowed: false,
+    reason: `The machine for Environment '${input.environment}' runs other people's work as plain processes, so it may not hold your credentials. Use microsandbox, a machine only you use, or set WORK_PERSONAL_CREDENTIALS=accept on that machine`,
+  };
+}
+
+const HARNESS_NAMES: Record<PersonalLoginKind, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+};
 
 /**
  * The policy an Allocation keeps from its admission: binding, requirements,
@@ -118,6 +174,11 @@ export interface EnvironmentDiscoveryItem {
   compatible: boolean;
   preferred: boolean;
   allowed: boolean;
+  /**
+   * Present when the Environment allows personal credentials (ADR 0184):
+   * whether this caller's own chats placed there would carry them.
+   */
+  personalCredentials?: boolean;
   reasons: readonly string[];
   binding?: Pick<
     EnvironmentBinding,
@@ -229,6 +290,8 @@ export class ExecutionEnvironmentsService {
     requirements: EnvironmentRequirements;
     allowed?: readonly string[];
     preferred?: readonly string[];
+    /** The agent runs with the owner's own harness login (ADR 0184). */
+    personalLogin?: PersonalLoginKind;
   }): Promise<EnvironmentDiscovery> {
     return withSpan(
       {
@@ -306,6 +369,9 @@ export class ExecutionEnvironmentsService {
             compatible: Boolean(admission) && allowed,
             preferred: args.preferred?.includes(name) ?? false,
             allowed,
+            ...(definition.personalCredentials
+              ? { personalCredentials: admission?.personalCredentials ?? false }
+              : {}),
             reasons,
             ...(admission
               ? {
@@ -367,6 +433,8 @@ export class ExecutionEnvironmentsService {
     allowed?: readonly string[];
     preferred?: readonly string[];
     requirements: EnvironmentRequirements;
+    /** The agent runs with the owner's own harness login (ADR 0184). */
+    personalLogin?: PersonalLoginKind;
   }): Promise<EnvironmentAdmission> {
     return withSpan(
       {
@@ -486,6 +554,7 @@ export class ExecutionEnvironmentsService {
     workerNodeId?: string;
     allocationBindingId?: string;
     requirements: EnvironmentRequirements;
+    personalLogin?: PersonalLoginKind;
   }): Promise<
     | { admission: EnvironmentAdmission }
     | { bindingUnavailable: true; reasons: [] }
@@ -532,6 +601,29 @@ export class ExecutionEnvironmentsService {
     if (!compatibility.compatible) {
       return { bindingUnavailable: false, reasons: compatibility.reasons };
     }
+    const personal = personalCredentialsDecision({
+      environment: args.name,
+      definition,
+      owner,
+      runtime,
+    });
+    if (args.personalLogin) {
+      if (!personal.allowed)
+        return { bindingUnavailable: false, reasons: [personal.reason] };
+      // An Environment image supplies the CLI; otherwise the machine must.
+      if (
+        !definition.image &&
+        !runtime.descriptor.capabilities.includes(
+          harnessCapability(args.personalLogin),
+        )
+      )
+        return {
+          bindingUnavailable: false,
+          reasons: [
+            `${HARNESS_NAMES[args.personalLogin]} is not installed on this Environment's machine. Name an image that has it, or install it on the machine's PATH`,
+          ],
+        };
+    }
     const sandbox = await this.sandboxFor({ ...args, definition });
     if ("reason" in sandbox)
       return { bindingUnavailable: false, reasons: [sandbox.reason] };
@@ -544,6 +636,7 @@ export class ExecutionEnvironmentsService {
         effectiveRequirements,
         sandbox,
         ...(definition.approvals ? { approvals: definition.approvals } : {}),
+        personalCredentials: personal.allowed,
       },
     };
   }

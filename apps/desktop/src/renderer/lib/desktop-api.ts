@@ -193,7 +193,7 @@ export interface ProjectAgentInfo {
   coordination: AgentCoordinationStrategy | null;
   /** Claude Code auto-memory; null = the definition doesn't say (off). */
   memory: boolean | null;
-  credentialsSource: "profile" | "secret" | "local" | "connection";
+  credentialsSource: "profile" | "secret" | "local" | "connection" | "personal";
   secretName: string | null;
   /** Declared connector names — enforced by name match (ADR 0056). */
   connections: string[];

@@ -71,6 +71,9 @@ export const MACHINE_CAPABILITIES = {
   codex: "harness.codex",
 } as const;
 
+export type MachineCapability =
+  (typeof MACHINE_CAPABILITIES)[keyof typeof MACHINE_CAPABILITIES];
+
 /** A harness whose own account login a member may bring (ADR 0184). */
 export type PersonalLoginKind = "claude-code" | "codex";
 

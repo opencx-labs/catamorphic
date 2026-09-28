@@ -37,7 +37,18 @@ export const WorkerOfferSchema = z.strictObject({
    * containers, an enforced egress policy.
    */
   capabilities: z
-    .array(z.enum(["images", "images.build", "containers", "network.policy"]))
+    .array(
+      z.enum([
+        "images",
+        "images.build",
+        "containers",
+        "network.policy",
+        // What the machine offers beside its provider (ADR 0184).
+        "credentials.personal",
+        "harness.claude-code",
+        "harness.codex",
+      ]),
+    )
     .default([]),
   capacity: z.strictObject({
     workspaces: z.number().int().positive().max(1_000),

@@ -583,6 +583,19 @@ export interface NotificationDeliveries {
   updated_at: Generated<Timestamp>;
 }
 
+export interface PersonalEnvironmentEntries {
+  bytes: number;
+  credential_ref: string;
+  expires_at: Timestamp | null;
+  external_user_id: string;
+  fingerprint: string;
+  kind: string;
+  name: string;
+  project_id: string;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface ProjectEventDeliveries {
   activation_id: string;
   attempt_count: Generated<number>;
@@ -1332,6 +1345,7 @@ export interface DB {
   memberships: Memberships;
   model_usage: ModelUsage;
   notification_deliveries: NotificationDeliveries;
+  personal_environment_entries: PersonalEnvironmentEntries;
   project_event_deliveries: ProjectEventDeliveries;
   project_event_monitors: ProjectEventMonitors;
   project_events: ProjectEvents;

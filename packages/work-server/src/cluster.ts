@@ -41,6 +41,8 @@ export async function registerWorkMachine(args: {
   workloads?: ("agent" | "workflow")[];
   /** Operator labels for this control-plane machine (ADR 0167). */
   labels?: Readonly<Record<string, string>>;
+  /** What this machine offers beside its sandbox provider (ADR 0184). */
+  capabilities?: readonly string[];
   /**
    * Whose work each worker takes, and who owns a piece of work: an email
    * and directory groups matched against worker access (ADR 0167).
@@ -73,6 +75,7 @@ export async function registerWorkMachine(args: {
     capabilities: [
       "network.egress",
       ...(args.sandboxProvider.capabilities ?? []),
+      ...(args.capabilities ?? []),
     ],
     resources: {
       cpuMillis: args.capacity?.cpuMillis,
@@ -174,9 +177,17 @@ export async function registerWorkMachine(args: {
         descriptor: { ...chosen.node.descriptor, labels: chosen.labels },
       };
       const remote = args.workers?.heldProvider(selected.id);
+      // A worker whose access names only this owner takes no one else's
+      // work, so it may hold their personal credentials (ADR 0184).
+      const servesOnlyOwner = Boolean(
+        owner &&
+          chosen.policy &&
+          accessTier({ access: nodeAccess(chosen.policy.access), owner }) === 0,
+      );
       return {
         descriptor: selected.descriptor,
         workerNodeId: selected.id,
+        ...(servesOnlyOwner ? { servesOnlyOwner } : {}),
         ...(selected.id === lease.id
           ? {
               sandboxProvider: args.sandboxProvider,

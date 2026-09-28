@@ -63,7 +63,10 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     resourceLimits: [...(provider.resourceLimits ?? [])],
     workspaceRoot: provider.workspaceRoot ?? "/workspace",
     processes: Boolean(provider.processes),
-    capabilities: [...(provider.capabilities ?? [])],
+    capabilities: [
+      ...(provider.capabilities ?? []),
+      ...execution.machineCapabilities,
+    ],
     capacity: execution.capacity,
     defaults: execution.defaults,
     ...(options.version ? { version: options.version } : {}),

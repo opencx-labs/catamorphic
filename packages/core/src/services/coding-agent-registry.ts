@@ -2,6 +2,7 @@ import type {
   AgentExecutionTopology,
   CodingAgentProvider,
   McpToolPolicyLayers,
+  PersonalLoginKind,
   Sandboxing,
   TurnOptions,
 } from "@catamorphic/sandbox";
@@ -39,6 +40,13 @@ export interface RegisteredCodingAgent {
    * that alias's gateway URL and grant file on every sandbox turn.
    */
   modelConnection?: string;
+  /**
+   * The harness login this sandbox-resident agent runs with: the chat
+   * owner's own (ADR 0184). Core admits it only to Environments that allow
+   * personal credentials for that owner, delivers the login into the
+   * sandbox on every turn, and hands the harness its location.
+   */
+  personalLogin?: PersonalLoginKind;
   /** Per-turn defaults applied when the session carries no override. */
   defaults?: TurnOptions;
   /** Committed persona instructions supplied by a project harness factory. */

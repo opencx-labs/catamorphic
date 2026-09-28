@@ -127,6 +127,7 @@ export {
   type AgentTurnSettledEvent,
   type ArchiveSessionResourcesHandler,
   type NativeAgentCheckout,
+  PersonalLoginUnavailableError,
   type SessionPlacement,
   type SyncedFileChange,
   UnsupportedAgentTopologyError,
@@ -368,6 +369,7 @@ export {
   ExecutionEnvironmentsService,
   NoCompatibleEnvironmentError,
   type PlacementReason,
+  personalCredentialsDecision,
 } from "./services/execution-environments-service.js";
 export {
   type ExecutionJob,
@@ -424,6 +426,28 @@ export {
   SseUsageReader,
   usageFromJson,
 } from "./services/model-gateway.js";
+export {
+  gitignoreLiteral,
+  personalExcludeBlock,
+  personalLoginHome,
+} from "./services/personal-environment-delivery.js";
+export {
+  holdsRefreshToken,
+  PERSONAL_FILE_MAX_BYTES,
+  PERSONAL_FILES_MAX,
+  PERSONAL_LOGIN_MAX_BYTES,
+  PERSONAL_LOGIN_REFRESH_WINDOW_MS,
+  type PersonalEnvironmentInput,
+  PersonalEnvironmentInvalidError,
+  PersonalEnvironmentService,
+  type PersonalEnvironmentStatus,
+  PersonalEnvironmentUnavailableError,
+  type PersonalFileStatus,
+  type PersonalLoginStatus,
+  personalFilePathProblem,
+  personalFingerprint,
+  validatePersonalEnvironment,
+} from "./services/personal-environment-service.js";
 export {
   type AttachedPluginInfo,
   type PluginInfo,

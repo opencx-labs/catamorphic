@@ -10,7 +10,7 @@ import {
   type RegisteredCodingAgent,
   type ToolPermissionChannel,
 } from "@catamorphic/core";
-import type { SandboxProvider } from "@catamorphic/sandbox";
+import type { PersonalLoginKind, SandboxProvider } from "@catamorphic/sandbox";
 import type { WorkAgentSettings } from "./config.js";
 import { FakeEchoAgent } from "./fake-agent.js";
 
@@ -98,6 +98,24 @@ export function buildAgentRegistry(deps: {
 
 export const ASSISTANT_SLUG = "assistant";
 
+/**
+ * Host agents that run Claude Code or Codex in the chat's sandbox with the
+ * chat owner's own login, sent by their desktop (ADR 0184). Offered in
+ * projects with an Environment that allows personal credentials.
+ */
+export const PERSONAL_HARNESS_AGENTS: Readonly<
+  Record<PersonalLoginKind, { name: string; description: string }>
+> = {
+  "claude-code": {
+    name: "Claude Code",
+    description: "Claude Code with your own Claude login",
+  },
+  codex: {
+    name: "Codex",
+    description: "Codex with your own ChatGPT login",
+  },
+};
+
 /** The registry id a scoped member's role ref resolves to (ADR 0055). */
 export function projectAssistantId(projectId: string): string {
   return `project:${projectId}:${ASSISTANT_SLUG}`;
@@ -128,15 +146,32 @@ function assistantRegistry(config: {
     defaults,
   };
   const projectForm = /^project:[0-9a-f-]+:assistant$/;
+  // Claude Code and Codex on the member's own login (ADR 0184): the same
+  // harness instances as project agents; the turn's login decides.
+  const personal = (kind: PersonalLoginKind): RegisteredCodingAgent => ({
+    id: kind,
+    provider:
+      kind === "codex" ? config.harnesses.codex : config.harnesses.claudeCode,
+    topology: "controller",
+    sandboxing: "propose",
+    personalLogin: kind,
+    systemPrompt: assistant.systemPrompt,
+  });
+  const personalAgents = [personal("claude-code"), personal("codex")];
+  const personalForm = /^project:[0-9a-f-]+:(claude-code|codex)$/;
   return {
     defaultAgentId: (projectId) =>
       projectId ? projectAssistantId(projectId) : ASSISTANT_SLUG,
     get: (id) => {
       if (id === ASSISTANT_SLUG) return assistant;
       if (projectForm.test(id)) return { ...assistant, id };
-      return undefined;
+      const bare = personalAgents.find((agent) => agent.id === id);
+      if (bare) return bare;
+      const qualified = id.match(personalForm)?.[1];
+      const agent = personalAgents.find((entry) => entry.id === qualified);
+      return agent ? { ...agent, id } : undefined;
     },
-    list: () => [assistant],
+    list: () => [assistant, ...personalAgents],
     projectAgent: ({ id, entry }) => {
       const definition = entry.definition;
       if (
@@ -208,8 +243,9 @@ function sandboxHarnesses(
 
 /**
  * A committed `claude-code` or `codex` agent, served when its credentials
- * name a model connection of its Environment. Personal CLI logins and
- * project secrets are desktop concepts; the server holds no such key.
+ * name a model connection of its Environment (ADR 0180), or `personal`: the
+ * chat owner's own login their desktop sent (ADR 0184). Project secrets
+ * and the machine's own CLI login are desktop concepts.
  */
 function sandboxProjectAgent(input: {
   id: string;
@@ -219,14 +255,35 @@ function sandboxProjectAgent(input: {
   harnesses: SandboxHarnesses;
 }): RegisteredCodingAgent | undefined {
   const { definition } = input;
+  const kind: PersonalLoginKind =
+    definition.kind === "codex" ? "codex" : "claude-code";
+  const requirements = (definition.connections ?? []).map(
+    normalizeConnectionRequirement,
+  );
+  if (definition.credentials?.source === "personal")
+    return {
+      id: input.id,
+      provider:
+        kind === "codex" ? input.harnesses.codex : input.harnesses.claudeCode,
+      topology: "controller",
+      sandboxing: definition.sandboxing ?? "propose",
+      environment: definition.environment,
+      connectionRequirements: requirements,
+      personalLogin: kind,
+      delegation: definition.delegation,
+      systemPrompt: [input.systemPrompt, input.promptFile]
+        .filter(Boolean)
+        .join("\n\n"),
+      defaults: {
+        ...(definition.model ? { model: definition.model } : {}),
+        ...(definition.effort ? { effort: definition.effort } : {}),
+      },
+    };
   const alias =
     definition.credentials?.source === "connection"
       ? definition.credentials.connection
       : undefined;
   if (!alias) return undefined;
-  const requirements = (definition.connections ?? []).map(
-    normalizeConnectionRequirement,
-  );
   return {
     id: input.id,
     provider:

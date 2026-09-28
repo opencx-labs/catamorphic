@@ -141,6 +141,7 @@ export {
   environmentSatisfies,
   harnessCapability,
   MACHINE_CAPABILITIES,
+  type MachineCapability,
   type NodeAccess,
   PERSONAL_LOGIN_KINDS,
   type PersonalLoginKind,
