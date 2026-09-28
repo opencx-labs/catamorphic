@@ -197,3 +197,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0182](0182-sandboxing-and-permission-modes-are-different-settings.md) | Sandboxing and permission modes are different settings | Accepted |
 | [0183](0183-guards-are-host-code-work-server-config-is-typed-data.md) | Guards are host code; Work server config is typed data | Accepted |
 | [0184](0184-personal-credentials-reach-a-members-own-sessions.md) | Personal credentials reach a member's own sessions | Accepted |
+| [0185](0185-passkey-requests-stay-answerable.md) | Passkey requests in browser tabs stay answerable | Accepted |

@@ -47,6 +47,7 @@ import type {
   HistoryVisit,
 } from "../../shared/history.js";
 import type { OpenMode } from "../../shared/open-mode.js";
+import type { PasskeyRequest } from "../../shared/passkeys.js";
 import type {
   PersonalEnvironmentView,
   PersonalHarness,
@@ -1370,6 +1371,11 @@ export interface CatamorphicDesktopApi {
   onSitePermissionWithdrawn: (
     listener: (payload: { ids: string[] }) => void,
   ) => () => void;
+  onPasskeyRequest: (listener: (request: PasskeyRequest) => void) => () => void;
+  onPasskeySettled: (
+    listener: (payload: { ids: string[] }) => void,
+  ) => () => void;
+  passkeyCancel: (input: { id: string }) => Promise<boolean>;
   onSiteSystemRefusal: (
     listener: (notice: SiteSystemRefusal) => void,
   ) => () => void;

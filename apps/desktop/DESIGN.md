@@ -1308,3 +1308,17 @@ agent and is part of what a committed definition's consent covers; a
 committed or server definition shows its setting read only and says where it
 is set. Local agents keep ADR 0140's defaults: Publish, Bypass permissions,
 and Codex with full access and approvals on request.
+
+### 2026-09-28: A passkey attempt always ends
+
+A site's passkey button used to leave the page spinning: Electron draws no
+Web Authentication UI and keeps no timer, and a stuck request made every
+retry fail (ADR 0185). Now the window shows a passkey sheet while a page
+waits, in the site dialog's style: the site, "Waiting for a security key",
+a plain line on what cannot be used here yet (passkeys on a phone, in iCloud
+Keychain or a password manager), and Cancel, which hands the page Chrome's
+own refusal so it offers its other ways in. The sheet closes by itself when
+the request settles, the site's deadline passes, or the page moves on.
+During a Work sign-in it also offers "Continue in your browser". The sheet
+shows the site's icon exactly as its tab does, so a dark-theme icon stays
+visible.

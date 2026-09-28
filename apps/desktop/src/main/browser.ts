@@ -79,6 +79,7 @@ import { PasswordVault } from "./browser-vault.js";
 import { DownloadsManager, DownloadsStore } from "./downloads.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { LoginCapture, type LoginSubmission } from "./login-capture.js";
+import { registerPasskeys } from "./passkeys.js";
 import { generateStrongPassword } from "./password-generator.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
@@ -363,6 +364,7 @@ export function registerBrowserSupport(
       callback(permission !== "openExternal"),
   );
   const permissionBroker = new SitePermissionBroker();
+  const disposePasskeys = registerPasskeys();
   // Guest id → OS refusals already explained for the page it shows.
   const mediaRefusalsShown = new Map<number, Set<string>>();
   const screenShareBroker = new PromptBroker<
@@ -2381,6 +2383,7 @@ export function registerBrowserSupport(
     history,
     dispose: () => {
       disposeSidebarSources();
+      disposePasskeys();
       app.removeListener("browser-window-created", attachBrowserCommands);
       for (const [window, listener] of appCommandListeners) {
         if (!window.isDestroyed())
