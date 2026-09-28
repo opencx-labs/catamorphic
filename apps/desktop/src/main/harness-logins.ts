@@ -154,7 +154,9 @@ export async function readLocalLogin(args: {
     const keychain = await (args.readKeychain ?? readClaudeKeychain)();
     stripped = keychain ? stripClaudeCredentials(keychain) : null;
     if (!stripped) {
-      const file = await readFile(path.join(home, ".claude", ".credentials.json"));
+      const file = await readFile(
+        path.join(home, ".claude", ".credentials.json"),
+      );
       stripped = file ? stripClaudeCredentials(file) : null;
     }
   } else {

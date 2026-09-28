@@ -102,9 +102,7 @@ export function RemoteEnvironmentModal({
         : view?.lastCheckedAt
           ? `Checked ${ago(view.lastCheckedAt, now)}`
           : null);
-  const statusIsError = Boolean(
-    error ?? view?.configError ?? view?.error,
-  );
+  const statusIsError = Boolean(error ?? view?.configError ?? view?.error);
 
   return (
     <Modal open={open} onClose={onClose}>
@@ -118,8 +116,8 @@ export function RemoteEnvironmentModal({
           </div>
           <p className="mt-1 text-xs leading-5 text-fg-muted">
             Your own sign-ins and chosen files, for your sessions on this
-            project's server. Only your sessions receive them, and the files
-            are never committed or shared with other members.
+            project's server. Only your sessions receive them, and the files are
+            never committed or shared with other members.
           </p>
         </header>
 
@@ -148,9 +146,7 @@ export function RemoteEnvironmentModal({
                   checked={login.included}
                   disabled={busy !== null || Boolean(view.configError)}
                   data-disabled-reason={
-                    view.configError
-                      ? "Fix the config file first"
-                      : waitReason
+                    view.configError ? "Fix the config file first" : waitReason
                   }
                   aria-label={`Use my ${login.label} sign-in`}
                   onChange={(event) => {

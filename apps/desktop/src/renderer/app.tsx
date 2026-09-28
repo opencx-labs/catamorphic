@@ -109,7 +109,6 @@ import {
 } from "./components/elicitation-modal.js";
 import { FloatingPanelBar } from "./components/floating-panel-bar.js";
 import { MobilePairingModal } from "./components/mobile-pairing-modal.js";
-import { RemoteEnvironmentModal } from "./components/remote-environment-modal.js";
 import { Modal } from "./components/modal.js";
 import { PendingButton } from "./components/pending-button.js";
 import { ProfileBar } from "./components/profile-bar.js";
@@ -122,6 +121,7 @@ import {
 } from "./components/remote-actions-modals.js";
 import { RemoteConnectModal } from "./components/remote-connect-modal.js";
 import { RemoteConnectionIndicator } from "./components/remote-connection-indicator.js";
+import { RemoteEnvironmentModal } from "./components/remote-environment-modal.js";
 import { RemoteHistoryModal } from "./components/remote-history-modal.js";
 import type { RemoteFeatures } from "./components/remote-nav.js";
 import { ScreenShareHost } from "./components/screen-share-picker.js";
@@ -5593,13 +5593,12 @@ export function App({
           projectId={projectId}
           onClose={() => setRemoteEnvironmentOpen(false)}
           onOpenFile={(filePath) => {
-            void openLinkedSurface(`file:${filePath}`).catch(
-              (cause: unknown) =>
-                setLinkError(
-                  cause instanceof Error
-                    ? cause.message
-                    : "Could not open this file",
-                ),
+            void openLinkedSurface(`file:${filePath}`).catch((cause: unknown) =>
+              setLinkError(
+                cause instanceof Error
+                  ? cause.message
+                  : "Could not open this file",
+              ),
             );
           }}
         />

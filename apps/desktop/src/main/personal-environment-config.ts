@@ -49,8 +49,7 @@ export function personalFilePathProblem(value: string): string | null {
     return `${value} is not a plain project path`;
   if (segments.includes(".."))
     return `${value} points outside the project folder`;
-  if (segments.includes(".git"))
-    return `${value} is inside Git's own folder`;
+  if (segments.includes(".git")) return `${value} is inside Git's own folder`;
   return null;
 }
 
@@ -281,8 +280,7 @@ export async function readListedFiles(args: {
       try {
         real = await fs.realpath(path.join(root, relative));
       } catch (cause) {
-        if (isMissing(cause))
-          return failed("Not found in the project folder");
+        if (isMissing(cause)) return failed("Not found in the project folder");
         throw cause;
       }
       const inside = path.relative(root, real);

@@ -196,7 +196,8 @@ export function parseRemotePersonalEnvironment(
     const entry = object(rawLogins[harness]);
     if (!entry) continue;
     logins[harness] = {
-      fingerprint: typeof entry.fingerprint === "string" ? entry.fingerprint : "",
+      fingerprint:
+        typeof entry.fingerprint === "string" ? entry.fingerprint : "",
       ...(typeof entry.expiresAt === "string"
         ? { expiresAt: entry.expiresAt }
         : {}),

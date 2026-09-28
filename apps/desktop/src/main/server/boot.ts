@@ -68,6 +68,7 @@ import {
 } from "./host-skills.js";
 import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
+import { REMOTE_ENVIRONMENT_SKILL } from "./remote-environment-skill.js";
 import { SessionCheckouts } from "./session-checkouts.js";
 import { syncReport } from "./sync-report.js";
 import {
@@ -423,6 +424,7 @@ export async function startEmbeddedServer(
       ...defaults,
       "configuring-catamorphic-desktop/SKILL.md": DESKTOP_SETTINGS_SKILL,
       "desktop-workspace/SKILL.md": DESKTOP_WORKSPACE_SKILL,
+      "remote-environment/SKILL.md": REMOTE_ENVIRONMENT_SKILL,
     }),
     hostId,
     toolPermissions,
@@ -1300,8 +1302,7 @@ export async function startEmbeddedServer(
     projectRoot: (projectId) => projectRoots.get(projectId),
     ensureHarnessExecutable: (harness) =>
       agentRegistry.ensureHarnessExecutable(harness),
-    isolated:
-      e2eFakeAgent || Boolean(process.env.CATAMORPHIC_E2E_DATA_DIR),
+    isolated: e2eFakeAgent || Boolean(process.env.CATAMORPHIC_E2E_DATA_DIR),
   });
   personalEnvironment.start();
   sessionMirror.syncMirrorsInBackground();

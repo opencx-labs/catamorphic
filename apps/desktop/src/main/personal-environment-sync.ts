@@ -175,6 +175,8 @@ interface LinkState {
   again: boolean;
   statusText: string | null;
   configFingerprint: string | null;
+  /** The local snapshot seen by the last run. */
+  localFingerprint: string | null;
   /** Watched folder to the file names that matter in it. */
   watchers: Map<string, { names: string; watcher: FSWatcher }>;
   debounce: NodeJS.Timeout | null;
@@ -245,7 +247,10 @@ export class PersonalEnvironmentSync {
   }
 
   /** Current view, starting a check when this link was never checked. */
-  view(args: { profileId: string; projectId: string }): PersonalEnvironmentView {
+  view(args: {
+    profileId: string;
+    projectId: string;
+  }): PersonalEnvironmentView {
     const link = this.link(args);
     const state = this.states.get(linkKey(args.profileId, args.projectId));
     if (link && !state?.lastCheckedAt && !state?.running)
@@ -261,20 +266,27 @@ export class PersonalEnvironmentSync {
     const link = this.link(args);
     if (!link) throw new Error("This project is not connected to a server");
     await this.sync(link);
-    return this.render(args.projectId, this.states.get(linkKey(args.profileId, args.projectId)), false);
+    return this.render(
+      args.projectId,
+      this.states.get(linkKey(args.profileId, args.projectId)),
+      false,
+    );
   }
 
   private async checkLocal(): Promise<void> {
     for (const link of this.deps.links()) {
-      const state = this.states.get(linkKey(link.profileId, link.localProjectId));
+      const state = this.states.get(
+        linkKey(link.profileId, link.localProjectId),
+      );
       if (state?.server !== "allowed" || state.running) continue;
       const root = await this.deps.projectRoot(link.localProjectId);
       if (!root) continue;
       try {
         const local = await this.collect(root);
+        // Local changes only; the remote check retries failed sends.
         if (
           local.configFingerprint !== state.configFingerprint ||
-          local.snapshot?.fingerprint !== state.lastSentFingerprint
+          (local.snapshot?.fingerprint ?? null) !== state.localFingerprint
         )
           void this.sync(link).catch(() => {});
       } catch {
@@ -359,7 +371,11 @@ export class PersonalEnvironmentSync {
       error: null,
       available,
       files,
-      snapshot: { logins, files, fingerprint: snapshotFingerprint({ logins, files }) },
+      snapshot: {
+        logins,
+        files,
+        fingerprint: snapshotFingerprint({ logins, files }),
+      },
     };
   }
 
@@ -374,6 +390,7 @@ export class PersonalEnvironmentSync {
     }
     let local = await this.collect(root);
     state.configFingerprint = local.configFingerprint;
+    state.localFingerprint = local.snapshot?.fingerprint ?? null;
     state.config = {
       exists: local.exists,
       error: local.error,
@@ -406,10 +423,7 @@ export class PersonalEnvironmentSync {
     try {
       if (!remote.allowed) {
         // Nothing may use it: take back what an earlier Environment allowed.
-        if (
-          Object.keys(remote.logins).length > 0 ||
-          remote.files.length > 0
-        ) {
+        if (Object.keys(remote.logins).length > 0 || remote.files.length > 0) {
           await link.client.deletePersonalEnvironment();
           state.remote = await link.client.personalEnvironment();
           state.lastSentFingerprint = null;
@@ -422,6 +436,7 @@ export class PersonalEnvironmentSync {
         local = await this.collect(root);
         state.available = local.available;
         state.files = local.files;
+        state.localFingerprint = local.snapshot?.fingerprint ?? null;
         if (!local.snapshot) return;
       }
       if (
@@ -514,6 +529,7 @@ export class PersonalEnvironmentSync {
         again: false,
         statusText: null,
         configFingerprint: null,
+        localFingerprint: null,
         watchers: new Map(),
         debounce: null,
       };
