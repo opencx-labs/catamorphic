@@ -2009,9 +2009,7 @@ export function registerIpcHandlers(
       const githubFullName = capabilities.source?.remoteUrl
         ? repoFullNameFromUrl(capabilities.source.remoteUrl)
         : null;
-      const builderCheckout = Boolean(
-        writesProgram(capabilities) && githubFullName,
-      );
+      const builderCheckout = isBuilderCheckout(capabilities);
       const project = await server.projectRoots.register({
         rootPath: input.rootPath,
         existing: false,
@@ -2142,16 +2140,19 @@ export function registerIpcHandlers(
       const rootPath = await requireRoot(projectId);
       const client = storedRemoteClient(event, projectId, link);
       const capabilities = await introspect(client, link.remoteProjectId);
+      // A builder's GitHub checkout gets its program through git; every
+      // other folder, an admin's included, syncs program files here.
+      const builderCheckout = isBuilderCheckout(capabilities);
       const report = await syncRemoteProject(
         rootPath,
-        writesProgram(capabilities) ? storeOnlyDocumentsClient(client) : client,
+        builderCheckout ? storeOnlyDocumentsClient(client) : client,
       );
       storesFor(event).remoteProjects.touch(
         projectId,
         new Date().toISOString(),
         capabilities,
       );
-      if (!writesProgram(capabilities)) {
+      if (!builderCheckout) {
         await checkpointProgramSync(projectId, report);
       }
       notifyGitChanged(projectId);
@@ -2260,6 +2261,48 @@ export function registerIpcHandlers(
     },
   );
 
+  // Program files leave the folder only as a proposal or, for members who
+  // may publish the program, a deploy (ADR 0055).
+  const readProgramChanges = (rootPath: string, paths: unknown) => {
+    if (!Array.isArray(paths) || paths.length === 0 || paths.length > 200)
+      throw new Error("Choose the project files to share");
+    const selected = [
+      ...new Set(paths.map((entry) => normalizeDocumentPath(String(entry)))),
+    ];
+    const root = fs.realpathSync(rootPath);
+    return selected.map((relative) => {
+      if (isPersonalFile(relative) || isProjectDataPath(relative))
+        throw new Error(
+          "Choose project files to share. Personal files must be prepared for sharing first.",
+        );
+      const absolute = fs.realpathSync(path.join(root, relative));
+      const contained = path.relative(root, absolute);
+      const canonical = contained.split(path.sep).join("/");
+      if (
+        isPersonalFile(canonical) ||
+        canonical === ".git" ||
+        canonical.startsWith(".git/") ||
+        isProjectDataPath(canonical)
+      )
+        throw new Error(
+          "Shared project changes cannot include a link to personal files, the store, or repository internals",
+        );
+      if (contained.startsWith("..") || path.isAbsolute(contained))
+        throw new Error("Project files must be inside the project folder");
+      if (
+        !fs.statSync(absolute).isFile() ||
+        fs.statSync(absolute).size > 1024 * 1024
+      )
+        throw new Error("Only text files up to 1 MB each can be shared");
+      return {
+        path: relative,
+        content: new TextDecoder("utf-8", { fatal: true }).decode(
+          fs.readFileSync(absolute),
+        ),
+      };
+    });
+  };
+
   // Propose (ADR 0055): the folder's edits to program files become a
   // branch/PR on the member's behalf.
   ipcMain.handle(
@@ -2274,51 +2317,36 @@ export function registerIpcHandlers(
       },
     ) => {
       const link = requireLink(event, input.projectId);
-      const rootPath = await requireRoot(input.projectId);
-      if (
-        !Array.isArray(input.paths) ||
-        input.paths.length === 0 ||
-        input.paths.length > 200
-      ) {
-        throw new Error("Choose the files to include in your proposal");
-      }
-      const selected = [...new Set(input.paths.map(normalizeDocumentPath))];
-      const root = fs.realpathSync(rootPath);
-      const changes = selected.map((relative) => {
-        if (isPersonalFile(relative) || isProjectDataPath(relative))
-          throw new Error(
-            "Choose project files for this proposal. Personal files must be prepared for sharing first.",
-          );
-        const absolute = fs.realpathSync(path.join(root, relative));
-        const contained = path.relative(root, absolute);
-        const canonical = contained.split(path.sep).join("/");
-        if (
-          isPersonalFile(canonical) ||
-          canonical === ".git" ||
-          canonical.startsWith(".git/") ||
-          isProjectDataPath(canonical)
-        )
-          throw new Error(
-            "A proposal cannot include a link to personal files, the store, or repository internals",
-          );
-        if (contained.startsWith("..") || path.isAbsolute(contained))
-          throw new Error("Proposal files must be inside the project folder");
-        if (
-          !fs.statSync(absolute).isFile() ||
-          fs.statSync(absolute).size > 1024 * 1024
-        )
-          throw new Error("Proposals support text files up to 1 MB each");
-        return {
-          path: relative,
-          content: new TextDecoder("utf-8", { fatal: true }).decode(
-            fs.readFileSync(absolute),
-          ),
-        };
-      });
+      const changes = readProgramChanges(
+        await requireRoot(input.projectId),
+        input.paths,
+      );
       return storedRemoteClient(event, input.projectId, link).propose({
         title: input.title,
         ...(input.body ? { body: input.body } : {}),
         changes,
+      });
+    },
+  );
+
+  // A member holding `program:publish` ships the folder's program edits
+  // directly; the server still guards role files and attached repositories.
+  ipcMain.handle(
+    "catamorphic:remote-publish-program",
+    async (
+      event,
+      input: { projectId: string; message: string; paths: string[] },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      const changes = readProgramChanges(
+        await requireRoot(input.projectId),
+        input.paths,
+      );
+      return storedRemoteClient(event, input.projectId, link).publishProgram({
+        message: input.message,
+        files: Object.fromEntries(
+          changes.map((change) => [change.path, change.content]),
+        ),
       });
     },
   );
@@ -3490,6 +3518,19 @@ export function registerIpcHandlers(
         project,
       });
     },
+  );
+}
+
+/** A builder of a GitHub-backed project works in a git checkout of it;
+ * everyone else's folder receives program files through remote sync. */
+function isBuilderCheckout(capabilities: {
+  permissions: readonly string[];
+  source?: { remoteUrl?: string | null } | null;
+}): boolean {
+  return Boolean(
+    writesProgram(capabilities) &&
+      capabilities.source?.remoteUrl &&
+      repoFullNameFromUrl(capabilities.source.remoteUrl),
   );
 }
 

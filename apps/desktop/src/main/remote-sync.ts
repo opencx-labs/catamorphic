@@ -146,6 +146,12 @@ export interface RemoteMe {
   };
 }
 
+type DeployRoute = paths["/api/projects/{projectId}/deploy"];
+type DeployBody = NonNullable<
+  DeployRoute["post"]["requestBody"]
+>["content"]["application/json"];
+type DeployResult =
+  DeployRoute["post"]["responses"][200]["content"]["application/json"];
 type PersonalEnvironmentRoute =
   paths["/api/projects/{projectId}/personal-environment"];
 
@@ -268,6 +274,8 @@ export interface RemoteProjectClient extends RemoteDocumentsClient {
     body?: string;
     changes: Array<{ path: string; content?: string; delete?: boolean }>;
   }): Promise<RemoteProposalResult>;
+  /** Deploy program files directly; the member must hold `program:publish`. */
+  publishProgram(input: DeployBody): Promise<DeployResult>;
 }
 
 /** Builder clones own program files; remote sync may only materialize store. */
@@ -630,6 +638,17 @@ export function httpDocumentsClient(args: {
       );
       if (!response.ok) return fail(response, "Proposing changes");
       return (await response.json()) as RemoteProposalResult;
+    },
+    async publishProgram(input) {
+      const { data, response } = await proposalClient.POST(
+        "/api/projects/{projectId}/deploy",
+        {
+          params: { path: { projectId: args.projectId } },
+          body: input,
+        },
+      );
+      if (!data) return fail(response, "Publishing project files");
+      return data;
     },
     async proposalReview(number) {
       const { data, response } = await proposalClient.GET(

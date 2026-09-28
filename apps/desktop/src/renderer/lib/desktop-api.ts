@@ -1017,6 +1017,15 @@ export interface CatamorphicDesktopApi {
     branch: string;
     pullRequest?: { url: string; number: number };
   }>;
+  remotePublishProgram: (input: {
+    projectId: string;
+    message: string;
+    paths: string[];
+  }) => Promise<{
+    status: "deployed" | "nothing-to-deploy" | "conflict";
+    commitSha: string | null;
+    conflicts: Array<{ path: string }>;
+  }>;
   remoteReconnect: (projectId: string) => Promise<{ ok: true }>;
   remoteDisconnect: (projectId: string) => Promise<void>;
   remoteTakePendingLink: () => Promise<string | null>;

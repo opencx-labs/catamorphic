@@ -512,6 +512,8 @@ const api = {
     invoke("catamorphic:remote-publish", input),
   remotePropose: (input: unknown): Promise<unknown> =>
     invoke("catamorphic:remote-propose", input),
+  remotePublishProgram: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-publish-program", input),
   remoteReconnect: (projectId: string): Promise<{ ok: true }> =>
     invoke("catamorphic:remote-reconnect", projectId),
   remoteMembers: (projectId: string): Promise<unknown> =>
