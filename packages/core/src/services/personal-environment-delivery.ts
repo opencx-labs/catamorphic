@@ -93,7 +93,37 @@ async function run(input: {
   return result.result;
 }
 
-/** Write the logins into their homes; the files follow with {@link deliverPersonalFiles}. */
+/**
+ * A login as its harness reads it in the sandbox. Codex requires a
+ * `tokens.refresh_token` field in `auth.json`; the member's copy never
+ * holds one (only their computer renews it), so an empty one stands in and
+ * the sandbox's Codex can never renew it.
+ */
+export function sandboxLoginDocument(input: {
+  kind: PersonalLoginKind;
+  content: string;
+}): string {
+  if (input.kind !== "codex") return input.content;
+  try {
+    const document: unknown = JSON.parse(input.content);
+    if (typeof document !== "object" || document === null) return input.content;
+    const tokens = "tokens" in document ? document.tokens : undefined;
+    if (
+      typeof tokens !== "object" ||
+      tokens === null ||
+      "refresh_token" in tokens
+    )
+      return input.content;
+    return JSON.stringify({
+      ...document,
+      tokens: { ...tokens, refresh_token: "" },
+    });
+  } catch {
+    return input.content;
+  }
+}
+
+/** Write the logins into their homes, readable by the sandbox user only. */
 export async function writePersonalLogins(input: {
   provider: SandboxProvider;
   sandboxId: string;
@@ -103,7 +133,12 @@ export async function writePersonalLogins(input: {
   for (const [kind, login] of input.logins)
     await input.provider.uploadFiles(
       input.sandboxId,
-      { [LOGIN_FILES[kind]]: login.content },
+      {
+        [LOGIN_FILES[kind]]: sandboxLoginDocument({
+          kind,
+          content: login.content,
+        }),
+      },
       personalLoginHome({ provider: input.provider, kind }),
     );
   const root = `${input.provider.workspaceRoot}/${SESSION_DIRECTORY}`;

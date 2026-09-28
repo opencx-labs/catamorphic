@@ -7,9 +7,16 @@
  * `Bash` tool uses the model asks for in its working directory, sends the
  * results back, and reports the answer and usage as a `result`. Tests put
  * it on a sandbox's PATH as `claude`.
+ *
+ * With a member's own login (ADR 0184: `CLAUDE_CONFIG_DIR` and no
+ * `ANTHROPIC_BASE_URL`) it calls no model: it runs the command of a
+ * `run: <command>` line itself, and otherwise answers with a report of the
+ * credentials it was given, so tests see what reached the CLI.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { createInterface } from "node:readline";
 
 type Json = Record<string, unknown>;
@@ -101,7 +108,103 @@ async function callModel(messages: Json[]): Promise<Answer> {
   return { content, usage };
 }
 
+/** What the CLI was given to authenticate with, for tests to read. */
+function credentialReport(prompt: string): string {
+  const directory = process.env.CLAUDE_CONFIG_DIR;
+  let login: unknown = null;
+  try {
+    login = directory
+      ? JSON.parse(
+          fs.readFileSync(path.join(directory, ".credentials.json"), "utf8"),
+        )
+      : null;
+  } catch {
+    login = null;
+  }
+  const oauth = record(record(login).claudeAiOauth);
+  const settings = flag("--settings") ?? "";
+  return JSON.stringify({
+    configDir: Boolean(directory),
+    credentials: login !== null,
+    // A digest, so the token never enters the transcript.
+    accessTokenSha256:
+      typeof oauth.accessToken === "string"
+        ? createHash("sha256").update(oauth.accessToken).digest("hex")
+        : null,
+    refreshToken: "refreshToken" in oauth,
+    baseUrl: process.env.ANTHROPIC_BASE_URL ?? null,
+    apiKey: process.env.ANTHROPIC_API_KEY ?? null,
+    apiKeyHelper: settings.includes("apiKeyHelper"),
+    note: prompt.includes("Work did not place"),
+  });
+}
+
+/** A turn on the member's own login: no model, a command or a report. */
+function personalAnswer(prompt: string): string {
+  const line = prompt
+    .split("\n")
+    .map((entry) => entry.trim())
+    .reverse()
+    .find((entry) => entry.startsWith("run:"));
+  if (!line) return credentialReport(prompt);
+  const run = spawnSync("bash", ["-c", line.slice("run:".length).trim()], {
+    encoding: "utf8",
+  });
+  return `Done: ${run.stdout}${run.stderr}`;
+}
+
 async function turn(prompt: string): Promise<void> {
+  if (!process.env.ANTHROPIC_BASE_URL && process.env.CLAUDE_CONFIG_DIR) {
+    const answer = personalAnswer(prompt);
+    emit({
+      type: "system",
+      subtype: "init",
+      session_id: sessionId,
+      uuid: randomUUID(),
+      cwd: process.cwd(),
+      model,
+      tools: ["Bash"],
+      mcp_servers: [],
+      permissionMode: "acceptEdits",
+      apiKeySource: "none",
+      slash_commands: [],
+      output_style: "default",
+    });
+    emit({
+      type: "assistant",
+      session_id: sessionId,
+      uuid: randomUUID(),
+      parent_tool_use_id: null,
+      message: {
+        id: `msg_${randomUUID()}`,
+        role: "assistant",
+        model,
+        content: [{ type: "text", text: answer }],
+        usage: { input_tokens: 3, output_tokens: 5 },
+      },
+    });
+    emit({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: answer,
+      session_id: sessionId,
+      uuid: randomUUID(),
+      duration_ms: 1,
+      duration_api_ms: 1,
+      num_turns: 1,
+      total_cost_usd: 0,
+      usage: {
+        input_tokens: 3,
+        output_tokens: 5,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
+      modelUsage: {},
+      permission_denials: [],
+    });
+    return;
+  }
   emit({
     type: "system",
     subtype: "init",

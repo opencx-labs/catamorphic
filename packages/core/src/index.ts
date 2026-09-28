@@ -430,6 +430,7 @@ export {
   gitignoreLiteral,
   personalExcludeBlock,
   personalLoginHome,
+  sandboxLoginDocument,
 } from "./services/personal-environment-delivery.js";
 export {
   holdsRefreshToken,

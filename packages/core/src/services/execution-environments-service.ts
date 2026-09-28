@@ -271,6 +271,11 @@ export class ExecutionEnvironmentsService {
     identity: Identity;
     bindingId: string;
     workerNodeId?: string;
+    /**
+     * Whose work the Allocation holds: a machine open only to that person
+     * resolves only for their work (ADR 0167).
+     */
+    owner?: string | null;
   }):
     | Promise<EnvironmentRuntimeBinding | undefined>
     | EnvironmentRuntimeBinding
@@ -280,6 +285,7 @@ export class ExecutionEnvironmentsService {
       pool: {},
       allocationBindingId: args.bindingId,
       ...(args.workerNodeId ? { workerNodeId: args.workerNodeId } : {}),
+      ...(args.owner ? { ownerUserId: args.owner } : {}),
     });
   }
 

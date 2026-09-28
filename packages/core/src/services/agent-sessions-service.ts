@@ -2632,6 +2632,7 @@ export class AgentSessionsService {
         ...(allocation.workerNodeId
           ? { workerNodeId: allocation.workerNodeId }
           : {}),
+        owner: placementOwner(row.external_user_id),
       });
       const selected = runtime?.sandboxProvider;
       if (!selected) return;
@@ -3028,7 +3029,10 @@ export class AgentSessionsService {
         agentId: fallback,
         notice: `This chat continues with the server's default agent: this server does not run ${name} with your own login.`,
       };
-    if (!usable(harness))
+    if (
+      identity.scope !== undefined &&
+      this.coveringAgentRef(identity, projectId, harness) === undefined
+    )
       return {
         agentId: fallback,
         notice: `This chat continues with the server's default agent: your role in this project does not include ${name}.`,
@@ -4798,6 +4802,7 @@ export class AgentSessionsService {
         "session.environment_name",
         "session.agent_id",
         "session.provider_session_id",
+        "session.external_user_id",
         "projects.tenant_id",
         "allocation.id as allocation_id",
         "allocation.created_at as allocated_at",
@@ -4864,6 +4869,7 @@ export class AgentSessionsService {
             providerSessionId: row.provider_session_id,
             allocationId: row.allocation_id,
             sandboxProviderId: row.sandbox_provider_id,
+            owner: placementOwner(row.external_user_id),
           })
         )
           released.push(row.id);
@@ -4886,6 +4892,8 @@ export class AgentSessionsService {
     providerSessionId: string | null;
     allocationId: string;
     sandboxProviderId: string | null;
+    /** The session's owner, whose machine may be open only to them. */
+    owner?: string | null;
   }): Promise<boolean> {
     const { identity, projectId, sessionId } = input;
     const allocation = await this.executionAllocations.get({
@@ -4905,6 +4913,7 @@ export class AgentSessionsService {
         ...(allocation.workerNodeId
           ? { workerNodeId: allocation.workerNodeId }
           : {}),
+        ...(input.owner !== undefined ? { owner: input.owner } : {}),
       });
       const selected = runtime?.sandboxProvider;
       // Only the instance that reaches the machine can save its workspace.
