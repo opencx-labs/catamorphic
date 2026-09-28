@@ -142,6 +142,51 @@ export class ConnectionCapabilityGrantsService {
       : null;
   }
 
+  /**
+   * Keep a working session's grants on one channel alive (#122). Harnesses
+   * hold MCP grants in static headers, so the control plane extends the
+   * same bearer rather than rotating it: at each turn start and on each
+   * renewal tick. Only unrevoked grants on an active Allocation extend, so
+   * close, idle release and archive still end them; a grant that lapsed
+   * while the session was idle comes back when the session works again.
+   */
+  async extend(args: {
+    agentSessionId: string;
+    channel: ConnectionGrantChannel;
+    ttlSeconds?: number;
+  }): Promise<number> {
+    const expiresAt = new Date(
+      Date.now() +
+        Math.min(
+          args.ttlSeconds ?? MAX_GRANT_TTL_SECONDS,
+          MAX_GRANT_TTL_SECONDS,
+        ) *
+          1000,
+    );
+    const rows = await this.db
+      .updateTable("connection_capability_grants")
+      .set({ expires_at: expiresAt })
+      .where("agent_session_id", "=", args.agentSessionId)
+      .where("channel", "=", args.channel)
+      .where("revoked_at", "is", null)
+      .where((eb) =>
+        eb.exists(
+          eb
+            .selectFrom("execution_allocations")
+            .select("execution_allocations.id")
+            .whereRef(
+              "execution_allocations.id",
+              "=",
+              "connection_capability_grants.allocation_id",
+            )
+            .where("execution_allocations.status", "=", "active"),
+        ),
+      )
+      .returning("id")
+      .execute();
+    return rows.length;
+  }
+
   async revokeAllocation(args: { allocationId: string }): Promise<void> {
     await this.db
       .updateTable("connection_capability_grants")

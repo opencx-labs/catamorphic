@@ -81,6 +81,12 @@ session's own authority.
   revokes the other. Sandbox grants live an hour, are issued at every sandbox
   turn and renewed every 20 minutes while it runs, and are revoked with the
   session's Allocation on close, idle release, and archive.
+- MCP grants keep their bearer (#122): harnesses hold it in static
+  headers from anchoring, and a review chat may live for days. Each turn
+  extends the session's unrevoked MCP grants to an hour before it runs,
+  and every 20 minutes while it runs; one that lapsed while the chat idled
+  comes back that way. Only grants on an active Allocation extend, so
+  close, idle release, and archive still end them for good.
 - The plugin mounts `/gateway/git/:alias/*` (under the host's API prefix). The
   grant is the HTTP Basic password (or a bearer); an unauthenticated request
   gets `WWW-Authenticate: Basic` so Git's credential helper answers.
