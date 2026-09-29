@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { app, ipcMain } from "electron";
 import { z } from "zod";
-import { executableSourceModule } from "../shared/workspace.js";
+import { executableSourceModule } from "../shared/workspace-config.js";
 import type { WindowProfileRegistry } from "./index.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";

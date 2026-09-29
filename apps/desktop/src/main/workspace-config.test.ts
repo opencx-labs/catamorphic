@@ -4,9 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_WORKSPACE_CONFIG,
+  DEFAULT_WORKSPACE_FILE,
   loadWorkspaceConfigFile,
   resolveWorkspaceConfig,
-  watchWorkspaceLayerFile,
+  watchConfigLayerFile,
 } from "./workspace-config.js";
 
 const CUSTOM = (title: string) =>
@@ -18,7 +19,7 @@ const tmpdirs: string[] = [];
 const disposers: Array<() => void> = [];
 
 function makeDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sidebar-config-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-config-"));
   tmpdirs.push(dir);
   return dir;
 }
@@ -343,10 +344,10 @@ describe("loadWorkspaceConfigFile", () => {
   });
 });
 
-describe("watchWorkspaceLayerFile", () => {
+describe("watchConfigLayerFile", () => {
   const changed = (file: string): Promise<void> =>
     new Promise((resolve) => {
-      disposers.push(watchWorkspaceLayerFile(file, resolve));
+      disposers.push(watchConfigLayerFile(file, resolve));
     });
 
   it("fires when the file changes in an existing directory", async () => {
@@ -545,7 +546,9 @@ describe("palette modes", () => {
   });
 
   it("resolves executable modules for sections and modes in one namespace", async () => {
-    const { executableSourceModule } = await import("../shared/workspace.js");
+    const { executableSourceModule } = await import(
+      "../shared/workspace-config.js"
+    );
     const { config } = resolve(`{ modes: [
       { id: "own", trigger: "own", title: "Own", source: { type: "custom", module: ".work/own.ts" } },
       { id: "reuse", trigger: "reuse", title: "Reuse", section: "todos" },
@@ -560,12 +563,32 @@ describe("palette modes", () => {
 });
 
 describe("workspace shape", () => {
+  it("writes a first-run template that loads as the built-in layout", () => {
+    const dir = makeDir();
+    const file = path.join(dir, "workspace.js");
+    fs.writeFileSync(file, DEFAULT_WORKSPACE_FILE);
+    const resolved = resolveWorkspaceConfig({ profileDir: dir });
+    expect(resolved.error).toBeUndefined();
+    const ids = (config: typeof resolved.config) =>
+      (["left", "right"] as const).map((side) =>
+        config.sidebars[side].map((tab) => [
+          tab.id,
+          tab.sections.map((section) => section.id),
+        ]),
+      );
+    expect(ids(resolved.config)).toEqual(ids(DEFAULT_WORKSPACE_CONFIG));
+  });
+
   it("requires sidebars and rejects unknown top-level keys", () => {
     for (const [source, message] of [
       ["module.exports = { left: [], right: [] };", "sidebars"],
       [
         "module.exports = { sidebars: { left: [], right: [] }, starters: [] };",
         "Unknown workspace keys: starters",
+      ],
+      [
+        "module.exports = { sidebars: { left: [], right: [], bottom: [] } };",
+        "Unknown sidebars: bottom",
       ],
     ]) {
       const { error } = resolveWorkspaceConfig(makeLayers({ profile: source }));

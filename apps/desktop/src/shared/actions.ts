@@ -23,6 +23,8 @@ export interface ActionDefinition {
   defaultBinding: string | null;
   /** Palette search synonyms, beyond the label itself. */
   keywords: string[];
+  /** Lucide icon name for the palette row (unknown names show the command glyph). */
+  icon: string;
   /** Hidden from the palette (e.g. the palette-openers themselves). */
   hiddenInPalette?: boolean;
 }
@@ -31,6 +33,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "submit-pr-comment",
     label: "Post pull request comment",
+    icon: "Send",
     description: "post the focused review comment or reply",
     defaultBinding: "Cmd+Enter",
     keywords: ["review", "comment", "reply"],
@@ -39,6 +42,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "open-settings",
     label: "Settings",
+    icon: "Settings",
     description: "open settings, including when no project is selected",
     defaultBinding: "Cmd+Alt+,",
     keywords: ["preferences", "configuration"],
@@ -46,6 +50,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "search-files",
     label: "Find files",
+    icon: "FileSearch",
     description: "focus filename search or open Files in the command palette",
     defaultBinding: "Cmd+Shift+O",
     keywords: ["files", "search", "filename"],
@@ -53,6 +58,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "search-content",
     label: "Search file content",
+    icon: "TextSearch",
     description: "search content in the review or command palette",
     defaultBinding: "Cmd+Shift+F",
     keywords: ["content", "grep", "search"],
@@ -60,6 +66,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "search-diff",
     label: "Find in diff",
+    icon: "Diff",
     description: "search the visible diff",
     defaultBinding: "Cmd+F",
     keywords: ["diff", "find"],
@@ -67,6 +74,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "search-changes",
     label: "Find changed files",
+    icon: "GitCompare",
     description: "focus filename search in Changes",
     defaultBinding: "Cmd+Alt+F",
     keywords: ["changes", "files", "search"],
@@ -74,6 +82,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "search-settings",
     label: "Search settings",
+    icon: "Search",
     description: "search settings in the palette",
     defaultBinding: "",
     keywords: ["settings", "search"],
@@ -81,6 +90,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "check-for-updates",
     label: "Check for updates",
+    icon: "RefreshCw",
     description: "check for a newer Work desktop version",
     defaultBinding: null,
     keywords: ["update", "upgrade", "version", "release"],
@@ -88,6 +98,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "new-tab",
     label: "New tab",
+    icon: "Plus",
     description: "open a new tab (the command palette)",
     defaultBinding: "Cmd+T",
     keywords: ["tab", "palette", "search"],
@@ -96,6 +107,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "command-palette",
     label: "Command palette",
+    icon: "Command",
     description: "open the command palette overlay",
     defaultBinding: "Cmd+P",
     keywords: [],
@@ -104,6 +116,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "new-floating-chat",
     label: "New chat",
+    icon: "MessageSquarePlus",
     description: "open the small floating chat",
     defaultBinding: "Cmd+N",
     keywords: ["chat", "assistant", "agent", "ai", "quick"],
@@ -111,6 +124,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "new-browser-tab",
     label: "New browser tab",
+    icon: "Globe",
     description: "open a new browser tab",
     defaultBinding: "Cmd+Alt+T",
     keywords: ["browser", "web", "page", "open"],
@@ -118,6 +132,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "browser-back",
     label: "Go back",
+    icon: "ArrowLeft",
     description: "go back in the focused browser tab",
     defaultBinding: "Cmd+ArrowLeft",
     keywords: ["browser", "history", "previous", "page", "left"],
@@ -125,6 +140,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "browser-forward",
     label: "Go forward",
+    icon: "ArrowRight",
     description: "go forward in the focused browser tab",
     defaultBinding: "Cmd+ArrowRight",
     keywords: ["browser", "history", "next", "page", "right"],
@@ -132,6 +148,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "reopen-tab",
     label: "Reopen closed tab",
+    icon: "History",
     description:
       "restore the most recently closed tab (its split partner too, when it had one)",
     defaultBinding: "Cmd+Shift+T",
@@ -140,6 +157,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "toggle-chat-minimized",
     label: "Minimize/restore chat",
+    icon: "Minimize2",
     description:
       "minimize the active chat to a bubble, or pop the bubble back open as a floating chat",
     defaultBinding: "Cmd+M",
@@ -148,6 +166,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "chat-to-tab",
     label: "Open chat as tab",
+    icon: "Maximize2",
     description: "expand the active chat into a full workspace tab",
     defaultBinding: "Cmd+Shift+M",
     keywords: ["chat", "tab", "maximize", "expand", "full", "screen"],
@@ -155,6 +174,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "split-view",
     label: "Split with previous tab",
+    icon: "Columns2",
     description:
       "tile the active tab beside the previously focused one; press again to unsplit",
     defaultBinding: "Cmd+\\",
@@ -163,6 +183,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "prev-chat",
     label: "Previous chat",
+    icon: "MessageSquare",
     description: "show the previous chat in the floating dock",
     defaultBinding: "Cmd+,",
     keywords: [
@@ -178,6 +199,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "next-chat",
     label: "Next chat",
+    icon: "MessageSquare",
     description: "show the next chat in the floating dock",
     defaultBinding: "Cmd+.",
     keywords: ["chat", "next", "right", "cycle", "switch", "dock", "floating"],
@@ -185,6 +207,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "prev-tab",
     label: "Previous tab",
+    icon: "ChevronLeft",
     description: "activate the tab to the left",
     defaultBinding: "Cmd+[",
     keywords: ["tab", "previous", "left", "cycle", "switch"],
@@ -192,6 +215,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "next-tab",
     label: "Next tab",
+    icon: "ChevronRight",
     description: "activate the tab to the right",
     defaultBinding: "Cmd+]",
     keywords: ["tab", "next", "right", "cycle", "switch"],
@@ -199,6 +223,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "new-terminal-tab",
     label: "New terminal",
+    icon: "SquareTerminal",
     description: "open a terminal tab in the project folder",
     defaultBinding: "Ctrl+`",
     keywords: ["terminal", "shell", "console", "cli", "command line"],
@@ -207,6 +232,7 @@ export const BUILTIN_ACTIONS = [
     id: "toggle-floating-terminal",
     hiddenInPalette: true,
     label: "Toggle floating terminal",
+    icon: "SquareTerminal",
     description: "show or hide the project's floating shell",
     defaultBinding: "Ctrl+Alt+`",
     keywords: ["terminal", "float", "shell", "overlay"],
@@ -215,6 +241,7 @@ export const BUILTIN_ACTIONS = [
     id: "new-floating-browser",
     hiddenInPalette: true,
     label: "New floating browser",
+    icon: "Globe",
     description: "open a page above the current workspace",
     defaultBinding: "Cmd+Alt+N",
     keywords: ["preview", "glance", "float", "browser"],
@@ -223,6 +250,7 @@ export const BUILTIN_ACTIONS = [
     id: "open-floating-settings",
     hiddenInPalette: true,
     label: "Open floating Settings",
+    icon: "Settings",
     description: "adjust preferences above the current workspace",
     defaultBinding: null,
     keywords: ["settings", "preferences", "float"],
@@ -231,6 +259,7 @@ export const BUILTIN_ACTIONS = [
     id: "dismiss-floating",
     hiddenInPalette: true,
     label: "Dismiss floating panel",
+    icon: "X",
     description: "hide the floating panel and keep its tab running",
     defaultBinding: "Escape",
     keywords: ["hide", "dismiss", "preview", "floating"],
@@ -239,6 +268,7 @@ export const BUILTIN_ACTIONS = [
     id: "floating-to-tab",
     hiddenInPalette: true,
     label: "Expand floating panel to tab",
+    icon: "Maximize2",
     description:
       "use the full content area without restarting the page or terminal",
     defaultBinding: null,
@@ -248,6 +278,7 @@ export const BUILTIN_ACTIONS = [
     id: "floating-to-split",
     hiddenInPalette: true,
     label: "Tile floating panel",
+    icon: "Columns2",
     description: "place the floating panel beside its original tab",
     defaultBinding: null,
     keywords: ["float", "tile", "split"],
@@ -255,6 +286,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "browser-focus-address",
     label: "Focus address bar",
+    icon: "Link",
     description: "edit the focused browser's address",
     defaultBinding: "Cmd+L",
     keywords: ["url", "address", "browser"],
@@ -262,6 +294,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "browser-reload",
     label: "Reload page",
+    icon: "RefreshCw",
     description: "reload the focused browser page",
     defaultBinding: "Cmd+R",
     keywords: ["reload", "refresh", "browser"],
@@ -269,6 +302,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "browser-reload-hard",
     label: "Reload page without cache",
+    icon: "RefreshCw",
     description: "reload the focused browser page ignoring cached resources",
     defaultBinding: "Cmd+Shift+R",
     keywords: ["reload", "refresh", "cache", "browser"],
@@ -276,6 +310,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "new-editor-tab",
     label: "New editor",
+    icon: "FileCode",
     description: "open a code editor tab (pick a project file)",
     defaultBinding: null,
     keywords: ["editor", "code", "file", "open", "monaco", "edit"],
@@ -283,6 +318,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "toggle-right-sidebar",
     label: "Toggle right sidebar",
+    icon: "PanelRight",
     description: "show or hide the right sidebar",
     defaultBinding: "Cmd+Shift+B",
     keywords: ["sidebar", "right", "widgets", "hide", "show"],
@@ -290,6 +326,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "toggle-sidebar",
     label: "Toggle left sidebar",
+    icon: "PanelLeft",
     description: "show/hide the sidebar",
     defaultBinding: "Cmd+B",
     keywords: ["sidebar", "hide", "show", "collapse", "expand", "panel"],
@@ -297,6 +334,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "close-tab",
     label: "Close tab",
+    icon: "X",
     description: "close the focused chat or tab",
     defaultBinding: "Cmd+W",
     keywords: ["close", "tab", "quit", "dismiss"],
@@ -304,6 +342,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "setup-agent",
     label: "Set up a new agent…",
+    icon: "Bot",
     description:
       "open the agent setup wizard (Claude Code, Codex, API key, or free models)",
     defaultBinding: null,
@@ -321,6 +360,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "default-agent",
     label: "Change default agent…",
+    icon: "Bot",
     description:
       "pick which configured AI agent answers new chats — in the active project (your override) or globally",
     defaultBinding: null,
@@ -338,6 +378,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "configure-agent",
     label: "Configure agent…",
+    icon: "Settings2",
     description:
       "open an agent's configuration: model, effort, mode, instructions, memory, connections, skills, tool access, auth (ADR 0056)",
     defaultBinding: null,
@@ -359,6 +400,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "session-status",
     label: "Status",
+    icon: "CircleDot",
     description:
       "open the focused chat's session details and contextual actions",
     defaultBinding: null,
@@ -375,6 +417,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "switch-agent",
     label: "Switch agent for this chat…",
+    icon: "Bot",
     description:
       "move the focused chat to another configured agent (its next turn runs there)",
     defaultBinding: null,
@@ -383,6 +426,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "switch-model",
     label: "Change model…",
+    icon: "Cpu",
     description:
       "change the model of the focused chat's agent, or the default agent when no chat is focused",
     defaultBinding: null,
@@ -391,6 +435,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "change-effort",
     label: "Change model effort…",
+    icon: "Gauge",
     description:
       "set reasoning effort for the focused chat, or the default agent when no chat is focused",
     defaultBinding: null,
@@ -407,6 +452,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "change-permission-mode",
     label: "Change permission mode…",
+    icon: "ShieldCheck",
     description:
       "set the harness's own permission mode (Claude Code's mode, or Codex's sandbox and approvals) for the focused chat's agent, or the default agent when no chat is focused",
     defaultBinding: null,
@@ -427,6 +473,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "connect-remote-project",
     label: "Connect to a remote project…",
+    icon: "Link2",
     description:
       "link a folder on this machine to a project on your team's server (paste the invite's connect link)",
     defaultBinding: null,
@@ -443,6 +490,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "manage-connectors",
     label: "Manage connectors…",
+    icon: "Plug",
     description:
       "open the connectors manager: installed MCP servers and plugins, plus search across the MCP registry and plugin marketplaces",
     defaultBinding: null,
@@ -466,6 +514,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "new-incognito-chat",
     label: "New incognito chat",
+    icon: "Ghost",
     description:
       "open a floating chat that stays on this machine: never mirrored to a linked server, never in team history or usage",
     defaultBinding: null,
@@ -482,6 +531,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "continue-on-mobile",
     label: "Continue on mobile",
+    icon: "Smartphone",
     description:
       "show a QR code that opens this workspace (and the focused chat) on your phone",
     defaultBinding: null,
@@ -500,6 +550,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "remote-environment",
     label: "Remote environment settings",
+    icon: "ServerCog",
     description:
       "choose which of your own sign-ins (Claude Code, Codex) and project files reach your sessions on this project's server",
     defaultBinding: null,

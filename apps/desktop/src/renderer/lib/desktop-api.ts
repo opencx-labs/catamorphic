@@ -760,9 +760,9 @@ export type {
   SidebarSide,
   SidebarTabConfig,
 } from "../../shared/sidebar.js";
-export type { WorkspaceConfig } from "../../shared/workspace.js";
+export type { WorkspaceConfig } from "../../shared/workspace-config.js";
 
-import type { WorkspaceConfig } from "../../shared/workspace.js";
+import type { WorkspaceConfig } from "../../shared/workspace-config.js";
 
 /**
  * Which layer of the layered resolution produced the config: this user's

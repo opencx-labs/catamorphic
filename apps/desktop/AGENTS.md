@@ -26,9 +26,9 @@ registry, project agents ADR 0050, workspace tools, triggers, e2e fakes);
 `terminal.ts` + `shared/terminal-text.ts` + `shell-integration.ts` are the PTY
 stack; `git-view.ts` is the system-git read surface (worktrees, status,
 diffs); `browser*.ts`, `profiles.ts`, `connections-store.ts`,
-`mcp-apps.ts`, `sidebar-config.ts`, `project-manifest.ts`, and
+`mcp-apps.ts`, `workspace-config.ts`, `project-manifest.ts`, and
 `shared/project-experience.ts` cover browser, profiles, connectors, MCP apps,
-sidebar layers, project starting actions, and capability targeting.
+workspace layers (sidebars, palette modes), project starting actions, and capability targeting.
 `harness-components.ts` installs the exact integrity-pinned Claude Code and
 Codex platform executable on first use; never import downloaded JavaScript
 into Electron or float those release pins. `mobile-pairing.ts` is "Continue on

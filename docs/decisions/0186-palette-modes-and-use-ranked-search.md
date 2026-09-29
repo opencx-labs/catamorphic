@@ -62,6 +62,13 @@ site's settings stay first, then up to six "Frequent" rows (at most three
 pages), then the usual commands and destinations. Individual site settings
 leave the top level for the Sites mode; the host moves to the row's detail.
 
+**The palette is a module, not a component.** `renderer/palette/` holds the
+host context (what the app provides, once, instead of 40 props), row hooks
+(commands, surfaces, resources, history, settings), one file per built-in
+mode, the loader and the ranker; `CommandPalette` is the shell that composes
+them. Action icons are Lucide names in the shared action registry, like rows
+in `workspace.js`.
+
 ## Consequences
 
 - A new built-in mode is one registry entry; a user's agent adds a mode by

@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { SETTINGS_CATALOG } from "../../shared/settings-catalog.js";
-import { createPaletteIndex, PALETTE_RESULT_LIMIT } from "./palette-search.js";
+import { createPaletteIndex, PALETTE_RESULT_LIMIT } from "./rank.js";
 
 it("finds individual settings without reading preference values", () => {
   const search = createPaletteIndex(
@@ -37,7 +37,7 @@ type Row = {
   label: string;
   keywords: string[];
   detail?: string;
-  category?: import("./palette-search.js").PaletteCategory;
+  category?: import("./rank.js").PaletteCategory;
   usage?: string;
   disabled?: boolean;
 };
@@ -160,7 +160,7 @@ it("boosts use inside the current project", () => {
 });
 
 it("orders frequent rows by use, once each, with pages capped", async () => {
-  const { frequentItems } = await import("./palette-search.js");
+  const { frequentItems } = await import("./rank.js");
   const rows = [
     row("p1", "Page 1", { category: "page" }),
     row("p2", "Page 2", { category: "page" }),

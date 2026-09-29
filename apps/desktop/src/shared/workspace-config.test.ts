@@ -3,7 +3,7 @@ import {
   sidebarSections,
   visibleWorkspaceConfig,
   type WorkspaceConfig,
-} from "./workspace.js";
+} from "./workspace-config.js";
 
 describe("sidebar presentation", () => {
   it("filters tabs, sections and nested links consistently for every consumer", () => {

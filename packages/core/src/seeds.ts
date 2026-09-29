@@ -582,19 +582,19 @@ leaves no empty UI behind.
 // .work/workspace.js
 module.exports = {
   sidebars: {
-  left: [{ id: "project", title: "Project", icon: "House", sections: [
-    { id: "chats", type: "chats" },
-    { id: "files", type: "files" },
-    {
-      id: "brain",
-      type: "custom",
-      title: "Company brain",
-      when: { permissions: ["brain:maintain"] },
-      items: [{ label: "Handbook", url: "https://handbook.example.com" }],
-    },
-    { id: "changes", type: "git", title: "Changes", when: { permissions: ["program:write"] } },
-  ] }],
-  right: [],
+    left: [{ id: "project", title: "Project", icon: "House", sections: [
+      { id: "chats", type: "chats" },
+      { id: "files", type: "files" },
+      {
+        id: "brain",
+        type: "custom",
+        title: "Company brain",
+        when: { permissions: ["brain:maintain"] },
+        items: [{ label: "Handbook", url: "https://handbook.example.com" }],
+      },
+      { id: "changes", type: "git", title: "Changes", when: { permissions: ["program:write"] } },
+    ] }],
+    right: [],
   },
 };
 \`\`\`

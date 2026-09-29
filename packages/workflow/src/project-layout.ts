@@ -99,8 +99,8 @@ export function isProjectSourcePath(filePath: string): boolean {
   );
 }
 
-/** Shared project sidebar layer. */
-export const PROJECT_WORKSPACE_PATH = projectPath("workspace.js");
+/** The shared project workspace file: sidebars and palette modes. */
+export const PROJECT_WORKSPACE_CONFIG_PATH = projectPath("workspace.js");
 /** Shared project theme. */
 export const PROJECT_THEME_PATH = projectPath("theme.json");
 /** Shared project preferences. */

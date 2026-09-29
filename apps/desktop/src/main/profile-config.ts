@@ -28,12 +28,13 @@ import {
   validateThemeConfig,
 } from "./theme.js";
 import {
+  legacySidebarFiles,
   projectLocalWorkspaceFile,
   projectWorkspaceFile,
   type ResolvedWorkspaceConfig,
   resolveWorkspaceConfig,
   WorkspaceConfigStore,
-  watchWorkspaceLayerFile,
+  watchConfigLayerFile,
 } from "./workspace-config.js";
 
 /** Everything a profile owns beyond browser state: look, keys, agents. */
@@ -70,7 +71,7 @@ export class ProfileConfigManager {
   private readonly keybindingsListeners = new Set<
     (profileId: string, bindings: Keybindings) => void
   >();
-  // Sidebar changes carry no payload: the resolved config depends on the
+  // Workspace changes carry no payload: the resolved config depends on the
   // renderer's active project (layered resolution), so listeners refetch.
   private readonly workspaceListeners = new Set<(profileId: string) => void>();
   /** Lazy per-(profile, project) watchers on the non-profile layers. */
@@ -159,7 +160,7 @@ export class ProfileConfigManager {
   }
 
   /**
-   * Layered sidebar resolution (ADR 0043): this user's per-project
+   * Layered workspace resolution (ADR 0043): this user's per-project
    * override, then the project's shared `.work/workspace.js`, then
    * the profile-global `workspace.js`, then the built-in default. Requesting
    * a project's config lazily registers watchers on its layer files so
@@ -214,7 +215,7 @@ export class ProfileConfigManager {
       if (!this.projectConfigWatchers.has(key)) {
         const notify = () => this.notifyPrefsChanged(profileId);
         const disposers = [files.personal, files.project].flatMap((file) =>
-          file ? [watchWorkspaceLayerFile(file, notify)] : [],
+          file ? [watchConfigLayerFile(file, notify)] : [],
         );
         this.projectConfigWatchers.set(key, () => {
           for (const dispose of disposers) dispose();
@@ -347,12 +348,20 @@ export class ProfileConfigManager {
     const stores = this.forProfile(profileId);
     stores.theme.load();
     stores.keybindings.load();
-    const sidebar = this.resolveWorkspace(profileId, project);
+    const workspace = this.resolveWorkspace(profileId, project);
     result.errors.push(
       ...[
         stores.theme.error,
         stores.keybindings.error,
-        sidebar.error ? `${sidebar.file}: ${sidebar.error}` : undefined,
+        workspace.error ? `${workspace.file}: ${workspace.error}` : undefined,
+        ...legacySidebarFiles({
+          profileDir: this.profileDir(profileId),
+          projectId: project?.id,
+          projectRoot: project?.rootPath ?? undefined,
+        }).map(
+          (file) =>
+            `${file} is no longer read: move its left and right under sidebars in workspace.js beside it.`,
+        ),
       ].filter((error): error is string => Boolean(error)),
     );
     return result;
@@ -390,14 +399,14 @@ export class ProfileConfigManager {
     if (this.projectConfigWatchers.has(key)) return;
     const notify = () => this.notifyWorkspaceChanged(profileId);
     const disposers: Array<() => void> = [
-      watchWorkspaceLayerFile(
+      watchConfigLayerFile(
         projectLocalWorkspaceFile(this.profileDir(profileId), projectId),
         notify,
       ),
     ];
     if (projectRoot) {
       disposers.push(
-        watchWorkspaceLayerFile(projectWorkspaceFile(projectRoot), notify),
+        watchConfigLayerFile(projectWorkspaceFile(projectRoot), notify),
       );
     }
     this.projectConfigWatchers.set(key, () => {

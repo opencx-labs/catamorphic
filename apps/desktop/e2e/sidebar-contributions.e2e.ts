@@ -260,7 +260,7 @@ it("mounts the real Codex-authored live widget through the sandboxed app bridge"
   const source = fs.readFileSync(file, "utf8");
   fs.writeFileSync(
     file,
-    `${source}\nmodule.exports.right.find(tab => tab.id === "focused-chat").sections = module.exports.right.find(tab => tab.id === "focused-chat").sections.filter(section => section.id !== "agent-monitor"); module.exports.right.find(tab => tab.id === "focused-chat").sections.push({id:"agent-monitor",type:"app",app:"agent-monitor",title:"Agent monitor",height:320,hideEmpty:true,collections:["subsessions"]});\n`,
+    `${source}\nmodule.exports.sidebars.right.find(tab => tab.id === "focused-chat").sections = module.exports.sidebars.right.find(tab => tab.id === "focused-chat").sections.filter(section => section.id !== "agent-monitor"); module.exports.sidebars.right.find(tab => tab.id === "focused-chat").sections.push({id:"agent-monitor",type:"app",app:"agent-monitor",title:"Agent monitor",height:320,hideEmpty:true,collections:["subsessions"]});\n`,
   );
   try {
     await app.waitFor(

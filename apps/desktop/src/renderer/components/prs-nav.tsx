@@ -3,7 +3,7 @@ import { type RefObject, useEffect, useState } from "react";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { desktopApi, type PullRequestSummary } from "../lib/desktop-api.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
-import type { PaletteItem } from "./command-palette.js";
+import type { PaletteItem } from "../palette/types.js";
 import {
   useSidebarContent,
   useSidebarContribution,

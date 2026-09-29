@@ -229,7 +229,7 @@ emitLog({ scope: "catamorphic-desktop", body: "Desktop starting" });
 
 const paths = resolveDataPaths();
 const profilesStore = new ProfilesStore(paths.profilesFile);
-// Per-profile config (theme, keybindings, sidebar, agents) — one manager
+// Per-profile config (theme, keybindings, workspace, agents) — one manager
 // shared by IPC, the window layer, and the chat agent's config mirror.
 const profileConfig = new ProfileConfigManager(paths, profilesStore, () =>
   nativeTheme.shouldUseDarkColors ? "dark" : "light",
@@ -251,7 +251,7 @@ const state: ServerState = {
 /**
  * Which profile each window shows. Windows are born with a profile (theme
  * pre-painted from it) and can switch in place when their workspace is
- * empty; broadcasts of per-profile state (theme, keybindings, sidebar,
+ * empty; broadcasts of per-profile state (theme, keybindings, workspace,
  * agents) go only to that profile's windows.
  */
 const windowProfiles = new Map<number, string>();

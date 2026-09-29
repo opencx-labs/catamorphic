@@ -324,7 +324,7 @@ describe("tabbed sidebars", () => {
       `[...document.querySelectorAll('[data-workspace-visible="true"] [data-sidebar="right"] button')].find(b => b.textContent.trim() === 'Customize sidebar').click()`,
     );
     await app.waitFor(
-      `document.body.innerText.includes('The live sidebar configuration file on this machine is')`,
+      `document.body.innerText.includes('The live workspace configuration file on this machine is')`,
     );
     expect(await app.eval("document.body.innerText")).toContain(configFile);
     writeConfig(DEFAULT_WORKSPACE_CONFIG);

@@ -1210,7 +1210,7 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:sidebar-source-changed", handler);
   },
-  // --- sidebar config ---
+  // --- workspace config (sidebars, palette modes) ---
   workspaceConfigGet: (projectId?: string): Promise<unknown> =>
     invoke("catamorphic:workspace-config-get", projectId),
   workspaceConfigFile: (): Promise<string> =>

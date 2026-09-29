@@ -4,7 +4,7 @@ import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it } from "vitest";
 import type { SidebarSurface } from "../../shared/sidebar.js";
-import type { WorkspaceConfig } from "../../shared/workspace.js";
+import type { WorkspaceConfig } from "../../shared/workspace-config.js";
 import type { SidebarContentState } from "./sidebar-contribution.js";
 import { TabbedSidebar } from "./tabbed-sidebar.js";
 

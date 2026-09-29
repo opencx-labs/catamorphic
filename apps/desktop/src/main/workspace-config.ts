@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
-import { PROJECT_WORKSPACE_PATH } from "@catamorphic/workflow/project-layout";
+import {
+  PROJECT_WORKSPACE_CONFIG_PATH,
+  PROJECT_WORKSPACE_ROOT,
+} from "@catamorphic/workflow/project-layout";
 import type { OpenMode } from "../shared/open-mode.js";
 import {
   normalizePaletteTrigger,
@@ -12,11 +15,13 @@ import type { SidebarSourceItem } from "../shared/sidebar-source.js";
 import { WORKSPACE_AUTHORING_GUIDE } from "./workspace-authoring.js";
 
 /**
- * User-customizable sidebar. The config is a real JS file at
- * `<userData>/profiles/<id>/sidebar.js` (same philosophy as keybindings.json:
+ * The user-customizable workspace (ADR 0186): both sidebars and the palette's
+ * own modes. The config is a real JS file at
+ * `<userData>/profiles/<id>/workspace.js` (same philosophy as keybindings.json:
  * plain, user-visible, agent-editable, file-watched, applies live). The file
  * evaluates in an isolated vm context with no require/process/fs and exports
- * left and right arrays of icon tabs, each holding ordered widget sections.
+ * { sidebars: { left, right }, palette? }: icon tabs holding ordered widget
+ * sections, and palette modes over the same sources.
  *
  * Everything crossing into the renderer is DATA: the config is evaluated
  * in the main process and sent over IPC, so menu entries name a declared
@@ -40,10 +45,10 @@ import {
   type PaletteModeConfig,
   sidebarSections,
   type WorkspaceConfig,
-} from "../shared/workspace.js";
+} from "../shared/workspace-config.js";
 
 export type { SidebarSectionConfig } from "../shared/sidebar.js";
-export type { WorkspaceConfig } from "../shared/workspace.js";
+export type { WorkspaceConfig } from "../shared/workspace-config.js";
 
 /** Hover menu for a project bookmark when the config doesn't override it. */
 export const DEFAULT_BOOKMARK_MENU: SidebarMenuEntry[] = [
@@ -609,6 +614,13 @@ function sanitize(raw: unknown): WorkspaceConfig {
     throw new Error(`Unknown workspace keys: ${unknown.join(", ")}.`);
   const ids = new Set<string>();
   const sectionIds = new Set<string>();
+  const sides = Object.keys(raw.sidebars).filter(
+    (key) => key !== "left" && key !== "right",
+  );
+  if (sides.length)
+    throw new Error(
+      `Unknown sidebars: ${sides.join(", ")}. Use left and right.`,
+    );
   const sidebars = {
     left: sanitizeTabs({ raw: raw.sidebars.left, ids, sectionIds }),
     right: sanitizeTabs({ raw: raw.sidebars.right, ids, sectionIds }),
@@ -735,7 +747,7 @@ function sanitizePaletteModes({
 }
 
 /** Evaluate a workspace.js source in the isolated vm context. Throws. */
-function evaluateSidebarModule(source: string, filename: string): unknown {
+function evaluateWorkspaceModule(source: string, filename: string): unknown {
   const module = { exports: {} as unknown };
   const context = vm.createContext({ module, exports: module.exports });
   vm.runInContext(source, context, { filename, timeout: 250 });
@@ -752,7 +764,7 @@ const loadErrors = new Map<string, string>();
 export function loadWorkspaceConfigFile(file: string): WorkspaceConfig {
   try {
     const config = sanitize(
-      evaluateSidebarModule(fs.readFileSync(file, "utf-8"), file),
+      evaluateWorkspaceModule(fs.readFileSync(file, "utf-8"), file),
     );
     lastGood.delete(file);
     lastGood.set(file, config);
@@ -801,9 +813,29 @@ export function projectLocalWorkspaceFile(
   return path.join(profileDir, "workspace-projects", `${projectId}.js`);
 }
 
-/** The project's shared, git-tracked sidebar (layer 2). */
+/** The project's shared, git-tracked workspace file (layer 2). */
 export function projectWorkspaceFile(projectRoot: string): string {
-  return path.join(projectRoot, PROJECT_WORKSPACE_PATH);
+  return path.join(projectRoot, PROJECT_WORKSPACE_CONFIG_PATH);
+}
+
+/**
+ * sidebar.js files from before workspace.js (ADR 0186) that still exist.
+ * Never read: they only produce a diagnostic saying where the layout went.
+ */
+export function legacySidebarFiles(opts: {
+  profileDir: string;
+  projectId?: string;
+  projectRoot?: string;
+}): string[] {
+  return [
+    path.join(opts.profileDir, "sidebar.js"),
+    ...(opts.projectId
+      ? [path.join(opts.profileDir, "sidebar-projects", `${opts.projectId}.js`)]
+      : []),
+    ...(opts.projectRoot
+      ? [path.join(opts.projectRoot, PROJECT_WORKSPACE_ROOT, "sidebar.js")]
+      : []),
+  ].filter((file) => fs.existsSync(file));
 }
 
 /** The candidate files for a resolution, most specific first. */
@@ -833,7 +865,7 @@ export function workspaceLayerFiles(opts: {
 }
 
 /**
- * Layered sidebar resolution (ADR 0043 era): the FIRST existing file wins —
+ * Layered workspace resolution (ADR 0043 era): the FIRST existing file wins —
  * this user's per-project override, then the project's shared
  * `.work/workspace.js`, then the profile-global `workspace.js`, then the
  * built-in default. A file that exists but fails to evaluate does NOT slide
@@ -861,7 +893,7 @@ export function resolveWorkspaceConfig(opts: {
  * file's directory when it exists, and the parent otherwise so we notice
  * the directory being created. Returns a disposer.
  */
-export function watchWorkspaceLayerFile(
+export function watchConfigLayerFile(
   file: string,
   onChange: () => void,
 ): () => void {
@@ -961,21 +993,6 @@ export class WorkspaceConfigStore {
     fs.writeFileSync(this.file, source);
   }
 
-  /**
-   * Does this source evaluate to a valid two-sided layout? Guards the
-   * agent-edit path: silently writing a broken file would collapse the
-   * user's sidebar to the defaults with no explanation.
-   */
-  isValidSource(source: string): boolean {
-    try {
-      const evaluated = evaluateSidebarModule(source, this.file);
-      sanitize(evaluated);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
   load(): WorkspaceConfig {
     return loadWorkspaceConfigFile(this.file);
   }
@@ -983,9 +1000,7 @@ export class WorkspaceConfigStore {
   /** The same watch as the project layers: directory events plus a poll. */
   watch(onChange: (config: WorkspaceConfig) => void): void {
     this.unwatch?.();
-    this.unwatch = watchWorkspaceLayerFile(this.file, () =>
-      onChange(this.load()),
-    );
+    this.unwatch = watchConfigLayerFile(this.file, () => onChange(this.load()));
   }
 
   dispose(): void {

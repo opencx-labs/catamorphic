@@ -121,7 +121,7 @@ portable performance guarantee. Native tests cover the actual typing/navigation
 flow. If real workspaces grow beyond this budget, measure their query distribution
 before adding a worker or a more complex index.
 
-`renderer/lib/palette-search.test.ts` covers bounded large-index results and long
+`renderer/palette/rank.test.ts` covers bounded large-index results and long
 input. Preserve the prepared-index boundary and result cap when adding providers.
 
 ## Changes subscriptions

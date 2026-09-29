@@ -7,7 +7,7 @@ import {
   normalizeCommandQuery,
   prepareCommand,
   scorePreparedCommand,
-} from "./command-score.js";
+} from "../lib/command-score.js";
 
 export const PALETTE_RESULT_LIMIT = 80;
 
