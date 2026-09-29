@@ -18,7 +18,7 @@ import {
   RemoteExecutorLeaseLostError,
   RemoteOperationQueue,
 } from "./remote-operations.js";
-import { toJson } from "./run-coordinator.js";
+import { jsonColumn, toJson } from "./run-coordinator.js";
 
 const resourceLimitsSchema = z.array(
   z.enum(["cpuMillis", "memoryMb", "storageMb", "gpu"]),
@@ -71,6 +71,14 @@ export class ClientRunnersService {
       );
     await this.authorize(args);
     const token = randomUUID();
+    // Arrays reach jsonb as JSON text: node-postgres would send them as
+    // Postgres arrays, which jsonb reads as `{}` or refuses.
+    const resourceLimits = jsonColumn(
+      toJson(resourceLimitsSchema.parse(args.resourceLimits ?? [])),
+    );
+    const capabilities = jsonColumn(
+      toJson(capabilitiesSchema.parse(args.capabilities ?? [])),
+    );
     const row = await this.db
       .insertInto("client_runners")
       .values({
@@ -81,12 +89,10 @@ export class ClientRunnersService {
         environment_name: args.environment,
         label: args.label,
         workspace_root: args.workspaceRoot,
-        resource_limits: toJson(
-          resourceLimitsSchema.parse(args.resourceLimits ?? []),
-        ),
+        resource_limits: resourceLimits,
         isolation: isolationSchema.parse(args.isolation ?? "none"),
         processes: args.processes ?? false,
-        capabilities: toJson(capabilitiesSchema.parse(args.capabilities ?? [])),
+        capabilities,
         lease_token: token,
         lease_expires_at: sql`now() + interval '45 seconds'`,
       })
@@ -99,14 +105,10 @@ export class ClientRunnersService {
             updated_at: sql`now()`,
             label: args.label,
             workspace_root: args.workspaceRoot,
-            resource_limits: toJson(
-              resourceLimitsSchema.parse(args.resourceLimits ?? []),
-            ),
+            resource_limits: resourceLimits,
             isolation: isolationSchema.parse(args.isolation ?? "none"),
             processes: args.processes ?? false,
-            capabilities: toJson(
-              capabilitiesSchema.parse(args.capabilities ?? []),
-            ),
+            capabilities,
             environment_name: args.environment,
           })
           .where("client_runners.tenant_id", "=", args.identity.tenantId)

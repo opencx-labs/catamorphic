@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -183,6 +183,7 @@ it.skipIf(!process.env.DATABASE_URL)(
             ".work/project.json": JSON.stringify({
               environments: {
                 build: { pool: { plane: "worker" }, workloads: ["agent"] },
+                laptop: { device: "member", workloads: ["agent"] },
               },
               defaultEnvironment: "build",
             }),
@@ -220,6 +221,30 @@ it.skipIf(!process.env.DATABASE_URL)(
       await stopping?.shutdown();
       const second = await turn(8);
       expect(second.split("\n---\n").at(-1)?.trim()).toBe("exit=0\n16");
+
+      // A member runner's capability lists reach Postgres as JSON arrays,
+      // not as Postgres arrays jsonb would misread.
+      const runners = a.catamorphic.core.clientRunners;
+      if (!runners) throw new Error("Client execution is unavailable");
+      const runnerId = randomUUID();
+      await runners.register({
+        identity,
+        projectId: project.id,
+        id: runnerId,
+        environment: "laptop",
+        label: "Laptop",
+        workspaceRoot: "/workspace",
+        resourceLimits: ["cpuMillis"],
+        capabilities: ["images"],
+      });
+      const binding = await runners.binding({
+        tenantId: SERVER_TENANT_ID,
+        ownerUserId: identity.externalUserId,
+        projectId: project.id,
+        clientRunnerId: runnerId,
+      });
+      expect(binding?.descriptor.capabilities).toContain("images");
+      expect(binding?.descriptor.resourceLimits).toEqual(["cpuMillis"]);
 
       expect(balancer.stats.badGateways).toBeGreaterThan(0);
       expect(balancer.stats.unreachable).toBeGreaterThan(0);
