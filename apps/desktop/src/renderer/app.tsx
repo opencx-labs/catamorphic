@@ -168,6 +168,15 @@ import {
 import { notifyDesktop, playChime } from "./lib/notify.js";
 import { sessionLabel } from "./lib/session-label.js";
 import { skillInvocation } from "./lib/skills.js";
+import {
+  EMPTY_SURFACE_HISTORY,
+  restoreSurface,
+  type SurfaceHistory,
+  stepSurface,
+  surfaceExists,
+  surfaceLocation,
+  visitSurface,
+} from "./lib/surface-history.js";
 import { useSidebarReveal } from "./lib/use-sidebar-reveal.js";
 import {
   fileNameFromPath,
@@ -3835,6 +3844,80 @@ export function App({
   workspaceConfigRef.current = visibleWorkspace;
   const activeProfileRef = useRef(activeProfile);
   activeProfileRef.current = activeProfile;
+
+  // Back and forward between surfaces (ADR 0188): each project remembers
+  // the places its workspace was at. The mouse's side buttons walk them;
+  // a focused browser tab walks its own pages instead.
+  const surfaceHistoriesRef = useRef(new Map<string, SurfaceHistory>());
+  useEffect(() => {
+    if (!projectId) return;
+    const histories = surfaceHistoriesRef.current;
+    histories.set(
+      projectId,
+      visitSurface(
+        histories.get(projectId) ?? EMPTY_SURFACE_HISTORY,
+        surfaceLocation(workspace),
+      ),
+    );
+  }, [projectId, workspace]);
+  const navigateBackForwardRef = useRef(
+    (_direction: "back" | "forward", _at: Element | null) => {},
+  );
+  navigateBackForwardRef.current = (direction, at) => {
+    const ws = workspaceRef.current;
+    // A press on a browser's page or toolbar walks that browser's pages;
+    // anywhere else (a chat, the sidebar, the tab strip) walks surfaces.
+    const browser = at?.closest("[data-chat-local-id]")
+      ? undefined
+      : at?.closest("[data-browser-toolbar]")
+        ? (ws.floatingKey ?? ws.activeTabKey)
+        : at?.closest<HTMLElement>("[data-surface-key]")?.dataset.surfaceKey;
+    if (browser?.startsWith("browser:")) {
+      browserHistoryNavigatorsRef.current.get(
+        browser.slice("browser:".length),
+      )?.(direction);
+      return;
+    }
+    const id = projectIdRef.current;
+    if (!id) return;
+    const next = stepSurface(
+      surfaceHistoriesRef.current.get(id) ?? EMPTY_SURFACE_HISTORY,
+      direction === "back" ? -1 : 1,
+      (location) => surfaceExists(ws, location),
+    );
+    const target = next?.entries[next.index];
+    if (!next || !target) return;
+    surfaceHistoriesRef.current.set(id, next);
+    updateWorkspace((current) => restoreSurface(current, target));
+  };
+  useEffect(() => {
+    // Windows and Linux report the buttons as app commands (main forwards
+    // those); macOS delivers them to the page under the pointer. A web
+    // page's own presses stay in its browser tab (the guest preload).
+    const onMouseUp = (event: globalThis.MouseEvent) => {
+      const direction =
+        event.button === 3 ? "back" : event.button === 4 ? "forward" : null;
+      if (!direction) return;
+      event.preventDefault();
+      navigateBackForwardRef.current(
+        direction,
+        event.target instanceof Element ? event.target : null,
+      );
+    };
+    const mac = /Mac/.test(navigator.platform);
+    if (mac) window.addEventListener("mouseup", onMouseUp, true);
+    const stop = desktopApi.onBrowserNavigate((command) => {
+      if (command.webContentsId === null)
+        navigateBackForwardRef.current(
+          command.direction,
+          document.activeElement,
+        );
+    });
+    return () => {
+      if (mac) window.removeEventListener("mouseup", onMouseUp, true);
+      stop();
+    };
+  }, []);
   useEffect(() => {
     /** The chat an agent-spawned surface belongs to: exact session match
         first (the tools carry their chat's session id), then the mid-turn
@@ -4708,6 +4791,7 @@ export function App({
     viewSlots[key] === "left" || viewSlots[key] === "right";
   const paneFocusProps = (key: string) => ({
     "data-workspace-slot": viewSlots[key],
+    "data-surface-key": key,
     "data-floating-surface": viewSlots[key] === "floating" ? key : undefined,
     "data-floating-state":
       viewSlots[key] === "floating"

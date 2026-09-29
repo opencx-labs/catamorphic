@@ -286,6 +286,129 @@ describe("ChatTimeline work display", () => {
     expect(toggles()).toEqual(["false"]);
   });
 
+  const liveSteps = () => [
+    ...container.querySelectorAll('[data-testid="chat-step"]'),
+  ];
+  const entering = () =>
+    liveSteps().map((step) => step.classList.contains("animate-step-in"));
+
+  it("appends arriving steps without rebuilding the ones on screen", async () => {
+    const ls = { type: "command", content: "ls", at: Date.now() };
+    const edit = { type: "file_edit", filePath: "a.ts", at: Date.now() };
+    const test = { type: "command", content: "bun test", at: Date.now() };
+    const ask = messages[0] as ChatTimelineMessage;
+    const turn = (live: ChatTimelineMessage[]) => [ask, ...live];
+    await act(async () =>
+      root.render(
+        <ChatTimeline
+          messages={turn([{ ...running("p", [ls]), content: "Working..." }])}
+          working
+          activity="Working"
+        />,
+      ),
+    );
+    const row = container.querySelector("[data-live-work]");
+    const [first] = liveSteps();
+    // The row's content is the activity line, and changes with every event.
+    await act(async () =>
+      root.render(
+        <ChatTimeline
+          messages={turn([
+            { ...running("p", [ls, edit]), content: "Editing files..." },
+          ])}
+          working
+          activity="Editing files"
+        />,
+      ),
+    );
+    expect(container.querySelector("[data-live-work]")).toBe(row);
+    expect(liveSteps()[0]).toBe(first);
+    expect(entering()).toEqual([false, true]);
+
+    // The steps become a note in place; the next steps start below it.
+    await act(async () =>
+      root.render(
+        <ChatTimeline
+          messages={turn([
+            {
+              ...note("p", "Found it.", 0),
+              metadata: { status: "completed", events: [ls, edit] },
+            } as ChatTimelineMessage,
+            running("q", [test]),
+          ])}
+          working
+          activity="Running tests"
+        />,
+      ),
+    );
+    const settledNote = container.querySelector(
+      "article:not([data-user-message])",
+    );
+    expect(settledNote).toBe(row);
+    expect(settledNote?.textContent).toContain("Found it.");
+    expect(liveSteps()[0]).toBe(first);
+    expect(liveSteps().map((step) => step.textContent)).toEqual([
+      "$ ls",
+      "Edited a.ts",
+      "$ bun test",
+    ]);
+  });
+
+  it("keeps step rows when earlier work folds in above them", async () => {
+    const ask = messages[0] as ChatTimelineMessage;
+    const earlier = note("a1", "Looking at the code.", 2);
+    const ls = { type: "command", content: "ls", at: Date.now() };
+    const display = { live: "latest", settled: "keep" } as const;
+    await act(async () =>
+      root.render(
+        <ChatTimeline
+          messages={[ask, earlier, running("p", [ls])]}
+          working
+          activity="Working"
+          workDisplay={display}
+        />,
+      ),
+    );
+    const [mine] = [
+      ...container.querySelectorAll(
+        '[data-live-work] [data-testid="chat-step"]',
+      ),
+    ];
+    // p writes its note: it is the latest now, and a1's work folds into it.
+    await act(async () =>
+      root.render(
+        <ChatTimeline
+          messages={[
+            ask,
+            earlier,
+            {
+              ...note("p", "Found it.", 0),
+              metadata: { status: "completed", events: [ls] },
+            } as ChatTimelineMessage,
+          ]}
+          working
+          activity="Thinking"
+          workDisplay={display}
+        />,
+      ),
+    );
+    const latest = [...container.querySelectorAll("article")].at(-1);
+    const steps = [
+      ...(latest?.querySelectorAll('[data-testid="chat-step"]') ?? []),
+    ];
+    expect(steps.map((step) => step.textContent)).toEqual([
+      "$ run-a1",
+      "$ run-a1",
+      "Looking at the code.",
+      "$ ls",
+    ]);
+    // The row that was there keeps its node; the folded work enters above.
+    expect(steps.at(-1)).toBe(mine);
+    expect(
+      steps.map((step) => step.classList.contains("animate-step-in")),
+    ).toEqual([true, true, true, false]);
+  });
+
   it("hides an in-progress message until it has steps", () => {
     const persisted = (steps: Record<string, unknown>[]) =>
       [running("p", steps)] as unknown as Parameters<typeof toTimeline>[0];

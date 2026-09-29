@@ -596,6 +596,26 @@ describe("chat flows", () => {
       ta.closest('form').requestSubmit();
       return true;
     `);
+    // A step joins the live row at its end: the row and the steps already
+    // on screen keep their nodes while the activity line changes under them.
+    await runWait(
+      `const edit = $$('[data-live-work] [data-testid="chat-step"]')
+         .find((step) => step.textContent.includes('src/parser.ts'));
+       if (!edit) return false;
+       window.__narratedEdit = edit;
+       window.__narratedRow = edit.closest('[data-live-work]');
+       return true;`,
+      { timeoutMs: 30_000, label: "live row with the edit step" },
+    );
+    expect(
+      await runWait<boolean>(
+        `const row = $('[data-live-work]');
+         if (!row?.textContent.includes('Run the tests')) return false;
+         return row === window.__narratedRow &&
+           window.__narratedEdit.isConnected;`,
+        { timeoutMs: 30_000, label: "test step appended to the same row" },
+      ),
+    ).toBe(true);
     // While the tests run: the notes stay in place, and the running step
     // shows below them with its target and how long it has run.
     const live = await runWait<{ notes: string[]; step: string }>(

@@ -19,6 +19,12 @@ Opening here can reuse a compatible clean browser/editor. Preserve dirty buffers
 and running sessions. An existing surface retains identity when focused, tiled,
 floated or restored. A collapsed tab group affects the strip, not materialization.
 
+The mouse's back and forward buttons move between the places a project's
+workspace was at: the focused tab and the chat or surface floating over it
+(ADR 0188, `lib/surface-history.ts`). A press on a browser's page or
+toolbar walks that browser's pages instead and stops at its first and last
+page; a press anywhere else walks surfaces.
+
 ## Chat presentation and visibility
 
 Full-tab chats stay in the tab bar when another resource takes focus, with no dock

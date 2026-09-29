@@ -80,6 +80,7 @@ export function useResourceRows({ active }: { active: boolean }) {
             ],
             kind: "navigate",
             category: "bookmark",
+            sidebar: true,
             usage: webUsageKey(url),
             run: (mode) => onOpenUrl(url, mode),
           });

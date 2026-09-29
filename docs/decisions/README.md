@@ -199,3 +199,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0184](0184-personal-credentials-reach-a-members-own-sessions.md) | Personal credentials reach a member's own sessions | Accepted |
 | [0185](0185-passkey-requests-stay-answerable.md) | Passkey requests in browser tabs stay answerable | Accepted |
 | [0186](0186-palette-modes-and-use-ranked-search.md) | Palette modes share one shape, and search ranks by use | Accepted |
+| [0188](0188-back-and-forward-between-surfaces.md) | Back and forward move between surfaces | Accepted |

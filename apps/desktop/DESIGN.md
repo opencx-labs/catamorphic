@@ -1384,3 +1384,22 @@ Lists load one way. The sources app widgets read (chats, files, workflows,
 bookmarks and the rest) are the palette's resources too, and every sidebar
 section can open its rows in the palette with its own filter. A mode can
 be as small as "running chats": a built-in source and one filter.
+
+### 2026-09-29: Back goes back, wherever you are
+
+The mouse's side buttons only worked in browser tabs. Now they work across
+the workspace (ADR 0188): back from a chat returns to the tab you came
+from, back again reopens the chat that floated over it. A browser keeps its
+own pages; press back on one and it goes back a page, and stops at its
+first page instead of leaving the tab.
+
+### 2026-09-29: Work arrives at the end
+
+A running turn's row was keyed by its text, which is the live activity
+line, so every step the agent took rebuilt the row and replayed every step
+already shown. Agent rows now keep their identity; a new step opens its own
+height at the end of the list and fades in, and nothing above it moves.
+In every work display (all notes or the latest; kept or folded after the
+answer) steps keep their rows as earlier work folds in above them. Opening
+a chat or a finished turn plays no step entrances.
+

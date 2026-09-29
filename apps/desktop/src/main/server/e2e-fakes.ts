@@ -968,6 +968,64 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
       return;
     }
 
+    // "step by step" → a paced turn of notes and tool calls, so the live
+    // work can be watched (and filmed) as each step joins the list.
+    if (prompt.includes("step by step")) {
+      const pause = async (ms: number) => {
+        const deadline = Date.now() + ms;
+        while (Date.now() < deadline && !state.interrupted)
+          await new Promise((resolve) => setTimeout(resolve, 100));
+      };
+      yield { type: "title", content: "Step by step" };
+      // Each command carries its own words, as a harness's do: the live
+      // line (and the running row's text) changes with every step.
+      const segments = [
+        {
+          note: "Reading the parser and its tests first.",
+          commands: [
+            ["cat src/parser.ts", "Read the parser"],
+            ["cat src/lexer.ts", "Read the lexer"],
+            ["bun test src/parser.test.ts", "Run the parser tests"],
+          ],
+        },
+        {
+          note: "The lexer drops empty input. Checking every caller.",
+          commands: [
+            ["rg -n 'lex\\(' src", "Find the lexer's callers"],
+            ["cat src/cli.ts", "Read the CLI entry"],
+            ["bun test", "Run every test"],
+          ],
+        },
+      ];
+      for (const [index, segment] of segments.entries()) {
+        if (state.interrupted) break;
+        yield { type: "text", content: segment.note };
+        for (const [
+          step,
+          [command, description],
+        ] of segment.commands.entries()) {
+          const toolUseId = `step-${index}-${step}`;
+          yield { type: "command", content: command, description, toolUseId };
+          await pause(900);
+          yield {
+            type: "command",
+            toolUseId,
+            status: "ended",
+            toolResult: "ok",
+          };
+          if (state.interrupted) break;
+        }
+      }
+      if (state.interrupted) {
+        yield { type: "error", content: "Interrupted." };
+        yield { type: "done" };
+        return;
+      }
+      yield { type: "text", content: "Fixed: empty input parses to nothing." };
+      yield { type: "done" };
+      return;
+    }
+
     // "slowly" → a multi-second turn, so tests can exercise mid-turn UI
     // (spinners, minimize, mode flips, queueing, interrupts) before the
     // agent completes. Interruptible: the sleep polls the abort flag.

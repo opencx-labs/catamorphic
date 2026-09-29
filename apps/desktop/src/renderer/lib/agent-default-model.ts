@@ -56,14 +56,29 @@ export function sameModel(
 }
 
 /**
- * How to name an unpinned model: the harness's own answer when it gave one,
+ * The model a chat runs, by the id the harness sends: an alias resolves
+ * through the harness's catalog ("opus[1m]" → "claude-opus-5[1m]"). A
+ * family name alone ("Opus") does not say which Opus.
+ */
+export function modelId(
+  id: string,
+  catalog: readonly { id: string; resolvedId?: string }[] | undefined,
+): string {
+  const resolved = catalog?.find((model) => model.id === id)?.resolvedId;
+  // An id that already names the model keeps its context-window suffix,
+  // which the catalog's resolution can drop.
+  return resolved && !sameModel(id, resolved) ? resolved : id;
+}
+
+/**
+ * How to name an unpinned model: the id the harness said it will send,
  * otherwise who decides ("Claude Code default"), never a vague "Automatic".
  */
 export function defaultModelLabel(
   agent: Agent | undefined,
   model: AgentDefaultModel | null | undefined,
 ): string {
-  if (model) return model.name ?? model.id;
+  if (model) return model.id;
   if (agent?.harness === "claude-code") return "Claude Code default";
   if (agent?.harness === "codex") return "Codex default";
   if (agent?.harness === "ai-sdk" && agent.provider === "openrouter")

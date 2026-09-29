@@ -756,10 +756,11 @@ export function BrowserScreen({
       ) {
         return;
       }
-      if (command.webContentsId === null && !active) return;
+      // A press outside any page is the workspace's to route (ADR 0188).
+      if (command.webContentsId === null) return;
       navigateHistory(command.direction);
     });
-  }, [active, navigateHistory]);
+  }, [navigateHistory]);
 
   useEffect(() => {
     registerCommandsRef.current?.({

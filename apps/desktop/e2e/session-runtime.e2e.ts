@@ -311,6 +311,55 @@ it("centers expanded chats on request and drags the collapsed bubble between bot
     await app.screenshot(
       `${process.env.CATAMORPHIC_INSPECTOR_SCREENSHOT}-dock-edge.png`,
     );
+  // Dragging the strip to a new placement collapses the open chat as the
+  // drag starts, with the minimize animation, instead of leaving it in
+  // place to snap over when the drag ends.
+  await wait(
+    `return !document.getAnimations().some(a=>a.playState==='running' && a.effect?.getTiming().iterations!==Infinity);`,
+  );
+  const handle = await app.eval<{ x: number; y: number; target: number }>(
+    `(() => {const b=document.querySelector('[data-dock-arrows]').getBoundingClientRect(), h=document.querySelector('[data-dock-host]').getBoundingClientRect();
+      return {x:b.left+b.width/2,y:b.top+b.height/2,target:h.left+h.width/6};})()`,
+  );
+  await app.cdp("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: handle.x,
+    y: handle.y,
+    button: "left",
+    clickCount: 1,
+  });
+  await app.cdp("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: handle.x - 40,
+    y: handle.y,
+    button: "left",
+    buttons: 1,
+  });
+  await wait(
+    `return $('[data-dock-rail]')?.dataset.dockDragging === 'true' && !!$('section[data-floating-chat].animate-dock-out');`,
+  );
+  await app.cdp("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: handle.target,
+    y: handle.y,
+    button: "left",
+    buttons: 1,
+  });
+  await wait(`return !$('section[data-floating-chat="true"]');`);
+  await app.cdp("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: handle.target,
+    y: handle.y,
+    button: "left",
+    clickCount: 1,
+  });
+  await wait(
+    `return $('[data-dock-host]')?.dataset.dockPlacement==='left' && !$('[data-dock-dragging]') && !$('section[data-floating-chat="true"]');`,
+  );
+  await run(
+    `await window.catamorphicDesktop.setPrefs({dockPlacement:'right'});`,
+  );
+  await wait(`return $('[data-dock-host]')?.dataset.dockPlacement==='right';`);
   await run(`$('[aria-label="Collapse chat bubbles"]').click();`);
   await wait(
     `return $('[data-dock-rail]')?.dataset.dockCollapsed === 'true' && !document.getAnimations().some(a=>a.playState==='running' && a.effect?.getTiming().iterations!==Infinity);`,

@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it } from "vitest";
-import { defaultModelLabel, sameModel } from "./agent-default-model.js";
+import {
+  defaultModelLabel,
+  modelId,
+  sameModel,
+} from "./agent-default-model.js";
 import type { AgentInfo } from "./desktop-api.js";
 
 describe("sameModel", () => {
@@ -23,10 +27,10 @@ describe("defaultModelLabel", () => {
     harness: "claude-code",
     provider: "anthropic",
   };
-  it("prefers the harness's name, then its id", () => {
+  it("names the model by the id the harness sends", () => {
     expect(
       defaultModelLabel(claude, { id: "claude-sonnet-5", name: "Sonnet" }),
-    ).toBe("Sonnet");
+    ).toBe("claude-sonnet-5");
     expect(defaultModelLabel(claude, { id: "custom" })).toBe("custom");
   });
   it("names who decides when the harness cannot say", () => {
@@ -41,5 +45,26 @@ describe("defaultModelLabel", () => {
       ),
     ).toBe("Best free model");
     expect(defaultModelLabel(undefined, null)).toBe("Agent default");
+  });
+});
+
+describe("modelId", () => {
+  const catalog = [
+    { id: "opus[1m]", resolvedId: "claude-opus-5[1m]" },
+    { id: "claude-fable-5-1[1m]", resolvedId: "claude-fable-5-1" },
+    { id: "gpt-5.5" },
+  ];
+  it("resolves an alias to the id it sends", () => {
+    expect(modelId("opus[1m]", catalog)).toBe("claude-opus-5[1m]");
+  });
+  it("keeps the context window of an id that already names the model", () => {
+    expect(modelId("claude-fable-5-1[1m]", catalog)).toBe(
+      "claude-fable-5-1[1m]",
+    );
+  });
+  it("keeps ids the catalog does not resolve", () => {
+    expect(modelId("gpt-5.5", catalog)).toBe("gpt-5.5");
+    expect(modelId("claude-fable-5-1", catalog)).toBe("claude-fable-5-1");
+    expect(modelId("opus", undefined)).toBe("opus");
   });
 });

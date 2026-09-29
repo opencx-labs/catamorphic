@@ -73,6 +73,11 @@ export function DockHost({
   } | null>(null);
   const suppressClick = useRef(false);
   const [dragLeft, setDragLeft] = useState<number | null>(null);
+  // A drag is under way (past the click threshold). The detached window
+  // holds its size until it lands: the open chat collapses as the drag
+  // starts, and resizing then would move the window out from under the
+  // pointer.
+  const [dragging, setDragging] = useState(false);
   const [dragTarget, setDragTarget] = useState<
     "left" | "center" | "right" | null
   >(null);
@@ -242,7 +247,7 @@ export function DockHost({
   // bubble instead of being clamped onto it.
   const DOCK_HEADROOM = 48;
   useEffect(() => {
-    if (detachedWindow)
+    if (detachedWindow && !dragging)
       void desktopApi.dockResize({
         width: expanded || dialogOpen ? 780 : railWidth,
         height: expanded || dialogOpen ? 560 : 76 + DOCK_HEADROOM,
@@ -251,7 +256,7 @@ export function DockHost({
         // then moves to the collapsed corner with the bubble.
         expanded: !collapsed || Boolean(expanded),
       });
-  }, [detachedWindow, expanded, dialogOpen, railWidth, collapsed]);
+  }, [detachedWindow, expanded, dialogOpen, railWidth, collapsed, dragging]);
   // Over the headroom, the margins around the chat, or any other empty
   // space, the window lets clicks through to whatever is behind it. Only
   // dock content answers a hit test there: the app root and the body are
@@ -448,6 +453,7 @@ export function DockHost({
       nativeDrag("cancel", dragStart.current.x);
     suppressClick.current = dragStart.current?.moved ?? false;
     dragStart.current = null;
+    setDragging(false);
     setDragLeft(null);
     setDragTarget(null);
   };
@@ -484,6 +490,14 @@ export function DockHost({
         return;
       const delta = (detachedWindow ? event.screenX : event.clientX) - start.x;
       if (!start.moved && Math.abs(delta) < 5) return;
+      if (!start.moved) {
+        setDragging(true);
+        // The open chat would sit still while the strip moves, then snap
+        // to its new place on release: it collapses as the drag starts,
+        // exactly as the collapse button does.
+        if (expanded && active)
+          actions.current.get(active.entry.localId)?.minimize?.();
+      }
       start.moved = true;
       event.preventDefault();
       if (detachedWindow) nativeDrag("move", event.screenX);
@@ -525,6 +539,7 @@ export function DockHost({
                 : "center",
           );
       }
+      setDragging(false);
       setDragLeft(null);
       setDragTarget(null);
       event.currentTarget.releasePointerCapture(event.pointerId);

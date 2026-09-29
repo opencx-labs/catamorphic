@@ -194,6 +194,8 @@ export function sourcePaletteRow({
     detail: view.detail(item),
     keywords: [label, ...view.keywords(item)],
     category: view.category,
+    // Archived chats are found here, not kept in a sidebar.
+    sidebar: item.data?.visibility !== "archived",
     usage: url
       ? webUsageKey(url)
       : view.history && projectId
