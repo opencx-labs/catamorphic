@@ -223,6 +223,8 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
  * - "show: <target>" → the real open_surface tool (tab behind the chat).
  * - "slowly" → a ~4s turn (exercises mid-turn UI: spinners, minimize,
  *   mode flips, kill-and-relaunch recovery).
+ * - "narrate" → notes between timed calls, with a test run that takes a
+ *   few seconds ("stall" makes it long; exercises live work display).
  * - "auth error" → the turn fails with a provider-style credential
  *   rejection, verbatim OpenRouter 401 text (exercises the friendly
  *   auth-error rewrite in agent-errors.ts).
@@ -913,6 +915,55 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
         state.workingDirectory,
       );
       yield { type: "text", content: "All done: two preambles, one summary." };
+      yield { type: "done" };
+      return;
+    }
+
+    if (prompt.includes("narrate")) {
+      const pause = async (ms: number) => {
+        const deadline = Date.now() + ms;
+        while (Date.now() < deadline && !state.interrupted)
+          await new Promise((resolve) => setTimeout(resolve, 100));
+      };
+      yield { type: "title", content: "Narrated fix" };
+      yield { type: "text", content: "First, I will read the parser." };
+      yield {
+        type: "tool_call",
+        toolName: "Read",
+        toolInput: { file_path: "src/parser.ts" },
+        toolUseId: "narrate-read",
+      };
+      await pause(600);
+      yield { type: "tool_call", toolUseId: "narrate-read", status: "ended" };
+      yield {
+        type: "text",
+        content: "Found the bug. Fixing it, then testing.",
+      };
+      yield { type: "file_edit", content: "edit", filePath: "src/parser.ts" };
+      await this.sandboxProvider.uploadFiles(
+        state.sandboxId,
+        { "src/parser.ts": "export const parse = (input = '') => input;\n" },
+        state.workingDirectory,
+      );
+      yield {
+        type: "command",
+        content: "bun test",
+        description: "Run the tests",
+        toolUseId: "narrate-test",
+      };
+      await pause(prompt.includes("stall") ? 45_000 : 3500);
+      if (state.interrupted) {
+        yield { type: "error", content: "Interrupted." };
+        yield { type: "done" };
+        return;
+      }
+      yield {
+        type: "command",
+        toolUseId: "narrate-test",
+        status: "ended",
+        toolResult: "12 passed",
+      };
+      yield { type: "text", content: "Fixed: the parser handles empty input." };
       yield { type: "done" };
       return;
     }

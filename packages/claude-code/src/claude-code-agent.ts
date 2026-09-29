@@ -316,6 +316,11 @@ interface LiveTurn {
   /** Subagents this query spawned, keyed by their Task tool-use id. */
   openSubagents: Set<string>;
   /**
+   * Commands and tool calls still waiting for their result, by tool-use
+   * id: the result's arrival is reported as the call's end.
+   */
+  openCalls: Map<string, "command" | "tool_call">;
+  /**
    * Raw `usage` of the last main-thread assistant message. Its input-side
    * sum (input + cache read + cache creation) is the session's context
    * occupancy after the turn — the result message only totals the turn.
@@ -338,6 +343,7 @@ function createLiveTurn(state: SessionState | undefined): LiveTurn {
   const live: Partial<LiveTurn> = {
     hookEvents: [],
     openSubagents: new Set<string>(),
+    openCalls: new Map(),
     abort: new AbortController(),
     state,
   };
@@ -1252,6 +1258,8 @@ interface ContentBlockLike {
   name?: string;
   input?: Record<string, unknown>;
   tool_use_id?: string;
+  /** A tool_result's payload: a string or text blocks. */
+  content?: unknown;
 }
 
 /** {@link positiveTokenCount} of the value at `key`. */
@@ -1333,7 +1341,10 @@ function turnUsageFromResult(
 function mapMessage(
   message: SDKMessage,
   openSubagents: Set<string>,
-  usageState: { lastMainUsage?: Record<string, unknown> },
+  turnState: {
+    lastMainUsage?: Record<string, unknown>;
+    openCalls: Map<string, "command" | "tool_call">;
+  },
 ): AgentEvent[] {
   switch (message.type) {
     case "assistant": {
@@ -1345,7 +1356,7 @@ function mapMessage(
       if (!parentToolUseId) {
         const rawUsage = (message.message as { usage?: unknown }).usage;
         if (rawUsage && typeof rawUsage === "object") {
-          usageState.lastMainUsage = rawUsage as Record<string, unknown>;
+          turnState.lastMainUsage = rawUsage as Record<string, unknown>;
         }
       }
       const events: AgentEvent[] = [];
@@ -1374,6 +1385,11 @@ function mapMessage(
           continue;
         }
         const mapped = mapContentBlock(block);
+        if (
+          mapped?.toolUseId &&
+          (mapped.type === "command" || mapped.type === "tool_call")
+        )
+          turnState.openCalls.set(mapped.toolUseId, mapped.type);
         if (mapped) {
           events.push(
             parentToolUseId
@@ -1386,22 +1402,34 @@ function mapMessage(
     }
     case "user": {
       // A top-level tool_result answering a Task tool-use closes that
-      // subagent. Nested results (parent_tool_use_id set) stay internal.
-      if (
-        (message as { parent_tool_use_id?: string | null }).parent_tool_use_id
-      )
-        return [];
+      // subagent. Nested results (parent_tool_use_id set) stay internal,
+      // except that they end the nested call they answer.
+      const nested = Boolean(
+        (message as { parent_tool_use_id?: string | null }).parent_tool_use_id,
+      );
       const blocks =
         (message.message as { content?: ContentBlockLike[] | string })
           .content ?? [];
       if (!Array.isArray(blocks)) return [];
       const events: AgentEvent[] = [];
       for (const block of blocks) {
-        if (
-          block.type === "tool_result" &&
-          block.tool_use_id &&
-          openSubagents.delete(block.tool_use_id)
-        ) {
+        if (block.type !== "tool_result" || !block.tool_use_id) continue;
+        const call = turnState.openCalls.get(block.tool_use_id);
+        if (call) {
+          turnState.openCalls.delete(block.tool_use_id);
+          const output =
+            call === "command" ? toolResultText(block.content) : undefined;
+          events.push({
+            type: call,
+            toolUseId: block.tool_use_id,
+            status: "ended",
+            // A command's output tail; other tools' results stay out of
+            // the step log (a Read result is the whole file).
+            ...(output ? { toolResult: output } : {}),
+          });
+          continue;
+        }
+        if (!nested && openSubagents.delete(block.tool_use_id)) {
           events.push({
             type: "subagent",
             status: "ended",
@@ -1412,7 +1440,7 @@ function mapMessage(
       return events;
     }
     case "result": {
-      const usage = turnUsageFromResult(message, usageState.lastMainUsage);
+      const usage = turnUsageFromResult(message, turnState.lastMainUsage);
       const usageEvents: AgentEvent[] = usage ? [{ type: "usage", usage }] : [];
       if (message.subtype === "success") {
         return [...usageEvents, { type: "done" }];
@@ -1574,6 +1602,7 @@ function mapContentBlock(block: ContentBlockLike): AgentEvent | null {
       if (name === "Bash") {
         return {
           type: "command",
+          ...(block.id ? { toolUseId: block.id } : {}),
           content: String(input.command ?? ""),
           ...(typeof input.description === "string" && input.description
             ? { description: input.description }
@@ -1604,6 +1633,7 @@ function mapContentBlock(block: ContentBlockLike): AgentEvent | null {
         type: "tool_call",
         toolName: name,
         toolInput: input,
+        ...(block.id ? { toolUseId: block.id } : {}),
         ...(typeof input.description === "string" && input.description
           ? { description: input.description }
           : {}),
@@ -1612,6 +1642,30 @@ function mapContentBlock(block: ContentBlockLike): AgentEvent | null {
     default:
       return null;
   }
+}
+
+/** Longest command output kept on a step: its tail, where results land. */
+const COMMAND_OUTPUT_MAX = 4_000;
+
+/** A tool_result's text (a string or text blocks), bounded to its tail. */
+function toolResultText(content: unknown): string | undefined {
+  const text =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content
+            .map((part) =>
+              part && typeof part === "object" && "text" in part
+                ? String(part.text)
+                : "",
+            )
+            .join("")
+        : "";
+  const trimmed = text.trimEnd();
+  if (!trimmed) return undefined;
+  return trimmed.length > COMMAND_OUTPUT_MAX
+    ? `…${trimmed.slice(-COMMAND_OUTPUT_MAX)}`
+    : trimmed;
 }
 
 /** Keep SDK stdin open until this turn settles, accepting answers while tools run. */

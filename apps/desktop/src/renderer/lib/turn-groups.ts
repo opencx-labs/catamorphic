@@ -9,6 +9,10 @@
  *
  * Whatever is not shown in place is `folded`: the host renders it, in
  * order, under one steps disclosure. Nothing is ever dropped.
+ *
+ * The steps taken since the latest note travel on the turn's in-progress
+ * message. It closes the turn's run while that runs, never folds, and
+ * shows only those steps.
  */
 export interface TurnGroupMessage {
   id: string;
@@ -22,12 +26,17 @@ export interface WorkDisplay {
 }
 
 export const DEFAULT_WORK_DISPLAY: WorkDisplay = {
-  live: "latest",
+  live: "all",
   settled: "collapse",
 };
 
 export type TimelineItem<T> =
-  | { kind: "message"; message: T }
+  | {
+      kind: "message";
+      message: T;
+      /** An assistant message of the turn that is still running. */
+      working?: boolean;
+    }
   | {
       kind: "turn";
       /** Notes folded under the turn's steps disclosure, in order. */
@@ -54,12 +63,12 @@ function endsTurn(message: TurnGroupMessage): boolean {
   );
 }
 
-function isFailed(message: TurnGroupMessage): boolean {
+function hasStatus(message: TurnGroupMessage, status: string): boolean {
   const metadata = message.metadata;
   return (
     typeof metadata === "object" &&
     metadata !== null &&
-    (metadata as { status?: unknown }).status === "failed"
+    (metadata as { status?: unknown }).status === status
   );
 }
 
@@ -87,23 +96,29 @@ export function groupTurns<T extends TurnGroupMessage>(
     const live =
       working && end === messages.length && !endsTurn(run.at(-1) as T);
     index = end;
+    const placeholder = hasStatus(run.at(-1) as T, "in_progress")
+      ? run.pop()
+      : undefined;
     const fold = live
       ? display.live === "latest"
       : display.settled === "collapse";
-    if (!fold || run.length === 1) {
-      for (const each of run) items.push({ kind: "message", message: each });
-      continue;
+    if (!fold || run.length <= 1) {
+      for (const each of run)
+        items.push({ kind: "message", message: each, working: live });
+    } else {
+      // A failed message is an error card with its own recovery actions:
+      // it always stays in place, as does whatever came right before it.
+      const last = run.at(-1) as T;
+      const keep = hasStatus(last, "failed") && run.length > 1 ? 2 : 1;
+      items.push({
+        kind: "turn",
+        folded: run.slice(0, -keep),
+        shown: run.slice(-keep),
+        working: live,
+      });
     }
-    // A failed message is an error card with its own recovery actions:
-    // it always stays in place, as does whatever came right before it.
-    const last = run.at(-1) as T;
-    const keep = isFailed(last) && run.length > 1 ? 2 : 1;
-    items.push({
-      kind: "turn",
-      folded: run.slice(0, -keep),
-      shown: run.slice(-keep),
-      working: live,
-    });
+    if (placeholder)
+      items.push({ kind: "message", message: placeholder, working: live });
   }
   return items;
 }

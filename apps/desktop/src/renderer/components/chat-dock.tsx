@@ -2542,6 +2542,17 @@ function ChatDockContent({
               activity={
                 chat.connectionLost || awaitingInput ? undefined : activity
               }
+              activityStartedAt={
+                chat.isWorking ? chat.session?.execution?.startedAt : undefined
+              }
+              activityUpdatedAt={
+                chat.isWorking &&
+                chat.session?.execution?.phase === "working" &&
+                chat.session.execution.executorHealthy &&
+                !chat.session.execution.cancellationRequested
+                  ? chat.session.execution.activityAt
+                  : undefined
+              }
               working={chat.isWorking}
               workDisplay={workDisplay}
               queue={chat.queue}

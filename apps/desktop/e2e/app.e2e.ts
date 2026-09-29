@@ -508,8 +508,7 @@ describe("chat flows", () => {
 
     await runWait(
       `const toggle = $$('[data-testid="chat-turn-steps-toggle"]').at(-1);
-       if (!toggle) return false;
-       if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+       if (toggle && toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
        const step = [...visibleDock().querySelectorAll('[data-testid="chat-step"] button')]
          .find((button) => button.textContent.includes('Updated the todo list'));
        if (!step) return false;
@@ -586,6 +585,56 @@ describe("chat flows", () => {
       "First, I will look at the project.",
       "Found it. Now writing some notes.",
     ]);
+  });
+
+  it("shows the work as it happens, then folds it under the answer", async () => {
+    await run(
+      `byText('button', 'New chat')?.click() ?? pressKey('n', { metaKey: true }); return true;`,
+    );
+    await runWait(`return !!visibleDock();`);
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'narrate the fix');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    // While the tests run: the notes stay in place, and the running step
+    // shows below them with its target and how long it has run.
+    const live = await runWait<{ notes: string[]; step: string }>(
+      `const dock = visibleDock();
+       const step = dock?.querySelector(
+         '[data-live-work] [data-testid="chat-step"][data-running]');
+       const time = step?.querySelector('[data-testid="chat-step-duration"]');
+       if (!step?.textContent.includes('Run the tests') || !time) return false;
+       if (!dock.querySelector('[data-testid="chat-activity-elapsed"]')) return false;
+       const notes = timelineMessages()
+         .filter((m) => m.role === 'Agent' && !m.text.includes('Run the tests'))
+         .map((m) => m.text);
+       return { notes, step: step.querySelector('button').textContent };`,
+      { timeoutMs: 30_000, label: "running step with its time" },
+    );
+    expect(live.notes.some((text) => text.includes("read the parser"))).toBe(
+      true,
+    );
+    expect(
+      live.notes.some((text) => text.includes("Fixing it, then testing")),
+    ).toBe(true);
+    expect(live.step).toMatch(/Run the tests\d+s$/);
+    // Settled: only the answer stays; the work is one click away, closed.
+    await runWait(
+      `return timelineMessages().some((m) => m.text.includes('handles empty input')) &&
+         !visibleDock().querySelector('[data-live-work]');`,
+      { timeoutMs: 30_000, label: "narrated answer" },
+    );
+    const settled = await run<{ agent: number; expanded: string | null }>(`
+      return {
+        agent: timelineMessages().filter((m) =>
+          /read the parser|Fixing it|handles empty input/.test(m.text)).length,
+        expanded: $$('[data-testid="chat-turn-steps-toggle"]').at(-1)
+          ?.getAttribute('aria-expanded') ?? null,
+      };
+    `);
+    expect(settled).toEqual({ agent: 1, expanded: "false" });
   });
 
   it("shares archive and unread actions between the sidebar and dock", async () => {

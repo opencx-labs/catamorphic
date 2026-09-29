@@ -5944,7 +5944,7 @@ export class AgentSessionsService {
                 );
           const presentCapability = capabilityEventPresenter();
           for await (const rawEvent of stream) {
-            const event = presentCapability(rawEvent);
+            const event = { at: Date.now(), ...presentCapability(rawEvent) };
             if (extras.leaseLost())
               throw new Error(
                 "Execution ownership was lost. Check the last actions before retrying.",
@@ -6380,7 +6380,7 @@ export class AgentSessionsService {
                   ...(interrupted ? { interrupted: true } : {}),
                   ...(errorKind ? { errorKind } : {}),
                   ...(heldText ? { partialContent: heldText } : {}),
-                  events: JSON.parse(JSON.stringify(events)) as JsonObject[],
+                  events: stepLogEvents(segmentEvents),
                 },
               })
               .where("id", "=", assistantMessageId)
@@ -8543,8 +8543,9 @@ export function liveStatusLine(value: string | undefined): string | undefined {
   return line.length > 80 ? `${line.slice(0, 79).trimEnd()}…` : line;
 }
 
-function stepLogEvents(events: AgentEvent[]): JsonObject[] {
-  const steps: AgentEvent[] = [];
+export function stepLogEvents(events: AgentEvent[]): JsonObject[] {
+  // `at` is when the step started; `endedAt` when its result arrived.
+  const steps: (AgentEvent & { endedAt?: number })[] = [];
   const invocations = new Map<string, number>();
   for (const event of events) {
     if (event.type === "usage") continue;
@@ -8556,11 +8557,30 @@ function stepLogEvents(events: AgentEvent[]): JsonObject[] {
         ? `${event.type}:${event.toolUseId}`
         : undefined;
     const existing = key ? invocations.get(key) : undefined;
-    if (existing !== undefined)
-      steps[existing] = { ...steps[existing], ...event };
-    else {
+    const ends = event.status === "ended" || event.toolResult !== undefined;
+    if (existing !== undefined) {
+      const started = steps[existing];
+      steps[existing] = {
+        ...started,
+        ...event,
+        at: started?.at ?? event.at,
+        ...(ends && event.at !== undefined ? { endedAt: event.at } : {}),
+      };
+    } else if (
+      key &&
+      event.status === "ended" &&
+      !event.content &&
+      !event.toolName
+    ) {
+      // The end of a call whose start belongs to an earlier message: there
+      // is nothing here for it to finish.
+    } else {
       if (key) invocations.set(key, steps.length);
-      steps.push(event);
+      steps.push(
+        ends && event.at !== undefined
+          ? { ...event, endedAt: event.at }
+          : event,
+      );
     }
   }
   return JSON.parse(JSON.stringify(steps)) as JsonObject[];

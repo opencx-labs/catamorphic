@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { groupTurns, type TimelineItem } from "./turn-groups.js";
+import {
+  DEFAULT_WORK_DISPLAY,
+  groupTurns,
+  type TimelineItem,
+} from "./turn-groups.js";
 
 const user = (id: string) => ({ id, role: "user" });
 const note = (id: string, status = "completed") => ({
@@ -115,5 +119,41 @@ describe("groupTurns", () => {
         }),
       ),
     ).toEqual(["u1", "a1"]);
+  });
+
+  it("shows every note by default, with the running turn's work open", () => {
+    const items = groupTurns(log, {
+      working: true,
+      display: DEFAULT_WORK_DISPLAY,
+    });
+    expect(shape(items)).toEqual(["u1", "a1", "a2", "a3"]);
+    expect(
+      items.map((item) => item.kind === "message" && item.working === true),
+    ).toEqual([false, true, true, true]);
+  });
+
+  it("keeps the steps since the latest note last, never folded", () => {
+    const running = [...log, note("p", "in_progress")];
+    expect(
+      shape(
+        groupTurns(running, {
+          working: true,
+          display: { live: "latest", settled: "collapse" },
+        }),
+      ),
+    ).toEqual(["u1", "a1+a2>a3*", "p"]);
+    expect(
+      shape(
+        groupTurns([user("u1"), note("p", "in_progress")], {
+          working: true,
+          display: { live: "latest", settled: "collapse" },
+        }),
+      ),
+    ).toEqual(["u1", "p"]);
+    const [, , , , last] = groupTurns(running, {
+      working: true,
+      display: { live: "all", settled: "collapse" },
+    });
+    expect(last).toMatchObject({ kind: "message", working: true });
   });
 });

@@ -666,21 +666,27 @@ describe("agent session coordination", () => {
       session.id,
       "Run command with progress",
     );
+    // Each row keeps when its command started and when it ended.
+    const at = expect.any(Number);
     expect(reply.metadata?.events).toEqual([
       {
         type: "command",
         toolUseId: "first",
         status: "ended",
         content: "bun test\nok",
+        at,
+        endedAt: at,
       },
       {
         type: "command",
         toolUseId: "second",
         status: "ended",
         content: "bun test\nok",
+        at,
+        endedAt: at,
       },
-      { type: "text", content: "Tests passed" },
-      { type: "done" },
+      { type: "text", content: "Tests passed", at },
+      { type: "done", at },
     ]);
   });
 

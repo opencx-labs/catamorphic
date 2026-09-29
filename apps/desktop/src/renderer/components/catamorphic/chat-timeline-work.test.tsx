@@ -3,7 +3,11 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChatTimeline, type ChatTimelineMessage } from "./chat-timeline.js";
+import {
+  ChatTimeline,
+  type ChatTimelineMessage,
+  toTimeline,
+} from "./chat-timeline.js";
 
 const note = (id: string, content: string, tools = 1): ChatTimelineMessage =>
   ({
@@ -142,6 +146,235 @@ describe("ChatTimeline work display", () => {
       ),
     );
     expect(container.querySelectorAll("article")).toHaveLength(4);
+  });
+
+  const running = (
+    id: string,
+    events: Record<string, unknown>[],
+  ): ChatTimelineMessage =>
+    ({
+      id,
+      role: "assistant",
+      content: "Running tests",
+      metadata: { status: "in_progress", events },
+    }) as ChatTimelineMessage;
+  const toggles = () =>
+    [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        '[data-testid="chat-turn-steps-toggle"]',
+      ),
+    ].map((toggle) => toggle.getAttribute("aria-expanded"));
+
+  it("streams the work open while the turn runs, then folds it away", async () => {
+    const now = Date.now();
+    const live = [
+      ...messages.slice(0, 3),
+      running("p", [
+        {
+          type: "command",
+          content: "bun test",
+          toolUseId: "t1",
+          at: now - 5000,
+          endedAt: now - 1000,
+        },
+        {
+          type: "command",
+          content: "bun run lint",
+          toolUseId: "t2",
+          at: now - 3000,
+        },
+      ]),
+    ];
+    await act(async () =>
+      root.render(
+        <ChatTimeline messages={live} working activity="Running tests" />,
+      ),
+    );
+    // Every note stays in place, each with its steps open, and the steps
+    // since the latest note follow them with no prose of their own.
+    expect(articles().filter(Boolean)).toEqual([
+      "Looking at the code.",
+      "Found it.\nThe bug is in the parser.",
+    ]);
+    expect(toggles()).toEqual(["true"]);
+    const liveWork = container.querySelector("[data-live-work]");
+    expect(liveWork?.textContent).not.toContain("Running tests");
+    expect(
+      [...(liveWork?.querySelectorAll('[data-testid="chat-step"]') ?? [])].map(
+        (step) => [step.textContent, step.hasAttribute("data-running")],
+      ),
+    ).toEqual([
+      ["$ bun test4s", false],
+      ["$ bun run lint3s", true],
+    ]);
+    expect(liveWork?.querySelector("[data-testid=chat-copy]")).toBeNull();
+
+    // Settled: the work folds under the answer, closed.
+    await act(async () => root.render(<ChatTimeline messages={messages} />));
+    expect(toggles()).toEqual(["false"]);
+  });
+
+  it("keeps the reader's choice to close the work while it runs", async () => {
+    const live = [
+      ...messages.slice(0, 2),
+      running("p", [
+        { type: "command", content: "one", at: Date.now() },
+        { type: "command", content: "two", at: Date.now() },
+      ]),
+    ];
+    await act(async () =>
+      root.render(<ChatTimeline messages={live} working activity="Working" />),
+    );
+    expect(toggles()).toEqual(["true"]);
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          "[data-live-work] [data-testid=chat-turn-steps-toggle]",
+        )
+        ?.click(),
+    );
+    const more = [
+      ...live.slice(0, 2),
+      running("p", [
+        { type: "command", content: "one", at: Date.now() },
+        { type: "command", content: "two", at: Date.now() },
+        { type: "command", content: "three", at: Date.now() },
+      ]),
+    ];
+    await act(async () =>
+      root.render(<ChatTimeline messages={more} working activity="Working" />),
+    );
+    expect(toggles()).toEqual(["false"]);
+  });
+
+  it("hides an in-progress message until it has steps", () => {
+    const persisted = (steps: Record<string, unknown>[]) =>
+      [running("p", steps)] as unknown as Parameters<typeof toTimeline>[0];
+    expect(toTimeline(persisted([]), [], "Thinking...").messages).toEqual([]);
+    expect(
+      toTimeline(
+        persisted([{ type: "command", content: "ls" }]),
+        [],
+        "Working",
+      ).messages.map((message) => message.id),
+    ).toEqual(["p"]);
+  });
+
+  it("shows a lone step as its own row, with how long it took", async () => {
+    await act(async () =>
+      root.render(
+        <ChatTimeline
+          messages={[
+            messages[0] as ChatTimelineMessage,
+            {
+              id: "a1",
+              role: "assistant",
+              content: "Done.",
+              metadata: {
+                status: "completed",
+                changedFiles: [],
+                events: [
+                  {
+                    type: "command",
+                    content: "bun test",
+                    at: 1000,
+                    endedAt: 48_500,
+                    status: "ended",
+                  },
+                ],
+              },
+            } as ChatTimelineMessage,
+          ]}
+        />,
+      ),
+    );
+    expect(toggles()).toEqual([]);
+    expect(
+      container.querySelector('[data-testid="chat-step-duration"]')
+        ?.textContent,
+    ).toBe("47s");
+  });
+
+  it("counts the turn's time and says when it has gone quiet", async () => {
+    const now = Date.now();
+    await act(async () =>
+      root.render(
+        <ChatTimeline
+          messages={[messages[0] as ChatTimelineMessage]}
+          working
+          activity="Running tests"
+          activityStartedAt={new Date(now - 134_000).toISOString()}
+          activityUpdatedAt={new Date(now - 10_000).toISOString()}
+        />,
+      ),
+    );
+    const elapsed = () =>
+      container.querySelector('[data-testid="chat-activity-elapsed"]')
+        ?.textContent;
+    const stalled = () =>
+      container.querySelector('[data-testid="chat-activity-stalled"]');
+    expect(elapsed()).toBe("2m 14s");
+    expect(stalled()).toBeNull();
+    await act(async () =>
+      root.render(
+        <ChatTimeline
+          messages={[messages[0] as ChatTimelineMessage]}
+          working
+          activity="Running tests"
+          activityStartedAt={new Date(now - 134_000).toISOString()}
+          activityUpdatedAt={new Date(now - 45_000).toISOString()}
+        />,
+      ),
+    );
+    expect(stalled()?.textContent).toBe("No updates for 45s");
+  });
+
+  it("says what an interruption stopped and what it left changed", async () => {
+    await act(async () =>
+      root.render(
+        <ChatTimeline
+          messages={[
+            messages[0] as ChatTimelineMessage,
+            {
+              id: "a1",
+              role: "assistant",
+              content: "Interrupted.",
+              metadata: {
+                status: "failed",
+                interrupted: true,
+                changedFiles: [
+                  { path: "src/parser.ts", kind: "modified" },
+                  { path: "src/lexer.ts", kind: "modified" },
+                ],
+                events: [
+                  { type: "file_edit", filePath: "src/parser.ts", at: 1000 },
+                  {
+                    type: "command",
+                    content: "bun test",
+                    description: "Run the tests",
+                    toolUseId: "t1",
+                    at: 2000,
+                  },
+                  { type: "error", content: "Interrupted.", at: 74_000 },
+                ],
+              },
+            } as ChatTimelineMessage,
+          ]}
+        />,
+      ),
+    );
+    expect(
+      container.querySelector('[data-testid="chat-interrupted-step"]')
+        ?.textContent,
+    ).toBe("While: Run the tests (1m 12s)");
+    expect(
+      container.querySelector('[data-testid="chat-interrupted-files"]')
+        ?.textContent,
+    ).toBe("Left 2 changed files: parser.ts, lexer.ts");
+    // The work it did stays readable.
+    expect(
+      container.querySelectorAll('[data-testid="chat-step"]'),
+    ).toHaveLength(2);
   });
 
   it("keeps steps out of text selection and copies the reply's Markdown", async () => {
