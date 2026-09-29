@@ -165,12 +165,21 @@ it("passes the typed query to sources that search", async () => {
   await wait(
     `return labels().length===1 && labels()[0].includes('Search results empty on mobile')`,
   );
-  const queries = fs
-    .readFileSync(path.join(projectRoot, "queries.log"), "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
-  expect(queries.at(-1)).toBe("mobile");
+  // The last answer is ranked locally at once; the source still gets the
+  // query, debounced, and its answer replaces the list.
+  await expect
+    .poll(() =>
+      fs
+        .readFileSync(path.join(projectRoot, "queries.log"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+        .at(-1),
+    )
+    .toBe("mobile");
+  await wait(
+    `return labels().length===1 && labels()[0].includes('Search results empty on mobile')`,
+  );
   // Backspace on an empty input leaves the mode.
   await type("");
   await run(`key('Backspace')`);

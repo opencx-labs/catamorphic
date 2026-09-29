@@ -17,14 +17,20 @@ description: Edit Work desktop configuration files to customize theme, fonts, sh
 
 # Configure the desktop
 
-Call the desktop_settings tool (discover it if it is not loaded) for this
-project's owning profile, exact host file paths, access mode and current
-validation errors. Use those paths, not the foreground profile, a guessed home
+Call the desktop_settings tool for this project's owning profile, exact host
+file paths, access mode and current validation errors. When it is not loaded,
+discover_capabilities({ query: "desktop settings" }) finds it as
+workspace.desktop_settings; call it with invoke_capability. Use those paths, not the foreground profile, a guessed home
 directory, a sandbox path, or a session worktree's .work folder. Read the relevant files first;
 a missing file is an empty object inheriting defaults. Read this skill for the file
 schema. Edit with ordinary file or shell facilities, preserving unrelated keys.
 Prefer writing a complete JSON object to a temporary sibling and renaming it over
 the original. Read back your change and report its actual scope.
+
+Scopes name layers, not folders: "personal" means files.*.personal from
+desktop_settings (outside the repository), never the project's personal
+documents directory (.work/personal), which holds documents, not settings.
+A configuration file anywhere else is not read.
 
 Paths are metadata, not permission grants. An agent whose sandboxing is
 contained may inspect but must not edit. Native harness filesystem permissions still apply outside the checkout.

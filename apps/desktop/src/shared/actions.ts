@@ -46,6 +46,8 @@ export const BUILTIN_ACTIONS = [
     description: "open settings, including when no project is selected",
     defaultBinding: "Cmd+Alt+,",
     keywords: ["preferences", "configuration"],
+    // The palette lists the Settings surface, which honors open modes.
+    hiddenInPalette: true,
   },
   {
     id: "search-files",

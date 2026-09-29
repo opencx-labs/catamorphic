@@ -495,11 +495,13 @@ export function SidebarItemRow<
                 <span className="sr-only">{label}</span>
               ) : (
                 (labelContent ?? (
-                  <span className="min-w-0 flex-1 truncate">{label}</span>
+                  // The label is what people read: it keeps its width and the
+                  // description gives way first when the row is narrow.
+                  <span className="min-w-0 flex-auto truncate">{label}</span>
                 ))
               )}
               {description && (
-                <span className="max-w-32 truncate text-[11px] text-fg-faint">
+                <span className="min-w-0 max-w-32 shrink-[3] truncate text-[11px] text-fg-faint">
                   {description}
                 </span>
               )}

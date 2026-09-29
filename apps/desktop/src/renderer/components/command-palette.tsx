@@ -343,10 +343,15 @@ export function CommandPalette({
     [signals, projectId],
   );
   const activeRows = activeMode?.rows;
+  // A source that searches shows its last answer while the next query
+  // loads; those rows are ranked here against what is typed now, so the
+  // top row (what Enter opens) always matches the current query.
+  const staleSearch =
+    activeRows?.kind === "load" && activeRows.filtered && modeLoad.loading;
   const modeItems =
     activeRows?.kind === "list"
       ? activeRows.items
-      : activeRows?.kind === "load" && !activeRows.filtered
+      : activeRows?.kind === "load" && (!activeRows.filtered || staleSearch)
         ? modeLoad.items
         : null;
   const searchMode = useMemo(
@@ -428,7 +433,7 @@ export function CommandPalette({
           return status("Loading…", false);
         if (!modeLoad.items.length)
           return activeRows.empty ? status(activeRows.empty, false) : [];
-        if (activeRows.filtered) return modeLoad.items;
+        if (activeRows.filtered && !staleSearch) return modeLoad.items;
       }
       const items = modeItems ?? [];
       if (!trimmed)
@@ -877,9 +882,11 @@ export function CommandPalette({
                   {item.iconNode ?? (
                     <Icon className="size-4 shrink-0 text-fg-faint" />
                   )}
-                  <span className="truncate">{item.label}</span>
+                  <span className="min-w-0 truncate">{item.label}</span>
+                  {/* A long label truncates before a short detail ("Chat",
+                      "Workflow"); a long detail keeps at most half the row. */}
                   {item.detail && (
-                    <span className="min-w-0 truncate text-[12px] text-fg-faint">
+                    <span className="min-w-0 max-w-[45%] shrink-0 truncate text-[12px] text-fg-faint">
                       {item.detail}
                     </span>
                   )}

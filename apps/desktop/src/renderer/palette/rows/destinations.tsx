@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useMemo } from "react";
 import { surfaceUsageKey } from "../../../shared/palette.js";
+import { formatBinding, useKeybindings } from "../../lib/keybindings.js";
 import { usePaletteHost } from "../host.js";
 import type { PaletteItem } from "../types.js";
 
@@ -24,6 +25,7 @@ export function useDestinationRows() {
     focusedSite = null,
     onOpenSiteSettings,
   } = usePaletteHost();
+  const keybindings = useKeybindings();
   const surfaceItems = useMemo<PaletteItem[]>(() => {
     const items: PaletteItem[] = [];
     items.push({
@@ -31,7 +33,15 @@ export function useDestinationRows() {
       icon: SettingsIcon,
       label: "Settings",
       detail: "Open settings",
-      keywords: ["settings", "preferences", "shortcuts", "theme", "keys"],
+      keywords: [
+        "settings",
+        "preferences",
+        "configuration",
+        "shortcuts",
+        "theme",
+        "keys",
+      ],
+      shortcut: formatBinding(keybindings["open-settings"]),
       kind: "navigate",
       category: "surface",
       usage: surfaceUsageKey("settings"),
@@ -122,7 +132,7 @@ export function useDestinationRows() {
         onOpenTab({ kind: "sites", name: "sites", label: "Sites" }, mode),
     });
     return items;
-  }, [focusedSite, onOpenSiteSettings, onOpenTab, profileId]);
+  }, [focusedSite, onOpenSiteSettings, onOpenTab, profileId, keybindings]);
   const historyPageItem = useMemo<PaletteItem>(
     () => ({
       id: "open-history",
