@@ -464,12 +464,11 @@ describe("a member's personal environment (ADR 0184)", () => {
     expect(outsideDatabase(SECRET_ENV.trim())).toEqual([]);
     expect(outsideDatabase(LOCAL_ENV.trim())).toEqual([]);
     expect(outsideDatabase(ACCESS_TOKEN)).toEqual([]);
-    // Operations forwarded to the worker drop their payload once taken.
+    // Operations forwarded to the worker leave Postgres once settled.
     const forwarded = await server.catamorphic.core.db
-      .selectFrom("worker_node_jobs")
+      .selectFrom("remote_operations")
       .select(["operation", "response"])
       .execute();
-    expect(forwarded.length).toBeGreaterThan(0);
     expect(JSON.stringify(forwarded)).not.toContain(ACCESS_TOKEN);
     expect(JSON.stringify(forwarded)).not.toContain(base64(SECRET_ENV));
     for (const other of ["alice-box-2", "shared-box"])

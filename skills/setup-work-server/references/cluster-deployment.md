@@ -161,9 +161,13 @@ directory has placed them in the group.
 3. Start the normal server. Boot migrates with database coordination, checks
    that origin, secrets, vault key id, and sign-in configuration match, and
    registers its machine with a renewable lease.
-4. Workers reconnect through the load balancer to any replica. If the replica
-   holding a worker's lease stops, the lease lapses within about a minute and
-   the worker's next connection moves it.
+4. Workers reach the replicas through the load balancer, and any replica
+   answers any worker call (ADR 0187). A worker retries a failed call, such as
+   a 502 or a replica restarting, without ending its session or interrupting
+   its agents. Set the balancer's idle timeout above 30 seconds (a poll waits
+   up to 20) and allow 64 MiB request bodies. The replica that took a worker's
+   lease runs its agents; if that replica stops, the lease lapses within about
+   a minute and the worker's next connection moves it.
 
 The operator can disable any machine with
 `PATCH /_work/operator/machines/:id` and `{ "enabled": false }`. Lease fencing

@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   cleanupWorkerAllocations,
-  RemoteWorkerJobsService,
+  RemoteOperationQueue,
   type WorkerCapacity,
   type WorkerNodeLease,
   WorkerNodeLeaseHeldError,
@@ -19,6 +19,11 @@ import {
 } from "./placement.js";
 
 export const WORKER_NODE_PREFIX = "worker.";
+
+/** A worker node's address in the remote operation queue. */
+function nodeExecutor(nodeId: string): string {
+  return `node:${nodeId}`;
+}
 
 const WorkerName = z
   .string()
@@ -98,7 +103,7 @@ export class WorkerConnectConflictError extends Error {
  */
 export class WorkWorkerRegistry {
   private readonly held = new Map<string, HeldWorker>();
-  private readonly jobs: RemoteWorkerJobsService;
+  private readonly queue: RemoteOperationQueue;
 
   constructor(
     private readonly deps: {
@@ -111,11 +116,59 @@ export class WorkWorkerRegistry {
       log?: (line: string) => void;
     },
   ) {
-    this.jobs = new RemoteWorkerJobsService(deps.db);
+    this.queue = new RemoteOperationQueue(deps.db);
   }
 
-  get jobService(): RemoteWorkerJobsService {
-    return this.jobs;
+  /**
+   * The worker takes its next operation, waiting up to 20 seconds. Any
+   * instance serves it: the queue and the lease live in Postgres.
+   */
+  async poll(args: { nodeId: string; session: string; pollId: string }) {
+    await this.touch(args.nodeId);
+    return this.queue.poll({
+      executor: nodeExecutor(args.nodeId),
+      leaseToken: args.session,
+      pollId: args.pollId,
+      waitMs: 20_000,
+      leaseHeld: () => this.leaseHeld(args.nodeId, args.session),
+    });
+  }
+
+  /** The worker reports one operation's outcome, to any instance. */
+  async complete(args: {
+    nodeId: string;
+    session: string;
+    operationId: string;
+    response?: unknown;
+    error?: string;
+  }): Promise<void> {
+    await this.touch(args.nodeId);
+    await this.queue.complete({
+      executor: nodeExecutor(args.nodeId),
+      leaseToken: args.session,
+      operationId: args.operationId,
+      ...(args.response !== undefined ? { response: args.response } : {}),
+      ...(args.error !== undefined ? { error: args.error } : {}),
+    });
+  }
+
+  /** A keepalive while operations run and no poll is pending. */
+  async renew(args: { nodeId: string; session: string }): Promise<boolean> {
+    await this.touch(args.nodeId);
+    return this.leaseHeld(args.nodeId, args.session);
+  }
+
+  private async leaseHeld(nodeId: string, leaseToken: string) {
+    return Boolean(
+      await this.deps.db
+        .selectFrom("worker_nodes")
+        .select("id")
+        .where("id", "=", nodeId)
+        .where("lease_token", "=", leaseToken)
+        .where("enabled", "=", true)
+        .where("lease_expires_at", ">", sql<Date>`now()`)
+        .executeTakeFirst(),
+    );
   }
 
   /** Operator: a one-time code a new worker exchanges for its credential. */
@@ -318,11 +371,14 @@ export class WorkWorkerRegistry {
     // An upgraded worker may offer more than it did; its sessions follow.
     if (existing && Boolean(existing.processes) === offer.processes)
       return existing;
-    const provider = this.jobs.sandboxProvider({
-      nodeId,
+    const provider = this.queue.provider({
+      executor: nodeExecutor(nodeId),
       leaseToken: () => this.held.get(nodeId)?.lease.token,
+      leaseHeld: (token) => this.leaseHeld(nodeId, token),
+      label: "The worker",
       workspaceRoot: offer.workspaceRoot,
       processes: offer.processes,
+      attributes: { "catamorphic.worker.id": nodeId },
     });
     this.providers.set(nodeId, provider);
     return provider;
@@ -381,7 +437,7 @@ export class WorkWorkerRegistry {
     return [...groups];
   }
 
-  async touch(nodeId: string): Promise<void> {
+  private async touch(nodeId: string): Promise<void> {
     await this.deps.db
       .updateTable("work_workers")
       .set({ last_seen_at: sql`now()` })
@@ -427,7 +483,6 @@ export class WorkWorkerRegistry {
         this.deps.log?.(`Worker ${nodeId} disconnected`);
       }
     }
-    await this.jobs.sweep();
     this.cleaning ??= this.cleanup().finally(() => {
       this.cleaning = undefined;
     });

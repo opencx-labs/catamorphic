@@ -1,13 +1,60 @@
-import {
-  type ClientRunnerOperation,
-  ClientRunnerOperationSchema,
-} from "@catamorphic/core";
+import { type RemoteOperation, RemoteOperationSchema } from "@catamorphic/core";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 
+/**
+ * The control plane ended this runner's session: its lease moved on, its
+ * access was revoked, or it was refused. Retrying the call cannot help; the
+ * runner stops and its owner connects again or gives up.
+ */
+export class RunnerSessionEndedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RunnerSessionEndedError";
+  }
+}
+
+/**
+ * The control plane refused one receipt: the operation already settled or
+ * its controller stopped waiting. The runner drops that receipt.
+ */
+export class ReceiptRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReceiptRefusedError";
+  }
+}
+
+/**
+ * The control plane cannot take this result (too large to accept). The
+ * runner reports the operation as failed instead.
+ */
+export class ResultRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ResultRejectedError";
+  }
+}
+
+/**
+ * How a runner reaches the control plane (ADR 0187). A transport throws
+ * {@link RunnerSessionEndedError}, {@link ReceiptRefusedError}, or
+ * {@link ResultRejectedError} for the control plane's definite answers.
+ * Anything else (a network error, a timeout, a 5xx from a load balancer or
+ * a restarting instance) is transient: the runner retries the same call.
+ */
 export interface ClientRunnerTransport {
   renew(): Promise<void>;
-  poll(): Promise<{ id: string; operation: unknown } | null>;
-  complete(args: {
+  /**
+   * Take the next operation, long-polling. A retry repeats `pollId`, and
+   * the control plane answers it with the operation that poll took, so an
+   * operation is never lost with a response.
+   */
+  poll(args: {
+    pollId: string;
+    signal: AbortSignal;
+  }): Promise<{ id: string; operation: unknown } | null>;
+  /** Idempotent: a receipt retried after its response was lost succeeds. */
+  complete(receipt: {
     jobId: string;
     response?: unknown;
     error?: string;
@@ -15,27 +62,54 @@ export interface ClientRunnerTransport {
   disconnect(): Promise<void>;
 }
 
+/** Transient failures retry with jittered backoff up to this delay. */
+const MAX_RETRY_DELAY_MS = 5_000;
+
+function definite(error: unknown): boolean {
+  return (
+    error instanceof RunnerSessionEndedError ||
+    error instanceof ReceiptRefusedError ||
+    error instanceof ResultRejectedError
+  );
+}
+
+/** The runner stopped while a call waited to be retried. */
+class RunnerStoppedError extends Error {}
+
 /**
  * Runs only operations the remote authority admitted for this runner. A
  * member's desktop runner stops its sandboxes when the connection ends; a
  * remote worker (ADR 0164) passes `sandboxes` to keep ownership across
  * control-plane reconnects and `keepSandboxes` so relocation stays possible.
+ *
+ * A session ends only on the control plane's definite answer. Transient
+ * failures retry the same call in place while the lease lasts, so a load
+ * balancer's 502 or an instance restarting never costs running work its
+ * executor (ADR 0187). An operation runs at most once; only its receipt is
+ * ever retried.
  */
 export function startClientRunner(args: {
   provider: SandboxProvider;
   transport: ClientRunnerTransport;
+  /** The session ended: {@link RunnerSessionEndedError} or a fault. */
   onError?: (error: unknown) => void;
+  /** A transient failure the runner is riding out. */
+  onRetry?: (error: unknown) => void;
   sandboxes?: Set<string>;
   keepSandboxes?: boolean;
   /** Most sandboxes this runner may hold at once. */
   maxSandboxes?: number;
-  /** Delay between empty polls; a long-polling transport can pass 0. */
-  idleDelayMs?: number;
   /** Operations run at once; 4 by default. */
   concurrency?: number;
 }) {
-  let stopped = false;
-  let renewing = false;
+  const stopping = new AbortController();
+  const stopped = () => stopping.signal.aborted;
+  let ended: { error: unknown } | undefined;
+  const end = (error: unknown) => {
+    if (ended || stopped()) return;
+    ended = { error };
+    stopping.abort();
+  };
   const ownedSandboxes = args.sandboxes ?? new Set<string>();
   const stopSandboxes = async () => {
     if (args.keepSandboxes) return;
@@ -43,15 +117,41 @@ export function startClientRunner(args: {
       [...ownedSandboxes].map((id) => args.provider.stopSandbox(id)),
     );
   };
+  const pause = (ms: number) =>
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(done, ms);
+      function done() {
+        clearTimeout(timer);
+        stopping.signal.removeEventListener("abort", done);
+        resolve();
+      }
+      stopping.signal.addEventListener("abort", done, { once: true });
+    });
+  /** Retry one idempotent call until it gets a definite answer. */
+  const retrying = async <T>(call: () => Promise<T>): Promise<T> => {
+    for (let attempt = 0; ; attempt++) {
+      if (stopped()) throw new RunnerStoppedError();
+      try {
+        return await call();
+      } catch (error) {
+        if (definite(error)) throw error;
+        if (stopped()) throw new RunnerStoppedError();
+        args.onRetry?.(error);
+        const ceiling = Math.min(MAX_RETRY_DELAY_MS, 250 * 2 ** attempt);
+        await pause(ceiling / 2 + Math.random() * (ceiling / 2));
+      }
+    }
+  };
+  let renewing = false;
   const heartbeat = setInterval(() => {
-    if (renewing || stopped) return;
+    if (renewing || stopped()) return;
     renewing = true;
+    // A transient failure waits for the next beat; polls renew too.
     void args.transport
       .renew()
-      .catch(async (error) => {
-        stopped = true;
-        await stopSandboxes();
-        args.onError?.(error);
+      .catch((error: unknown) => {
+        if (error instanceof RunnerSessionEndedError) end(error);
+        else args.onRetry?.(error);
       })
       .finally(() => {
         renewing = false;
@@ -59,12 +159,34 @@ export function startClientRunner(args: {
   }, 10000);
   heartbeat.unref();
   let creating = 0;
+  /** Deliver a receipt; a refused one is dropped, a rejected result fails. */
+  const deliver = async (receipt: {
+    jobId: string;
+    response?: unknown;
+    error?: string;
+  }): Promise<void> => {
+    try {
+      await retrying(() => args.transport.complete(receipt));
+    } catch (error) {
+      if (error instanceof ReceiptRefusedError) return;
+      if (error instanceof ResultRejectedError && receipt.error === undefined) {
+        await deliver({
+          jobId: receipt.jobId,
+          error: receiptError(
+            `The result could not be delivered: ${error.message}`,
+          ),
+        });
+        return;
+      }
+      throw error;
+    }
+  };
   /** Run one admitted operation and deliver its receipt. */
   const run = async (job: { id: string; operation: unknown }) => {
     let receipt: { jobId: string; response?: unknown; error?: string };
     let reserved = false;
     try {
-      const operation = ClientRunnerOperationSchema.parse(job.operation);
+      const operation = RemoteOperationSchema.parse(job.operation);
       // A server may only address sandboxes created for this connection.
       if ("sandboxId" in operation && !ownedSandboxes.has(operation.sandboxId))
         throw new Error("Sandbox does not belong to this runner connection");
@@ -104,65 +226,43 @@ export function startClientRunner(args: {
     } finally {
       if (reserved) creating--;
     }
-    // Retry only the idempotent receipt, never the operation.
-    await args.transport
-      .complete(receipt)
-      .catch(() => args.transport.complete(receipt))
-      .catch(async (error: unknown) => {
-        if (receipt.error !== undefined) throw error;
-        // A result the control plane refuses (too large to accept, or not
-        // storable) fails that operation, not this runner.
-        await args.transport.complete({
-          jobId: job.id,
-          error: receiptError(
-            `The result could not be delivered: ${error instanceof Error ? error.message : String(error)}`,
-          ),
-        });
-      });
+    await deliver(receipt);
   };
   const concurrency = Math.max(1, args.concurrency ?? 4);
   const running = new Set<Promise<void>>();
-  let failure: { error: unknown } | undefined;
   const work = (async () => {
-    while (!stopped) {
+    while (!stopped()) {
       // A long read (a process's output, up to 20 seconds) or command
       // holds one slot; writes and other operations take the others.
       if (running.size >= concurrency) {
         await Promise.race(running);
         continue;
       }
-      const job = await args.transport.poll();
-      if (stopped) break;
-      if (!job) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, args.idleDelayMs ?? 200),
-        );
-        continue;
-      }
+      const pollId = crypto.randomUUID();
+      const job = await retrying(() =>
+        args.transport.poll({ pollId, signal: stopping.signal }),
+      );
+      if (!job) continue;
       const task: Promise<void> = run(job)
         .catch((error: unknown) => {
-          failure ??= { error };
-          stopped = true;
+          if (!(error instanceof RunnerStoppedError)) end(error);
         })
         .finally(() => running.delete(task));
       running.add(task);
     }
-    await Promise.allSettled(running);
-    if (failure) throw failure.error;
   })()
-    .catch((error) => {
-      stopped = true;
-      args.onError?.(error);
+    .catch((error: unknown) => {
+      if (!(error instanceof RunnerStoppedError)) end(error);
     })
     .finally(async () => {
+      await Promise.allSettled(running);
       clearInterval(heartbeat);
       await stopSandboxes();
+      if (ended) args.onError?.(ended.error);
     });
   return {
     stop: async () => {
-      stopped = true;
-      clearInterval(heartbeat);
-      await stopSandboxes();
+      stopping.abort();
       await work;
       await args.transport.disconnect().catch(() => {});
     },
@@ -174,7 +274,7 @@ async function executeClientOperation({
   operation,
 }: {
   provider: SandboxProvider;
-  operation: ClientRunnerOperation;
+  operation: RemoteOperation;
 }): Promise<unknown> {
   switch (operation.kind) {
     case "create":

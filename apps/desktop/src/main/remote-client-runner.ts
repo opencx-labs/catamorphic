@@ -1,7 +1,12 @@
 import { createApiClient } from "@catamorphic/api-client";
-import { ClientRunnerResultSchema } from "@catamorphic/core";
+import { RemoteOperationResultSchema } from "@catamorphic/core";
 import type { SandboxProvider } from "@catamorphic/sandbox";
-import { startClientRunner } from "@catamorphic/server-sdk";
+import {
+  ReceiptRefusedError,
+  ResultRejectedError,
+  RunnerSessionEndedError,
+  startClientRunner,
+} from "@catamorphic/server-sdk";
 import type { ProfileConfigManager } from "./profile-config.js";
 import { refreshRemoteCredentials } from "./remote-oauth.js";
 
@@ -11,6 +16,25 @@ class RunnerAccessDeniedError extends Error {
     super(message);
     this.name = "RunnerAccessDeniedError";
   }
+}
+
+/**
+ * The server's definite answers become the runner's errors (ADR 0187);
+ * anything else (a 5xx, a timeout, no answer) is transient and retried.
+ */
+function refusal(args: {
+  status: number;
+  error: { error?: string } | undefined;
+  receipt?: boolean;
+}): Error {
+  const message = args.error?.error ?? `The server answered ${args.status}`;
+  if (args.status >= 500 || args.status === 408 || args.status === 429)
+    return new Error(message);
+  if (args.receipt && args.status === 409)
+    return new ReceiptRefusedError(message);
+  if (args.receipt && (args.status === 400 || args.status === 413))
+    return new ResultRejectedError(message);
+  return new RunnerSessionEndedError(message);
 }
 
 /** Per-project authenticated runner, independent of desktop's local root API. */
@@ -49,7 +73,10 @@ export class RemoteClientRunners {
           refresh: (credentials) => refreshRemoteCredentials({ credentials }),
         });
         request.headers.set("authorization", `Bearer ${token}`);
-        return fetch(request, { signal: AbortSignal.timeout(30000) });
+        // A poll waits up to 20 seconds on the server.
+        return fetch(request, {
+          signal: AbortSignal.any([request.signal, AbortSignal.timeout(30000)]),
+        });
       },
     });
     let runner = this.runners.get(args.projectId);
@@ -87,41 +114,54 @@ export class RemoteClientRunners {
               renew: async () => {
                 const response = await client.POST(
                   "/api/client-runners/renew",
-                  {
-                    body: lease,
-                  },
+                  { body: lease },
                 );
-                if (!response.data)
-                  throw new Error("Local execution authorization expired");
+                if (response.error)
+                  throw refusal({
+                    status: response.response.status,
+                    error: response.error,
+                  });
               },
-              poll: async () => {
+              poll: async ({ pollId, signal }) => {
                 const response = await client.POST("/api/client-runners/poll", {
-                  body: lease,
+                  body: { ...lease, pollId },
+                  signal,
                 });
-                if (response.error) throw new Error(response.error.error);
+                if (response.error)
+                  throw refusal({
+                    status: response.response.status,
+                    error: response.error,
+                  });
                 return response.data ?? null;
               },
               complete: async (input) => {
+                const result = input.error
+                  ? undefined
+                  : RemoteOperationResultSchema.safeParse(
+                      input.response ?? null,
+                    );
+                if (result && !result.success)
+                  throw new ResultRejectedError(
+                    "The result is not one this server accepts",
+                  );
                 const response = await client.POST(
                   "/api/client-runners/complete",
                   {
                     body: {
                       ...lease,
                       jobId: input.jobId,
-                      ...(input.error
-                        ? { error: input.error }
-                        : {
-                            response: ClientRunnerResultSchema.parse(
-                              input.response ?? null,
-                            ),
-                          }),
+                      ...(result
+                        ? { response: result.data }
+                        : { error: input.error }),
                     },
                   },
                 );
-                if (!response.data)
-                  throw new Error(
-                    "The server did not accept the execution receipt",
-                  );
+                if (response.error)
+                  throw refusal({
+                    status: response.response.status,
+                    error: response.error,
+                    receipt: true,
+                  });
               },
               disconnect: async () => {
                 await client.POST("/api/client-runners/disconnect", {
@@ -137,8 +177,8 @@ export class RemoteClientRunners {
               if (this.runners.get(args.projectId) === started)
                 this.runners.delete(args.projectId);
               console.warn("[desktop] Local runner stopped", error);
-              // A server restart or a network drop ends the connection;
-              // this machine keeps serving once the server answers again.
+              // The server ended the session (its lease moved on, say after
+              // a long sleep); this machine serves again once it registers.
               this.reconnect(args, 1);
             },
           });

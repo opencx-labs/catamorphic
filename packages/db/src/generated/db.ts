@@ -338,18 +338,6 @@ export interface BatchStepMembers {
   workflow_step_attempt_id: string;
 }
 
-export interface ClientRunnerJobs {
-  created_at: Generated<Timestamp>;
-  error: string | null;
-  expires_at: Timestamp;
-  id: Generated<string>;
-  lease_token: string;
-  operation: Json;
-  response: Json | null;
-  runner_id: string;
-  status: Generated<string>;
-}
-
 export interface ClientRunners {
   capabilities: Generated<Json>;
   environment_name: string;
@@ -723,6 +711,19 @@ export interface RateReservationBuckets {
   updated_at: Generated<Timestamp>;
 }
 
+export interface RemoteOperations {
+  created_at: Generated<Timestamp>;
+  error: string | null;
+  executor: string;
+  expires_at: Timestamp;
+  id: Generated<string>;
+  lease_token: string;
+  operation: Json;
+  poll_id: string | null;
+  response: Json | null;
+  status: Generated<string>;
+}
+
 export interface ScheduleBindings {
   activation_id: string;
   created_at: Generated<Timestamp>;
@@ -990,18 +991,6 @@ export interface WorkDirectoryGrants {
   roles: Generated<Json>;
   updated_at: Generated<Timestamp>;
   user_id: string;
-}
-
-export interface WorkerNodeJobs {
-  created_at: Generated<Timestamp>;
-  error: string | null;
-  expires_at: Timestamp;
-  id: Generated<string>;
-  lease_token: string;
-  node_id: string;
-  operation: Json;
-  response: Json | null;
-  status: Generated<string>;
 }
 
 export interface WorkerNodes {
@@ -1331,7 +1320,6 @@ export interface DB {
   batch_sink_chunks: BatchSinkChunks;
   batch_step_invocations: BatchStepInvocations;
   batch_step_members: BatchStepMembers;
-  client_runner_jobs: ClientRunnerJobs;
   client_runners: ClientRunners;
   connection_action_requirements: ConnectionActionRequirements;
   connection_audit_events: ConnectionAuditEvents;
@@ -1357,6 +1345,7 @@ export interface DB {
   publications: Publications;
   push_subscriptions: PushSubscriptions;
   rate_reservation_buckets: RateReservationBuckets;
+  remote_operations: RemoteOperations;
   schedule_bindings: ScheduleBindings;
   schedule_occurrences: ScheduleOccurrences;
   session_actions: SessionActions;
@@ -1390,7 +1379,6 @@ export interface DB {
   work_token_families: WorkTokenFamilies;
   work_worker_enrollments: WorkWorkerEnrollments;
   work_workers: WorkWorkers;
-  worker_node_jobs: WorkerNodeJobs;
   worker_nodes: WorkerNodes;
   workflow_enablement_connections: WorkflowEnablementConnections;
   workflow_enablement_events: WorkflowEnablementEvents;

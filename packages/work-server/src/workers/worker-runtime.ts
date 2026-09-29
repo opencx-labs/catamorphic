@@ -3,6 +3,9 @@ import path from "node:path";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import {
   type ClientRunnerTransport,
+  ReceiptRefusedError,
+  ResultRejectedError,
+  RunnerSessionEndedError,
   startClientRunner,
 } from "@catamorphic/server-sdk";
 import { isSecurePublicUrl } from "../config.js";
@@ -27,7 +30,16 @@ export interface WorkWorkerOptions {
   log?: (line: string) => void;
 }
 
-class SessionEndedError extends Error {}
+/**
+ * How long each call may take. A poll waits up to 20 seconds on the control
+ * plane; a receipt may carry up to 64 MiB.
+ */
+const CALL_TIMEOUT_MS = {
+  connect: 60_000,
+  poll: 45_000,
+  renew: 30_000,
+  complete: 300_000,
+} as const;
 
 /**
  * A remote worker (ADR 0164): runs sandbox operations for agents whose
@@ -71,7 +83,17 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     defaults: execution.defaults,
     ...(options.version ? { version: options.version } : {}),
   };
-  const call = async (route: string, body: unknown): Promise<unknown> => {
+  /**
+   * One call to the control plane. Definite answers become the runner's
+   * errors; anything else (no answer, a timeout, a 5xx from a load balancer
+   * or a restarting instance) is transient and retried by the caller.
+   */
+  const call = async (
+    route: "connect" | "poll" | "renew" | "complete",
+    body: unknown,
+    signal?: AbortSignal,
+  ): Promise<unknown> => {
+    const timeout = AbortSignal.timeout(CALL_TIMEOUT_MS[route]);
     const response = await doFetch(`${base}/api/workers/${route}`, {
       method: "POST",
       headers: {
@@ -79,28 +101,28 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         "content-type": "application/json",
       },
       body: JSON.stringify(body),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     });
-    if (response.status === 401) {
-      throw new Error("This worker's credential was revoked or is unknown");
-    }
-    if (response.status === 409) throw new SessionEndedError();
-    if (!response.ok) {
-      const body: unknown = await response.json().catch(() => undefined);
-      const reason =
-        typeof body === "object" &&
-        body !== null &&
-        "error" in body &&
-        typeof body.error === "string"
-          ? `: ${body.error}`
-          : "";
-      if (response.status === 403) {
-        throw new WorkerRefusedError(reason.slice(2) || "Refused");
-      }
-      throw new Error(
-        `Control plane answered ${response.status} on ${route}${reason}`,
-      );
-    }
-    return response.json();
+    if (response.ok) return response.json();
+    const answer: unknown = await response.json().catch(() => undefined);
+    const reason =
+      typeof answer === "object" &&
+      answer !== null &&
+      "error" in answer &&
+      typeof answer.error === "string"
+        ? answer.error
+        : `Control plane answered ${response.status} on ${route}`;
+    if (response.status === 401) throw new WorkerRevokedError();
+    if (response.status === 403) throw new WorkerRefusedError(reason);
+    if (route === "complete" && response.status === 409)
+      throw new ReceiptRefusedError(reason);
+    if (route === "complete" && [400, 413].includes(response.status))
+      throw new ResultRejectedError(reason);
+    if (response.status >= 500 || [408, 429].includes(response.status))
+      throw new Error(reason);
+    // The lease moved on (409), or this worker's protocol is not the
+    // control plane's: connect again.
+    throw new RunnerSessionEndedError(reason);
   };
 
   // Sandboxes belong to this worker process, across control-plane sessions.
@@ -108,9 +130,12 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     path.join(options.dataDir, "sandboxes.json"),
   );
   let stopped = false;
-  let runners: Array<{ stop(): Promise<void> }> = [];
+  let runner: { stop(): Promise<void> } | undefined;
   let wake: (() => void) | undefined;
+  let lastRetryLog = 0;
+  let backoffMs = 1_000;
 
+  /** One session: a node lease, held until the control plane ends it. */
   const session = async (): Promise<void> => {
     const connected = await call("connect", offer);
     const token =
@@ -122,6 +147,8 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         : undefined;
     if (!token) throw new Error("The control plane returned no session");
     log(`Connected to ${base} as ${nodeId}`);
+    backoffMs = 1_000;
+    let failure: unknown;
     const ended = new Promise<void>((resolve) => {
       wake = resolve;
     });
@@ -129,8 +156,8 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       renew: async () => {
         await call("renew", { session: token });
       },
-      poll: async () => {
-        const polled = await call("poll", { session: token });
+      poll: async ({ pollId, signal }) => {
+        const polled = await call("poll", { session: token, pollId }, signal);
         return typeof polled === "object" &&
           polled !== null &&
           "job" in polled &&
@@ -147,58 +174,56 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       },
       disconnect: async () => {},
     };
-    // One lane per workspace so one long command never blocks the others.
-    const lanes = Math.min(16, Math.max(1, execution.capacity.workspaces));
-    runners = Array.from({ length: lanes }, () =>
-      startClientRunner({
-        provider,
-        transport,
-        sandboxes,
-        keepSandboxes: true,
-        maxSandboxes: execution.capacity.workspaces,
-        idleDelayMs: 0,
-        // One operation per lane: the lanes are the concurrency.
-        concurrency: 1,
-        onError: (error) => {
-          if (!(error instanceof SessionEndedError)) {
-            log(
-              `Worker session ended: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            );
-          }
-          wake?.();
-        },
-      }),
-    );
+    runner = startClientRunner({
+      provider,
+      transport,
+      sandboxes,
+      keepSandboxes: true,
+      maxSandboxes: execution.capacity.workspaces,
+      // One slot per workspace, so one long command never blocks the others.
+      concurrency: Math.min(16, Math.max(1, execution.capacity.workspaces)),
+      onRetry: (error) => {
+        if (Date.now() - lastRetryLog < 10_000) return;
+        lastRetryLog = Date.now();
+        log(
+          `Control plane unreachable, retrying: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      },
+      onError: (error) => {
+        failure = error;
+        wake?.();
+      },
+    });
     await ended;
-    const current = runners;
-    runners = [];
-    await Promise.allSettled(current.map((runner) => runner.stop()));
+    const current = runner;
+    runner = undefined;
+    await current?.stop();
+    if (failure) throw failure;
   };
 
   const loop = (async () => {
-    let backoffMs = 1_000;
     while (!stopped) {
       try {
         await session();
-        backoffMs = 1_000;
       } catch (error) {
-        if (error instanceof WorkerRefusedError) {
-          // Reachable, but the operator's placement forbids this worker as it
-          // runs; it connects once that changes.
-          log(`The control plane refused this worker: ${error.message}`);
-        } else if (!(error instanceof SessionEndedError)) {
-          log(
-            `Worker cannot reach the control plane: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-          if (error instanceof Error && /revoked/.test(error.message)) {
-            stopped = true;
-            break;
-          }
+        if (error instanceof WorkerRevokedError) {
+          log(error.message);
+          stopped = true;
+          break;
         }
+        log(
+          error instanceof WorkerRefusedError
+            ? // Reachable, but the operator's placement forbids this worker
+              // as it runs; it connects once that changes.
+              `The control plane refused this worker: ${error.message}`
+            : error instanceof RunnerSessionEndedError
+              ? `Worker session ended: ${error.message}`
+              : `Worker cannot reach the control plane: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+        );
       }
       if (stopped) break;
       await new Promise((resolve) => setTimeout(resolve, backoffMs));
@@ -211,6 +236,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     stop: async () => {
       stopped = true;
       wake?.();
+      await runner?.stop();
       await loop;
       await Promise.allSettled(
         [...sandboxes].map((id) => provider.stopSandbox(id)),
@@ -265,10 +291,19 @@ async function loadOrEnroll(args: {
   return credential;
 }
 
-class WorkerRefusedError extends Error {
+/** The operator's placement forbids this worker as it runs. */
+class WorkerRefusedError extends RunnerSessionEndedError {
   constructor(message: string) {
     super(message);
     this.name = "WorkerRefusedError";
+  }
+}
+
+/** The operator revoked this worker; it never connects again. */
+class WorkerRevokedError extends RunnerSessionEndedError {
+  constructor() {
+    super("This worker's credential was revoked or is unknown");
+    this.name = "WorkerRevokedError";
   }
 }
 

@@ -18,6 +18,7 @@ import {
   defineStaticEnvironments,
   FsBackend,
   ProjectManager,
+  ResultRejectedError,
   startClientRunner,
 } from "@catamorphic/server-sdk";
 import { PGlite } from "@electric-sql/pglite";
@@ -275,6 +276,7 @@ it("an authenticated member executes on this machine and loses execution immedia
     await expect(
       service.poll({
         ...lease,
+        pollId: randomUUID(),
         identity: { ...identity, externalUserId: "someone-else" },
       }),
     ).rejects.toThrow();
@@ -282,11 +284,11 @@ it("an authenticated member executes on this machine and loses execution immedia
       provider,
       transport: {
         renew: () => service.renew({ ...lease, identity }),
-        poll: () => service.poll({ ...lease, identity }),
+        poll: ({ pollId }) => service.poll({ ...lease, identity, pollId }),
         complete: async (receipt) => {
           // The receipt route's bound on an error message.
           if ((receipt.error?.length ?? 0) > 4000)
-            throw new Error("Receipt refused: error too long");
+            throw new ResultRejectedError("Receipt refused: error too long");
           await service.complete({ ...lease, identity, ...receipt });
         },
         disconnect: () => service.disconnect({ ...lease, identity }),

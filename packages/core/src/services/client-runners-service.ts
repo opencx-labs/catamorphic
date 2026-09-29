@@ -1,13 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { DB } from "@catamorphic/db";
-import { getTracer, withSpan } from "@catamorphic/otel";
 import {
   type EnvironmentRuntimeBinding,
-  PROCESS_SIGNALS,
   SANDBOX_CAPABILITIES,
   type SandboxCapability,
-  type SandboxProcessProvider,
-  type SandboxProvider,
 } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
@@ -19,13 +15,11 @@ import {
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ProjectEnvironmentsService } from "./project-environments-service.js";
 import {
-  jsonColumn,
-  storableJson,
-  toJson,
-  withoutNul,
-} from "./run-coordinator.js";
+  RemoteExecutorLeaseLostError,
+  RemoteOperationQueue,
+} from "./remote-operations.js";
+import { toJson } from "./run-coordinator.js";
 
-const tracer = getTracer("@catamorphic/core");
 const resourceLimitsSchema = z.array(
   z.enum(["cpuMillis", "memoryMb", "storageMb", "gpu"]),
 );
@@ -38,251 +32,21 @@ const capabilitiesSchema = z.array(
     SANDBOX_CAPABILITIES.egressPolicy,
   ]),
 );
-const stringMap = z.record(z.string(), z.string());
-export const ClientRunnerOperationSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("create"),
-    options: z.object({
-      resources: z
-        .object({
-          cpuMillis: z.number().int().positive().optional(),
-          memoryMb: z.number().int().positive().optional(),
-          storageMb: z.number().int().positive().optional(),
-          gpu: z.boolean().optional(),
-        })
-        .optional(),
-      snapshotName: z.string().optional(),
-      image: z
-        .discriminatedUnion("kind", [
-          z.object({ kind: z.literal("oci"), reference: z.string() }),
-          z.object({
-            kind: z.literal("dockerfile"),
-            path: z.string(),
-            content: z.string().max(64 * 1024),
-            digest: z.string(),
-          }),
-        ])
-        .optional(),
-      containers: z.boolean().optional(),
-      egress: z
-        .discriminatedUnion("mode", [
-          z.object({ mode: z.literal("open") }),
-          z.object({
-            mode: z.literal("allowlist"),
-            allow: z.array(z.string()).readonly(),
-          }),
-        ])
-        .optional(),
-      language: z.string().optional(),
-      envVars: stringMap.optional(),
-      autoStopInterval: z.number().optional(),
-      labels: stringMap.optional(),
-    }),
-  }),
-  z.object({
-    kind: z.enum(["start", "stop", "destroy", "status"]),
-    sandboxId: z.string(),
-  }),
-  z.object({
-    kind: z.literal("execute"),
-    sandboxId: z.string(),
-    command: z.string(),
-    options: z
-      .object({
-        cwd: z.string().optional(),
-        timeout: z.number().optional(),
-        env: stringMap.optional(),
-      })
-      .optional(),
-  }),
-  z.object({
-    kind: z.literal("upload"),
-    sandboxId: z.string(),
-    files: stringMap,
-    basePath: z.string(),
-  }),
-  z.object({
-    kind: z.literal("download"),
-    sandboxId: z.string(),
-    path: z.string(),
-  }),
-  z.object({
-    kind: z.literal("clone"),
-    sandboxId: z.string(),
-    url: z.string(),
-    path: z.string(),
-    options: z
-      .object({
-        branch: z.string().optional(),
-        commitId: z.string().optional(),
-        username: z.string().optional(),
-        password: z.string().optional(),
-      })
-      .optional(),
-  }),
-  z.object({
-    kind: z.literal("checkout"),
-    sandboxId: z.string(),
-    path: z.string(),
-    ref: z.string(),
-  }),
-  // Background processes (ADR 0174): short request/response operations; a
-  // follower reads again from the cursor the last read returned.
-  z.object({
-    kind: z.literal("process.start"),
-    sandboxId: z.string(),
-    command: z.string(),
-    cwd: z.string().optional(),
-    env: stringMap.optional(),
-    name: z.string().optional(),
-    stdin: z.boolean().optional(),
-  }),
-  // A stdio harness in the sandbox (ADR 0180): input arrives in writes.
-  z.object({
-    kind: z.literal("process.write"),
-    sandboxId: z.string(),
-    processId: z.string(),
-    data: z.string(),
-    end: z.boolean().optional(),
-  }),
-  z.object({
-    kind: z.literal("process.read"),
-    sandboxId: z.string(),
-    processId: z.string(),
-    cursor: z.number().int().nonnegative().optional(),
-    maxBytes: z.number().int().positive().optional(),
-    waitMs: z.number().int().nonnegative().optional(),
-  }),
-  z.object({
-    kind: z.literal("process.signal"),
-    sandboxId: z.string(),
-    processId: z.string(),
-    signal: z.enum(PROCESS_SIGNALS),
-  }),
-  z.object({
-    kind: z.literal("process.list"),
-    sandboxId: z.string(),
-  }),
-]);
-export type ClientRunnerOperation = z.infer<typeof ClientRunnerOperationSchema>;
-const statusSchema = z.enum([
-  "creating",
-  "started",
-  "stopped",
-  "archived",
-  "error",
-]);
-const handleSchema = z.object({
-  id: z.string(),
-  providerId: z.string(),
-  sandboxType: z.enum(["dev", "execution"]),
-  status: statusSchema,
-});
-
-const processSchema = z.object({
-  processId: z.string(),
-  sandboxId: z.string(),
-  command: z.string(),
-  name: z.string().optional(),
-  cwd: z.string(),
-  status: z.enum(["running", "exited"]),
-  exitCode: z.number().nullable(),
-  signal: z.enum(PROCESS_SIGNALS).nullable(),
-  startedAt: z.string(),
-  endedAt: z.string().nullable(),
-  outputBytes: z.number(),
-});
-const processOutputSchema = z.object({
-  processId: z.string(),
-  chunk: z.string(),
-  cursor: z.number(),
-  nextCursor: z.number(),
-  more: z.boolean(),
-  outputBytes: z.number(),
-  status: z.enum(["running", "exited"]),
-  exitCode: z.number().nullable(),
-  signal: z.enum(PROCESS_SIGNALS).nullable(),
-});
-
-export const ClientRunnerResultSchema = z.union([
-  z.null(),
-  z.string(),
-  handleSchema,
-  z.object({ exitCode: z.number(), result: z.string() }),
-  processSchema,
-  processOutputSchema,
-  z.array(processSchema),
-]);
-
-/**
- * A sandbox provider whose every operation is executed elsewhere: by a
- * member's desktop runner or by a remote worker (ADR 0164). `call` delivers
- * one operation and resolves with the runner's response. `processes` says
- * whether the remote provider runs background processes (ADR 0174).
- */
-export function forwardingSandboxProvider(args: {
-  workspaceRoot: string;
-  processes: boolean;
-  call: (operation: ClientRunnerOperation) => Promise<unknown>;
-}): SandboxProvider {
-  const { call } = args;
-  const processes: SandboxProcessProvider = {
-    startProcess: async (options) =>
-      processSchema.parse(await call({ kind: "process.start", ...options })),
-    readProcessOutput: async (options) =>
-      processOutputSchema.parse(
-        await call({ kind: "process.read", ...options }),
-      ),
-    signalProcess: async (options) =>
-      processSchema.parse(await call({ kind: "process.signal", ...options })),
-    listProcesses: async (options) =>
-      z
-        .array(processSchema)
-        .parse(await call({ kind: "process.list", ...options })),
-    writeProcessInput: async (options) => {
-      await call({ kind: "process.write", ...options });
-    },
-  };
-  return {
-    workspaceRoot: args.workspaceRoot,
-    ...(args.processes ? { processes } : {}),
-    createSandbox: async (options) =>
-      handleSchema.parse(await call({ kind: "create", options })),
-    startSandbox: async (sandboxId) => {
-      await call({ kind: "start", sandboxId });
-    },
-    stopSandbox: async (sandboxId) => {
-      await call({ kind: "stop", sandboxId });
-    },
-    destroySandbox: async (sandboxId) => {
-      await call({ kind: "destroy", sandboxId });
-    },
-    getSandboxStatus: async (sandboxId) =>
-      statusSchema.parse(await call({ kind: "status", sandboxId })),
-    executeCommand: async (sandboxId, command, options) =>
-      z
-        .object({ exitCode: z.number(), result: z.string() })
-        .parse(await call({ kind: "execute", sandboxId, command, options })),
-    uploadFiles: async (sandboxId, files, basePath) => {
-      await call({ kind: "upload", sandboxId, files, basePath });
-    },
-    downloadFile: async (sandboxId, path) =>
-      z.string().parse(await call({ kind: "download", sandboxId, path })),
-    gitClone: async (sandboxId, url, path, options) => {
-      await call({ kind: "clone", sandboxId, url, path, options });
-    },
-    gitCheckout: async (sandboxId, path, ref) => {
-      await call({ kind: "checkout", sandboxId, path, ref });
-    },
-  };
+/** A member runner's address in the remote operation queue. */
+function clientExecutor(id: string): string {
+  return `client:${id}`;
 }
 
 /** Authenticated member clients provide execution, never database access. */
 export class ClientRunnersService {
+  private readonly queue: RemoteOperationQueue;
+
   constructor(
     private readonly db: Kysely<DB>,
     private readonly environments: ProjectEnvironmentsService,
-  ) {}
+  ) {
+    this.queue = new RemoteOperationQueue(db);
+  }
 
   async register(args: {
     identity: Identity;
@@ -360,44 +124,23 @@ export class ClientRunnersService {
     return { id: row.id, token };
   }
 
-  async poll(args: { identity: Identity; id: string; token: string }) {
-    const runner = await this.requireRunner(args);
-    await this.authorize({
-      identity: args.identity,
-      projectId: runner.project_id,
-      environment: runner.environment_name,
-    });
-    await this.db
-      .updateTable("client_runners")
-      .set({
-        lease_expires_at: sql`now() + interval '45 seconds'`,
-        updated_at: sql`now()`,
-      })
-      .where("id", "=", args.id)
-      .where("lease_token", "=", args.token)
-      .execute();
-    return this.db.transaction().execute(async (trx) => {
-      const job = await trx
-        .selectFrom("client_runner_jobs")
-        .selectAll()
-        .where("runner_id", "=", args.id)
-        .where("lease_token", "=", args.token)
-        .where("status", "=", "pending")
-        .where("expires_at", ">", sql<Date>`now()`)
-        .orderBy("created_at")
-        .forUpdate()
-        .skipLocked()
-        .executeTakeFirst();
-      if (!job) return null;
-      await trx
-        .updateTable("client_runner_jobs")
-        .set({ status: "running" })
-        .where("id", "=", job.id)
-        .execute();
-      return {
-        id: job.id,
-        operation: ClientRunnerOperationSchema.parse(job.operation),
-      };
+  /**
+   * Take the next operation for this runner, waiting up to 20 seconds.
+   * A poll retried with the same `pollId` receives what it already took.
+   */
+  async poll(args: {
+    identity: Identity;
+    id: string;
+    token: string;
+    pollId: string;
+  }) {
+    await this.renew(args);
+    return this.queue.poll({
+      executor: clientExecutor(args.id),
+      leaseToken: args.token,
+      pollId: args.pollId,
+      waitMs: 20_000,
+      leaseHeld: () => this.leaseHeld({ id: args.id, token: args.token }),
     });
   }
 
@@ -409,55 +152,21 @@ export class ClientRunnersService {
     response?: unknown;
     error?: string;
   }) {
-    const runner = await this.requireRunner(args);
-    await this.authorize({
-      identity: args.identity,
-      projectId: runner.project_id,
-      environment: runner.environment_name,
+    await this.requireRunner(args);
+    await this.queue.complete({
+      executor: clientExecutor(args.id),
+      leaseToken: args.token,
+      operationId: args.jobId,
+      ...(args.response !== undefined ? { response: args.response } : {}),
+      ...(args.error !== undefined ? { error: args.error } : {}),
     });
-    const result = await this.db
-      .updateTable("client_runner_jobs")
-      .set({
-        status: args.error ? "failed" : "completed",
-        response: jsonColumn(storableJson(args.response)),
-        error: args.error === undefined ? null : withoutNul(args.error),
-      })
-      .where("id", "=", args.jobId)
-      .where("runner_id", "=", args.id)
-      .where("lease_token", "=", args.token)
-      .where("status", "=", "running")
-      .where("expires_at", ">", sql<Date>`now()`)
-      .returning("id")
-      .executeTakeFirst();
-    if (!result) {
-      const receipt = await this.db
-        .selectFrom("client_runner_jobs")
-        .select("id")
-        .where("id", "=", args.jobId)
-        .where("runner_id", "=", args.id)
-        .where("lease_token", "=", args.token)
-        .where("status", "=", args.error ? "failed" : "completed")
-        .where(
-          sql<boolean>`response = ${JSON.stringify(args.response ?? null)}::jsonb`,
-        )
-        .where("error", args.error ? "=" : "is", args.error ?? null)
-        .executeTakeFirst();
-      if (receipt) return { ok: true };
-      throw new Error(
-        "Execution receipt is no longer accepted; inspect the session before retrying",
-      );
-    }
     return { ok: true };
   }
 
+  /** Keep the lease while operations run and no poll is pending. */
   async renew(args: { identity: Identity; id: string; token: string }) {
-    const runner = await this.requireRunner(args);
-    await this.authorize({
-      identity: args.identity,
-      projectId: runner.project_id,
-      environment: runner.environment_name,
-    });
-    await this.db
+    await this.requireRunner(args);
+    const renewed = await this.db
       .updateTable("client_runners")
       .set({
         lease_expires_at: sql`now() + interval '45 seconds'`,
@@ -465,11 +174,20 @@ export class ClientRunnersService {
       })
       .where("id", "=", args.id)
       .where("lease_token", "=", args.token)
-      .execute();
+      .where("lease_expires_at", ">", sql<Date>`now()`)
+      .returning("id")
+      .executeTakeFirst();
+    if (!renewed) throw new RemoteExecutorLeaseLostError();
   }
 
   async disconnect(args: { identity: Identity; id: string; token: string }) {
-    await this.requireRunner(args);
+    try {
+      await this.requireRunner(args);
+    } catch (error) {
+      // Already gone: nothing to end.
+      if (error instanceof RemoteExecutorLeaseLostError) return;
+      throw error;
+    }
     await this.db
       .updateTable("client_runners")
       .set({ lease_expires_at: sql`now()` })
@@ -505,75 +223,17 @@ export class ClientRunnersService {
       (allocationParts?.[2] && allocationParts[2] !== runner.lease_token)
     )
       return undefined;
-    const call = async (operation: ClientRunnerOperation): Promise<unknown> =>
-      withSpan(
-        {
-          tracer,
-          name: "client.execute",
-          attributes: {
-            "catamorphic.tenant.id": args.tenantId,
-            "catamorphic.project.id": args.projectId,
-            "catamorphic.client.id": runner.id,
-            "catamorphic.client.operation": operation.kind,
-          },
-        },
-        async () => {
-          // A first sandbox from a Dockerfile builds its image on the
-          // member's computer, which may take up to the builder's 30 minutes.
-          const minutes =
-            operation.kind === "create" &&
-            operation.options.image?.kind === "dockerfile"
-              ? 35
-              : 5;
-          const row = await this.db
-            .insertInto("client_runner_jobs")
-            .values({
-              runner_id: runner.id,
-              lease_token: runner.lease_token,
-              operation: toJson(operation),
-              expires_at: sql`now() + make_interval(mins => ${minutes})`,
-            })
-            .returning("id")
-            .executeTakeFirstOrThrow();
-          const deadline = Date.now() + minutes * 60_000;
-          while (Date.now() < deadline) {
-            const job = await this.db
-              .selectFrom("client_runner_jobs")
-              .selectAll()
-              .where("id", "=", row.id)
-              .executeTakeFirstOrThrow();
-            if (job.status === "completed") return job.response;
-            if (job.status === "failed")
-              throw new Error(job.error ?? "Client execution failed");
-            const online = await this.db
-              .selectFrom("client_runners")
-              .select("id")
-              .where("id", "=", runner.id)
-              .where("lease_token", "=", runner.lease_token)
-              .where("lease_expires_at", ">", sql<Date>`now()`)
-              .executeTakeFirst();
-            if (!online) break;
-            await new Promise((resolve) => setTimeout(resolve, 100));
-          }
-          await this.db
-            .updateTable("client_runner_jobs")
-            .set({
-              status: "failed",
-              error:
-                "Client disconnected or timed out; execution outcome may be unknown",
-            })
-            .where("id", "=", row.id)
-            .where("status", "in", ["pending", "running"])
-            .execute();
-          throw new Error(
-            "This machine disconnected or timed out. Check the last action before retrying.",
-          );
-        },
-      );
-    const provider = forwardingSandboxProvider({
+    const provider = this.queue.provider({
+      executor: clientExecutor(runner.id),
+      leaseToken: runner.lease_token,
+      leaseHeld: (token) => this.leaseHeld({ id: runner.id, token }),
+      label: "This machine",
       workspaceRoot: runner.workspace_root,
       processes: runner.processes,
-      call,
+      attributes: {
+        "catamorphic.tenant.id": args.tenantId,
+        "catamorphic.project.id": args.projectId,
+      },
     });
     return {
       descriptor: {
@@ -595,6 +255,23 @@ export class ClientRunnersService {
     };
   }
 
+  private async leaseHeld(args: { id: string; token: string }) {
+    return Boolean(
+      await this.db
+        .selectFrom("client_runners")
+        .select("id")
+        .where("id", "=", args.id)
+        .where("lease_token", "=", args.token)
+        .where("lease_expires_at", ">", sql<Date>`now()`)
+        .executeTakeFirst(),
+    );
+  }
+
+  /**
+   * The member's own runner, still permitted to serve its Environment. A
+   * lapsed or replaced lease is a lost connection, not a refusal: the runner
+   * registers again.
+   */
   private async requireRunner(args: {
     identity: Identity;
     id: string;
@@ -603,13 +280,19 @@ export class ClientRunnersService {
     const runner = await this.db
       .selectFrom("client_runners")
       .selectAll()
+      .select(sql<boolean>`lease_expires_at > now()`.as("lease_live"))
       .where("id", "=", args.id)
       .where("tenant_id", "=", args.identity.tenantId)
       .where("external_user_id", "=", args.identity.externalUserId)
-      .where("lease_token", "=", args.token)
-      .where("lease_expires_at", ">", sql<Date>`now()`)
       .executeTakeFirst();
     if (!runner) throw new AccessDeniedError();
+    await this.authorize({
+      identity: args.identity,
+      projectId: runner.project_id,
+      environment: runner.environment_name,
+    });
+    if (runner.lease_token !== args.token || !runner.lease_live)
+      throw new RemoteExecutorLeaseLostError();
     return runner;
   }
   private async authorize(args: {
