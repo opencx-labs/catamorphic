@@ -1,13 +1,13 @@
 import type {
   AppCollections,
   AppContentState,
-  AppIconName,
   AppSurface,
 } from "@catamorphic/app";
 import { useCatamorphic } from "@catamorphic/react";
 import { AppMount } from "@catamorphic/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useRef } from "react";
+import { type AppSummary, appsQuery } from "../lib/apps.js";
 import { useSteadyWidthDuringLayoutTransitions } from "../lib/layout-transition.js";
 import { appHostTheme, useTheme } from "../lib/theme.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
@@ -17,30 +17,12 @@ import { useAppPreferences } from "../lib/use-app-preferences.js";
 const DESKTOP_TENANT_ID = "00000000-0000-4000-8000-00000000d001";
 const DESKTOP_USER_ID = "desktop-user";
 
-export interface AppSummary {
-  name: string;
-  title: string;
-  id: string | null;
-  activeVersionId: string | null;
-  publishedAt: string | null;
-  icon: AppIconName;
-  /** Host data the newest ready build declares it reads (ADR 0148). */
-  access: { sessions?: "read" };
-}
+export type { AppSummary } from "../lib/apps.js";
 
 export function useApps(projectId: string | undefined) {
   const { apiClient } = useCatamorphic();
   return useQuery<AppSummary[]>({
-    queryKey: ["cat", "project", projectId, "apps"],
-    queryFn: async () => {
-      const result = await apiClient.GET("/api/projects/{projectId}/apps", {
-        params: { path: { projectId: projectId ?? "" } },
-      });
-      // Source listing is builder-only; scoped members open granted app surfaces.
-      if (result.response.status === 403) return [];
-      if (!result.data) throw new Error("Failed to list apps");
-      return result.data;
-    },
+    ...appsQuery({ apiClient, projectId }),
     enabled: Boolean(projectId),
     refetchInterval: 5000,
   });

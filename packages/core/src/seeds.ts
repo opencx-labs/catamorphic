@@ -558,7 +558,7 @@ uncertain action just because a connection returned.
 ## Shape the project experience from capabilities
 
 In the Work desktop app, a project may ship a shared
-\`.work/sidebar.js\` and up to six New Tab starters in the ordinary
+\`.work/workspace.js\` and up to six New Tab starters in the ordinary
 \`.work/project.json\` manifest. Both may target resolved authority with
 \`when: { permissions }\`; never branch on a role slug. Every declared
 condition must match, invalid conditions fail closed, and omitted configuration
@@ -579,23 +579,30 @@ leaves no empty UI behind.
 \`\`\`
 
 \`\`\`javascript
-// .work/sidebar.js
+// .work/workspace.js
 module.exports = {
-  left: [{ id: "project", title: "Project", icon: "House", sections: [
-    { id: "chats", type: "chats" },
-    { id: "files", type: "files" },
-    {
-      id: "brain",
-      type: "custom",
-      title: "Company brain",
-      when: { permissions: ["brain:maintain"] },
-      items: [{ label: "Handbook", url: "https://handbook.example.com" }],
-    },
-    { id: "changes", type: "git", title: "Changes", when: { permissions: ["program:write"] } },
-  ] }],
-  right: [],
+  sidebars: {
+    left: [{ id: "project", title: "Project", icon: "House", sections: [
+      { id: "chats", type: "chats" },
+      { id: "files", type: "files" },
+      {
+        id: "brain",
+        type: "custom",
+        title: "Company brain",
+        when: { permissions: ["brain:maintain"] },
+        items: [{ label: "Handbook", url: "https://handbook.example.com" }],
+      },
+      { id: "changes", type: "git", title: "Changes", when: { permissions: ["program:write"] } },
+    ] }],
+    right: [],
+  },
 };
 \`\`\`
+
+The same file may add \`palette: { modes: [...] }\`: typed command palette
+modes (\`tickets\` then Space) over a custom section's module or items, for
+lists worth finding but not worth permanent sidebar space. The desktop
+configuration skill has the full contract and design guidance.
 
 These are project-owned presentation files, not a stock-server bootstrap
 format and not workflow logic. Embedders may provide a different presentation

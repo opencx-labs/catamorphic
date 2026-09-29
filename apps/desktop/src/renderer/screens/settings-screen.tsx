@@ -264,7 +264,7 @@ export function SettingsScreen({
               "prDefaultView",
             ]}
           />
-          <SidebarSection />
+          <WorkspaceSection />
         </>
       ),
     },
@@ -1861,22 +1861,23 @@ function ImportSection() {
 }
 
 /**
- * The sidebar is defined by a JS file, not a settings form — this section
- * points at it and offers a way back from a bad edit.
+ * Sidebars and palette modes are defined by one JS file (workspace.js), not
+ * a settings form: this section points at it and offers a way back from a
+ * bad edit.
  */
-function SidebarSection() {
+function WorkspaceSection() {
   const [file, setFile] = useState("");
   useEffect(() => {
-    void desktopApi.sidebarConfigFile().then(setFile);
+    void desktopApi.workspaceConfigFile().then(setFile);
   }, []);
 
   return (
-    <section data-setting-id="sidebar" className="settings-card mt-4">
+    <section data-setting-id="workspace" className="settings-card mt-4">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold">Sidebar</h2>
+        <h2 className="text-sm font-semibold">Sidebars and palette</h2>
         <button
           type="button"
-          onClick={() => void desktopApi.sidebarConfigReset()}
+          onClick={() => void desktopApi.workspaceConfigReset()}
           className="flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
         >
           <RotateCcw className="size-3" />
@@ -1884,10 +1885,10 @@ function SidebarSection() {
         </button>
       </div>
       <p className="mt-1 text-xs leading-5 text-fg-muted">
-        The left sidebar's sections and items are defined in a JavaScript file.
-        Edit it directly, or ask the assistant to change it for you (&ldquo;hide
-        the workflows section&rdquo;, &ldquo;add a Docs section&rdquo;). Changes
-        apply live.
+        Both sidebars and your own palette modes are defined in one JavaScript
+        file. Edit it directly, or ask the assistant to change it for you
+        (&ldquo;hide the workflows section&rdquo;, &ldquo;add a palette mode for
+        my open tickets&rdquo;). Changes apply live.
       </p>
       <p className="mt-2 text-xs text-fg-faint">
         <span className="break-all font-mono">{file}</span>
@@ -2073,7 +2074,7 @@ function ConfigurationErrors({ projectId }: { projectId?: string }) {
       desktopApi.onPrefsChanged(refresh),
       desktopApi.onThemeChanged(refresh),
       desktopApi.onKeybindingsChanged(refresh),
-      desktopApi.onSidebarConfigChanged(refresh),
+      desktopApi.onWorkspaceConfigChanged(refresh),
     ];
     return () => {
       alive = false;

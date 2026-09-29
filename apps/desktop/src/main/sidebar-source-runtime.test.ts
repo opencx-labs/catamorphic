@@ -3,8 +3,8 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { sanitizeSidebarSourcePage } from "./sidebar-config.js";
 import { SidebarSourceRuntime } from "./sidebar-source-runtime.js";
+import { sanitizeSidebarSourcePage } from "./workspace-config.js";
 
 const roots: string[] = [];
 const runtimes: SidebarSourceRuntime[] = [];

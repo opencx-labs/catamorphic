@@ -66,10 +66,10 @@ beforeAll(async () => {
     `window.catamorphicDesktop.createProject({name:'Sidebar primitives',rootPath:${JSON.stringify(path.join(app.userDataDir, "sidebar-primitives"))}})`,
   );
   file = await app.eval<string>(
-    "window.catamorphicDesktop.sidebarConfigFile()",
+    "window.catamorphicDesktop.workspaceConfigFile()",
   );
   fs.copyFileSync(
-    path.join(import.meta.dirname, "fixtures/agent-sidebar.cjs"),
+    path.join(import.meta.dirname, "fixtures/agent-workspace.cjs"),
     file,
   );
   const server = await app.eval<{ url: string }>(
@@ -260,7 +260,7 @@ it("mounts the real Codex-authored live widget through the sandboxed app bridge"
   const source = fs.readFileSync(file, "utf8");
   fs.writeFileSync(
     file,
-    `${source}\nmodule.exports.right.find(tab => tab.id === "focused-chat").sections = module.exports.right.find(tab => tab.id === "focused-chat").sections.filter(section => section.id !== "agent-monitor"); module.exports.right.find(tab => tab.id === "focused-chat").sections.push({id:"agent-monitor",type:"app",app:"agent-monitor",title:"Agent monitor",height:320,hideEmpty:true,collections:["subsessions"]});\n`,
+    `${source}\nmodule.exports.sidebars.right.find(tab => tab.id === "focused-chat").sections = module.exports.sidebars.right.find(tab => tab.id === "focused-chat").sections.filter(section => section.id !== "agent-monitor"); module.exports.sidebars.right.find(tab => tab.id === "focused-chat").sections.push({id:"agent-monitor",type:"app",app:"agent-monitor",title:"Agent monitor",height:320,hideEmpty:true,collections:["subsessions"]});\n`,
   );
   try {
     await app.waitFor(

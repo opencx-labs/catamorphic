@@ -250,7 +250,7 @@ export function TabbedSidebar({
         )}
         {error && (
           <p role="alert" className="px-3 pb-2 text-xs text-warning">
-            Sidebar could not reload. {error}
+            workspace.js could not reload. {error}
           </p>
         )}
         <div className="relative min-h-0 flex-1 overflow-hidden">

@@ -17,8 +17,8 @@ import {
   type SessionCheckoutInfo,
 } from "../lib/desktop-api.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
+import type { PaletteItem } from "../palette/types.js";
 import { Collapsible } from "./collapsible.js";
-import type { PaletteItem } from "./command-palette.js";
 import { OpenResourceButton } from "./open-resource-button.js";
 import {
   useSidebarContent,

@@ -25,7 +25,7 @@ describe("profile resource ownership", () => {
         const disposed = [
           stores.theme,
           stores.keybindings,
-          stores.sidebar,
+          stores.workspace,
           stores.prefs,
         ].map((store) => vi.spyOn(store, "dispose"));
         expect(profiles.remove(profile.id)).toBe(true);

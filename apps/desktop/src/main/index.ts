@@ -229,7 +229,7 @@ emitLog({ scope: "catamorphic-desktop", body: "Desktop starting" });
 
 const paths = resolveDataPaths();
 const profilesStore = new ProfilesStore(paths.profilesFile);
-// Per-profile config (theme, keybindings, sidebar, agents) — one manager
+// Per-profile config (theme, keybindings, workspace, agents) — one manager
 // shared by IPC, the window layer, and the chat agent's config mirror.
 const profileConfig = new ProfileConfigManager(paths, profilesStore, () =>
   nativeTheme.shouldUseDarkColors ? "dark" : "light",
@@ -251,7 +251,7 @@ const state: ServerState = {
 /**
  * Which profile each window shows. Windows are born with a profile (theme
  * pre-painted from it) and can switch in place when their workspace is
- * empty; broadcasts of per-profile state (theme, keybindings, sidebar,
+ * empty; broadcasts of per-profile state (theme, keybindings, workspace,
  * agents) go only to that profile's windows.
  */
 const windowProfiles = new Map<number, string>();
@@ -580,10 +580,10 @@ app.whenReady().then(async () => {
     }
   });
   nativeTheme.on("updated", () => profileConfig.systemAppearanceChanged());
-  profileConfig.onSidebarChanged((profileId) => {
+  profileConfig.onWorkspaceChanged((profileId) => {
     // No payload: the resolved config depends on each window's active
     // project (layered resolution), so the renderer refetches instead.
-    sendToProfile(profileId, "catamorphic:sidebar-config-changed", null);
+    sendToProfile(profileId, "catamorphic:workspace-config-changed", null);
   });
   profileConfig.onPrefsChanged((profileId, prefs) => {
     sendToProfile(profileId, "catamorphic:prefs-changed", prefs);

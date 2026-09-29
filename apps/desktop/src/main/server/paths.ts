@@ -16,7 +16,7 @@ export interface DataPaths {
   profilesFile: string;
   /**
    * Per-profile home: `profiles/<id>/` holds that profile's theme.json,
-   * keybindings.json, sidebar.js, agents.json — plus the browser state that
+   * keybindings.json, workspace.js, agents.json — plus the browser state that
    * already lived here (history, vault, extensions).
    */
   profilesDir: string;

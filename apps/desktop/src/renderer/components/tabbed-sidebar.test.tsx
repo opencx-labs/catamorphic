@@ -3,7 +3,8 @@
 import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it } from "vitest";
-import type { SidebarConfig, SidebarSurface } from "../../shared/sidebar.js";
+import type { SidebarSurface } from "../../shared/sidebar.js";
+import type { WorkspaceConfig } from "../../shared/workspace-config.js";
 import type { SidebarContentState } from "./sidebar-contribution.js";
 import { TabbedSidebar } from "./tabbed-sidebar.js";
 
@@ -140,21 +141,23 @@ it("separates relevance and content states while preserving a hidden widget and 
   const node = document.createElement("div");
   document.body.append(node);
   const root = createRoot(node);
-  const config: SidebarConfig = {
-    left: [],
-    right: [
-      {
-        id: "chat",
-        title: "Chat tools",
-        when: { surface: ["chat"], session: true },
-        sections: [{ id: "children", type: "subsessions", hideEmpty: true }],
-      },
-      {
-        id: "all",
-        title: "Always",
-        sections: [{ id: "links", type: "custom" }],
-      },
-    ],
+  const config: WorkspaceConfig = {
+    sidebars: {
+      left: [],
+      right: [
+        {
+          id: "chat",
+          title: "Chat tools",
+          when: { surface: ["chat"], session: true },
+          sections: [{ id: "children", type: "subsessions", hideEmpty: true }],
+        },
+        {
+          id: "all",
+          title: "Always",
+          sections: [{ id: "links", type: "custom" }],
+        },
+      ],
+    },
   };
   const render = async (surface: SidebarSurface, state: SidebarContentState) =>
     act(async () =>
@@ -163,7 +166,7 @@ it("separates relevance and content states while preserving a hidden widget and 
           side="right"
           scope="test"
           open
-          tabs={config.right}
+          tabs={config.sidebars.right}
           surface={surface}
           onCustomize={() => {}}
           renderSection={(section, _visible, report) =>

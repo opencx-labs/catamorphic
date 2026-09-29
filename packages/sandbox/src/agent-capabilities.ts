@@ -43,8 +43,11 @@ export function agentCapabilityTools(
       description:
         "Find permitted host capabilities by topic, such as apps, workflows, browser, terminal, sessions, documents, connections, or execution. Returns typed schemas. Visibility is not permission to perform another action.",
       parameters: DiscoverCapabilitiesSchema.shape,
+      // Strict for agents: an unknown field (say intent for query) would
+      // otherwise be dropped and return an unfiltered page, which reads as
+      // "the capability does not exist".
       execute: (input) =>
-        gateway.discover(DiscoverCapabilitiesSchema.parse(input)),
+        gateway.discover(DiscoverCapabilitiesSchema.strict().parse(input)),
     },
     {
       name: "invoke_capability",

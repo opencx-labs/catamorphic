@@ -1,28 +1,67 @@
 import type { AppCollectionItem, AppCollections } from "@catamorphic/app";
-import { useCatamorphic } from "@catamorphic/react";
+import { useCatamorphic, workflowKeys } from "@catamorphic/react";
 import type { AgentSession } from "@catamorphic/react/types";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef } from "react";
+import {
+  createContext,
+  createElement,
+  type ReactNode,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+} from "react";
 import {
   OPEN_ACTIONS,
   type OpenMode,
   openModeForAction,
 } from "../../shared/open-mode.js";
-import type { SidebarSurface } from "../../shared/sidebar.js";
+import type { SidebarSource, SidebarSurface } from "../../shared/sidebar.js";
+import { isWorkspaceSource } from "../../shared/workspace-config.js";
 import { buildTree, isVisibleProjectFile } from "../components/files-nav.js";
 import type { WorkspaceTab } from "../components/workspace-tabs.js";
+import { appsQuery } from "./apps.js";
 import { desktopApi } from "./desktop-api.js";
 import {
   readSidebarSessionPage,
   subscribeSidebarSessions,
 } from "./sidebar-sessions.js";
 
-export function useSidebarAppCollections({
+/**
+ * The one data layer for workspace lists (ADR 0186). Sidebar app widgets
+ * (through their grants), palette resources, section searches and palette
+ * modes all read the same sources, and the built-in sidebar sections share
+ * their query caches, so a list loads, refreshes and opens one way.
+ */
+export interface WorkspaceSources extends AppCollections {
+  read: (
+    request: Parameters<AppCollections["read"]>[0] & {
+      /** Chats only: archived chats instead of promoted ones. */
+      archived?: boolean;
+      /** Internal: false for search reads, which no subscriber watches. */
+      track?: boolean;
+    },
+  ) => ReturnType<AppCollections["read"]>;
+  /**
+   * Every row of a source, roots then children, bounded and unique; for
+   * search. Search reads are not live views, so they do not register for
+   * a subscriber's branch invalidations.
+   */
+  readAll: (request: {
+    source: string;
+    signal: AbortSignal;
+    archived?: boolean;
+    /** Walk into rows with children (default true). */
+    children?: boolean;
+    limit?: number;
+  }) => Promise<AppCollectionItem[]>;
+}
+
+export function useWorkspaceSources({
   projectId,
   profileId,
   tabs,
   onOpenUrl,
-  granted,
   surface,
   writesProgram,
   onOpenSession,
@@ -34,7 +73,6 @@ export function useSidebarAppCollections({
   profileId?: string;
   tabs: readonly WorkspaceTab[];
   onOpenUrl: (url: string, mode?: OpenMode) => void;
-  granted?: string[];
   surface: SidebarSurface;
   /** Whether the viewer edits the program (`program:write`): Git sources and program files. */
   writesProgram: boolean;
@@ -45,7 +83,7 @@ export function useSidebarAppCollections({
     id: string,
     action: "archive" | "mark-read" | "mark-unread",
   ) => void;
-}): AppCollections {
+}): WorkspaceSources {
   const { apiClient } = useCatamorphic();
   const queryClient = useQueryClient();
   const actions = useRef({
@@ -71,20 +109,63 @@ export function useSidebarAppCollections({
     previousTabs.current = tabs;
     for (const listener of tabListeners.current) listener();
   }, [tabs]);
-  const grantedKey = JSON.stringify(granted ?? []);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: grantedKey is the value identity of the complete grant list.
   return useMemo(() => {
-    const allowed = new Set(granted ?? []);
     const sessions = new Map<string, AgentSession>();
     const openers = new Map<string, (mode?: OpenMode) => void>();
     const admitted = new Map<string, Map<string, AppCollectionItem>>();
     const loadedParents = new Map<string, Set<string | null>>();
+    // Git reads the program's checkouts: only for people who edit it.
     const requireSource = (source: string) => {
-      if (!allowed.has(source) || (!writesProgram && ["git"].includes(source)))
-        throw new Error(`Source ${source} is not granted to this widget`);
+      if (!isWorkspaceSource(source))
+        throw new Error(`Source ${source} has no collection adapter`);
+      if (!writesProgram && source === "git")
+        throw new Error(`Source ${source} is not available here`);
     };
-    const result: AppCollections = {
-      read: async ({ source, parentId, cursor, signal }) => {
+    const result: WorkspaceSources = {
+      readAll: async ({
+        source,
+        signal,
+        archived,
+        children = true,
+        limit = 1000,
+      }) => {
+        const rows = new Map<string, AppCollectionItem>();
+        const queue: Array<string | null> = [null];
+        // Activity already lists running children beside their parents.
+        const walk = children && source !== "activity";
+        let pages = 0;
+        while (queue.length && rows.size < limit && pages < 50) {
+          const parentId = queue.shift() ?? null;
+          let cursor: string | undefined;
+          do {
+            pages += 1;
+            const page = await result.read({
+              source,
+              parentId,
+              cursor,
+              signal,
+              archived,
+              track: false,
+            });
+            for (const item of page.items) {
+              if (rows.has(item.id)) continue;
+              rows.set(item.id, item);
+              if (walk && item.hasChildren) queue.push(item.id);
+            }
+            // A page can be empty after filtering and still have more.
+            cursor = page.cursor;
+          } while (cursor && rows.size < limit && pages < 50);
+        }
+        return [...rows.values()].slice(0, limit);
+      },
+      read: async ({
+        source,
+        parentId,
+        cursor,
+        signal,
+        archived,
+        track = true,
+      }) => {
         requireSource(source);
         const offset = cursor ? Number(cursor) : 0;
         if (!Number.isSafeInteger(offset) || offset < 0)
@@ -108,7 +189,9 @@ export function useSidebarAppCollections({
             query: {
               limit: 50,
               offset,
-              ...(source === "chats" ? { visibility: "promoted" } : {}),
+              ...(source === "chats"
+                ? { visibility: archived ? "archived" : "promoted" }
+                : {}),
               ...(parent
                 ? { parentSessionId: parent }
                 : source === "activity"
@@ -119,7 +202,7 @@ export function useSidebarAppCollections({
           items = page.items
             .filter(
               (session) =>
-                session.visibility !== "archived" &&
+                (session.visibility !== "archived" || archived) &&
                 (source !== "activity" ||
                   session.running ||
                   session.attentionRequired),
@@ -147,11 +230,9 @@ export function useSidebarAppCollections({
                   { id: "mark-read", label: "Mark as read" },
                   { id: "mark-unread", label: "Mark as unread" },
                 ],
-                data: {
-                  status: session.status,
-                  agentId: session.agentId,
-                  source: session.source,
-                },
+                // The record itself: filters and sorts compare the same
+                // fields the sidebar section does (source.filter).
+                data: { ...session },
               };
             });
           if (offset + page.items.length < page.total)
@@ -183,6 +264,7 @@ export function useSidebarAppCollections({
                   actions: node.children
                     ? []
                     : [{ id: "open", label: "Open file" }],
+                  data: { path: node.path },
                 });
               if (node.children) visit(node.children, node.path);
             }
@@ -191,28 +273,42 @@ export function useSidebarAppCollections({
           items = all.slice(offset, offset + 100);
           if (offset + 100 < all.length) next = String(offset + 100);
         } else if (source === "workflows") {
-          const response = await apiClient.GET(
-            "/api/projects/{projectId}/workflows",
-            { params: { path: { projectId } }, signal },
-          );
-          if (!response.data) throw new Error("Could not read workflows");
-          items = response.data.map((workflow) => ({
+          // The sidebar's Workflows section reads this same cache.
+          const workflows = await queryClient.fetchQuery({
+            queryKey: workflowKeys.list({ projectId, ref: undefined }),
+            staleTime: 1000,
+            // The query's own signal: one reader leaving must not fail the
+            // shared request the sidebar is waiting on.
+            queryFn: async ({ signal: querySignal }) => {
+              const response = await apiClient.GET(
+                "/api/projects/{projectId}/workflows",
+                {
+                  params: { path: { projectId }, query: {} },
+                  signal: querySignal,
+                },
+              );
+              if (!response.data) throw new Error("Could not read workflows");
+              return response.data;
+            },
+          });
+          items = workflows.map((workflow) => ({
             id: workflow.name,
             label: workflow.displayName ?? workflow.name,
             icon: "Workflow",
             actions: [{ id: "open", label: "Open workflow" }],
+            data: { ...workflow },
           }));
         } else if (source === "apps") {
-          const response = await apiClient.GET(
-            "/api/projects/{projectId}/apps",
-            { params: { path: { projectId } }, signal },
-          );
-          if (!response.data) throw new Error("Could not read apps");
-          items = response.data.map((app) => ({
+          const apps = await queryClient.fetchQuery({
+            ...appsQuery({ apiClient, projectId }),
+            staleTime: 1000,
+          });
+          items = apps.map((app) => ({
             id: app.name,
             label: app.title,
             icon: app.icon,
             actions: [{ id: "open", label: "Open app" }],
+            data: { ...app },
           }));
         } else if (source === "prs") {
           const prs = await desktopApi.prList(projectId);
@@ -222,6 +318,7 @@ export function useSidebarAppCollections({
             description: pr.author,
             icon: "GitPullRequest",
             actions: [{ id: "open", label: "Open review" }],
+            data: { number: pr.number, author: pr.author, title: pr.title },
           }));
         } else if (source === "git") {
           const overview = await desktopApi.gitOverview(
@@ -278,7 +375,12 @@ export function useSidebarAppCollections({
         } else if (source === "bookmarks") {
           if (!profileId)
             throw new Error("A profile is required for bookmarks");
-          const data = await desktopApi.bookmarksGet({ projectId, profileId });
+          // One read serves every folder of a walk.
+          const data = await queryClient.fetchQuery({
+            queryKey: ["desktop", "bookmarks", profileId, projectId],
+            staleTime: 1000,
+            queryFn: () => desktopApi.bookmarksGet({ projectId, profileId }),
+          });
           const nodes: AppCollectionItem[] = [];
           for (const [scope, group] of Object.entries(data)) {
             if (!group) continue;
@@ -309,7 +411,11 @@ export function useSidebarAppCollections({
                   { id: "open", label: "Open bookmark" },
                   { id: "copy-url", label: "Copy URL" },
                 ],
-                data: { url: bookmark.url },
+                data: {
+                  url: bookmark.url,
+                  faviconUrl: bookmark.faviconUrl ?? null,
+                  scope,
+                },
               });
             }
           }
@@ -355,7 +461,7 @@ export function useSidebarAppCollections({
               actions: [{ id: "open", label: "Focus tab" }],
             };
           });
-        } else throw new Error(`Source ${source} has no collection adapter`);
+        }
         items = items.map((item) =>
           item.actions?.some((action) => action.id === "open")
             ? {
@@ -371,9 +477,11 @@ export function useSidebarAppCollections({
             : item,
         );
         signal.throwIfAborted();
-        const parents = loadedParents.get(source) ?? new Set<string | null>();
-        parents.add(parentId ?? null);
-        loadedParents.set(source, parents);
+        if (track) {
+          const parents = loadedParents.get(source) ?? new Set<string | null>();
+          parents.add(parentId ?? null);
+          loadedParents.set(source, parents);
+        }
         const known = admitted.get(source) ?? new Map();
         for (const item of items) known.set(item.id, item);
         admitted.set(source, known);
@@ -445,7 +553,15 @@ export function useSidebarAppCollections({
           "prs",
         ].includes(source)
           ? desktopApi.onGitChanged((change) => {
-              if (change.projectId === projectId) refresh();
+              if (change.projectId !== projectId) return;
+              // Program files changed: the shared lists are stale now.
+              void queryClient.invalidateQueries({
+                queryKey: workflowKeys.project({ projectId }),
+              });
+              void queryClient.invalidateQueries({
+                queryKey: ["cat", "project", projectId, "apps"],
+              });
+              refresh();
             })
           : () => {};
         const sessions = ["chats", "subsessions", "activity"].includes(source)
@@ -459,10 +575,14 @@ export function useSidebarAppCollections({
           source === "bookmarks"
             ? desktopApi.onBookmarksChanged((change) => {
                 if (
-                  change.profileId === profileId &&
-                  (!change.projectId || change.projectId === projectId)
+                  change.profileId !== profileId ||
+                  (change.projectId && change.projectId !== projectId)
                 )
-                  refresh();
+                  return;
+                queryClient.removeQueries({
+                  queryKey: ["desktop", "bookmarks", profileId],
+                });
+                refresh();
               })
             : () => {};
         return () => {
@@ -479,8 +599,86 @@ export function useSidebarAppCollections({
     queryClient,
     projectId,
     profileId,
-    grantedKey,
     surface.sessionId,
     writesProgram,
   ]);
+}
+
+/** A widget sees only the sources its section grants (ADR 0102). */
+export function grantSources(
+  sources: WorkspaceSources,
+  granted: readonly string[] | undefined,
+): AppCollections {
+  const allowed = new Set(granted ?? []);
+  const require = (source: string) => {
+    if (!allowed.has(source))
+      throw new Error(`Source ${source} is not granted to this widget`);
+  };
+  return {
+    read: async (request) => {
+      require(request.source);
+      return sources.read(request);
+    },
+    execute: async (request) => {
+      require(request.source);
+      return sources.execute(request);
+    },
+    subscribe: (request) => {
+      require(request.source);
+      return sources.subscribe?.(request) ?? (() => {});
+    },
+  };
+}
+
+/**
+ * source.filter and source.sort over loaded rows. Fields resolve on the
+ * row's data first (a chat's running, a PR's author), then the row itself.
+ */
+export function projectSourceItems<
+  T extends { data?: Record<string, unknown> },
+>(items: readonly T[], source: SidebarSource | undefined): T[] {
+  const read = (item: T, field: string): unknown => {
+    let value: unknown = { ...item, ...item.data };
+    for (const part of field.split(".")) {
+      if (!value || typeof value !== "object") return undefined;
+      value = Object.entries(value).find(([key]) => key === part)?.[1];
+    }
+    return value;
+  };
+  const filtered = items.filter((item) =>
+    Object.entries(source?.filter ?? {}).every(
+      ([field, value]) => read(item, field) === value,
+    ),
+  );
+  const sort = source?.sort;
+  return sort
+    ? filtered.sort((left, right) => {
+        const a = read(left, sort.field);
+        const b = read(right, sort.field);
+        const order =
+          typeof a === "number" && typeof b === "number"
+            ? a - b
+            : String(a ?? "").localeCompare(String(b ?? ""));
+        return order * (sort.direction === "desc" ? -1 : 1);
+      })
+    : filtered;
+}
+
+const WorkspaceSourcesContext = createContext<WorkspaceSources | null>(null);
+
+export function WorkspaceSourcesProvider({
+  value,
+  children,
+}: {
+  value: WorkspaceSources;
+  children: ReactNode;
+}) {
+  return createElement(WorkspaceSourcesContext.Provider, { value }, children);
+}
+
+export function useWorkspaceSourcesContext(): WorkspaceSources {
+  const sources = useContext(WorkspaceSourcesContext);
+  if (!sources)
+    throw new Error("Workspace lists need a WorkspaceSourcesProvider.");
+  return sources;
 }

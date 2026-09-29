@@ -1098,7 +1098,7 @@ export function buildWorkspaceToolkit(
     {
       name: "desktop_settings",
       description:
-        "Get the files that configure Work for this project and person (preferences, theme, keyboard shortcuts, sidebar) with their scopes, and any validation errors. Use with the configuring-catamorphic-desktop skill when the person wants to change how Work looks or behaves.",
+        "Get the files that configure Work for this project and person (preferences, theme, keyboard shortcuts, and workspace.js for sidebars and palette modes) with their scopes, and any validation errors. Use with the configuring-catamorphic-desktop skill when the person wants to change how Work looks or behaves.",
       parameters: {},
       execute: async (_input, ctx) => {
         if (!host.desktopSettings)

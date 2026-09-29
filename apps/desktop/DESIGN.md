@@ -382,7 +382,7 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   empty}` and renders rows only. The section header shows a small spinner while
   loading or refreshing and a hover-revealed Refresh button otherwise; the body
   shows three still skeleton rows before the first result, one muted sentence
-  when empty (`section.empty` in `sidebar.js` replaces it), and the error with
+  when empty (`section.empty` in `workspace.js` replaces it), and the error with
   Retry when a read fails. Rows stay on screen during a refresh; collapsing and
   re-expanding never discards what was already loaded.
 - **No private loading text.** "Loading…", spinners, skeletons, empty copy and
@@ -437,7 +437,7 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   transition height and position, so a section that loads after the popover
   opens expands it smoothly. A popover that shifts its layout on load is a
   defect.
-- **Primitives, not presets.** Anything a built-in section can do, a `sidebar.js`
+- **Primitives, not presets.** Anything a built-in section can do, a `workspace.js`
   section can do with the same fields: `empty`, `headerActions`, `itemDefaults`,
   `itemOverrides`, `height`, `rowHeight`, and a source that exports `load`,
   `subscribe`, `action`, `move`, `drop`. A sidebar an agent writes looks like a
@@ -1322,3 +1322,29 @@ the request settles, the site's deadline passes, or the page moves on.
 During a Work sign-in it also offers "Continue in your browser". The sheet
 shows the site's icon exactly as its tab does, so a dark-theme icon stays
 visible.
+
+### 2026-09-29: The palette learns what you use
+
+The palette ranked by text alone, so a page title could outrank the command
+you meant, and the focused site's settings topped any query that matched its
+host. Now a row's score is its match, what kind of row it is, and how much
+you use it (ADR 0186). Commands and app surfaces come before pages unless a
+page matches clearly better or you visit it far more. Pages keep their
+history counts; Settings, Usage, Sites and the other surfaces count a visit
+however you open them; commands count when picked from the palette. Picking
+a row after typing teaches that query, so "se" lands on what you chose last
+time. The empty palette shows up to six Frequent rows under the starting
+actions and the current site's settings, with pages held to half.
+
+Every mode is one shape: a chip, the names that enter it, and its rows.
+Pickers, sidebar searches, the new Sites and Commands modes and your own
+modes share it, with one set of loading, empty and retry rows. Your agent
+adds a mode in workspace.js under palette.modes, from the same sources
+sections use, so one module can be a sidebar list and a palette mode. The
+file was sidebar.js; it now describes the whole window, so it is
+workspace.js, exporting { sidebars: { left, right }, palette }.
+
+Lists load one way. The sources app widgets read (chats, files, workflows,
+bookmarks and the rest) are the palette's resources too, and every sidebar
+section can open its rows in the palette with its own filter. A mode can
+be as small as "running chats": a built-in source and one filter.

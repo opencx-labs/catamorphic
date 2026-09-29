@@ -1,60 +1,7 @@
-import { useAgentSessions, useWorkflows } from "@catamorphic/react";
-import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
-import {
-  ArrowLeft,
-  ArrowRight,
-  Bot,
-  ChartColumn,
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  CircleDot,
-  Columns2,
-  Command,
-  Cpu,
-  Diff,
-  Download,
-  FileCode,
-  FileSearch,
-  Gauge,
-  Ghost,
-  GitCompare,
-  Globe,
-  History,
-  KeyRound,
-  LayoutGrid,
-  Link,
-  Link2,
-  type LucideIcon,
-  Maximize2,
-  MessageSquare,
-  MessageSquarePlus,
-  Minimize2,
-  PanelLeft,
-  PanelRight,
-  Plug,
-  Plus,
-  RefreshCw,
-  Search,
-  Send,
-  ServerCog,
-  Settings2,
-  Settings as SettingsIcon,
-  ShieldCheck,
-  SlidersHorizontal,
-  Smartphone,
-  Sparkles,
-  SquareTerminal,
-  Star,
-  TextSearch,
-  UserRound,
-  Workflow as WorkflowIcon,
-  X,
-} from "lucide-react";
+import { Bot, Check, Globe, type LucideIcon, Search, Star } from "lucide-react";
 import {
   Fragment,
   type KeyboardEvent,
-  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -63,430 +10,63 @@ import {
   useState,
 } from "react";
 import {
-  type ActionDefinition,
   type ActionId,
   BUILTIN_ACTIONS,
   type KeybindingAction,
 } from "../../shared/actions.js";
-import { permissionModeLabel } from "../../shared/agent-permissions.js";
-import type { FileSearchResult } from "../../shared/file-search.js";
-import type { HistoryEntry } from "../../shared/history.js";
 import type { OpenMode as CommitMode } from "../../shared/open-mode.js";
-import { SETTINGS_CATALOG } from "../../shared/settings-catalog.js";
-import { sidebarSections } from "../../shared/sidebar.js";
-import type { TerminalMacro } from "../../shared/terminal-macros.js";
 import {
-  defaultModelLabel,
-  useAgentDefaultModel,
-} from "../lib/agent-default-model.js";
-import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
-import { permissionModeChoices } from "../lib/agent-permissions.js";
-import { commandScore } from "../lib/command-score.js";
-import {
-  type AgentEffort,
-  type AgentInfo,
-  type Bookmark,
-  desktopApi,
-  type HarnessModelInfo,
-  type HarnessPermissions,
-  type OpenRouterCatalog,
-  type Profile,
-  type ProjectAgentInfo,
-  projectAgentAsInfo,
-  type SidebarConfig,
-  type SidebarItem,
-} from "../lib/desktop-api.js";
-import { historyDetail, historyIcon, useHistory } from "../lib/history.js";
+  EMPTY_PALETTE_SIGNALS,
+  type PaletteSignals,
+  paletteCountsVisit,
+} from "../../shared/palette.js";
+import { normalizeCommandQuery } from "../lib/command-score.js";
+import { desktopApi, projectAgentAsInfo } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
-import { lucideIcon } from "../lib/lucide-icon.js";
+import { useProjectSkills } from "../lib/skills.js";
+import { usePaletteHost } from "../palette/host.js";
+import {
+  isFullPaletteModeName,
+  matchPaletteMode,
+  pinCurrentFirst,
+  usePaletteLoad,
+} from "../palette/load.js";
+import { isChoiceMode } from "../palette/modes/choices.js";
+import { useTopLevelModeRows } from "../palette/modes/custom.js";
+import { usePaletteModes } from "../palette/modes/index.js";
+import { useProjectAgents } from "../palette/project-agents.js";
 import {
   createPaletteIndex,
+  frequentItems,
   PALETTE_RESULT_LIMIT,
-} from "../lib/palette-search.js";
-import { skillsForAgent, useProjectSkills } from "../lib/skills.js";
-import { NEW_WORKFLOW_PROMPT } from "../lib/workflow-authoring.js";
-import { useApps } from "../screens/app-screen.js";
+} from "../palette/rank.js";
+import { useCommandRows } from "../palette/rows/commands.js";
+import { useDestinationRows } from "../palette/rows/destinations.js";
+import { useHistoryRows } from "../palette/rows/history.js";
+import { useResourceRows } from "../palette/rows/resources.js";
+import { useSettingRows } from "../palette/rows/settings.js";
+import type { PaletteItem, PaletteModeRequest } from "../palette/types.js";
 import { resolveInput } from "../screens/browser-screen.js";
 import { PILL_SURFACE } from "./context-pill.js";
 import { OpenResourceButton } from "./open-resource-button.js";
-import { SiteFavicon } from "./site-favicon.js";
-import type { WorkspaceTab } from "./workspace-tabs.js";
 
 /**
  * The command palette, in two hosts: a Cmd+P overlay above everything, and
- * the content of a "New Tab" (Cmd+T). Matching is Superhuman's
- * command-score over label + keywords — the same algorithm cmdk uses, so
- * subsequences ("gto proj") and synonyms both hit.
+ * the content of a "New Tab" (Cmd+T). Both read the app through the palette
+ * host (palette/host.tsx); rows come from palette/rows, modes from
+ * palette/modes, ranking from palette/rank (ADR 0186).
  *
  * Enter/Cmd+Enter: in the overlay, Enter opens in the current tab and
  * Cmd+Enter in a new one; in a palette tab both land in the tab itself
  * (the palette tab is consumed).
  */
 
-/**
- * How a row's target opens, mirrored from the entry hints: ↵ opens in the
- * current tab, ⌘↵ in a new tab, ⌘⇧↵ tiled to the side of the current
- * view. Rows that can't tile (pure actions) treat "side" as "tab".
- */
-
-/**
- * Icons stay renderer-side (the shared registry is plain data usable by
- * the main process). Unknown ids — e.g. future plugin actions — fall back
- * to the command glyph.
- */
-const ACTION_ICONS: Partial<Record<ActionId, LucideIcon>> = {
-  "open-settings": SettingsIcon,
-  "open-floating-settings": SettingsIcon,
-  "search-files": FileSearch,
-  "search-content": TextSearch,
-  "search-diff": Diff,
-  "search-changes": GitCompare,
-  "search-settings": Search,
-  "new-tab": Plus,
-  "command-palette": Command,
-  "submit-pr-comment": Send,
-  "toggle-floating-terminal": SquareTerminal,
-  "new-floating-browser": Globe,
-  "dismiss-floating": X,
-  "floating-to-tab": Maximize2,
-  "floating-to-split": Columns2,
-  "browser-focus-address": Link,
-  "browser-reload": RefreshCw,
-  "browser-reload-hard": RefreshCw,
-  "toggle-right-sidebar": PanelRight,
-  "check-for-updates": RefreshCw,
-  "session-status": CircleDot,
-  "continue-on-mobile": Smartphone,
-  "remote-environment": ServerCog,
-  "new-incognito-chat": Ghost,
-  "new-floating-chat": MessageSquarePlus,
-  "toggle-chat-minimized": Minimize2,
-  "chat-to-tab": Maximize2,
-  "prev-chat": MessageSquare,
-  "next-chat": MessageSquare,
-  "prev-tab": ChevronLeft,
-  "next-tab": ChevronRight,
-  "split-view": Columns2,
-  "new-browser-tab": Globe,
-  "browser-back": ArrowLeft,
-  "browser-forward": ArrowRight,
-  "reopen-tab": History,
-  "new-terminal-tab": SquareTerminal,
-  "new-editor-tab": FileCode,
-  "toggle-sidebar": PanelLeft,
-  "close-tab": X,
-  "setup-agent": Bot,
-  "default-agent": Bot,
-  "switch-agent": Bot,
-  "configure-agent": Settings2,
-  "change-effort": Gauge,
-  "change-permission-mode": ShieldCheck,
-  "switch-model": Cpu,
-  "manage-connectors": Plug,
-  "connect-remote-project": Link2,
-};
-
-/**
- * Pickers: palette-local flows where a command narrows the list to one
- * question ("which agent?", "which effort?"). Same chip visual as the @
- * modes; Backspace on empty input pops back out.
- */
-export type PaletteInPicker =
-  | "default-agent"
-  | "switch-agent"
-  | "configure-agent"
-  | "effort"
-  | "permission-mode"
-  | "model";
-
-const PICKER_CHIPS: Record<
-  PaletteInPicker,
-  { chip: string; icon: LucideIcon; placeholder: string }
-> = {
-  "default-agent": {
-    chip: "Default agent",
-    icon: Bot,
-    placeholder: "Pick the profile's default agent…",
-  },
-  "switch-agent": {
-    chip: "Chat agent",
-    icon: Bot,
-    placeholder: "Pick an agent for this chat…",
-  },
-  "configure-agent": {
-    chip: "Configure",
-    icon: Settings2,
-    placeholder: "Pick an agent to configure…",
-  },
-  effort: {
-    chip: "Effort",
-    icon: Gauge,
-    placeholder: "Pick reasoning effort…",
-  },
-  "permission-mode": {
-    chip: "Permission mode",
-    icon: ShieldCheck,
-    placeholder: "Pick the agent's permission mode…",
-  },
-  model: {
-    chip: "Model",
-    icon: Cpu,
-    placeholder: "Type or pick a model…",
-  },
-};
-
-/** Action rows that open a picker instead of running an app handler. */
-const PICKER_ACTIONS: Partial<Record<ActionId, PaletteInPicker>> = {
-  "default-agent": "default-agent",
-  "switch-agent": "switch-agent",
-  "configure-agent": "configure-agent",
-  "change-effort": "effort",
-  "change-permission-mode": "permission-mode",
-  "switch-model": "model",
-};
-
-const HARNESS_LABELS: Record<AgentInfo["harness"], string> = {
-  "ai-sdk": "Built-in",
-  "claude-code": "Claude Code",
-  codex: "Codex",
-};
-
-const PROVIDER_LABELS: Record<string, string> = {
-  anthropic: "Anthropic",
-  openai: "OpenAI",
-  openrouter: "OpenRouter",
-};
-
-/**
- * What an agent runs on, for the faded detail: the built-in agent is
- * named by its provider (the harness name says nothing useful next to a
- * user-chosen agent name), the CLIs by the harness.
- */
-function agentSourceLabel(agent: AgentInfo): string {
-  if (agent.harness === "ai-sdk" && agent.provider) {
-    return PROVIDER_LABELS[agent.provider] ?? agent.provider;
-  }
-  return HARNESS_LABELS[agent.harness];
-}
-
-/** Kind labels for PROJECT agents (committed definitions, ADR 0050). */
-const PROJECT_KIND_LABELS: Record<string, string> = {
-  "claude-code": "Claude Code",
-  codex: "Codex",
-  builtin: "Built-in",
-  acp: "ACP",
-  "e2e-fake": "Fake harness",
-};
-
-/** Faded detail for a project-agent row: kind + consent state (or error). */
-function projectAgentDetail(agent: ProjectAgentInfo): string {
-  if (agent.invalid) return agent.invalid;
-  const kind = PROJECT_KIND_LABELS[agent.kind] ?? agent.kind;
-  const state =
-    agent.consent === "none"
-      ? "needs approval"
-      : agent.consent === "stale"
-        ? "changed — approve again"
-        : agent.credentialsSource === "secret"
-          ? "project secret"
-          : agent.credentialsSource === "connection"
-            ? "server model connection"
-            : "approved";
-  return `${kind} · ${state}`;
-}
-
-/** How it authenticates, in the user's terms. */
-function agentAuthLabel(agent: AgentInfo): string {
-  if (agent.auth === "api-key") return "API key";
-  if (agent.auth === "local") return "this machine";
-  return agent.harness === "ai-sdk" && agent.provider === "openrouter"
-    ? "signed in"
-    : "separate account";
-}
-
-const EFFORT_LEVELS: Array<{
-  id: AgentEffort;
-  label: string;
-  description: string;
-}> = [
-  { id: "low", label: "Low effort", description: "Fast, direct responses" },
-  { id: "medium", label: "Medium effort", description: "Balanced reasoning" },
-  { id: "high", label: "High effort", description: "Deep, thorough reasoning" },
-  {
-    id: "xhigh",
-    label: "Extra-high effort",
-    description: "Extended reasoning (Codex's deepest)",
-  },
-  {
-    id: "max",
-    label: "Max effort",
-    description: "Deepest reasoning",
-  },
-];
-
-export interface PaletteItem {
-  id: string;
-  icon: LucideIcon;
-  iconNode?: ReactNode;
-  label: string;
-  /** Muted inline text, e.g. a URL host or the item's type. */
-  detail?: string;
-  keywords: string[];
-  /** Preformatted chip, e.g. "⌘B". */
-  shortcut?: string;
-  /**
-   * Picker rows: this row IS the active choice (current model/agent/
-   * effort). Renders a quiet check + "current" chip on the right, and the
-   * unfiltered picker list pins it first (normal ranking while searching).
-   */
-  current?: boolean;
-  /** Web rows saved as bookmarks carry a star at the right edge. */
-  bookmarked?: boolean;
-  /**
-   * Scope label rendered above this row when the previous row carries a
-   * different group (e.g. "Project agents" in the agent pickers).
-   */
-  group?: string;
-  /** Unusable rows (invalid project agents): visible, never committable. */
-  disabled?: boolean;
-  /** Navigate items load something tab-shaped and honor the commit mode. */
-  kind: "action" | "navigate";
-  run: (mode: CommitMode) => void;
-}
-
-/**
- * Unfiltered picker lists open with the active choice on top — "what runs
- * today" must be visible before picking. Stable sort: everything else
- * keeps its order. Searching skips this (normal ranking; the check chip
- * still marks the current row wherever it lands).
- */
-const pinCurrentFirst = (rows: PaletteItem[]): PaletteItem[] =>
-  [...rows].sort(
-    (a, b) => Number(b.current ?? false) - Number(a.current ?? false),
-  );
-
 /** The whole input is URL-shaped: scheme, or domain(+path) with no spaces. */
 const URLISH =
   /^(https?:\/\/\S+|[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?|localhost(:\d+)?(\/\S*)?)$/i;
 const LONG_QUERY = 60;
 const LIST_MAX_HEIGHT = 350;
-
-/**
- * Explicit intent modes (Chrome omnibox @-shortcuts pattern): typing the
- * trigger then Tab/Space — or picking the zero-state row — commits the
- * mode as a chip; the input then only feeds that mode. Backspace on empty
- * input pops the chip (cmdk convention).
- */
-export type PaletteSearchRequest = { nonce: string } & (
-  | { mode: "files" | "content" | "history" | "settings" }
-  | { mode: "section"; label: string; load: () => Promise<PaletteItem[]> }
-);
-
-export interface PaletteMode {
-  id:
-    | "agent"
-    | "web"
-    | "settings"
-    | "files"
-    | "content"
-    | "section"
-    | "history";
-  /** Typed trigger, matched with or without the leading @. */
-  trigger: string;
-  /** Alternate typed names that commit the same mode (e.g. "chat"). */
-  aliases?: string[];
-  /** Chip text once committed. */
-  chip: string;
-  icon: LucideIcon;
-  /** Zero-state row label + description. */
-  label: string;
-  description: string;
-  placeholder: string;
-}
-
-export const PALETTE_MODES: PaletteMode[] = [
-  {
-    id: "history",
-    trigger: "history",
-    chip: "History",
-    icon: History,
-    label: "Search history",
-    description: "Find pages and work you opened",
-    placeholder: "Search history…",
-  },
-  {
-    id: "files",
-    trigger: "files",
-    aliases: ["file"],
-    chip: "Files",
-    icon: FileCode,
-    label: "Find files",
-    description: "Find a filename in this project",
-    placeholder: "Search filenames…",
-  },
-  {
-    id: "content",
-    trigger: "content",
-    aliases: ["grep"],
-    chip: "File content",
-    icon: Search,
-    label: "Search file content",
-    description: "Find text and open its matching line",
-    placeholder: "Search inside files…",
-  },
-  {
-    id: "settings",
-    trigger: "settings",
-    aliases: ["preferences"],
-    chip: "Settings",
-    icon: SettingsIcon,
-    label: "Search settings",
-    description: "Find a setting and open its control",
-    placeholder: "Search settings…",
-  },
-  {
-    id: "agent",
-    trigger: "agent",
-    aliases: ["chat"],
-    chip: "Ask agent",
-    icon: Bot,
-    label: "Ask the agent",
-    description: "Send everything you type to a new chat",
-    placeholder: "Message the agent…",
-  },
-  {
-    id: "web",
-    trigger: "web",
-    chip: "Search web",
-    icon: Search,
-    label: "Search the web",
-    description: "Google search in a browser tab",
-    placeholder: "Search the web…",
-  },
-];
-
-/** A mode's typed names: the trigger plus any aliases. */
-const modeNames = (mode: PaletteMode): string[] => [
-  mode.trigger,
-  ...(mode.aliases ?? []),
-];
-
-/** "@age", "age", or "chat" → the agent mode, once unambiguous. */
-const matchMode = (input: string): PaletteMode | undefined => {
-  const raw = (input.startsWith("@") ? input.slice(1) : input).toLowerCase();
-  if (raw.length === 0) return undefined;
-  const matches = PALETTE_MODES.filter((mode) =>
-    modeNames(mode).some((name) => name.startsWith(raw)),
-  );
-  return matches.length === 1 ? matches[0] : undefined;
-};
-
-/** The input IS a full mode name (trigger or alias), no @ needed. */
-const isFullModeName = (input: string): boolean => {
-  const raw = input.toLowerCase();
-  return PALETTE_MODES.some((mode) => modeNames(mode).includes(raw));
-};
 
 /**
  * The New Tab page's quiet cheat sheet: the workhorse shortcuts that have
@@ -546,60 +126,11 @@ function FooterHint({ keycap, label }: { keycap: string; label: string }) {
   );
 }
 
-const hostOf = (url: string): string => {
-  try {
-    return new URL(url).host.replace(/^www\./, "");
-  } catch {
-    return url;
-  }
-};
-
-const bareUrl = (url: string): string =>
-  url.replace(/^https?:\/\/(www\.)?/, "");
-
 export function CommandPalette({
   variant,
   open = true,
   onClose,
-  projectId,
-  profileId,
-  projects,
-  activeProjectId,
-  profiles,
-  activeProfileId,
-  sidebarConfig,
-  onOpenUrl: suppliedOnOpenUrl,
-  onOpenTab: suppliedOnOpenTab,
-  onOpenSession: suppliedOnOpenSession,
-  onSelectProject,
-  onSwitchProfile,
-  onSendToAgent,
-  startingActions,
-  canCreateWorkflows = false,
-  onRunSkill,
-  actionHandlers,
-  terminalMacros,
-  onRunTerminalMacro,
-  actionAvailability,
-  agents,
-  defaultAgentId,
-  focusedChat,
-  onPickDefaultAgent,
-  onPickSessionAgent,
-  onPickProjectAgent,
-  onConfigureAgent,
-  defaultAgentOverridden,
-  onClearDefaultOverride,
-  onPickEffort,
-  onPickModel,
-  onPickHarnessPermissions,
-  onHighlightTarget,
-  pickerRequest,
-  searchRequest,
-  onOpenHistory,
-  focusedSite = null,
-  onOpenSiteSettings,
-  incognitoAllowed = true,
+  modeRequest,
 }: {
   variant: "overlay" | "tab";
   /**
@@ -609,345 +140,56 @@ export function CommandPalette({
   open?: boolean;
   /** Overlay: hide the palette. Tab: close/consume the palette tab. */
   onClose: () => void;
-  projectId: string | undefined;
-  profileId?: string;
-  projects: ProjectSummary[];
-  activeProjectId?: string;
-  profiles: Profile[];
-  activeProfileId?: string;
-  sidebarConfig: SidebarConfig | null;
-  onOpenUrl: (url: string, mode: CommitMode) => void;
-  onOpenTab: (tab: WorkspaceTab, mode?: CommitMode) => void;
-  onOpenSession: (session: AgentSession, mode?: CommitMode) => void;
-  onSelectProject: (id: string) => void;
-  onSwitchProfile: (profile: Profile) => void;
-  onSendToAgent: (
-    message: string,
-    mode: "float" | "tab",
-    agentId?: string,
-  ) => void;
-  /** Project-authored, caller-resolved zero-state actions. Empty means no UI. */
-  startingActions: Array<{ label: string; prompt: string; agentId?: string }>;
-  canCreateWorkflows?: boolean;
-  /**
-   * A skill row was committed: send its invocation message to an agent —
-   * into the focused chat when one exists, else a new chat in `mode`.
-   */
-  onRunSkill: (name: string, mode: "float" | "tab") => void;
-  /** One handler per registry action — the same map the shortcuts use. */
-  actionHandlers: Record<ActionId, (mode?: CommitMode) => void>;
-  terminalMacros: TerminalMacro[];
-  onRunTerminalMacro: (macro: TerminalMacro, mode?: CommitMode) => void;
-  /** False means the command cannot change the current workspace state. */
-  actionAvailability?: Partial<Record<ActionId, boolean>>;
-  /** The profile's configured agents (for the agent/effort pickers). */
-  agents: AgentInfo[];
-  defaultAgentId: string | null;
-  /** The chat the session-scoped commands act on; null = none focused. */
-  focusedChat: {
-    /** Its checkout can carry its own harness settings. */
-    sessionId: string | null;
-    agentId: string | null;
-    model: string | null;
-    effort: AgentEffort | null;
-  } | null;
-  onPickDefaultAgent: (agentId: string) => void;
-  onPickSessionAgent: (agentId: string) => void;
-  /**
-   * A project agent was picked. The app runs the consent flow first when
-   * the definition isn't approved (or approval went stale), then applies
-   * the same default/session switch the profile-agent handlers do.
-   */
-  onPickProjectAgent: (
-    agent: ProjectAgentInfo,
-    target: "default" | "session",
-  ) => void;
-  /** A configure-picker row was committed: open the agent's modal. */
-  onConfigureAgent: (agentId: string) => void;
-  /** This user's per-project default override is set (ADR 0056). */
-  defaultAgentOverridden?: boolean;
-  /** Clear that override, falling back to the project/global layers. */
-  onClearDefaultOverride?: () => void;
-  onPickEffort: (effort: AgentEffort | null) => void;
-  /** Change the target agent's model ("" = the automatic default). */
-  onPickModel: (agentId: string, model: string) => void;
-  /** Change a profile agent's harness permission mode (ADR 0182). */
-  onPickHarnessPermissions: (
-    agentId: string,
-    patch: HarnessPermissions,
-  ) => void;
-  /**
-   * The highlighted row targets a specific surface ("chat" = the focused
-   * chat, "close" = whatever close-tab would close) — reported up so the
-   * app can accent that surface's border while the row is highlighted.
-   */
-  onHighlightTarget?: (target: "chat" | "close" | null) => void;
-  /** Overlay only: open straight into a picker (Cmd+P agent commands). */
-  pickerRequest?: { kind: PaletteInPicker; nonce: string } | null;
-  searchRequest?: PaletteSearchRequest | null;
-  onOpenHistory: (entry: HistoryEntry, mode: CommitMode) => void;
-  /** The site of the focused browser tab; its settings command leads. */
-  focusedSite?: { origin: string; host: string } | null;
-  onOpenSiteSettings?: (origin: string) => void;
-  /** Project policy (ADR 0062): hide the incognito command when false. */
-  incognitoAllowed?: boolean;
+  /** Overlay only: open straight into a mode (agent commands, sidebar search). */
+  modeRequest?: PaletteModeRequest | null;
 }) {
+  const {
+    projectId,
+    profileId,
+    focusedChat,
+    onSendToAgent,
+    onOpenUrl,
+    onHighlightTarget,
+    agents,
+    defaultAgentId,
+    actionAvailability,
+  } = usePaletteHost();
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const navigation = useRef({
-    onOpenUrl: suppliedOnOpenUrl,
-    onOpenTab: suppliedOnOpenTab,
-    onOpenSession: suppliedOnOpenSession,
-  });
-  navigation.current = {
-    onOpenUrl: suppliedOnOpenUrl,
-    onOpenTab: suppliedOnOpenTab,
-    onOpenSession: suppliedOnOpenSession,
-  };
-  const onOpenUrl = useCallback(
-    (...args: Parameters<typeof suppliedOnOpenUrl>) =>
-      navigation.current.onOpenUrl(...args),
-    [],
-  );
-  const onOpenTab = useCallback(
-    (...args: Parameters<typeof suppliedOnOpenTab>) =>
-      navigation.current.onOpenTab(...args),
-    [],
-  );
-  const onOpenSession = useCallback(
-    (...args: Parameters<typeof suppliedOnOpenSession>) =>
-      navigation.current.onOpenSession(...args),
-    [],
-  );
-  const [mode, setMode] = useState<PaletteMode | null>(null);
-  const [sectionItems, setSectionItems] = useState<PaletteItem[]>([]);
-  const [sectionError, setSectionError] = useState<string | null>(null);
-  const [sectionLoading, setSectionLoading] = useState(false);
-  const [sectionRetry, setSectionRetry] = useState(0);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: retry explicitly reloads the same scoped source
-  useEffect(() => {
-    if (!open || searchRequest?.mode !== "section") return;
-    let active = true;
-    setSectionItems([]);
-    setSectionError(null);
-    setSectionLoading(true);
-    void searchRequest
-      .load()
-      .then((items) => {
-        if (active) setSectionItems(items);
-      })
-      .catch((error: unknown) => {
-        if (active)
-          setSectionError(
-            error instanceof Error
-              ? error.message
-              : "Could not load this section.",
-          );
-      })
-      .finally(() => {
-        if (active) setSectionLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [open, searchRequest, sectionRetry]);
-  const [fileSearch, setFileSearch] = useState<FileSearchResult | null>(null);
-  const [fileSearchError, setFileSearchError] = useState<string | null>(null);
-  useEffect(() => {
-    setFileSearch(null);
-    setFileSearchError(null);
-    if (
-      !open ||
-      !projectId ||
-      (mode?.id !== "files" && mode?.id !== "content") ||
-      !query.trim()
-    )
-      return;
-    let cancelled = false;
-    const searchMode = mode.id;
-    const timer = window.setTimeout(() => {
-      void desktopApi
-        .fileSearch({ projectId, query, mode: searchMode })
-        .then((result) => {
-          if (!cancelled) setFileSearch(result);
-        })
-        .catch((error: unknown) => {
-          if (!cancelled)
-            setFileSearchError(
-              error instanceof Error
-                ? error.message
-                : "Search failed. Try again.",
-            );
-        });
-    }, 150);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-      void desktopApi.cancelFileSearch().catch(() => {});
-    };
-  }, [open, projectId, mode?.id, query]);
+  // The active mode by id. Modes are built further down from live data;
+  // a sidebar search carries its own rows in the request.
+  const [modeId, setModeId] = useState<string | null>(null);
+  const [sectionSearch, setSectionSearch] = useState<Extract<
+    PaletteModeRequest,
+    { mode: "section" }
+  > | null>(null);
   // Exiting chip lingers to play chip-out; removed on animationend.
-  const [exitingMode, setExitingMode] = useState<PaletteMode | null>(null);
-  const [picker, setPicker] = useState<PaletteInPicker | null>(null);
-  const [exitingPicker, setExitingPicker] = useState<PaletteInPicker | null>(
-    null,
-  );
+  const [exitingChip, setExitingChip] = useState<{
+    icon: LucideIcon;
+    label: string;
+  } | null>(null);
+  const picker = modeId && isChoiceMode(modeId) ? modeId : null;
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const sizerRef = useRef<HTMLDivElement>(null);
 
-  const enterMode = useCallback((next: PaletteMode) => {
-    setMode(next);
-    setExitingMode(null);
-    setPicker(null);
-    setExitingPicker(null);
+  const enterMode = useCallback((next: string) => {
+    setModeId(next);
+    setExitingChip(null);
     setQuery("");
     setSelectedIndex(0);
     inputRef.current?.focus();
   }, []);
-
-  const exitMode = useCallback(() => {
-    setMode((current) => {
-      if (current) setExitingMode(current);
-      return null;
-    });
-  }, []);
-
-  // OpenRouter catalog for the model picker, fetched when first needed
-  // (main caches it for an hour).
-  const [catalog, setCatalog] = useState<OpenRouterCatalog | null>(null);
-  // Per-agent supported models (Claude Code / Codex / provider APIs),
-  // resolved live by main — never a hardcoded list.
-  const [harnessModels, setHarnessModels] = useState<{
-    agentId: string;
-    models: HarnessModelInfo[];
-    error?: string;
-  } | null>(null);
-
-  const enterPicker = useCallback((next: PaletteInPicker) => {
-    setPicker(next);
-    setExitingPicker(null);
-    setMode(null);
-    setExitingMode(null);
-    setQuery("");
-    setSelectedIndex(0);
-    inputRef.current?.focus();
-  }, []);
-
-  const exitPicker = useCallback(() => {
-    setPicker((current) => {
-      if (current) setExitingPicker(current);
-      return null;
-    });
-  }, []);
-
-  // The ACTIVE project's committed agent definitions (ADR 0050), fetched
-  // fresh on every entry into an agent picker — definitions are files a
-  // collaborator (or an agent) may have just written, and consent state
-  // changes with approvals; a stale snapshot would show the wrong rows.
-  const [projectAgents, setProjectAgents] = useState<ProjectAgentInfo[]>([]);
-  useEffect(() => {
-    if (!projectId) return;
-    if (
-      picker !== "default-agent" &&
-      picker !== "switch-agent" &&
-      picker !== "configure-agent" &&
-      picker !== "model" &&
-      picker !== "effort"
-    ) {
-      return;
-    }
-    let cancelled = false;
-    void desktopApi
-      .projectAgentsList(projectId)
-      .then((data) => {
-        if (!cancelled) setProjectAgents(data.agents);
-      })
-      .catch(() => {
-        if (!cancelled) setProjectAgents([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [picker, projectId]);
-
-  // The model picker's target: the focused chat's agent, else the default.
-  const targetAgent = useMemo(
-    () =>
-      [...agents, ...projectAgents.map(projectAgentAsInfo)].find(
-        (candidate) =>
-          candidate.id === ((focusedChat?.agentId ?? defaultAgentId) || ""),
-      ),
-    [agents, projectAgents, focusedChat?.agentId, defaultAgentId],
-  );
-
-  useEffect(() => {
-    if ((picker !== "model" && picker !== "effort") || !targetAgent) return;
-    let cancelled = false;
-    if (
-      targetAgent.harness === "ai-sdk" &&
-      targetAgent.provider === "openrouter"
-    ) {
-      if (catalog === null) {
-        void desktopApi.openrouterModels().then((data) => {
-          if (!cancelled) setCatalog(data);
-        });
-      }
-    } else if (harnessModels?.agentId !== targetAgent.id) {
-      void desktopApi
-        .agentModels(targetAgent.id)
-        .then((data) => {
-          if (!cancelled) {
-            setHarnessModels({
-              agentId: targetAgent.id,
-              models: data.models,
-              error: data.error,
-            });
-          }
-        })
-        .catch(() => {
-          if (!cancelled)
-            setHarnessModels({
-              agentId: targetAgent.id,
-              models: [],
-              error: "Could not load models. Try again.",
-            });
-        });
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [picker, catalog, harnessModels, targetAgent]);
-
-  const effortModel =
-    harnessModels?.agentId === targetAgent?.id
-      ? harnessModels?.models.find(
-          (model) =>
-            model.id === (focusedChat?.model || targetAgent?.model) ||
-            model.resolvedId === (focusedChat?.model || targetAgent?.model),
-        )
-      : undefined;
-  // What the default row means right now, asked of the harness, so picking
-  // it is an informed choice. (OpenRouter shows its catalog pick instead;
-  // the other built-in providers always pin a model.)
-  const harnessDefault = useAgentDefaultModel({
-    projectId,
-    agent: targetAgent,
-    sessionId: focusedChat?.sessionId,
-    enabled: picker === "model" && targetAgent?.harness !== "ai-sdk",
-  });
 
   // Keep the exiting list intact, but always start a fresh opening even if
   // the user reopens before its exit animation has finished. This precedes
-  // pickerRequest so an explicit picker can initialize the fresh palette.
+  // modeRequest so an explicit mode can initialize the fresh palette.
   useLayoutEffect(() => {
     const reset = () => {
       setQuery("");
       setSelectedIndex(0);
-      setMode(null);
-      setExitingMode(null);
-      setPicker(null);
-      setExitingPicker(null);
+      setModeId(null);
+      setExitingChip(null);
       listMotionRef.current.reset();
     };
     if (open) {
@@ -978,34 +220,14 @@ export function CommandPalette({
     };
   }, [open, variant]);
 
-  // Cmd+P agent commands open the overlay already inside a picker.
+  // Commands run from anywhere open the overlay already inside their mode.
   useEffect(() => {
-    if (variant !== "overlay" || !pickerRequest) return;
-    enterPicker(pickerRequest.kind);
-  }, [variant, pickerRequest, enterPicker]);
-  useEffect(() => {
-    if (variant !== "overlay" || !searchRequest) return;
-    const next: PaletteMode | undefined =
-      searchRequest.mode === "section"
-        ? {
-            id: "section",
-            trigger: "",
-            chip: searchRequest.label,
-            label: searchRequest.label,
-            icon: Search,
-            description: "",
-            placeholder: `Search ${searchRequest.label.toLowerCase()}…`,
-          }
-        : PALETTE_MODES.find((mode) => mode.id === searchRequest.mode);
-    if (next) enterMode(next);
-  }, [variant, searchRequest, enterMode]);
+    if (variant !== "overlay" || !modeRequest) return;
+    if (modeRequest.mode === "section") setSectionSearch(modeRequest);
+    enterMode(modeRequest.mode);
+  }, [variant, modeRequest, enterMode]);
 
   const keybindings = useKeybindings();
-
-  const workflows = useWorkflows(projectId).data ?? [];
-  const apps = useApps(projectId).data ?? [];
-  const sessions =
-    useAgentSessions(projectId, { limit: 100 }).data?.items ?? [];
   // Fresh on every open, like history below: skills are files an agent or
   // collaborator may have just written. The tab variant is always "open",
   // so a new query session (empty → typing) is its refresh moment.
@@ -1022,44 +244,27 @@ export function CommandPalette({
     variant === "tab" || open,
     skillsRefresh,
   );
-
-  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  // Ranking signals (ADR 0186), on the same beat as skills: every opening
+  // and every new query session, so use elsewhere shows up next time.
+  const [signals, setSignals] = useState<PaletteSignals>(EMPTY_PALETTE_SIGNALS);
   useEffect(() => {
-    if (!profileId || !projectId) return;
+    if (!profileId || skillsRefresh === 0) return;
     let cancelled = false;
-    void desktopApi.bookmarksGet({ projectId, profileId }).then((data) => {
-      if (!cancelled) {
-        setBookmarks([...data.pinned.bookmarks, ...data.project.bookmarks]);
-      }
-    });
-    const unsubscribe = desktopApi.onBookmarksChanged((change) => {
-      if (change.profileId !== profileId) return;
-      // Profile-wide changes (projectId null, e.g. a browser import) have
-      // no project scope attached — refetch the combined view.
-      if (change.projectId === null) {
-        void desktopApi.bookmarksGet({ projectId, profileId }).then((data) => {
-          setBookmarks([...data.pinned.bookmarks, ...data.project.bookmarks]);
-        });
-        return;
-      }
-      if (change.projectId === projectId && change.project) {
-        setBookmarks([...change.pinned.bookmarks, ...change.project.bookmarks]);
-      }
-    });
+    void desktopApi
+      .paletteSignals()
+      .then((next) => {
+        // Unchanged signals keep their identity, so rows do not re-rank
+        // (and glide) on every opening.
+        if (!cancelled)
+          setSignals((current) =>
+            JSON.stringify(current) === JSON.stringify(next) ? current : next,
+          );
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
-      unsubscribe();
     };
-  }, [projectId, profileId]);
-
-  const historyResults = useHistory({
-    query,
-    limit: 80,
-    enabled: Boolean(profileId) && (variant === "tab" || open),
-    profileId,
-  });
-  const historyOpenRef = useRef(onOpenHistory);
-  historyOpenRef.current = onOpenHistory;
+  }, [profileId, skillsRefresh]);
 
   // A palette tab is the only thing on its page, so returning to the
   // window (Cmd+Tab, a click from another app) should land the caret in
@@ -1077,1052 +282,237 @@ export function CommandPalette({
     return () => window.removeEventListener("focus", onWindowFocus);
   }, [variant]);
 
-  // Action rows come straight from the shared registry — one entry there
-  // yields the shortcut, the Settings row, the agent doc, and this row.
-  // Handlers are read through a ref: the map is rebuilt every app render
-  // (closures over fresh state), and letting it invalidate this memo
-  // would cascade into the results memo and the FLIP pass per render.
-  const actionHandlersRef = useRef(actionHandlers);
-  actionHandlersRef.current = actionHandlers;
-  const macroHandlerRef = useRef(onRunTerminalMacro);
-  macroHandlerRef.current = onRunTerminalMacro;
-  const hasFocusedChat = focusedChat !== null;
-  const actionItems = useMemo<PaletteItem[]>(() => {
-    const available = BUILTIN_ACTIONS.filter(
-      (action: ActionDefinition) =>
-        !action.hiddenInPalette &&
-        actionAvailability?.[action.id as ActionId] !== false &&
-        // Session-scoped: only offered while a chat is focused.
-        (action.id !== "switch-agent" || hasFocusedChat) &&
-        // Project policy (ADR 0062): incognito may be disabled here.
-        (action.id !== "new-incognito-chat" || incognitoAllowed),
-    );
-    // With a chat focused, the commands that act on THAT chat lead the
-    // list — they're what "change the agent/model/effort" almost always
-    // means in the moment, and ties in fuzzy scores resolve by this order.
-    const chatScoped = new Set([
-      "switch-agent",
-      "switch-model",
-      "change-effort",
-      "change-permission-mode",
-    ]);
-    const ordered = hasFocusedChat
-      ? [
-          ...available.filter((action) => chatScoped.has(action.id)),
-          ...available.filter((action) => !chatScoped.has(action.id)),
-        ]
-      : available;
-    const commands = ordered.map((action): PaletteItem => {
-      const targetPicker = PICKER_ACTIONS[action.id];
-      return {
-        id: `action:${action.id}`,
-        icon: ACTION_ICONS[action.id] ?? Command,
-        label: action.label,
-        keywords: [...action.keywords],
-        shortcut:
-          action.id in keybindings
-            ? formatBinding(keybindings[action.id as KeybindingAction])
-            : undefined,
-        kind: "action" as const,
-        // Picker commands swap palette state in place (like mode rows);
-        // everything else runs the shared handler.
-        run: targetPicker
-          ? () => enterPicker(targetPicker)
-          : (mode) => actionHandlersRef.current[action.id](mode),
-      };
-    });
-    return [
-      ...commands,
-      ...terminalMacros.map(
-        (macro): PaletteItem => ({
-          id: `macro:${macro.id}`,
-          icon: SquareTerminal,
-          label: macro.name,
-          detail: "Macro",
-          keywords: ["macro", "terminal", macro.command],
-          shortcut: formatBinding(macro.shortcut),
-          kind: "action",
-          run: (mode) => macroHandlerRef.current(macro, mode),
-        }),
-      ),
+  // Project agents refresh with skills and on every picker entry.
+  const projectAgents = useProjectAgents({
+    projectId,
+    refresh: `${skillsRefresh}:${picker ?? ""}`,
+  });
+  // Skills follow the target agent's allowlist: the focused chat's agent,
+  // else the default, profile or project.
+  const skillAgent = [...agents, ...projectAgents.map(projectAgentAsInfo)].find(
+    (agent) => agent.id === (focusedChat?.agentId ?? defaultAgentId),
+  );
+  const {
+    actionItems,
+    startingActionItems,
+    skillItems,
+    projectItems,
+    profileItems,
+    commandItems,
+  } = useCommandRows({ enterMode, skills, agentSkills: skillAgent?.skills });
+  const { resourceItems, bookmarkedUsage } = useResourceRows({
+    active: variant === "tab" || open,
+  });
+  const { surfaceItems, historyPageItem } = useDestinationRows();
+  const { historyRow, historyItems } = useHistoryRows({
+    query,
+    enabled: (variant === "tab" || open) && !modeId,
+    bookmarkedUsage,
+  });
+  const settingItems = useSettingRows();
+  const { modes, customModes } = usePaletteModes({
+    picker,
+    historyRow,
+    settingItems,
+    commandItems,
+    sectionSearch,
+    projectAgents,
+  });
+  const namedModes = useMemo(
+    () => modes.filter((candidate) => candidate.names?.length),
+    [modes],
+  );
+  const activeMode = modes.find((candidate) => candidate.id === modeId) ?? null;
+  // A mode can vanish while active (workspace.js edited, project switched):
+  // fall back to the ordinary palette rather than a chipless dead end.
+  useEffect(() => {
+    if (modeId && !activeMode) setModeId(null);
+  }, [modeId, activeMode]);
+  const exitMode = () => {
+    if (activeMode)
+      setExitingChip({ icon: activeMode.icon, label: activeMode.chip });
+    setModeId(null);
+  };
+  const modeLoad = usePaletteLoad(
+    activeMode?.rows,
+    query,
+    (variant === "tab" || open) && Boolean(activeMode),
+  );
+  const rankContext = useMemo(
+    () => ({ signals, projectId }),
+    [signals, projectId],
+  );
+  const activeRows = activeMode?.rows;
+  // A source that searches shows its last answer while the next query
+  // loads; those rows are ranked here against what is typed now, so the
+  // top row (what Enter opens) always matches the current query.
+  const staleSearch =
+    activeRows?.kind === "load" && activeRows.filtered && modeLoad.loading;
+  const modeItems =
+    activeRows?.kind === "list"
+      ? activeRows.items
+      : activeRows?.kind === "load" && (!activeRows.filtered || staleSearch)
+        ? modeLoad.items
+        : null;
+  const searchMode = useMemo(
+    () => (modeItems ? createPaletteIndex(modeItems) : null),
+    [modeItems],
+  );
+  const searchCommands = useMemo(
+    () => createPaletteIndex(commandItems),
+    [commandItems],
+  );
+
+  const topLevelModeRows = useTopLevelModeRows(
+    customModes,
+    (variant === "tab" || open) && !modeId,
+  );
+  // Rows everything else already lists: a bookmarked page or a workflow
+  // appears once, as its own row, ranked with its history counts.
+  const nativeRows = useMemo(() => {
+    // A custom mode over a built-in source lists rows the palette already
+    // has (the same chat, the same workflow): each row appears once.
+    const rows = [
+      ...actionItems,
+      ...skillItems,
+      ...projectItems,
+      ...profileItems,
+      ...resourceItems,
+      ...topLevelModeRows,
+      historyPageItem,
+      ...surfaceItems,
     ];
+    const seen = new Set<string>();
+    return rows.filter((row) => !seen.has(row.id) && seen.add(row.id));
   }, [
-    keybindings,
-    hasFocusedChat,
-    enterPicker,
-    incognitoAllowed,
-    terminalMacros,
-    actionAvailability,
+    actionItems,
+    skillItems,
+    projectItems,
+    profileItems,
+    resourceItems,
+    topLevelModeRows,
+    historyPageItem,
+    surfaceItems,
   ]);
-
-  const startingActionItems = useMemo<PaletteItem[]>(
-    () =>
-      startingActions.map(
-        (action, index): PaletteItem => ({
-          id: `starter:${index}:${action.label}`,
-          icon: Sparkles,
-          label: action.label,
-          detail: "Start with your project agent",
-          keywords: [action.label, "start", "project", "agent"],
-          kind: "navigate",
-          run: (mode) =>
-            onSendToAgent(
-              action.prompt,
-              mode === "tab" ? "tab" : "float",
-              action.agentId,
-            ),
-        }),
-      ),
-    [startingActions, onSendToAgent],
-  );
-
-  // Skills as commands (ADR 0052): a row is just a message send — into the
-  // focused chat when one exists (an action, chat highlighted like other
-  // scoped commands), else a new chat that honors the commit mode.
-  const skillItems = useMemo<PaletteItem[]>(
-    () =>
-      skillsForAgent(skills, targetAgent?.skills).map((skill) => ({
-        id: `skill:${skill.name}`,
-        icon: Sparkles,
-        // The pretty title fronts the row; the slug stays a keyword so
-        // technical users typing the exact name still hit it.
-        label: skill.title,
-        detail: skill.source === "host" ? "App skill" : "Skill",
-        keywords: [
-          skill.name,
-          skill.title,
-          "skill",
-          "use",
-          ...skill.description.split(/\s+/).slice(0, 12),
-        ],
-        kind: hasFocusedChat ? ("action" as const) : ("navigate" as const),
-        run: (mode) => onRunSkill(skill.name, mode === "tab" ? "tab" : "float"),
-      })),
-    [skills, targetAgent?.skills, hasFocusedChat, onRunSkill],
-  );
-
-  const projectItems = useMemo<PaletteItem[]>(
-    () =>
-      projects
-        .filter((project) => project.id !== activeProjectId)
-        .map((project) => ({
-          id: `project:${project.id}`,
-          icon: ArrowRight,
-          label: `Go to ${project.name}`,
-          detail: "Project",
-          keywords: [project.name, "go to", "project", "switch", "open"],
-          kind: "action" as const,
-          run: () => onSelectProject(project.id),
-        })),
-    [projects, activeProjectId, onSelectProject],
-  );
-
-  const profileItems = useMemo<PaletteItem[]>(
-    () =>
-      profiles
-        .filter((profile) => profile.id !== activeProfileId)
-        .map((profile) => ({
-          id: `profile:${profile.id}`,
-          icon: UserRound,
-          label: `Switch to ${profile.name}`,
-          detail: "Profile",
-          keywords: [profile.name, "switch to", "profile", "account"],
-          kind: "action" as const,
-          run: () => onSwitchProfile(profile),
-        })),
-    [profiles, activeProfileId, onSwitchProfile],
-  );
-
-  const sidebarItems = useMemo<PaletteItem[]>(() => {
-    const items: PaletteItem[] = [];
-    if (canCreateWorkflows)
-      items.push({
-        id: "create-workflow",
-        icon: WorkflowIcon,
-        label: "Create workflow",
-        detail: "Describe it to your agent",
-        keywords: ["new", "workflow", "automation", "build"],
-        kind: "action",
-        run: (mode) =>
-          onSendToAgent(NEW_WORKFLOW_PROMPT, mode === "tab" ? "tab" : "float"),
-      });
-    for (const workflow of workflows) {
-      const label = workflow.displayName ?? workflow.name;
-      items.push({
-        id: `workflow:${workflow.name}`,
-        icon: WorkflowIcon,
-        label,
-        detail: "Workflow",
-        keywords: [workflow.name, "workflow", "go to", "open"],
-        kind: "navigate",
-        run: (mode) =>
-          onOpenTab({ kind: "workflow", name: workflow.name, label }, mode),
-      });
-    }
-    for (const app of apps) {
-      items.push({
-        id: `app:${app.name}`,
-        icon: LayoutGrid,
-        label: app.name,
-        detail: "App",
-        keywords: [app.name, "app", "go to", "open"],
-        kind: "navigate",
-        run: (mode) => onOpenTab({ kind: "app", name: app.name }, mode),
-      });
-    }
-    for (const session of sessions) {
-      if (session.visibility === "latent") continue;
-      const created = new Date(session.createdAt);
-      const label =
-        session.title ??
-        `Chat ${created.toLocaleDateString()} ${created.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-      items.push({
-        id: `session:${session.id}`,
-        icon: MessageSquare,
-        label,
-        detail: session.visibility === "archived" ? "Archived chat" : "Chat",
-        keywords: [
-          label,
-          "chat",
-          "session",
-          "conversation",
-          ...(session.visibility === "archived" ? ["archived"] : []),
-        ],
-        kind: "navigate",
-        run: (mode) => onOpenSession(session, mode),
-      });
-    }
-    for (const bookmark of bookmarks) {
-      items.push({
-        id: `bookmark:${bookmark.id}`,
-        icon: Globe,
-        iconNode: (
-          <SiteFavicon
-            url={bookmark.url}
-            faviconUrl={bookmark.faviconUrl}
-            className="size-4"
-          />
-        ),
-        label: bookmark.label,
-        detail: hostOf(bookmark.url),
-        keywords: [
-          bookmark.label,
-          hostOf(bookmark.url),
-          bareUrl(bookmark.url),
-          "bookmark",
-        ],
-        kind: "navigate",
-        bookmarked: true,
-        run: (mode) => onOpenUrl(bookmark.url, mode),
-      });
-    }
-    const addCustomItems = (customItems: SidebarItem[] | undefined) => {
-      for (const item of customItems ?? []) {
-        if (item.url) {
-          const url = item.url;
-          items.push({
-            id: `custom:${item.label}:${url}`,
-            icon: lucideIcon(item.icon) ?? Globe,
-            iconNode: item.icon ? undefined : (
-              <SiteFavicon url={url} className="size-4" />
-            ),
-            label: item.label,
-            detail: hostOf(url),
-            keywords: [item.label, hostOf(url), bareUrl(url), "link"],
-            kind: "navigate",
-            run: (mode) => onOpenUrl(url, mode),
-          });
-        }
-        addCustomItems(item.items);
-      }
-    };
-    for (const section of sidebarSections(sidebarConfig)) {
-      if (section.type !== "custom") continue;
-      addCustomItems(section.items);
-    }
-    items.push({
-      id: "tab:settings",
-      icon: SettingsIcon,
-      label: "Settings",
-      detail: "Open settings",
-      keywords: ["settings", "preferences", "shortcuts", "theme", "keys"],
-      kind: "navigate",
-      run: (mode) =>
-        onOpenTab(
-          { kind: "settings", name: "settings", label: "Settings" },
-          mode,
-        ),
-    });
-    items.push({
-      id: "tab:usage",
-      icon: ChartColumn,
-      label: "Usage",
-      detail: "Tokens and cost across agents",
-      keywords: ["usage", "cost", "tokens", "spend", "billing", "consumption"],
-      kind: "navigate",
-      run: (mode) =>
-        onOpenTab({ kind: "usage", name: "usage", label: "Usage" }, mode),
-    });
-    return items;
-  }, [
-    canCreateWorkflows,
-    onSendToAgent,
-    workflows,
-    apps,
-    sessions,
-    bookmarks,
-    sidebarConfig,
-    onOpenTab,
-    onOpenSession,
-    onOpenUrl,
-  ]);
-
-  const historyItems = useMemo<PaletteItem[]>(
-    () =>
-      historyResults.entries.map((entry) => ({
-        id: `history:${entry.id}`,
-        icon: historyIcon(entry),
-        iconNode:
-          entry.target.kind === "web" && entry.faviconUrl ? (
-            <SiteFavicon
-              url={entry.target.url}
-              faviconUrl={entry.faviconUrl}
-              className="size-4"
-            />
-          ) : undefined,
-        bookmarked:
-          entry.target.kind === "web" &&
-          bookmarks.some(
-            (bookmark) =>
-              entry.target.kind === "web" &&
-              bookmark.url.replace(/\/$/, "") ===
-                entry.target.url.replace(/\/$/, ""),
-          ),
-        label: entry.title,
-        detail: historyDetail(entry),
-        keywords: [historyDetail(entry)],
-        kind: "navigate",
-        run: (mode) => historyOpenRef.current(entry, mode),
-      })),
-    [historyResults.entries, bookmarks],
-  );
-  const sitePageItems = useMemo<PaletteItem[]>(() => {
-    const items: PaletteItem[] = [];
-    if (focusedSite && onOpenSiteSettings) {
-      const { origin, host } = focusedSite;
-      items.push({
-        id: "site-settings",
-        icon: Settings2,
-        label: "Site settings",
-        detail: host,
-        keywords: [
-          "site",
-          "permissions",
-          "camera",
-          "microphone",
-          "location",
-          "notifications",
-          "cookies",
-          host,
-        ],
-        kind: "action",
-        run: () => onOpenSiteSettings(origin),
-      });
-    }
-    if (profileId)
-      items.push({
-        id: "open-passwords",
-        icon: KeyRound,
-        label: "Passwords",
-        detail: "Saved logins and notes",
-        keywords: ["passwords", "logins", "credentials", "keychain", "notes"],
-        kind: "navigate",
-        run: (mode) =>
-          onOpenTab(
-            { kind: "passwords", name: profileId, label: "Passwords" },
-            mode,
-          ),
-      });
-    items.push({
-      id: "open-downloads",
-      icon: Download,
-      label: "Downloads",
-      detail: "Files saved from pages",
-      keywords: ["downloads", "files", "saved", "download"],
-      kind: "navigate",
-      run: (mode) =>
-        onOpenTab(
-          { kind: "downloads", name: "downloads", label: "Downloads" },
-          mode,
-        ),
-    });
-    items.push({
-      id: "open-sites",
-      icon: SlidersHorizontal,
-      label: "Sites",
-      detail: "Permissions and data per site",
-      keywords: ["sites", "permissions", "cookies", "site settings", "data"],
-      kind: "navigate",
-      run: (mode) =>
-        onOpenTab({ kind: "sites", name: "sites", label: "Sites" }, mode),
-    });
-    return items;
-  }, [focusedSite, onOpenSiteSettings, onOpenTab, profileId]);
-  const historyPageItem = useMemo<PaletteItem>(
-    () => ({
-      id: "open-history",
-      icon: History,
-      label: "History",
-      detail: "Pages and work you've opened",
-      keywords: ["history", "recent", "visited"],
-      kind: "navigate",
-      run: (mode) =>
-        onOpenTab({ kind: "history", name: "history", label: "History" }, mode),
-    }),
-    [onOpenTab],
-  );
-
-  const settingItems = useMemo<PaletteItem[]>(
-    () =>
-      SETTINGS_CATALOG.map((setting) => ({
-        id: `setting:${setting.id}`,
-        label: setting.label,
-        detail: `Settings · ${setting.category}`,
-        icon: SettingsIcon,
-        keywords: [
-          "settings",
-          "preferences",
-          setting.category,
-          ...setting.keywords,
-        ],
-        kind: "navigate",
-        run: (mode) =>
-          onOpenTab(
-            {
-              kind: "settings",
-              name: "settings",
-              label: "Settings",
-              destination: { id: setting.id, requestId: crypto.randomUUID() },
-            },
-            mode,
-          ),
-      })),
-    [onOpenTab],
-  );
-  const searchSettings = useMemo(
-    () => createPaletteIndex(settingItems),
-    [settingItems],
+  const nativeUsage = useMemo(
+    () => new Set(nativeRows.flatMap((item) => item.usage ?? [])),
+    [nativeRows],
   );
   const searchEverything = useMemo(
     () =>
       createPaletteIndex([
         ...startingActionItems,
-        ...actionItems,
-        ...skillItems,
-        ...projectItems,
-        ...profileItems,
-        ...sidebarItems,
-        ...historyItems,
-        historyPageItem,
-        ...sitePageItems,
+        ...nativeRows,
+        ...historyItems.filter((item) => !nativeUsage.has(item.usage ?? "")),
         ...settingItems,
       ]),
-    [
-      startingActionItems,
-      actionItems,
-      skillItems,
-      projectItems,
-      profileItems,
-      sidebarItems,
-      historyItems,
-      historyPageItem,
-      sitePageItems,
-      settingItems,
-    ],
+    [startingActionItems, nativeRows, nativeUsage, historyItems, settingItems],
   );
   const trimmed = query.trim();
   const allResults = useMemo<PaletteItem[]>(() => {
-    // Picker active: the list IS the question. Agent rows or effort rows,
-    // narrowed by whatever is typed; picking answers and closes.
-    if (picker === "model") {
-      if (!targetAgent) {
-        return [
-          {
-            id: "pick:none",
-            icon: SettingsIcon,
-            label: "No agents configured",
-            detail: "Open Settings to add one",
-            keywords: [],
-            kind: "navigate",
-            run: () =>
-              onOpenTab({
-                kind: "settings",
-                name: "settings",
-                label: "Settings",
-              }),
-          },
-        ];
-      }
-      const agent = targetAgent;
-      // A focused session selects only its override. Empty means "inherit the
-      // agent", even when that agent itself pins a concrete model.
-      const current = focusedChat ? (focusedChat.model ?? "") : agent.model;
-      const rows: PaletteItem[] = [];
-      if (agent.harness === "ai-sdk" && agent.provider === "openrouter") {
-        const modelRow = (model: OpenRouterCatalog["models"][number]) =>
-          ({
-            id: `pick:model:${model.id}`,
-            icon: Cpu,
-            label: model.name,
-            detail: model.id,
-            keywords: [],
-            kind: "action",
-            ...(model.id === current ? { current: true } : {}),
-            run: () => onPickModel(agent.id, model.id),
-          }) satisfies PaletteItem;
-        rows.push({
-          id: "pick:model:",
-          icon: Cpu,
-          label: focusedChat ? "Agent default" : "Automatic model",
-          detail:
-            focusedChat && agent.model
-              ? agent.model
-              : (catalog?.bestFreeModelId ?? "resolved from the catalog"),
-          keywords: ["best", "free", "auto", "default"],
-          kind: "action",
-          ...(current === "" ? { current: true } : {}),
-          run: () => onPickModel(agent.id, ""),
-        });
-        const models = (catalog?.models ?? [])
-          .slice()
-          .sort(
-            (a, b) => Number(b.free) - Number(a.free) || b.created - a.created,
-          );
-        // The unfiltered list pins the CURRENT model right under the
-        // automatic row — picking a model must show what runs today.
-        // While searching, normal ranking applies (the check still marks
-        // the current row wherever it lands).
-        if (!trimmed && current) {
-          const pinned = models.find((model) => model.id === current);
-          rows.push(
-            pinned
-              ? modelRow(pinned)
-              : {
-                  id: `pick:model:${current}`,
-                  icon: Cpu,
-                  label: current,
-                  keywords: [],
-                  kind: "action",
-                  current: true,
-                  run: () => onPickModel(agent.id, current),
-                },
-          );
-        }
-        // Zero state: the newest free models only — the browsable shortlist.
-        // Typing searches the whole catalog.
-        const matched = trimmed
-          ? models
-              .map((model) => ({
-                model,
-                score: commandScore(`${model.name} ${model.id}`, trimmed, []),
-              }))
-              .filter((entry) => entry.score > 0)
-              .sort((a, b) => b.score - a.score)
-              .map((entry) => entry.model)
-          : models
-              .filter((model) => model.free && model.id !== current)
-              .sort((a, b) => b.created - a.created)
-              .slice(0, 20);
-        for (const model of matched.slice(0, 50)) {
-          rows.push(modelRow(model));
-        }
-        return trimmed ? rows : pinCurrentFirst(rows);
-      }
-      // CLIs run their own default; Anthropic/OpenAI need an explicit id.
-      if (focusedChat || agent.harness !== "ai-sdk") {
-        rows.push({
-          id: "pick:model:",
-          icon: Cpu,
-          label: focusedChat ? "Agent default" : defaultModelLabel(agent, null),
-          detail:
-            focusedChat && agent.model
-              ? agent.model
-              : harnessDefault.data?.model
-                ? defaultModelLabel(agent, harnessDefault.data.model)
-                : undefined,
-          keywords: ["default", "auto"],
-          kind: "action",
-          ...(current === "" ? { current: true } : {}),
-          run: () => onPickModel(agent.id, ""),
-        });
-      }
-      // Supported values straight from the harness (Claude Code's own
-      // catalog, Codex app-server `model/list`, or the provider's /v1/models).
-      const supported =
-        harnessModels?.agentId === agent.id ? harnessModels.models : [];
-      if (
-        harnessModels?.agentId !== agent.id ||
-        harnessModels.error ||
-        supported.length === 0
-      ) {
-        rows.push({
-          id: "pick:model:catalog-status",
-          icon: Cpu,
-          label:
-            harnessModels?.agentId !== agent.id
-              ? "Loading models…"
-              : harnessModels.error
-                ? "Could not load models"
-                : "No models returned",
-          detail: harnessModels?.error ?? "Refresh the model list",
-          keywords: [],
-          kind: "action",
-          run: () => {
-            setHarnessModels(null);
-          },
-        });
-      }
-      const supportedRow = (model: HarnessModelInfo) =>
-        ({
-          id: `pick:model:${model.id}`,
-          icon: Cpu,
-          label: model.name,
-          // Aliases ("sonnet") show the versioned id they resolve to.
-          detail: model.resolvedId ?? model.id,
-          keywords: [],
-          kind: "action",
-          ...(model.id === current ? { current: true } : {}),
-          run: () => onPickModel(agent.id, model.id),
-        }) satisfies PaletteItem;
-      // A pinned model the harness didn't list still needs a visible row.
-      const customCurrentRow: PaletteItem | null =
-        current && !supported.some((model) => model.id === current)
-          ? {
-              id: `pick:model:${current}`,
-              icon: Cpu,
-              label: current,
-              keywords: [],
-              kind: "action",
-              current: true,
-              run: () => onPickModel(agent.id, current),
-            }
-          : null;
-      const matchedSupported = trimmed
-        ? supported
-            .map((model) => ({
-              model,
-              score: commandScore(`${model.name} ${model.id}`, trimmed, []),
-            }))
-            .filter((entry) => entry.score > 0)
-            .sort((a, b) => b.score - a.score)
-            .map((entry) => entry.model)
-        : // Unfiltered: pin the current model to the top of the list
-          // (normal ranking takes over the moment the user types).
-          supported
-            .slice()
-            .sort(
-              (a, b) => Number(b.id === current) - Number(a.id === current),
-            );
-      if (customCurrentRow && !trimmed) rows.push(customCurrentRow);
-      for (const model of matchedSupported.slice(0, 50)) {
-        rows.push(supportedRow(model));
-      }
-      if (customCurrentRow && trimmed) rows.push(customCurrentRow);
-      if (
-        trimmed &&
-        trimmed !== current &&
-        !supported.some((model) => model.id === trimmed)
-      ) {
-        rows.push({
-          id: `pick:model-custom`,
-          icon: Cpu,
-          label: `Use "${trimmed}"`,
-          detail: "Set this model id",
-          keywords: [],
-          kind: "action",
-          run: () => onPickModel(agent.id, trimmed),
-        });
-      }
-      return trimmed ? rows : pinCurrentFirst(rows);
-    }
-
-    if (picker) {
-      const rows: PaletteItem[] =
-        picker === "permission-mode"
-          ? permissionModeChoices(targetAgent).map((choice) => ({
-              id: `pick:permission:${choice.id}`,
-              icon: ShieldCheck,
-              label: choice.label,
-              detail: choice.detail,
-              keywords: choice.keywords,
-              kind: "action" as const,
-              ...(choice.current ? { current: true } : {}),
-              run: () => {
-                if (targetAgent)
-                  onPickHarnessPermissions(targetAgent.id, choice.patch);
-              },
-            }))
-          : picker === "effort"
-            ? [
-                ...(focusedChat
-                  ? [
-                      {
-                        id: "pick:effort:default",
-                        icon: Gauge,
-                        label: "Agent default",
-                        detail:
-                          effectiveEffort(
-                            targetAgent,
-                            targetAgent?.effort,
-                            effortModel,
-                          ) ?? "Unavailable",
-                        keywords: ["default", "inherit", "effort"],
-                        kind: "action" as const,
-                        ...(focusedChat.effort === null
-                          ? { current: true }
-                          : {}),
-                        run: () => onPickEffort(null),
-                      },
-                    ]
-                  : []),
-                ...EFFORT_LEVELS.filter((level) =>
-                  supportedEfforts(targetAgent, effortModel).includes(level.id),
-                ).map((level) => {
-                  const current = effectiveEffort(
-                    targetAgent,
-                    focusedChat ? focusedChat.effort : targetAgent?.effort,
-                    effortModel,
-                  );
-                  return {
-                    id: `pick:effort:${level.id}`,
-                    icon: Gauge,
-                    label: level.label,
-                    detail: level.description,
-                    keywords: [level.id, "effort", "reasoning"],
-                    kind: "action" as const,
-                    // Supported levels keep their low-to-high order; the check
-                    // alone marks the active one (no reordering).
-                    ...(level.id === current ? { current: true } : {}),
-                    run: () => onPickEffort(level.id),
-                  };
-                }),
-              ]
-            : [
-                ...agents.map((agent) => {
-                  const isCurrent =
-                    picker === "configure-agent"
-                      ? false
-                      : picker === "default-agent"
-                        ? agent.id === defaultAgentId
-                        : agent.id ===
-                          ((focusedChat?.agentId ?? defaultAgentId) || "");
-                  return {
-                    id: `pick:agent:${agent.id}`,
-                    icon: picker === "configure-agent" ? Settings2 : Bot,
-                    label: agent.name,
-                    detail: [
-                      agentSourceLabel(agent),
-                      agentAuthLabel(agent),
-                      permissionModeLabel({
-                        harness: agent.harness,
-                        permissions: agent.harnessPermissions,
-                      }),
-                    ]
-                      .filter(Boolean)
-                      .join(" · "),
-                    keywords: [
-                      agent.name,
-                      agent.harness,
-                      agent.provider ?? "",
-                      agent.model,
-                    ],
-                    kind: "action" as const,
-                    ...(isCurrent ? { current: true } : {}),
-                    run: () =>
-                      picker === "default-agent"
-                        ? onPickDefaultAgent(agent.id)
-                        : picker === "configure-agent"
-                          ? onConfigureAgent(agent.id)
-                          : onPickSessionAgent(agent.id),
-                  };
-                }),
-                // The active project's committed agents (ADR 0050), under
-                // their own scope label. Invalid definitions stay visible —
-                // disabled, with the error where the description goes — so
-                // a typo'd file is diagnosable from the picker itself. The
-                // configure picker keeps them clickable: its modal shows
-                // the full error and where to fix it.
-                ...projectAgents.map((agent) => {
-                  const isCurrent =
-                    picker === "configure-agent"
-                      ? false
-                      : picker === "default-agent"
-                        ? agent.id === defaultAgentId
-                        : agent.id ===
-                          ((focusedChat?.agentId ?? defaultAgentId) || "");
-                  return {
-                    id: `pick:agent:${agent.id}`,
-                    icon: picker === "configure-agent" ? Settings2 : Bot,
-                    label: agent.name,
-                    detail: projectAgentDetail(agent),
-                    keywords: [agent.name, agent.slug, "project", agent.kind],
-                    kind: "action" as const,
-                    group: "Project agents",
-                    ...(isCurrent ? { current: true } : {}),
-                    ...(agent.invalid && picker !== "configure-agent"
-                      ? { disabled: true }
-                      : {}),
-                    run: () => {
-                      if (picker === "configure-agent") {
-                        onConfigureAgent(agent.id);
-                        return;
-                      }
-                      if (agent.invalid) return;
-                      onPickProjectAgent(
-                        agent,
-                        picker === "default-agent" ? "default" : "session",
-                      );
-                    },
-                  };
-                }),
-                // Layered defaults (ADR 0056): while this user's per-project
-                // override is set, offer the way back to the layers below.
-                ...(picker === "default-agent" && defaultAgentOverridden
-                  ? [
-                      {
-                        id: "pick:agent-default-clear",
-                        icon: Bot,
-                        label: "Use the project's default",
-                        detail:
-                          "Clear your override for this project (falls back to the project, then your global default)",
-                        keywords: ["clear", "project", "default", "reset"],
-                        kind: "action" as const,
-                        run: () => onClearDefaultOverride?.(),
-                      },
-                    ]
-                  : []),
-              ];
-      if (rows.length === 0) {
-        return [
-          {
-            id: "pick:none",
-            icon: SettingsIcon,
-            label: "No agents configured",
-            detail: "Open Settings to add one",
-            keywords: [],
-            kind: "navigate",
-            run: () =>
-              onOpenTab({
-                kind: "settings",
-                name: "settings",
-                label: "Settings",
-              }),
-          },
-        ];
-      }
-      // Agent pickers pin the current agent first while unfiltered; the
-      // effort picker keeps its low→high order (three fixed rows).
-      if (!trimmed)
-        return picker === "effort" || picker === "permission-mode"
-          ? rows
-          : pinCurrentFirst(rows);
-      return rows
-        .map((item) => ({
-          item,
-          score: commandScore(item.label, trimmed, item.keywords),
-        }))
-        .filter((entry) => entry.score > 0)
-        .sort((a, b) => b.score - a.score)
-        .map((entry) => entry.item);
-    }
-
-    // Chip mode active: the whole input belongs to that mode. One row —
-    // Enter commits it — so typing never drifts into unrelated matches.
-    if (mode) {
-      if (mode.id === "history") {
-        if (
-          historyResults.error ||
-          (historyResults.loading && !historyItems.length)
-        )
-          return [
-            {
-              id: "history:status",
-              icon: History,
-              label: historyResults.error ?? "Searching…",
-              keywords: [],
-              kind: "action",
-              disabled: !historyResults.error,
-              run: historyResults.refresh,
-            },
-          ];
-        return historyItems;
-      }
-      if (mode.id === "section" && searchRequest?.mode === "section") {
-        if (sectionLoading || sectionError)
-          return [
-            {
-              id: "section:status",
-              icon: Search,
-              label: sectionError ?? "Loading…",
-              detail: sectionError ? "Press Enter to retry" : undefined,
-              keywords: [],
-              kind: "action",
-              disabled: !sectionError,
-              run: () => setSectionRetry((value) => value + 1),
-            },
-          ];
-        return sectionItems
-          .map((item) => ({
-            item,
-            score: trimmed
-              ? commandScore(item.label, trimmed, [
-                  item.detail ?? "",
-                  ...item.keywords,
-                ])
-              : 1,
-          }))
-          .filter(({ score }) => score > 0)
-          .sort((a, b) => b.score - a.score)
-          .map(({ item }) => item);
-      }
-      if (mode.id === "settings") return searchSettings(trimmed);
-      if (mode.id === "files" || mode.id === "content") {
-        if (!fileSearch?.matches.length)
-          return [
-            {
-              id: "files:status",
-              disabled: true,
-              icon: Search,
-              label:
-                fileSearchError ??
-                (!trimmed
-                  ? "Type to search this project"
-                  : fileSearch
-                    ? "No matches"
-                    : "Searching…"),
-              detail: fileSearch?.truncated
-                ? "Search limit reached. Refine your query."
-                : undefined,
-              keywords: [],
-              kind: "action",
-              run: () => {},
-            },
-          ];
-        return fileSearch.matches.map((match) => ({
-          id: `file:${match.path}:${match.line ?? 0}`,
-          icon: FileCode,
-          label: match.line ? `${match.path}:${match.line}` : match.path,
-          detail: match.text ?? "File",
-          keywords: [],
-          kind: "navigate",
-          run: (commitMode) =>
-            onOpenUrl(
-              `file:${match.path}${match.line ? `:${match.line}` : ""}`,
-              commitMode,
-            ),
-        }));
-      }
-      const modeQuery = trimmed;
-      if (mode.id === "agent") {
-        return [
-          {
-            id: "mode:agent",
-            icon: Bot,
-            label: "Ask agent",
-            detail:
-              [...agents, ...projectAgents.map(projectAgentAsInfo)].find(
-                (agent) => agent.id === defaultAgentId,
-              )?.name ?? (modeQuery ? undefined : "Type a message"),
-            keywords: [],
-            kind: "navigate",
-            run: (commitMode) => {
-              if (!modeQuery) return;
-              onSendToAgent(query, commitMode === "tab" ? "tab" : "float");
-            },
-          },
-        ];
-      }
-      return [
+    // Mode active: the whole input belongs to that mode's rows.
+    if (activeRows) {
+      const status = (label: string, retry: boolean): PaletteItem[] => [
         {
-          id: "mode:web",
+          id: `${modeId}:status`,
           icon: Search,
-          label: modeQuery
-            ? `Search the web for "${modeQuery}"`
-            : "Search the web",
-          detail: modeQuery ? "Google Search" : "Type a query",
+          label,
+          detail: retry ? "Press Enter to retry" : undefined,
           keywords: [],
-          kind: "navigate",
-          run: (commitMode) => {
-            if (!modeQuery) return;
-            onOpenUrl(
-              `https://www.google.com/search?q=${encodeURIComponent(modeQuery)}`,
-              commitMode,
-            );
-          },
+          kind: "action",
+          commit: "stay",
+          disabled: !retry,
+          run: modeLoad.retry,
         },
       ];
+      if (activeRows.kind === "compute") return activeRows.rows(query);
+      if (activeRows.kind === "load") {
+        if (modeLoad.idle) return status(activeRows.idle ?? "", false);
+        if (modeLoad.error) return status(modeLoad.error, true);
+        if (modeLoad.loading && !modeLoad.items.length)
+          return status("Loading…", false);
+        if (!modeLoad.items.length)
+          return activeRows.empty ? status(activeRows.empty, false) : [];
+        if (activeRows.filtered && !staleSearch) return modeLoad.items;
+      }
+      const items = modeItems ?? [];
+      if (!trimmed)
+        return activeRows.kind === "list" && activeRows.zero === "pin-current"
+          ? pinCurrentFirst([...items])
+          : [...items];
+      return searchMode?.(trimmed, rankContext) ?? [];
     }
 
     // "@" zero-state: list the modes as selectable rows (Chrome's
     // @-shortcut pills). Narrows as the trigger is typed.
     if (trimmed.startsWith("@")) {
       const partial = trimmed.slice(1).toLowerCase();
-      const modeRows = PALETTE_MODES.filter(
-        (candidate) =>
-          (projectId || candidate.id !== "agent") &&
-          modeNames(candidate).some((name) => name.startsWith(partial)),
-      ).map(
-        (candidate): PaletteItem => ({
-          id: `mode-row:${candidate.id}`,
-          icon: candidate.icon,
-          label: candidate.label,
-          detail: candidate.description,
-          shortcut: "Tab",
-          keywords: [],
-          kind: "action",
-          run: () => enterMode(candidate),
-        }),
-      );
+      const modeRows = namedModes
+        .filter((candidate) =>
+          candidate.names?.some((name) => name.startsWith(partial)),
+        )
+        .map(
+          (candidate): PaletteItem => ({
+            id: `mode-row:${candidate.id}`,
+            icon: candidate.icon,
+            label: candidate.label ?? candidate.chip,
+            detail: candidate.description,
+            shortcut: "Tab",
+            keywords: [],
+            kind: "action",
+            commit: "stay",
+            run: () => enterMode(candidate.id),
+          }),
+        );
       if (modeRows.length > 0) return modeRows;
     }
 
-    // ">" filters to command rows only (VS Code quick-open convention).
+    // ">" filters to command rows only (VS Code quick-open convention),
+    // the Commands mode without its chip.
     if (trimmed.startsWith(">")) {
       const commandQuery = trimmed.slice(1).trim();
-      const commands = [
-        ...actionItems,
-        ...skillItems,
-        ...projectItems,
-        ...profileItems,
-      ];
-      if (!commandQuery) return commands;
-      return commands
-        .map((item) => ({
-          item,
-          score: commandScore(item.label, commandQuery, item.keywords),
-        }))
-        .filter((entry) => entry.score > 0)
-        .sort((a, b) => b.score - a.score)
-        .map((entry) => entry.item);
+      return commandQuery
+        ? searchCommands(commandQuery, rankContext)
+        : commandItems;
     }
 
     if (!trimmed) {
+      // A focused site's settings lead its zero state, like chat commands.
+      const siteSettings = surfaceItems.filter(
+        (item) => item.id === "site-settings",
+      );
+      const rest = nativeRows.filter(
+        (item) =>
+          item.id !== "site-settings" && !topLevelModeRows.includes(item),
+      );
+      const byUsage = new Map(
+        nativeRows.flatMap((item) => (item.usage ? [[item.usage, item]] : [])),
+      );
+      const frequent = frequentItems(
+        [
+          ...rest,
+          ...topLevelModeRows,
+          ...signals.frequentHistory.map(
+            (entry) => byUsage.get(entry.id) ?? historyRow(entry),
+          ),
+        ],
+        rankContext,
+      ).map((item) => ({ ...item, group: "Frequent" }));
+      const taken = new Set(frequent.map((item) => item.id));
       return [
         ...startingActionItems,
-        // A focused site's settings lead its zero state, like chat commands.
-        ...sitePageItems.filter((item) => item.id === "site-settings"),
-        ...actionItems,
-        ...skillItems,
-        ...projectItems,
-        ...profileItems,
-        ...sidebarItems,
-        historyPageItem,
-        ...sitePageItems.filter((item) => item.id !== "site-settings"),
-        ...historyItems.slice(0, 8),
+        ...siteSettings,
+        ...frequent,
+        ...rest.filter((item) => !taken.has(item.id)),
+        ...historyItems
+          .filter(
+            (item) => !taken.has(item.id) && !nativeUsage.has(item.usage ?? ""),
+          )
+          .slice(0, 8),
       ];
     }
 
-    const scored = searchEverything(trimmed);
+    const scored = searchEverything(trimmed, rankContext);
 
     const multiline = query.includes("\n");
     const sendItem: PaletteItem = {
@@ -2158,53 +548,31 @@ export function CommandPalette({
     }
     return [...scored, ...(webItem ? [webItem] : []), ...sendItems];
   }, [
+    activeRows,
+    staleSearch,
+    modeId,
+    modeLoad,
+    modeItems,
+    searchMode,
+    rankContext,
+    namedModes,
+    enterMode,
+    searchCommands,
+    commandItems,
     trimmed,
-    searchRequest,
-    sectionItems,
-    sectionError,
-    sectionLoading,
-    fileSearch,
-    fileSearchError,
-    searchSettings,
+    query,
+    startingActionItems,
+    surfaceItems,
+    nativeRows,
+    nativeUsage,
+    topLevelModeRows,
+    signals.frequentHistory,
+    historyRow,
+    historyItems,
     searchEverything,
     projectId,
-    query,
-    mode,
-    picker,
-    agents,
-    projectAgents,
-    defaultAgentId,
-    focusedChat,
-    enterMode,
-    actionItems,
-    startingActionItems,
-    skillItems,
-    projectItems,
-    profileItems,
-    sidebarItems,
-    historyItems,
-    historyPageItem,
-    sitePageItems,
-    historyResults.error,
-    historyResults.loading,
-    historyResults.refresh,
     onSendToAgent,
     onOpenUrl,
-    onOpenTab,
-    onPickDefaultAgent,
-    onPickSessionAgent,
-    onPickProjectAgent,
-    onConfigureAgent,
-    defaultAgentOverridden,
-    onClearDefaultOverride,
-    onPickEffort,
-    onPickModel,
-    onPickHarnessPermissions,
-    targetAgent,
-    catalog,
-    harnessModels,
-    effortModel,
-    harnessDefault.data?.model,
   ]);
 
   const results = useMemo(
@@ -2242,38 +610,53 @@ export function CommandPalette({
 
   const selected = Math.min(selectedIndex, Math.max(results.length - 1, 0));
 
-  // The surface the highlighted row would act on, reported up so the app
-  // accents its border — a scoped command visibly points at its target.
-  const selectedId = results[selected]?.id;
-  const highlightTarget: "chat" | "close" | null =
+  // The surface the highlighted row (or the open question) acts on,
+  // reported up so the app accents its border.
+  const highlight =
     variant === "overlay" && !open
-      ? null
-      : picker === "switch-agent"
+      ? undefined
+      : (activeMode?.highlight ?? results[selected]?.highlight);
+  const highlightTarget: "chat" | "close" | null =
+    highlight === "chat-if-focused"
+      ? focusedChat
         ? "chat"
-        : picker === "effort" ||
-            picker === "model" ||
-            picker === "permission-mode"
-          ? focusedChat
-            ? "chat"
-            : null
-          : selectedId === "action:switch-agent"
-            ? "chat"
-            : selectedId === "action:change-effort" ||
-                selectedId === "action:change-permission-mode" ||
-                selectedId === "action:switch-model" ||
-                selectedId?.startsWith("skill:")
-              ? focusedChat
-                ? "chat"
-                : null
-              : selectedId === "action:close-tab"
-                ? "close"
-                : null;
+        : null
+      : (highlight ?? null);
   const onHighlightTargetRef = useRef(onHighlightTarget);
   onHighlightTargetRef.current = onHighlightTarget;
   useEffect(() => {
     onHighlightTargetRef.current?.(highlightTarget);
     return () => onHighlightTargetRef.current?.(null);
   }, [highlightTarget]);
+
+  // What the palette learns from a pick (ADR 0186): the typed query, and a
+  // visit for destinations nothing else counts.
+  const record = (item: PaletteItem) => {
+    const key = item.usage;
+    if (!key || !profileId) return;
+    // Keyed exactly as the ranker looks picks up ("gpt-4o" → "gpt 4o").
+    const typed = normalizeCommandQuery(
+      trimmed.startsWith(">") ? trimmed.slice(1) : trimmed,
+    ).trim();
+    const use = {
+      key,
+      ...(typed ? { query: typed } : {}),
+      visit: paletteCountsVisit(key),
+      ...(projectId ? { projectId } : {}),
+    };
+    // Incognito chats stay out of what the palette remembers, as they
+    // stay out of history.
+    const chat = key.startsWith('["chat",') ? item.id.slice(8) : null;
+    void (
+      chat && item.id.startsWith("session:")
+        ? desktopApi.sessionIsIncognito(chat)
+        : Promise.resolve(false)
+    )
+      .then((incognito) => {
+        if (!incognito) return desktopApi.paletteRecord(use);
+      })
+      .catch(() => {});
+  };
 
   const commit = (
     item: PaletteItem,
@@ -2283,36 +666,18 @@ export function CommandPalette({
   ) => {
     // Disabled rows (invalid project agents) are informational only.
     if (item.disabled) return;
-    if (
-      item.id === "pick:model:catalog-status" ||
-      item.id === "section:status" ||
-      item.id === "history:status"
-    ) {
+    // Entering a mode, retrying a load: palette state changes in place.
+    if (item.commit === "stay") {
       item.run("replace");
       return;
     }
-    // Entering a chip mode swaps palette state — the palette stays open.
-    if (item.id.startsWith("mode-row:")) {
-      item.run("replace");
-      return;
-    }
-    // Picker-opening commands likewise swap palette state in place.
-    if (
-      item.id.startsWith("action:") &&
-      PICKER_ACTIONS[item.id.slice("action:".length) as ActionId]
-    ) {
-      item.run("replace");
-      return;
-    }
-    // Picking an answer runs it and puts the palette away.
-    if (item.id.startsWith("pick:")) {
+    // Answering a mode's question runs it and puts the palette away.
+    if (item.commit === "answer") {
       if (variant === "overlay") onClose();
       item.run("replace");
-      exitPicker();
+      exitMode();
       return;
     }
-    // A chip-mode row with nothing typed has nothing to do yet.
-    if (item.id.startsWith("mode:") && trimmed === "") return;
     const inTab = variant === "tab";
     const commitMode: CommitMode = floating
       ? "floating"
@@ -2323,6 +688,7 @@ export function CommandPalette({
           : "replace";
     if (variant === "overlay") onClose();
     item.run(commitMode);
+    record(item);
     // A palette tab is consumed by whatever it opened; pure actions
     // (toggle sidebar, …) leave it in place.
     if (inTab && item.kind === "navigate") onClose();
@@ -2334,8 +700,13 @@ export function CommandPalette({
         Math.max(Math.min(current, results.length - 1) + delta, 0),
         results.length - 1,
       );
+      const id = results[next]?.id;
       requestAnimationFrame(() => {
-        sizerRef.current?.children[next]?.scrollIntoView({ block: "nearest" });
+        // Group labels and notices share the list, so find the row itself.
+        if (id)
+          sizerRef.current
+            ?.querySelector(`[data-item-id="${CSS.escape(id)}"]`)
+            ?.scrollIntoView({ block: "nearest" });
       });
       return next;
     });
@@ -2347,27 +718,22 @@ export function CommandPalette({
     // [Ask agent]). Both keys, deliberately — Chrome removed Space once
     // and had to bring it back.
     if (
-      !mode &&
+      !activeMode &&
       (event.key === "Tab" || event.key === " ") &&
       trimmed.length > 1 &&
-      (trimmed.startsWith("@") || isFullModeName(trimmed))
+      (trimmed.startsWith("@") || isFullPaletteModeName(namedModes, trimmed))
     ) {
-      const candidate = matchMode(trimmed);
-      if (candidate && (projectId || candidate.id !== "agent")) {
+      const candidate = matchPaletteMode(namedModes, trimmed);
+      if (candidate) {
         event.preventDefault();
-        enterMode(candidate);
+        enterMode(candidate.id);
         return;
       }
     }
     // Backspace on empty input pops the chip (cmdk convention).
-    if (mode && event.key === "Backspace" && query === "") {
+    if (activeMode && event.key === "Backspace" && query === "") {
       event.preventDefault();
       exitMode();
-      return;
-    }
-    if (picker && event.key === "Backspace" && query === "") {
-      event.preventDefault();
-      exitPicker();
       return;
     }
     if (event.key === "ArrowDown") {
@@ -2411,25 +777,12 @@ export function CommandPalette({
       window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, [variant, open, onClose]);
 
-  // The rendered chip: the live mode/picker, or the exiting one mid
-  // chip-out. Pickers reuse the mode chip's exact visual vocabulary.
-  const chip = mode
-    ? { icon: mode.icon, label: mode.chip, live: true }
-    : picker
-      ? {
-          icon: PICKER_CHIPS[picker].icon,
-          label: PICKER_CHIPS[picker].chip,
-          live: true,
-        }
-      : exitingMode
-        ? { icon: exitingMode.icon, label: exitingMode.chip, live: false }
-        : exitingPicker
-          ? {
-              icon: PICKER_CHIPS[exitingPicker].icon,
-              label: PICKER_CHIPS[exitingPicker].chip,
-              live: false,
-            }
-          : null;
+  // The rendered chip: the live mode, or the exiting one mid chip-out.
+  const chip = activeMode
+    ? { icon: activeMode.icon, label: activeMode.chip, live: true }
+    : exitingChip
+      ? { ...exitingChip, live: false }
+      : null;
 
   const panel = (
     <div
@@ -2442,10 +795,7 @@ export function CommandPalette({
           <span
             data-testid={chip.live ? "palette-mode-chip" : undefined}
             onAnimationEnd={(event) => {
-              if (event.animationName === "chip-out") {
-                setExitingMode(null);
-                setExitingPicker(null);
-              }
+              if (event.animationName === "chip-out") setExitingChip(null);
             }}
             className={`mt-[9px] flex shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap py-1 pl-1.5 pr-2 ${PILL_SURFACE} ${
               chip.live ? "animate-chip-in" : "animate-chip-out"
@@ -2466,13 +816,7 @@ export function CommandPalette({
           onKeyDown={onInputKeyDown}
           rows={1}
           spellCheck={false}
-          placeholder={
-            mode
-              ? mode.placeholder
-              : picker
-                ? PICKER_CHIPS[picker].placeholder
-                : "Search or ask anything…"
-          }
+          placeholder={activeMode?.placeholder ?? "Search or ask anything…"}
           aria-label="Search commands, pages, and more"
           className="field-sizing-content max-h-40 w-full resize-none bg-transparent px-1 py-3 text-sm outline-none placeholder:text-fg-faint"
           style={{ outline: "none" }}
@@ -2485,16 +829,11 @@ export function CommandPalette({
         aria-label="Results"
       >
         <div ref={sizerRef} className="p-2">
-          {(mode?.id === "files" || mode?.id === "content") &&
-            fileSearch &&
-            (fileSearch.truncated ||
-              fileSearch.matches.length > PALETTE_RESULT_LIMIT) && (
-              <p role="status" className="px-4 py-2 text-xs text-fg-muted">
-                Showing the first{" "}
-                {Math.min(fileSearch.matches.length, PALETTE_RESULT_LIMIT)}{" "}
-                matches. Refine your query to see more.
-              </p>
-            )}
+          {activeMode && modeLoad.notice && (
+            <p role="status" className="px-4 py-2 text-xs text-fg-muted">
+              {modeLoad.notice}
+            </p>
+          )}
           {results.map((item, index) => {
             const Icon = item.icon;
             const isSelected = index === selected;
@@ -2544,9 +883,11 @@ export function CommandPalette({
                   {item.iconNode ?? (
                     <Icon className="size-4 shrink-0 text-fg-faint" />
                   )}
-                  <span className="truncate">{item.label}</span>
+                  <span className="min-w-0 truncate">{item.label}</span>
+                  {/* A long label truncates before a short detail ("Chat",
+                      "Workflow"); a long detail keeps at most half the row. */}
                   {item.detail && (
-                    <span className="min-w-0 truncate text-[12px] text-fg-faint">
+                    <span className="min-w-0 max-w-[45%] shrink-0 truncate text-[12px] text-fg-faint">
                       {item.detail}
                     </span>
                   )}
@@ -2591,7 +932,7 @@ export function CommandPalette({
         data-testid="palette-footer"
         className="flex shrink-0 items-center gap-3 border-t border-border px-4 py-1.5 text-[11px] text-fg-faint"
       >
-        {mode || picker ? (
+        {activeMode ? (
           <FooterHint keycap="⌫" label="exit mode" />
         ) : (
           <>

@@ -46,12 +46,12 @@ checkout selection are runtime state, separate from presentation preferences.
 
 | Family | Resolution |
 |---|---|
-| Sidebar contents | Built-in, profile, shared project, personal project; whole document |
+| Workspace (`workspace.js`: sidebars, palette modes) | Built-in, profile, shared project, personal project; whole document |
 | Theme | Profile, shared project, personal project; sparse selection, token and font overrides |
 | Default agent | Profile, shared project, personal project |
 | Runtime state | Explicit owner, not inherited appearance configuration |
 
-Do not apply generic object merging to sidebar documents or themes. Credentials,
+Do not apply generic object merging to workspace documents or themes. Credentials,
 enforced permissions, last project, unread markers and sidebar pose are not ordinary
 project-overridable settings. `ProfileConfigManager.forProject` identifies an owning
 profile; `resolveSettings` resolves layers. These are different operations.
