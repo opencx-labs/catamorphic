@@ -752,6 +752,8 @@ export class AgentSessionsService {
   private readonly personalEnvironments?: PersonalEnvironmentService;
   /** Sandbox grant renewals of the turns running in this process. */
   private readonly grantRenewals = new Map<string, NodeJS.Timeout>();
+  /** Running turns' connection MCP grant renewals, by session (#122). */
+  private readonly mcpGrantRenewals = new Map<string, NodeJS.Timeout>();
   /** A renewal's login write still in flight, per session (ADR 0184). */
   private readonly loginRenewals = new Map<string, Promise<void>>();
   private readonly plugins?: PluginsService;
@@ -2419,7 +2421,8 @@ export class AgentSessionsService {
     input: Parameters<AgentSessionsService["configureSandboxGateway"]>[0],
     personal?: { kind: PersonalLoginKind; owner: string },
   ): void {
-    this.stopGrantRenewal(input.sessionId);
+    const previous = this.grantRenewals.get(input.sessionId);
+    if (previous) clearInterval(previous);
     const timer = setInterval(() => {
       void this.configureSandboxGateway({ ...input, renewOnly: true }).catch(
         (error: unknown) =>
@@ -2466,6 +2469,35 @@ export class AgentSessionsService {
     const timer = this.grantRenewals.get(sessionId);
     if (timer) clearInterval(timer);
     this.grantRenewals.delete(sessionId);
+    const mcp = this.mcpGrantRenewals.get(sessionId);
+    if (mcp) clearInterval(mcp);
+    this.mcpGrantRenewals.delete(sessionId);
+  }
+
+  /**
+   * Keep a turn's connection tools reachable (#122). The harness holds its
+   * connection MCP grants in static headers from anchoring, which may be
+   * days old for a long-lived chat, so the turn extends the same grants
+   * before it runs and every renewal tick while it runs.
+   */
+  private async keepConnectionGrants(sessionId: string): Promise<void> {
+    const grants = this.connectionGrants;
+    if (!grants) return;
+    const extend = () =>
+      grants
+        .extend({ agentSessionId: sessionId, channel: "mcp" })
+        .catch((error: unknown) =>
+          console.warn(
+            `[catamorphic] Could not renew the connection grants of session ${sessionId}`,
+            error,
+          ),
+        );
+    await extend();
+    const previous = this.mcpGrantRenewals.get(sessionId);
+    if (previous) clearInterval(previous);
+    const timer = setInterval(() => void extend(), GRANT_RENEWAL_MS);
+    timer.unref?.();
+    this.mcpGrantRenewals.set(sessionId, timer);
   }
 
   /** Stop renewals and wait out a login write already under way. */
@@ -5744,6 +5776,7 @@ export class AgentSessionsService {
             agent,
             runtime,
           );
+          await this.keepConnectionGrants(sessionId);
           const workspaceNote =
             copyMoveNote ??
             (workspaceMove && agent.topology === "native"

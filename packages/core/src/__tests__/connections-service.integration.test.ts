@@ -611,8 +611,49 @@ describe("credential connections", () => {
     expect(Date.parse(renewed.expiresAt) - Date.now()).toBeLessThanOrEqual(
       3600 * 1000,
     );
+    // A long-lived chat's harness keeps its MCP bearer (#122): the grant
+    // lapses while the chat idles and the next turn extends the same one.
+    await db
+      .updateTable("connection_capability_grants")
+      .set({ expires_at: new Date(Date.now() - 1000) })
+      .where("agent_session_id", "=", sessionId)
+      .where("channel", "=", "mcp")
+      .execute();
+    await expect(
+      grants.validate({ token: mcpGrant.token }),
+    ).resolves.toBeNull();
+    await expect(
+      grants.extend({
+        agentSessionId: sessionId,
+        channel: "mcp",
+        ttlSeconds: 2,
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      grants.validate({ token: mcpGrant.token }),
+    ).resolves.toMatchObject({ channel: "mcp", agentSessionId: sessionId });
+    // A short grant runs out again unless the next tick extends it.
+    await new Promise((resolve) => setTimeout(resolve, 2100));
+    await expect(
+      grants.validate({ token: mcpGrant.token }),
+    ).resolves.toBeNull();
+    await grants.extend({ agentSessionId: sessionId, channel: "mcp" });
+    await expect(
+      grants.validate({ token: mcpGrant.token }),
+    ).resolves.toMatchObject({ channel: "mcp" });
+    // Extending MCP grants leaves the sandbox's own grant as it was.
+    await expect(
+      grants.validate({ token: renewed.token }),
+    ).resolves.toMatchObject({ channel: "sandbox" });
     await grants.revokeAllocation({ allocationId: live.id });
     await expect(grants.validate({ token: renewed.token })).resolves.toBeNull();
+    await expect(
+      grants.validate({ token: mcpGrant.token }),
+    ).resolves.toBeNull();
+    // Released grants never come back.
+    await expect(
+      grants.extend({ agentSessionId: sessionId, channel: "mcp" }),
+    ).resolves.toBe(0);
     await expect(
       grants.validate({ token: mcpGrant.token }),
     ).resolves.toBeNull();
