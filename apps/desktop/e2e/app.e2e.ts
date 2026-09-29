@@ -549,18 +549,16 @@ describe("chat flows", () => {
       `return timelineMessages().some((m) => m.text.includes('two preambles, one summary'));`,
       { timeoutMs: 30_000, label: "final summary message" },
     );
-    const agentTexts = await run<string[]>(`
-      return timelineMessages()
-        .filter((m) => m.role === 'Agent')
-        .map((m) => m.text);
-    `);
     // By default only the answer stays in the conversation; the notes the
-    // agent wrote on the way are rows of its steps, one click away.
-    expect(
-      agentTexts.filter((text) =>
-        /look at the project|writing some notes|two preambles/.test(text),
-      ),
-    ).toHaveLength(1);
+    // agent wrote on the way are rows of its steps, one click away. They
+    // close up as the turn settles, then leave.
+    await runWait(
+      `return timelineMessages()
+        .filter((m) => m.role === 'Agent' &&
+          /look at the project|writing some notes|two preambles/.test(m.text))
+        .length === 1;`,
+      { label: "notes folded under the answer" },
+    );
     // Expanded, the step log holds both notes in emission order and the
     // file the fake agent wrote.
     await runWait(
@@ -626,14 +624,18 @@ describe("chat flows", () => {
          !visibleDock().querySelector('[data-live-work]');`,
       { timeoutMs: 30_000, label: "narrated answer" },
     );
-    const settled = await run<{ agent: number; expanded: string | null }>(`
-      return {
-        agent: timelineMessages().filter((m) =>
-          /read the parser|Fixing it|handles empty input/.test(m.text)).length,
-        expanded: $$('[data-testid="chat-turn-steps-toggle"]').at(-1)
-          ?.getAttribute('aria-expanded') ?? null,
-      };
-    `);
+    // The notes close up as they fold, then leave.
+    const settled = await runWait<{ agent: number; expanded: string | null }>(
+      `const agent = timelineMessages().filter((m) =>
+         /read the parser|Fixing it|handles empty input/.test(m.text)).length;
+       if (agent !== 1) return false;
+       return {
+         agent,
+         expanded: $$('[data-testid="chat-turn-steps-toggle"]').at(-1)
+           ?.getAttribute('aria-expanded') ?? null,
+       };`,
+      { label: "narrated notes folded under the answer" },
+    );
     expect(settled).toEqual({ agent: 1, expanded: "false" });
   });
 

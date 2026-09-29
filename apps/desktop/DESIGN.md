@@ -511,6 +511,14 @@ turn now reads while it runs:
 - **An interruption says what it stopped.** The interrupted turn keeps
   its steps and says which step was running, for how long, and which
   files it left changed.
+- **Nothing snaps.** Showing every note made settling the biggest jump in
+  the chat: the notes left all at once. Notes that fold now stay for one
+  fold-away animation (`animate-fold-away`), keyed by the note, because a
+  settle can land over two renders. A lone step keeps the list's
+  structure, so a second step grows the line to open it in. The clock,
+  step times, the quiet hint and the interruption summary fade in. The
+  quiet hint is muted text: a long test run is quiet too, so it is not
+  shown as a warning.
 
 ### 2026-09-28: Your own sign-ins and files follow you to the server
 

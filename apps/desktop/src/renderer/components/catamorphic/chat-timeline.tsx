@@ -28,6 +28,8 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
+  useRef,
   useState,
 } from "react";
 import Markdown, { defaultUrlTransform } from "react-markdown";
@@ -38,6 +40,7 @@ import { formatElapsed, useNow } from "../../lib/elapsed";
 import {
   DEFAULT_WORK_DISPLAY,
   groupTurns,
+  type TimelineItem,
   type WorkDisplay,
 } from "../../lib/turn-groups";
 import { ActivityText } from "../activity-text";
@@ -314,6 +317,11 @@ export function ChatTimeline({
     messages,
     backgroundCommands ?? [],
   );
+  const items = groupTurns(messages, {
+    working: working ?? Boolean(activity),
+    display: workDisplay,
+  });
+  const folding = useFoldingNotes(items);
   return (
     <BackgroundStates.Provider value={backgroundStates}>
       <StickToBottom
@@ -339,15 +347,22 @@ export function ChatTimeline({
               message: ChatTimelineMessage,
               working: boolean | undefined,
               foldedWork?: ChatTimelineMessage[],
+              foldingAway?: boolean,
             ) => (
+              // A folding note keeps its row key, so the same message
+              // closes up in place rather than being replaced.
               <div
                 key={keyOf.get(message)}
-                data-message-id={message.id}
+                data-message-id={foldingAway ? undefined : message.id}
                 tabIndex={-1}
+                aria-hidden={foldingAway || undefined}
+                inert={foldingAway}
                 className={
-                  message.id === focusMessageId
-                    ? "rounded-md outline outline-1 outline-accent/50"
-                    : "contents"
+                  foldingAway
+                    ? "animate-fold-away"
+                    : message.id === focusMessageId
+                      ? "rounded-md outline outline-1 outline-accent/50"
+                      : "contents"
                 }
               >
                 <Message
@@ -373,24 +388,26 @@ export function ChatTimeline({
                 />
               </div>
             );
-            return groupTurns(messages, {
-              working: working ?? Boolean(activity),
-              display: workDisplay,
-            }).flatMap((item) =>
+            return items.flatMap((item) =>
               item.kind === "message"
                 ? [row(item.message, item.working)]
-                : item.shown.map((message, index) =>
-                    row(
-                      message,
-                      item.working,
-                      index === 0 ? item.folded : undefined,
+                : [
+                    ...item.folded
+                      .filter((message) => folding.has(message.id))
+                      .map((message) => row(message, false, undefined, true)),
+                    ...item.shown.map((message, index) =>
+                      row(
+                        message,
+                        item.working,
+                        index === 0 ? item.folded : undefined,
+                      ),
                     ),
-                  ),
+                  ],
             );
           })()}
           {activity && (
             <div
-              className="flex items-center gap-2 text-xs text-fg-muted"
+              className="flex animate-fade-in items-center gap-2 text-xs text-fg-muted"
               data-testid="chat-activity"
             >
               <LoaderCircle className="size-4 animate-spin" />
@@ -448,6 +465,58 @@ export function ChatTimeline({
       </StickToBottom>
     </BackgroundStates.Provider>
   );
+}
+
+/** How long a folding note stays on screen: its fold-away animation. */
+const FOLD_AWAY_MS = 220;
+
+/**
+ * Notes that were in place a moment ago and have just folded into their
+ * answer's steps (the turn settled, or the setting changed). They stay on
+ * screen for the fold-away animation, so settling closes them up instead
+ * of snapping the conversation shorter. Keyed by the note itself: a settle
+ * can land over two renders, and the answer they fold under may change
+ * between them.
+ */
+function useFoldingNotes(
+  items: TimelineItem<ChatTimelineMessage>[],
+): Set<string> {
+  const inPlace = useRef<Set<string>>(new Set());
+  const timers = useRef<Set<number>>(new Set());
+  const [folding, setFolding] = useState<Set<string>>(() => new Set());
+  // Before paint: the notes never leave the screen for a frame.
+  useLayoutEffect(() => {
+    const now = new Set<string>();
+    const arrived: string[] = [];
+    for (const item of items) {
+      if (item.kind === "message") {
+        now.add(item.message.id);
+        continue;
+      }
+      for (const message of item.shown) now.add(message.id);
+      for (const message of item.folded)
+        if (inPlace.current.has(message.id)) arrived.push(message.id);
+    }
+    inPlace.current = now;
+    if (arrived.length === 0) return;
+    setFolding((current) => new Set([...current, ...arrived]));
+    const timer = window.setTimeout(() => {
+      timers.current.delete(timer);
+      setFolding((current) => {
+        const next = new Set(current);
+        for (const id of arrived) next.delete(id);
+        return next;
+      });
+    }, FOLD_AWAY_MS);
+    timers.current.add(timer);
+  }, [items]);
+  useEffect(() => {
+    const pending = timers.current;
+    return () => {
+      for (const timer of pending) window.clearTimeout(timer);
+    };
+  }, []);
+  return folding;
 }
 
 /**
@@ -630,6 +699,10 @@ function MessageImpl({
 }) {
   const metadata = asRecord(message.metadata);
   const [entered, setEntered] = useState(false);
+  // Live steps become a note in place: the same message gains its prose.
+  const [bornLive] = useState(
+    () => message.role === "assistant" && metadata?.status === "in_progress",
+  );
 
   // Double rAF: the first frame aligns with the commit, the second
   // guarantees the browser resolved the hidden pose before it flips —
@@ -730,7 +803,9 @@ function MessageImpl({
             </article>
           )}
           <div
-            className="flex flex-col items-center gap-0.5 text-center text-xs text-fg-faint"
+            // The running steps above become this summary in place; it fades
+            // in rather than snapping over them.
+            className="flex animate-fade-in flex-col items-center gap-0.5 text-center text-xs text-fg-faint"
             data-testid="chat-interrupted"
           >
             <div className="italic">Interrupted</div>
@@ -842,7 +917,9 @@ function MessageImpl({
           <InlineMessage content={message.content} attachments={attachments} />
         </div>
       ) : (
-        <div className="cat-markdown min-w-0 break-words leading-6">
+        <div
+          className={`cat-markdown min-w-0 break-words leading-6 ${bornLive ? "animate-fade-in" : ""}`}
+        >
           <LinkContext.Provider value={{ onLinkClick, renderLink }}>
             <Markdown
               remarkPlugins={REMARK_PLUGINS}
@@ -1422,7 +1499,7 @@ function TurnClock({
         // The turn's time, not the step's: the timer marks it apart from
         // the running step's own count just above.
         <span
-          className="flex items-center gap-1 tabular-nums text-fg-faint"
+          className="flex animate-fade-in items-center gap-1 tabular-nums text-fg-faint"
           role="timer"
           aria-label="Turn time"
         >
@@ -1433,7 +1510,11 @@ function TurnClock({
         </span>
       )}
       {quiet >= STALL_AFTER_MS && (
-        <span className="text-warning" data-testid="chat-activity-stalled">
+        // Plain words, not an alarm: a long test run is quiet too.
+        <span
+          className="animate-fade-in text-fg-muted"
+          data-testid="chat-activity-stalled"
+        >
           {`No updates for ${formatElapsed(quiet)}`}
         </span>
       )}
@@ -1587,18 +1668,10 @@ function TurnSteps({
   }, [defaultExpanded]);
   const expanded = chosen ?? live;
   if (steps.length === 0) return null;
-  if (steps.length === 1 && steps[0]) {
-    const step = steps[0];
-    return (
-      <div className="mb-1.5 select-none" data-testid="chat-turn-steps">
-        <StepRow
-          step={step}
-          iconUrl={step.toolName ? resolveToolIcon?.(step.toolName) : undefined}
-          onFileClick={onFileClick}
-        />
-      </div>
-    );
-  }
+  // A lone step is its own row. It keeps the list's structure, so a second
+  // step grows the line to open it in, rather than swapping the row out.
+  const lone = steps.length === 1;
+  const open = lone || expanded;
   // A command still running in the background stays in view, outside the
   // fold, until it ends; then it folds in with the rest.
   const running = steps.filter(
@@ -1612,20 +1685,31 @@ function TurnSteps({
     // drag across several replies selects the prose and skips these rows.
     // An opened payload is content again, and selectable.
     <div className="mb-1.5 select-none" data-testid="chat-turn-steps">
-      <button
-        type="button"
-        onClick={() => setChosen(!expanded)}
-        className="flex cursor-pointer items-center gap-1 text-[11px] text-fg-faint transition-colors duration-100 hover:text-fg-muted"
-        aria-expanded={expanded}
-        data-testid="chat-turn-steps-toggle"
+      <div
+        className={`grid transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+          lone ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100"
+        }`}
+        inert={lone}
       >
-        <ChevronRight
-          className={`size-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`}
-        />
-        {steps.length === 1 ? "1 step" : `${steps.length} steps`}
-      </button>
+        <div className="overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setChosen(!expanded)}
+            className="flex cursor-pointer items-center gap-1 text-[11px] text-fg-faint transition-colors duration-100 hover:text-fg-muted"
+            aria-expanded={expanded}
+            data-testid="chat-turn-steps-toggle"
+          >
+            <ChevronRight
+              className={`size-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`}
+            />
+            {`${steps.length} steps`}
+          </button>
+        </div>
+      </div>
       {running.length > 0 && (
-        <div className="mt-1 flex flex-col gap-0.5 border-l border-border pl-2.5">
+        <div
+          className={`flex flex-col gap-0.5 border-l transition-[border-color,padding,margin] duration-200 ${lone ? "border-transparent pl-0" : "mt-1 border-border pl-2.5"}`}
+        >
           {running.map((step) => (
             <StepRow
               key={step.background?.ref}
@@ -1639,11 +1723,13 @@ function TurnSteps({
           mounted, so the collapse mirrors the expansion exactly. */}
       <div
         className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-          expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+          open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
         }`}
       >
         <div className="overflow-hidden">
-          <div className="mt-1 flex flex-col gap-0.5 border-l border-border pl-2.5">
+          <div
+            className={`flex flex-col gap-0.5 border-l transition-[border-color,padding,margin] duration-200 ${lone ? "border-transparent pl-0" : "mt-1 border-border pl-2.5"}`}
+          >
             {folded.map((step, index) => (
               <StepRow
                 // Steps are append-only within a message; index is stable.
@@ -1730,7 +1816,7 @@ function StepRow({
           <img src={iconUrl} alt="" className="size-3.5 shrink-0 rounded-sm" />
         ) : (
           <Icon
-            className={`size-3.5 shrink-0 ${pulsing ? "animate-pulse text-accent" : "text-fg-faint"}`}
+            className={`size-3.5 shrink-0 transition-colors duration-200 ${pulsing ? "animate-pulse text-accent" : "text-fg-faint"}`}
           />
         )}
         {step.background ? (
@@ -1745,7 +1831,7 @@ function StepRow({
           </span>
         ) : (
           <span
-            className={`min-w-0 flex-1 truncate ${step.mono ? "font-mono" : ""} ${step.running ? "text-fg" : ""}`}
+            className={`min-w-0 flex-1 truncate transition-colors duration-200 ${step.mono ? "font-mono" : ""} ${step.running ? "text-fg" : ""}`}
           >
             {step.label}
           </span>
@@ -1805,7 +1891,7 @@ function StepDuration({ step }: { step: TurnStep }) {
   if (ms === undefined || ms < 1000) return null;
   return (
     <span
-      className="shrink-0 tabular-nums text-fg-faint"
+      className="shrink-0 animate-fade-in tabular-nums text-fg-faint"
       data-testid="chat-step-duration"
     >
       {formatElapsed(ms)}

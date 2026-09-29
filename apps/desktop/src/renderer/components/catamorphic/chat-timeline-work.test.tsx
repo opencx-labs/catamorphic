@@ -158,12 +158,15 @@ describe("ChatTimeline work display", () => {
       content: "Running tests",
       metadata: { status: "in_progress", events },
     }) as ChatTimelineMessage;
+  // A lone step keeps its toggle mounted but closed away and inert.
   const toggles = () =>
     [
       ...container.querySelectorAll<HTMLButtonElement>(
         '[data-testid="chat-turn-steps-toggle"]',
       ),
-    ].map((toggle) => toggle.getAttribute("aria-expanded"));
+    ]
+      .filter((toggle) => !toggle.closest("[inert]"))
+      .map((toggle) => toggle.getAttribute("aria-expanded"));
 
   it("streams the work open while the turn runs, then folds it away", async () => {
     const now = Date.now();
@@ -209,9 +212,45 @@ describe("ChatTimeline work display", () => {
     ]);
     expect(liveWork?.querySelector("[data-testid=chat-copy]")).toBeNull();
 
-    // Settled: the work folds under the answer, closed.
+    // Settled: the work folds under the answer, closed. The notes that were
+    // in place close up on the way, then leave.
     await act(async () => root.render(<ChatTimeline messages={messages} />));
     expect(toggles()).toEqual(["false"]);
+    expect(container.querySelectorAll(".animate-fold-away")).toHaveLength(2);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    expect(container.querySelectorAll(".animate-fold-away")).toHaveLength(0);
+    expect(container.querySelectorAll("article")).toHaveLength(2);
+  });
+
+  it("keeps folding notes on screen when a settle lands over two renders", async () => {
+    const step = { type: "command", content: "ls", at: Date.now() };
+    const live = [...messages.slice(0, 4), running("p", [step])];
+    const folds = () => container.querySelectorAll(".animate-fold-away").length;
+    await act(async () =>
+      root.render(<ChatTimeline messages={live} working activity="Working" />),
+    );
+    // The turn stops before its last message settles: a3 answers for now.
+    await act(async () => root.render(<ChatTimeline messages={live} />));
+    expect(folds()).toBe(2);
+    // Then the last message settles and becomes the answer: a3 folds too,
+    // and the notes already folding stay on screen.
+    const settled = [
+      ...messages.slice(0, 4),
+      {
+        id: "p",
+        role: "assistant",
+        content: "Done.",
+        metadata: { status: "completed", changedFiles: [], events: [step] },
+      } as ChatTimelineMessage,
+    ];
+    await act(async () => root.render(<ChatTimeline messages={settled} />));
+    expect(folds()).toBe(3);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    expect(folds()).toBe(0);
   });
 
   it("keeps the reader's choice to close the work while it runs", async () => {
