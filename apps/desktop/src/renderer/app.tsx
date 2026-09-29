@@ -4715,8 +4715,11 @@ export function App({
     .filter((chat) => chat.mode === "tab")
     .map((chat) => {
       const memberKeys = attachedTabKeys(workspace, chat.localId);
-      for (const key of memberKeys) groupOfKey.set(key, chat.localId);
-      groupOfKey.set(chatTabKey(chat.localId), chat.localId);
+      // A chat with nothing attached is a tab, not a group.
+      if (memberKeys.length > 0) {
+        for (const key of memberKeys) groupOfKey.set(key, chat.localId);
+        groupOfKey.set(chatTabKey(chat.localId), chat.localId);
+      }
       return {
         parentKey: chatTabKey(chat.localId),
         memberKeys,

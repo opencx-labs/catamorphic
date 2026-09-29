@@ -1161,14 +1161,9 @@ export function BrowserScreen({
         ? toolbarActive && toolbarHost && createPortal(toolbar, toolbarHost)
         : toolbar}
 
-      {/* Stay on the app background until the guest actually mounts —
-          flashing white for the pre-mount frames is its own kind of jank. */}
-      <div
-        ref={pageAreaRef}
-        className={`relative min-h-0 flex-1 ${
-          ready && firstUrl ? "bg-white" : "bg-bg"
-        }`}
-      >
+      {/* The theme's background until the page paints its own, as Chrome
+          does: a page loading (or a guest mounting) never flashes white. */}
+      <div ref={pageAreaRef} className="relative min-h-0 flex-1 bg-bg">
         {ready && firstUrl ? (
           <webview
             key={webviewNonce}

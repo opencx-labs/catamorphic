@@ -84,6 +84,12 @@ afterAll(async () => {
 });
 
 it("settles a new chat and shows Option-click previews above the chat", async () => {
+  // A chat tab with nothing attached is a tab, not a group: no eyebrow.
+  expect(
+    await app.eval(
+      `!!document.querySelector('${chatTab}') && !document.querySelector('[data-tab-group-eyebrow]')`,
+    ),
+  ).toBe(true);
   await app.eval(`(() => { ${setReactValueJs}
     const input = document.querySelector('[data-chat-local-id] [data-composer-input]');
     setReactValue(input, ${JSON.stringify(`[Preview](${origin}/preview)`)});
@@ -147,6 +153,29 @@ it.each([
   await app.waitFor(
     "!!document.querySelector('[aria-label=\"Pop out to floating chat\"]')",
   );
+});
+
+it("gives a chat tab group one eyebrow across all its tabs", async () => {
+  const eyebrow = await app.eval<{
+    owners: string[];
+    connected: boolean;
+  }>(`(() => {
+    const marks = [...document.querySelectorAll('[data-tab-group-eyebrow]')];
+    const boxes = marks.map((mark) => mark.getBoundingClientRect());
+    return {
+      owners: marks.map((mark) =>
+        mark.closest('[data-point-key]').dataset.pointKey.split(':')[0] +
+        ':' + mark.dataset.tabGroupEyebrow),
+      connected: boxes.every((box, index) =>
+        index === 0 || Math.abs(boxes[index - 1].right - box.left) <= 1),
+    };
+  })()`);
+  expect(eyebrow.owners[0]).toBe("chat:start");
+  expect(eyebrow.owners.length).toBeGreaterThan(1);
+  expect(
+    eyebrow.owners.slice(1).every((owner) => owner.endsWith(":rest")),
+  ).toBe(true);
+  expect(eyebrow.connected).toBe(true);
 });
 
 it("opens floating previews from a collapsed chat tab group", async () => {

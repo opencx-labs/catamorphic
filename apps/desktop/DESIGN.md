@@ -1403,3 +1403,14 @@ In every work display (all notes or the latest; kept or folded after the
 answer) steps keep their rows as earlier work folds in above them. Opening
 a chat or a finished turn plays no step entrances.
 
+
+### 2026-09-30: A group wears one eyebrow; pages load on the theme
+
+A chat tab in the top strip wore an accent eyebrow even alone, and a group
+drew one per tab. Now only a chat with tabs attached is a group, and the
+group carries one line across all of its tabs and the fold chevron. A
+collapsed group keeps it over its chat, which still holds the folded tabs.
+
+Opening a page showed white until it painted. Its frame now waits on the
+theme's background, as Chrome does; a page with no background of its own
+still paints its white canvas once it arrives.

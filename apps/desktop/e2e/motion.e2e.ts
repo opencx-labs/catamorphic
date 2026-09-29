@@ -551,18 +551,18 @@ describe("animate-before-unmount", () => {
 
   it("closing a workspace tab plays tab-out before removal", async () => {
     await run(`$('button[aria-label="New tab"]').click(); return true;`);
-    // Scope to tab-strip elements: tabs carry animate-tab-in from mount
-    // (bubble close buttons share the "Close …" aria-label prefix).
+    // Scope to tab-strip elements (bubble close buttons share the
+    // "Close …" aria-label prefix).
     await runWait(
-      `return $$('.animate-tab-in button[aria-label^="Close"]').length >= 2;`,
+      `return $$('[data-tab-orientation="horizontal"] [data-point-key] button[aria-label^="Close"]').length >= 2;`,
       { label: "second workspace tab open" },
     );
     const samples = await run<
       { t: number; exiting?: boolean; gone?: boolean }[]
     >(`
-      const buttons = $$('.animate-tab-in button[aria-label^="Close"]');
+      const buttons = $$('[data-tab-orientation="horizontal"] [data-point-key] button[aria-label^="Close"]');
       const button = buttons[buttons.length - 1];
-      const tab = button.closest('.animate-tab-in');
+      const tab = button.closest('[data-point-key]');
       button.click();
       return sampleUntilGone(tab, 'animate-tab-out', 1500);
     `);
@@ -575,7 +575,7 @@ describe("animate-before-unmount", () => {
 
   it("tab hover cards fade out before unmounting", async () => {
     await run(`
-      const tab = $('.animate-tab-in[data-point-key]');
+      const tab = $('[data-tab-orientation="horizontal"] [data-point-key]');
       const body = [...tab.querySelectorAll('button')]
         .find((button) => !button.getAttribute('aria-label')?.startsWith('Close'));
       body.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
@@ -589,7 +589,7 @@ describe("animate-before-unmount", () => {
     const samples = await run<
       { t: number; exiting?: boolean; gone?: boolean }[]
     >(`
-      const tab = $('.animate-tab-in[data-point-key]');
+      const tab = $('[data-tab-orientation="horizontal"] [data-point-key]');
       const body = [...tab.querySelectorAll('button')]
         .find((button) => !button.getAttribute('aria-label')?.startsWith('Close'));
       const card = $('[data-testid="tab-hover-card"]');

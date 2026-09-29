@@ -50,6 +50,15 @@ const wheel = (deltaX: number, ticks: number, target = "document.body") =>
   );
 const indicator = `document.querySelector('[data-testid="browser-swipe-indicator"]')`;
 
+it("waits on the theme's background while a page loads, never white", async () => {
+  await ready("One");
+  expect(
+    await app.eval(
+      `getComputedStyle(${guest}.parentElement).backgroundColor === getComputedStyle(document.body).backgroundColor`,
+    ),
+  ).toBe(true);
+});
+
 describe("trackpad history gestures", () => {
   it("shows the back arrow as the gesture grows and navigates past the threshold", async () => {
     await ready("One");
