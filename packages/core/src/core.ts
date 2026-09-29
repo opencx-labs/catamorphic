@@ -1,4 +1,4 @@
-import type { DB, Json } from "@catamorphic/db";
+import { type DB, type Json, withJsonArrayParameters } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import type { PluginResolver } from "@catamorphic/plugins";
 import type {
@@ -468,7 +468,8 @@ export class CatamorphicCore {
 
   constructor(config: CatamorphicCoreConfig) {
     this.toolPermissions = config.toolPermissions;
-    this.db = config.db;
+    // Array parameters reach jsonb as JSON on every host's database.
+    this.db = withJsonArrayParameters(config.db);
     this.notifications = new UserNotificationsService(
       this.db,
       config.pushNotifications,
