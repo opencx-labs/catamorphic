@@ -87,9 +87,10 @@ describe("session runtime controls", () => {
     );
     await inspector();
     // Nothing pinned: before the first message, the inspector names the
-    // model the harness itself would run, marked as its default.
+    // model the harness itself would run, by the id it sends, marked as
+    // its default.
     await wait(
-      `const model = $('[aria-label="Change model"]'); return !!model && model.textContent.includes('Fake Model A') && model.textContent.includes('default');`,
+      `const model = $('[aria-label="Change model"]'); return !!model && model.textContent.includes('fake-model-a-2.1') && model.textContent.includes('default');`,
     );
     await run(`$('[aria-label="Change model"]').click();`);
     await pick("Fake Model B");
@@ -158,7 +159,7 @@ describe("session runtime controls", () => {
     await pick("Agent default");
     await inspector();
     await wait(
-      `const model = $('[aria-label="Change model"]'); return !!model && model.textContent.includes('Fake Model A') && model.textContent.includes('default');`,
+      `const model = $('[aria-label="Change model"]'); return !!model && model.textContent.includes('fake-model-a-2.1') && model.textContent.includes('default');`,
     );
   });
 });

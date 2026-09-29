@@ -3846,8 +3846,8 @@ export function App({
   activeProfileRef.current = activeProfile;
 
   // Back and forward between surfaces (ADR 0188): each project remembers
-  // the places its workspace was at. The mouse's side buttons walk them;
-  // a focused browser tab walks its own pages instead.
+  // the places its workspace was at, and the mouse's side buttons walk
+  // them, except on a browser, which walks its own pages.
   const surfaceHistoriesRef = useRef(new Map<string, SurfaceHistory>());
   useEffect(() => {
     if (!projectId) return;

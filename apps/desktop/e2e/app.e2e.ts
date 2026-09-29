@@ -599,7 +599,7 @@ describe("chat flows", () => {
     // A step joins the live row at its end: the row and the steps already
     // on screen keep their nodes while the activity line changes under them.
     await runWait(
-      `const edit = $$('[data-live-work] [data-testid="chat-step"]')
+      `const edit = $$('[data-live-work] [data-step-kind="file_edit"]')
          .find((step) => step.textContent.includes('src/parser.ts'));
        if (!edit) return false;
        window.__narratedEdit = edit;
