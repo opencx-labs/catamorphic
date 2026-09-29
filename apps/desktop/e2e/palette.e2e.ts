@@ -221,12 +221,19 @@ it("ranks the app's own commands above pages and learns picks", async () => {
   const target = await run<string>(
     `const ids=rows().map(row=>row.dataset.itemId);return ids.indexOf('action:new-terminal-tab')<ids.indexOf('action:new-editor-tab')?'action:new-editor-tab':'action:new-terminal-tab'`,
   );
-  const index = await run<number>(
-    `return rows().findIndex(row=>row.dataset.itemId===${JSON.stringify(target)})`,
+  expect(
+    await run<number>(
+      `return rows().findIndex(row=>row.dataset.itemId===${JSON.stringify(target)})`,
+    ),
+  ).toBeGreaterThan(0);
+  // Rows can still re-rank as late sources arrive, so walk the highlight to
+  // the target and press Enter only once it is the highlighted row.
+  await wait(
+    `const selected=rows().find(row=>row.getAttribute('aria-selected')==='true');
+     if(selected?.dataset.itemId===${JSON.stringify(target)}){key('Enter');return true}
+     key('ArrowDown');return false`,
+    "target picked",
   );
-  expect(index).toBeGreaterThan(0);
-  for (let step = 0; step < index; step++) await run(`key('ArrowDown')`);
-  await run(`key('Enter')`);
   await wait(`return !input()`);
   await open();
   await type("new");

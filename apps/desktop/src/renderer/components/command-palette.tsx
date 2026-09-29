@@ -24,6 +24,7 @@ import { normalizeCommandQuery } from "../lib/command-score.js";
 import { desktopApi, projectAgentAsInfo } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
+import { pointerMoved } from "../lib/pointer-moved.js";
 import { useProjectSkills } from "../lib/skills.js";
 import { usePaletteHost } from "../palette/host.js";
 import {
@@ -873,7 +874,9 @@ export function CommandPalette({
                     if (event.button !== 0) return;
                     event.preventDefault();
                   }}
-                  onMouseEnter={() => setSelectedIndex(index)}
+                  onMouseMove={(event) => {
+                    if (pointerMoved(event)) setSelectedIndex(index);
+                  }}
                   className={`flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors duration-100 ${
                     item.disabled
                       ? "cursor-default opacity-50"
