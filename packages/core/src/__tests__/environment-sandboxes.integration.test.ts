@@ -20,8 +20,8 @@ import { allocationSandboxProvider } from "../services/allocation-sandbox-provid
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import {
   EnvironmentIncompatibleError,
+  EnvironmentPolicyInvalidError,
   ExecutionEnvironmentsService,
-  InvalidEnvironmentPolicyError,
 } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
@@ -251,6 +251,6 @@ describe("Environment sandboxes from admission to creation (ADR 0176)", () => {
         projectId: broken,
         requirements: { workload: "agent", topology: "controller" },
       }),
-    ).rejects.toBeInstanceOf(InvalidEnvironmentPolicyError);
+    ).rejects.toBeInstanceOf(EnvironmentPolicyInvalidError);
   });
 });

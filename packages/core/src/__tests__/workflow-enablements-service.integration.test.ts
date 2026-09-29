@@ -11,7 +11,10 @@ import {
   PROJECT_PRINCIPAL_ID,
 } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
-import type { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
+import {
+  EnvironmentPolicyInvalidError,
+  type ExecutionEnvironmentsService,
+} from "../services/execution-environments-service.js";
 import {
   WorkflowEnablementConflictError,
   WorkflowEnablementConsentRequiredError,
@@ -52,6 +55,7 @@ let artifact = {
   lastUsedAt: new Date().toISOString(),
 };
 let service: WorkflowEnablementsService;
+const admit = vi.fn(async () => ({ environmentName: "default" }));
 let resolvedMemberA: Identity | null = memberA;
 /** What the workflow under test declares in `permissions`. */
 let declared: string[] = [];
@@ -65,9 +69,7 @@ beforeAll(async () => {
     .execute();
   await insertArtifact(artifact);
   service = new WorkflowEnablementsService(db, {
-    executionEnvironments: {
-      admit: vi.fn(async () => ({ environmentName: "default" })),
-    } as unknown as ExecutionEnvironmentsService,
+    executionEnvironments: { admit } as unknown as ExecutionEnvironmentsService,
     resolveTarget: vi.fn(async () => ({
       artifact,
       requirements: [],
@@ -254,6 +256,27 @@ describe("WorkflowEnablementsService", () => {
         identity: memberA,
         enablementId: created!.id,
       }),
+    ).toMatchObject({ status: "active", suspensionReason: null });
+  });
+
+  it("names a broken Environment policy as the reason, not lost access", async () => {
+    const [created] = await service.list({ identity: memberA, projectId });
+    admit.mockRejectedValueOnce(
+      new EnvironmentPolicyInvalidError(
+        "defaultEnvironment must name a valid declared Environment",
+      ),
+    );
+    await expect(
+      service.revalidate({ identity: memberA, enablementId: created!.id }),
+    ).rejects.toBeInstanceOf(WorkflowEnablementSuspendedError);
+    expect(
+      await service.get({ identity: memberA, enablementId: created!.id }),
+    ).toMatchObject({
+      status: "suspended",
+      suspensionReason: "environment_policy_invalid",
+    });
+    expect(
+      await service.reenable({ identity: memberA, enablementId: created!.id }),
     ).toMatchObject({ status: "active", suspensionReason: null });
   });
 

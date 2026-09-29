@@ -79,6 +79,7 @@ export type WorkflowEnablementSuspensionReason =
   | "member_removed"
   | "workflow_denied"
   | "environment_denied"
+  | "environment_policy_invalid"
   | "connection_unavailable"
   | "connection_permission_denied"
   | "connection_capability_changed"

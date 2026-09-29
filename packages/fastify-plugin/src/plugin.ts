@@ -2,7 +2,7 @@ import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import {
   AccessDeniedError,
   DeploymentBlockedError,
-  InvalidEnvironmentPolicyError,
+  EnvironmentPolicyInvalidError,
   ProjectNotFoundError,
   SessionArtifactConflictError,
   SessionArtifactNotFoundError,
@@ -187,7 +187,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
       return reply.status(404).send({ error: "Project not found" });
     }
     // The project's committed policy is invalid: its owners fix it.
-    if (err instanceof InvalidEnvironmentPolicyError) {
+    if (err instanceof EnvironmentPolicyInvalidError) {
       return reply
         .status(422)
         .send({ error: err.message, code: "environment_policy_invalid" });

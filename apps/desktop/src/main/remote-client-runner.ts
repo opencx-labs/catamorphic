@@ -10,8 +10,39 @@ import {
 import type { ProfileConfigManager } from "./profile-config.js";
 import { refreshRemoteCredentials } from "./remote-oauth.js";
 
-/** How long replicas may serve roles and project policy from cache. */
-const REFUSAL_CONFIRM_MS = 11_000;
+/**
+ * How long a replica may serve roles and project policy from before a
+ * change: the stock roles cache (10 seconds) over a program fetch it may
+ * have memoized just before (5 seconds), plus a margin (issue 154).
+ */
+const REFUSAL_CONFIRM_MS = 16_000;
+
+/** This registration no longer matters: stopped, or another Environment. */
+class RegistrationSupersededError extends Error {
+  constructor() {
+    super("This machine no longer serves this Environment");
+    this.name = "RegistrationSupersededError";
+  }
+}
+
+/** Resolves after `ms`, or rejects as superseded once `signal` aborts. */
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new RegistrationSupersededError());
+      return;
+    }
+    const abort = () => {
+      clearTimeout(timer);
+      reject(new RegistrationSupersededError());
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
 
 /** The server refused this machine: retrying cannot help. */
 class RunnerAccessDeniedError extends Error {
@@ -44,13 +75,18 @@ function refusal(args: {
 export class RemoteClientRunners {
   private readonly runners = new Map<
     string,
-    Promise<ReturnType<typeof startClientRunner>>
+    {
+      environment: string;
+      started: Promise<ReturnType<typeof startClientRunner>>;
+    }
   >();
   /** The Environment each project's member asked this machine to serve. */
   private readonly wanted = new Map<string, string>();
   private readonly retries = new Map<string, NodeJS.Timeout>();
   /** False while the computer sleeps or Work shuts down. */
   private active = true;
+  /** Aborts registrations in flight when the computer sleeps or Work quits. */
+  private halt = new AbortController();
   constructor(
     private readonly profiles: ProfileConfigManager,
     private readonly provider: SandboxProvider,
@@ -82,13 +118,24 @@ export class RemoteClientRunners {
         });
       },
     });
-    let runner = this.runners.get(args.projectId);
+    const existing = this.runners.get(args.projectId);
+    if (existing && existing.environment !== args.environment) {
+      // Another Environment: end the old connection before registering the
+      // new one under the same runner id.
+      this.runners.delete(args.projectId);
+      await existing.started.then((old) => old.stop()).catch(() => {});
+    }
+    let runner = this.runners.get(args.projectId)?.started;
     if (!runner) {
       let failed = false;
+      const halted = this.halt.signal;
+      const superseded = () =>
+        halted.aborted || this.wanted.get(args.projectId) !== args.environment;
       const started: Promise<ReturnType<typeof startClientRunner>> =
         (async () => {
           const register = () =>
             client.POST("/api/projects/{projectId}/client-runners", {
+              signal: halted,
               params: { path: { projectId: link.remoteProjectId } },
               body: {
                 id: link.connectionId,
@@ -106,9 +153,8 @@ export class RemoteClientRunners {
           // before a change that grants this machine (issue 154): confirm
           // a refusal once that window has passed before believing it.
           if (registration.response.status === 403) {
-            await new Promise((resolve) =>
-              setTimeout(resolve, REFUSAL_CONFIRM_MS),
-            );
+            await pause(REFUSAL_CONFIRM_MS, halted);
+            if (superseded()) throw new RegistrationSupersededError();
             registration = await register();
           }
           if (!registration.data) {
@@ -186,7 +232,7 @@ export class RemoteClientRunners {
               // only its first ends it, and never a newer runner's entry.
               if (failed) return;
               failed = true;
-              if (this.runners.get(args.projectId) === started)
+              if (this.runners.get(args.projectId)?.started === started)
                 this.runners.delete(args.projectId);
               console.warn("[desktop] Local runner stopped", error);
               // The server ended the session (its lease moved on, say after
@@ -196,9 +242,12 @@ export class RemoteClientRunners {
           });
         })();
       runner = started;
-      this.runners.set(args.projectId, started);
+      this.runners.set(args.projectId, {
+        environment: args.environment,
+        started,
+      });
       void started.catch(() => {
-        if (this.runners.get(args.projectId) === started)
+        if (this.runners.get(args.projectId)?.started === started)
           this.runners.delete(args.projectId);
       });
     }
@@ -250,6 +299,7 @@ export class RemoteClientRunners {
   /** After sleep: serve again every project the member connected. */
   resume() {
     this.active = true;
+    this.halt = new AbortController();
     for (const [projectId, environment] of this.wanted)
       if (!this.runners.has(projectId))
         this.reconnect({ projectId, environment }, 1);
@@ -258,11 +308,15 @@ export class RemoteClientRunners {
   /** On sleep or shutdown; `resume` serves the same projects again. */
   async stop() {
     this.active = false;
+    // Registrations in flight give up at once instead of holding up sleep
+    // or quit.
+    this.halt.abort();
     for (const timer of this.retries.values()) clearTimeout(timer);
     this.retries.clear();
-    await Promise.allSettled(
-      [...this.runners.values()].map(async (runner) => (await runner).stop()),
-    );
+    const runners = [...this.runners.values()];
     this.runners.clear();
+    await Promise.allSettled(
+      runners.map(async ({ started }) => (await started).stop()),
+    );
   }
 }

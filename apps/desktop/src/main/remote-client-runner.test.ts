@@ -135,7 +135,7 @@ describe("RemoteClientRunners", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect(registrations).toHaveLength(2);
     // A replica's cached roles may be stale: the refusal is asked once more.
-    await vi.advanceTimersByTimeAsync(11_000);
+    await vi.advanceTimersByTimeAsync(16_001);
     expect(registrations).toHaveLength(3);
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(registrations).toHaveLength(3);
@@ -151,10 +151,50 @@ describe("RemoteClientRunners", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(registrations).toHaveLength(1);
     refuse = false;
-    await vi.advanceTimersByTimeAsync(11_000);
+    await vi.advanceTimersByTimeAsync(16_001);
     await expect(connecting).resolves.toEqual({
       id: "7d1c3f0e-4c1b-4a4e-9a51-2f6c9c1b0a11",
     });
+    expect(registrations).toHaveLength(2);
+    expect(started).toHaveLength(1);
+    await machine.stop();
+  });
+
+  it("stops waiting to confirm a refusal when the computer sleeps", async () => {
+    const machine = runners({ current: true });
+    refuse = true;
+    const connecting = machine
+      .connect({ projectId: "local", environment: "laptop" })
+      .catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(registrations).toHaveLength(1);
+    // Sleep does not wait out the confirmation window.
+    await machine.stop();
+    await expect(connecting).resolves.toBeInstanceOf(Error);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(registrations).toHaveLength(1);
+    expect(started).toHaveLength(0);
+  });
+
+  it("serves the Environment asked for last, not one whose refusal it was confirming", async () => {
+    const machine = runners({ current: true });
+    refuse = true;
+    const first = machine
+      .connect({ projectId: "local", environment: "laptop" })
+      .catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    refuse = false;
+    const second = machine.connect({
+      projectId: "local",
+      environment: "desktop",
+    });
+    await vi.advanceTimersByTimeAsync(16_001);
+    await expect(second).resolves.toEqual({
+      id: "7d1c3f0e-4c1b-4a4e-9a51-2f6c9c1b0a11",
+    });
+    await expect(first).resolves.toBeInstanceOf(Error);
+    // One refused registration for laptop, then desktop's; the laptop
+    // confirmation never registers again.
     expect(registrations).toHaveLength(2);
     expect(started).toHaveLength(1);
     await machine.stop();
