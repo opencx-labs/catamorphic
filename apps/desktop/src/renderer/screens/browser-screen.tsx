@@ -32,6 +32,7 @@ import {
 } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { useSteadyWidthDuringLayoutTransitions } from "../lib/layout-transition.js";
+import { pointerMoved } from "../lib/pointer-moved.js";
 
 /**
  * A browser page inside a workspace tab: address bar (with Chrome-style
@@ -949,7 +950,9 @@ export function BrowserScreen({
         event.preventDefault();
         commitSuggestion(suggestion);
       }}
-      onMouseEnter={() => setSelectedIndex(index)}
+      onMouseMove={(event) => {
+        if (pointerMoved(event)) setSelectedIndex(index);
+      }}
       className={`flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-[13px] ${
         index === selectedIndex ? "bg-bg-raised text-fg" : "text-fg-muted"
       }`}
