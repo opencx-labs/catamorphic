@@ -20,12 +20,17 @@ import {
  */
 class JsonArrayTransformer extends OperationNodeTransformer {
   protected override transformValue(node: ValueNode): ValueNode {
-    return Array.isArray(node.value)
-      ? ValueNode.create(JSON.stringify(node.value))
-      : node;
+    if (!Array.isArray(node.value)) return node;
+    const json = JSON.stringify(node.value);
+    return node.immediate
+      ? ValueNode.createImmediate(json)
+      : ValueNode.create(json);
   }
 
-  /** An inserted row's values, or an `in` list: arrays among them are jsonb. */
+  /**
+   * An inserted row's values, or the right side of a comparison with an
+   * array (`in (...)`): an array among them is a jsonb value.
+   */
   protected override transformPrimitiveValueList(
     node: PrimitiveValueListNode,
   ): PrimitiveValueListNode {

@@ -191,13 +191,18 @@ describe.skipIf(!databaseUrl)("service connections (ADR 0172)", () => {
   }, 120_000);
 
   afterAll(async () => {
-    await worker?.stop();
-    await server?.shutdown();
-    await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-    await admin.query(`DROP ROLE IF EXISTS ${reader}`);
-    await admin.query(`DROP DATABASE IF EXISTS ${serverDatabase} WITH (FORCE)`);
-    await admin.end();
-    if (root) fs.rmSync(root, { recursive: true, force: true });
+    try {
+      await worker?.stop();
+      await server?.shutdown();
+    } finally {
+      await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      await admin.query(`DROP ROLE IF EXISTS ${reader}`);
+      await admin.query(
+        `DROP DATABASE IF EXISTS ${serverDatabase} WITH (FORCE)`,
+      );
+      await admin.end();
+      if (root) fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("only an organization administrator connects a service connection", async () => {

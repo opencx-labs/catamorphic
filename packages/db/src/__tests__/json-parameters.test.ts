@@ -66,6 +66,42 @@ describe("array parameters reach jsonb as JSON", () => {
     ]);
   });
 
+  it("reaches every shape a query builder or template gives a value", () => {
+    const db = compiler();
+    // A row with an expression becomes a list of value nodes.
+    expect(
+      db
+        .insertInto("json_rows")
+        .values({ id: "a", items: [], label: sql`default` })
+        .compile().parameters,
+    ).toEqual(["a", "[]"]);
+    expect(
+      db
+        .insertInto("json_rows")
+        .values({ id: "a", items: [], label: "x" })
+        .onConflict((oc) => oc.column("id").doUpdateSet({ items: ["b"] }))
+        .compile().parameters,
+    ).toEqual(["a", "[]", "x", '["b"]']);
+    expect(
+      db
+        .selectFrom("json_rows")
+        .select((eb) => eb.val(["a"]).as("items"))
+        .compile().parameters,
+    ).toEqual(['["a"]']);
+    expect(
+      sql`select ${sql.val(["a"])}, ${sql.join([["b"], "c"])}`.compile(db)
+        .parameters,
+    ).toEqual(['["a"]', '["b"]', "c"]);
+    // A jsonb `in` list: its elements are the arrays.
+    expect(
+      db
+        .selectFrom("json_rows")
+        .select("id")
+        .where("items", "in", [["a"], []])
+        .compile().parameters,
+    ).toEqual(['["a"]', "[]"]);
+  });
+
   it("leaves `in` lists and objects alone", () => {
     const db = compiler();
     expect(
