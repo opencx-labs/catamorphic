@@ -5,14 +5,14 @@ import {
 import { normalizePrefs } from "../../shared/app-prefs.js";
 import { SETTING_KEYS, SETTINGS } from "../../shared/settings.js";
 import { THEME_TOKENS } from "../../shared/theme-tokens.js";
-import { SIDEBAR_AUTHORING_GUIDE } from "../sidebar-authoring.js";
 import { THEME_PRESETS } from "../theme.js";
+import { WORKSPACE_AUTHORING_GUIDE } from "../workspace-authoring.js";
 
 /** Delivered through the host skill tier, including existing user projects. */
 export const DESKTOP_SETTINGS_SKILL = `---
 name: configuring-catamorphic-desktop
 title: Configure desktop settings
-description: Edit Work desktop configuration files to customize theme, fonts, shortcuts, sidebar sections, command palette modes, tabs, notifications or terminal macros, including project overrides and reset.
+description: Edit Work desktop configuration files to customize theme, fonts, shortcuts, sidebar sections and command palette modes (workspace.js), tabs, notifications or terminal macros, including project overrides and reset.
 ---
 
 # Configure the desktop
@@ -104,7 +104,7 @@ An empty string disables an action; delete its key to restore the default. Keep
 bindings unique. Defaults and supported action ids:
 ${KEYBINDING_ACTIONS.map((action) => `- ${action}: ${JSON.stringify(DEFAULT_KEYBINDINGS[action])}`).join("\n")}
 
-${SIDEBAR_AUTHORING_GUIDE}
+${WORKSPACE_AUTHORING_GUIDE}
 
 ## Validation and boundaries
 

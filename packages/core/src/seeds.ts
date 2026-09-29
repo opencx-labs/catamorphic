@@ -558,7 +558,7 @@ uncertain action just because a connection returned.
 ## Shape the project experience from capabilities
 
 In the Work desktop app, a project may ship a shared
-\`.work/sidebar.js\` and up to six New Tab starters in the ordinary
+\`.work/workspace.js\` and up to six New Tab starters in the ordinary
 \`.work/project.json\` manifest. Both may target resolved authority with
 \`when: { permissions }\`; never branch on a role slug. Every declared
 condition must match, invalid conditions fail closed, and omitted configuration
@@ -579,8 +579,9 @@ leaves no empty UI behind.
 \`\`\`
 
 \`\`\`javascript
-// .work/sidebar.js
+// .work/workspace.js
 module.exports = {
+  sidebars: {
   left: [{ id: "project", title: "Project", icon: "House", sections: [
     { id: "chats", type: "chats" },
     { id: "files", type: "files" },
@@ -594,6 +595,7 @@ module.exports = {
     { id: "changes", type: "git", title: "Changes", when: { permissions: ["program:write"] } },
   ] }],
   right: [],
+  },
 };
 \`\`\`
 

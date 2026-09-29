@@ -96,7 +96,7 @@ text and never echoes the draft message.
 Every palette mode has one shape (ADR 0186): a chip, typed names, and rows that
 are ranked, computed, or loaded. Type a name then Space or Tab, or pick it from
 the @ list; Backspace on an empty input leaves. Choice pickers, sidebar searches,
-Sites, Commands (also `>`) and sidebar.js `palette.modes` all use it. Results rank
+Sites, Commands (also `>`) and workspace.js `palette.modes` all use it. Results rank
 by match, row kind and use: commands and surfaces before pages, frequent
 destinations first, and rows picked earlier for a query. The empty palette shows
 starting actions, the focused site's settings, then up to six Frequent rows.

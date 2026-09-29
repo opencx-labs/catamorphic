@@ -29,8 +29,10 @@ one loader owns debounce, abort, loading, empty, error and retry rows.
 Committing a row either proceeds normally, stays (enter a mode, retry), or
 answers the mode's question and puts the palette away.
 
-**Custom modes are sidebar sources.** `sidebar.js` gains `palette.modes`,
-layered and validated with the sidebars. A mode takes exactly one row source:
+**Custom modes are sidebar sources, in one workspace file.** The layered
+`sidebar.js` becomes `workspace.js`, exporting `{ sidebars: { left, right },
+palette: { modes } }` (profile, `.work/workspace.js`, personal override); no
+other keys. Modes are validated with the sidebars. A mode takes exactly one row source:
 an executable module (ADR 0140's contract), a custom section by id, or static
 items. `search: "source"` passes the typed query to the module's `load`;
 `topLevel` ranks a palette-searched mode's rows in the ordinary palette.
@@ -63,10 +65,13 @@ leave the top level for the Sites mode; the host moves to the row's detail.
 ## Consequences
 
 - A new built-in mode is one registry entry; a user's agent adds a mode by
-  editing `sidebar.js`, and one module can back a section and a mode.
+  editing `workspace.js`, and one module can back a section and a mode.
 - Ranking adapts to each person without configuration; there is no ranking
   knob, and the skill says so.
 - Typed queries are stored per profile, bounded to 500, and cleared with
   history.
-- Built-in collection sources (chats, files, and so on) cannot back a custom
-  mode yet; they are already searchable, and filtered variants are follow-up.
+- New Tab starters stay in `.work/project.json`: core serves them to every
+  client (the PWA included), and a server must never execute project code to
+  render a list.
+- Existing `sidebar.js` files are not read; move their contents under
+  `sidebars` in `workspace.js` (ask the assistant).

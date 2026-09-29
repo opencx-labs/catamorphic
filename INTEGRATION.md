@@ -418,8 +418,8 @@ sidebar sections, custom items, and New Tab starting actions with
 `permissions: ["program:write"]` for the people who edit the program. Omit
 `when` to show an item to everyone.
 
-In the desktop reference host, shared navigation lives in
-`.work/sidebar.js`. New Tab actions live in the ordinary project
+In the desktop reference host, shared sidebars and palette modes live in
+`.work/workspace.js`. New Tab actions live in the ordinary project
 manifest and remain visually absent when omitted:
 
 ```json

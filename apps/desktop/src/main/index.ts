@@ -580,10 +580,10 @@ app.whenReady().then(async () => {
     }
   });
   nativeTheme.on("updated", () => profileConfig.systemAppearanceChanged());
-  profileConfig.onSidebarChanged((profileId) => {
+  profileConfig.onWorkspaceChanged((profileId) => {
     // No payload: the resolved config depends on each window's active
     // project (layered resolution), so the renderer refetches instead.
-    sendToProfile(profileId, "catamorphic:sidebar-config-changed", null);
+    sendToProfile(profileId, "catamorphic:workspace-config-changed", null);
   });
   profileConfig.onPrefsChanged((profileId, prefs) => {
     sendToProfile(profileId, "catamorphic:prefs-changed", prefs);

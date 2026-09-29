@@ -79,8 +79,8 @@ beforeAll(async () => {
     `export default {async load({signal}){const r=await fetch('http://127.0.0.1:${address.port}',{signal});if(!r.ok)throw Error('Service unavailable: '+r.status);return r.json()}}`,
   );
   fs.writeFileSync(
-    path.join(projectRoot, ".work/sidebar.js"),
-    `module.exports={left:[{id:'live',title:'Sources',icon:'ListTodo',sections:[{id:'todos',type:'custom',title:'My todos',source:{type:'custom',module:'.work/todos.ts'},height:180},{id:'http',type:'custom',title:'Service',source:{type:'custom',module:'.work/http.ts'},height:120,headerActions:[{label:'Refresh Service',action:'refresh',icon:'RefreshCw'}]}]},{id:'other',title:'Other',icon:'Folder',sections:[{id:'files',type:'files'}]}],right:[]};`,
+    path.join(projectRoot, ".work/workspace.js"),
+    `module.exports={sidebars: {left:[{id:'live',title:'Sources',icon:'ListTodo',sections:[{id:'todos',type:'custom',title:'My todos',source:{type:'custom',module:'.work/todos.ts'},height:180},{id:'http',type:'custom',title:'Service',source:{type:'custom',module:'.work/http.ts'},height:120,headerActions:[{label:'Refresh Service',action:'refresh',icon:'RefreshCw'}]}]},{id:'other',title:'Other',icon:'Folder',sections:[{id:'files',type:'files'}]}],right:[] }};`,
   );
   await app.reload();
   await app.waitFor(

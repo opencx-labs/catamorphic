@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
-import { PROJECT_SIDEBAR_PATH } from "@catamorphic/workflow/project-layout";
+import { PROJECT_WORKSPACE_PATH } from "@catamorphic/workflow/project-layout";
 import type { OpenMode } from "../shared/open-mode.js";
 import {
   normalizePaletteTrigger,
@@ -9,7 +9,7 @@ import {
 } from "../shared/palette.js";
 import { sanitizeProjectExperienceWhen } from "../shared/project-experience.js";
 import type { SidebarSourceItem } from "../shared/sidebar-source.js";
-import { SIDEBAR_AUTHORING_GUIDE } from "./sidebar-authoring.js";
+import { WORKSPACE_AUTHORING_GUIDE } from "./workspace-authoring.js";
 
 /**
  * User-customizable sidebar. The config is a real JS file at
@@ -26,21 +26,24 @@ import { SIDEBAR_AUTHORING_GUIDE } from "./sidebar-authoring.js";
 import {
   resolveSidebarSection,
   type SidebarAction,
-  type SidebarConfig,
   type SidebarItem,
   type SidebarItemPresentation,
   type SidebarMenuEntry,
-  type SidebarPaletteMode,
   type SidebarPreview,
   type SidebarPreviewMetadata,
   type SidebarSectionConfig,
   type SidebarSource,
   type SidebarTabConfig,
   type SidebarWhen,
-  sidebarSections,
 } from "../shared/sidebar.js";
+import {
+  type PaletteModeConfig,
+  sidebarSections,
+  type WorkspaceConfig,
+} from "../shared/workspace.js";
 
-export type { SidebarConfig, SidebarSectionConfig } from "../shared/sidebar.js";
+export type { SidebarSectionConfig } from "../shared/sidebar.js";
+export type { WorkspaceConfig } from "../shared/workspace.js";
 
 /** Hover menu for a project bookmark when the config doesn't override it. */
 export const DEFAULT_BOOKMARK_MENU: SidebarMenuEntry[] = [
@@ -66,53 +69,55 @@ export const DEFAULT_CUSTOM_MENU: SidebarMenuEntry[] = [
   { label: "Copy link", action: "copy-url" },
 ];
 
-export const DEFAULT_SIDEBAR_CONFIG: SidebarConfig = {
-  left: [
-    {
-      id: "project",
-      title: "Project",
-      icon: "House",
-      sections: [
-        { id: "bookmarks", type: "bookmarks" },
-        { id: "workflows", type: "workflows" },
-        { id: "apps", type: "apps" },
-        { id: "chats", type: "chats" },
-        { id: "tabs", type: "tabs" },
-        { id: "files", type: "files", collapsed: true },
-        { id: "remote", type: "remote", title: "Server" },
-      ],
-    },
-  ],
-  right: [
-    {
-      id: "companion",
-      title: "Activity",
-      icon: "Activity",
-      sections: [
-        { id: "activity", type: "activity" },
-        {
-          id: "subsessions",
-          type: "subsessions",
-          title: "Subsessions",
-          when: { surface: ["chat"], session: true },
-          hideEmpty: true,
-        },
-        { id: "changes", type: "git", hideEmpty: true },
-      ],
-    },
-    {
-      id: "reviews",
-      title: "Proposals",
-      icon: "GitPullRequest",
-      sections: [{ id: "prs", type: "prs" }],
-    },
-  ],
+export const DEFAULT_WORKSPACE_CONFIG: WorkspaceConfig = {
+  sidebars: {
+    left: [
+      {
+        id: "project",
+        title: "Project",
+        icon: "House",
+        sections: [
+          { id: "bookmarks", type: "bookmarks" },
+          { id: "workflows", type: "workflows" },
+          { id: "apps", type: "apps" },
+          { id: "chats", type: "chats" },
+          { id: "tabs", type: "tabs" },
+          { id: "files", type: "files", collapsed: true },
+          { id: "remote", type: "remote", title: "Server" },
+        ],
+      },
+    ],
+    right: [
+      {
+        id: "companion",
+        title: "Activity",
+        icon: "Activity",
+        sections: [
+          { id: "activity", type: "activity" },
+          {
+            id: "subsessions",
+            type: "subsessions",
+            title: "Subsessions",
+            when: { surface: ["chat"], session: true },
+            hideEmpty: true,
+          },
+          { id: "changes", type: "git", hideEmpty: true },
+        ],
+      },
+      {
+        id: "reviews",
+        title: "Proposals",
+        icon: "GitPullRequest",
+        sections: [{ id: "prs", type: "prs" }],
+      },
+    ],
+  },
 };
 
-export const DEFAULT_SIDEBAR_FILE = `${SIDEBAR_AUTHORING_GUIDE.split("\n")
+export const DEFAULT_WORKSPACE_FILE = `${WORKSPACE_AUTHORING_GUIDE.split("\n")
   .map((line) => `// ${line}`)
   .join("\n")}
-module.exports = ${JSON.stringify(DEFAULT_SIDEBAR_CONFIG, null, 2)};
+module.exports = ${JSON.stringify(DEFAULT_WORKSPACE_CONFIG, null, 2)};
 `;
 
 const VALID_TYPES = new Set([
@@ -468,7 +473,7 @@ function sanitizeTabs({
   sectionIds: Set<string>;
 }): SidebarTabConfig[] {
   if (!Array.isArray(raw))
-    throw new Error("Both left and right must be arrays of tabs.");
+    throw new Error("sidebars.left and sidebars.right must be arrays of tabs.");
   return raw
     .map((tab): SidebarTabConfig => {
       if (
@@ -592,18 +597,28 @@ function sanitizeTabs({
     .filter((tab) => tab.sections.length > 0);
 }
 
-function sanitize(raw: unknown): SidebarConfig {
-  if (!isRecord(raw)) throw new Error("Export a sidebar configuration object.");
+function sanitize(raw: unknown): WorkspaceConfig {
+  if (!isRecord(raw))
+    throw new Error("Export a workspace configuration object.");
+  if (!isRecord(raw.sidebars))
+    throw new Error("Export { sidebars: { left, right }, palette? }.");
+  const unknown = Object.keys(raw).filter(
+    (key) => key !== "sidebars" && key !== "palette",
+  );
+  if (unknown.length)
+    throw new Error(`Unknown workspace keys: ${unknown.join(", ")}.`);
   const ids = new Set<string>();
   const sectionIds = new Set<string>();
-  const left = sanitizeTabs({ raw: raw.left, ids, sectionIds });
-  const right = sanitizeTabs({ raw: raw.right, ids, sectionIds });
+  const sidebars = {
+    left: sanitizeTabs({ raw: raw.sidebars.left, ids, sectionIds }),
+    right: sanitizeTabs({ raw: raw.sidebars.right, ids, sectionIds }),
+  };
   const modes = sanitizePaletteModes({
     raw: raw.palette,
-    sections: sidebarSections({ left, right }),
+    sections: sidebarSections({ sidebars }),
     ids: sectionIds,
   });
-  return { left, right, ...(modes ? { palette: { modes } } : {}) };
+  return { sidebars, ...(modes ? { palette: { modes } } : {}) };
 }
 
 /**
@@ -618,12 +633,12 @@ function sanitizePaletteModes({
   raw: unknown;
   sections: SidebarSectionConfig[];
   ids: Set<string>;
-}): SidebarPaletteMode[] | undefined {
+}): PaletteModeConfig[] | undefined {
   if (raw === undefined) return undefined;
   if (!isRecord(raw) || !Array.isArray(raw.modes))
     throw new Error("palette must be { modes: [...] }.");
   const names = new Set<string>();
-  return raw.modes.map((mode): SidebarPaletteMode => {
+  return raw.modes.map((mode): PaletteModeConfig => {
     if (!isRecord(mode) || !stableId(mode.id) || ids.has(mode.id))
       throw new Error(
         "Each palette mode needs a unique id, distinct from section ids.",
@@ -719,7 +734,7 @@ function sanitizePaletteModes({
   });
 }
 
-/** Evaluate a sidebar.js source in the isolated vm context. Throws. */
+/** Evaluate a workspace.js source in the isolated vm context. Throws. */
 function evaluateSidebarModule(source: string, filename: string): unknown {
   const module = { exports: {} as unknown };
   const context = vm.createContext({ module, exports: module.exports });
@@ -732,9 +747,9 @@ function evaluateSidebarModule(source: string, filename: string): unknown {
  * layout for this exact file; a first invalid load uses defaults and exposes
  * an error. Never silently fall through to a different configuration layer.
  */
-const lastGood = new Map<string, SidebarConfig>();
+const lastGood = new Map<string, WorkspaceConfig>();
 const loadErrors = new Map<string, string>();
-export function loadSidebarConfigFile(file: string): SidebarConfig {
+export function loadWorkspaceConfigFile(file: string): WorkspaceConfig {
   try {
     const config = sanitize(
       evaluateSidebarModule(fs.readFileSync(file, "utf-8"), file),
@@ -759,56 +774,60 @@ export function loadSidebarConfigFile(file: string): SidebarConfig {
       file,
       cause instanceof Error ? cause.message : String(cause),
     );
-    return lastGood.get(file) ?? DEFAULT_SIDEBAR_CONFIG;
+    return lastGood.get(file) ?? DEFAULT_WORKSPACE_CONFIG;
   }
 }
 
 /** Which layer of the ADR-0043 resolution produced the config. */
-export type SidebarLayer = "project-local" | "project" | "profile" | "default";
+export type WorkspaceLayer =
+  | "project-local"
+  | "project"
+  | "profile"
+  | "default";
 
-export interface ResolvedSidebarConfig {
-  config: SidebarConfig;
+export interface ResolvedWorkspaceConfig {
+  config: WorkspaceConfig;
   error?: string;
-  layer: SidebarLayer;
+  layer: WorkspaceLayer;
   /** The winning layer's file (absent for the built-in default). */
   file?: string;
 }
 
 /** This user's local override for one project (layer 1). */
-export function projectLocalSidebarFile(
+export function projectLocalWorkspaceFile(
   profileDir: string,
   projectId: string,
 ): string {
-  return path.join(profileDir, "sidebar-projects", `${projectId}.js`);
+  return path.join(profileDir, "workspace-projects", `${projectId}.js`);
 }
 
 /** The project's shared, git-tracked sidebar (layer 2). */
-export function projectSidebarFile(projectRoot: string): string {
-  return path.join(projectRoot, PROJECT_SIDEBAR_PATH);
+export function projectWorkspaceFile(projectRoot: string): string {
+  return path.join(projectRoot, PROJECT_WORKSPACE_PATH);
 }
 
 /** The candidate files for a resolution, most specific first. */
-export function sidebarLayerFiles(opts: {
+export function workspaceLayerFiles(opts: {
   profileDir: string;
   projectId?: string;
   projectRoot?: string | null;
-}): Array<{ layer: SidebarLayer; file: string }> {
-  const layers: Array<{ layer: SidebarLayer; file: string }> = [];
+}): Array<{ layer: WorkspaceLayer; file: string }> {
+  const layers: Array<{ layer: WorkspaceLayer; file: string }> = [];
   if (opts.projectId) {
     layers.push({
       layer: "project-local",
-      file: projectLocalSidebarFile(opts.profileDir, opts.projectId),
+      file: projectLocalWorkspaceFile(opts.profileDir, opts.projectId),
     });
   }
   if (opts.projectRoot) {
     layers.push({
       layer: "project",
-      file: projectSidebarFile(opts.projectRoot),
+      file: projectWorkspaceFile(opts.projectRoot),
     });
   }
   layers.push({
     layer: "profile",
-    file: path.join(opts.profileDir, "sidebar.js"),
+    file: path.join(opts.profileDir, "workspace.js"),
   });
   return layers;
 }
@@ -816,33 +835,33 @@ export function sidebarLayerFiles(opts: {
 /**
  * Layered sidebar resolution (ADR 0043 era): the FIRST existing file wins —
  * this user's per-project override, then the project's shared
- * `.work/sidebar.js`, then the profile-global `sidebar.js`, then the
+ * `.work/workspace.js`, then the profile-global `workspace.js`, then the
  * built-in default. A file that exists but fails to evaluate does NOT slide
  * to the next layer (that would silently reroute a typo); it retains that
  * file's last valid layout, or defaults if none has loaded. `layer` names
  * the file that won even in that case.
  */
-export function resolveSidebarConfig(opts: {
+export function resolveWorkspaceConfig(opts: {
   profileDir: string;
   projectId?: string;
   projectRoot?: string | null;
-}): ResolvedSidebarConfig {
-  for (const { layer, file } of sidebarLayerFiles(opts)) {
+}): ResolvedWorkspaceConfig {
+  for (const { layer, file } of workspaceLayerFiles(opts)) {
     if (!fs.existsSync(file)) continue;
-    const config = loadSidebarConfigFile(file);
+    const config = loadWorkspaceConfigFile(file);
     return { config, layer, file, error: loadErrors.get(file) };
   }
-  return { config: DEFAULT_SIDEBAR_CONFIG, layer: "default" };
+  return { config: DEFAULT_WORKSPACE_CONFIG, layer: "default" };
 }
 
 /**
  * Watch one config-layer file for changes, tolerating the file — and its
  * containing directory — not existing yet (`.work/` is opt-in, and
- * a profile's `sidebar-projects/` appears on first override). Watches the
+ * a profile's `workspace-projects/` appears on first override). Watches the
  * file's directory when it exists, and the parent otherwise so we notice
  * the directory being created. Returns a disposer.
  */
-export function watchSidebarLayerFile(
+export function watchWorkspaceLayerFile(
   file: string,
   onChange: () => void,
 ): () => void {
@@ -912,7 +931,7 @@ export function watchSidebarLayerFile(
   };
 }
 
-export class SidebarConfigStore {
+export class WorkspaceConfigStore {
   private unwatch: (() => void) | undefined;
 
   constructor(readonly file: string) {}
@@ -921,7 +940,7 @@ export class SidebarConfigStore {
   ensureFile(): void {
     if (!fs.existsSync(this.file)) {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
-      fs.writeFileSync(this.file, DEFAULT_SIDEBAR_FILE);
+      fs.writeFileSync(this.file, DEFAULT_WORKSPACE_FILE);
     }
   }
 
@@ -933,7 +952,7 @@ export class SidebarConfigStore {
     try {
       return fs.readFileSync(this.file, "utf-8");
     } catch {
-      return DEFAULT_SIDEBAR_FILE;
+      return DEFAULT_WORKSPACE_FILE;
     }
   }
 
@@ -957,14 +976,14 @@ export class SidebarConfigStore {
     }
   }
 
-  load(): SidebarConfig {
-    return loadSidebarConfigFile(this.file);
+  load(): WorkspaceConfig {
+    return loadWorkspaceConfigFile(this.file);
   }
 
   /** The same watch as the project layers: directory events plus a poll. */
-  watch(onChange: (config: SidebarConfig) => void): void {
+  watch(onChange: (config: WorkspaceConfig) => void): void {
     this.unwatch?.();
-    this.unwatch = watchSidebarLayerFile(this.file, () =>
+    this.unwatch = watchWorkspaceLayerFile(this.file, () =>
       onChange(this.load()),
     );
   }

@@ -510,7 +510,7 @@ describe("configurable browser workspace", () => {
       await app.eval(
         "document.querySelector('[data-pill-kind=\"path\"]').textContent",
       ),
-    ).toContain("sidebar.js");
+    ).toContain("workspace.js");
   });
 });
 

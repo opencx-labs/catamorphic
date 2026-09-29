@@ -116,7 +116,7 @@ export function paletteCountsVisit(key: string): boolean {
 }
 
 /**
- * Typed names the built-in modes own. Custom modes (sidebar.js
+ * Typed names the built-in modes own. Custom modes (workspace.js
  * palette.modes) must pick other names; the renderer's built-in mode
  * definitions draw their triggers and aliases from this list. A full name
  * followed by Space enters its mode, so every name here is a word that

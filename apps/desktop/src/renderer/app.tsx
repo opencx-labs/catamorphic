@@ -14,7 +14,6 @@ import {
 import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
 import {
   PROJECT_APP_DATA_DIR,
-  PROJECT_SIDEBAR_PATH,
   PROJECT_STORE_DIR,
 } from "@catamorphic/workflow/project-layout";
 import { useQueryClient } from "@tanstack/react-query";
@@ -74,11 +73,7 @@ import {
   type ProjectExperienceContext,
   writesProgram,
 } from "../shared/project-experience.js";
-import {
-  type SidebarSurface,
-  sidebarSections,
-  visibleSidebarConfig,
-} from "../shared/sidebar.js";
+import type { SidebarSurface } from "../shared/sidebar.js";
 import { siteHost, siteOrigin } from "../shared/site-settings.js";
 import {
   isBrowserFile,
@@ -87,6 +82,10 @@ import {
   resolveProjectFileLocation,
 } from "../shared/surface-link.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
+import {
+  sidebarSections,
+  visibleWorkspaceConfig,
+} from "../shared/workspace.js";
 import { findSearchInput } from "./components/action-search-input.js";
 import {
   type AgentPointer,
@@ -165,8 +164,8 @@ import {
   type ProfilesData,
   type ProjectAgentInfo,
   type RemoteProjectStatus,
-  type SidebarConfig,
   type SidebarSectionConfig,
+  type WorkspaceConfig,
 } from "./lib/desktop-api.js";
 import { readEditorSelection } from "./lib/editor-selection.js";
 import { useFloatingMotion } from "./lib/floating-motion.js";
@@ -699,16 +698,15 @@ export function App({
     target?: Profile;
   } | null>(null);
 
-  // User-customizable sidebar layout (sidebar.js, file-watched). Resolved
-  // per project (project-local override → project .work/sidebar.js
-  // → profile sidebar.js), so the fetch is keyed on the active project —
+  // User-customizable sidebar layout (workspace.js, file-watched). Resolved
+  // per project (project-local override → project .work/workspace.js
+  // → profile workspace.js), so the fetch is keyed on the active project —
   // see the effect below projectId — and the changed event is a refetch
   // signal, not a payload.
-  const [sidebarConfig, setSidebarConfig] = useState<SidebarConfig | null>(
-    null,
-  );
+  const [workspaceConfig, setWorkspaceConfig] =
+    useState<WorkspaceConfig | null>(null);
 
-  const [sidebarConfigScope, setSidebarConfigScope] = useState<string>();
+  const [workspaceConfigScope, setWorkspaceConfigScope] = useState<string>();
 
   const allProjects = projectsQuery.data?.items ?? [];
   // Projects created before profiles existed have no owner; the default
@@ -768,13 +766,13 @@ export function App({
     () => ({ root: experienceRoot, permissions: experiencePermissions ?? [] }),
     [experienceRoot, experiencePermissions],
   );
-  const visibleSidebars = useMemo(
+  const visibleWorkspace = useMemo(
     () =>
-      visibleSidebarConfig({
-        config: sidebarConfig,
+      visibleWorkspaceConfig({
+        config: workspaceConfig,
         context: projectExperienceContext,
       }),
-    [sidebarConfig, projectExperienceContext],
+    [workspaceConfig, projectExperienceContext],
   );
 
   const sidebarScope = `${activeProfile?.id}:${projectId}`;
@@ -785,9 +783,9 @@ export function App({
   }, [sidebarScope]);
   const rightSidebarHasContent = Boolean(
     projectId &&
-      sidebarConfigScope === sidebarScope &&
+      workspaceConfigScope === sidebarScope &&
       remoteSurfaceResolved &&
-      visibleSidebars?.right.length,
+      visibleWorkspace?.sidebars.right.length,
   );
   const emptyRightSidebarOpen =
     emptyRightSidebar?.scope === sidebarScope ? emptyRightSidebar.open : null;
@@ -906,7 +904,7 @@ export function App({
     let signature: string | undefined;
     const refetch = (animate = false) => {
       const currentRequest = ++request;
-      void desktopApi.sidebarConfigGet(projectId).then((resolved) => {
+      void desktopApi.workspaceConfigGet(projectId).then((resolved) => {
         if (stale || currentRequest !== request) return;
         setSidebarError(resolved.error);
         const next = JSON.stringify(resolved.config);
@@ -914,15 +912,17 @@ export function App({
         const apply = () => {
           if (stale || currentRequest !== request) return;
           signature = next;
-          setSidebarConfig(resolved.config);
-          setSidebarConfigScope(sidebarScope);
+          setWorkspaceConfig(resolved.config);
+          setWorkspaceConfigScope(sidebarScope);
         };
         if (animate) transitionSidebarUpdate(apply);
         else apply();
       });
     };
     refetch();
-    const unsubscribe = desktopApi.onSidebarConfigChanged(() => refetch(true));
+    const unsubscribe = desktopApi.onWorkspaceConfigChanged(() =>
+      refetch(true),
+    );
     return () => {
       stale = true;
       unsubscribe();
@@ -3850,7 +3850,7 @@ export function App({
   const bootReady =
     profilesData !== null &&
     agentsData !== null &&
-    sidebarConfig !== null &&
+    workspaceConfig !== null &&
     !projectsLoading;
   useEffect(() => {
     if (bootRevealed) return;
@@ -3872,8 +3872,8 @@ export function App({
   const chatLabelsRef = useRef<Record<string, string>>({});
   const projectIdRef = useRef(projectId);
   projectIdRef.current = projectId;
-  const sidebarConfigRef = useRef<SidebarConfig | null>(sidebarConfig);
-  sidebarConfigRef.current = visibleSidebars;
+  const workspaceConfigRef = useRef<WorkspaceConfig | null>(workspaceConfig);
+  workspaceConfigRef.current = visibleWorkspace;
   const activeProfileRef = useRef(activeProfile);
   activeProfileRef.current = activeProfile;
   useEffect(() => {
@@ -4027,7 +4027,7 @@ export function App({
             // Lets the context snapshot mark the asking agent's own chat.
             sessionId: chat.sessionId ?? null,
           }));
-          const sidebar = sidebarSections(sidebarConfigRef.current).map(
+          const sidebar = sidebarSections(workspaceConfigRef.current).map(
             (section) => ({
               type: section.type,
               title: section.title,
@@ -5155,7 +5155,7 @@ export function App({
     activeProjectId: projectId,
     profiles: profilesData?.profiles ?? [],
     activeProfileId: activeProfile?.id,
-    sidebarConfig: visibleSidebars,
+    workspaceConfig: visibleWorkspace,
     onOpenUrl: openUrl,
     onOpenTab: openTab,
     onOpenSession: openSession,
@@ -5267,17 +5267,13 @@ export function App({
       return;
     }
     void Promise.all([
-      desktopApi.sidebarConfigGet(projectId),
-      desktopApi.sidebarConfigFile(),
-      projectId ? desktopApi.projectRoot(projectId) : Promise.resolve(null),
+      desktopApi.workspaceConfigGet(projectId),
+      desktopApi.workspaceConfigFile(),
     ])
-      .then(([resolved, profileFile, root]) => {
-        const file =
-          resolved.layer === "project" && root
-            ? `${root}/${PROJECT_SIDEBAR_PATH}`
-            : resolved.layer === "project-local" && projectId
-              ? `${profileFile.slice(0, profileFile.lastIndexOf("/"))}/sidebar-projects/${projectId}.js`
-              : profileFile;
+      .then(([resolved, profileFile]) => {
+        // Edit the layer that is showing; the built-in default has no file,
+        // so the profile file is created from it.
+        const file = resolved.file ?? profileFile;
         // The user sees one sentence and two pills. The file path and the
         // layout contract are agent context, never prose in the message. A
         // path pill carries only its reference, so the contract and the
@@ -5294,11 +5290,11 @@ export function App({
               },
               {
                 kind: "text",
-                name: "Sidebar layout",
+                name: "Workspace layout",
                 source: { type: "paste" },
                 text: [
-                  `The live sidebar configuration file on this machine is ${JSON.stringify(file)}. Read it first, or create it from the current layout below if it does not exist. Edits apply live.`,
-                  "The file exports module.exports = { left: [...], right: [...] }. Each tab has a stable id, title, Lucide icon and sections. Each section has a stable id and type (bookmarks, tabs, workflows, apps, chats, files, remote, git, prs, activity, note, custom or app). Preserve existing ids and the other sidebar. Profile selection and Settings are fixed in the left footer. A single tab hides its icon strip. Do not commit these local settings.",
+                  `The live workspace configuration file on this machine is ${JSON.stringify(file)}. Read it first, or create it from the current layout below if it does not exist. Edits apply live.`,
+                  "The file exports module.exports = { sidebars: { left: [...], right: [...] }, palette: { modes: [...] } }. Each tab has a stable id, title, Lucide icon and sections. Each section has a stable id and type (bookmarks, tabs, workflows, apps, chats, files, remote, git, prs, activity, note, custom or app). Preserve existing ids, the other sidebar and any palette modes. Profile selection and Settings are fixed in the left footer. A single tab hides its icon strip. Load the configuring-catamorphic-desktop skill for the full contract. Do not commit these local settings.",
                   `Current layout: ${JSON.stringify(resolved.config)}`,
                 ].join("\n\n"),
               },
@@ -5333,7 +5329,7 @@ export function App({
 
   const sidebarTabs = (side: "left" | "right") => {
     if (side === "right" && !projectId) return [];
-    return visibleSidebars?.[side] ?? [];
+    return visibleWorkspace?.sidebars[side] ?? [];
   };
   const [sidebarHasSelection, setSidebarHasSelection] = useState(false);
   useEffect(() => {

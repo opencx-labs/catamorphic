@@ -382,7 +382,7 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   empty}` and renders rows only. The section header shows a small spinner while
   loading or refreshing and a hover-revealed Refresh button otherwise; the body
   shows three still skeleton rows before the first result, one muted sentence
-  when empty (`section.empty` in `sidebar.js` replaces it), and the error with
+  when empty (`section.empty` in `workspace.js` replaces it), and the error with
   Retry when a read fails. Rows stay on screen during a refresh; collapsing and
   re-expanding never discards what was already loaded.
 - **No private loading text.** "Loading…", spinners, skeletons, empty copy and
@@ -437,7 +437,7 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   transition height and position, so a section that loads after the popover
   opens expands it smoothly. A popover that shifts its layout on load is a
   defect.
-- **Primitives, not presets.** Anything a built-in section can do, a `sidebar.js`
+- **Primitives, not presets.** Anything a built-in section can do, a `workspace.js`
   section can do with the same fields: `empty`, `headerActions`, `itemDefaults`,
   `itemOverrides`, `height`, `rowHeight`, and a source that exports `load`,
   `subscribe`, `action`, `move`, `drop`. A sidebar an agent writes looks like a
@@ -1339,5 +1339,7 @@ actions and the current site's settings, with pages held to half.
 Every mode is one shape: a chip, the names that enter it, and its rows.
 Pickers, sidebar searches, the new Sites and Commands modes and your own
 modes share it, with one set of loading, empty and retry rows. Your agent
-adds a mode in sidebar.js under palette.modes, from the same sources
-sections use, so one module can be a sidebar list and a palette mode.
+adds a mode in workspace.js under palette.modes, from the same sources
+sections use, so one module can be a sidebar list and a palette mode. The
+file was sidebar.js; it now describes the whole window, so it is
+workspace.js, exporting { sidebars: { left, right }, palette }.

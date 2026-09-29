@@ -1,12 +1,15 @@
 /** One reference shared by the live config template and the project agent skill. */
-export const SIDEBAR_AUTHORING_GUIDE = `## Sidebar: JavaScript, whole-document replacement
+export const WORKSPACE_AUTHORING_GUIDE = `## Workspace: sidebars and palette modes in workspace.js
 
-Use the supplied sidebar paths. Precedence is built-in, profile, shared project,
-personal project. Each file replaces the entire document. Read the resolved highest
-existing layer before copying it to a higher layer, then edit only the intended
-sections. Preserve unrelated content. The profile file is the live, commented
-schema/example; read it before editing. Export with module.exports = {left: [...],
-right: [...]}. Delete an override file to inherit the lower layer again.
+workspace.js holds what the window offers: both sidebars and your own command
+palette modes. Use the supplied workspace paths. Precedence is built-in, profile,
+shared project (.work/workspace.js), personal project. Each file replaces the
+entire document. Read the resolved highest existing layer before copying it to a
+higher layer, then edit only the intended parts. Preserve unrelated content. The
+profile file is the live, commented schema/example; read it before editing.
+Export with module.exports = { sidebars: { left: [...], right: [...] },
+palette: { modes: [...] } }; palette is optional and no other keys are allowed.
+Delete an override file to inherit the lower layer again.
 One left sidebar tab hides its tab strip; an empty right sidebar starts closed.
 Sidebar content and the top/sidebar placement of open workspace tabs are separate.
 
@@ -94,7 +97,7 @@ For custom live data use createCollection({source:{load,subscribe}}). load recei
 {parentId,cursor,signal} and returns {items,cursor?}. subscribe publishes upsert,
 remove or invalidate changes and returns cleanup. Identity is stable; never use
 array positions or JSON.stringify(item) as keys. No IPC callbacks or privileged
-renderer JavaScript may be exported from sidebar.js.
+renderer JavaScript may be exported from workspace.js.
 
 After editing: read the actual winning file, validate the layout, check both sidebars,
 try ordinary click and right-click separately, change the current surface, and
@@ -180,7 +183,7 @@ failed fetch, retry and action feedback in the app.
 A palette mode is a typed name that scopes the command palette (Cmd+P, New Tab)
 to one list: type the name then Space or Tab, or pick it from the @ list; the
 chip stays until Backspace on an empty input. Modes live beside the sidebars in
-the same file and layers: module.exports = {left, right, palette: {modes: [...]}}.
+the same file and layers, under palette.modes.
 Each mode takes exactly one row source, the same primitives sections use:
 { id: "issues", trigger: "issues", aliases: ["bugs"], title: "Issues",
   description: "Open issues assigned to me", icon: "Bug",

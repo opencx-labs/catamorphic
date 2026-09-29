@@ -3,12 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { app, ipcMain } from "electron";
 import { z } from "zod";
-import { executableSourceModule } from "../shared/sidebar.js";
+import { executableSourceModule } from "../shared/workspace.js";
 import type { WindowProfileRegistry } from "./index.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
-import { sanitizeSidebarSourcePage } from "./sidebar-config.js";
 import { SidebarSourceRuntime } from "./sidebar-source-runtime.js";
+import { sanitizeSidebarSourcePage } from "./workspace-config.js";
 
 const identity = z.object({
   projectId: z.string().min(1),
@@ -106,7 +106,7 @@ export function registerSidebarSources(deps: {
       throw new Error(
         "Executable sidebar sources need a local project folder.",
       );
-    const resolved = deps.config.resolveSidebar(profileId, {
+    const resolved = deps.config.resolveWorkspace(profileId, {
       id: input.projectId,
       rootPath: root,
     });

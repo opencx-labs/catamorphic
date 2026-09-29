@@ -79,12 +79,11 @@ beforeAll(async () => {
     };`,
   );
   fs.writeFileSync(
-    path.join(projectRoot, ".work/sidebar.js"),
-    `module.exports={
-      left:[{id:'work',title:'Work',icon:'Ticket',sections:[
+    path.join(projectRoot, ".work/workspace.js"),
+    `module.exports={sidebars: {left:[{id:'work',title:'Work',icon:'Ticket',sections:[
         {id:'tickets',type:'custom',title:'Tickets',source:{type:'custom',module:'.work/tickets.ts'},height:160},
         {id:'files',type:'files'}]}],
-      right:[],
+      right:[] },
       palette:{modes:[
         {id:'ticket-mode',trigger:'tickets',aliases:['tix'],title:'Tickets',description:'Find a ticket and claim it',icon:'Ticket',section:'tickets'},
         {id:'ticket-search',trigger:'find-ticket',title:'Ticket search',source:{type:'custom',module:'.work/tickets.ts'},search:'source'},

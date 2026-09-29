@@ -1,0 +1,71 @@
+import { describe, expect, it } from "vitest";
+import {
+  sidebarSections,
+  visibleWorkspaceConfig,
+  type WorkspaceConfig,
+} from "./workspace.js";
+
+describe("sidebar presentation", () => {
+  it("filters tabs, sections and nested links consistently for every consumer", () => {
+    const config: WorkspaceConfig = {
+      sidebars: {
+        left: [
+          {
+            id: "private",
+            title: "Private",
+            when: { permissions: ["brain:maintain"] },
+            sections: [
+              {
+                id: "private-links",
+                type: "custom",
+                items: [
+                  { label: "Hidden", url: "https://example.test/private" },
+                ],
+              },
+            ],
+          },
+        ],
+        right: [
+          {
+            id: "work",
+            title: "Work",
+            sections: [
+              { id: "git", type: "git" },
+              { id: "remote", type: "remote" },
+              {
+                id: "links",
+                type: "custom",
+                items: [
+                  {
+                    label: "Folder",
+                    items: [
+                      { label: "Public", url: "https://example.test" },
+                      {
+                        label: "Maintainers",
+                        url: "https://example.test/maintainers",
+                        when: { permissions: ["brain:maintain"] },
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const visible = visibleWorkspaceConfig({
+      config,
+      context: { root: false, permissions: ["program:read"] },
+    });
+    expect(visible?.sidebars.left).toEqual([]);
+    expect(sidebarSections(visible).map((section) => section.id)).toEqual([
+      "remote",
+      "links",
+    ]);
+    expect(
+      sidebarSections(visible)[1]?.items?.[0]?.items?.map((item) => item.label),
+    ).toEqual(["Public"]);
+    expect(config.sidebars.right[0]?.sections).toHaveLength(3);
+  });
+});

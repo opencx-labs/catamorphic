@@ -66,10 +66,10 @@ beforeAll(async () => {
     `window.catamorphicDesktop.createProject({name:'Sidebar primitives',rootPath:${JSON.stringify(path.join(app.userDataDir, "sidebar-primitives"))}})`,
   );
   file = await app.eval<string>(
-    "window.catamorphicDesktop.sidebarConfigFile()",
+    "window.catamorphicDesktop.workspaceConfigFile()",
   );
   fs.copyFileSync(
-    path.join(import.meta.dirname, "fixtures/agent-sidebar.cjs"),
+    path.join(import.meta.dirname, "fixtures/agent-workspace.cjs"),
     file,
   );
   const server = await app.eval<{ url: string }>(

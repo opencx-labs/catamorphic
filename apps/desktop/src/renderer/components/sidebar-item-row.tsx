@@ -68,7 +68,7 @@ function TitleHint({
  * hover that opens a menu. One button, not a row of them — stacked icon
  * buttons get unreadable fast and every new capability made it worse.
  *
- * The menu is data (`SidebarMenuEntry[]`, from sidebar.js) and the row is
+ * The menu is data (`SidebarMenuEntry[]`, from workspace.js) and the row is
  * generic, so custom config-defined items and built-in bookmarks share
  * exactly the same interaction.
  */

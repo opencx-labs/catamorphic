@@ -80,8 +80,8 @@ import {
   webUsageKey,
 } from "../../shared/palette.js";
 import { SETTINGS_CATALOG } from "../../shared/settings-catalog.js";
-import { sidebarSections } from "../../shared/sidebar.js";
 import type { TerminalMacro } from "../../shared/terminal-macros.js";
+import { sidebarSections } from "../../shared/workspace.js";
 import {
   defaultModelLabel,
   useAgentDefaultModel,
@@ -100,8 +100,8 @@ import {
   type Profile,
   type ProjectAgentInfo,
   projectAgentAsInfo,
-  type SidebarConfig,
   type SidebarItem,
+  type WorkspaceConfig,
 } from "../lib/desktop-api.js";
 import { historyDetail, historyIcon, useHistory } from "../lib/history.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
@@ -463,7 +463,7 @@ export function CommandPalette({
   activeProjectId,
   profiles,
   activeProfileId,
-  sidebarConfig,
+  workspaceConfig,
   onOpenUrl: suppliedOnOpenUrl,
   onOpenTab: suppliedOnOpenTab,
   onOpenSession: suppliedOnOpenSession,
@@ -512,7 +512,7 @@ export function CommandPalette({
   activeProjectId?: string;
   profiles: Profile[];
   activeProfileId?: string;
-  sidebarConfig: SidebarConfig | null;
+  workspaceConfig: WorkspaceConfig | null;
   onOpenUrl: (url: string, mode: CommitMode) => void;
   onOpenTab: (tab: WorkspaceTab, mode?: CommitMode) => void;
   onOpenSession: (session: AgentSession, mode?: CommitMode) => void;
@@ -1179,7 +1179,7 @@ export function CommandPalette({
         addCustomItems(item.items);
       }
     };
-    for (const section of sidebarSections(sidebarConfig)) {
+    for (const section of sidebarSections(workspaceConfig)) {
       if (section.type !== "custom") continue;
       addCustomItems(section.items);
     }
@@ -1219,7 +1219,7 @@ export function CommandPalette({
     apps,
     sessions,
     bookmarks,
-    sidebarConfig,
+    workspaceConfig,
     onOpenTab,
     onOpenSession,
     onOpenUrl,
@@ -1886,13 +1886,13 @@ export function CommandPalette({
   const customModes = useMemo(
     () =>
       customPaletteModes({
-        config: sidebarConfig,
+        config: workspaceConfig,
         projectId,
         memberShell,
         onOpenUrl,
         onError: (message) => errorRef.current?.(message),
       }),
-    [sidebarConfig, projectId, memberShell, onOpenUrl],
+    [workspaceConfig, projectId, memberShell, onOpenUrl],
   );
 
   /**
@@ -2121,7 +2121,7 @@ export function CommandPalette({
     [modes],
   );
   const activeMode = modes.find((candidate) => candidate.id === modeId) ?? null;
-  // A mode can vanish while active (sidebar.js edited, project switched):
+  // A mode can vanish while active (workspace.js edited, project switched):
   // fall back to the ordinary palette rather than a chipless dead end.
   useEffect(() => {
     if (modeId && !activeMode) setModeId(null);

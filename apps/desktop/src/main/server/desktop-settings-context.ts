@@ -2,9 +2,9 @@ import path from "node:path";
 import { PROJECT_PERSONAL_DIR } from "@catamorphic/workflow/project-layout";
 import type { ProfileConfigManager } from "../profile-config.js";
 import {
-  projectLocalSidebarFile,
-  projectSidebarFile,
-} from "../sidebar-config.js";
+  projectLocalWorkspaceFile,
+  projectWorkspaceFile,
+} from "../workspace-config.js";
 
 /** Host metadata, refreshed per turn; it grants no filesystem permissions. */
 export function desktopSettingsContext({
@@ -43,14 +43,14 @@ export function desktopSettingsContext({
         personal: preferences.personal,
       },
       shortcuts: stores.keybindings.file,
-      sidebar: {
-        profile: stores.sidebar.file,
-        personal: projectLocalSidebarFile(
-          path.dirname(stores.sidebar.file),
+      workspace: {
+        profile: stores.workspace.file,
+        personal: projectLocalWorkspaceFile(
+          path.dirname(stores.workspace.file),
           project.id,
         ),
         ...(project.rootPath
-          ? { project: projectSidebarFile(project.rootPath) }
+          ? { project: projectWorkspaceFile(project.rootPath) }
           : {}),
       },
     },

@@ -86,7 +86,6 @@ import { registerPasskeys } from "./passkeys.js";
 import { generateStrongPassword } from "./password-generator.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
-import { DEFAULT_SIDEBAR_FILE } from "./sidebar-config.js";
 import { registerSidebarSources } from "./sidebar-source-ipc.js";
 import { SiteIcons } from "./site-icons.js";
 import {
@@ -95,6 +94,7 @@ import {
   SitePermissionBroker,
   SiteSettingsStore,
 } from "./site-settings.js";
+import { DEFAULT_WORKSPACE_FILE } from "./workspace-config.js";
 
 /**
  * Browser support for workspace tabs. Pages render in `<webview>` tags in
@@ -2190,37 +2190,37 @@ export function registerBrowserSupport(
     },
   );
 
-  // --- sidebar config (per sender profile) ---
-  const sidebarFor = (event: Electron.IpcMainInvokeEvent) =>
-    profileConfig.forProfile(windows.profileFor(event.sender)).sidebar;
+  // --- workspace config (per sender profile) ---
+  const workspaceFor = (event: Electron.IpcMainInvokeEvent) =>
+    profileConfig.forProfile(windows.profileFor(event.sender)).workspace;
 
   // Layered per project (ADR 0043): project-local override → project
-  // `.work/sidebar.js` → profile `sidebar.js` → built-in default.
+  // `.work/workspace.js` → profile `workspace.js` → built-in default.
   // Without a projectId only the profile layer applies (boot, settings).
   // The `-file`/`-source`/`-reset` handlers below stay profile-scoped:
-  // they back the Settings "edit sidebar.js" surface.
+  // they back the Settings "edit workspace.js" surface.
   ipcMain.handle(
-    "catamorphic:sidebar-config-get",
+    "catamorphic:workspace-config-get",
     async (event, projectId?: string) => {
       const profileId = windows.profileFor(event.sender);
-      if (!projectId) return profileConfig.resolveSidebar(profileId);
-      return profileConfig.resolveSidebar(profileId, {
+      if (!projectId) return profileConfig.resolveWorkspace(profileId);
+      return profileConfig.resolveWorkspace(profileId, {
         id: projectId,
         rootPath: await projectRootFor(projectId),
       });
     },
   );
   ipcMain.handle(
-    "catamorphic:sidebar-config-file",
-    (event) => sidebarFor(event).file,
+    "catamorphic:workspace-config-file",
+    (event) => workspaceFor(event).file,
   );
-  ipcMain.handle("catamorphic:sidebar-config-source", (event) =>
-    sidebarFor(event).read(),
+  ipcMain.handle("catamorphic:workspace-config-source", (event) =>
+    workspaceFor(event).read(),
   );
-  ipcMain.handle("catamorphic:sidebar-config-reset", (event) => {
-    sidebarFor(event).write(DEFAULT_SIDEBAR_FILE);
+  ipcMain.handle("catamorphic:workspace-config-reset", (event) => {
+    workspaceFor(event).write(DEFAULT_WORKSPACE_FILE);
   });
-  // Change fan-out lives in main/index.ts (profileConfig.onSidebarChanged),
+  // Change fan-out lives in main/index.ts (profileConfig.onWorkspaceChanged),
   // scoped to the owning profile's windows.
 
   // --- import from other browsers ---

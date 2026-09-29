@@ -8,13 +8,13 @@ import {
 } from "react";
 import type { OpenMode as CommitMode } from "../../shared/open-mode.js";
 import { webUsageKey } from "../../shared/palette.js";
-import type {
-  SidebarConfig,
-  SidebarItem,
-  SidebarPaletteMode,
-} from "../../shared/sidebar.js";
-import { sidebarSections } from "../../shared/sidebar.js";
+import type { SidebarItem } from "../../shared/sidebar.js";
 import type { SidebarSourceItem } from "../../shared/sidebar-source.js";
+import type {
+  PaletteModeConfig,
+  WorkspaceConfig,
+} from "../../shared/workspace.js";
+import { sidebarSections } from "../../shared/workspace.js";
 import { desktopApi } from "./desktop-api.js";
 import { lucideIcon } from "./lucide-icon.js";
 import type { PaletteCategory } from "./palette-search.js";
@@ -98,7 +98,7 @@ export interface PaletteLoad {
 
 /**
  * A palette mode: one chip, one question, one list of rows. Built-in
- * modes, choice pickers, sidebar searches and sidebar.js modes all take
+ * modes, choice pickers, sidebar searches and workspace.js modes all take
  * this shape; typed names enter it, Backspace on empty input leaves it.
  */
 export interface PaletteMode {
@@ -228,7 +228,7 @@ function sourceRow({
   onOpenUrl,
   onRun,
 }: {
-  mode: SidebarPaletteMode;
+  mode: PaletteModeConfig;
   item: SidebarItem & { id: string };
   parent?: string;
   icon: LucideIcon;
@@ -342,7 +342,7 @@ async function loadModuleRows({
 }
 
 /**
- * sidebar.js palette modes as palette modes (ADR 0186). Module sources run
+ * workspace.js palette modes as palette modes (ADR 0186). Module sources run
  * in the same local Bun process as sidebar sections; member shells, where
  * local code never runs, list only static modes.
  */
@@ -353,7 +353,7 @@ export function customPaletteModes({
   onOpenUrl,
   onError,
 }: {
-  config: SidebarConfig | null;
+  config: WorkspaceConfig | null;
   projectId: string | undefined;
   memberShell: boolean;
   onOpenUrl: (url: string, commit: CommitMode) => void;

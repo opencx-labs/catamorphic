@@ -3,16 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  DEFAULT_SIDEBAR_CONFIG,
-  loadSidebarConfigFile,
-  resolveSidebarConfig,
-  watchSidebarLayerFile,
-} from "./sidebar-config.js";
+  DEFAULT_WORKSPACE_CONFIG,
+  loadWorkspaceConfigFile,
+  resolveWorkspaceConfig,
+  watchWorkspaceLayerFile,
+} from "./workspace-config.js";
 
 const CUSTOM = (title: string) =>
-  `module.exports = { left: [{ id: "project", title: "Project", sections: [{ id: "widget-1", type: "custom", title: ${JSON.stringify(
+  `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [{ id: "widget-1", type: "custom", title: ${JSON.stringify(
     title,
-  )}, items: [] }] }], right: [] };\n`;
+  )}, items: [] }] }], right: [] } };\n`;
 
 const tmpdirs: string[] = [];
 const disposers: Array<() => void> = [];
@@ -40,64 +40,68 @@ function makeLayers(files: {
   const projectRoot = makeDir();
   const projectId = "proj-1";
   if (files.projectLocal !== undefined) {
-    fs.mkdirSync(path.join(profileDir, "sidebar-projects"), {
+    fs.mkdirSync(path.join(profileDir, "workspace-projects"), {
       recursive: true,
     });
     fs.writeFileSync(
-      path.join(profileDir, "sidebar-projects", `${projectId}.js`),
+      path.join(profileDir, "workspace-projects", `${projectId}.js`),
       files.projectLocal,
     );
   }
   if (files.project !== undefined) {
     fs.mkdirSync(path.join(projectRoot, ".work"), { recursive: true });
     fs.writeFileSync(
-      path.join(projectRoot, ".work", "sidebar.js"),
+      path.join(projectRoot, ".work", "workspace.js"),
       files.project,
     );
   }
   if (files.profile !== undefined) {
-    fs.writeFileSync(path.join(profileDir, "sidebar.js"), files.profile);
+    fs.writeFileSync(path.join(profileDir, "workspace.js"), files.profile);
   }
   return { profileDir, projectRoot, projectId };
 }
 
-describe("resolveSidebarConfig", () => {
+describe("resolveWorkspaceConfig", () => {
   it("falls back to the built-in default when no layer file exists", () => {
     const { profileDir, projectRoot, projectId } = makeLayers({});
-    const resolved = resolveSidebarConfig({
+    const resolved = resolveWorkspaceConfig({
       profileDir,
       projectId,
       projectRoot,
     });
     expect(resolved.layer).toBe("default");
-    expect(resolved.config).toEqual(DEFAULT_SIDEBAR_CONFIG);
+    expect(resolved.config).toEqual(DEFAULT_WORKSPACE_CONFIG);
   });
 
   it("uses the profile layer when it is the only file", () => {
     const { profileDir, projectRoot, projectId } = makeLayers({
       profile: CUSTOM("Profile"),
     });
-    const resolved = resolveSidebarConfig({
+    const resolved = resolveWorkspaceConfig({
       profileDir,
       projectId,
       projectRoot,
     });
     expect(resolved.layer).toBe("profile");
-    expect(resolved.config.left[0]!.sections[0]?.title).toBe("Profile");
+    expect(resolved.config.sidebars.left[0]!.sections[0]?.title).toBe(
+      "Profile",
+    );
   });
 
-  it("prefers the project's shared .work/sidebar.js over the profile", () => {
+  it("prefers the project's shared .work/workspace.js over the profile", () => {
     const { profileDir, projectRoot, projectId } = makeLayers({
       project: CUSTOM("Project"),
       profile: CUSTOM("Profile"),
     });
-    const resolved = resolveSidebarConfig({
+    const resolved = resolveWorkspaceConfig({
       profileDir,
       projectId,
       projectRoot,
     });
     expect(resolved.layer).toBe("project");
-    expect(resolved.config.left[0]!.sections[0]?.title).toBe("Project");
+    expect(resolved.config.sidebars.left[0]!.sections[0]?.title).toBe(
+      "Project",
+    );
   });
 
   it("prefers the user's project-local override over everything", () => {
@@ -106,13 +110,13 @@ describe("resolveSidebarConfig", () => {
       project: CUSTOM("Project"),
       profile: CUSTOM("Profile"),
     });
-    const resolved = resolveSidebarConfig({
+    const resolved = resolveWorkspaceConfig({
       profileDir,
       projectId,
       projectRoot,
     });
     expect(resolved.layer).toBe("project-local");
-    expect(resolved.config.left[0]!.sections[0]?.title).toBe("Local");
+    expect(resolved.config.sidebars.left[0]!.sections[0]?.title).toBe("Local");
   });
 
   it("skips project layers when no projectId/projectRoot is given", () => {
@@ -121,9 +125,11 @@ describe("resolveSidebarConfig", () => {
       profile: CUSTOM("Profile"),
     });
     void projectRoot;
-    const resolved = resolveSidebarConfig({ profileDir });
+    const resolved = resolveWorkspaceConfig({ profileDir });
     expect(resolved.layer).toBe("profile");
-    expect(resolved.config.left[0]!.sections[0]?.title).toBe("Profile");
+    expect(resolved.config.sidebars.left[0]!.sections[0]?.title).toBe(
+      "Profile",
+    );
   });
 
   it("does NOT slide past a broken winning layer — it falls to defaults", () => {
@@ -131,7 +137,7 @@ describe("resolveSidebarConfig", () => {
       project: "this is not javascript {",
       profile: CUSTOM("Profile"),
     });
-    const resolved = resolveSidebarConfig({
+    const resolved = resolveWorkspaceConfig({
       profileDir,
       projectId,
       projectRoot,
@@ -139,49 +145,53 @@ describe("resolveSidebarConfig", () => {
     // The broken project file wins the resolution (it exists) but yields
     // the defaults, exactly like a broken profile file always has.
     expect(resolved.layer).toBe("project");
-    expect(resolved.config).toEqual(DEFAULT_SIDEBAR_CONFIG);
+    expect(resolved.config).toEqual(DEFAULT_WORKSPACE_CONFIG);
   });
 
   it("treats a config that sanitizes to zero sections as defaults", () => {
     const { profileDir, projectRoot, projectId } = makeLayers({
-      projectLocal: `module.exports = { left: [{ id: "project", title: "Project", sections: [{ id: "widget-2", type: "bogus" }] }], right: [] };`,
+      projectLocal: `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [{ id: "widget-2", type: "bogus" }] }], right: [] } };`,
     });
-    const resolved = resolveSidebarConfig({
+    const resolved = resolveWorkspaceConfig({
       profileDir,
       projectId,
       projectRoot,
     });
     expect(resolved.layer).toBe("project-local");
-    expect(resolved.config).toEqual(DEFAULT_SIDEBAR_CONFIG);
+    expect(resolved.config).toEqual(DEFAULT_WORKSPACE_CONFIG);
   });
 
   it("sanitizes the winning layer like the profile store does", () => {
     const { profileDir, projectRoot, projectId } = makeLayers({
-      project: `module.exports = { left: [{ id: "project", title: "Project", sections: [
+      project: `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [
         { id: "widget-3", type: "workflows", collapsed: true },
         { id: "widget-4", type: "files", title: "Customer work" },
         { id: "widget-6", type: "custom", title: "Docs", items: [
           { label: "MDN", url: "https://developer.mozilla.org" },
           { label: "no url" },
         ] },
-      ] }], right: [] };`,
+      ] }], right: [] } };`,
     });
-    const resolved = resolveSidebarConfig({
+    const resolved = resolveWorkspaceConfig({
       profileDir,
       projectId,
       projectRoot,
     });
-    expect(resolved.config.left[0]!.sections).toHaveLength(3);
-    expect(resolved.config.left[0]!.sections[0]).toMatchObject({
+    expect(resolved.config.sidebars.left[0]!.sections).toHaveLength(3);
+    expect(resolved.config.sidebars.left[0]!.sections[0]).toMatchObject({
       type: "workflows",
       collapsed: true,
     });
-    expect(resolved.config.left[0]!.sections[1]).toMatchObject({
+    expect(resolved.config.sidebars.left[0]!.sections[1]).toMatchObject({
       type: "files",
       title: "Customer work",
     });
-    expect(resolved.config.left[0]!.sections[2]?.items).toHaveLength(1);
-    expect(resolved.config.left[0]!.sections[2]?.items?.[0]).toMatchObject({
+    expect(resolved.config.sidebars.left[0]!.sections[2]?.items).toHaveLength(
+      1,
+    );
+    expect(
+      resolved.config.sidebars.left[0]!.sections[2]?.items?.[0],
+    ).toMatchObject({
       label: "MDN",
       url: "https://developer.mozilla.org",
     });
@@ -189,7 +199,7 @@ describe("resolveSidebarConfig", () => {
 
   it("preserves valid capability predicates and drops invalid ones", () => {
     const { profileDir, projectRoot, projectId } = makeLayers({
-      project: `module.exports = { left: [{ id: "project", title: "Project", sections: [
+      project: `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [
         {
           id: "widget-9", type: "custom",
           title: "Brain",
@@ -212,13 +222,13 @@ describe("resolveSidebarConfig", () => {
             },
           ],
         },
-      ] }], right: [] };`,
+      ] }], right: [] } };`,
     });
-    const section = resolveSidebarConfig({
+    const section = resolveWorkspaceConfig({
       profileDir,
       projectId,
       projectRoot,
-    }).config.left[0]!.sections[0];
+    }).config.sidebars.left[0]!.sections[0];
     expect(section?.when).toEqual({ permissions: ["brain:maintain"] });
     expect(section?.items).toEqual([
       expect.objectContaining({
@@ -230,7 +240,7 @@ describe("resolveSidebarConfig", () => {
 
   it("retains recursive custom items and folder-only nodes", () => {
     const { profileDir, projectRoot, projectId } = makeLayers({
-      project: `module.exports = { left: [{ id: "project", title: "Project", sections: [{
+      project: `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [{
         id: "widget-10", type: "custom",
         title: "Knowledge",
         items: [{
@@ -242,14 +252,14 @@ describe("resolveSidebarConfig", () => {
             items: [{ label: "Runbook", url: "https://example.test/runbook" }],
           }],
         }],
-      }] }], right: [] };`,
+      }] }], right: [] } };`,
     });
 
-    const item = resolveSidebarConfig({
+    const item = resolveWorkspaceConfig({
       profileDir,
       projectId,
       projectRoot,
-    }).config.left[0]!.sections[0]?.items?.[0];
+    }).config.sidebars.left[0]!.sections[0]?.items?.[0];
     expect(item).toMatchObject({
       label: "Engineering",
       icon: "Folder",
@@ -265,7 +275,7 @@ describe("resolveSidebarConfig", () => {
 
   it("sanitizes custom item previews and preserves an explicit opt-out", () => {
     const { profileDir, projectRoot, projectId } = makeLayers({
-      project: `module.exports = { left: [{ id: "project", title: "Project", sections: [{
+      project: `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [{
         id: "widget-11", type: "custom",
         items: [
           {
@@ -290,16 +300,18 @@ describe("resolveSidebarConfig", () => {
             preview: false,
           },
         ],
-      }] }], right: [] };`,
+      }] }], right: [] } };`,
     });
 
-    const resolved = resolveSidebarConfig({
+    const resolved = resolveWorkspaceConfig({
       profileDir,
       projectId,
       projectRoot,
     });
 
-    expect(resolved.config.left[0]!.sections[0]?.items?.[0]?.preview).toEqual({
+    expect(
+      resolved.config.sidebars.left[0]!.sections[0]?.items?.[0]?.preview,
+    ).toEqual({
       title: "Production deployments",
       description: "Release health at a glance",
       metadata: [
@@ -309,37 +321,37 @@ describe("resolveSidebarConfig", () => {
         { label: "Version", value: "2026.8.24" },
       ],
     });
-    expect(resolved.config.left[0]!.sections[0]?.items?.[1]?.preview).toBe(
-      false,
-    );
+    expect(
+      resolved.config.sidebars.left[0]!.sections[0]?.items?.[1]?.preview,
+    ).toBe(false);
   });
 });
 
-describe("loadSidebarConfigFile", () => {
+describe("loadWorkspaceConfigFile", () => {
   it("returns the defaults for a missing file", () => {
     const dir = makeDir();
-    expect(loadSidebarConfigFile(path.join(dir, "nope.js"))).toEqual(
-      DEFAULT_SIDEBAR_CONFIG,
+    expect(loadWorkspaceConfigFile(path.join(dir, "nope.js"))).toEqual(
+      DEFAULT_WORKSPACE_CONFIG,
     );
   });
 
   it("has no access to require/process in the sandbox", () => {
     const dir = makeDir();
-    const file = path.join(dir, "sidebar.js");
+    const file = path.join(dir, "workspace.js");
     fs.writeFileSync(file, `require("node:fs"); module.exports = {};`);
-    expect(loadSidebarConfigFile(file)).toEqual(DEFAULT_SIDEBAR_CONFIG);
+    expect(loadWorkspaceConfigFile(file)).toEqual(DEFAULT_WORKSPACE_CONFIG);
   });
 });
 
-describe("watchSidebarLayerFile", () => {
+describe("watchWorkspaceLayerFile", () => {
   const changed = (file: string): Promise<void> =>
     new Promise((resolve) => {
-      disposers.push(watchSidebarLayerFile(file, resolve));
+      disposers.push(watchWorkspaceLayerFile(file, resolve));
     });
 
   it("fires when the file changes in an existing directory", async () => {
     const dir = makeDir();
-    const file = path.join(dir, "sidebar.js");
+    const file = path.join(dir, "workspace.js");
     fs.writeFileSync(file, CUSTOM("one"));
     const fired = changed(file);
     // Give fs.watch a beat to attach before mutating.
@@ -350,7 +362,7 @@ describe("watchSidebarLayerFile", () => {
 
   it("fires when the directory is created after the watch starts", async () => {
     const root = makeDir();
-    const file = path.join(root, ".work", "sidebar.js");
+    const file = path.join(root, ".work", "workspace.js");
     const fired = changed(file);
     await new Promise((resolve) => setTimeout(resolve, 50));
     fs.mkdirSync(path.dirname(file));
@@ -362,51 +374,56 @@ describe("watchSidebarLayerFile", () => {
 describe("tabbed layout reloads", () => {
   it("retains the last valid layout across invalid saves and recovers", () => {
     const profileDir = makeDir();
-    const file = path.join(profileDir, "sidebar.js");
+    const file = path.join(profileDir, "workspace.js");
     fs.writeFileSync(file, CUSTOM("Original"));
-    const original = resolveSidebarConfig({ profileDir }).config;
+    const original = resolveWorkspaceConfig({ profileDir }).config;
     fs.writeFileSync(file, "module.exports = {");
-    const broken = resolveSidebarConfig({ profileDir });
+    const broken = resolveWorkspaceConfig({ profileDir });
     expect(broken.config).toEqual(original);
     expect(broken.error).toBeTruthy();
     fs.writeFileSync(file, CUSTOM("Updated"));
-    const recovered = resolveSidebarConfig({ profileDir });
+    const recovered = resolveWorkspaceConfig({ profileDir });
     expect(recovered.error).toBeUndefined();
-    expect(recovered.config.left[0]?.sections[0]?.title).toBe("Updated");
+    expect(recovered.config.sidebars.left[0]?.sections[0]?.title).toBe(
+      "Updated",
+    );
   });
 
   it("accepts empty sides and rejects duplicate identities atomically", () => {
     const profileDir = makeDir();
-    const file = path.join(profileDir, "sidebar.js");
-    fs.writeFileSync(file, "module.exports = { left: [], right: [] }");
-    expect(resolveSidebarConfig({ profileDir }).config).toEqual({
-      left: [],
-      right: [],
+    const file = path.join(profileDir, "workspace.js");
+    fs.writeFileSync(
+      file,
+      "module.exports = { sidebars: {left: [], right: [] } }",
+    );
+    expect(resolveWorkspaceConfig({ profileDir }).config).toEqual({
+      sidebars: { left: [], right: [] },
     });
     fs.writeFileSync(
       file,
-      `module.exports = { left: [{ id: 'same', title: 'One', sections: [] }], right: [{ id: 'same', title: 'Two', sections: [] }] }`,
+      `module.exports = { sidebars: {left: [{ id: 'same', title: 'One', sections: [] }], right: [{ id: 'same', title: 'Two', sections: [] }] } }`,
     );
-    const invalid = resolveSidebarConfig({ profileDir });
+    const invalid = resolveWorkspaceConfig({ profileDir });
     expect(invalid.error).toContain("unique id");
-    expect(invalid.config).toEqual({ left: [], right: [] });
+    expect(invalid.config).toEqual({ sidebars: { left: [], right: [] } });
   });
 
   it("validates app names and bounds compact heights without granting file access", () => {
     const profileDir = makeDir();
-    const file = path.join(profileDir, "sidebar.js");
+    const file = path.join(profileDir, "workspace.js");
     fs.writeFileSync(
       file,
-      `module.exports = { left: [], right: [{ id: 'apps', title: 'Apps', icon: 'Box', sections: [{id:'app', type:'app', app:'renewals', height:9999}]}] }`,
+      `module.exports = { sidebars: {left: [], right: [{ id: 'apps', title: 'Apps', icon: 'Box', sections: [{id:'app', type:'app', app:'renewals', height:9999}]}] } }`,
     );
     expect(
-      resolveSidebarConfig({ profileDir }).config.right[0]?.sections[0],
+      resolveWorkspaceConfig({ profileDir }).config.sidebars.right[0]
+        ?.sections[0],
     ).toMatchObject({ app: "renewals", height: 1200 });
     fs.writeFileSync(
       file,
-      `module.exports = { left: [], right: [{ id: 'notes', title: 'Notes', sections: [{id:'note', type:'note', path:'../secrets'}]}] }`,
+      `module.exports = { sidebars: {left: [], right: [{ id: 'notes', title: 'Notes', sections: [{id:'note', type:'note', path:'../secrets'}]}] } }`,
     );
-    expect(resolveSidebarConfig({ profileDir }).error).toContain(
+    expect(resolveWorkspaceConfig({ profileDir }).error).toContain(
       "project-relative",
     );
   });
@@ -415,17 +432,18 @@ describe("tabbed layout reloads", () => {
 describe("shared sidebar contributions", () => {
   it("keeps source options, distinct action placements and sparse overrides", () => {
     const dir = makeDir();
-    const file = path.join(dir, "sidebar.js");
+    const file = path.join(dir, "workspace.js");
     fs.writeFileSync(
       file,
-      `module.exports = {left:[],right:[{id:"chat",title:"Chat",when:{surface:["chat"],session:true},sections:[{
+      `module.exports = {sidebars: {left:[],right:[{id:"chat",title:"Chat",when:{surface:["chat"],session:true},sections:[{
       id:"children",type:"custom",source:{type:"subsessions",pageSize:25,groupBy:"agentId"},
       itemDefaults:{icon:"Bot",menu:[{label:"Open",action:"open-tab"}]},
       itemOverrides:{abc:{label:"Renamed"}},
       contextMenu:[],actions:[{label:"Beside",action:"open-side",icon:"Columns2"}]
-    }]}]};`,
+    }]}] }};`,
     );
-    const section = loadSidebarConfigFile(file).right[0]?.sections[0];
+    const section =
+      loadWorkspaceConfigFile(file).sidebars.right[0]?.sections[0];
     expect(section?.source).toMatchObject({
       type: "subsessions",
       pageSize: 25,
@@ -435,21 +453,23 @@ describe("shared sidebar contributions", () => {
     expect(section?.itemDefaults?.icon).toBe("Bot");
     fs.writeFileSync(
       file,
-      `module.exports={left:[],right:[{id:"chat",title:"Chat",sections:[{id:"children",type:"chats",actions:[{label:"Bad",action:"invented"}]}]}]};`,
+      `module.exports={sidebars: {left:[],right:[{id:"chat",title:"Chat",sections:[{id:"children",type:"chats",actions:[{label:"Bad",action:"invented"}]}]}] }};`,
     );
-    expect(loadSidebarConfigFile(file).right[0]?.sections[0]).toEqual(section);
+    expect(
+      loadWorkspaceConfigFile(file).sidebars.right[0]?.sections[0],
+    ).toEqual(section);
   });
 });
 
 describe("palette modes", () => {
   const layout = (palette: string) =>
-    `module.exports = { left: [{ id: "project", title: "Project", sections: [
+    `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [
       { id: "todos", type: "custom", title: "Todos", source: { type: "custom", module: ".work/todos.ts" } },
       { id: "links", type: "custom", title: "Links", items: [{ label: "Docs", url: "https://example.com/docs" }] },
       { id: "chats", type: "chats" }
-    ] }], right: [], palette: ${palette} };\n`;
+    ] }], right: [] }, palette: ${palette} };\n`;
   const resolve = (palette: string) =>
-    resolveSidebarConfig(makeLayers({ profile: layout(palette) }));
+    resolveWorkspaceConfig(makeLayers({ profile: layout(palette) }));
 
   it("keeps modes backed by a module, a custom section or static items", () => {
     const { config, error } = resolve(`{ modes: [
@@ -525,7 +545,7 @@ describe("palette modes", () => {
   });
 
   it("resolves executable modules for sections and modes in one namespace", async () => {
-    const { executableSourceModule } = await import("../shared/sidebar.js");
+    const { executableSourceModule } = await import("../shared/workspace.js");
     const { config } = resolve(`{ modes: [
       { id: "own", trigger: "own", title: "Own", source: { type: "custom", module: ".work/own.ts" } },
       { id: "reuse", trigger: "reuse", title: "Reuse", section: "todos" },
@@ -536,5 +556,20 @@ describe("palette modes", () => {
     expect(executableSourceModule(config, "reuse")).toBe(".work/todos.ts");
     expect(executableSourceModule(config, "static")).toBeUndefined();
     expect(executableSourceModule(config, "missing")).toBeUndefined();
+  });
+});
+
+describe("workspace shape", () => {
+  it("requires sidebars and rejects unknown top-level keys", () => {
+    for (const [source, message] of [
+      ["module.exports = { left: [], right: [] };", "sidebars"],
+      [
+        "module.exports = { sidebars: { left: [], right: [] }, starters: [] };",
+        "Unknown workspace keys: starters",
+      ],
+    ]) {
+      const { error } = resolveWorkspaceConfig(makeLayers({ profile: source }));
+      expect(error).toContain(message);
+    }
   });
 });

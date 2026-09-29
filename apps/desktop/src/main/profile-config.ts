@@ -19,14 +19,6 @@ import {
   validateSettingsFile,
 } from "./settings-store.js";
 import {
-  projectLocalSidebarFile,
-  projectSidebarFile,
-  type ResolvedSidebarConfig,
-  resolveSidebarConfig,
-  SidebarConfigStore,
-  watchSidebarLayerFile,
-} from "./sidebar-config.js";
-import {
   normalizeTheme,
   normalizeThemeLayer,
   type ResolvedTheme,
@@ -35,12 +27,20 @@ import {
   ThemeStore,
   validateThemeConfig,
 } from "./theme.js";
+import {
+  projectLocalWorkspaceFile,
+  projectWorkspaceFile,
+  type ResolvedWorkspaceConfig,
+  resolveWorkspaceConfig,
+  WorkspaceConfigStore,
+  watchWorkspaceLayerFile,
+} from "./workspace-config.js";
 
 /** Everything a profile owns beyond browser state: look, keys, agents. */
 export interface ProfileStores {
   theme: ThemeStore;
   keybindings: KeybindingsStore;
-  sidebar: SidebarConfigStore;
+  workspace: WorkspaceConfigStore;
   agents: AgentsStore;
   /** Consent + auth bindings for PROJECT agents (ADR 0050). */
   agentBindings: AgentBindingsStore;
@@ -72,7 +72,7 @@ export class ProfileConfigManager {
   >();
   // Sidebar changes carry no payload: the resolved config depends on the
   // renderer's active project (layered resolution), so listeners refetch.
-  private readonly sidebarListeners = new Set<(profileId: string) => void>();
+  private readonly workspaceListeners = new Set<(profileId: string) => void>();
   /** Lazy per-(profile, project) watchers on the non-profile layers. */
   private readonly projectConfigWatchers = new Map<string, () => void>();
   private readonly connectionsListeners = new Set<
@@ -106,7 +106,7 @@ export class ProfileConfigManager {
         this.systemAppearance,
       ),
       keybindings: new KeybindingsStore(path.join(dir, "keybindings.json")),
-      sidebar: new SidebarConfigStore(path.join(dir, "sidebar.js")),
+      workspace: new WorkspaceConfigStore(path.join(dir, "workspace.js")),
       agents: new AgentsStore(path.join(dir, "agents.json")),
       agentBindings: new AgentBindingsStore(
         path.join(dir, "agent-bindings.json"),
@@ -117,7 +117,7 @@ export class ProfileConfigManager {
         path.join(dir, "remote-projects.json"),
       ),
     };
-    stores.sidebar.ensureFile();
+    stores.workspace.ensureFile();
     stores.theme.watch((theme) => {
       for (const listener of this.themeListeners) listener(profileId, theme);
     });
@@ -126,7 +126,7 @@ export class ProfileConfigManager {
         listener(profileId, bindings);
       }
     });
-    stores.sidebar.watch(() => this.notifySidebarChanged(profileId));
+    stores.workspace.watch(() => this.notifyWorkspaceChanged(profileId));
     stores.prefs.watch((prefs) => {
       for (const listener of this.prefsListeners) listener(profileId, prefs);
     });
@@ -160,20 +160,20 @@ export class ProfileConfigManager {
 
   /**
    * Layered sidebar resolution (ADR 0043): this user's per-project
-   * override, then the project's shared `.work/sidebar.js`, then
-   * the profile-global `sidebar.js`, then the built-in default. Requesting
+   * override, then the project's shared `.work/workspace.js`, then
+   * the profile-global `workspace.js`, then the built-in default. Requesting
    * a project's config lazily registers watchers on its layer files so
    * later edits broadcast like profile edits always have.
    */
-  resolveSidebar(
+  resolveWorkspace(
     profileId: string,
     project?: { id: string; rootPath: string | null },
-  ): ResolvedSidebarConfig {
+  ): ResolvedWorkspaceConfig {
     this.forProfile(profileId); // Ensure the profile file + watch exist.
     if (project) {
-      this.watchProjectSidebarLayers(profileId, project.id, project.rootPath);
+      this.watchProjectWorkspaceLayers(profileId, project.id, project.rootPath);
     }
-    return resolveSidebarConfig({
+    return resolveWorkspaceConfig({
       profileDir: this.profileDir(profileId),
       projectId: project?.id,
       projectRoot: project?.rootPath,
@@ -214,7 +214,7 @@ export class ProfileConfigManager {
       if (!this.projectConfigWatchers.has(key)) {
         const notify = () => this.notifyPrefsChanged(profileId);
         const disposers = [files.personal, files.project].flatMap((file) =>
-          file ? [watchSidebarLayerFile(file, notify)] : [],
+          file ? [watchWorkspaceLayerFile(file, notify)] : [],
         );
         this.projectConfigWatchers.set(key, () => {
           for (const dispose of disposers) dispose();
@@ -347,7 +347,7 @@ export class ProfileConfigManager {
     const stores = this.forProfile(profileId);
     stores.theme.load();
     stores.keybindings.load();
-    const sidebar = this.resolveSidebar(profileId, project);
+    const sidebar = this.resolveWorkspace(profileId, project);
     result.errors.push(
       ...[
         stores.theme.error,
@@ -381,23 +381,23 @@ export class ProfileConfigManager {
   }
 
   /** Idempotent per (profile, project); disposed with everything else. */
-  private watchProjectSidebarLayers(
+  private watchProjectWorkspaceLayers(
     profileId: string,
     projectId: string,
     projectRoot: string | null,
   ): void {
     const key = `${profileId}\0${projectId}`;
     if (this.projectConfigWatchers.has(key)) return;
-    const notify = () => this.notifySidebarChanged(profileId);
+    const notify = () => this.notifyWorkspaceChanged(profileId);
     const disposers: Array<() => void> = [
-      watchSidebarLayerFile(
-        projectLocalSidebarFile(this.profileDir(profileId), projectId),
+      watchWorkspaceLayerFile(
+        projectLocalWorkspaceFile(this.profileDir(profileId), projectId),
         notify,
       ),
     ];
     if (projectRoot) {
       disposers.push(
-        watchSidebarLayerFile(projectSidebarFile(projectRoot), notify),
+        watchWorkspaceLayerFile(projectWorkspaceFile(projectRoot), notify),
       );
     }
     this.projectConfigWatchers.set(key, () => {
@@ -405,8 +405,8 @@ export class ProfileConfigManager {
     });
   }
 
-  private notifySidebarChanged(profileId: string): void {
-    for (const listener of this.sidebarListeners) listener(profileId);
+  private notifyWorkspaceChanged(profileId: string): void {
+    for (const listener of this.workspaceListeners) listener(profileId);
   }
 
   onThemeChanged(
@@ -430,8 +430,8 @@ export class ProfileConfigManager {
     this.keybindingsListeners.add(listener);
   }
 
-  onSidebarChanged(listener: (profileId: string) => void): void {
-    this.sidebarListeners.add(listener);
+  onWorkspaceChanged(listener: (profileId: string) => void): void {
+    this.workspaceListeners.add(listener);
   }
 
   onPrefsChanged(listener: (profileId: string, prefs: AppPrefs) => void): void {
@@ -448,7 +448,7 @@ export class ProfileConfigManager {
     const stores = this.stores.get(profileId);
     stores?.theme.dispose();
     stores?.keybindings.dispose();
-    stores?.sidebar.dispose();
+    stores?.workspace.dispose();
     stores?.prefs.dispose();
     this.stores.delete(profileId);
     this.settingsStores.delete(profileId);
@@ -466,7 +466,7 @@ export class ProfileConfigManager {
     for (const profileId of this.stores.keys()) this.releaseProfile(profileId);
     this.themeListeners.clear();
     this.keybindingsListeners.clear();
-    this.sidebarListeners.clear();
+    this.workspaceListeners.clear();
     this.connectionsListeners.clear();
     this.prefsListeners.clear();
   }

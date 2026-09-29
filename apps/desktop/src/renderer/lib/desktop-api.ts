@@ -752,7 +752,6 @@ export interface PullRequestFile {
 
 export type {
   SidebarAction,
-  SidebarConfig,
   SidebarItem,
   SidebarMenuEntry,
   SidebarPreview,
@@ -761,20 +760,27 @@ export type {
   SidebarSide,
   SidebarTabConfig,
 } from "../../shared/sidebar.js";
+export type { WorkspaceConfig } from "../../shared/workspace.js";
 
-import type { SidebarConfig } from "../../shared/sidebar.js";
+import type { WorkspaceConfig } from "../../shared/workspace.js";
 
 /**
  * Which layer of the layered resolution produced the config: this user's
- * per-project override, the project's shared `.work/sidebar.js`,
- * the profile-global `sidebar.js`, or the built-in default.
+ * per-project override, the project's shared `.work/workspace.js`,
+ * the profile-global `workspace.js`, or the built-in default.
  */
-export type SidebarLayer = "project-local" | "project" | "profile" | "default";
+export type WorkspaceLayer =
+  | "project-local"
+  | "project"
+  | "profile"
+  | "default";
 
-export interface ResolvedSidebarConfig {
-  config: SidebarConfig;
+export interface ResolvedWorkspaceConfig {
+  config: WorkspaceConfig;
   error?: string;
-  layer: SidebarLayer;
+  layer: WorkspaceLayer;
+  /** The winning layer's file; absent for the built-in default. */
+  file?: string;
 }
 
 export type ThemeToken =
@@ -1655,12 +1661,12 @@ export interface CatamorphicDesktopApi {
   onSidebarSourceChanged: (
     listener: (event: { leaseId: string; error?: string }) => void,
   ) => () => void;
-  sidebarConfigGet: (projectId?: string) => Promise<ResolvedSidebarConfig>;
-  sidebarConfigFile: () => Promise<string>;
-  sidebarConfigSource: () => Promise<string>;
-  sidebarConfigReset: () => Promise<void>;
+  workspaceConfigGet: (projectId?: string) => Promise<ResolvedWorkspaceConfig>;
+  workspaceConfigFile: () => Promise<string>;
+  workspaceConfigSource: () => Promise<string>;
+  workspaceConfigReset: () => Promise<void>;
   /** Change signal only — refetch with the active project to resolve. */
-  onSidebarConfigChanged: (listener: () => void) => () => void;
+  onWorkspaceConfigChanged: (listener: () => void) => () => void;
 }
 
 declare global {
@@ -1676,7 +1682,7 @@ export const desktopApi: CatamorphicDesktopApi = {
   onBookmarksChanged: shareEvent((publish) =>
     nativeApi.onBookmarksChanged(publish),
   ),
-  onSidebarConfigChanged: shareEvent((publish) =>
-    nativeApi.onSidebarConfigChanged(() => publish(undefined)),
+  onWorkspaceConfigChanged: shareEvent((publish) =>
+    nativeApi.onWorkspaceConfigChanged(() => publish(undefined)),
   ),
 };

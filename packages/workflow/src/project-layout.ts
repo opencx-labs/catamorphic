@@ -100,7 +100,7 @@ export function isProjectSourcePath(filePath: string): boolean {
 }
 
 /** Shared project sidebar layer. */
-export const PROJECT_SIDEBAR_PATH = projectPath("sidebar.js");
+export const PROJECT_WORKSPACE_PATH = projectPath("workspace.js");
 /** Shared project theme. */
 export const PROJECT_THEME_PATH = projectPath("theme.json");
 /** Shared project preferences. */

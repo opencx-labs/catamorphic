@@ -92,7 +92,7 @@ const DEFAULT_CUSTOM_MENU: SidebarMenuEntry[] = [
   { label: "Copy link", action: "copy-url" },
 ];
 
-/** One sidebar section, shaped by the user's sidebar.js config. */
+/** One sidebar section, shaped by the user's workspace.js config. */
 export function ConfiguredSection({
   section: configured,
   relevant,

@@ -92,10 +92,18 @@ export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
     }),
   ),
   {
-    id: "sidebar",
-    label: "Sidebar configuration",
+    id: "workspace",
+    label: "Sidebars and palette modes",
     category: "workspace",
-    keywords: ["sidebar", "widgets", "sections", "customize"],
+    keywords: [
+      "sidebar",
+      "widgets",
+      "sections",
+      "palette",
+      "modes",
+      "workspace.js",
+      "customize",
+    ],
   },
   {
     id: "agents",
