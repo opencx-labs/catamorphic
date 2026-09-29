@@ -42,8 +42,10 @@ import {
   type SidebarWhen,
 } from "../shared/sidebar.js";
 import {
+  isWorkspaceSource,
   type PaletteModeConfig,
   sidebarSections,
+  WORKSPACE_SOURCES,
   type WorkspaceConfig,
 } from "../shared/workspace-config.js";
 
@@ -679,9 +681,14 @@ function sanitizePaletteModes({
     if (mode.aliases !== undefined && !Array.isArray(mode.aliases))
       throw new Error(`${where}: aliases must be an array of names.`);
     const source = sanitizeSource(mode.source);
-    if (source && (source.type !== "custom" || !source.module))
+    if (
+      source &&
+      !(source.type === "custom"
+        ? source.module
+        : isWorkspaceSource(source.type))
+    )
       throw new Error(
-        `${where}: a mode source is an executable module ({ type: "custom", module }).`,
+        `${where}: a mode source is a module ({ type: "custom", module }) or a workspace source (${WORKSPACE_SOURCES.join(", ")}).`,
       );
     const section =
       typeof mode.section === "string"
@@ -689,12 +696,14 @@ function sanitizePaletteModes({
         : undefined;
     if (mode.section !== undefined) {
       if (!section) throw new Error(`${where}: no section ${mode.section}.`);
+      const type = resolveSidebarSection(section).type;
       if (
-        resolveSidebarSection(section).type !== "custom" ||
-        (!section.source?.module && !section.items?.length)
+        type === "custom"
+          ? !section.source?.module && !section.items?.length
+          : !isWorkspaceSource(type)
       )
         throw new Error(
-          `${where}: only custom sections with a module or items can back a mode.`,
+          `${where}: a mode's section lists rows: a workspace source, or a custom section with a module or items.`,
         );
     }
     const items = sanitizeItems(mode.items);

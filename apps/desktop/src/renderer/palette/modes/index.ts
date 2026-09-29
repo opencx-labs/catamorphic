@@ -1,5 +1,7 @@
 import { useMemo, useRef } from "react";
 import type { HistoryEntry } from "../../../shared/history.js";
+import type { ProjectAgentInfo } from "../../lib/desktop-api.js";
+import { useWorkspaceSourcesContext } from "../../lib/workspace-sources.js";
 import { usePaletteHost } from "../host.js";
 import type {
   PaletteChoiceMode,
@@ -27,8 +29,10 @@ export function usePaletteModes({
   settingItems,
   commandItems,
   sectionSearch,
+  projectAgents,
 }: {
   picker: PaletteChoiceMode | null;
+  projectAgents: readonly ProjectAgentInfo[];
   historyRow: (entry: HistoryEntry) => PaletteItem;
   settingItems: readonly PaletteItem[];
   commandItems: readonly PaletteItem[];
@@ -41,11 +45,12 @@ export function usePaletteModes({
     onOpenUrl,
     onError,
   } = usePaletteHost();
-  const choices = useChoiceModes({ picker });
+  const sources = useWorkspaceSourcesContext();
+  const choices = useChoiceModes({ picker, projectAgents });
   const history = useHistoryMode(historyRow);
   const files = useFileModes();
   const sites = useSitesMode();
-  const input = useInputModes({ projectAgents: choices.projectAgents });
+  const input = useInputModes({ projectAgents });
   const errorRef = useRef(onError);
   errorRef.current = onError;
   const customModes = useMemo(
@@ -56,8 +61,9 @@ export function usePaletteModes({
         memberShell,
         onOpenUrl,
         onError: (message) => errorRef.current?.(message),
+        sources,
       }),
-    [workspaceConfig, projectId, memberShell, onOpenUrl],
+    [workspaceConfig, projectId, memberShell, onOpenUrl, sources],
   );
   const modes = useMemo<PaletteMode[]>(
     () => [
@@ -66,7 +72,7 @@ export function usePaletteModes({
       settingsMode(settingItems),
       sites,
       commandsMode(commandItems),
-      ...choices.modes,
+      ...choices,
       ...input,
       ...customModes,
       ...(sectionSearch ? [sectionMode(sectionSearch)] : []),
@@ -77,7 +83,7 @@ export function usePaletteModes({
       settingItems,
       sites,
       commandItems,
-      choices.modes,
+      choices,
       input,
       customModes,
       sectionSearch,

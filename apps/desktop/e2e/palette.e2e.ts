@@ -87,7 +87,8 @@ beforeAll(async () => {
       palette:{modes:[
         {id:'ticket-mode',trigger:'tickets',aliases:['tix'],title:'Tickets',description:'Find a ticket and claim it',icon:'Ticket',section:'tickets'},
         {id:'ticket-search',trigger:'find-ticket',title:'Ticket search',source:{type:'custom',module:'.work/tickets.ts'},search:'source'},
-        {id:'runbooks',trigger:'runbooks',title:'Runbooks',items:[{label:'Deploy runbook',url:'https://runbooks.test/deploy',keywords:['release']}]}
+        {id:'runbooks',trigger:'runbooks',title:'Runbooks',items:[{label:'Deploy runbook',url:'https://runbooks.test/deploy',keywords:['release']}]},
+        {id:'project-files',trigger:'pf',title:'Project files',section:'files'}
       ]}
     };`,
   );
@@ -139,6 +140,20 @@ it("lists custom modes with the built-in ones and enters them by name", async ()
         : "",
     )
     .toBe("t-102\n");
+});
+
+it("lists a built-in source through a mode, from the same data the sidebar shows", async () => {
+  await open();
+  await type("pf");
+  await run(`key(' ')`);
+  await wait(`return chip()==='Project files'`);
+  await wait(
+    `return labels().some(label=>label.includes('tickets.json'))`,
+    "files source rows",
+  );
+  await type("tickets");
+  await wait(`return labels()[0]?.includes('tickets.json')`);
+  await close();
 });
 
 it("passes the typed query to sources that search", async () => {

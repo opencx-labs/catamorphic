@@ -37,7 +37,7 @@ export async function readSidebarSessionPage({
   query: {
     limit: number;
     offset: number;
-    visibility?: "promoted";
+    visibility?: "promoted" | "archived";
     parentSessionId?: string;
     rootsOnly?: "true" | "false";
   };

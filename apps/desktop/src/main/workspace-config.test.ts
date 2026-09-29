@@ -477,7 +477,9 @@ describe("palette modes", () => {
       { id: "issues", trigger: "@Issues", aliases: ["bugs"], title: "Issues", icon: "Bug",
         source: { type: "custom", module: ".work/issues.ts" }, search: "source" },
       { id: "todo-mode", trigger: "todo", title: "Todos", section: "todos", topLevel: true },
-      { id: "docs", trigger: "docs", title: "Docs", items: [{ label: "Guide", url: "https://example.com/guide" }] }
+      { id: "docs", trigger: "docs", title: "Docs", items: [{ label: "Guide", url: "https://example.com/guide" }] },
+      { id: "running", trigger: "running", title: "Running chats", source: { type: "chats", filter: { running: true } }, topLevel: true },
+      { id: "all-chats", trigger: "all-chats", title: "All chats", section: "chats" }
     ] }`);
     expect(error).toBeUndefined();
     expect(config.palette?.modes).toMatchObject([
@@ -491,6 +493,12 @@ describe("palette modes", () => {
       },
       { id: "todo-mode", section: "todos", search: "palette", topLevel: true },
       { id: "docs", items: [{ label: "Guide" }] },
+      {
+        id: "running",
+        source: { type: "chats", filter: { running: true } },
+        topLevel: true,
+      },
+      { id: "all-chats", section: "chats" },
     ]);
   });
 
@@ -506,14 +514,14 @@ describe("palette modes", () => {
       "distinct from section ids",
     ],
     [
-      "a built-in collection source",
-      `{ modes: [{ id: "m", trigger: "m", title: "M", source: { type: "chats" } }] }`,
-      "executable module",
+      "an app widget source",
+      `{ modes: [{ id: "m", trigger: "m", title: "M", source: { type: "app" } }] }`,
+      "workspace source",
     ],
     [
-      "a section that is not custom",
-      `{ modes: [{ id: "m", trigger: "m", title: "M", section: "chats" }] }`,
-      "only custom sections",
+      "a custom source without a module",
+      `{ modes: [{ id: "m", trigger: "m", title: "M", source: { type: "custom" } }] }`,
+      "workspace source",
     ],
     [
       "two row sources",

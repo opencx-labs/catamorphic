@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useRef } from "react";
 import type { HistoryEntry } from "../../../shared/history.js";
 import { SiteFavicon } from "../../components/site-favicon.js";
-import type { Bookmark } from "../../lib/desktop-api.js";
 import { historyDetail, historyIcon, useHistory } from "../../lib/history.js";
 import { usePaletteHost } from "../host.js";
 import type { PaletteItem } from "../types.js";
@@ -14,11 +13,12 @@ import { hostOf } from "../urls.js";
 export function useHistoryRows({
   query,
   enabled,
-  bookmarks,
+  bookmarkedUsage,
 }: {
   query: string;
   enabled: boolean;
-  bookmarks: readonly Bookmark[];
+  /** Usage keys of bookmarked pages: a page's key is its history identity. */
+  bookmarkedUsage: ReadonlySet<string>;
 }) {
   const { profileId, onOpenHistory } = usePaletteHost();
   const historyResults = useHistory({
@@ -41,14 +41,7 @@ export function useHistoryRows({
             className="size-4"
           />
         ) : undefined,
-      bookmarked:
-        entry.target.kind === "web" &&
-        bookmarks.some(
-          (bookmark) =>
-            entry.target.kind === "web" &&
-            bookmark.url.replace(/\/$/, "") ===
-              entry.target.url.replace(/\/$/, ""),
-        ),
+      bookmarked: bookmarkedUsage.has(entry.id),
       label: entry.title,
       detail: historyDetail(entry),
       keywords:
@@ -65,7 +58,7 @@ export function useHistoryRows({
       usage: entry.id,
       run: (mode) => historyOpenRef.current(entry, mode),
     }),
-    [bookmarks],
+    [bookmarkedUsage],
   );
   const historyItems = useMemo(
     () => historyResults.entries.map(historyRow),

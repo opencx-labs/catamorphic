@@ -42,9 +42,13 @@ import {
   type SidebarSectionConfig,
 } from "../lib/desktop-api.js";
 import { sessionLabel } from "../lib/session-label.js";
-import { useSidebarAppCollections } from "../lib/sidebar-app-collections.js";
 import { useSidebarSessions } from "../lib/sidebar-sessions.js";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag.js";
+import {
+  grantSources,
+  useWorkspaceSourcesContext,
+} from "../lib/workspace-sources.js";
+import { sectionRows } from "../palette/modes/custom.js";
 import type { PaletteItem, PaletteModeRequest } from "../palette/types.js";
 import { AppScreen, useApps } from "../screens/app-screen.js";
 import { AnimatedTitle } from "./animated-title.js";
@@ -108,7 +112,6 @@ export function ConfiguredSection({
   profileId,
   pinnedStyle,
   tabs,
-  sourceTabs,
   activeTab,
   activeChatSessionId,
   activeFilePath,
@@ -128,6 +131,7 @@ export function ConfiguredSection({
   onOpenHistory,
   onPublish,
   onPropose,
+  onError,
 }: {
   section: SidebarSectionConfig;
   relevant: boolean;
@@ -149,7 +153,6 @@ export function ConfiguredSection({
   profileId?: string;
   pinnedStyle: "tiles" | "list";
   tabs: ReactNode;
-  sourceTabs: WorkspaceTab[];
   activeTab?: WorkspaceTab;
   activeChatSessionId?: string;
   activeFilePath?: string;
@@ -169,24 +172,20 @@ export function ConfiguredSection({
   onOpenHistory: (filePath: string) => void;
   onPublish: (filePath: string, features: RemoteFeatures | undefined) => void;
   onPropose: (files: string[], features: RemoteFeatures | undefined) => void;
+  /** A searched row's action failed after the palette closed. */
+  onError: (message: string) => void;
 }) {
   const section = useMemo(
     () => resolveSidebarSection(configured),
     [configured],
   );
-  const collections = useSidebarAppCollections({
-    projectId,
-    profileId,
-    tabs: sourceTabs,
-    onOpenUrl: (url, mode) => onOpenUrl(url, mode ?? "replace"),
-    granted: section.collections,
-    surface,
-    writesProgram: !memberShell,
-    onOpenSession,
-    onOpenTab,
-    onOpenFile,
-    onSessionAction,
-  });
+  const sources = useWorkspaceSourcesContext();
+  const grantKey = JSON.stringify(section.collections ?? []);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: grantKey is the value identity of the grant list
+  const collections = useMemo(
+    () => grantSources(sources, section.collections),
+    [sources, grantKey],
+  );
   const [status, setStatus] = useState<SidebarStatus>({ state: "loading" });
   const [itemCounts, setItemCounts] = useState<ReadonlyMap<string, number>>(
     new Map(),
@@ -234,7 +233,9 @@ export function ConfiguredSection({
         ]
       : []),
     ...(!memberShell ? ["new-workflow"] : []),
-    ...(["git", "prs", "files"].includes(section.type) ? ["search"] : []),
+    // Every list section is searchable in the palette; header buttons stay
+    // where configured (headerActions) or built in (files, changes, PRs).
+    ...(section.type !== "app" && section.type !== "note" ? ["search"] : []),
     ...([
       "chats",
       "subsessions",
@@ -251,7 +252,21 @@ export function ConfiguredSection({
       ? ["refresh"]
       : []),
   ]);
+  // Sections with their own view state (the selected checkout, the review
+  // filter) register what they show; every other section searches its
+  // source through the workspace sources (ADR 0186).
   const searchItems = useRef<() => Promise<PaletteItem[]>>(async () => []);
+  const searchRows = (): Promise<PaletteItem[]> =>
+    section.type === "git" || section.type === "prs"
+      ? searchItems.current()
+      : sectionRows({
+          section,
+          sources,
+          projectId,
+          signal: new AbortController().signal,
+          onOpenUrl,
+          onError,
+        });
   const searchAction = (label: string, files = false) => (
     <ShortcutHint label={`Search ${label.toLowerCase()}`}>
       <button
@@ -269,7 +284,7 @@ export function ConfiguredSection({
           onSearch(
             files
               ? { mode: "files" }
-              : { mode: "section", label, load: () => searchItems.current() },
+              : { mode: "section", label, load: searchRows },
           )
         }
       >
@@ -592,7 +607,7 @@ export function ConfiguredSection({
                 : {
                     mode: "section",
                     label: section.title ?? section.type,
-                    load: () => searchItems.current(),
+                    load: searchRows,
                   },
             );
           else if (action.startsWith("run:") && section.source?.module) {

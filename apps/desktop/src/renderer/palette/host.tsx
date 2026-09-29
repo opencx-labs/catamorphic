@@ -113,9 +113,19 @@ export interface PaletteHost {
 
 const PaletteHostContext = createContext<PaletteHost | null>(null);
 
+/** Same contents, same identity: plain data rebuilt on every app render. */
+function useStableData<T>(value: T): T {
+  const ref = useRef(value);
+  if (JSON.stringify(ref.current) !== JSON.stringify(value))
+    ref.current = value;
+  return ref.current;
+}
+
 /**
- * Navigation callbacks keep one identity across renders: rows close over
- * them, and a new identity per app render would rebuild every row index.
+ * The app rebuilds the host object on every render. Navigation callbacks and
+ * the data objects rows depend on (the focused chat, command availability,
+ * macros) keep one identity while unchanged, so row indexes and the list's
+ * motion do not rerun on unrelated renders.
  */
 export function PaletteHostProvider({
   value,
@@ -137,9 +147,18 @@ export function PaletteHostProvider({
     }),
     [],
   );
+  const focusedChat = useStableData(value.focusedChat);
+  const actionAvailability = useStableData(value.actionAvailability);
+  const terminalMacros = useStableData(value.terminalMacros);
   const host = useMemo(
-    () => ({ ...value, ...navigation }),
-    [value, navigation],
+    () => ({
+      ...value,
+      ...navigation,
+      focusedChat,
+      actionAvailability,
+      terminalMacros,
+    }),
+    [value, navigation, focusedChat, actionAvailability, terminalMacros],
   );
   return (
     <PaletteHostContext.Provider value={host}>

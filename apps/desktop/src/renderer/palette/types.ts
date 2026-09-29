@@ -45,8 +45,15 @@ export interface PaletteItem {
    * and puts the palette away. Default: an ordinary commit.
    */
   commit?: "stay" | "answer";
+  /**
+   * The surface this row acts on, accented while it is highlighted: the
+   * focused chat, the chat when one is focused, or what close-tab closes.
+   */
+  highlight?: PaletteHighlight;
   run: (mode: CommitMode) => void;
 }
+
+export type PaletteHighlight = "chat" | "chat-if-focused" | "close";
 
 /**
  * Where a mode's rows come from. "list" rows are ranked by the palette as
@@ -97,6 +104,8 @@ export interface PaletteMode {
   label?: string;
   description?: string;
   rows: PaletteRows;
+  /** The surface the mode's answer changes, accented while it is open. */
+  highlight?: PaletteHighlight;
 }
 
 /**

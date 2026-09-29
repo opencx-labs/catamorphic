@@ -10,6 +10,24 @@ import type {
   SidebarWhen,
 } from "./sidebar.js";
 
+/** Every built-in list the workspace offers, by source name. */
+export const WORKSPACE_SOURCES = [
+  "chats",
+  "subsessions",
+  "activity",
+  "files",
+  "workflows",
+  "apps",
+  "git",
+  "prs",
+  "bookmarks",
+  "remote",
+  "tabs",
+] as const;
+export type WorkspaceSourceName = (typeof WORKSPACE_SOURCES)[number];
+export const isWorkspaceSource = (name: string): name is WorkspaceSourceName =>
+  WORKSPACE_SOURCES.some((source) => source === name);
+
 /**
  * The workspace file (`workspace.js`, ADR 0186): what the window offers for
  * this profile or project. Its sidebars and its palette modes are read from

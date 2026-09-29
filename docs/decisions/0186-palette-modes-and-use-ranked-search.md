@@ -62,6 +62,18 @@ site's settings stay first, then up to six "Frequent" rows (at most three
 pages), then the usual commands and destinations. Individual site settings
 leave the top level for the Sites mode; the host moves to the row's detail.
 
+**One data layer for workspace lists.** The collection sources app widgets
+already read (chats, subsessions, activity, files, workflows, apps, git,
+PRs, bookmarks, remote, tabs) become the workspace sources: one registry,
+created once and provided to the app. Widgets get it through their grants;
+the palette lists its resources from it; every list section is searchable
+through it with its own filter and sort (sections with view state, the
+selected checkout and the review filter, search what they show); custom
+modes may name a workspace source with a filter. Rows carry the fields
+filters compare. Built-in sections keep their specialized renderers (tiles,
+checkout groups) and share the registry's query caches, so a list loads one
+way and refreshes everywhere.
+
 **The palette is a module, not a component.** `renderer/palette/` holds the
 host context (what the app provides, once, instead of 40 props), row hooks
 (commands, surfaces, resources, history, settings), one file per built-in
@@ -71,7 +83,10 @@ in `workspace.js`.
 
 ## Consequences
 
-- A new built-in mode is one registry entry; a user's agent adds a mode by
+- A new built-in mode is one file in `renderer/palette/modes/` plus its line
+  in the mode index and its typed names in `BUILTIN_PALETTE_TRIGGERS` (which
+  main uses to refuse colliding custom names); a mode declares the surface it
+  highlights. A user's agent adds a mode by
   editing `workspace.js`, and one module can back a section and a mode.
 - Ranking adapts to each person without configuration; there is no ranking
   knob, and the skill says so.

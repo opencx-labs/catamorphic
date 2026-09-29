@@ -1343,3 +1343,8 @@ adds a mode in workspace.js under palette.modes, from the same sources
 sections use, so one module can be a sidebar list and a palette mode. The
 file was sidebar.js; it now describes the whole window, so it is
 workspace.js, exporting { sidebars: { left, right }, palette }.
+
+Lists load one way. The sources app widgets read (chats, files, workflows,
+bookmarks and the rest) are the palette's resources too, and every sidebar
+section can open its rows in the palette with its own filter. A mode can
+be as small as "running chats": a built-in source and one filter.

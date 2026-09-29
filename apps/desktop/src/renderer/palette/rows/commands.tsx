@@ -17,7 +17,16 @@ import { lucideIcon } from "../../lib/lucide-icon.js";
 import { type SkillInfo, skillsForAgent } from "../../lib/skills.js";
 import { usePaletteHost } from "../host.js";
 import { PICKER_ACTIONS } from "../modes/choices.js";
-import type { PaletteItem } from "../types.js";
+import type { PaletteHighlight, PaletteItem } from "../types.js";
+
+/** Commands that act on a specific surface accent it while highlighted. */
+const ACTION_HIGHLIGHTS: Partial<Record<ActionId, PaletteHighlight>> = {
+  "switch-agent": "chat",
+  "change-effort": "chat-if-focused",
+  "change-permission-mode": "chat-if-focused",
+  "switch-model": "chat-if-focused",
+  "close-tab": "close",
+};
 
 /**
  * Command rows: the shared action registry (one entry yields the shortcut,
@@ -101,6 +110,7 @@ export function useCommandRows({
         kind: "action" as const,
         category: "command",
         usage: `action:${action.id}`,
+        highlight: ACTION_HIGHLIGHTS[action.id],
         // Choice commands swap palette state in place (like mode rows);
         // everything else runs the shared handler.
         ...(targetPicker ? { commit: "stay" as const } : {}),
@@ -180,6 +190,7 @@ export function useCommandRows({
         kind: hasFocusedChat ? ("action" as const) : ("navigate" as const),
         category: "resource" as const,
         usage: `skill:${skill.name}`,
+        highlight: "chat-if-focused" as const,
         run: (mode) => onRunSkill(skill.name, mode === "tab" ? "tab" : "float"),
       })),
     [skills, agentSkills, hasFocusedChat, onRunSkill],

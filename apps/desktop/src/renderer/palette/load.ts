@@ -110,3 +110,14 @@ export function usePaletteLoad(
     };
   }, [state, token, loadKey, idle, retry]);
 }
+
+/**
+ * Unfiltered picker lists open with the active choice on top — "what runs
+ * today" must be visible before picking. Stable sort: everything else
+ * keeps its order. Searching skips this (normal ranking; the check chip
+ * still marks the current row wherever it lands).
+ */
+export const pinCurrentFirst = (rows: PaletteItem[]): PaletteItem[] =>
+  [...rows].sort(
+    (a, b) => Number(b.current ?? false) - Number(a.current ?? false),
+  );

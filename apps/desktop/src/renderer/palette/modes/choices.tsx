@@ -28,9 +28,10 @@ import {
   projectAgentAsInfo,
 } from "../../lib/desktop-api.js";
 import { usePaletteHost } from "../host.js";
+import { pinCurrentFirst } from "../load.js";
 import type { PaletteChoiceMode, PaletteItem, PaletteMode } from "../types.js";
 
-export const CHOICE_CHIPS: Record<
+const CHOICE_CHIPS: Record<
   PaletteChoiceMode,
   { chip: string; icon: LucideIcon; placeholder: string; description?: string }
 > = {
@@ -161,19 +162,8 @@ const EFFORT_LEVELS: Array<{
   },
 ];
 
-/**
- * Unfiltered picker lists open with the active choice on top — "what runs
- * today" must be visible before picking. Stable sort: everything else
- * keeps its order. Searching skips this (normal ranking; the check chip
- * still marks the current row wherever it lands).
- */
-export const pinCurrentFirst = (rows: PaletteItem[]): PaletteItem[] =>
-  [...rows].sort(
-    (a, b) => Number(b.current ?? false) - Number(a.current ?? false),
-  );
-
 /** Choice rows answer the active question and put the palette away. */
-export const asAnswer = (row: PaletteItem): PaletteItem =>
+const asAnswer = (row: PaletteItem): PaletteItem =>
   row.commit ? row : { ...row, commit: "answer" };
 
 /**
@@ -182,8 +172,10 @@ export const asAnswer = (row: PaletteItem): PaletteItem =>
  */
 export function useChoiceModes({
   picker,
+  projectAgents,
 }: {
   picker: PaletteChoiceMode | null;
+  projectAgents: readonly ProjectAgentInfo[];
 }) {
   const {
     projectId,
@@ -212,27 +204,6 @@ export function useChoiceModes({
     models: HarnessModelInfo[];
     error?: string;
   } | null>(null);
-
-  // The ACTIVE project's committed agent definitions (ADR 0050), fetched
-  // fresh on every entry into an agent picker — definitions are files a
-  // collaborator (or an agent) may have just written, and consent state
-  // changes with approvals; a stale snapshot would show the wrong rows.
-  const [projectAgents, setProjectAgents] = useState<ProjectAgentInfo[]>([]);
-  useEffect(() => {
-    if (!projectId || !picker || picker === "permission-mode") return;
-    let cancelled = false;
-    void desktopApi
-      .projectAgentsList(projectId)
-      .then((data) => {
-        if (!cancelled) setProjectAgents(data.agents);
-      })
-      .catch(() => {
-        if (!cancelled) setProjectAgents([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [picker, projectId]);
 
   // The model picker's target: the focused chat's agent, else the default.
   const targetAgent = useMemo(
@@ -723,6 +694,13 @@ export function useChoiceModes({
       label: CHOICE_CHIPS[id].chip,
       names: typed,
       rows,
+      // The chat a choice changes glows while its question is open.
+      highlight:
+        id === "switch-agent"
+          ? "chat"
+          : id === "model" || id === "effort" || id === "permission-mode"
+            ? "chat-if-focused"
+            : undefined,
     });
     // Typed names follow the commands' availability (a project agent has no
     // editable model; some harnesses have no permission modes).
@@ -770,5 +748,5 @@ export function useChoiceModes({
     picker,
     choiceItems,
   ]);
-  return { modes, targetAgent, projectAgents };
+  return modes;
 }

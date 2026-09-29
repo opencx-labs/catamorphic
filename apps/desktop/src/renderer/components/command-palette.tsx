@@ -21,7 +21,7 @@ import {
   paletteCountsVisit,
 } from "../../shared/palette.js";
 import { normalizeCommandQuery } from "../lib/command-score.js";
-import { desktopApi } from "../lib/desktop-api.js";
+import { desktopApi, projectAgentAsInfo } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
 import { useProjectSkills } from "../lib/skills.js";
@@ -29,11 +29,13 @@ import { usePaletteHost } from "../palette/host.js";
 import {
   isFullPaletteModeName,
   matchPaletteMode,
+  pinCurrentFirst,
   usePaletteLoad,
 } from "../palette/load.js";
-import { isChoiceMode, pinCurrentFirst } from "../palette/modes/choices.js";
+import { isChoiceMode } from "../palette/modes/choices.js";
 import { useTopLevelModeRows } from "../palette/modes/custom.js";
 import { usePaletteModes } from "../palette/modes/index.js";
+import { useProjectAgents } from "../palette/project-agents.js";
 import {
   createPaletteIndex,
   frequentItems,
@@ -148,6 +150,8 @@ export function CommandPalette({
     onSendToAgent,
     onOpenUrl,
     onHighlightTarget,
+    agents,
+    defaultAgentId,
     actionAvailability,
   } = usePaletteHost();
   const [query, setQuery] = useState("");
@@ -278,10 +282,14 @@ export function CommandPalette({
     return () => window.removeEventListener("focus", onWindowFocus);
   }, [variant]);
 
+  // Project agents refresh with skills and on every picker entry.
+  const projectAgents = useProjectAgents({
+    projectId,
+    refresh: `${skillsRefresh}:${picker ?? ""}`,
+  });
   // Skills follow the target agent's allowlist: the focused chat's agent,
-  // else the default.
-  const { agents, defaultAgentId } = usePaletteHost();
-  const skillAgent = agents.find(
+  // else the default, profile or project.
+  const skillAgent = [...agents, ...projectAgents.map(projectAgentAsInfo)].find(
     (agent) => agent.id === (focusedChat?.agentId ?? defaultAgentId),
   );
   const {
@@ -292,12 +300,14 @@ export function CommandPalette({
     profileItems,
     commandItems,
   } = useCommandRows({ enterMode, skills, agentSkills: skillAgent?.skills });
-  const { resourceItems, bookmarks } = useResourceRows();
+  const { resourceItems, bookmarkedUsage } = useResourceRows({
+    active: variant === "tab" || open,
+  });
   const { surfaceItems, historyPageItem } = useDestinationRows();
   const { historyRow, historyItems } = useHistoryRows({
     query,
     enabled: (variant === "tab" || open) && !modeId,
-    bookmarks,
+    bookmarkedUsage,
   });
   const settingItems = useSettingRows();
   const { modes, customModes } = usePaletteModes({
@@ -306,6 +316,7 @@ export function CommandPalette({
     settingItems,
     commandItems,
     sectionSearch,
+    projectAgents,
   });
   const namedModes = useMemo(
     () => modes.filter((candidate) => candidate.names?.length),
@@ -353,8 +364,10 @@ export function CommandPalette({
   );
   // Rows everything else already lists: a bookmarked page or a workflow
   // appears once, as its own row, ranked with its history counts.
-  const nativeRows = useMemo(
-    () => [
+  const nativeRows = useMemo(() => {
+    // A custom mode over a built-in source lists rows the palette already
+    // has (the same chat, the same workflow): each row appears once.
+    const rows = [
       ...actionItems,
       ...skillItems,
       ...projectItems,
@@ -363,18 +376,19 @@ export function CommandPalette({
       ...topLevelModeRows,
       historyPageItem,
       ...surfaceItems,
-    ],
-    [
-      actionItems,
-      skillItems,
-      projectItems,
-      profileItems,
-      resourceItems,
-      topLevelModeRows,
-      historyPageItem,
-      surfaceItems,
-    ],
-  );
+    ];
+    const seen = new Set<string>();
+    return rows.filter((row) => !seen.has(row.id) && seen.add(row.id));
+  }, [
+    actionItems,
+    skillItems,
+    projectItems,
+    profileItems,
+    resourceItems,
+    topLevelModeRows,
+    historyPageItem,
+    surfaceItems,
+  ]);
   const nativeUsage = useMemo(
     () => new Set(nativeRows.flatMap((item) => item.usage ?? [])),
     [nativeRows],
@@ -590,32 +604,18 @@ export function CommandPalette({
 
   const selected = Math.min(selectedIndex, Math.max(results.length - 1, 0));
 
-  // The surface the highlighted row would act on, reported up so the app
-  // accents its border — a scoped command visibly points at its target.
-  const selectedId = results[selected]?.id;
-  const highlightTarget: "chat" | "close" | null =
+  // The surface the highlighted row (or the open question) acts on,
+  // reported up so the app accents its border.
+  const highlight =
     variant === "overlay" && !open
-      ? null
-      : picker === "switch-agent"
+      ? undefined
+      : (activeMode?.highlight ?? results[selected]?.highlight);
+  const highlightTarget: "chat" | "close" | null =
+    highlight === "chat-if-focused"
+      ? focusedChat
         ? "chat"
-        : picker === "effort" ||
-            picker === "model" ||
-            picker === "permission-mode"
-          ? focusedChat
-            ? "chat"
-            : null
-          : selectedId === "action:switch-agent"
-            ? "chat"
-            : selectedId === "action:change-effort" ||
-                selectedId === "action:change-permission-mode" ||
-                selectedId === "action:switch-model" ||
-                selectedId?.startsWith("skill:")
-              ? focusedChat
-                ? "chat"
-                : null
-              : selectedId === "action:close-tab"
-                ? "close"
-                : null;
+        : null
+      : (highlight ?? null);
   const onHighlightTargetRef = useRef(onHighlightTarget);
   onHighlightTargetRef.current = onHighlightTarget;
   useEffect(() => {

@@ -188,11 +188,20 @@ Each mode takes exactly one row source, the same primitives sections use:
 { id: "issues", trigger: "issues", aliases: ["bugs"], title: "Issues",
   description: "Open issues assigned to me", icon: "Bug",
   source: { type: "custom", module: ".work/issues.ts" } }
+{ id: "running", trigger: "running", title: "Running chats", icon: "Loader",
+  source: { type: "chats", filter: { running: true },
+    sort: { field: "updatedAt", direction: "desc" } } }
 { id: "todo-search", trigger: "todo", title: "Todos", section: "todos" }
 { id: "runbooks", trigger: "runbook", title: "Runbooks",
   items: [{ label: "Deploy", url: "https://wiki.example.com/deploy" }] }
-section reuses a custom section's module or items, so one source can be a sidebar
-list and a palette mode at once. items are static rows; nested items list flat.
+source is a module ({ type: "custom", module }) or a workspace source: chats,
+subsessions, activity, files, workflows, apps, git, prs, bookmarks, remote or
+tabs, with the same filter and sort sections use. Chats filter on running,
+attentionRequired, owner, status, visibility, agentId, title, createdAt and
+updatedAt; files on path; workflows and apps on name; PRs on number, author and
+title; every row also on label. section reuses any list section (a workspace
+source, or a custom module or items), so one source can be a sidebar list and a
+palette mode at once. items are static rows; nested items list flat.
 A mode id shares the section id namespace. trigger and aliases are 1 to 32
 lowercase letters, digits or dashes, unique across modes, and cannot be a
 built-in mode name (history, files, file, content, grep, settings, preferences,
@@ -216,6 +225,12 @@ search. topLevel: true also ranks a palette-searched mode's rows in the ordinary
 palette; reserve it for small, frequently used lists, since every open loads it.
 Connected projects run no local modules, so module-backed modes are hidden there.
 
+Every list section is searchable in the palette through the same sources:
+headerActions: [{label:"Search", action:"search", icon:"Search"}] (or a menu
+entry) opens the palette scoped to that section's rows, filter and sort
+included. Files, Changes and pull requests have the button built in and search
+what they show (the selected checkout, the review filter).
+
 ## Designing good sections and modes
 
 Choose by the question the user is asking. A section answers "what is going on"
@@ -234,7 +249,8 @@ and point a section and a mode at it with section.
 - Give every row a destination: a url, or a run: action that does what the
   label says. Never ship rows that silently do nothing.
 - Do not duplicate built-ins. Files, file content, history, settings, sites,
-  chats, workflows, apps and bookmarks are already searchable.
+  chats, workflows, apps and bookmarks are already searchable; a mode over a
+  built-in source earns its place with a filter ("running chats", "my PRs").
 After adding a mode, open the palette, type @ to see it listed, enter it by name,
 search, and open a row; check the empty, failed and retry states.
 `;
