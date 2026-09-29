@@ -10767,6 +10767,7 @@ export interface paths {
                         token: string;
                         /** Format: uuid */
                         pollId: string;
+                        max?: number;
                     };
                 };
             };
@@ -10905,7 +10906,7 @@ export interface paths {
                                 kind: "process.list";
                                 sandboxId: string;
                             };
-                        } | null;
+                        }[];
                     };
                 };
                 /** @description Default Response */

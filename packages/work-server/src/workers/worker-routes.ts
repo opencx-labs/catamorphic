@@ -13,7 +13,11 @@ import {
 
 const Session = z.strictObject({ session: z.string().uuid() });
 /** A retried poll repeats its id and receives what that poll took. */
-const Poll = Session.extend({ pollId: z.string().uuid() });
+const Poll = Session.extend({
+  pollId: z.string().uuid(),
+  /** The worker's free slots: it takes up to this many at once. */
+  max: z.number().int().min(1).max(64).default(1),
+});
 const Completion = z.strictObject({
   session: z.string().uuid(),
   jobId: z.string().uuid(),
@@ -92,8 +96,12 @@ export function registerWorkerRoutes(
     const body = Poll.safeParse(request.body);
     if (!body.success) return reply.status(400).send({ error: "No session" });
     try {
-      const job = await registry.poll({ nodeId: worker.nodeId, ...body.data });
-      return { job };
+      const jobs = await registry.poll({
+        nodeId: worker.nodeId,
+        ...body.data,
+        signal: hungUp(reply),
+      });
+      return { jobs };
     } catch (error) {
       if (error instanceof RemoteExecutorLeaseLostError) {
         return reply.status(409).send({ error: error.message });
@@ -144,4 +152,16 @@ export function registerWorkerRoutes(
       }
     },
   );
+}
+
+/**
+ * Aborts when the caller hangs up before the answer is sent, so a long poll
+ * nobody waits for any more takes nothing.
+ */
+function hungUp(reply: FastifyReply): AbortSignal {
+  const controller = new AbortController();
+  reply.raw.once("close", () => {
+    if (!reply.raw.writableFinished) controller.abort();
+  });
+  return controller.signal;
 }

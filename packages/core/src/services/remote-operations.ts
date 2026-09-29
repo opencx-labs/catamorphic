@@ -417,43 +417,59 @@ export class RemoteOperationQueue {
         `${args.label} disconnected or timed out; the outcome may be unknown. Check the last action before retrying.`,
       );
     } finally {
+      // Cleanup never turns a recorded outcome into a failure: a row left
+      // behind is swept after it expires.
       await this.db
         .deleteFrom("remote_operations")
         .where("id", "=", row.id)
-        .execute();
-      await this.sweep();
+        .execute()
+        .catch(() => {});
+      this.sweepSoon();
     }
   }
 
   /**
-   * Executor side: take the next operation, waiting up to `waitMs` for one.
-   * A poll retried with the same `pollId` receives the operation it took.
-   * Throws {@link RemoteExecutorLeaseLostError} once the lease moved on.
+   * Executor side: take up to `max` operations, waiting up to `waitMs` for
+   * one. A poll retried with the same `pollId` receives what that poll took
+   * and takes nothing more, so an answer lost on the way is never an
+   * operation lost. Once `signal` aborts (the executor hung up), the poll
+   * stops and gives back what it took. Throws
+   * {@link RemoteExecutorLeaseLostError} once the lease moved on.
    */
   async poll(
     args: RemoteExecutorLease & {
       pollId: string;
+      max?: number;
       waitMs?: number;
+      signal?: AbortSignal;
       leaseHeld: () => Promise<boolean>;
     },
-  ): Promise<{ id: string; operation: RemoteOperation } | null> {
+  ): Promise<Array<{ id: string; operation: RemoteOperation }>> {
     const deadline = Date.now() + (args.waitMs ?? 0);
+    const max = Math.max(1, args.max ?? 1);
     let leaseCheckedAt = 0;
+    this.sweepSoon();
     for (;;) {
+      if (args.signal?.aborted) return [];
       if (Date.now() - leaseCheckedAt >= LEASE_CHECK_MS) {
         leaseCheckedAt = Date.now();
         if (!(await args.leaseHeld())) throw new RemoteExecutorLeaseLostError();
       }
-      const job = await this.db.transaction().execute(async (trx) => {
-        const taken = await trx
+      const jobs = await this.db.transaction().execute(async (trx) => {
+        // One poll id at a time: a retry and the poll it retries (still
+        // waiting on another instance) never both take operations.
+        await sql`SELECT pg_advisory_xact_lock(hashtext(${args.pollId}))`.execute(
+          trx,
+        );
+        const answered = await trx
           .selectFrom("remote_operations")
-          .select(["id", "operation"])
+          .select(["id", "operation", "status"])
           .where("executor", "=", args.executor)
           .where("lease_token", "=", args.leaseToken)
           .where("poll_id", "=", args.pollId)
-          .where("status", "=", "running")
-          .executeTakeFirst();
-        if (taken) return taken;
+          .execute();
+        if (answered.length > 0)
+          return answered.filter((job) => job.status === "running");
         const next = await trx
           .selectFrom("remote_operations")
           .select(["id", "operation"])
@@ -462,23 +478,43 @@ export class RemoteOperationQueue {
           .where("status", "=", "pending")
           .where("expires_at", ">", sql<Date>`now()`)
           .orderBy("created_at")
+          .limit(max)
           .forUpdate()
           .skipLocked()
-          .executeTakeFirst();
-        if (!next) return null;
+          .execute();
+        if (next.length === 0) return [];
         await trx
           .updateTable("remote_operations")
           .set({ status: "running", poll_id: args.pollId })
-          .where("id", "=", next.id)
+          .where(
+            "id",
+            "in",
+            next.map((job) => job.id),
+          )
           .execute();
         return next;
       });
-      if (job)
-        return {
+      if (jobs.length > 0 && args.signal?.aborted) {
+        // Nobody will receive these: they wait for the next poll.
+        await this.db
+          .updateTable("remote_operations")
+          .set({ status: "pending", poll_id: null })
+          .where(
+            "id",
+            "in",
+            jobs.map((job) => job.id),
+          )
+          .where("poll_id", "=", args.pollId)
+          .where("status", "=", "running")
+          .execute();
+        return [];
+      }
+      if (jobs.length > 0)
+        return jobs.map((job) => ({
           id: job.id,
           operation: RemoteOperationSchema.parse(job.operation),
-        };
-      if (Date.now() >= deadline) return null;
+        }));
+      if (Date.now() >= deadline) return [];
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
   }
@@ -520,22 +556,31 @@ export class RemoteOperationQueue {
       .where("executor", "=", args.executor)
       .where("lease_token", "=", args.leaseToken)
       .where("status", "=", status)
-      .where("error", args.error === undefined ? "is" : "=", args.error ?? null)
+      .where(
+        "error",
+        args.error === undefined ? "is" : "=",
+        args.error === undefined ? null : withoutNul(args.error),
+      )
       .executeTakeFirst();
     if (!recorded) throw new RemoteReceiptRefusedError();
   }
 
   /**
    * Drop operations whose controller stopped waiting without deleting them
-   * (its instance stopped): their payloads are project content. At most
-   * once a minute per instance.
+   * (its instance stopped): their payloads are project content. Runs from
+   * dispatches and polls, at most once a minute per instance; hosts may also
+   * call it on their own schedule.
    */
-  private async sweep(): Promise<void> {
-    if (Date.now() - this.lastSweep < SWEEP_EVERY_MS) return;
+  async sweep(): Promise<void> {
     this.lastSweep = Date.now();
     await this.db
       .deleteFrom("remote_operations")
       .where("expires_at", "<", sql<Date>`now() - interval '10 minutes'`)
       .execute();
+  }
+
+  private sweepSoon(): void {
+    if (Date.now() - this.lastSweep < SWEEP_EVERY_MS) return;
+    void this.sweep().catch(() => {});
   }
 }

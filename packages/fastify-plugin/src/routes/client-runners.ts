@@ -5,7 +5,7 @@ import {
   RemoteOperationSchema,
   RemoteReceiptRefusedError,
 } from "@catamorphic/core";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import type { RouteContext } from "../app.js";
@@ -90,15 +90,19 @@ export function registerClientRunnerRoutes(
     "/client-runners/poll",
     {
       schema: {
-        // A retried poll repeats its id and receives what that poll took.
-        body: Lease.extend({ pollId: z.string().uuid() }),
+        // A retried poll repeats its id and receives what that poll took;
+        // `max` is the runner's free slots.
+        body: Lease.extend({
+          pollId: z.string().uuid(),
+          max: z.number().int().min(1).max(64).optional(),
+        }),
         response: {
-          200: z
-            .object({
+          200: z.array(
+            z.object({
               id: z.string().uuid(),
               operation: RemoteOperationSchema,
-            })
-            .nullable(),
+            }),
+          ),
           403: ErrorSchema,
           409: ErrorSchema,
           503: ErrorSchema,
@@ -115,6 +119,7 @@ export function registerClientRunnerRoutes(
           await ctx.core.clientRunners.poll({
             ...request.body,
             identity: resolveIdentity(request),
+            signal: hungUp(reply),
           }),
         );
       } catch (error) {
@@ -223,4 +228,16 @@ export function registerClientRunnerRoutes(
       return { ok: true };
     },
   );
+}
+
+/**
+ * Aborts when the runner hangs up before the answer is sent, so a long poll
+ * nobody waits for any more takes nothing.
+ */
+function hungUp(reply: FastifyReply): AbortSignal {
+  const controller = new AbortController();
+  reply.raw.once("close", () => {
+    if (!reply.raw.writableFinished) controller.abort();
+  });
+  return controller.signal;
 }

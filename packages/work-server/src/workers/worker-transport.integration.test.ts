@@ -27,6 +27,8 @@ function flakyBalancer(replicas: Map<string, string>) {
     /** The replica that took the worker's lease. */
     holder: "",
     badGateways: 0,
+    /** Calls sent to a replica that had stopped. */
+    unreachable: 0,
     lostResponses: 0,
     lostJobs: 0,
   };
@@ -47,7 +49,14 @@ function flakyBalancer(replicas: Map<string, string>) {
       stats.badGateways++;
       return new Response("Bad Gateway", { status: 502 });
     }
-    const response = await globalThis.fetch(`${origin}${url.pathname}`, init);
+    const response = await globalThis
+      .fetch(`${origin}${url.pathname}`, init)
+      .catch((error: unknown) => {
+        // A replica that stopped leaves rotation, as a health check would.
+        replicas.delete(name);
+        stats.unreachable++;
+        throw error;
+      });
     if (!chaotic) return response;
     const body = await response.text();
     // The replica took an operation for this poll, but its answer is lost:
@@ -203,17 +212,17 @@ it.skipIf(!process.env.DATABASE_URL)(
       const once = await turn(8);
       expect(once.split("\n---\n").at(-1)?.trim()).toBe("exit=0\n8");
 
-      // A replica stops (a rolling deploy); requests routed to it fail
-      // until the balancer notices. The worker's lease and running work
-      // are untouched.
+      // A replica stops (a rolling deploy). It stays in the balancer's
+      // rotation until calls to it fail; the worker's lease and running
+      // work are untouched.
       const stopping = servers.get(other);
-      replicas.delete(other);
       servers.delete(other);
       await stopping?.shutdown();
       const second = await turn(8);
       expect(second.split("\n---\n").at(-1)?.trim()).toBe("exit=0\n16");
 
       expect(balancer.stats.badGateways).toBeGreaterThan(0);
+      expect(balancer.stats.unreachable).toBeGreaterThan(0);
       expect(balancer.stats.lostJobs).toBe(1);
       expect(balancer.stats.lostResponses).toBeGreaterThan(0);
       // One session throughout: the worker never had to connect again.

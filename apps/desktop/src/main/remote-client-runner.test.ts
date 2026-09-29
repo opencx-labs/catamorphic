@@ -150,6 +150,7 @@ describe("RemoteClientRunners", () => {
     const poll = () =>
       transport.poll({
         pollId: "8f0c7c1e-2b1a-4e5d-9c3f-0a1b2c3d4e5f",
+        max: 1,
         signal: new AbortController().signal,
       });
     const receipt = () => transport.complete({ jobId: "job", response: null });

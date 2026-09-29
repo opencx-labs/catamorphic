@@ -284,7 +284,8 @@ it("an authenticated member executes on this machine and loses execution immedia
       provider,
       transport: {
         renew: () => service.renew({ ...lease, identity }),
-        poll: ({ pollId }) => service.poll({ ...lease, identity, pollId }),
+        poll: ({ pollId, max }) =>
+          service.poll({ ...lease, identity, pollId, max }),
         complete: async (receipt) => {
           // The receipt route's bound on an error message.
           if ((receipt.error?.length ?? 0) > 4000)

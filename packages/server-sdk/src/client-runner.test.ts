@@ -11,18 +11,40 @@ import {
 type Job = { id: string; operation: unknown };
 type Receipt = { jobId: string; response?: unknown; error?: string };
 
-/** A sandbox provider that records every command it runs. */
+/**
+ * A sandbox provider that records every command it runs. `sleep` commands
+ * run until their sandbox stops.
+ */
 function recordingProvider() {
   const commands: string[] = [];
-  const provider = {
+  const stopped: string[] = [];
+  const sleeping = new Set<() => void>();
+  const unsupported = async (): Promise<never> => {
+    throw new Error("Not used by these tests");
+  };
+  const provider: SandboxProvider = {
     workspaceRoot: "/workspace",
-    executeCommand: async (_sandboxId: string, command: string) => {
+    executeCommand: async (_sandboxId, command) => {
       commands.push(command);
+      if (command.startsWith("sleep"))
+        await new Promise<void>((resolve) => sleeping.add(resolve));
       return { exitCode: 0, result: command };
     },
-    stopSandbox: async () => {},
-  } as unknown as SandboxProvider;
-  return { provider, commands };
+    stopSandbox: async (sandboxId) => {
+      stopped.push(sandboxId);
+      for (const wake of sleeping) wake();
+      sleeping.clear();
+    },
+    createSandbox: unsupported,
+    startSandbox: unsupported,
+    destroySandbox: unsupported,
+    getSandboxStatus: unsupported,
+    uploadFiles: unsupported,
+    downloadFile: unsupported,
+    gitClone: unsupported,
+    gitCheckout: unsupported,
+  };
+  return { provider, commands, stopped };
 }
 
 /**
@@ -30,12 +52,14 @@ function recordingProvider() {
  * real queue does, and lets each test fail calls on the way.
  */
 function controlPlane(jobs: Job[]) {
-  const taken = new Map<string, Job>();
+  const taken = new Map<string, Job[]>();
   const pollIds: string[] = [];
+  const maxes: number[] = [];
   const receipts: Receipt[] = [];
   let waiting: (() => void) | undefined;
   const plane = {
     pollIds,
+    maxes,
     receipts,
     faults: {
       poll: [] as Array<"transient" | "lost" | "ended">,
@@ -43,26 +67,27 @@ function controlPlane(jobs: Job[]) {
     },
     transport: {
       renew: async () => {},
-      poll: async ({ pollId, signal }) => {
+      poll: async ({ pollId, max, signal }) => {
         pollIds.push(pollId);
+        maxes.push(max);
         const fault = plane.faults.poll.shift();
         if (fault === "transient") throw new Error("502 Bad Gateway");
         if (fault === "ended")
           throw new RunnerSessionEndedError("The lease moved on");
-        const job = taken.get(pollId) ?? jobs.shift();
-        if (!job) {
+        const took = taken.get(pollId) ?? jobs.splice(0, max);
+        if (took.length === 0) {
           // Long-poll until stopped.
           await new Promise<void>((resolve) => {
             waiting = resolve;
             signal.addEventListener("abort", () => resolve(), { once: true });
           });
           if (signal.aborted) throw new Error("aborted");
-          return null;
+          return [];
         }
-        taken.set(pollId, job);
+        taken.set(pollId, took);
         // Taken on the server, but the response never arrives.
         if (fault === "lost") throw new Error("socket hang up");
-        return job;
+        return took;
       },
       complete: async (receipt) => {
         const fault = plane.faults.complete.shift();
@@ -192,5 +217,45 @@ describe("client runner transport (ADR 0187)", () => {
     const started = Date.now();
     await runner.stop();
     expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("takes as many operations at once as it has free slots", async () => {
+    const { provider, commands } = recordingProvider();
+    const plane = controlPlane([
+      execute("job-1", "sleep a"),
+      execute("job-2", "sleep b"),
+      execute("job-3", "echo c"),
+    ]);
+    const runner = startClientRunner({
+      provider,
+      transport: plane.transport,
+      sandboxes: new Set(["sandbox-1"]),
+      concurrency: 3,
+    });
+    await until(() => plane.receipts.length === 1, "the quick receipt");
+    expect(plane.maxes[0]).toBe(3);
+    expect(commands.sort()).toEqual(["echo c", "sleep a", "sleep b"]);
+    // Two slots stay busy: the next poll asks for one.
+    await until(() => plane.maxes.length === 2, "the next poll");
+    expect(plane.maxes[1]).toBe(1);
+    await runner.stop();
+  });
+
+  it("stops a member's sandboxes instead of waiting for their commands", async () => {
+    const { provider, stopped } = recordingProvider();
+    const plane = controlPlane([execute("job-1", "sleep forever")]);
+    const runner = startClientRunner({
+      provider,
+      transport: plane.transport,
+      sandboxes: new Set(["sandbox-1"]),
+    });
+    await until(() => plane.pollIds.length === 2, "the command to start");
+    const started = Date.now();
+    await runner.stop();
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(stopped).toEqual(["sandbox-1"]);
+    // The command's receipt finds the runner stopped and is not sent.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(plane.receipts).toEqual([]);
   });
 });

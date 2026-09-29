@@ -40,13 +40,15 @@ function executor() {
     drop: () => {
       held = false;
     },
-    poll: (pollId: string) =>
-      queue.poll({
-        ...lease,
-        pollId,
-        waitMs: 5_000,
-        leaseHeld: async () => held,
-      }),
+    poll: async (pollId: string) =>
+      (
+        await queue.poll({
+          ...lease,
+          pollId,
+          waitMs: 5_000,
+          leaseHeld: async () => held,
+        })
+      )[0] ?? null,
   };
 }
 
@@ -99,7 +101,7 @@ describe("remote operation queue (ADR 0187)", () => {
       waitMs: 0,
       leaseHeld: async () => true,
     });
-    expect(other).toBeNull();
+    expect(other).toEqual([]);
     const receipt = {
       ...remote.lease,
       operationId: taken?.id ?? "",
@@ -145,5 +147,118 @@ describe("remote operation queue (ADR 0187)", () => {
       error: "No such file",
     });
     await expect(result).rejects.toThrow("No such file");
+  });
+
+  it("takes several operations in one poll, and a retry takes no more", async () => {
+    const remote = executor();
+    const results = ["one", "two", "three"].map((word) =>
+      remote.provider.executeCommand("sandbox-1", `echo ${word}`),
+    );
+    const pollId = crypto.randomUUID();
+    const take = (max: number) =>
+      remote.queue.poll({
+        ...remote.lease,
+        pollId,
+        max,
+        waitMs: 5_000,
+        leaseHeld: async () => true,
+      });
+    // The three dispatches insert on their own; wait until all are queued.
+    await expect
+      .poll(
+        async () =>
+          (
+            await db
+              .selectFrom("remote_operations")
+              .select("id")
+              .where("executor", "=", remote.lease.executor)
+              .execute()
+          ).length,
+      )
+      .toBe(3);
+    const taken = await take(2);
+    expect(taken).toHaveLength(2);
+    // The answer was lost; the retry asks for more but gets the same two.
+    expect(await take(3)).toEqual(taken);
+    for (const job of taken)
+      await remote.queue.complete({
+        ...remote.lease,
+        operationId: job.id,
+        response: { exitCode: 0, result: "" },
+      });
+    const rest = await remote.queue.poll({
+      ...remote.lease,
+      pollId: crypto.randomUUID(),
+      max: 5,
+      waitMs: 5_000,
+      leaseHeld: async () => true,
+    });
+    expect(rest).toHaveLength(1);
+    await remote.queue.complete({
+      ...remote.lease,
+      operationId: rest[0]?.id ?? "",
+      response: { exitCode: 0, result: "" },
+    });
+    await Promise.all(results);
+  });
+
+  it("answers a retried poll whose operation was abandoned with nothing", async () => {
+    const remote = executor();
+    const pollId = crypto.randomUUID();
+    const operation = (command: string) =>
+      JSON.stringify({ kind: "execute", sandboxId: "sandbox-1", command });
+    // The poll's operation was abandoned by a controller that stopped before
+    // it could delete the row; another operation waits.
+    const row = {
+      executor: remote.lease.executor,
+      lease_token: remote.lease.leaseToken,
+      expires_at: new Date(Date.now() + 60_000),
+    };
+    await db
+      .insertInto("remote_operations")
+      .values([
+        {
+          ...row,
+          poll_id: pollId,
+          status: "failed",
+          operation: operation("sleep 60"),
+        },
+        { ...row, operation: operation("echo next") },
+      ])
+      .execute();
+    expect(
+      await remote.queue.poll({
+        ...remote.lease,
+        pollId,
+        waitMs: 0,
+        leaseHeld: async () => true,
+      }),
+    ).toEqual([]);
+    const fresh = await remote.poll(crypto.randomUUID());
+    expect(fresh?.operation).toMatchObject({ command: "echo next" });
+  });
+
+  it("takes nothing for a poll whose executor hung up", async () => {
+    const remote = executor();
+    const result = remote.provider.executeCommand("sandbox-1", "echo later");
+    const hungUp = new AbortController();
+    hungUp.abort();
+    expect(
+      await remote.queue.poll({
+        ...remote.lease,
+        pollId: crypto.randomUUID(),
+        waitMs: 5_000,
+        signal: hungUp.signal,
+        leaseHeld: async () => true,
+      }),
+    ).toEqual([]);
+    const job = await remote.poll(crypto.randomUUID());
+    expect(job?.operation).toMatchObject({ command: "echo later" });
+    await remote.queue.complete({
+      ...remote.lease,
+      operationId: job?.id ?? "",
+      response: { exitCode: 0, result: "later" },
+    });
+    await expect(result).resolves.toEqual({ exitCode: 0, result: "later" });
   });
 });

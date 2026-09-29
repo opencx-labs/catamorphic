@@ -2,10 +2,11 @@
 -- (ADR 0164) and members' This machine runners (ADR 0098) receive sandbox
 -- operations the same way. `executor` names the target (`node:<id>` or
 -- `client:<id>`); `lease_token` fences it; `poll_id` is the poll that took an
--- operation, so a poll retried after its response was lost receives the same
--- operation again instead of losing it. Rows are transient: the queue drops
--- them once settled or abandoned, and in-flight rows do not survive this
--- upgrade (their controllers already fail them as uncertain).
+-- operation (a poll may take several), so a poll retried after its response
+-- was lost receives the same operations again instead of losing them. Rows
+-- are transient: the queue drops them once settled or abandoned, and
+-- in-flight rows do not survive this upgrade (their controllers already
+-- fail them as uncertain).
 DROP TABLE worker_node_jobs;
 DROP TABLE client_runner_jobs;
 
@@ -24,4 +25,4 @@ CREATE TABLE remote_operations (
 );
 
 CREATE INDEX idx_remote_operations_pending ON remote_operations USING btree (executor, created_at) WHERE (status = 'pending'::text);
-CREATE UNIQUE INDEX idx_remote_operations_poll ON remote_operations USING btree (executor, poll_id) WHERE (poll_id IS NOT NULL);
+CREATE INDEX idx_remote_operations_poll ON remote_operations USING btree (executor, poll_id) WHERE (poll_id IS NOT NULL);

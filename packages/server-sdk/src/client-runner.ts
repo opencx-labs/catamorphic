@@ -45,14 +45,15 @@ export class ResultRejectedError extends Error {
 export interface ClientRunnerTransport {
   renew(): Promise<void>;
   /**
-   * Take the next operation, long-polling. A retry repeats `pollId`, and
-   * the control plane answers it with the operation that poll took, so an
+   * Take up to `max` operations, long-polling. A retry repeats `pollId`,
+   * and the control plane answers it with what that poll took, so an
    * operation is never lost with a response.
    */
   poll(args: {
     pollId: string;
+    max: number;
     signal: AbortSignal;
-  }): Promise<{ id: string; operation: unknown } | null>;
+  }): Promise<Array<{ id: string; operation: unknown }>>;
   /** Idempotent: a receipt retried after its response was lost succeeds. */
   complete(receipt: {
     jobId: string;
@@ -64,6 +65,12 @@ export interface ClientRunnerTransport {
 
 /** Transient failures retry with jittered backoff up to this delay. */
 const MAX_RETRY_DELAY_MS = 5_000;
+
+/**
+ * A receipt undelivered this long finds no controller waiting: the longest
+ * an operation's controller waits (a Dockerfile build) has passed.
+ */
+const RECEIPT_GIVE_UP_MS = 36 * 60_000;
 
 function definite(error: unknown): boolean {
   return (
@@ -127,14 +134,20 @@ export function startClientRunner(args: {
       }
       stopping.signal.addEventListener("abort", done, { once: true });
     });
-  /** Retry one idempotent call until it gets a definite answer. */
-  const retrying = async <T>(call: () => Promise<T>): Promise<T> => {
+  /**
+   * Retry one idempotent call until it gets a definite answer, or until
+   * `giveUpAt` for a call that stops mattering.
+   */
+  const retrying = async <T>(
+    call: () => Promise<T>,
+    giveUpAt = Number.POSITIVE_INFINITY,
+  ): Promise<T> => {
     for (let attempt = 0; ; attempt++) {
       if (stopped()) throw new RunnerStoppedError();
       try {
         return await call();
       } catch (error) {
-        if (definite(error)) throw error;
+        if (definite(error) || Date.now() >= giveUpAt) throw error;
         if (stopped()) throw new RunnerStoppedError();
         args.onRetry?.(error);
         const ceiling = Math.min(MAX_RETRY_DELAY_MS, 250 * 2 ** attempt);
@@ -159,16 +172,26 @@ export function startClientRunner(args: {
   }, 10000);
   heartbeat.unref();
   let creating = 0;
-  /** Deliver a receipt; a refused one is dropped, a rejected result fails. */
+  /**
+   * Deliver a receipt. A refused one is dropped, a rejected result fails
+   * the operation, and one nobody can take any more is given up.
+   */
   const deliver = async (receipt: {
     jobId: string;
     response?: unknown;
     error?: string;
   }): Promise<void> => {
     try {
-      await retrying(() => args.transport.complete(receipt));
+      await retrying(
+        () => args.transport.complete(receipt),
+        Date.now() + RECEIPT_GIVE_UP_MS,
+      );
     } catch (error) {
       if (error instanceof ReceiptRefusedError) return;
+      if (!definite(error) && !(error instanceof RunnerStoppedError)) {
+        args.onRetry?.(error);
+        return;
+      }
       if (error instanceof ResultRejectedError && receipt.error === undefined) {
         await deliver({
           jobId: receipt.jobId,
@@ -234,29 +257,33 @@ export function startClientRunner(args: {
     while (!stopped()) {
       // A long read (a process's output, up to 20 seconds) or command
       // holds one slot; writes and other operations take the others.
-      if (running.size >= concurrency) {
+      const free = concurrency - running.size;
+      if (free <= 0) {
         await Promise.race(running);
         continue;
       }
       const pollId = crypto.randomUUID();
-      const job = await retrying(() =>
-        args.transport.poll({ pollId, signal: stopping.signal }),
+      const jobs = await retrying(() =>
+        args.transport.poll({ pollId, max: free, signal: stopping.signal }),
       );
-      if (!job) continue;
-      const task: Promise<void> = run(job)
-        .catch((error: unknown) => {
-          if (!(error instanceof RunnerStoppedError)) end(error);
-        })
-        .finally(() => running.delete(task));
-      running.add(task);
+      for (const job of jobs) {
+        const task: Promise<void> = run(job)
+          .catch((error: unknown) => {
+            if (!(error instanceof RunnerStoppedError)) end(error);
+          })
+          .finally(() => running.delete(task));
+        running.add(task);
+      }
     }
   })()
     .catch((error: unknown) => {
       if (!(error instanceof RunnerStoppedError)) end(error);
     })
     .finally(async () => {
-      await Promise.allSettled(running);
       clearInterval(heartbeat);
+      // Operations still running are not waited for: their receipts would
+      // be refused. A member's runner stops their sandboxes, which ends
+      // them; a worker keeps its sandboxes for its next session.
       await stopSandboxes();
       if (ended) args.onError?.(ended.error);
     });

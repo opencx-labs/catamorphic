@@ -88,11 +88,15 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
    * errors; anything else (no answer, a timeout, a 5xx from a load balancer
    * or a restarting instance) is transient and retried by the caller.
    */
-  const call = async (
-    route: "connect" | "poll" | "renew" | "complete",
-    body: unknown,
-    signal?: AbortSignal,
-  ): Promise<unknown> => {
+  const call = async ({
+    route,
+    body,
+    signal,
+  }: {
+    route: "connect" | "poll" | "renew" | "complete";
+    body: unknown;
+    signal?: AbortSignal;
+  }): Promise<unknown> => {
     const timeout = AbortSignal.timeout(CALL_TIMEOUT_MS[route]);
     const response = await doFetch(`${base}/api/workers/${route}`, {
       method: "POST",
@@ -129,15 +133,30 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   const sandboxes = new PersistedSandboxes(
     path.join(options.dataDir, "sandboxes.json"),
   );
-  let stopped = false;
-  let runner: { stop(): Promise<void> } | undefined;
-  let wake: (() => void) | undefined;
+  const stopping = new AbortController();
+  /** Resolves after `ms`, or at once when the worker stops. */
+  const pause = (ms: number) =>
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      stopping.signal.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        { once: true },
+      );
+    });
   let lastRetryLog = 0;
   let backoffMs = 1_000;
 
   /** One session: a node lease, held until the control plane ends it. */
   const session = async (): Promise<void> => {
-    const connected = await call("connect", offer);
+    const connected = await call({
+      route: "connect",
+      body: offer,
+      signal: stopping.signal,
+    });
     const token =
       typeof connected === "object" &&
       connected !== null &&
@@ -149,32 +168,49 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     log(`Connected to ${base} as ${nodeId}`);
     backoffMs = 1_000;
     let failure: unknown;
+    let endSession: () => void = () => {};
     const ended = new Promise<void>((resolve) => {
-      wake = resolve;
+      endSession = resolve;
+      stopping.signal.addEventListener("abort", () => resolve(), {
+        once: true,
+      });
     });
     const transport: ClientRunnerTransport = {
       renew: async () => {
-        await call("renew", { session: token });
+        await call({ route: "renew", body: { session: token } });
       },
-      poll: async ({ pollId, signal }) => {
-        const polled = await call("poll", { session: token, pollId }, signal);
-        return typeof polled === "object" &&
+      poll: async ({ pollId, max, signal }) => {
+        const polled = await call({
+          route: "poll",
+          body: { session: token, pollId, max },
+          signal,
+        });
+        const jobs =
+          typeof polled === "object" &&
           polled !== null &&
-          "job" in polled &&
-          typeof polled.job === "object" &&
-          polled.job !== null &&
-          "id" in polled.job &&
-          typeof polled.job.id === "string" &&
-          "operation" in polled.job
-          ? { id: polled.job.id, operation: polled.job.operation }
-          : null;
+          "jobs" in polled &&
+          Array.isArray(polled.jobs)
+            ? polled.jobs
+            : [];
+        return jobs.flatMap((job: unknown) =>
+          typeof job === "object" &&
+          job !== null &&
+          "id" in job &&
+          typeof job.id === "string" &&
+          "operation" in job
+            ? [{ id: job.id, operation: job.operation }]
+            : [],
+        );
       },
       complete: async (receipt) => {
-        await call("complete", { session: token, ...receipt });
+        await call({
+          route: "complete",
+          body: { session: token, ...receipt },
+        });
       },
       disconnect: async () => {},
     };
-    runner = startClientRunner({
+    const runner = startClientRunner({
       provider,
       transport,
       sandboxes,
@@ -193,24 +229,22 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       },
       onError: (error) => {
         failure = error;
-        wake?.();
+        endSession();
       },
     });
     await ended;
-    const current = runner;
-    runner = undefined;
-    await current?.stop();
+    await runner.stop();
     if (failure) throw failure;
   };
 
   const loop = (async () => {
-    while (!stopped) {
+    while (!stopping.signal.aborted) {
       try {
         await session();
       } catch (error) {
+        if (stopping.signal.aborted) break;
         if (error instanceof WorkerRevokedError) {
           log(error.message);
-          stopped = true;
           break;
         }
         log(
@@ -225,8 +259,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
                 }`,
         );
       }
-      if (stopped) break;
-      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      await pause(backoffMs);
       backoffMs = Math.min(backoffMs * 2, 30_000);
     }
   })();
@@ -234,9 +267,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   return {
     nodeId,
     stop: async () => {
-      stopped = true;
-      wake?.();
-      await runner?.stop();
+      stopping.abort();
       await loop;
       await Promise.allSettled(
         [...sandboxes].map((id) => provider.stopSandbox(id)),

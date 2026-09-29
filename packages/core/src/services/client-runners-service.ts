@@ -125,7 +125,7 @@ export class ClientRunnersService {
   }
 
   /**
-   * Take the next operation for this runner, waiting up to 20 seconds.
+   * Take up to `max` operations for this runner, waiting up to 20 seconds.
    * A poll retried with the same `pollId` receives what it already took.
    */
   async poll(args: {
@@ -133,12 +133,16 @@ export class ClientRunnersService {
     id: string;
     token: string;
     pollId: string;
+    max?: number;
+    signal?: AbortSignal;
   }) {
     await this.renew(args);
     return this.queue.poll({
       executor: clientExecutor(args.id),
       leaseToken: args.token,
       pollId: args.pollId,
+      ...(args.max !== undefined ? { max: args.max } : {}),
+      ...(args.signal ? { signal: args.signal } : {}),
       waitMs: 20_000,
       leaseHeld: () => this.leaseHeld({ id: args.id, token: args.token }),
     });

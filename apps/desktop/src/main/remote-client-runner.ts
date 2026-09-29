@@ -122,9 +122,9 @@ export class RemoteClientRunners {
                     error: response.error,
                   });
               },
-              poll: async ({ pollId, signal }) => {
+              poll: async ({ pollId, max, signal }) => {
                 const response = await client.POST("/api/client-runners/poll", {
-                  body: { ...lease, pollId },
+                  body: { ...lease, pollId, max },
                   signal,
                 });
                 if (response.error)
@@ -132,14 +132,15 @@ export class RemoteClientRunners {
                     status: response.response.status,
                     error: response.error,
                   });
-                return response.data ?? null;
+                return response.data ?? [];
               },
               complete: async (input) => {
-                const result = input.error
-                  ? undefined
-                  : RemoteOperationResultSchema.safeParse(
-                      input.response ?? null,
-                    );
+                const result =
+                  input.error !== undefined
+                    ? undefined
+                    : RemoteOperationResultSchema.safeParse(
+                        input.response ?? null,
+                      );
                 if (result && !result.success)
                   throw new ResultRejectedError(
                     "The result is not one this server accepts",

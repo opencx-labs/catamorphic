@@ -120,15 +120,23 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * The worker takes its next operation, waiting up to 20 seconds. Any
+   * The worker takes up to `max` operations, waiting up to 20 seconds. Any
    * instance serves it: the queue and the lease live in Postgres.
    */
-  async poll(args: { nodeId: string; session: string; pollId: string }) {
+  async poll(args: {
+    nodeId: string;
+    session: string;
+    pollId: string;
+    max: number;
+    signal: AbortSignal;
+  }) {
     await this.touch(args.nodeId);
     return this.queue.poll({
       executor: nodeExecutor(args.nodeId),
       leaseToken: args.session,
       pollId: args.pollId,
+      max: args.max,
+      signal: args.signal,
       waitMs: 20_000,
       leaseHeld: () => this.leaseHeld(args.nodeId, args.session),
     });
@@ -483,6 +491,7 @@ export class WorkWorkerRegistry {
         this.deps.log?.(`Worker ${nodeId} disconnected`);
       }
     }
+    await this.queue.sweep().catch(() => {});
     this.cleaning ??= this.cleanup().finally(() => {
       this.cleaning = undefined;
     });
