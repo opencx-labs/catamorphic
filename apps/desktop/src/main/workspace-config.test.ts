@@ -519,6 +519,11 @@ describe("palette modes", () => {
       "workspace source",
     ],
     [
+      "a chat scope",
+      `{ modes: [{ id: "m", trigger: "m", title: "M", source: { type: "chats", scope: "children" } }] }`,
+      "source.scope needs a sidebar",
+    ],
+    [
       "a custom source without a module",
       `{ modes: [{ id: "m", trigger: "m", title: "M", source: { type: "custom" } }] }`,
       "workspace source",

@@ -690,6 +690,11 @@ function sanitizePaletteModes({
       throw new Error(
         `${where}: a mode source is a module ({ type: "custom", module }) or a workspace source (${WORKSPACE_SOURCES.join(", ")}).`,
       );
+    // Scope follows the chat beside a sidebar; the palette has none.
+    if (source?.scope && source.scope !== "project")
+      throw new Error(
+        `${where}: source.scope needs a sidebar; point section at a scoped section instead.`,
+      );
     const section =
       typeof mode.section === "string"
         ? sections.find((item) => item.id === mode.section)

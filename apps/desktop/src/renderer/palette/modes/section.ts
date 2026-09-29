@@ -13,6 +13,6 @@ export const sectionMode = (
     kind: "load",
     key: request.nonce,
     filtered: false,
-    load: async () => ({ items: await request.load() }),
+    load: async (_query, signal) => ({ items: await request.load(signal) }),
   },
 });

@@ -13,6 +13,7 @@ import {
   sidebarSections,
   type WorkspaceConfig,
 } from "../../../shared/workspace-config.js";
+import { sidebarItemPresentation } from "../../components/sidebar-contribution.js";
 import { desktopApi } from "../../lib/desktop-api.js";
 import { lucideIcon } from "../../lib/lucide-icon.js";
 import type { WorkspaceSources } from "../../lib/workspace-sources.js";
@@ -226,6 +227,7 @@ export async function sectionRows({
   section,
   sources,
   projectId,
+  memberShell,
   signal,
   onOpenUrl,
   onError,
@@ -233,24 +235,48 @@ export async function sectionRows({
   section: SidebarSectionConfig;
   sources: WorkspaceSources;
   projectId: string;
+  /** Connected projects run no local modules (ADR 0140). */
+  memberShell: boolean;
   signal: AbortSignal;
   onOpenUrl: (url: string, commit: CommitMode) => void;
   onError: (message: string) => void;
 }): Promise<PaletteItem[]> {
   const owner = { id: section.id, title: section.title ?? section.type };
   const icon = Search;
+  // What the section hides stays out of its search.
+  const shown = (id: string) => !sidebarItemPresentation({ section, id }).hide;
   if (section.source?.module)
-    return moduleRows({ owner, projectId, icon, signal, onOpenUrl, onError });
+    return memberShell
+      ? []
+      : (
+          await moduleRows({
+            owner,
+            projectId,
+            icon,
+            signal,
+            onOpenUrl,
+            onError,
+          })
+        ).filter((row) => shown(row.id.slice(`mode:${owner.id}:`.length)));
   const type = resolveSidebarSection(section).type;
   if (type === "custom")
     return staticRows({ owner, items: section.items, icon, onOpenUrl });
   if (!isWorkspaceSource(type)) return [];
+  // A chats section scoped to the current chat lists its children.
+  const scoped =
+    (type === "chats" || type === "subsessions") &&
+    section.source?.scope &&
+    section.source.scope !== "project"
+      ? "subsessions"
+      : type;
   return loadSourceRows({
     sources,
-    source: type,
+    source: scoped,
     projectId,
     filter: section.source,
     signal,
+    onError,
+    keep: (item) => shown(item.id),
   });
 }
 
@@ -321,6 +347,7 @@ export function customPaletteModes({
                   projectId,
                   filter: listed,
                   signal,
+                  onError,
                 }),
               }),
             },

@@ -33,12 +33,14 @@ export function useResourceRows({ active }: { active: boolean }) {
     workspaceConfig,
     onOpenUrl,
     onSendToAgent,
+    onError,
     canCreateWorkflows = false,
   } = usePaletteHost();
   const sourceRows = useSourceRows({
     names: RESOURCE_SOURCES,
     active,
     projectId,
+    onError: (message) => onError?.(message),
   });
   const resourceItems = useMemo<PaletteItem[]>(() => {
     const items: PaletteItem[] = [];

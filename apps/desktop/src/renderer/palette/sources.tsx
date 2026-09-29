@@ -158,25 +158,37 @@ export function sourcePaletteRow({
   item,
   sources,
   projectId,
+  onError,
 }: {
   source: WorkspaceSourceName;
   item: AppCollectionItem;
   sources: WorkspaceSources;
   projectId: string | undefined;
+  /** Opening failed after the palette closed (the chat was deleted, ...). */
+  onError: (message: string) => void;
 }): PaletteItem {
   const view = PRESENTATION[source];
   const url = urlOf(item);
   const opens = Boolean(item.actions?.some((action) => action.id === "open"));
+  const created =
+    typeof item.data?.createdAt === "string"
+      ? new Date(item.data.createdAt)
+      : null;
   const label =
     source === "prs" && typeof item.data?.number === "number"
       ? `#${item.data.number} ${item.label}`
-      : item.label;
+      : // Untitled chats read by when they started, so they stay apart.
+        view.prefix === "session" && !item.data?.title && created
+        ? `Chat ${created.toLocaleDateString()} ${created.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+        : item.label;
+  const faviconUrl =
+    typeof item.data?.faviconUrl === "string" ? item.data.faviconUrl : null;
   return {
     id: `${view.prefix}:${item.id}`,
     icon: lucideIcon(item.icon) ?? view.icon,
     iconNode:
       source === "bookmarks" && url ? (
-        <SiteFavicon url={url} className="size-4" />
+        <SiteFavicon url={url} faviconUrl={faviconUrl} className="size-4" />
       ) : undefined,
     label,
     detail: view.detail(item),
@@ -198,7 +210,13 @@ export function sourcePaletteRow({
           action: openAction(mode),
           signal: new AbortController().signal,
         })
-        .catch(() => {}),
+        .catch((cause: unknown) =>
+          onError(
+            cause instanceof Error && cause.message
+              ? cause.message
+              : `Could not open ${label}.`,
+          ),
+        ),
   };
 }
 
@@ -209,98 +227,134 @@ export async function loadSourceRows({
   projectId,
   filter,
   signal,
+  onError,
   archived = false,
+  children = true,
+  keep,
 }: {
   sources: WorkspaceSources;
   source: WorkspaceSourceName;
   projectId: string | undefined;
   filter?: SidebarSource;
   signal: AbortSignal;
+  onError: (message: string) => void;
+  /** Chats: archived ones too. */
   archived?: boolean;
+  children?: boolean;
+  /** Rows a section hides (itemOverrides.hide) stay out of its search. */
+  keep?: (item: AppCollectionItem) => boolean;
 }): Promise<PaletteItem[]> {
-  const read = async (includeArchived: boolean) =>
-    sources.readAll({ source, signal, archived: includeArchived });
+  const read = (includeArchived: boolean) =>
+    sources.readAll({ source, signal, archived: includeArchived, children });
   const items = [
     ...(await read(false)),
     ...(archived && source === "chats" ? await read(true) : []),
   ];
   return projectSourceItems(items, filter)
-    .filter((item) => item.actions?.some((action) => action.id === "open"))
-    .map((item) => sourcePaletteRow({ source, item, sources, projectId }));
+    .filter(
+      (item) =>
+        (keep?.(item) ?? true) &&
+        item.actions?.some((action) => action.id === "open"),
+    )
+    .map((item) =>
+      sourcePaletteRow({ source, item, sources, projectId, onError }),
+    );
 }
 
 /**
  * The palette's resource rows, straight from the workspace sources: loaded
- * while the palette is open and refreshed when a source changes, so they
- * match the sidebar without a second copy of any list. Chats include the
- * archived ones: the palette is where an old conversation is found.
+ * while the palette is open, each source as it answers, and reloaded only
+ * when that source changes, so they match the sidebar without a second copy
+ * of any list. Chats include archived ones (the palette is where an old
+ * conversation is found) but not subsessions, which history lists.
+ * Bookmarks are the pinned and project ones, not an imported library.
  */
 export function useSourceRows({
   names,
   active,
   projectId,
+  onError,
 }: {
   names: readonly WorkspaceSourceName[];
   active: boolean;
   projectId: string | undefined;
+  onError: (message: string) => void;
 }): PaletteItem[] {
   const sources = useWorkspaceSourcesContext();
   const key = `${projectId}:${names.join(",")}`;
   const [state, setState] = useState<{
     key: string;
-    lists: ReadonlyMap<string, PaletteItem[]>;
+    lists: ReadonlyMap<string, { rows: PaletteItem[]; signature: string }>;
   }>({ key: "", lists: new Map() });
   const namesRef = useRef(names);
   namesRef.current = names;
+  const errorRef = useRef(onError);
+  errorRef.current = onError;
   useEffect(() => {
     if (!active || !projectId) return;
     const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const load = () => {
-      void Promise.all(
-        namesRef.current.map(
-          async (source): Promise<[string, PaletteItem[]]> => {
-            try {
-              const rows = await loadSourceRows({
-                sources,
-                source,
-                projectId,
-                signal: controller.signal,
-                archived: true,
-              });
-              return [source, rows];
-            } catch {
-              // One unavailable source (no profile, no permission) leaves
-              // the others listed.
-              return [source, []];
-            }
-          },
-        ),
-      ).then((entries) => {
-        if (!controller.signal.aborted)
-          setState({ key, lists: new Map(entries) });
-      });
+    const timers = new Map<string, ReturnType<typeof setTimeout>>();
+    const requests = new Map<string, number>();
+    const load = (source: WorkspaceSourceName) => {
+      const request = (requests.get(source) ?? 0) + 1;
+      requests.set(source, request);
+      void loadSourceRows({
+        sources,
+        source,
+        projectId,
+        signal: controller.signal,
+        onError: (message) => errorRef.current(message),
+        archived: true,
+        children: false,
+        keep: (item) =>
+          source !== "bookmarks" ||
+          item.data?.scope === "pinned" ||
+          item.data?.scope === "project",
+      })
+        .catch((): PaletteItem[] => [])
+        .then((rows) => {
+          if (controller.signal.aborted || requests.get(source) !== request)
+            return;
+          // A beat that changed nothing keeps the rows (and their ranking).
+          const signature = rows
+            .map(
+              (row) => `${row.id}\u0000${row.label}\u0000${row.detail ?? ""}`,
+            )
+            .join("\n");
+          setState((current) => {
+            const base = current.key === key ? current.lists : new Map();
+            if (base.get(source)?.signature === signature) return current;
+            const lists = new Map(base);
+            lists.set(source, { rows, signature });
+            return { key, lists };
+          });
+        });
     };
-    load();
-    // Chats change with every turn: coalesce a burst into one reload.
-    const reload = () => {
-      clearTimeout(timer);
-      timer = setTimeout(load, 250);
-    };
+    for (const source of namesRef.current) load(source);
     const stops = namesRef.current.map(
       (source) =>
-        sources.subscribe?.({ source, publish: reload }) ?? (() => {}),
+        sources.subscribe?.({
+          source,
+          publish: () => {
+            // Chats beat often: coalesce a burst into one reload.
+            clearTimeout(timers.get(source));
+            timers.set(
+              source,
+              setTimeout(() => load(source), 250),
+            );
+          },
+        }) ?? (() => {}),
     );
     return () => {
       controller.abort();
-      clearTimeout(timer);
+      for (const timer of timers.values()) clearTimeout(timer);
       for (const stop of stops) stop();
     };
   }, [active, projectId, sources, key]);
   return useMemo(
     () =>
       state.key === key
-        ? names.flatMap((name) => state.lists.get(name) ?? [])
+        ? names.flatMap((name) => state.lists.get(name)?.rows ?? [])
         : [],
     [state, key, names],
   );

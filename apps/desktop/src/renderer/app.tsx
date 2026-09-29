@@ -15,7 +15,6 @@ import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
 import {
   PROJECT_APP_DATA_DIR,
   PROJECT_STORE_DIR,
-  PROJECT_WORKSPACE_CONFIG_PATH,
 } from "@catamorphic/workflow/project-layout";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -58,18 +57,12 @@ import {
 import type { PendingChatMessage } from "../shared/chat.js";
 import type { WorkspaceNavigation } from "../shared/desktop-workspace.js";
 import { type DownloadRecord, fileUrlFor } from "../shared/downloads.js";
-import {
-  type HistoryEntry,
-  type HistoryProject,
-  type HistoryVisit,
-  historyIdentity,
-} from "../shared/history.js";
+import type { HistoryEntry } from "../shared/history.js";
 import {
   type OpenMode as CommitMode,
   type OpenModifiers,
   openModeFromEvent,
 } from "../shared/open-mode.js";
-import { PALETTE_SURFACE_KINDS, surfaceUsageKey } from "../shared/palette.js";
 import {
   type ProjectExperienceContext,
   writesProgram,
@@ -174,11 +167,16 @@ import {
 } from "./lib/keybindings.js";
 import { notifyDesktop, playChime } from "./lib/notify.js";
 import { sessionLabel } from "./lib/session-label.js";
-import { transitionSidebarUpdate } from "./lib/sidebar-transition.js";
 import { skillInvocation } from "./lib/skills.js";
 import { useSidebarReveal } from "./lib/use-sidebar-reveal.js";
+import {
+  fileNameFromPath,
+  useVisitRecording,
+} from "./lib/use-visit-recording.js";
+import { useWorkspaceConfig } from "./lib/use-workspace-config.js";
 import { NEW_WORKFLOW_PROMPT } from "./lib/workflow-authoring.js";
 import { useWorkspace } from "./lib/workspace-context.js";
+import { workspaceCustomizationMessage } from "./lib/workspace-customization.js";
 import {
   useWorkspaceSources,
   WorkspaceSourcesProvider,
@@ -272,9 +270,6 @@ const NO_CHAT_SIGNALS: ChatLiveSignals = {
   draft: false,
   awaitingInput: false,
 };
-
-const fileNameFromPath = (filePath: string) =>
-  filePath.split(/[\\/]/).at(-1) || filePath;
 
 const truncateLabel = (value: string): string =>
   value.length <= 40 ? value : `${value.slice(0, 39)}…`;
@@ -529,7 +524,6 @@ export function App({
     scope: string;
     open: boolean;
   } | null>(null);
-  const [workspaceError, setWorkspaceError] = useState<string>();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [closingWorkflow, setClosingWorkflow] = useState<string | null>(null);
   // Live per-chat signals reported by each ChatDock (working / draft /
@@ -701,16 +695,6 @@ export function App({
     target?: Profile;
   } | null>(null);
 
-  // User-customizable sidebar layout (workspace.js, file-watched). Resolved
-  // per project (project-local override → project .work/workspace.js
-  // → profile workspace.js), so the fetch is keyed on the active project —
-  // see the effect below projectId — and the changed event is a refetch
-  // signal, not a payload.
-  const [workspaceConfig, setWorkspaceConfig] =
-    useState<WorkspaceConfig | null>(null);
-
-  const [workspaceConfigScope, setWorkspaceConfigScope] = useState<string>();
-
   const allProjects = projectsQuery.data?.items ?? [];
   // Projects created before profiles existed have no owner; the default
   // profile shows them (matches main-process lazy adoption).
@@ -769,6 +753,13 @@ export function App({
     () => ({ root: experienceRoot, permissions: experiencePermissions ?? [] }),
     [experienceRoot, experiencePermissions],
   );
+  const sidebarScope = `${activeProfile?.id}:${projectId}`;
+  // The workspace file (sidebars and palette modes), resolved per project.
+  const {
+    config: workspaceConfig,
+    scope: workspaceConfigScope,
+    error: workspaceError,
+  } = useWorkspaceConfig({ projectId, scope: sidebarScope });
   const visibleWorkspace = useMemo(
     () =>
       visibleWorkspaceConfig({
@@ -778,7 +769,6 @@ export function App({
     [workspaceConfig, projectExperienceContext],
   );
 
-  const sidebarScope = `${activeProfile?.id}:${projectId}`;
   useEffect(() => {
     setEmptyRightSidebar((current) =>
       current?.scope === sidebarScope ? current : null,
@@ -897,40 +887,6 @@ export function App({
       cancelled = true;
     };
   }, [projectId]);
-
-  // Layered sidebar fetch: runs at boot with no project yet (profile layer
-  // keeps the boot gate working), again when the active project lands or
-  // changes, and on every main-process change signal.
-  useEffect(() => {
-    let stale = false;
-    let request = 0;
-    let signature: string | undefined;
-    const refetch = (animate = false) => {
-      const currentRequest = ++request;
-      void desktopApi.workspaceConfigGet(projectId).then((resolved) => {
-        if (stale || currentRequest !== request) return;
-        setWorkspaceError(resolved.error);
-        const next = JSON.stringify(resolved.config);
-        if (signature === next) return;
-        const apply = () => {
-          if (stale || currentRequest !== request) return;
-          signature = next;
-          setWorkspaceConfig(resolved.config);
-          setWorkspaceConfigScope(sidebarScope);
-        };
-        if (animate) transitionSidebarUpdate(apply);
-        else apply();
-      });
-    };
-    refetch();
-    const unsubscribe = desktopApi.onWorkspaceConfigChanged(() =>
-      refetch(true),
-    );
-    return () => {
-      stale = true;
-      unsubscribe();
-    };
-  }, [projectId, sidebarScope]);
 
   /**
    * Switching profile follows the workspace's occupancy: an empty
@@ -4617,162 +4573,18 @@ export function App({
       current = false;
     };
   }, [projectId]);
-  // Surfaces the palette offers count a visit whenever they come to the
-  // front, however they were opened (ADR 0186).
-  const lastSurfaceVisit = useRef<string | null>(null);
-  const frontTabKey = workspace.floatingKey ?? workspace.activeTabKey;
-  const frontSurface = workspace.tabs.find(
-    (item) => tabKey(item) === frontTabKey,
-  )?.kind;
-  useEffect(() => {
-    const kind = PALETTE_SURFACE_KINDS.find((item) => item === frontSurface);
-    const visit =
-      runtime.visible && workspaceReady && kind ? `${frontTabKey}` : null;
-    if (visit === lastSurfaceVisit.current) return;
-    lastSurfaceVisit.current = visit;
-    if (visit && kind)
-      void desktopApi
-        .paletteRecord({
-          key: surfaceUsageKey(kind),
-          visit: true,
-          ...(projectId ? { projectId } : {}),
-        })
-        .catch(() => {});
-  }, [runtime.visible, workspaceReady, frontTabKey, frontSurface, projectId]);
-  const lastHistoryVisit = useRef<HistoryVisit | null>(null);
-  useEffect(() => {
-    if (!runtime.visible || !workspaceReady) {
-      lastHistoryVisit.current = null;
-      return;
-    }
-    const projectName = projectId
-      ? projects.find((item) => item.id === projectId)?.name
-      : undefined;
-    // The project list is still loading: this visit records once it lands.
-    if (projectId && projectName === undefined) return;
-    const project: HistoryProject | undefined =
-      projectId && projectName !== undefined
-        ? { id: projectId, name: projectName }
-        : undefined;
-    const key =
-      workspace.floatingKey ??
-      (focusedChat?.mode === "partial"
-        ? chatTabKey(focusedChat.localId)
-        : workspace.activeTabKey);
-    const tab = workspace.tabs.find((item) => tabKey(item) === key);
-    const editor = workspace.editors.find(
-      (item) => editorTabKey(item.localId) === key,
-    );
-    const chat = workspace.chats.find(
-      (item) => chatTabKey(item.localId) === key,
-    );
-    const browser = workspace.browsers.find(
-      (item) => browserTabKey(item.localId) === key,
-    );
-    const browserUrl = browser?.url || browser?.initialUrl;
-    const fileSurface = browserUrl?.startsWith("file://")
-      ? parseSurfaceLink(browserUrl)
-      : null;
-    // A file:// tab is one of the project's files when it lives under
-    // the project root; anything else is a file on this machine. Until
-    // the root is known the tab waits rather than recording as loose.
-    if (fileSurface?.kind === "file" && project && !projectRoot) return;
-    const fileLocation =
-      fileSurface?.kind === "file" && project && projectRoot
-        ? resolveProjectFileLocation(projectRoot, fileSurface.path)
-        : null;
-    const visit: HistoryVisit | null =
-      fileSurface?.kind === "file"
-        ? {
-            target:
-              project &&
-              fileLocation &&
-              fileLocation.relativePath !== fileLocation.absolutePath
-                ? {
-                    kind: "file",
-                    projectId: project.id,
-                    resource: fileLocation.relativePath,
-                  }
-                : { kind: "local", path: fileSurface.path },
-            title: browser?.title || fileNameFromPath(fileSurface.path),
-            project,
-          }
-        : !project
-          ? null
-          : editor?.filePath
-            ? {
-                target: {
-                  kind: "file",
-                  projectId: project.id,
-                  resource: editor.filePath,
-                },
-                title: fileNameFromPath(editor.filePath),
-                project,
-              }
-            : chat?.sessionId && !chat.incognito
-              ? {
-                  target: {
-                    kind: "chat",
-                    projectId: project.id,
-                    resource: chat.sessionId,
-                  },
-                  title: sessionsById.get(chat.sessionId)?.title ?? "Chat",
-                  project,
-                }
-              : tab &&
-                  (tab.kind === "app" ||
-                    tab.kind === "workflow" ||
-                    tab.kind === "run" ||
-                    tab.kind === "artifact")
-                ? {
-                    target: {
-                      kind: tab.kind,
-                      projectId: project.id,
-                      resource: tab.name,
-                    },
-                    title:
-                      (tab.kind === "app"
-                        ? appMetadata.get(tab.name)?.title
-                        : null) ??
-                      tab.label ??
-                      tab.name,
-                    project,
-                  }
-                : null;
-    if (!visit) {
-      lastHistoryVisit.current = null;
-      return;
-    }
-    const previous = lastHistoryVisit.current;
-    const revisit =
-      !previous ||
-      historyIdentity(previous.target) !== historyIdentity(visit.target);
-    if (
-      !revisit &&
-      previous?.title === visit.title &&
-      previous.project?.name === visit.project?.name
-    )
-      return;
-    lastHistoryVisit.current = visit;
-    if (visit.target.kind === "chat") {
-      void desktopApi
-        .sessionIsIncognito(visit.target.resource)
-        .then((incognito) => {
-          if (!incognito) return desktopApi.historyRecord({ visit, revisit });
-        })
-        .catch(() => {});
-    } else void desktopApi.historyRecord({ visit, revisit }).catch(() => {});
-  }, [
-    runtime.visible,
-    projectId,
-    projectRoot,
-    workspaceReady,
+  // History and palette usage learn from what comes to the front.
+  useVisitRecording({
+    visible: runtime.visible,
+    ready: workspaceReady,
     workspace,
     focusedChat,
+    projectId,
     projects,
+    projectRoot,
     sessionsById,
     appMetadata,
-  ]);
+  });
 
   const chatLabels = Object.fromEntries(
     workspace.chats.map((chat, index) => {
@@ -5278,35 +5090,13 @@ export function App({
         // Edit the layer that is showing; the built-in default has no file,
         // so the profile file is created from it.
         const file = resolved.file ?? profileFile;
-        // The user sees one sentence and two pills. The file path and the
-        // layout contract are agent context, never prose in the message. A
-        // path pill carries only its reference, so the contract and the
-        // current layout travel as a pasted block the harness fences.
         const localId = sendToAgent(
-          {
-            text: `Help me customize my ${side} sidebar. Walk me through the available tabs and widgets, then make the changes I ask for.`,
-            attachments: [
-              {
-                kind: "text",
-                name: file.slice(file.lastIndexOf("/") + 1),
-                source: { type: "path", path: file },
-                text: file,
-              },
-              {
-                kind: "text",
-                name: "Workspace configuration",
-                source: { type: "paste" },
-                text: [
-                  `The live workspace configuration file on this machine is ${JSON.stringify(file)}. Read it first, or create it from the current layout below if it does not exist. Edits apply live.`,
-                  "The file exports module.exports = { sidebars: { left: [...], right: [...] }, palette: { modes: [...] } }. Each tab has a stable id, title, Lucide icon and sections. Each section has a stable id and type (bookmarks, tabs, workflows, apps, chats, files, remote, git, prs, activity, note, custom or app). palette is optional. Preserve existing ids, the other sidebar and any palette modes. Profile selection and Settings are fixed in the left footer. A single tab hides its icon strip. Load the configuring-catamorphic-desktop skill for the full contract.",
-                  resolved.layer === "project"
-                    ? `This is the project's shared file (${PROJECT_WORKSPACE_CONFIG_PATH}): changes reach everyone in the project once committed.`
-                    : "This is a local file: do not commit it.",
-                  `Current layout: ${JSON.stringify(resolved.config)}`,
-                ].join("\n\n"),
-              },
-            ],
-          },
+          workspaceCustomizationMessage({
+            side,
+            file,
+            layer: resolved.layer,
+            config: resolved.config,
+          }),
           "float",
         );
         if (localId) sidebarCustomizationChat.current = { projectId, localId };

@@ -38,13 +38,21 @@ export interface WorkspaceSources extends AppCollections {
     request: Parameters<AppCollections["read"]>[0] & {
       /** Chats only: archived chats instead of promoted ones. */
       archived?: boolean;
+      /** Internal: false for search reads, which no subscriber watches. */
+      track?: boolean;
     },
   ) => ReturnType<AppCollections["read"]>;
-  /** Every row of a source, roots then children, bounded; for search. */
+  /**
+   * Every row of a source, roots then children, bounded and unique; for
+   * search. Search reads are not live views, so they do not register for
+   * a subscriber's branch invalidations.
+   */
   readAll: (request: {
     source: string;
     signal: AbortSignal;
     archived?: boolean;
+    /** Walk into rows with children (default true). */
+    children?: boolean;
     limit?: number;
   }) => Promise<AppCollectionItem[]>;
 }
@@ -114,11 +122,19 @@ export function useWorkspaceSources({
         throw new Error(`Source ${source} is not available here`);
     };
     const result: WorkspaceSources = {
-      readAll: async ({ source, signal, archived, limit = 1000 }) => {
-        const rows: AppCollectionItem[] = [];
+      readAll: async ({
+        source,
+        signal,
+        archived,
+        children = true,
+        limit = 1000,
+      }) => {
+        const rows = new Map<string, AppCollectionItem>();
         const queue: Array<string | null> = [null];
+        // Activity already lists running children beside their parents.
+        const walk = children && source !== "activity";
         let pages = 0;
-        while (queue.length && rows.length < limit && pages < 50) {
+        while (queue.length && rows.size < limit && pages < 50) {
           const parentId = queue.shift() ?? null;
           let cursor: string | undefined;
           do {
@@ -129,17 +145,27 @@ export function useWorkspaceSources({
               cursor,
               signal,
               archived,
+              track: false,
             });
             for (const item of page.items) {
-              rows.push(item);
-              if (item.hasChildren) queue.push(item.id);
+              if (rows.has(item.id)) continue;
+              rows.set(item.id, item);
+              if (walk && item.hasChildren) queue.push(item.id);
             }
-            cursor = page.items.length ? page.cursor : undefined;
-          } while (cursor && rows.length < limit && pages < 50);
+            // A page can be empty after filtering and still have more.
+            cursor = page.cursor;
+          } while (cursor && rows.size < limit && pages < 50);
         }
-        return rows.slice(0, limit);
+        return [...rows.values()].slice(0, limit);
       },
-      read: async ({ source, parentId, cursor, signal, archived }) => {
+      read: async ({
+        source,
+        parentId,
+        cursor,
+        signal,
+        archived,
+        track = true,
+      }) => {
         requireSource(source);
         const offset = cursor ? Number(cursor) : 0;
         if (!Number.isSafeInteger(offset) || offset < 0)
@@ -204,20 +230,9 @@ export function useWorkspaceSources({
                   { id: "mark-read", label: "Mark as read" },
                   { id: "mark-unread", label: "Mark as unread" },
                 ],
-                // Filters and sorts compare these fields (source.filter).
-                data: {
-                  status: session.status,
-                  agentId: session.agentId,
-                  source: session.source,
-                  running: Boolean(session.running),
-                  attentionRequired: Boolean(session.attentionRequired),
-                  owner: session.owner,
-                  visibility: session.visibility,
-                  title: session.title,
-                  createdAt: session.createdAt,
-                  updatedAt: session.updatedAt,
-                  childCount: session.childCount ?? 0,
-                },
+                // The record itself: filters and sorts compare the same
+                // fields the sidebar section does (source.filter).
+                data: { ...session },
               };
             });
           if (offset + page.items.length < page.total)
@@ -262,10 +277,15 @@ export function useWorkspaceSources({
           const workflows = await queryClient.fetchQuery({
             queryKey: workflowKeys.list({ projectId, ref: undefined }),
             staleTime: 1000,
-            queryFn: async () => {
+            // The query's own signal: one reader leaving must not fail the
+            // shared request the sidebar is waiting on.
+            queryFn: async ({ signal: querySignal }) => {
               const response = await apiClient.GET(
                 "/api/projects/{projectId}/workflows",
-                { params: { path: { projectId }, query: {} }, signal },
+                {
+                  params: { path: { projectId }, query: {} },
+                  signal: querySignal,
+                },
               );
               if (!response.data) throw new Error("Could not read workflows");
               return response.data;
@@ -276,7 +296,7 @@ export function useWorkspaceSources({
             label: workflow.displayName ?? workflow.name,
             icon: "Workflow",
             actions: [{ id: "open", label: "Open workflow" }],
-            data: { name: workflow.name },
+            data: { ...workflow },
           }));
         } else if (source === "apps") {
           const apps = await queryClient.fetchQuery({
@@ -288,7 +308,7 @@ export function useWorkspaceSources({
             label: app.title,
             icon: app.icon,
             actions: [{ id: "open", label: "Open app" }],
-            data: { name: app.name },
+            data: { ...app },
           }));
         } else if (source === "prs") {
           const prs = await desktopApi.prList(projectId);
@@ -355,7 +375,12 @@ export function useWorkspaceSources({
         } else if (source === "bookmarks") {
           if (!profileId)
             throw new Error("A profile is required for bookmarks");
-          const data = await desktopApi.bookmarksGet({ projectId, profileId });
+          // One read serves every folder of a walk.
+          const data = await queryClient.fetchQuery({
+            queryKey: ["desktop", "bookmarks", profileId, projectId],
+            staleTime: 1000,
+            queryFn: () => desktopApi.bookmarksGet({ projectId, profileId }),
+          });
           const nodes: AppCollectionItem[] = [];
           for (const [scope, group] of Object.entries(data)) {
             if (!group) continue;
@@ -386,7 +411,11 @@ export function useWorkspaceSources({
                   { id: "open", label: "Open bookmark" },
                   { id: "copy-url", label: "Copy URL" },
                 ],
-                data: { url: bookmark.url },
+                data: {
+                  url: bookmark.url,
+                  faviconUrl: bookmark.faviconUrl ?? null,
+                  scope,
+                },
               });
             }
           }
@@ -448,9 +477,11 @@ export function useWorkspaceSources({
             : item,
         );
         signal.throwIfAborted();
-        const parents = loadedParents.get(source) ?? new Set<string | null>();
-        parents.add(parentId ?? null);
-        loadedParents.set(source, parents);
+        if (track) {
+          const parents = loadedParents.get(source) ?? new Set<string | null>();
+          parents.add(parentId ?? null);
+          loadedParents.set(source, parents);
+        }
         const known = admitted.get(source) ?? new Map();
         for (const item of items) known.set(item.id, item);
         admitted.set(source, known);
@@ -522,7 +553,15 @@ export function useWorkspaceSources({
           "prs",
         ].includes(source)
           ? desktopApi.onGitChanged((change) => {
-              if (change.projectId === projectId) refresh();
+              if (change.projectId !== projectId) return;
+              // Program files changed: the shared lists are stale now.
+              void queryClient.invalidateQueries({
+                queryKey: workflowKeys.project({ projectId }),
+              });
+              void queryClient.invalidateQueries({
+                queryKey: ["cat", "project", projectId, "apps"],
+              });
+              refresh();
             })
           : () => {};
         const sessions = ["chats", "subsessions", "activity"].includes(source)
@@ -536,10 +575,14 @@ export function useWorkspaceSources({
           source === "bookmarks"
             ? desktopApi.onBookmarksChanged((change) => {
                 if (
-                  change.profileId === profileId &&
-                  (!change.projectId || change.projectId === projectId)
+                  change.profileId !== profileId ||
+                  (change.projectId && change.projectId !== projectId)
                 )
-                  refresh();
+                  return;
+                queryClient.removeQueries({
+                  queryKey: ["desktop", "bookmarks", profileId],
+                });
+                refresh();
               })
             : () => {};
         return () => {

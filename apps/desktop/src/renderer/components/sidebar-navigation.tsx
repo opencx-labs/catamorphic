@@ -256,14 +256,15 @@ export function ConfiguredSection({
   // filter) register what they show; every other section searches its
   // source through the workspace sources (ADR 0186).
   const searchItems = useRef<() => Promise<PaletteItem[]>>(async () => []);
-  const searchRows = (): Promise<PaletteItem[]> =>
+  const searchRows = (signal: AbortSignal): Promise<PaletteItem[]> =>
     section.type === "git" || section.type === "prs"
       ? searchItems.current()
       : sectionRows({
           section,
           sources,
           projectId,
-          signal: new AbortController().signal,
+          memberShell,
+          signal,
           onOpenUrl,
           onError,
         });

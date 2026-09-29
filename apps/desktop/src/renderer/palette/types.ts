@@ -126,5 +126,9 @@ export type PaletteModeId = BuiltinPaletteMode | PaletteChoiceMode;
 /** Open the palette inside a mode (a command run from anywhere, a sidebar search). */
 export type PaletteModeRequest = { nonce: string } & (
   | { mode: PaletteModeId }
-  | { mode: "section"; label: string; load: () => Promise<PaletteItem[]> }
+  | {
+      mode: "section";
+      label: string;
+      load: (signal: AbortSignal) => Promise<PaletteItem[]>;
+    }
 );
