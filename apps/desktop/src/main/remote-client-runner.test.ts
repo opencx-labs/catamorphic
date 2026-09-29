@@ -1,16 +1,32 @@
 import type { SandboxProvider } from "@catamorphic/sandbox";
+import {
+  type ClientRunnerTransport,
+  ReceiptRefusedError,
+  ResultRejectedError,
+  RunnerSessionEndedError,
+} from "@catamorphic/server-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProfileConfigManager } from "./profile-config.js";
 import { RemoteClientRunners } from "./remote-client-runner.js";
 
 const started = vi.hoisted(
-  () => [] as Array<{ onError?: (error: unknown) => void }>,
+  () =>
+    [] as Array<{
+      onError?: (error: unknown) => void;
+      transport: ClientRunnerTransport;
+    }>,
 );
 vi.mock("@catamorphic/server-sdk", () => ({
-  startClientRunner: (args: { onError?: (error: unknown) => void }) => {
+  startClientRunner: (args: {
+    onError?: (error: unknown) => void;
+    transport: ClientRunnerTransport;
+  }) => {
     started.push(args);
     return { stop: async () => {} };
   },
+  ReceiptRefusedError: class extends Error {},
+  ResultRejectedError: class extends Error {},
+  RunnerSessionEndedError: class extends Error {},
 }));
 
 const link = {
@@ -120,5 +136,37 @@ describe("RemoteClientRunners", () => {
     expect(registrations).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(registrations).toHaveLength(2);
+  });
+
+  it("tells the runner which answers end its session and which to retry", async () => {
+    const machine = runners({ current: true });
+    await machine.connect({ projectId: "local", environment: "laptop" });
+    const transport = started[0]?.transport;
+    if (!transport) throw new Error("No runner started");
+    const answer = (status: number) =>
+      vi.stubGlobal("fetch", async () =>
+        Response.json({ error: `answered ${status}` }, { status }),
+      );
+    const poll = () =>
+      transport.poll({
+        pollId: "8f0c7c1e-2b1a-4e5d-9c3f-0a1b2c3d4e5f",
+        max: 1,
+        signal: new AbortController().signal,
+      });
+    const receipt = () => transport.complete({ jobId: "job", response: null });
+
+    answer(502);
+    await expect(poll()).rejects.not.toBeInstanceOf(RunnerSessionEndedError);
+    answer(409);
+    await expect(poll()).rejects.toBeInstanceOf(RunnerSessionEndedError);
+    answer(403);
+    await expect(poll()).rejects.toBeInstanceOf(RunnerSessionEndedError);
+    answer(503);
+    await expect(receipt()).rejects.not.toBeInstanceOf(ReceiptRefusedError);
+    answer(409);
+    await expect(receipt()).rejects.toBeInstanceOf(ReceiptRefusedError);
+    answer(413);
+    await expect(receipt()).rejects.toBeInstanceOf(ResultRejectedError);
+    await machine.stop();
   });
 });

@@ -1,9 +1,11 @@
 import {
   AccessDeniedError,
-  ClientRunnerOperationSchema,
-  ClientRunnerResultSchema,
+  RemoteExecutorLeaseLostError,
+  RemoteOperationResultSchema,
+  RemoteOperationSchema,
+  RemoteReceiptRefusedError,
 } from "@catamorphic/core";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import type { RouteContext } from "../app.js";
@@ -11,6 +13,13 @@ import { resolveIdentity } from "../http-identity.js";
 import { ErrorSchema, ProjectIdParamsSchema } from "../schemas.js";
 
 const Lease = z.object({ id: z.string().uuid(), token: z.string().uuid() });
+
+/**
+ * A member's This machine runner (ADRs 0098, 0187). Poll long-polls; a 409
+ * from poll or renew means the lease moved on and the runner registers
+ * again, a 409 from complete refuses only that receipt, and a 403 means the
+ * member may no longer serve this Environment.
+ */
 export function registerClientRunnerRoutes(
   app: FastifyInstance,
   ctx: RouteContext,
@@ -81,15 +90,21 @@ export function registerClientRunnerRoutes(
     "/client-runners/poll",
     {
       schema: {
-        body: Lease,
+        // A retried poll repeats its id and receives what that poll took;
+        // `max` is the runner's free slots.
+        body: Lease.extend({
+          pollId: z.string().uuid(),
+          max: z.number().int().min(1).max(64).optional(),
+        }),
         response: {
-          200: z
-            .object({
+          200: z.array(
+            z.object({
               id: z.string().uuid(),
-              operation: ClientRunnerOperationSchema,
-            })
-            .nullable(),
+              operation: RemoteOperationSchema,
+            }),
+          ),
           403: ErrorSchema,
+          409: ErrorSchema,
           503: ErrorSchema,
         },
       },
@@ -99,12 +114,19 @@ export function registerClientRunnerRoutes(
         return reply
           .status(503)
           .send({ error: "Client execution is not enabled by this host" });
-      return reply.send(
-        await ctx.core.clientRunners.poll({
-          ...request.body,
-          identity: resolveIdentity(request),
-        }),
-      );
+      try {
+        return reply.send(
+          await ctx.core.clientRunners.poll({
+            ...request.body,
+            identity: resolveIdentity(request),
+            signal: hungUp(reply),
+          }),
+        );
+      } catch (error) {
+        if (error instanceof RemoteExecutorLeaseLostError)
+          return reply.status(409).send({ error: error.message });
+        throw error;
+      }
     },
   );
   typed.post(
@@ -115,6 +137,7 @@ export function registerClientRunnerRoutes(
         response: {
           200: z.object({ ok: z.boolean() }),
           403: ErrorSchema,
+          409: ErrorSchema,
           503: ErrorSchema,
         },
       },
@@ -124,10 +147,16 @@ export function registerClientRunnerRoutes(
         return reply
           .status(503)
           .send({ error: "Client execution is not enabled by this host" });
-      await ctx.core.clientRunners.renew({
-        ...request.body,
-        identity: resolveIdentity(request),
-      });
+      try {
+        await ctx.core.clientRunners.renew({
+          ...request.body,
+          identity: resolveIdentity(request),
+        });
+      } catch (error) {
+        if (error instanceof RemoteExecutorLeaseLostError)
+          return reply.status(409).send({ error: error.message });
+        throw error;
+      }
       return { ok: true };
     },
   );
@@ -140,7 +169,7 @@ export function registerClientRunnerRoutes(
       schema: {
         body: Lease.extend({
           jobId: z.string().uuid(),
-          response: ClientRunnerResultSchema.optional(),
+          response: RemoteOperationResultSchema.optional(),
           error: z.string().max(4000).optional(),
         }),
         response: {
@@ -156,12 +185,23 @@ export function registerClientRunnerRoutes(
         return reply
           .status(503)
           .send({ error: "Client execution is not enabled by this host" });
-      return reply.send(
-        await ctx.core.clientRunners.complete({
-          ...request.body,
-          identity: resolveIdentity(request),
-        }),
-      );
+      try {
+        return reply.send(
+          await ctx.core.clientRunners.complete({
+            ...request.body,
+            identity: resolveIdentity(request),
+          }),
+        );
+      } catch (error) {
+        // The operation settled or was abandoned, or the lease moved on:
+        // the runner drops this receipt.
+        if (
+          error instanceof RemoteReceiptRefusedError ||
+          error instanceof RemoteExecutorLeaseLostError
+        )
+          return reply.status(409).send({ error: error.message });
+        throw error;
+      }
     },
   );
   typed.post(
@@ -188,4 +228,16 @@ export function registerClientRunnerRoutes(
       return { ok: true };
     },
   );
+}
+
+/**
+ * Aborts when the runner hangs up before the answer is sent, so a long poll
+ * nobody waits for any more takes nothing.
+ */
+function hungUp(reply: FastifyReply): AbortSignal {
+  const controller = new AbortController();
+  reply.raw.once("close", () => {
+    if (!reply.raw.writableFinished) controller.abort();
+  });
+  return controller.signal;
 }

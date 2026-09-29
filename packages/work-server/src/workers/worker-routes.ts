@@ -1,4 +1,7 @@
-import { RemoteWorkerLeaseLostError } from "@catamorphic/core";
+import {
+  RemoteExecutorLeaseLostError,
+  RemoteReceiptRefusedError,
+} from "@catamorphic/core";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
@@ -9,6 +12,12 @@ import {
 } from "./worker-registry.js";
 
 const Session = z.strictObject({ session: z.string().uuid() });
+/** A retried poll repeats its id and receives what that poll took. */
+const Poll = Session.extend({
+  pollId: z.string().uuid(),
+  /** The worker's free slots: it takes up to this many at once. */
+  max: z.number().int().min(1).max(64).default(1),
+});
 const Completion = z.strictObject({
   session: z.string().uuid(),
   jobId: z.string().uuid(),
@@ -17,9 +26,11 @@ const Completion = z.strictObject({
 });
 
 /**
- * The worker protocol (ADR 0164). Every call but enrollment carries the
- * worker's machine credential; a session is the node lease token, so a
- * stale connection is refused as soon as its lease moves on.
+ * The worker protocol (ADRs 0164, 0187). Every call but enrollment carries
+ * the worker's machine credential; a session is the node lease token, so a
+ * stale connection is refused as soon as its lease moves on. Any instance
+ * answers any call: operations and leases live in Postgres. A 409 from poll
+ * or renew ends the session; a 409 from complete refuses only that receipt.
  */
 export function registerWorkerRoutes(
   app: FastifyInstance,
@@ -82,18 +93,17 @@ export function registerWorkerRoutes(
   app.post("/api/workers/poll", async (request, reply) => {
     const worker = await authenticated(request, reply);
     if (!worker) return reply;
-    const body = Session.safeParse(request.body);
+    const body = Poll.safeParse(request.body);
     if (!body.success) return reply.status(400).send({ error: "No session" });
-    await registry.touch(worker.nodeId);
     try {
-      const job = await registry.jobService.poll({
+      const jobs = await registry.poll({
         nodeId: worker.nodeId,
-        leaseToken: body.data.session,
-        waitMs: 20_000,
+        ...body.data,
+        signal: hungUp(reply),
       });
-      return job ? { job } : { job: null };
+      return { jobs };
     } catch (error) {
-      if (error instanceof RemoteWorkerLeaseLostError) {
+      if (error instanceof RemoteExecutorLeaseLostError) {
         return reply.status(409).send({ error: error.message });
       }
       throw error;
@@ -106,12 +116,7 @@ export function registerWorkerRoutes(
     if (!worker) return reply;
     const body = Session.safeParse(request.body);
     if (!body.success) return reply.status(400).send({ error: "No session" });
-    await registry.touch(worker.nodeId);
-    const held = await registry.jobService.leaseHeld({
-      nodeId: worker.nodeId,
-      leaseToken: body.data.session,
-    });
-    return held
+    return (await registry.renew({ nodeId: worker.nodeId, ...body.data }))
       ? { ok: true }
       : reply.status(409).send({ error: "The worker's lease moved on" });
   });
@@ -126,12 +131,11 @@ export function registerWorkerRoutes(
       if (!body.success) {
         return reply.status(400).send({ error: "Invalid completion" });
       }
-      await registry.touch(worker.nodeId);
       try {
-        await registry.jobService.complete({
+        await registry.complete({
           nodeId: worker.nodeId,
-          leaseToken: body.data.session,
-          jobId: body.data.jobId,
+          session: body.data.session,
+          operationId: body.data.jobId,
           ...(body.data.response !== undefined
             ? { response: body.data.response }
             : {}),
@@ -141,10 +145,23 @@ export function registerWorkerRoutes(
         });
         return { ok: true };
       } catch (error) {
-        return reply.status(409).send({
-          error: error instanceof Error ? error.message : "Receipt refused",
-        });
+        if (error instanceof RemoteReceiptRefusedError) {
+          return reply.status(409).send({ error: error.message });
+        }
+        throw error;
       }
     },
   );
+}
+
+/**
+ * Aborts when the caller hangs up before the answer is sent, so a long poll
+ * nobody waits for any more takes nothing.
+ */
+function hungUp(reply: FastifyReply): AbortSignal {
+  const controller = new AbortController();
+  reply.raw.once("close", () => {
+    if (!reply.raw.writableFinished) controller.abort();
+  });
+  return controller.signal;
 }

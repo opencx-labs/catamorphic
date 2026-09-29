@@ -199,13 +199,7 @@ export {
   keyedChatOwnerId,
   parseChatKey,
 } from "./services/chat-delivery.js";
-export {
-  type ClientRunnerOperation,
-  ClientRunnerOperationSchema,
-  ClientRunnerResultSchema,
-  ClientRunnersService,
-  forwardingSandboxProvider,
-} from "./services/client-runners-service.js";
+export { ClientRunnersService } from "./services/client-runners-service.js";
 export type {
   CodeHost,
   CodeHostCredential,
@@ -528,13 +522,18 @@ export {
   RateReservationsService,
 } from "./services/rate-reservations-service.js";
 export {
+  type RemoteExecutorLease,
+  RemoteExecutorLeaseLostError,
+  type RemoteOperation,
+  RemoteOperationQueue,
+  RemoteOperationResultSchema,
+  RemoteOperationSchema,
+  RemoteReceiptRefusedError,
+} from "./services/remote-operations.js";
+export {
   type RemoteSyncOutcome,
   RemoteSyncService,
 } from "./services/remote-sync-service.js";
-export {
-  RemoteWorkerJobsService,
-  RemoteWorkerLeaseLostError,
-} from "./services/remote-worker-jobs-service.js";
 export {
   DEFAULT_RUN_RETENTION_DAYS,
   type PurgeResult,

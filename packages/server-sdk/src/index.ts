@@ -186,6 +186,9 @@ export type {
 export { Catamorphic, createCatamorphic } from "./catamorphic.js";
 export {
   type ClientRunnerTransport,
+  ReceiptRefusedError,
+  ResultRejectedError,
+  RunnerSessionEndedError,
   startClientRunner,
 } from "./client-runner.js";
 export type { HostPluginDefinition } from "./define-plugin.js";
