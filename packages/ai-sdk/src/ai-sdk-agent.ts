@@ -598,6 +598,8 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     // MCP tool calls get a second, cumulative event once their result
     // lands — the result payload is what an MCP Apps view renders.
     const pendingMcpCalls = new Map<string, { name: string; input: unknown }>();
+    // Commands and tool calls awaiting their result: the result ends them.
+    const openCalls = new Map<string, "command" | "tool_call">();
 
     try {
       const result = await telemetry.run(() =>
@@ -644,8 +646,19 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
             };
             continue;
           }
-          yield mapToolCall(part.toolName, part.input);
+          const mapped = mapToolCall(part.toolName, part.input);
+          if (mapped.type === "command" || mapped.type === "tool_call") {
+            openCalls.set(part.toolCallId, mapped.type);
+            yield { ...mapped, toolUseId: part.toolCallId };
+          } else yield mapped;
           continue;
+        }
+        if (part.type === "tool-result" || part.type === "tool-error") {
+          const call = openCalls.get(part.toolCallId);
+          if (call) {
+            openCalls.delete(part.toolCallId);
+            yield { type: call, toolUseId: part.toolCallId, status: "ended" };
+          }
         }
         if (part.type === "tool-result") {
           const pending = pendingMcpCalls.get(part.toolCallId);

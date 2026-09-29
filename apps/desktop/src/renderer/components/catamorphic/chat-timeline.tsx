@@ -18,6 +18,7 @@ import {
   Radio,
   RotateCcw,
   SquareTerminal,
+  Timer,
   Wrench,
 } from "lucide-react";
 import {
@@ -27,15 +28,19 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
+  useRef,
   useState,
 } from "react";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 import { splitAttachmentMarkers } from "../../lib/composer-serialize";
+import { formatElapsed, useNow } from "../../lib/elapsed";
 import {
   DEFAULT_WORK_DISPLAY,
   groupTurns,
+  type TimelineItem,
   type WorkDisplay,
 } from "../../lib/turn-groups";
 import { ActivityText } from "../activity-text";
@@ -162,6 +167,14 @@ export interface ChatTimelineProps {
   messages: ChatTimelineMessage[];
   /** Live activity line ("Thinking...", tool progress) shown under messages. */
   activity?: string;
+  /** When the running turn started (ISO); the activity line counts from it. */
+  activityStartedAt?: string | null;
+  /**
+   * When the running turn last reported progress (ISO). Hosts pass it only
+   * while the agent is working, not while it waits on someone: a long
+   * silence is then said on the activity line.
+   */
+  activityUpdatedAt?: string | null;
   /** @deprecated superseded by `queue`; kept for simple hosts. */
   queuedCount?: number;
   /** Messages waiting behind the in-flight turn (editable until sent). */
@@ -264,6 +277,8 @@ export function ChatTimeline({
   backgroundCommands,
   messages,
   activity,
+  activityStartedAt,
+  activityUpdatedAt,
   queuedCount = 0,
   queue,
   onUpdateQueued,
@@ -302,6 +317,11 @@ export function ChatTimeline({
     messages,
     backgroundCommands ?? [],
   );
+  const items = groupTurns(messages, {
+    working: working ?? Boolean(activity),
+    display: workDisplay,
+  });
+  const folding = useFoldingNotes(items);
   return (
     <BackgroundStates.Provider value={backgroundStates}>
       <StickToBottom
@@ -325,20 +345,29 @@ export function ChatTimeline({
             );
             const row = (
               message: ChatTimelineMessage,
+              working: boolean | undefined,
               foldedWork?: ChatTimelineMessage[],
+              foldingAway?: boolean,
             ) => (
+              // A folding note keeps its row key, so the same message
+              // closes up in place rather than being replaced.
               <div
                 key={keyOf.get(message)}
-                data-message-id={message.id}
+                data-message-id={foldingAway ? undefined : message.id}
                 tabIndex={-1}
+                aria-hidden={foldingAway || undefined}
+                inert={foldingAway}
                 className={
-                  message.id === focusMessageId
-                    ? "rounded-md outline outline-1 outline-accent/50"
-                    : "contents"
+                  foldingAway
+                    ? "animate-fold-away"
+                    : message.id === focusMessageId
+                      ? "rounded-md outline outline-1 outline-accent/50"
+                      : "contents"
                 }
               >
                 <Message
                   message={message}
+                  working={working}
                   foldedWork={foldedWork}
                   // A focused note inside the fold has to be on screen.
                   openWork={foldedWork?.some(
@@ -359,21 +388,34 @@ export function ChatTimeline({
                 />
               </div>
             );
-            return groupTurns(messages, {
-              working: working ?? Boolean(activity),
-              display: workDisplay,
-            }).flatMap((item) =>
+            return items.flatMap((item) =>
               item.kind === "message"
-                ? [row(item.message)]
-                : item.shown.map((message, index) =>
-                    row(message, index === 0 ? item.folded : undefined),
-                  ),
+                ? [row(item.message, item.working)]
+                : [
+                    ...item.folded
+                      .filter((message) => folding.has(message.id))
+                      .map((message) => row(message, false, undefined, true)),
+                    ...item.shown.map((message, index) =>
+                      row(
+                        message,
+                        item.working,
+                        index === 0 ? item.folded : undefined,
+                      ),
+                    ),
+                  ],
             );
           })()}
           {activity && (
-            <div className="flex items-center gap-2 text-xs text-fg-muted">
+            <div
+              className="flex animate-fade-in items-center gap-2 text-xs text-fg-muted"
+              data-testid="chat-activity"
+            >
               <LoaderCircle className="size-4 animate-spin" />
               <ActivityText text={activity} />
+              <TurnClock
+                startedAt={activityStartedAt}
+                updatedAt={activityUpdatedAt}
+              />
               {!queue && queuedCount > 0 && (
                 <span className="ml-auto text-fg-faint">
                   {queuedCount} queued
@@ -423,6 +465,58 @@ export function ChatTimeline({
       </StickToBottom>
     </BackgroundStates.Provider>
   );
+}
+
+/** How long a folding note stays on screen: its fold-away animation. */
+const FOLD_AWAY_MS = 220;
+
+/**
+ * Notes that were in place a moment ago and have just folded into their
+ * answer's steps (the turn settled, or the setting changed). They stay on
+ * screen for the fold-away animation, so settling closes them up instead
+ * of snapping the conversation shorter. Keyed by the note itself: a settle
+ * can land over two renders, and the answer they fold under may change
+ * between them.
+ */
+function useFoldingNotes(
+  items: TimelineItem<ChatTimelineMessage>[],
+): Set<string> {
+  const inPlace = useRef<Set<string>>(new Set());
+  const timers = useRef<Set<number>>(new Set());
+  const [folding, setFolding] = useState<Set<string>>(() => new Set());
+  // Before paint: the notes never leave the screen for a frame.
+  useLayoutEffect(() => {
+    const now = new Set<string>();
+    const arrived: string[] = [];
+    for (const item of items) {
+      if (item.kind === "message") {
+        now.add(item.message.id);
+        continue;
+      }
+      for (const message of item.shown) now.add(message.id);
+      for (const message of item.folded)
+        if (inPlace.current.has(message.id)) arrived.push(message.id);
+    }
+    inPlace.current = now;
+    if (arrived.length === 0) return;
+    setFolding((current) => new Set([...current, ...arrived]));
+    const timer = window.setTimeout(() => {
+      timers.current.delete(timer);
+      setFolding((current) => {
+        const next = new Set(current);
+        for (const id of arrived) next.delete(id);
+        return next;
+      });
+    }, FOLD_AWAY_MS);
+    timers.current.add(timer);
+  }, [items]);
+  useEffect(() => {
+    const pending = timers.current;
+    return () => {
+      for (const timer of pending) window.clearTimeout(timer);
+    };
+  }, []);
+  return folding;
 }
 
 /**
@@ -552,6 +646,7 @@ const Message = memo(
     // one-line rows; re-rendering them is free.
     next.message.role !== "system" &&
     previous.message === next.message &&
+    previous.working === next.working &&
     previous.openWork === next.openWork &&
     (previous.foldedWork?.length ?? 0) === (next.foldedWork?.length ?? 0) &&
     (next.foldedWork ?? []).every(
@@ -563,6 +658,7 @@ const Message = memo(
 
 function MessageImpl({
   message,
+  working,
   foldedWork,
   openWork,
   isLast,
@@ -577,6 +673,8 @@ function MessageImpl({
   onFork,
 }: {
   message: ChatTimelineMessage;
+  /** Part of the turn that is still running: its steps stay open. */
+  working?: boolean;
   /** Earlier notes of this turn, folded into this message's steps. */
   foldedWork?: ChatTimelineMessage[];
   openWork?: boolean;
@@ -601,6 +699,10 @@ function MessageImpl({
 }) {
   const metadata = asRecord(message.metadata);
   const [entered, setEntered] = useState(false);
+  // Live steps become a note in place: the same message gains its prose.
+  const [bornLive] = useState(
+    () => message.role === "assistant" && metadata?.status === "in_progress",
+  );
 
   // Double rAF: the first frame aligns with the commit, the second
   // guarantees the browser resolved the hidden pose before it flips —
@@ -685,15 +787,38 @@ function MessageImpl({
       // it's a user action, not a failure worth a red card.
       const partial = message.content.trim();
       const showPartial = partial && !/^interrupted\.?$/i.test(partial);
+      const steps = turnSteps(message);
+      const stopped = interruptedStep(message, steps);
+      const changed = changedPaths(metadata);
       return (
         <div className={`flex flex-col gap-2 ${enterClasses}`}>
-          {showPartial && (
+          {(showPartial || steps.length > 0) && (
             <article className="mr-auto max-w-[85%] whitespace-pre-wrap break-words text-sm leading-6">
-              {partial}
+              <TurnSteps
+                steps={steps}
+                resolveToolIcon={resolveToolIcon}
+                onFileClick={onFileClick}
+              />
+              {showPartial && partial}
             </article>
           )}
-          <div className="text-center text-xs italic text-fg-faint">
-            Interrupted
+          <div
+            // The running steps above become this summary in place; it fades
+            // in rather than snapping over them.
+            className="flex animate-fade-in flex-col items-center gap-0.5 text-center text-xs text-fg-faint"
+            data-testid="chat-interrupted"
+          >
+            <div className="italic">Interrupted</div>
+            {stopped && (
+              <span data-testid="chat-interrupted-step">
+                {`While: ${stopped.label}${stopped.ran ? ` (${stopped.ran})` : ""}`}
+              </span>
+            )}
+            {changed.length > 0 && (
+              <span data-testid="chat-interrupted-files">
+                {`Left ${changed.length === 1 ? "1 changed file" : `${changed.length} changed files`}: ${changedFileNames(changed)}`}
+              </span>
+            )}
           </div>
         </div>
       );
@@ -727,9 +852,16 @@ function MessageImpl({
     );
   }
 
+  // The steps taken since the latest note, while the turn runs: only the
+  // steps; the prose is the activity line's, below.
+  const liveWork =
+    message.role === "assistant" && metadata?.status === "in_progress";
+  const ownSteps =
+    message.role === "assistant" ? turnSteps(message) : ([] as TurnStep[]);
   return (
     <article
       data-user-message={humanUserMessage || undefined}
+      data-live-work={liveWork || undefined}
       className={`group/msg relative max-w-[85%] text-sm ${enterClasses} ${humanUserMessage ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : message.role === "user" ? "mr-auto rounded-xl rounded-bl-sm border border-border bg-bg-raised px-3 py-2" : "mr-auto"}`}
     >
       <SessionAttribution
@@ -745,7 +877,7 @@ function MessageImpl({
       {/* The pl-2 bridges the gap between the message edge and the
           button: without it the pointer leaves the group mid-crossing
           and the reveal fades out and back in — a visible blink. */}
-      {message.role === "assistant" && (
+      {message.role === "assistant" && !liveWork && (
         <span className="absolute bottom-0 left-full flex items-center gap-0.5 pl-2 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/msg:opacity-100">
           <CopyMessageButton content={message.content} />
           {onFork && (
@@ -772,19 +904,22 @@ function MessageImpl({
               ...turnSteps(folded),
               noteStep(folded),
             ]),
-            ...turnSteps(message),
+            ...(liveWork && working ? markRunning(ownSteps) : ownSteps),
           ]}
+          live={working}
           defaultExpanded={openWork}
           resolveToolIcon={resolveToolIcon}
           onFileClick={onFileClick}
         />
       )}
-      {message.role === "user" ? (
+      {liveWork ? null : message.role === "user" ? (
         <div className="whitespace-pre-wrap break-words leading-6">
           <InlineMessage content={message.content} attachments={attachments} />
         </div>
       ) : (
-        <div className="cat-markdown min-w-0 break-words leading-6">
+        <div
+          className={`cat-markdown min-w-0 break-words leading-6 ${bornLive ? "animate-fade-in" : ""}`}
+        >
           <LinkContext.Provider value={{ onLinkClick, renderLink }}>
             <Markdown
               remarkPlugins={REMARK_PLUGINS}
@@ -871,6 +1006,15 @@ interface TurnStep {
     kind: ChatBackgroundCommand["kind"];
     description: string;
   };
+  /** When the step started and when its result arrived (epoch ms). */
+  startedAt?: number;
+  endedAt?: number;
+  /** Its result has arrived, or it has none to wait for. */
+  finished?: boolean;
+  /** A call whose end the harness reports (it carries a call id). */
+  awaitsEnd?: boolean;
+  /** Still going: the turn runs and its result has not arrived. */
+  running?: boolean;
 }
 
 const STEP_ICONS = {
@@ -1181,6 +1325,7 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
   for (const [index, entry] of events.entries()) {
     const event = asRecord(entry);
     if (!event) continue;
+    const timing = stepTiming(event);
     const content = typeof event.content === "string" ? event.content : "";
     const firstLine = content.split("\n", 1)[0]?.trim() ?? "";
     const description =
@@ -1188,6 +1333,7 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
     if (event.type === "command") {
       // The agent's own words lead; the command itself is one click away.
       steps.push({
+        ...timing,
         kind: "command",
         label: description || `$ ${firstLine || "(command)"}`,
         mono: !description,
@@ -1204,6 +1350,8 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
     } else if (event.type === "file_edit") {
       const path = typeof event.filePath === "string" ? event.filePath : "";
       steps.push({
+        ...timing,
+        finished: true,
         kind: "file_edit",
         label: `Edited ${path || "a file"}`,
         mono: true,
@@ -1216,6 +1364,8 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
       const started = backgroundStart(event);
       if (started) {
         steps.push({
+          ...timing,
+          finished: true,
           kind: "background",
           label: started.description,
           background: { ref: `${message.id}:${index}`, ...started },
@@ -1226,6 +1376,7 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
       }
       const pretty = toolStepLabel(toolName, event.toolInput);
       steps.push({
+        ...timing,
         kind: "tool",
         label: pretty.label,
         mono: pretty.mono,
@@ -1235,6 +1386,7 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
       });
     } else if (event.type === "subagent" && event.status !== "ended") {
       steps.push({
+        ...timing,
         kind: "subagent",
         label: `Subagent: ${firstLine || "delegated work"}`,
       });
@@ -1242,6 +1394,136 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
   }
   return steps;
 }
+
+/** When a logged event started and ended, and whether it has finished. */
+function stepTiming(
+  event: Record<string, unknown>,
+): Pick<TurnStep, "startedAt" | "endedAt" | "finished" | "awaitsEnd"> {
+  const startedAt = typeof event.at === "number" ? event.at : undefined;
+  const endedAt = typeof event.endedAt === "number" ? event.endedAt : undefined;
+  return {
+    startedAt,
+    endedAt,
+    finished:
+      endedAt !== undefined ||
+      event.status === "ended" ||
+      event.toolResult !== undefined,
+    awaitsEnd: typeof event.toolUseId === "string",
+  };
+}
+
+/**
+ * Marks the live steps still going. A call the harness reports the end of
+ * runs until that end arrives; any other step runs only while it is the
+ * latest, because nothing will say when it finished.
+ */
+function markRunning(steps: TurnStep[]): TurnStep[] {
+  return steps.map((step, index) =>
+    !step.finished && (step.awaitsEnd || index === steps.length - 1)
+      ? { ...step, running: true }
+      : step,
+  );
+}
+
+/**
+ * The step an interruption stopped, and how long it had run: the latest
+ * still running by the same rule as a live turn's, timed to the
+ * interruption (the log's last event).
+ */
+function interruptedStep(
+  message: ChatTimelineMessage,
+  steps: TurnStep[],
+): { label: string; ran?: string } | undefined {
+  const step = markRunning(steps)
+    .reverse()
+    .find((each) => each.running && !each.background);
+  if (!step) return undefined;
+  const events = asRecord(message.metadata)?.events;
+  const stoppedAt = Array.isArray(events)
+    ? events.reduce<number | undefined>((latest, entry) => {
+        const at = asRecord(entry)?.at;
+        return typeof at === "number" && (latest === undefined || at > latest)
+          ? at
+          : latest;
+      }, undefined)
+    : undefined;
+  const ran =
+    step.startedAt !== undefined && stoppedAt !== undefined
+      ? stoppedAt - step.startedAt
+      : undefined;
+  return {
+    label: step.label,
+    ...(ran !== undefined && ran >= 1000 ? { ran: formatElapsed(ran) } : {}),
+  };
+}
+
+/** The workspace paths a settled turn reported changing. */
+function changedPaths(metadata: Record<string, unknown> | undefined): string[] {
+  const changes = metadata?.changedFiles;
+  if (!Array.isArray(changes)) return [];
+  return changes.flatMap((change) => {
+    const path = asRecord(change)?.path;
+    return typeof path === "string" && path ? [path] : [];
+  });
+}
+
+/** Up to three file names, then how many more. */
+function changedFileNames(paths: string[]): string {
+  const names = paths
+    .slice(0, 3)
+    .map((path) => path.slice(path.lastIndexOf("/") + 1));
+  return paths.length > 3
+    ? `${names.join(", ")} and ${paths.length - 3} more`
+    : names.join(", ");
+}
+
+/**
+ * How long the running turn has taken, and a plain word when it has gone
+ * quiet: a spinner that looks the same at two seconds and at nine minutes
+ * says nothing.
+ */
+function TurnClock({
+  startedAt,
+  updatedAt,
+}: {
+  startedAt?: string | null;
+  updatedAt?: string | null;
+}) {
+  const started = startedAt ? Date.parse(startedAt) : Number.NaN;
+  const updated = updatedAt ? Date.parse(updatedAt) : Number.NaN;
+  const now = useNow(Number.isFinite(started) || Number.isFinite(updated));
+  const quiet = Number.isFinite(updated) ? now - updated : 0;
+  return (
+    <>
+      {Number.isFinite(started) && (
+        // The turn's time, not the step's: the timer marks it apart from
+        // the running step's own count just above.
+        <span
+          className="flex animate-fade-in items-center gap-1 tabular-nums text-fg-faint"
+          role="timer"
+          aria-label="Turn time"
+        >
+          <Timer className="size-3" />
+          <span data-testid="chat-activity-elapsed">
+            {formatElapsed(now - started)}
+          </span>
+        </span>
+      )}
+      {quiet >= STALL_AFTER_MS && (
+        // Plain words, not an alarm: a long test run is quiet too.
+        <span
+          className="animate-fade-in text-fg-muted"
+          data-testid="chat-activity-stalled"
+        >
+          {`No updates for ${formatElapsed(quiet)}`}
+        </span>
+      )}
+    </>
+  );
+}
+
+/** Silence long enough to say so on the activity line. */
+const STALL_AFTER_MS = 30_000;
 
 /** A run_background_command or watch_command call's command and words. */
 function backgroundStart(event: Record<string, unknown>):
@@ -1350,18 +1632,23 @@ function noteStep(message: ChatTimelineMessage): TurnStep {
 }
 
 /**
- * The expandable event log under an assistant reply: collapsed to a muted
- * "N steps" line; expanded, each step is a row that itself stays collapsed
- * (payloads are long and technical) until clicked. MCP tool rows show the
- * connector's icon when the host can resolve one.
+ * The expandable event log under an assistant reply: a muted "N steps"
+ * line, open while the turn runs so the work reads as it happens, closed
+ * once it has answered. Opening or closing it by hand sticks. Each step is
+ * a row that itself stays collapsed (payloads are long and technical)
+ * until clicked; a lone step is its own row, with no line to open. MCP
+ * tool rows show the connector's icon when the host can resolve one.
  */
 function TurnSteps({
   steps,
+  live = false,
   defaultExpanded = false,
   resolveToolIcon,
   onFileClick,
 }: {
   steps: TurnStep[];
+  /** The turn is still running. */
+  live?: boolean;
   defaultExpanded?: boolean;
   resolveToolIcon?: (toolName: string) => string | undefined;
   onFileClick?: (
@@ -1374,12 +1661,17 @@ function TurnSteps({
     },
   ) => void;
 }) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [chosen, setChosen] = useState<boolean>();
   const backgroundStates = useContext(BackgroundStates);
   useEffect(() => {
-    if (defaultExpanded) setExpanded(true);
+    if (defaultExpanded) setChosen(true);
   }, [defaultExpanded]);
+  const expanded = chosen ?? live;
   if (steps.length === 0) return null;
+  // A lone step is its own row. It keeps the list's structure, so a second
+  // step grows the line to open it in, rather than swapping the row out.
+  const lone = steps.length === 1;
+  const open = lone || expanded;
   // A command still running in the background stays in view, outside the
   // fold, until it ends; then it folds in with the rest.
   const running = steps.filter(
@@ -1393,20 +1685,31 @@ function TurnSteps({
     // drag across several replies selects the prose and skips these rows.
     // An opened payload is content again, and selectable.
     <div className="mb-1.5 select-none" data-testid="chat-turn-steps">
-      <button
-        type="button"
-        onClick={() => setExpanded((value) => !value)}
-        className="flex cursor-pointer items-center gap-1 text-[11px] text-fg-faint transition-colors duration-100 hover:text-fg-muted"
-        aria-expanded={expanded}
-        data-testid="chat-turn-steps-toggle"
+      <div
+        className={`grid transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+          lone ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100"
+        }`}
+        inert={lone}
       >
-        <ChevronRight
-          className={`size-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`}
-        />
-        {steps.length === 1 ? "1 step" : `${steps.length} steps`}
-      </button>
+        <div className="overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setChosen(!expanded)}
+            className="flex cursor-pointer items-center gap-1 text-[11px] text-fg-faint transition-colors duration-100 hover:text-fg-muted"
+            aria-expanded={expanded}
+            data-testid="chat-turn-steps-toggle"
+          >
+            <ChevronRight
+              className={`size-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`}
+            />
+            {`${steps.length} steps`}
+          </button>
+        </div>
+      </div>
       {running.length > 0 && (
-        <div className="mt-1 flex flex-col gap-0.5 border-l border-border pl-2.5">
+        <div
+          className={`flex flex-col gap-0.5 border-l transition-[border-color,padding,margin] duration-200 ${lone ? "border-transparent pl-0" : "mt-1 border-border pl-2.5"}`}
+        >
           {running.map((step) => (
             <StepRow
               key={step.background?.ref}
@@ -1420,11 +1723,13 @@ function TurnSteps({
           mounted, so the collapse mirrors the expansion exactly. */}
       <div
         className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-          expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+          open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
         }`}
       >
         <div className="overflow-hidden">
-          <div className="mt-1 flex flex-col gap-0.5 border-l border-border pl-2.5">
+          <div
+            className={`flex flex-col gap-0.5 border-l transition-[border-color,padding,margin] duration-200 ${lone ? "border-transparent pl-0" : "mt-1 border-border pl-2.5"}`}
+          >
             {folded.map((step, index) => (
               <StepRow
                 // Steps are append-only within a message; index is stable.
@@ -1466,7 +1771,8 @@ function StepRow({
   const background = step.background
     ? backgroundStates.get(step.background.ref)
     : undefined;
-  const pulsing = background?.status === "running";
+  const pulsing = background?.status === "running" || step.running === true;
+  const note = step.kind === "note";
   const Icon = STEP_ICONS[step.kind];
   const expandable = Boolean(step.detail);
   // Edited-file rows click through to the file in an editor surface.
@@ -1478,6 +1784,7 @@ function StepRow({
       data-step-kind={step.kind}
       data-running={pulsing || undefined}
       data-file-path={step.filePath}
+      className={note ? "my-0.5" : undefined}
       data-message-id={step.messageId}
     >
       <button
@@ -1495,7 +1802,10 @@ function StepRow({
               ? () => setOpen((value) => !value)
               : undefined
         }
-        className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11px] text-fg-muted ${
+        className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left ${
+          // A note is the agent talking, not a tool row: it reads as prose.
+          note ? "text-xs text-fg" : "text-[11px] text-fg-muted"
+        } ${
           interactive
             ? "cursor-pointer transition-colors duration-100 hover:bg-bg-inset hover:text-fg"
             : "cursor-default"
@@ -1506,7 +1816,7 @@ function StepRow({
           <img src={iconUrl} alt="" className="size-3.5 shrink-0 rounded-sm" />
         ) : (
           <Icon
-            className={`size-3.5 shrink-0 ${pulsing ? "animate-pulse text-accent" : "text-fg-faint"}`}
+            className={`size-3.5 shrink-0 transition-colors duration-200 ${pulsing ? "animate-pulse text-accent" : "text-fg-faint"}`}
           />
         )}
         {step.background ? (
@@ -1521,11 +1831,12 @@ function StepRow({
           </span>
         ) : (
           <span
-            className={`min-w-0 flex-1 truncate ${step.mono ? "font-mono" : ""}`}
+            className={`min-w-0 flex-1 truncate transition-colors duration-200 ${step.mono ? "font-mono" : ""} ${step.running ? "text-fg" : ""}`}
           >
             {step.label}
           </span>
         )}
+        <StepDuration step={step} />
         {expandable && (
           <ChevronRight
             className={`size-3 shrink-0 text-fg-faint transition-transform duration-150 ${open ? "rotate-90" : ""}`}
@@ -1562,6 +1873,29 @@ function StepRow({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * How long a step took, once that is worth saying (a second or more), or
+ * how long it has been running.
+ */
+function StepDuration({ step }: { step: TurnStep }) {
+  const now = useNow(Boolean(step.running && step.startedAt !== undefined));
+  if (step.startedAt === undefined) return null;
+  const ms = step.running
+    ? now - step.startedAt
+    : step.endedAt !== undefined
+      ? step.endedAt - step.startedAt
+      : undefined;
+  if (ms === undefined || ms < 1000) return null;
+  return (
+    <span
+      className="shrink-0 animate-fade-in tabular-nums text-fg-faint"
+      data-testid="chat-step-duration"
+    >
+      {formatElapsed(ms)}
+    </span>
   );
 }
 
@@ -1719,8 +2053,9 @@ function AutoRetryCountdown({ nextAtMs }: { nextAtMs: number }) {
 }
 
 /**
- * Derive the visible timeline from raw agent-session messages: hides
- * in-progress assistant placeholders. Activity comes from execution state.
+ * Derive the visible timeline from raw agent-session messages: an
+ * in-progress assistant placeholder shows only once it carries steps.
+ * Activity comes from execution state.
  * When the latest assistant message is awaiting user input, its parsed
  * questions are exposed so hosts can render an answer UI.
  */
@@ -1794,7 +2129,9 @@ function isConversationMessage(message: ChatTimelineMessage): boolean {
     );
   }
   if (message.role !== "assistant") return true;
-  if (asRecord(message.metadata)?.status === "in_progress") return false;
+  // The in-progress message carries the steps since the latest note.
+  if (asRecord(message.metadata)?.status === "in_progress")
+    return turnSteps(message).length > 0;
   // Question-only turns have no prose; the question panel is the content.
   return message.content.trim().length > 0;
 }

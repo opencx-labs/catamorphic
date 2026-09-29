@@ -130,6 +130,27 @@ describe("ClaudeCodeAgent", () => {
             input: { skill: "pdf" },
           },
         ]),
+        // Results end the calls they answer; a command keeps its output.
+        {
+          type: "user",
+          session_id: "sess-1",
+          parent_tool_use_id: null,
+          message: {
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_1",
+                content: [{ type: "text", text: "12 passed\n" }],
+              },
+              { type: "tool_result", tool_use_id: "toolu_2", content: "ok" },
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_3",
+                content: "the whole skill",
+              },
+            ],
+          },
+        },
         successResult,
       ]),
     );
@@ -139,9 +160,21 @@ describe("ClaudeCodeAgent", () => {
 
     expect(events).toEqual([
       { type: "text", content: "Working on it." },
-      { type: "command", content: "bun test" },
+      { type: "command", content: "bun test", toolUseId: "toolu_1" },
       { type: "file_edit", filePath: "src/app.ts", content: "edit" },
-      { type: "tool_call", toolName: "Skill", toolInput: { skill: "pdf" } },
+      {
+        type: "tool_call",
+        toolName: "Skill",
+        toolInput: { skill: "pdf" },
+        toolUseId: "toolu_3",
+      },
+      {
+        type: "command",
+        toolUseId: "toolu_1",
+        status: "ended",
+        toolResult: "12 passed",
+      },
+      { type: "tool_call", toolUseId: "toolu_3", status: "ended" },
       { type: "done" },
     ]);
   });
@@ -651,6 +684,7 @@ describe("ClaudeCodeAgent", () => {
         type: "tool_call",
         toolName: "Grep",
         toolInput: { pattern: "TODO" },
+        toolUseId: "toolu_9",
         subagentId: "task_1",
       },
       { type: "subagent", status: "ended", subagentId: "task_1" },
@@ -684,6 +718,7 @@ describe("ClaudeCodeAgent", () => {
     const events = await collect(new ClaudeCodeAgent(), "migrate");
     expect(events).toContainEqual({
       type: "command",
+      toolUseId: "toolu_1",
       content: "bun run db:migrate",
       description: "Apply database migrations",
     });

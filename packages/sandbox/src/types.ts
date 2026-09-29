@@ -441,8 +441,9 @@ export interface AgentEvent {
   /** On "subagent" events: the harness's agent-type name, when known. */
   subagentType?: string;
   /**
-   * Lifecycle marker on "subagent" events, and on "command" events from
-   * harnesses that report when a command finishes (same toolUseId).
+   * Lifecycle marker on "subagent" events, and on "command"/"tool_call"
+   * events from harnesses that report when the call finishes (same
+   * toolUseId; the ending event may carry only the id and the result).
    */
   status?: "started" | "ended";
   /**
@@ -460,6 +461,12 @@ export interface AgentEvent {
    * it is bookkeeping, never step-log activity.
    */
   usage?: AgentTurnUsage;
+  /**
+   * When the host received the event, in epoch milliseconds. Hosts stamp
+   * it as events arrive; harnesses leave it unset. A step's duration and a
+   * running step's elapsed time are measured from it.
+   */
+  at?: number;
 }
 
 export interface AgentSession {

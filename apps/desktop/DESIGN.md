@@ -485,6 +485,41 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-09-29: Work reads as it happens
+
+People watching a long turn saw one sentence change every few minutes,
+with the steps behind a closed "N steps" line and nothing for the call in
+flight: a two-minute test run and a hung command looked the same. The
+turn now reads while it runs:
+
+- **Every note by default.** `chatWorkLive` defaults to `all`, so the
+  agent talks through the work; `latest` stays a choice.
+- **Steps open while live.** A running turn's steps disclosures are open
+  and close once it has answered. Opening or closing one by hand sticks.
+  A lone step is its own row, never a "1 step" line to open.
+- **The call in flight shows.** The in-progress message's steps (those
+  since the latest note) render below the notes, with no prose of their
+  own. A call runs until its result arrives; harnesses report that end
+  (Claude Code and the built-in agent now do, Codex did). Core stamps
+  each event's arrival (`at`) and each step's `endedAt`, so steps show
+  their duration from a second up, and a running step counts.
+- **The clock and the silence.** The activity line counts from the
+  turn's start and, after 30 seconds without progress while the agent is
+  working, says "No updates for 45s".
+- **Notes are prose.** A note folded into steps reads in the body text
+  colour and size, not as a grey tool row.
+- **An interruption says what it stopped.** The interrupted turn keeps
+  its steps and says which step was running, for how long, and which
+  files it left changed.
+- **Nothing snaps.** Showing every note made settling the biggest jump in
+  the chat: the notes left all at once. Notes that fold now stay for one
+  fold-away animation (`animate-fold-away`), keyed by the note, because a
+  settle can land over two renders. A lone step keeps the list's
+  structure, so a second step grows the line to open it in. The clock,
+  step times, the quiet hint and the interruption summary fade in. The
+  quiet hint is muted text: a long test run is quiet too, so it is not
+  shown as a warning.
+
 ### 2026-09-28: Your own sign-ins and files follow you to the server
 
 A linked project's sessions on a Work server can use the person's own
@@ -1038,8 +1073,9 @@ choices instead (Settings → Workspace → Chat dock):
 - **Once it has answered** (`chatWorkSettled`): notes kept in place, or
   folded into steps.
 
-The default is `latest`+`collapse`: one note at a time while the agent
-works, then only the answer, with the notes one click away under its steps.
+The default was `latest`+`collapse` (now `all`+`collapse`, see
+2026-09-29): one note at a time while the agent works, then only the
+answer, with the notes one click away under its steps.
 The three requested behaviours are `all`+`keep` (how it used to read),
 `all`+`collapse`, and `latest`+`collapse`; the fourth combination comes
 free. A folded note is not a new kind of thing: it is a row of the same

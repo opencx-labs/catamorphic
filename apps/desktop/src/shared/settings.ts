@@ -47,7 +47,7 @@ export const SETTINGS = {
   chatWorkLive: {
     label: "While the agent works",
     description:
-      "The notes an agent writes between its steps. Earlier notes fold into the steps line when only the latest is shown.",
+      "The notes an agent writes between its steps, which stay open while it works. Earlier notes fold into the steps line when only the latest is shown.",
     scopes: profileScope,
     valid: oneOf("all", "latest"),
     options: { all: "Show every note", latest: "Show only the latest note" },

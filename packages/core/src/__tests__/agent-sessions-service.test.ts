@@ -7,6 +7,7 @@ import {
   liveStatusLine,
   modelVisibleDelivery,
   parsePorcelain,
+  stepLogEvents,
 } from "../services/agent-sessions-service.js";
 
 describe("modelVisibleDelivery", () => {
@@ -89,6 +90,64 @@ describe("activityLabel", () => {
       }),
     ).toBe("Working...");
     expect(activityLabel({ type: "command" })).toBe("Working...");
+  });
+});
+
+describe("stepLogEvents", () => {
+  it("times each call from its start to its result", () => {
+    expect(
+      stepLogEvents([
+        { type: "text", content: "Testing.", at: 1 },
+        { type: "command", content: "bun test", toolUseId: "t1", at: 10 },
+        { type: "file_edit", filePath: "a.ts", at: 20 },
+        {
+          type: "command",
+          toolUseId: "t1",
+          status: "ended",
+          toolResult: "ok",
+          at: 57,
+        },
+        { type: "tool_call", toolName: "Read", toolUseId: "t2", at: 60 },
+        { type: "usage", at: 70 },
+      ]),
+    ).toEqual([
+      { type: "text", content: "Testing.", at: 1 },
+      {
+        type: "command",
+        content: "bun test",
+        toolUseId: "t1",
+        status: "ended",
+        toolResult: "ok",
+        at: 10,
+        endedAt: 57,
+      },
+      { type: "file_edit", filePath: "a.ts", at: 20 },
+      { type: "tool_call", toolName: "Read", toolUseId: "t2", at: 60 },
+    ]);
+  });
+
+  it("drops the end of a call that started in an earlier message", () => {
+    expect(
+      stepLogEvents([
+        { type: "command", toolUseId: "t0", status: "ended", at: 5 },
+        {
+          type: "tool_call",
+          toolName: "Read",
+          toolUseId: "t1",
+          toolResult: "x",
+          at: 9,
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "tool_call",
+        toolName: "Read",
+        toolUseId: "t1",
+        toolResult: "x",
+        at: 9,
+        endedAt: 9,
+      },
+    ]);
   });
 });
 

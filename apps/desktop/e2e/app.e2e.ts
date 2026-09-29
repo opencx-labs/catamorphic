@@ -508,8 +508,7 @@ describe("chat flows", () => {
 
     await runWait(
       `const toggle = $$('[data-testid="chat-turn-steps-toggle"]').at(-1);
-       if (!toggle) return false;
-       if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+       if (toggle && toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
        const step = [...visibleDock().querySelectorAll('[data-testid="chat-step"] button')]
          .find((button) => button.textContent.includes('Updated the todo list'));
        if (!step) return false;
@@ -550,18 +549,16 @@ describe("chat flows", () => {
       `return timelineMessages().some((m) => m.text.includes('two preambles, one summary'));`,
       { timeoutMs: 30_000, label: "final summary message" },
     );
-    const agentTexts = await run<string[]>(`
-      return timelineMessages()
-        .filter((m) => m.role === 'Agent')
-        .map((m) => m.text);
-    `);
     // By default only the answer stays in the conversation; the notes the
-    // agent wrote on the way are rows of its steps, one click away.
-    expect(
-      agentTexts.filter((text) =>
-        /look at the project|writing some notes|two preambles/.test(text),
-      ),
-    ).toHaveLength(1);
+    // agent wrote on the way are rows of its steps, one click away. They
+    // close up as the turn settles, then leave.
+    await runWait(
+      `return timelineMessages()
+        .filter((m) => m.role === 'Agent' &&
+          /look at the project|writing some notes|two preambles/.test(m.text))
+        .length === 1;`,
+      { label: "notes folded under the answer" },
+    );
     // Expanded, the step log holds both notes in emission order and the
     // file the fake agent wrote.
     await runWait(
@@ -586,6 +583,60 @@ describe("chat flows", () => {
       "First, I will look at the project.",
       "Found it. Now writing some notes.",
     ]);
+  });
+
+  it("shows the work as it happens, then folds it under the answer", async () => {
+    await run(
+      `byText('button', 'New chat')?.click() ?? pressKey('n', { metaKey: true }); return true;`,
+    );
+    await runWait(`return !!visibleDock();`);
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'narrate the fix');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    // While the tests run: the notes stay in place, and the running step
+    // shows below them with its target and how long it has run.
+    const live = await runWait<{ notes: string[]; step: string }>(
+      `const dock = visibleDock();
+       const step = dock?.querySelector(
+         '[data-live-work] [data-testid="chat-step"][data-running]');
+       const time = step?.querySelector('[data-testid="chat-step-duration"]');
+       if (!step?.textContent.includes('Run the tests') || !time) return false;
+       if (!dock.querySelector('[data-testid="chat-activity-elapsed"]')) return false;
+       const notes = timelineMessages()
+         .filter((m) => m.role === 'Agent' && !m.text.includes('Run the tests'))
+         .map((m) => m.text);
+       return { notes, step: step.querySelector('button').textContent };`,
+      { timeoutMs: 30_000, label: "running step with its time" },
+    );
+    expect(live.notes.some((text) => text.includes("read the parser"))).toBe(
+      true,
+    );
+    expect(
+      live.notes.some((text) => text.includes("Fixing it, then testing")),
+    ).toBe(true);
+    expect(live.step).toMatch(/Run the tests\d+s$/);
+    // Settled: only the answer stays; the work is one click away, closed.
+    await runWait(
+      `return timelineMessages().some((m) => m.text.includes('handles empty input')) &&
+         !visibleDock().querySelector('[data-live-work]');`,
+      { timeoutMs: 30_000, label: "narrated answer" },
+    );
+    // The notes close up as they fold, then leave.
+    const settled = await runWait<{ agent: number; expanded: string | null }>(
+      `const agent = timelineMessages().filter((m) =>
+         /read the parser|Fixing it|handles empty input/.test(m.text)).length;
+       if (agent !== 1) return false;
+       return {
+         agent,
+         expanded: $$('[data-testid="chat-turn-steps-toggle"]').at(-1)
+           ?.getAttribute('aria-expanded') ?? null,
+       };`,
+      { label: "narrated notes folded under the answer" },
+    );
+    expect(settled).toEqual({ agent: 1, expanded: "false" });
   });
 
   it("shares archive and unread actions between the sidebar and dock", async () => {

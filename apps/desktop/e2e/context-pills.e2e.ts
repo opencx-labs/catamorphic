@@ -752,9 +752,10 @@ describe("context pills", () => {
     // compare the settled turn with the markdown emphasis set aside.
     const echoed = await runWait<string>(
       `const log = frontDock()?.querySelector('[role="log"]');
-       const toggle = log?.querySelector('[data-testid="chat-turn-steps-toggle"]');
-       if (!toggle) return false;
-       if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+       if (!log) return false;
+       // A lone step is its own row, with no line to open.
+       const toggle = log.querySelector('[data-testid="chat-turn-steps-toggle"]');
+       if (toggle && toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
        const text = log.textContent.replaceAll('**', '');
        return text.includes('[text-pill selection sel.md:5-5]') &&
          text.includes('[text-pill selection sel.md:3-3]') ? text : false;`,

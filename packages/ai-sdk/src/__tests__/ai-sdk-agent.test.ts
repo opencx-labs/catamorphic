@@ -686,6 +686,13 @@ describe("AiSdkCodingAgent", () => {
       type: "tool_call",
       toolName: "read",
       toolInput: { path: "src/value.ts" },
+      toolUseId: "tool-1",
+    });
+    // Its result ends the call.
+    expect(events).toContainEqual({
+      type: "tool_call",
+      toolUseId: "tool-1",
+      status: "ended",
     });
     expect(events).toContainEqual({
       type: "file_edit",
@@ -763,6 +770,7 @@ describe("AiSdkCodingAgent", () => {
       type: "command",
       content: "bun test",
       description: "Run the test suite",
+      toolUseId: "tool-1",
     });
   });
 
