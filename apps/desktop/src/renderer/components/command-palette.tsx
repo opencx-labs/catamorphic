@@ -549,6 +549,7 @@ export function CommandPalette({
     return [...scored, ...(webItem ? [webItem] : []), ...sendItems];
   }, [
     activeRows,
+    staleSearch,
     modeId,
     modeLoad,
     modeItems,
