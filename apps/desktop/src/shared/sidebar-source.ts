@@ -17,6 +17,11 @@ export interface SidebarSourceModule {
   load: (
     request: Parameters<CollectionSource<SidebarSourceItem>["load"]>[0] & {
       projectRoot: string;
+      /**
+       * What the user typed, only for a palette mode with search "source"
+       * (ADR 0186). Absent for sidebar loads and palette-ranked modes.
+       */
+      query?: string;
     },
   ) => Promise<CollectionPage<SidebarSourceItem>>;
   subscribe?: (context: {
@@ -65,6 +70,8 @@ export interface SidebarSourceRequest {
   method: "load" | "action" | "move" | "drop";
   parentId?: string | null;
   cursor?: string;
+  /** Palette modes with search "source" pass the typed query to load. */
+  query?: string;
   itemId?: string;
   action?: string;
   beforeId?: string;

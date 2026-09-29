@@ -42,7 +42,7 @@ Known script quirks:
 3. Demo project: `git reset --hard <base>`, then remove
    `.work/{node_modules,apps,workflows,contracts,scripts,package.json,bun.lock,personal,app-data}`
    so only `bunfig.toml`, `project.json` and `skills/` remain.
-4. Profile: delete `<Desktop data>/profiles/<profile id>/sidebar-projects/<project id>.js`
+4. Profile: delete `<Desktop data>/profiles/<profile id>/workspace-projects/<project id>.js`
    and `settings-projects/<project id>.json` (the agent's layers from the last take).
 5. Start the desktop, export the new `CDP_PORT`, and run `node film.mjs prep`: dock
    in the window, app approvals cleared, tabs closed, `Launch plan.md` opened from

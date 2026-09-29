@@ -68,7 +68,7 @@ function TitleHint({
  * hover that opens a menu. One button, not a row of them — stacked icon
  * buttons get unreadable fast and every new capability made it worse.
  *
- * The menu is data (`SidebarMenuEntry[]`, from sidebar.js) and the row is
+ * The menu is data (`SidebarMenuEntry[]`, from workspace.js) and the row is
  * generic, so custom config-defined items and built-in bookmarks share
  * exactly the same interaction.
  */
@@ -495,11 +495,13 @@ export function SidebarItemRow<
                 <span className="sr-only">{label}</span>
               ) : (
                 (labelContent ?? (
-                  <span className="min-w-0 flex-1 truncate">{label}</span>
+                  // The label is what people read: it keeps its width and the
+                  // description gives way first when the row is narrow.
+                  <span className="min-w-0 flex-auto truncate">{label}</span>
                 ))
               )}
               {description && (
-                <span className="max-w-32 truncate text-[11px] text-fg-faint">
+                <span className="min-w-0 max-w-32 shrink-[3] truncate text-[11px] text-fg-faint">
                   {description}
                 </span>
               )}

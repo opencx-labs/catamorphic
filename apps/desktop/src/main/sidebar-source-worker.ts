@@ -60,6 +60,9 @@ input.on("line", (line) => {
               projectRoot,
               parentId: message.parentId ?? null,
               cursor: message.cursor,
+              ...(typeof message.query === "string"
+                ? { query: message.query }
+                : {}),
               signal: controller.signal,
             })
           : message.method === "move"

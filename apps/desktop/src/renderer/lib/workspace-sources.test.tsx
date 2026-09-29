@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
-import type { AppCollections } from "@catamorphic/app";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import { useSidebarAppCollections } from "./sidebar-app-collections.js";
+import {
+  grantSources,
+  projectSourceItems,
+  useWorkspaceSources,
+  type WorkspaceSources,
+} from "./workspace-sources.js";
 import type { WorkspaceTab } from "./workspace-types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -45,14 +49,13 @@ it("checks grants and advertised item actions, forwards open modes, and updates 
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
   const node = document.createElement("div");
   const root = createRoot(node);
-  let broker: AppCollections | undefined;
+  let broker: WorkspaceSources | undefined;
   function Probe({ tabs }: { tabs: WorkspaceTab[] }) {
-    broker = useSidebarAppCollections({
+    broker = useWorkspaceSources({
       projectId: "project",
       profileId: "profile",
       surface: { kind: "chat", sessionId: "parent" },
       tabs,
-      granted: ["chats", "tabs"],
       writesProgram: false,
       onOpenSession: mocks.open,
       onOpenTab: mocks.open,
@@ -68,7 +71,9 @@ it("checks grants and advertised item actions, forwards open modes, and updates 
       root.render(<Probe tabs={[{ kind: "editor", name: "notes.md" }]} />),
     );
     if (!broker) throw new Error("Missing collection broker");
-    const current = broker;
+    const sources = broker;
+    // A widget sees only its section's grants.
+    const current = grantSources(sources, ["chats", "tabs"]);
     await expect(current.read({ source: "git", signal })).rejects.toThrow(
       "not granted",
     );
@@ -130,7 +135,7 @@ it("checks grants and advertised item actions, forwards open modes, and updates 
     await act(async () =>
       root.render(<Probe tabs={[{ kind: "editor", name: "new.md" }]} />),
     );
-    expect(broker).toBe(current);
+    expect(broker).toBe(sources);
     expect(publish).toHaveBeenCalledWith({ type: "invalidate" });
     expect(
       (await current.read({ source: "tabs", signal })).items[0]?.label,
@@ -142,4 +147,25 @@ it("checks grants and advertised item actions, forwards open modes, and updates 
   } finally {
     await act(async () => root.unmount());
   }
+});
+
+it("filters and sorts rows by their data, then the row itself", () => {
+  const rows = [
+    { id: "a", label: "Alpha", data: { running: true, createdAt: 2 } },
+    { id: "b", label: "Beta", data: { running: false, createdAt: 3 } },
+    { id: "c", label: "Gamma", data: { running: true, createdAt: 1 } },
+  ];
+  expect(
+    projectSourceItems(rows, {
+      type: "chats",
+      filter: { running: true },
+      sort: { field: "createdAt", direction: "desc" },
+    }).map((row) => row.id),
+  ).toEqual(["a", "c"]);
+  expect(
+    projectSourceItems(rows, {
+      type: "chats",
+      filter: { label: "Beta" },
+    }).map((row) => row.id),
+  ).toEqual(["b"]);
 });

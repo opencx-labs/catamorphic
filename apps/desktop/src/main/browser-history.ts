@@ -310,6 +310,10 @@ export class HistoryStore {
     }
     return sites;
   }
+  /** Every entry, for palette signals; callers must not mutate. */
+  entries(profileId: string): readonly HistoryEntry[] {
+    return this.load(profileId);
+  }
   releaseProfile(profileId: string): void {
     clearTimeout(this.writes.get(profileId));
     this.writes.delete(profileId);

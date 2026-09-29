@@ -60,7 +60,7 @@ alone never free capacity.
   `memberships:read|write` or `roles:read|write` permissions (ADR 0158) for
   admission and membership APIs under `/api/projects/:projectId`.
 - Ongoing company-brain configuration is project code: `.work/roles/*.json`,
-  `.work/agents/*`, `.work/sidebar.js`, and
+  `.work/agents/*`, `.work/workspace.js`, and
   `.work/project.json`. The stock server must not grow a parallel
   bootstrap configuration file. Role presentation targets resolved
   permissions, never hard-coded role names.

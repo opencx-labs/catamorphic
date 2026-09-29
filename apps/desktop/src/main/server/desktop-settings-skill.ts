@@ -5,26 +5,32 @@ import {
 import { normalizePrefs } from "../../shared/app-prefs.js";
 import { SETTING_KEYS, SETTINGS } from "../../shared/settings.js";
 import { THEME_TOKENS } from "../../shared/theme-tokens.js";
-import { SIDEBAR_AUTHORING_GUIDE } from "../sidebar-authoring.js";
 import { THEME_PRESETS } from "../theme.js";
+import { WORKSPACE_AUTHORING_GUIDE } from "../workspace-authoring.js";
 
 /** Delivered through the host skill tier, including existing user projects. */
 export const DESKTOP_SETTINGS_SKILL = `---
 name: configuring-catamorphic-desktop
 title: Configure desktop settings
-description: Edit Work desktop configuration files to customize theme, fonts, shortcuts, sidebar sections, tabs, notifications or terminal macros, including project overrides and reset.
+description: Edit Work desktop configuration files to customize theme, fonts, shortcuts, sidebar sections and command palette modes (workspace.js), tabs, notifications or terminal macros, including project overrides and reset.
 ---
 
 # Configure the desktop
 
-Call the desktop_settings tool (discover it if it is not loaded) for this
-project's owning profile, exact host file paths, access mode and current
-validation errors. Use those paths, not the foreground profile, a guessed home
+Call the desktop_settings tool for this project's owning profile, exact host
+file paths, access mode and current validation errors. When it is not loaded,
+discover_capabilities({ query: "desktop settings" }) finds it as
+workspace.desktop_settings; call it with invoke_capability. Use those paths, not the foreground profile, a guessed home
 directory, a sandbox path, or a session worktree's .work folder. Read the relevant files first;
 a missing file is an empty object inheriting defaults. Read this skill for the file
 schema. Edit with ordinary file or shell facilities, preserving unrelated keys.
 Prefer writing a complete JSON object to a temporary sibling and renaming it over
 the original. Read back your change and report its actual scope.
+
+Scopes name layers, not folders: "personal" means files.*.personal from
+desktop_settings (outside the repository), never the project's personal
+documents directory (.work/personal), which holds documents, not settings.
+A configuration file anywhere else is not read.
 
 Paths are metadata, not permission grants. An agent whose sandboxing is
 contained may inspect but must not edit. Native harness filesystem permissions still apply outside the checkout.
@@ -104,7 +110,7 @@ An empty string disables an action; delete its key to restore the default. Keep
 bindings unique. Defaults and supported action ids:
 ${KEYBINDING_ACTIONS.map((action) => `- ${action}: ${JSON.stringify(DEFAULT_KEYBINDINGS[action])}`).join("\n")}
 
-${SIDEBAR_AUTHORING_GUIDE}
+${WORKSPACE_AUTHORING_GUIDE}
 
 ## Validation and boundaries
 
@@ -119,4 +125,7 @@ setup flows. Never edit credential stores or invent scalar preference keys for
 those flows. Committed agent behavior follows the project's agent-authoring guide.
 The palette searches settings normally; type settings then Space or Tab to search
 only settings. Enter opens and highlights the target without changing its value.
+The palette ranks by match, kind and use: commands and app surfaces before pages,
+frequently used destinations first, and rows the user picked for a query earlier.
+It learns from use on its own; do not try to tune ranking through configuration.
 `;

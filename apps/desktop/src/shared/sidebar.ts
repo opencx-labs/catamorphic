@@ -1,8 +1,5 @@
 import type { OpenMode } from "./open-mode.js";
-import {
-  matchesProjectExperience,
-  type ProjectExperienceWhen,
-} from "./project-experience.js";
+import type { ProjectExperienceWhen } from "./project-experience.js";
 
 /** What a click (or menu entry) does. Declarative so it can cross IPC. */
 export type SidebarAction =
@@ -76,6 +73,8 @@ export interface SidebarSource {
 export interface SidebarItemPresentation {
   label?: string;
   description?: string;
+  /** Extra words the palette matches this row by (synonyms, ids). */
+  keywords?: string[];
   icon?: string;
   badges?: string[];
   progress?: number;
@@ -181,16 +180,6 @@ export interface SidebarTabConfig {
 }
 
 export type SidebarSide = "left" | "right";
-export interface SidebarConfig {
-  left: SidebarTabConfig[];
-  right: SidebarTabConfig[];
-}
-
-export function sidebarSections(config: SidebarConfig | null | undefined) {
-  return [...(config?.left ?? []), ...(config?.right ?? [])].flatMap(
-    (tab) => tab.sections,
-  );
-}
 
 export function matchesSidebarSurface(
   when: SidebarWhen | undefined,
@@ -211,42 +200,4 @@ export function resolveSidebarSection(
   section: SidebarSectionConfig,
 ): SidebarSectionConfig {
   return { ...section, type: section.source?.type ?? section.type };
-}
-
-/** Resolve the same authorized presentation for sidebars, search and agent discovery. */
-export function visibleSidebarConfig({
-  config,
-  context,
-}: {
-  config: SidebarConfig | null;
-  context: import("./project-experience.js").ProjectExperienceContext;
-}): SidebarConfig | null {
-  if (!config) return null;
-  const items = (
-    entries: SidebarItem[] | undefined,
-  ): SidebarItem[] | undefined =>
-    entries?.flatMap((entry) => {
-      if (!matchesProjectExperience(entry.when, context)) return [];
-      const children = items(entry.items);
-      return entry.url || entry.actions?.length || children?.length
-        ? [{ ...entry, items: children }]
-        : [];
-    });
-  const tabs = (entries: SidebarTabConfig[]): SidebarTabConfig[] =>
-    entries
-      .filter((tab) => matchesProjectExperience(tab.when, context))
-      .map((tab) => ({
-        ...tab,
-        sections: tab.sections
-          .filter(
-            (section) =>
-              matchesProjectExperience(section.when, context) &&
-              (context.root ||
-                context.permissions.includes("program:write") ||
-                !["git"].includes(section.source?.type ?? section.type)),
-          )
-          .map((section) => ({ ...section, items: items(section.items) })),
-      }))
-      .filter((tab) => tab.sections.length > 0);
-  return { left: tabs(config.left), right: tabs(config.right) };
 }

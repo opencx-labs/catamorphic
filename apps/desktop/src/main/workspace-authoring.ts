@@ -1,12 +1,15 @@
 /** One reference shared by the live config template and the project agent skill. */
-export const SIDEBAR_AUTHORING_GUIDE = `## Sidebar: JavaScript, whole-document replacement
+export const WORKSPACE_AUTHORING_GUIDE = `## Workspace: sidebars and palette modes in workspace.js
 
-Use the supplied sidebar paths. Precedence is built-in, profile, shared project,
-personal project. Each file replaces the entire document. Read the resolved highest
-existing layer before copying it to a higher layer, then edit only the intended
-sections. Preserve unrelated content. The profile file is the live, commented
-schema/example; read it before editing. Export with module.exports = {left: [...],
-right: [...]}. Delete an override file to inherit the lower layer again.
+workspace.js holds what the window offers: both sidebars and your own command
+palette modes. Use the supplied workspace paths. Precedence is built-in, profile,
+shared project (.work/workspace.js), personal project. Each file replaces the
+entire document. Read the resolved highest existing layer before copying it to a
+higher layer, then edit only the intended parts. Preserve unrelated content. The
+profile file is the live, commented schema/example; read it before editing.
+Export with module.exports = { sidebars: { left: [...], right: [...] },
+palette: { modes: [...] } }; palette is optional and no other keys are allowed.
+Delete an override file to inherit the lower layer again.
 One left sidebar tab hides its tab strip; an empty right sidebar starts closed.
 Sidebar content and the top/sidebar placement of open workspace tabs are separate.
 
@@ -94,7 +97,7 @@ For custom live data use createCollection({source:{load,subscribe}}). load recei
 {parentId,cursor,signal} and returns {items,cursor?}. subscribe publishes upsert,
 remove or invalidate changes and returns cleanup. Identity is stable; never use
 array positions or JSON.stringify(item) as keys. No IPC callbacks or privileged
-renderer JavaScript may be exported from sidebar.js.
+renderer JavaScript may be exported from workspace.js.
 
 After editing: read the actual winning file, validate the layout, check both sidebars,
 try ordinary click and right-click separately, change the current surface, and
@@ -174,4 +177,80 @@ fetch(url,{signal}), check response.ok, map response items to stable IDs/labels,
 and return the API's next cursor. A subscribe interval must return clearInterval
 cleanup. Do not pass credentials in row data. Validate loading, refresh, empty,
 failed fetch, retry and action feedback in the app.
+
+## Palette modes
+
+A palette mode is a typed name that scopes the command palette (Cmd+P, New Tab)
+to one list: type the name then Space or Tab, or pick it from the @ list; the
+chip stays until Backspace on an empty input. Modes live beside the sidebars in
+the same file and layers, under palette.modes.
+Each mode takes exactly one row source, the same primitives sections use:
+{ id: "issues", trigger: "issues", aliases: ["bugs"], title: "Issues",
+  description: "Open issues assigned to me", icon: "Bug",
+  source: { type: "custom", module: ".work/issues.ts" } }
+{ id: "running", trigger: "running", title: "Running chats", icon: "Loader",
+  source: { type: "chats", filter: { running: true },
+    sort: { field: "updatedAt", direction: "desc" } } }
+{ id: "todo-search", trigger: "todo", title: "Todos", section: "todos" }
+{ id: "runbooks", trigger: "runbook", title: "Runbooks",
+  items: [{ label: "Deploy", url: "https://wiki.example.com/deploy" }] }
+source is a module ({ type: "custom", module }) or a workspace source: chats,
+subsessions, activity, files, workflows, apps, git, prs, bookmarks, remote or
+tabs, with the same filter and sort sections use. Chats filter on running,
+attentionRequired, owner, status, visibility, agentId, title, createdAt and
+updatedAt; files on path; workflows and apps on name; PRs on number, author and
+title; every row also on label. section reuses any list section (a workspace
+source, or a custom module or items), so one source can be a sidebar list and a
+palette mode at once. items are static rows; nested items list flat.
+A mode id shares the section id namespace. trigger and aliases are 1 to 32
+lowercase letters, digits or dashes, unique across modes, and cannot be a
+built-in mode name (history, files, file, content, grep, settings, preferences,
+sites, commands, model, effort, permissions, agent, chat, web). A full name followed by
+Space enters the mode, so pick a noun the user would not start an ordinary
+search with. when accepts permissions only.
+
+Rows use the normal row fields plus keywords (extra words the palette matches:
+synonyms, ids, owners). Enter opens a row's url. A module row without one runs
+its first run:<name> action from actions or menu, and a failure is reported;
+a module row with neither is shown disabled. Static rows need a url; folders
+list their children. A module's tree is walked up to 1000 rows and 50 pages;
+the parent label becomes the detail line when a row has no description. A
+mode over a section that when hides is hidden too.
+search: "palette" (default) loads the rows once when the mode opens and ranks
+them as the user types, learning from what the user picks. search: "source"
+passes what the user typed to load as request.query, debounced, and shows the
+first page in the order returned; use it for APIs that search server-side (an
+issue tracker, a CRM), and return the best matches first. Only module sources can
+search. topLevel: true also ranks a palette-searched mode's rows in the ordinary
+palette; reserve it for small, frequently used lists, since every open loads it.
+Connected projects run no local modules, so module-backed modes are hidden there.
+
+Every list section is searchable in the palette through the same sources:
+headerActions: [{label:"Search", action:"search", icon:"Search"}] (or a menu
+entry) opens the palette scoped to that section's rows, filter and sort
+included. Files, Changes and pull requests have the button built in and search
+what they show (the selected checkout, the review filter).
+
+## Designing good sections and modes
+
+Choose by the question the user is asking. A section answers "what is going on"
+and stays in view: current work, status, things needing attention. A mode
+answers "take me to X" among many items that do not deserve permanent space:
+tickets, customers, runbooks, environments. When both apply, write one module
+and point a section and a mode at it with section.
+- Keep ids stable across edits: row ids feed selection, usage ranking and
+  learned picks. Never derive them from positions or display text that changes.
+- Put what the user types in label: the name, number or title they remember.
+  Put where it lives or its state in description, and synonyms in keywords.
+- One mode per kind of thing, named by that thing ("issues", not "search").
+  A mode that mixes unrelated rows ranks poorly and teaches nothing.
+- Keep load fast and bounded. Cache slow APIs in the module, page with cursor,
+  and throw a clear Error on failure; the palette shows it with Retry.
+- Give every row a destination: a url, or a run: action that does what the
+  label says. Never ship rows that silently do nothing.
+- Do not duplicate built-ins. Files, file content, history, settings, sites,
+  chats, workflows, apps and bookmarks are already searchable; a mode over a
+  built-in source earns its place with a filter ("running chats", "my PRs").
+After adding a mode, open the palette, type @ to see it listed, enter it by name,
+search, and open a row; check the empty, failed and retry states.
 `;

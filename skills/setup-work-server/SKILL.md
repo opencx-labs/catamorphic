@@ -89,7 +89,7 @@ disagree with the installed source, the source wins.
   server's own operations. Organization administrators manage only the named
   service connections (ADR 0172); they gain nothing inside projects.
 - **After setup, configuration is project code.** Roles, agents,
-  `.work/sidebar.js`, and `.work/project.json` change through
+  `.work/workspace.js`, and `.work/project.json` change through
   ordinary review. Do not create a parallel bootstrap config.
 - **Unattended work needs explicit consent.** Each member reviews and enables
   a deployed workflow and authorizes its connections. Project automations

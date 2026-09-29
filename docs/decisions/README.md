@@ -198,3 +198,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0183](0183-guards-are-host-code-work-server-config-is-typed-data.md) | Guards are host code; Work server config is typed data | Accepted |
 | [0184](0184-personal-credentials-reach-a-members-own-sessions.md) | Personal credentials reach a member's own sessions | Accepted |
 | [0185](0185-passkey-requests-stay-answerable.md) | Passkey requests in browser tabs stay answerable | Accepted |
+| [0186](0186-palette-modes-and-use-ranked-search.md) | Palette modes share one shape, and search ranks by use | Accepted |

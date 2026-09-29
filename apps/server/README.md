@@ -81,7 +81,7 @@ ordinary reviewed project files. `.work/roles/*.json` grants artifacts,
 Environments, connection aliases, document paths, and namespaced permissions;
 `.work/agents/*` defines the project agents (the built-in agent, or Claude
 Code and Codex running in their sandbox with a model connection, ADR 0180);
-`.work/sidebar.js` and
+`.work/workspace.js` and
 `.work/project.json` can shape the desktop sidebar and starting actions
 from resolved permissions. There is no parallel stock-server
 bootstrap config.

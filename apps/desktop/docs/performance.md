@@ -105,9 +105,12 @@ audit but is not evidence of the timing-retention fix failing.
 The palette prepares searchable labels and keywords when its source arrays change.
 Settings metadata comes from `shared/settings-catalog.ts`; typing never reads
 configuration files or calls a settings API. Normal search includes settings, and
-`settings` + Space or Tab selects a settings-only index. Literal matches take
-priority; the existing fuzzy scorer handles abbreviations and typos when no literal
-match exists. Render at most 80 results. Queries longer than 256 characters or
+`settings` + Space or Tab selects a settings-only index. Scores combine a literal
+match tier (label, then keywords, then detail), a category prior, frecency and
+learned picks (ADR 0186); the fuzzy scorer joins only when nothing matches
+literally, or for a row picked earlier for the query. Ranking signals load
+once per opening and per new query session, never per keystroke. Render at most
+80 results. Queries longer than 256 characters or
 containing a newline bypass fuzzy search and remain available to agent/web actions.
 
 Search remains linear in catalog size, plus sorting matches. A local Bun probe on
@@ -118,7 +121,7 @@ portable performance guarantee. Native tests cover the actual typing/navigation
 flow. If real workspaces grow beyond this budget, measure their query distribution
 before adding a worker or a more complex index.
 
-`renderer/lib/palette-search.test.ts` covers bounded large-index results and long
+`renderer/palette/rank.test.ts` covers bounded large-index results and long
 input. Preserve the prepared-index boundary and result cap when adding providers.
 
 ## Changes subscriptions

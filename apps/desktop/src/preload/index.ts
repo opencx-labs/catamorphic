@@ -371,6 +371,9 @@ const api = {
     invoke("catamorphic:history-record", input),
   historyRemove: (id: string) => invoke("catamorphic:history-remove", id),
   historyClear: () => invoke("catamorphic:history-clear"),
+  paletteRecord: (input: unknown) =>
+    invoke("catamorphic:palette-record", input),
+  paletteSignals: () => invoke("catamorphic:palette-signals"),
   onHistoryChanged: (listener: () => void) => {
     const handler = () => listener();
     ipcRenderer.on("catamorphic:history-changed", handler);
@@ -1207,22 +1210,25 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:sidebar-source-changed", handler);
   },
-  // --- sidebar config ---
-  sidebarConfigGet: (projectId?: string): Promise<unknown> =>
-    invoke("catamorphic:sidebar-config-get", projectId),
-  sidebarConfigFile: (): Promise<string> =>
-    invoke("catamorphic:sidebar-config-file"),
-  sidebarConfigSource: (): Promise<string> =>
-    invoke("catamorphic:sidebar-config-source"),
-  sidebarConfigReset: (): Promise<void> =>
-    invoke("catamorphic:sidebar-config-reset"),
+  // --- workspace config (sidebars, palette modes) ---
+  workspaceConfigGet: (projectId?: string): Promise<unknown> =>
+    invoke("catamorphic:workspace-config-get", projectId),
+  workspaceConfigFile: (): Promise<string> =>
+    invoke("catamorphic:workspace-config-file"),
+  workspaceConfigSource: (): Promise<string> =>
+    invoke("catamorphic:workspace-config-source"),
+  workspaceConfigReset: (): Promise<void> =>
+    invoke("catamorphic:workspace-config-reset"),
   // The changed event carries no config: the resolved layers depend on the
   // renderer's active project, so the renderer refetches on the signal.
-  onSidebarConfigChanged: (listener: () => void): (() => void) => {
+  onWorkspaceConfigChanged: (listener: () => void): (() => void) => {
     const handler = () => listener();
-    ipcRenderer.on("catamorphic:sidebar-config-changed", handler);
+    ipcRenderer.on("catamorphic:workspace-config-changed", handler);
     return () =>
-      ipcRenderer.removeListener("catamorphic:sidebar-config-changed", handler);
+      ipcRenderer.removeListener(
+        "catamorphic:workspace-config-changed",
+        handler,
+      );
   },
 };
 
