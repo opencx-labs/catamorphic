@@ -10,6 +10,9 @@ import {
 import type { ProfileConfigManager } from "./profile-config.js";
 import { refreshRemoteCredentials } from "./remote-oauth.js";
 
+/** How long replicas may serve roles and project policy from cache. */
+const REFUSAL_CONFIRM_MS = 11_000;
+
 /** The server refused this machine: retrying cannot help. */
 class RunnerAccessDeniedError extends Error {
   constructor(message: string) {
@@ -84,9 +87,8 @@ export class RemoteClientRunners {
       let failed = false;
       const started: Promise<ReturnType<typeof startClientRunner>> =
         (async () => {
-          const registration = await client.POST(
-            "/api/projects/{projectId}/client-runners",
-            {
+          const register = () =>
+            client.POST("/api/projects/{projectId}/client-runners", {
               params: { path: { projectId: link.remoteProjectId } },
               body: {
                 id: link.connectionId,
@@ -98,8 +100,17 @@ export class RemoteClientRunners {
                 processes: Boolean(this.provider.processes),
                 capabilities: [...(this.provider.capabilities ?? [])],
               },
-            },
-          );
+            });
+          let registration = await register();
+          // A replica may still hold roles and project policy cached from
+          // before a change that grants this machine (issue 154): confirm
+          // a refusal once that window has passed before believing it.
+          if (registration.response.status === 403) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, REFUSAL_CONFIRM_MS),
+            );
+            registration = await register();
+          }
           if (!registration.data) {
             const message =
               registration.error?.error ?? "Local execution could not connect";

@@ -1,4 +1,8 @@
-import { DeploymentBlockedError, type Identity } from "@catamorphic/core";
+import {
+  DeploymentBlockedError,
+  type Identity,
+  InvalidEnvironmentPolicyError,
+} from "@catamorphic/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 
@@ -162,6 +166,24 @@ describe("program permissions on project routes (ADR 0158)", () => {
     });
     expect(response.statusCode).toBe(409);
     expect(response.json().error).toContain("Record the changes");
+  });
+
+  it("answers 422 when the project's committed Environment policy is invalid", async () => {
+    const core = fakeCore();
+    core.deployment.deploy.mockRejectedValueOnce(
+      new InvalidEnvironmentPolicyError(
+        "defaultEnvironment must name a valid declared Environment",
+      ),
+    );
+    const response = await appFor(member("program:publish"), core).inject({
+      method: "POST",
+      url: `/api/projects/${PROJECT_ID}/deploy`,
+      payload: {},
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({
+      code: "environment_policy_invalid",
+    });
   });
 
   it("routes a server project attached to a code host to pull requests (ADR 0170)", async () => {

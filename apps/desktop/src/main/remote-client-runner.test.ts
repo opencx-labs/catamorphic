@@ -127,15 +127,37 @@ describe("RemoteClientRunners", () => {
     expect(registrations).toHaveLength(2);
   });
 
-  it("stops retrying when the server refuses this machine", async () => {
+  it("stops retrying once the server confirms it refuses this machine", async () => {
     const machine = runners({ current: true });
     await machine.connect({ projectId: "local", environment: "laptop" });
     refuse = true;
     started[0]?.onError?.(new Error("fetch failed"));
     await vi.advanceTimersByTimeAsync(2_000);
     expect(registrations).toHaveLength(2);
+    // A replica's cached roles may be stale: the refusal is asked once more.
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(registrations).toHaveLength(3);
     await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(registrations).toHaveLength(3);
+  });
+
+  it("connects when a refusal clears once replicas' caches catch up", async () => {
+    const machine = runners({ current: true });
+    refuse = true;
+    const connecting = machine.connect({
+      projectId: "local",
+      environment: "laptop",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(registrations).toHaveLength(1);
+    refuse = false;
+    await vi.advanceTimersByTimeAsync(11_000);
+    await expect(connecting).resolves.toEqual({
+      id: "7d1c3f0e-4c1b-4a4e-9a51-2f6c9c1b0a11",
+    });
     expect(registrations).toHaveLength(2);
+    expect(started).toHaveLength(1);
+    await machine.stop();
   });
 
   it("tells the runner which answers end its session and which to retry", async () => {

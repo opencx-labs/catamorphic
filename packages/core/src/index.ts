@@ -361,6 +361,7 @@ export {
   EnvironmentIncompatibleError,
   EnvironmentNotFoundError,
   ExecutionEnvironmentsService,
+  InvalidEnvironmentPolicyError,
   NoCompatibleEnvironmentError,
   type PlacementReason,
   personalCredentialsDecision,

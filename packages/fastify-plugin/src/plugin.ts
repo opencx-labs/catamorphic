@@ -2,6 +2,7 @@ import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import {
   AccessDeniedError,
   DeploymentBlockedError,
+  InvalidEnvironmentPolicyError,
   ProjectNotFoundError,
   SessionArtifactConflictError,
   SessionArtifactNotFoundError,
@@ -184,6 +185,12 @@ export const catamorphicPlugin: FastifyPluginAsync<
     }
     if (err instanceof ProjectNotFoundError) {
       return reply.status(404).send({ error: "Project not found" });
+    }
+    // The project's committed policy is invalid: its owners fix it.
+    if (err instanceof InvalidEnvironmentPolicyError) {
+      return reply
+        .status(422)
+        .send({ error: err.message, code: "environment_policy_invalid" });
     }
     // A normal state the person resolves (record changes first), not a fault.
     if (err instanceof DeploymentBlockedError) {
