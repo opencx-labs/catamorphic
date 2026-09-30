@@ -206,7 +206,6 @@ export class ClientRunnersService {
     projectId?: string;
     clientRunnerId?: string;
     allocationBindingId?: string;
-    workerNodeId?: string;
   }): Promise<EnvironmentRuntimeBinding | undefined> {
     const allocationParts = args.allocationBindingId?.startsWith("client:")
       ? args.allocationBindingId.split(":")
@@ -254,7 +253,6 @@ export class ClientRunnersService {
         ],
         resources: {},
       },
-      workerNodeId: args.workerNodeId,
       sandboxProvider: provider,
     };
   }

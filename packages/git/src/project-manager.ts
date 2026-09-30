@@ -65,44 +65,64 @@ export class ProjectManager {
   }
 
   /**
+   * First-time creation of a working copy in this process, by path: two
+   * callers opening the same new copy at once must not seed it together,
+   * or one reads objects the other has not finished writing.
+   */
+  private readonly preparing = new Map<string, Promise<void>>();
+
+  /**
    * Open (creating if needed) the dev working copy for a specific user. When
    * the underlying storage has no clone for this user yet, we initialize one
-   * and pull from origin so the user starts in sync with main.
+   * and pull from origin so the user starts in sync with main. Concurrent
+   * first opens share one seeding.
    */
   async openDev(
     tenantId: string,
     projectId: string,
     externalUserId: string,
   ): Promise<ProjectRepo> {
-    const existed = await this.storage.exists(
-      tenantId,
-      projectId,
-      externalUserId,
-    );
-    if (existed) {
-      return this.open(tenantId, projectId, externalUserId);
+    const key = JSON.stringify([tenantId, projectId, externalUserId]);
+    let pending = this.preparing.get(key);
+    if (!pending) {
+      pending = this.prepareDev({
+        tenantId,
+        projectId,
+        externalUserId,
+      }).finally(() => this.preparing.delete(key));
+      this.preparing.set(key, pending);
     }
+    await pending;
+    return this.open(tenantId, projectId, externalUserId);
+  }
 
+  private async prepareDev(args: {
+    tenantId: string;
+    projectId: string;
+    externalUserId: string;
+  }): Promise<void> {
+    const { tenantId, projectId, externalUserId } = args;
+    if (await this.storage.exists(tenantId, projectId, externalUserId)) return;
     const repoPath = await this.storage.initProject(tenantId, projectId, {
       externalUserId,
     });
+    if (!this.remote) return;
     const { release } = await this.storage.acquireProject(
       tenantId,
       projectId,
       externalUserId,
     );
     const repo = new ProjectRepoImpl(projectId, repoPath, release);
-
-    if (this.remote) {
+    try {
       await seedFromOrigin({
         remote: this.remote,
         tenantId,
         projectId,
         dev: repo,
       });
+    } finally {
+      await repo.dispose();
     }
-
-    return repo;
   }
 
   /** An isolated origin snapshot, removed on disposal even with host-mapped projects. */

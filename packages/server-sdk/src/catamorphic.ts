@@ -134,8 +134,6 @@ export interface CatamorphicHostConfig {
   clientExecution?: boolean;
   credentialVault?: CredentialVault;
   connectionProviders?: readonly ConnectionProvider[];
-  /** Every node lease this process holds, including remote workers (ADR 0164). */
-  heldWorkerNodes?: CatamorphicCoreConfig["heldWorkerNodes"];
   /** Review every brokered connection action (ADR 0162). */
   connectionGuards?: CatamorphicCoreConfig["connectionGuards"];
   /** How long one guard may take before its action escalates (ADR 0183). */
@@ -368,9 +366,6 @@ export class Catamorphic {
       hostId: config.hostId,
       agentCapabilities: config.agentCapabilities,
       workerNode: config.workerNode,
-      ...(config.heldWorkerNodes
-        ? { heldWorkerNodes: config.heldWorkerNodes }
-        : {}),
       db,
       projectManager: resolveStorage(config.storage),
       sandboxProvider: config.sandboxProvider,

@@ -64,14 +64,6 @@ export async function registerWorkMachine(args: {
       userId: string,
     ): Promise<{ userId: string; groups: readonly string[] } | undefined>;
   };
-  /** Remote workers whose leases this instance holds. */
-  workers?: {
-    heldProvider(
-      nodeId: string,
-    ):
-      | { provider: SandboxProvider; lease: { id: string; token: string } }
-      | undefined;
-  };
 }) {
   const nodes = new WorkerNodesService(args.db);
   const descriptor: EnvironmentBinding = {
@@ -205,7 +197,6 @@ export async function registerWorkMachine(args: {
         ...chosen.node,
         descriptor: { ...chosen.node.descriptor, labels: chosen.labels },
       };
-      const remote = args.workers?.heldProvider(selected.id);
       // A worker whose access names only this owner takes no one else's
       // work, so it may hold their personal credentials (ADR 0184).
       const servesOnlyOwner = Boolean(
@@ -217,15 +208,21 @@ export async function registerWorkMachine(args: {
         descriptor: selected.descriptor,
         workerNodeId: selected.id,
         ...(servesOnlyOwner ? { servesOnlyOwner } : {}),
+        // This process's own machine, or a worker any replica reaches
+        // through the operation queue (ADR 0192). Another replica's own
+        // machine has no provider here.
         ...(selected.id === lease.id
           ? {
               sandboxProvider: args.sandboxProvider,
               workerLeaseToken: lease.token,
             }
-          : remote
+          : selected.remote
             ? {
-                sandboxProvider: remote.provider,
-                workerLeaseToken: remote.lease.token,
+                sandboxProvider: nodes.remoteProvider({
+                  nodeId: selected.id,
+                  offer: selected.remote,
+                  label: "The worker",
+                }),
               }
             : {}),
       };

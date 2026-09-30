@@ -141,11 +141,17 @@ export interface ExecutionAllocation {
 /**
  * Why an Allocation ended. `idle`: a chat gave its workspace back while
  * waiting (ADR 0173). `node_lost`: its machine stopped for good and the
- * workload moved on (ADR 0190). `retired`: the workload ended. A chat is
- * admitted again on its next turn after any release; a workflow run moved
- * off a lost machine gets its new Allocation at once.
+ * workload moved on (ADR 0190). `connection_ended`: a member's machine
+ * connected again, and its earlier connection's workspace is gone (ADR
+ * 0192). `retired`: the workload ended. A chat is admitted again on its
+ * next turn after any release; a workflow run moved off a lost machine gets
+ * its new Allocation at once.
  */
-export type AllocationReleaseReason = "idle" | "node_lost" | "retired";
+export type AllocationReleaseReason =
+  | "idle"
+  | "node_lost"
+  | "connection_ended"
+  | "retired";
 
 export class ExecutionAllocationConflictError extends Error {
   constructor(readonly rootWorkloadId: string) {
@@ -291,7 +297,10 @@ export class ExecutionAllocationsService {
 }
 
 function releaseReason(value: string | null): AllocationReleaseReason | null {
-  return value === "idle" || value === "node_lost" || value === "retired"
+  return value === "idle" ||
+    value === "node_lost" ||
+    value === "connection_ended" ||
+    value === "retired"
     ? value
     : null;
 }

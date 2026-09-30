@@ -420,8 +420,8 @@ async function createWorkServerInner(
     userId: string,
   ) => Promise<{ userId: string; groups: string[] } | undefined> = async () =>
     undefined;
-  // Enrolled remote workers (ADR 0164): this instance holds the leases of
-  // the workers connected to it and forwards their sandbox operations.
+  // Enrolled remote workers (ADR 0164). Each worker owns its node lease
+  // (ADR 0192), so any replica serves its calls and runs its agents.
   const workers = new WorkWorkerRegistry({
     db: ownDb,
     nodes: new WorkerNodesService(ownDb),
@@ -429,7 +429,6 @@ async function createWorkServerInner(
     authorityId: hostId,
     log,
   });
-  disposers.push(() => workers.releaseAll());
   const machine = await registerWorkMachine({
     db: ownDb,
     tenantId: SERVER_TENANT_ID,
@@ -444,7 +443,6 @@ async function createWorkServerInner(
     workloads: config.execution.workloads,
     capabilities: execution.machineCapabilities,
     sandboxProvider,
-    workers,
     placement: {
       workers: () => workers.placements(),
       owner: (userId) => placementOwner(userId),
@@ -506,7 +504,6 @@ async function createWorkServerInner(
           })
         : null,
     workerNode: machine.lease,
-    heldWorkerNodes: () => [machine.lease, ...workers.heldLeases()],
     clientExecution: true,
     database: databaseConfig,
     storage: objectStore

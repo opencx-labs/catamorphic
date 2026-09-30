@@ -125,11 +125,13 @@ export {
   type AgentTodoStatus,
   AgentTurnInProgressError,
   type AgentTurnSettledEvent,
+  AgentTurnUnsettledError,
   type ArchiveSessionResourcesHandler,
   type NativeAgentCheckout,
   PersonalLoginUnavailableError,
   type SessionPlacement,
   type SyncedFileChange,
+  type UnsettledTurnState,
   UnsupportedAgentTopologyError,
 } from "./services/agent-sessions-service.js";
 export {
@@ -528,6 +530,8 @@ export {
   RateReservationsService,
 } from "./services/rate-reservations-service.js";
 export {
+  EXECUTOR_RESTARTED_ERROR,
+  nodeExecutor,
   type RemoteExecutorLease,
   RemoteExecutorLeaseLostError,
   type RemoteOperation,
@@ -745,6 +749,10 @@ export {
   EnvironmentCapacityError,
 } from "./services/worker-capacity.js";
 export {
+  REMOTE_EPOCH_PATTERN,
+  RemoteEpochSupersededError,
+  type RemoteNodeOffer,
+  RemoteNodeOfferSchema,
   WORKER_NODE_LEASE_MS,
   type WorkerNode,
   type WorkerNodeLease,

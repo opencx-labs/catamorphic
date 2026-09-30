@@ -5,7 +5,7 @@ import {
   type SandboxProcessProvider,
   type SandboxProvider,
 } from "@catamorphic/sandbox";
-import { type Kysely, sql } from "kysely";
+import { type Kysely, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import {
   jsonColumn,
@@ -276,6 +276,15 @@ export class RemoteReceiptRefusedError extends Error {
   }
 }
 
+/** An enrolled worker node's address in the queue (ADR 0164). */
+export function nodeExecutor(nodeId: string): string {
+  return `node:${nodeId}`;
+}
+
+/** The error a controller sees for an operation its executor restarted under. */
+export const EXECUTOR_RESTARTED_ERROR =
+  "The machine restarted while this ran; the outcome is unknown. Check the last action before retrying.";
+
 /** A remote executor and the lease that fences what it receives. */
 export interface RemoteExecutorLease {
   /** `node:<id>` for an enrolled worker, `client:<id>` for a member runner. */
@@ -321,13 +330,13 @@ export class RemoteOperationQueue {
   constructor(private readonly db: Kysely<DB>) {}
 
   /**
-   * A sandbox provider whose operations run on the executor. The lease is
-   * read at each call: a worker may reconnect under a new lease while
-   * sessions keep this provider.
+   * A sandbox provider whose operations run on the executor. A function
+   * lease is read at each call: a worker may restart under a new epoch while
+   * sessions keep this provider (ADR 0192).
    */
   provider(args: {
     executor: string;
-    leaseToken: string | (() => string | undefined);
+    leaseToken: string | (() => Promise<string | undefined>);
     /** Whether the executor still holds this lease. */
     leaseHeld: (leaseToken: string) => Promise<boolean>;
     /** Names the executor in errors: "The worker", "This machine". */
@@ -351,10 +360,10 @@ export class RemoteOperationQueue {
               "catamorphic.executor.operation": operation.kind,
             },
           },
-          () => {
+          async () => {
             const leaseToken =
               typeof args.leaseToken === "function"
-                ? args.leaseToken()
+                ? await args.leaseToken()
                 : args.leaseToken;
             if (!leaseToken)
               throw new Error(`${args.label} is not connected right now`);
@@ -563,6 +572,30 @@ export class RemoteOperationQueue {
       )
       .executeTakeFirst();
     if (!recorded) throw new RemoteReceiptRefusedError();
+  }
+
+  /**
+   * The executor restarted under a new lease (ADR 0192): every operation the
+   * old one was sent or took fails as uncertain, in the caller's transaction,
+   * and is never delivered again. Its late receipts are refused.
+   */
+  static async failLease(args: {
+    transaction: Transaction<DB>;
+    executor: string;
+    leaseToken: string;
+  }): Promise<number> {
+    const failed = await args.transaction
+      .updateTable("remote_operations")
+      .set({
+        status: "failed",
+        error: EXECUTOR_RESTARTED_ERROR,
+        operation: sql`jsonb_build_object('kind', operation->'kind')`,
+      })
+      .where("executor", "=", args.executor)
+      .where("lease_token", "=", args.leaseToken)
+      .where("status", "in", ["pending", "running"])
+      .executeTakeFirst();
+    return Number(failed.numUpdatedRows);
   }
 
   /**

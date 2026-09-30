@@ -24,8 +24,6 @@ type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 function flakyBalancer(replicas: Map<string, string>) {
   const stats = {
     connects: 0,
-    /** The replica that took the worker's lease. */
-    holder: "",
     badGateways: 0,
     /** Calls sent to a replica that had stopped. */
     unreachable: 0,
@@ -40,10 +38,7 @@ function flakyBalancer(replicas: Map<string, string>) {
     const live = [...replicas];
     const [name, origin] = live[Math.floor(Math.random() * live.length)] ?? [];
     if (!name || !origin) throw new TypeError("fetch failed: no replica");
-    if (route === "connect") {
-      stats.connects++;
-      stats.holder = name;
-    }
+    if (route === "connect") stats.connects++;
     const chaotic = ["poll", "renew", "complete"].includes(route);
     if (chaotic && Math.random() < 0.2) {
       stats.badGateways++;
@@ -156,14 +151,9 @@ it.skipIf(!process.env.DATABASE_URL)(
           timeout: 20_000,
         })
         .toBe(true);
-      // The replica holding the lease runs the worker's agents (ADR 0164);
-      // the other one serves only the worker's calls routed to it.
-      const holder = servers.get(balancer.stats.holder);
-      const other = [...servers.keys()].find(
-        (name) => name !== balancer.stats.holder,
-      );
-      if (!holder || !other) throw new Error("Two replicas must serve");
-      const a = holder;
+      // Either replica runs the worker's agents (ADR 0192).
+      const a = servers.get("a");
+      if (!a) throw new Error("Replica a must serve");
 
       const identity: Identity = {
         tenantId: SERVER_TENANT_ID,
@@ -215,8 +205,8 @@ it.skipIf(!process.env.DATABASE_URL)(
       // A replica stops (a rolling deploy). It stays in the balancer's
       // rotation until calls to it fail; the worker's lease and running
       // work are untouched.
-      const stopping = servers.get(other);
-      servers.delete(other);
+      const stopping = servers.get("b");
+      servers.delete("b");
       await stopping?.shutdown();
       const second = await turn(8);
       expect(second.split("\n---\n").at(-1)?.trim()).toBe("exit=0\n16");

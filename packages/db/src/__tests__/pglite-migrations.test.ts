@@ -79,6 +79,7 @@ describe("PGlite migrations", () => {
       "039_client_runner_capabilities.sql",
       "040_remote_operations.sql",
       "041_disposable_worker_nodes.sql",
+      "043_worker_owned_leases.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

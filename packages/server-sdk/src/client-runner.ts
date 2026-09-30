@@ -211,7 +211,11 @@ export function startClientRunner(args: {
     try {
       const operation = RemoteOperationSchema.parse(job.operation);
       // A server may only address sandboxes created for this connection.
-      if ("sandboxId" in operation && !ownedSandboxes.has(operation.sandboxId))
+      // Destroying one that is already gone succeeds, so a cleanup whose
+      // receipt was lost can be retried.
+      const owned =
+        !("sandboxId" in operation) || ownedSandboxes.has(operation.sandboxId);
+      if (!owned && operation.kind !== "destroy")
         throw new Error("Sandbox does not belong to this runner connection");
       if (operation.kind === "create") {
         if (
@@ -222,10 +226,9 @@ export function startClientRunner(args: {
         creating++;
         reserved = true;
       }
-      const response = await executeClientOperation({
-        provider: args.provider,
-        operation,
-      });
+      const response = owned
+        ? await executeClientOperation({ provider: args.provider, operation })
+        : null;
       if (operation.kind === "create") {
         const handle = response;
         if (

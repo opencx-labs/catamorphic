@@ -477,6 +477,8 @@ export interface ExecutionAllocations {
   created_at: Generated<Timestamp>;
   environment_name: string;
   id: Generated<string>;
+  maintenance_claim: string | null;
+  maintenance_claimed_until: Timestamp | null;
   policy_snapshot: Json;
   project_id: string;
   release_reason: string | null;
@@ -1004,6 +1006,7 @@ export interface WorkerNodes {
   lease_expires_at: Timestamp;
   lease_token: string;
   recovery_attempted_at: Timestamp | null;
+  remote: Json | null;
   tenant_id: string;
   updated_at: Generated<Timestamp>;
 }

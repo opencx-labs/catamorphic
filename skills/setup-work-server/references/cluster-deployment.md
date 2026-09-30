@@ -47,7 +47,8 @@ brain become replicas. Never add a replica just for capacity.
    `DATABASE_URL`, `WORK_SECRET`, or `WORK_VAULT_KEY` is set. It dials out; open
    no inbound port.
 3. Check `GET /_work/operator/machines` for `worker.build-1` with
-   `available: true`, and `GET /_work/operator/workers` for its last contact.
+   `available: true`, and `GET /_work/operator/workers` for its last contact
+   (its last call to any replica).
 4. Nothing in projects changes: the `default` Environment already runs agents
    on any machine open to their owner. To reserve machines for some work, give
    them a label and select it in `.work/project.json`
@@ -187,9 +188,22 @@ fresh one with an empty disk at any time.
    answers any worker call (ADR 0187). A worker retries a failed call, such as
    a 502 or a replica restarting, without ending its session or interrupting
    its agents. Set the balancer's idle timeout above 30 seconds (a poll waits
-   up to 20) and allow 64 MiB request bodies. The replica that took a worker's
-   lease runs its agents; if that replica stops, the lease lapses within about
-   a minute and the worker's next connection moves it.
+   up to 20) and allow 64 MiB request bodies. A worker owns its lease (ADR
+   0192): its own calls renew it, and any replica runs its agents. Stopping a
+   replica affects only the turns that replica was running: a stopping
+   replica lets them finish or interrupts them (see below), and a crashed
+   one's are settled as interrupted by another replica once their turn lease
+   lapses, about a minute later. The chats' next turns run on any replica. A
+   worker that is away for more than 45 seconds is unavailable: its chats'
+   turns wait, and in-flight operations its controllers stopped waiting for
+   fail as uncertain. When it calls again, the same process simply carries
+   on.
+
+A restarted worker process connects under a new epoch. The operations it had
+in flight fail as uncertain and are never replayed; its sandboxes and chats
+carry on. Two processes must never share one worker's data volume: the older
+one stops for good once the newer one connects. A new process whose clock is
+behind its predecessor's waits up to 45 seconds for the old lease to lapse.
 
 The operator can disable any machine with
 `PATCH /_work/operator/machines/:id` and `{ "enabled": false }`. Lease fencing
@@ -226,8 +240,10 @@ replica checks for lost replicas every ten seconds and recovers their work:
   can take waits for one; a run whose Environment the project removed, or
   whose owner may no longer act, fails with the reason.
   Tenant run capacity is freed when the run ends, as always;
-- each chat's workspace is released; its next turn is admitted on a live
-  machine and restores the workspace from its `sessions/<id>` branch;
+- each chat's workspace on that replica is released; its next turn is
+  admitted on a live machine and restores the workspace from its
+  `sessions/<id>` branch. Chats on workers and on members' machines keep
+  their workspaces: any replica runs their turns;
 - the lost machine disappears from `GET /_work/operator/machines`.
 
 Server agent sessions checkpoint to isolated `sessions/<id>` branches in the
@@ -246,6 +262,12 @@ an authenticated SDK runner using its local sandbox provider. It receives no
 Postgres credentials. Discovery and every operation retain the member's current
 project and Environment permissions. Closing the desktop or losing authorization
 stops the runner. A new connection lifetime cannot revive an old allocation.
+The runner renews its own lease through any replica, so its chats belong to no
+replica: any replica runs their turns, and they continue when the replica
+that admitted them stops (ADR 0192). While the runner is away, its chats' turns stay
+queued instead of failing. When it connects again, a new connection cannot
+revive the old workspace (see above): each chat is admitted on the new
+connection and its workspace rebuilt from its `sessions/<id>` branch.
 
 Stock local execution uses the controller topology: the host model loop and
 connection broker stay on the server; sandbox commands and files run on the
