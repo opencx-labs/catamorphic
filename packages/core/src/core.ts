@@ -977,6 +977,8 @@ export class CatamorphicCore {
       environments: this.executionEnvironments,
       allocations: this.executionAllocations,
       coordinator,
+      // Read at call time: memberships are constructed further down.
+      resolveOwner: (args) => this.resolveMember(args),
     });
     executionWorker.registerExhaustedHandler((args) =>
       coordinator.handleExhaustedJob(args),

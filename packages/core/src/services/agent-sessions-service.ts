@@ -774,6 +774,8 @@ export class AgentSessionsService {
   /** Sessions whose in-flight turn was interrupted by the user. */
   private readonly interruptedTurns = new Set<string>();
   private readonly drainers = new Map<string, Promise<void>>();
+  /** Set by {@link stopLocalTurns}: this process claims no more turns. */
+  private stoppingTurns = false;
   private readonly turnWorkerId = `agent-sessions:${randomUUID()}`;
   private archiveResources?: ArchiveSessionResourcesHandler;
   /** The host's identity resolver, from {@link startWorker}. */
@@ -782,6 +784,46 @@ export class AgentSessionsService {
     projectId: string;
     externalUserId: string;
   }) => Promise<Identity | null>;
+
+  /**
+   * Stop this process's turns before its machine goes away (ADR 0190): it
+   * claims no more, lets running turns finish for most of `timeoutMs`
+   * (default 15 seconds), then asks the harnesses still running to stop and
+   * waits for those turns to settle. Queued turns stay queued for whichever
+   * machine takes the chat next.
+   */
+  async stopLocalTurns(input: { timeoutMs?: number } = {}): Promise<void> {
+    this.stoppingTurns = true;
+    const timeoutMs = input.timeoutMs ?? 15_000;
+    const settled = (ms: number) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      return Promise.race([
+        Promise.allSettled([...this.drainers.values()]),
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, ms);
+        }),
+      ]).finally(() => clearTimeout(timer));
+    };
+    await settled(Math.floor((timeoutMs * 2) / 3));
+    const running = [...this.runningTurns];
+    if (running.length === 0) return;
+    const sessions = await this.db
+      .selectFrom("agent_sessions")
+      .select(["id", "agent_id", "project_id", "provider_session_id"])
+      .where("id", "in", running)
+      .execute();
+    for (const session of sessions) {
+      this.interruptedTurns.add(session.id);
+      try {
+        (
+          await this.resolveAgent(session.agent_id, session.project_id)
+        ).provider.interrupt?.(session.provider_session_id ?? session.id);
+      } catch {
+        // No resolvable agent: nothing to signal; the turn settles alone.
+      }
+    }
+    await settled(Math.ceil(timeoutMs / 3));
+  }
 
   /** Hosts start this alongside their workflow worker, after migrations. */
   startWorker(input: {
@@ -4710,6 +4752,7 @@ export class AgentSessionsService {
         : undefined;
       if (this.workerNode ? !nodeLease : allocation?.workerNodeId !== null)
         return;
+      if (this.stoppingTurns) return;
       const turn = await this.turns.claimNextForSession({
         workerId: this.turnWorkerId,
         sessionId,

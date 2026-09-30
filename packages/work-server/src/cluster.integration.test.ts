@@ -10,6 +10,7 @@ import {
   EncryptedCredentialVault,
   PostgresObjectStore,
 } from "@catamorphic/server-sdk";
+import pg from "pg";
 import { expect, it } from "vitest";
 import {
   createWorkServer,
@@ -397,6 +398,34 @@ it.skipIf(!process.env.DATABASE_URL)(
       expect(secondNode).not.toBe(firstNode);
       expect(await node(firstNode)).toBeUndefined();
 
+      const probe = async (url: "/healthz" | "/readyz") =>
+        (await second.app.inject({ method: "GET", url })).statusCode;
+      expect([await probe("/healthz"), await probe("/readyz")]).toEqual([
+        200, 200,
+      ]);
+
+      // A database blip: renewals hang, but the lease is still valid. The
+      // replica stops being ready and stays alive.
+      const blocker = new pg.Client({ connectionString: database.url });
+      await blocker.connect();
+      try {
+        await blocker.query("BEGIN");
+        await blocker.query(
+          "SELECT id FROM catamorphic.worker_nodes WHERE id = $1 FOR UPDATE",
+          [secondNode],
+        );
+        await expect
+          .poll(() => probe("/readyz"), { timeout: 30_000, interval: 500 })
+          .toBe(503);
+        expect(await probe("/healthz")).toBe(200);
+        await blocker.query("COMMIT");
+      } finally {
+        await blocker.end();
+      }
+      await expect
+        .poll(() => probe("/readyz"), { timeout: 20_000, interval: 500 })
+        .toBe(200);
+
       // Its lease lapses (the database was unreachable for too long, or an
       // operator disabled it): the lease can never be renewed.
       let lost = false;
@@ -420,13 +449,14 @@ it.skipIf(!process.env.DATABASE_URL)(
         ok: false,
         machine: { id: secondNode },
       });
+      expect(await probe("/readyz")).toBe(503);
     } finally {
       for (const server of servers) await server.shutdown();
       await fs.rm(dir, { recursive: true, force: true });
       await database.drop();
     }
   },
-  60_000,
+  120_000,
 );
 
 it("a Postgres deployment requires the operator credential every replica shares", async () => {
@@ -452,3 +482,95 @@ it("a Postgres deployment requires the operator credential every replica shares"
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });
+
+it.skipIf(!process.env.DATABASE_URL)(
+  "stopping a replica lets a running chat turn settle before its sandbox goes",
+  async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "work-sigterm-"));
+    const database = await createTestDatabase("work_sigterm");
+    const server = await createWorkServer(
+      testServerOptions({
+        publicBases: ["https://sigterm.example.test"],
+        dataDir: dir,
+        env: {
+          DATABASE_URL: database.url,
+          WORK_SECRET: "sigterm-test-secret-with-at-least-32-characters",
+          WORK_OPERATOR_SECRET: "sigterm-test-operator-secret-with-32-chars",
+          WORK_VAULT_KEY: Buffer.alloc(32, 5).toString("base64"),
+          WORK_TRUST_CONTROL_PLANE_AGENTS: "1",
+          WORK_FAKE_AGENT: "1",
+          PATH: process.env.PATH,
+        },
+      }),
+    );
+    let stopped = false;
+    const admin = new pg.Client({ connectionString: database.url });
+    try {
+      const node: string = (
+        await server.app.inject({ method: "GET", url: "/healthz" })
+      ).json().machine.id;
+      const identity = {
+        tenantId: SERVER_TENANT_ID,
+        externalUserId: randomUUID(),
+      };
+      const core = server.catamorphic.core;
+      const project = await core.projects.create(identity, { name: "Stop" });
+      const sessions = core.agentSessions;
+      if (!sessions) throw new Error("Agent sessions are not configured");
+      const session = await sessions.create(identity, project.id);
+      await sessions.enqueueMessage(
+        identity,
+        project.id,
+        session.id,
+        "run sleep 3 && echo finished",
+      );
+      await expect
+        .poll(
+          async () =>
+            (
+              await core.db
+                .selectFrom("agent_turns")
+                .select("status")
+                .where("session_id", "=", session.id)
+                .executeTakeFirst()
+            )?.status,
+          { timeout: 30_000, interval: 100 },
+        )
+        .toBe("running");
+
+      // SIGTERM while the turn runs a command in its sandbox.
+      await server.shutdown();
+      stopped = true;
+      await admin.connect();
+      const turn = await admin.query(
+        "SELECT status FROM catamorphic.agent_turns WHERE session_id = $1",
+        [session.id],
+      );
+      expect(turn.rows).toEqual([{ status: "completed" }]);
+      const reply = await admin.query(
+        "SELECT content FROM catamorphic.agent_messages WHERE session_id = $1 AND role = 'assistant'",
+        [session.id],
+      );
+      expect(reply.rows[0]?.content).toContain("finished");
+      // Only then did the machine go, and the chat's workspace with it.
+      const allocation = await admin.query(
+        "SELECT a.status, a.release_reason FROM catamorphic.agent_sessions s JOIN catamorphic.execution_allocations a ON a.id = s.allocation_id WHERE s.id = $1",
+        [session.id],
+      );
+      expect(allocation.rows).toEqual([
+        { status: "released", release_reason: "node_lost" },
+      ]);
+      const nodes = await admin.query(
+        "SELECT id FROM catamorphic.worker_nodes WHERE id = $1",
+        [node],
+      );
+      expect(nodes.rows).toEqual([]);
+    } finally {
+      if (!stopped) await server.shutdown();
+      await admin.end().catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+      await database.drop();
+    }
+  },
+  90_000,
+);

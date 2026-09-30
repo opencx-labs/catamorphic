@@ -1003,6 +1003,7 @@ export interface WorkerNodes {
   id: string;
   lease_expires_at: Timestamp;
   lease_token: string;
+  recovery_attempted_at: Timestamp | null;
   tenant_id: string;
   updated_at: Generated<Timestamp>;
 }

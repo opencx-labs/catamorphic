@@ -14,9 +14,10 @@ One process, zero external services by default: PGlite, bare Git origins,
 and local-process execution under one data directory (`/data` in the image).
 It is **single-tenant only**: local-process execution gives processes the
 host's filesystem and network (ADR 0047). It serves the API at `/api`, sign-in
-at `/login`, the mobile PWA at `/`, and `/healthz`, which answers 503 while
-the server's machine lease is not renewing. A lease that lapsed cannot be
-renewed, so the process then exits; run it under a restart policy.
+at `/login`, the mobile PWA at `/`, `/readyz` (503 while the machine's
+lease is not renewing, or the machine is disabled), and `/healthz` (503 only
+once a replica's lease is lost for good, when the process also exits; run it
+under a restart policy).
 
 ## Configuration
 

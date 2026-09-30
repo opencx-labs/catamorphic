@@ -33,6 +33,7 @@ const identity: Identity = {
   externalUserId: "recovery-member",
 };
 const projectId = randomUUID();
+const DEPARTED = "departed-member";
 let root = "";
 let core: CatamorphicCore | undefined;
 let nodes: WorkerNodesService | undefined;
@@ -93,6 +94,9 @@ beforeAll(async () => {
     db,
     projectManager,
     environmentProvider: nodeProvider(nodes),
+    // The host's member resolver: someone who left may run nothing.
+    resolveMemberIdentity: async ({ tenantId, externalUserId }) =>
+      externalUserId === DEPARTED ? null : { tenantId, externalUserId },
   });
 });
 
@@ -102,15 +106,27 @@ afterAll(async () => {
   if (root) await fs.rm(root, { recursive: true, force: true });
 });
 
-async function register(): Promise<{ id: string; token: string }> {
+async function register(
+  authority = authorityId,
+): Promise<{ id: string; token: string }> {
   if (!nodes) throw new Error("Database required");
   const id = `node.${randomUUID()}`;
   return nodes.register({
     tenantId: identity.tenantId,
-    authorityId,
+    authorityId: authority,
     descriptor: descriptor(id),
     disposable: true,
   });
+}
+
+/** Earlier tests' nodes stop taking work (but are not lost yet). */
+async function quietOthers(): Promise<void> {
+  await db
+    ?.updateTable("worker_nodes")
+    .set({ lease_expires_at: sql<Date>`now() - interval '1 second'` })
+    .where("authority_id", "=", authorityId)
+    .where("lease_expires_at", ">", sql<Date>`now()`)
+    .execute();
 }
 
 /** The node's process died this long ago: nothing renews its lease. */
@@ -128,6 +144,8 @@ async function lapse(nodeId: string, seconds: number): Promise<void> {
 async function placeWork(args: {
   nodeId: string;
   environment?: string;
+  status?: string;
+  owner?: string;
 }): Promise<{ runId: string; childId: string; allocationId: string }> {
   if (!core || !db) throw new Error("Database required");
   const runId = randomUUID();
@@ -150,11 +168,11 @@ async function placeWork(args: {
     provenance: {},
     status: "waiting",
     allocation_id: allocation.id,
-    external_user_id: identity.externalUserId,
+    external_user_id: args.owner ?? identity.externalUserId,
   };
   await db
     .insertInto("workflow_runs")
-    .values({ ...run, id: runId })
+    .values({ ...run, id: runId, status: args.status ?? "waiting" })
     .execute();
   // The root waits on a child run, which shares its Allocation.
   const step = await db
@@ -368,6 +386,161 @@ it.skipIf(!db)(
       status: "released",
       release_reason: "node_lost",
     });
+  },
+  30_000,
+);
+
+it.skipIf(!db)(
+  "two concurrent passes move a run once",
+  async () => {
+    if (!core || !db) return;
+    await quietOthers();
+    const lost = await register();
+    const live = await register();
+    const work = await placeWork({ nodeId: lost.id });
+    await lapse(lost.id, 300);
+    const passes = await Promise.all([
+      core.nodeRecovery.recoverLostNodes({ authorityId, nodeIds: [lost.id] }),
+      core.nodeRecovery.recoverLostNodes({ authorityId, nodeIds: [lost.id] }),
+    ]);
+    expect(passes.reduce((sum, pass) => sum + pass.movedRuns, 0)).toBe(1);
+    const allocations = await db
+      .selectFrom("execution_allocations")
+      .select(["worker_node_id", "status"])
+      .where("root_workload_id", "=", work.runId)
+      .orderBy("created_at")
+      .execute();
+    expect(allocations).toEqual([
+      { worker_node_id: lost.id, status: "released" },
+      { worker_node_id: live.id, status: "active" },
+    ]);
+  },
+  30_000,
+);
+
+it.skipIf(!db)(
+  "a job still leased on the lost node is fenced from it and claimed once on the new one",
+  async () => {
+    if (!core || !db) return;
+    await quietOthers();
+    const lost = await register();
+    const live = await register();
+    const work = await placeWork({ nodeId: lost.id });
+    await new ExecutionJobsService(db).enqueue({
+      tenantId: identity.tenantId,
+      kind: "durable_boundary",
+      payload: {},
+      workflowRunId: work.runId,
+    });
+    const jobsOn = (lease: { id: string; token: string }) =>
+      new ExecutionJobsService(db, lease);
+    // The lost node's process claimed the job before it froze.
+    const [held] = await jobsOn(lost).claim({
+      workerId: "lost-worker",
+      kinds: ["durable_boundary"],
+      leaseSeconds: 600,
+    });
+    if (!held?.leaseToken) throw new Error("The lost node claimed nothing");
+    await lapse(lost.id, 300);
+    expect(
+      (
+        await core.nodeRecovery.recoverLostNodes({
+          authorityId,
+          nodeIds: [lost.id],
+        })
+      ).movedRuns,
+    ).toBe(1);
+    // The old holder can no longer extend its lease: its run moved away.
+    expect(
+      await jobsOn(lost).heartbeat({
+        jobId: held.id,
+        workerId: "lost-worker",
+        leaseToken: held.leaseToken,
+        leaseGeneration: held.leaseGeneration,
+      }),
+    ).toBe(false);
+    // Nobody else claims it while the old lease stands.
+    const claimOnLive = () =>
+      jobsOn(live).claim({
+        workerId: "live-worker",
+        kinds: ["durable_boundary"],
+      });
+    expect(await claimOnLive()).toEqual([]);
+    // Once that lease lapses, the job returns and only the new node takes it.
+    await db
+      .updateTable("execution_jobs")
+      .set({ lease_expires_at: sql<Date>`now() - interval '1 second'` })
+      .where("id", "=", held.id)
+      .execute();
+    await jobsOn(live).requeueExpired();
+    expect((await claimOnLive()).map((claimed) => claimed.id)).toEqual([
+      held.id,
+    ]);
+  },
+  30_000,
+);
+
+it.skipIf(!db)(
+  "fails an operator-paused run, and a run whose owner left, instead of holding them",
+  async () => {
+    if (!core || !db) return;
+    await quietOthers();
+    const lost = await register();
+    await register();
+    const paused = await placeWork({
+      nodeId: lost.id,
+      environment: "removed",
+      status: "paused",
+    });
+    const departed = await placeWork({ nodeId: lost.id, owner: DEPARTED });
+    await lapse(lost.id, 300);
+    const result = await core.nodeRecovery.recoverLostNodes({
+      authorityId,
+      nodeIds: [lost.id],
+    });
+    expect(result).toMatchObject({ failedRuns: 2, deletedNodes: 1 });
+    const runs = await db
+      .selectFrom("workflow_runs")
+      .select(["id", "status", "error"])
+      .where("id", "in", [paused.runId, departed.runId])
+      .execute();
+    expect(runs.map((run) => run.status)).toEqual(["failed", "failed"]);
+    expect(runs.find((run) => run.id === departed.runId)?.error).toContain(
+      "its owner may no longer run work",
+    );
+  },
+  30_000,
+);
+
+it.skipIf(!db)(
+  "takes the lost nodes it looked at longest ago first",
+  async () => {
+    if (!core || !db) return;
+    await quietOthers();
+    // Another deployment, where no machine can take work: both wait.
+    const elsewhere = "recovery-starvation";
+    const stuck = await register(elsewhere);
+    const newer = await register(elsewhere);
+    await placeWork({ nodeId: stuck.id });
+    await placeWork({ nodeId: newer.id });
+    await lapse(stuck.id, 600);
+    await lapse(newer.id, 300);
+    const seen: string[] = [];
+    for (let round = 0; round < 2; round += 1) {
+      const pass = await core.nodeRecovery.recoverLostNodes({
+        authorityId: elsewhere,
+        limit: 1,
+      });
+      expect(pass).toMatchObject({ nodes: 1, waitingRuns: 1 });
+      const [latest] = await db
+        .selectFrom("worker_nodes")
+        .select("id")
+        .where("id", "in", [stuck.id, newer.id])
+        .orderBy("recovery_attempted_at", (order) => order.desc().nullsLast())
+        .execute();
+      if (latest) seen.push(latest.id);
+    }
+    expect(seen).toEqual([stuck.id, newer.id]);
   },
   30_000,
 );

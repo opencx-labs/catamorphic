@@ -158,7 +158,8 @@ fresh one with an empty disk at any time.
 
 1. Provision the same version with its own `WORK_DATA_DIR`. It may be empty
    and need not persist: it holds only working copies and sandboxes. Never
-   share one data directory between two running replicas.
+   share one data directory between two running replicas: a replica removes
+   the sandboxes it finds there when it starts.
 2. Supply the deployment's `DATABASE_URL`, `WORK_SECRET`, `WORK_VAULT_KEY`,
    `WORK_OPERATOR_SECRET`, `WORK_PUBLIC_URL`, sign-in configuration
    (`WORK_AUTH_CONFIG`), and gateway configuration (`WORK_GATEWAY_CONFIG`)
@@ -171,9 +172,15 @@ fresh one with an empty disk at any time.
    sign-in configuration match, and registers a new machine
    (`node.<uuid>`, `plane=control`) with a renewable lease. The machine lives
    as long as the process: a restarted replica is a new machine.
-4. Point the orchestrator's liveness probe at `/healthz`. It answers 503 while
-   the lease is not renewing. A lease that lapsed cannot be renewed, so the
-   process then exits and its supervisor starts a fresh one.
+4. Probe it. `/readyz` (readiness) answers 503 while its lease is not
+   renewing, for example during a database failover, or while the machine is
+   disabled; the balancer then routes around it. `/healthz` (liveness) answers
+   503 only once the lease is lost, which is permanent: the process then exits
+   and its supervisor starts a fresh one. Never point liveness at `/readyz`:
+   a database blip shorter than the 45 second lease would restart every
+   replica. On Kubernetes, also set `terminationGracePeriodSeconds` to at
+   least 30, so a stopping replica can let its chat turns finish (up to 15
+   seconds) and move its work before it is killed.
 5. Workers reach the replicas through the load balancer, and any replica
    answers any worker call (ADR 0187). A worker retries a failed call, such as
    a 502 or a replica restarting, without ending its session or interrupting
@@ -186,8 +193,10 @@ The operator can disable any machine with
 `PATCH /_work/operator/machines/:id` and `{ "enabled": false }`. Lease fencing
 blocks new claims and renewal of old execution ownership. A disabled
 replica's lease lapses, its process exits, and its work is recovered like a
-lost replica's. A disabled worker keeps its sessions: they do not silently
-move to a different machine.
+lost replica's. A disabled single server keeps running, answers 503 on
+`/readyz`, takes no work, and resumes when its own operator API enables it
+again. A disabled worker keeps its sessions: they do not silently move to a
+different machine.
 
 ## Shared state and recovery
 
@@ -200,16 +209,20 @@ by moving the old key to `WORK_VAULT_PREVIOUS_KEYS`; see
 [secrets and the gateway](secrets-and-gateway.md).
 
 A replica that stops (SIGTERM) stops claiming work, returns its running
-workflow jobs to the queue, gives its machine back, and moves its work to the
-other replicas at once. A replica that dies is lost once its lease has lapsed
+workflow jobs to the queue, lets its running chat turns finish (and
+interrupts any still running after about ten seconds), gives its machine
+back, moves its work to the other replicas at once, and removes its
+sandboxes. A replica that dies is lost once its lease has lapsed
 for 30 seconds (about a minute and a quarter after its last renewal). Every
 replica checks for lost replicas every ten seconds and recovers their work:
 
 - each workflow run, paused durable runs included, gets a workspace on a
   live replica in its own Environment. Its sandbox is rebuilt from the
   deployed commit and its step journal carries on; a step whose outcome was
-  uncertain retries as after a restart. A run that no replica can take waits
-  for one; a run whose Environment the project removed fails with the reason.
+  uncertain retries as after a restart. The run is placed for its owner
+  with their current access, as a chat's next turn is. A run that no replica
+  can take waits for one; a run whose Environment the project removed, or
+  whose owner may no longer act, fails with the reason.
   Tenant run capacity is freed when the run ends, as always;
 - each chat's workspace is released; its next turn is admitted on a live
   machine and restores the workspace from its `sessions/<id>` branch;

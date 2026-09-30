@@ -188,9 +188,10 @@ export interface WorkServer {
   accounts: AccountLifecycle;
   agentsDescription: string;
   /**
-   * Resolves when this server's machine lease lapsed. It can never be
-   * renewed, so the host should shut down and let its supervisor start a
-   * fresh process (ADR 0190).
+   * Resolves when a replica's machine lease is lost: lapsed or disabled,
+   * it can never be renewed, so the host should shut down and let its
+   * supervisor start a fresh process (ADR 0190). A single server never
+   * loses its lease; it takes it again after a lapse.
    */
   lost: Promise<void>;
   shutdown(): Promise<void>;
@@ -654,15 +655,17 @@ async function createWorkServerInner(
     if (disposable)
       recoverOwnNode = async () => {
         await recover([machine.lease.id]);
-        // Its sandboxes live on this machine and no Allocation will use them
-        // again: remove them before the process ends.
+        // Every sandbox this machine still holds (moved off, released idle
+        // or retired but not yet cleaned) lives here and no Allocation will
+        // use it again: remove them before the process ends.
         const sandboxes = await core.db
           .selectFrom("execution_allocations")
           .select("sandbox_provider_id")
           .where("worker_node_id", "=", machine.lease.id)
+          .where("sandbox_provider_id", "is not", null)
           .where((eb) =>
             eb.or([
-              eb("status", "=", "active"),
+              eb("capacity_released_at", "is", null),
               eb("release_reason", "=", "node_lost"),
             ]),
           )
@@ -861,12 +864,19 @@ async function createWorkServerInner(
         : undefined,
     log,
   });
-  if (core.agentSessions) {
-    catamorphic.startAgentWorker({
+  const agentSessions = core.agentSessions;
+  if (agentSessions) {
+    const agentWorker = catamorphic.startAgentWorker({
       resolveIdentity: async (args) =>
         (await accountLifecycle.isActive(args.externalUserId))
           ? core.memberships.identityFor(args)
           : null,
+    });
+    // Stopping: this process's turns finish or stop before its machine and
+    // their sandboxes go away (ADR 0190).
+    disposers.push(async () => {
+      await agentWorker.stop();
+      await agentSessions.stopLocalTurns();
     });
   }
   if (directories.length > 0) {
@@ -1089,21 +1099,27 @@ async function createWorkServerInner(
     admission,
   });
 
-  // Unhealthy while the machine's lease is not renewing, and for good once
-  // it lapsed: a liveness probe then restarts the replica (ADR 0190).
+  // Liveness and readiness (ADR 0190). `/healthz` fails only once the
+  // machine's lease is lost for good, so a database failover shorter than
+  // the lease never restarts a replica. `/readyz` fails while renewals fail
+  // or hang, or the machine is disabled, so a balancer can route around it.
+  const health = () => ({
+    machine: {
+      id: nodeId,
+      label: config.machineName,
+      capacity: execution.capacity,
+      defaults: execution.defaults,
+      isolation: execution.isolation,
+    },
+    agentSessions: Boolean(core.agentSessions),
+  });
   app.get("/healthz", async (_request, reply) => {
-    const ok = machine.healthy();
-    return reply.status(ok ? 200 : 503).send({
-      ok,
-      machine: {
-        id: nodeId,
-        label: config.machineName,
-        capacity: execution.capacity,
-        defaults: execution.defaults,
-        isolation: execution.isolation,
-      },
-      agentSessions: Boolean(core.agentSessions),
-    });
+    const ok = !machine.isLost();
+    return reply.status(ok ? 200 : 503).send({ ok, ...health() });
+  });
+  app.get("/readyz", async (_request, reply) => {
+    const ok = !machine.isLost() && machine.ready();
+    return reply.status(ok ? 200 : 503).send({ ok, ...health() });
   });
 
   // Machine-local setup authority lives on a separate server, not merely a

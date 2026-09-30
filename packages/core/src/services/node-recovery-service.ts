@@ -7,7 +7,11 @@ import {
   sql,
   type Transaction,
 } from "kysely";
-import type { Identity } from "../identity.js";
+import {
+  type Identity,
+  isProjectPrincipal,
+  projectPrincipalIdentity,
+} from "../identity.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
 import {
   admissionPolicy,
@@ -17,6 +21,7 @@ import {
   EnvironmentNotFoundError,
   EnvironmentPolicyInvalidError,
   type ExecutionEnvironmentsService,
+  placementOwner,
 } from "./execution-environments-service.js";
 import type { RunCoordinator } from "./run-coordinator.js";
 import { EnvironmentCapacityError } from "./worker-capacity.js";
@@ -74,6 +79,15 @@ export class NodeRecoveryService {
       environments: ExecutionEnvironmentsService;
       allocations: ExecutionAllocationsService;
       coordinator: RunCoordinator;
+      /**
+       * A member's identity as the host resolves it now, or null when they
+       * may no longer act (ADR 0053): the same resolver unattended work uses.
+       */
+      resolveOwner: (args: {
+        tenantId: string;
+        projectId: string;
+        externalUserId: string;
+      }) => Promise<Identity | null>;
     },
   ) {}
 
@@ -110,12 +124,20 @@ export class NodeRecoveryService {
             query.where("id", "in", [...(args.nodeIds ?? [])]),
           )
           .where((eb) => isLost(eb, graceMs))
+          // Nodes looked at longest ago first, so nodes whose work cannot
+          // move yet never starve newer ones.
+          .orderBy("recovery_attempted_at", (order) => order.asc().nullsFirst())
           .orderBy("lease_expires_at")
           .limit(Math.max(1, Math.min(args.limit ?? 20, 100)))
           .execute();
         const failures: unknown[] = [];
         for (const node of lost) {
           result.nodes += 1;
+          await this.deps.db
+            .updateTable("worker_nodes")
+            .set({ recovery_attempted_at: sql`now()` })
+            .where("id", "=", node.id)
+            .execute();
           const allocations = await this.deps.db
             .selectFrom("execution_allocations")
             .selectAll()
@@ -204,27 +226,41 @@ export class NodeRecoveryService {
           return outcome;
         }
         const fail = async (reason: string): Promise<RunOutcome> => {
-          await this.deps.coordinator.failRunTree({
-            runId: run.id,
-            error: `Its machine stopped and the run cannot continue elsewhere: ${reason}`,
-          });
-          await this.deps.db
-            .updateTable("execution_allocations")
-            .set({
-              release_reason: "node_lost",
-              capacity_released_at: sql`now()`,
-            })
-            .where("id", "=", allocation.id)
-            .where("status", "=", "released")
-            .execute();
-          span.setAttribute("catamorphic.recovery.outcome", "failed");
-          return "failed";
+          // Only while the Allocation is still on the lost node: another
+          // pass may have moved the run in the meantime.
+          const failed = await this.deps.db
+            .transaction()
+            .execute(async (trx) => {
+              if (!(await lockLostAllocation({ trx, ...args }))) return false;
+              await this.deps.coordinator.failRunTree({
+                runId: run.id,
+                error: `Its machine stopped and the run cannot continue elsewhere: ${reason}`,
+                trx,
+              });
+              await retireAllocation({ trx, allocationId: allocation.id });
+              return true;
+            });
+          const outcome = failed ? "failed" : "skipped";
+          span.setAttribute("catamorphic.recovery.outcome", outcome);
+          return outcome;
         };
         if (!run.external_user_id) return fail("the run has no owner");
-        const identity: Identity = {
-          tenantId: allocation.tenant_id,
-          externalUserId: run.external_user_id,
-        };
+        // The run's owner as they are now, placed as readmission places a
+        // chat (ADR 0167, 0173): a project automation as the project, a
+        // member with their current access.
+        const identity = isProjectPrincipal(run.external_user_id)
+          ? projectPrincipalIdentity({
+              tenantId: allocation.tenant_id,
+              projectId: allocation.project_id,
+              environment: allocation.environment_name,
+            })
+          : await this.deps.resolveOwner({
+              tenantId: allocation.tenant_id,
+              projectId: allocation.project_id,
+              externalUserId: run.external_user_id,
+            });
+        if (!identity)
+          return fail("its owner may no longer run work in this project");
         const previous = await this.deps.allocations.get({
           identity,
           allocationId: allocation.id,
@@ -237,6 +273,7 @@ export class NodeRecoveryService {
           admission = await this.deps.environments.admit({
             identity,
             projectId: allocation.project_id,
+            owner: placementOwner(run.external_user_id),
             environment: allocation.environment_name,
             requirements: { workload: "workflow" },
           });

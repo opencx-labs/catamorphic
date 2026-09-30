@@ -4,3 +4,7 @@
 -- it never returns, so any replica recovers its work: workflow runs move to
 -- a live node, chats are admitted again, and the node row is deleted.
 ALTER TABLE worker_nodes ADD COLUMN disposable boolean NOT NULL DEFAULT false;
+-- When recovery last looked at a lost node: each pass takes the nodes it
+-- looked at longest ago, so nodes whose work cannot move yet never starve
+-- newer ones.
+ALTER TABLE worker_nodes ADD COLUMN recovery_attempted_at timestamptz;

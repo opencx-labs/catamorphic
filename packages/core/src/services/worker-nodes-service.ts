@@ -82,6 +82,12 @@ export class WorkerNodesService {
      * work with {@link NodeRecoveryService}.
      */
     disposable?: boolean;
+    /**
+     * Take the lease of a disabled node too. A single server holds its own
+     * lease while disabled, so its operator can enable it again; a disabled
+     * node renews nothing and takes no work.
+     */
+    evenIfDisabled?: boolean;
   }): Promise<WorkerNodeLease> {
     const descriptor = descriptorSchema.parse(args.descriptor);
     const capacity = args.capacity
@@ -146,7 +152,11 @@ export class WorkerNodesService {
                 })
                 .where("worker_nodes.tenant_id", "=", args.tenantId)
                 .where("worker_nodes.authority_id", "=", args.authorityId)
-                .where("worker_nodes.enabled", "=", true)
+                .where(
+                  "worker_nodes.enabled",
+                  "in",
+                  args.evenIfDisabled ? [true, false] : [true],
+                )
                 .where("worker_nodes.lease_expires_at", "<=", sql<Date>`now()`),
             )
             .returning("id")

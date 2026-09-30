@@ -117,5 +117,5 @@ process.on("SIGINT", () => void stop("SIGINT", 0));
 // supervisor (a restart policy, a Kubernetes Deployment) starts a fresh
 // process, which registers a new lease.
 void server.lost.then(() =>
-  stop("This machine's lease lapsed and cannot be renewed", 1),
+  stop("This machine's lease is lost and cannot be renewed", 1),
 );

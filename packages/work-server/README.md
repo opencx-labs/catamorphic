@@ -75,7 +75,8 @@ config fields and hooks (`secret`, `vaultKeys`, `operatorSecret`) supply them
 instead. With `databaseUrl` the server is a disposable replica (ADR 0190):
 `secret`, vault keys, and `operatorSecret` are required, it writes no identity
 to `dataDir`, and it registers a new machine at every start. `server.lost`
-resolves when that machine's lease lapsed; the host should then shut down so
+resolves when that machine's lease is lost (`/healthz` then answers 503;
+`/readyz` answers 503 whenever renewals fail); the host should then shut down so
 its supervisor starts a fresh process.
 
 ## Hooks

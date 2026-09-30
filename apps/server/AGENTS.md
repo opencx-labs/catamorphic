@@ -80,9 +80,9 @@ alone never free capacity.
   processes the host filesystem and network (ADR 0047).
 - `/_work/operator/*` is machine-local setup authority on a separate
   Fastify listener bound to `127.0.0.1`. Never register those routes on the
-  public app or expose the setup port from the container. `/healthz` and the
-  hosted PWA are public. Application administration belongs under `/api` and
-  uses ordinary project permissions.
+  public app or expose the setup port from the container. `/healthz`,
+  `/readyz`, and the hosted PWA are public. Application administration
+  belongs under `/api` and uses ordinary project permissions.
 
 ## Verify
 

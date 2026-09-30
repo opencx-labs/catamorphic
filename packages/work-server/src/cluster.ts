@@ -105,6 +105,9 @@ export async function registerWorkMachine(args: {
         capacity: args.capacity,
         defaults: args.defaults,
         disposable: args.disposable,
+        // A single server holds its own lease while disabled, so its
+        // operator API can enable it again.
+        evenIfDisabled: !args.disposable,
       });
     } catch (error) {
       if (!(error instanceof WorkerNodeLeaseHeldError) || Date.now() > deadline)
@@ -225,37 +228,55 @@ export async function registerWorkMachine(args: {
       };
     },
   };
-  let heartbeat: Promise<boolean> | undefined;
-  let healthy = true;
-  // A lapsed lease never renews: the node is lost for good, and the
-  // process should stop so its orchestrator starts a fresh one.
+  let heartbeat: Promise<void> | undefined;
+  // Renewing: the lease is current and the node takes work. False while a
+  // renewal fails or hangs, and while the node is disabled.
+  // A disabled single server starts idle.
+  let ready = await nodes.renew({ lease });
+  // A disposable node whose lease lapsed or was disabled never renews: it
+  // is lost for good, and the process should stop so its orchestrator
+  // starts a fresh one (ADR 0190).
   let markLost = () => {};
   const lost = new Promise<void>((resolve) => {
     markLost = resolve;
   });
   let isLost = false;
+  const beat = async (): Promise<void> => {
+    if (await nodes.renew({ lease })) {
+      ready = true;
+      return;
+    }
+    ready = false;
+    if (args.disposable) {
+      isLost = true;
+      markLost();
+      return;
+    }
+    // A single server's identity outlives a lapse (a sleeping laptop, a
+    // database outage): it takes its lease again once the old one lapsed,
+    // under a new token every holder of `lease` reads. A disabled server
+    // keeps its lease and idles until its operator enables it.
+    try {
+      const next = await register();
+      lease.token = next.token;
+      ready = await nodes.renew({ lease });
+    } catch (error) {
+      if (!(error instanceof WorkerNodeLeaseHeldError)) throw error;
+    }
+  };
   const timer = setInterval(() => {
     if (isLost) return;
     if (heartbeat) {
-      // The last renewal has not answered in a whole interval: the database
-      // is unreachable or hung, so this machine may be losing its lease.
-      healthy = false;
+      // The last renewal has not answered in a whole interval: the
+      // database is unreachable or hung.
+      ready = false;
       return;
     }
-    heartbeat = nodes
-      .renew({ lease })
-      .then((owned) => {
-        healthy = owned;
-        if (!owned) {
-          isLost = true;
-          markLost();
-        }
-        return owned;
-      })
+    heartbeat = beat()
       .catch(() => {
-        // The database did not answer: unhealthy until a renewal lands.
-        healthy = false;
-        return false;
+        // The database did not answer: not ready until a renewal lands.
+        // The lease may still be valid, so this is not a lost node.
+        ready = false;
       })
       .finally(() => {
         heartbeat = undefined;
@@ -264,7 +285,7 @@ export async function registerWorkMachine(args: {
   timer.unref();
   let cleanup: Promise<unknown> | undefined;
   const cleanupTimer = setInterval(() => {
-    if (cleanup || !healthy) return;
+    if (cleanup || !ready) return;
     cleanup = cleanupWorkerAllocations({
       db: args.db,
       workerNode: lease,
@@ -283,9 +304,11 @@ export async function registerWorkMachine(args: {
     lease,
     nodes,
     environmentProvider,
-    /** False while the lease is not renewing, and for good once it is lost. */
-    healthy: () => healthy,
-    /** Resolves when the node's lease lapsed and can never be renewed. */
+    /** Renewing its lease and taking work (readiness). */
+    ready: () => ready,
+    /** The lease is gone for good (liveness): the process should stop. */
+    isLost: () => isLost,
+    /** Resolves when a disposable node's lease can never be renewed. */
     lost,
     /** Stop renewing and give the lease back; later calls share the first. */
     stop: () =>

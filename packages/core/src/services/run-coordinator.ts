@@ -842,8 +842,18 @@ export class RunCoordinator {
    * its Environment cannot place it again (ADR 0190). Releases the root's
    * Allocation. A run already terminal is left as it is.
    */
-  async failRunTree(args: { runId: string; error: string }): Promise<void> {
-    await this.db.transaction().execute(async (trx) => {
+  async failRunTree(args: {
+    runId: string;
+    error: string;
+    /** Run inside the caller's transaction, which holds its own locks. */
+    trx?: Transaction<DB>;
+  }): Promise<void> {
+    if (!args.trx)
+      return this.db
+        .transaction()
+        .execute((trx) => this.failRunTree({ ...args, trx }));
+    const trx = args.trx;
+    {
       const root = await lockRun({ trx, runId: args.runId });
       if (!root) return;
       const runs = await lockRunHierarchy({ trx, root });
@@ -860,7 +870,7 @@ export class RunCoordinator {
           statuses,
         });
       }
-    });
+    }
   }
 
   async handleExhaustedJob(args: {
