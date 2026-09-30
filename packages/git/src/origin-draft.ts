@@ -1,4 +1,3 @@
-import nodeFs from "node:fs";
 import path from "node:path";
 import {
   DRAFT_REF_PREFIX,
@@ -7,23 +6,21 @@ import {
   publishedRef,
   SYSTEM_COMMIT_AUTHOR,
 } from "@catamorphic/workflow/project-layout";
-import git from "isomorphic-git";
 import { type FileReadOptions, readFileSnapshot } from "./file-reads.js";
-import {
-  collectConflicts,
-  fetchObject,
-  fetchRemote,
-  pushObject,
-} from "./git-sync.js";
+import { fetchRemote } from "./git-sync.js";
 import {
   DraftPathError,
   type GitObjectCache,
+  type IgnoreRules,
   isTreeMode,
+  mergeTrees,
   OriginObjects,
+  SYMLINK_MODE,
   type TreeChange,
 } from "./origin-objects.js";
 import { assertSafePath } from "./project-repo.js";
 import { RefMovedError } from "./ref-moved-error.js";
+import { assertValidRefName } from "./ref-names.js";
 import type {
   CommitInfo,
   ConflictEntry,
@@ -35,6 +32,9 @@ import type {
 } from "./types.js";
 
 const MAIN = "refs/heads/main";
+const BRANCHES = "refs/heads/";
+/** Branches that hold one session's work, private to it. */
+const SESSION_BRANCHES = `${BRANCHES}sessions/`;
 const SHA_RE = /^[0-9a-f]{40}$/;
 /** Lost compare-and-swap races before a write gives up. */
 const MAX_ATTEMPTS = 8;
@@ -70,19 +70,6 @@ export type DraftPublishResult =
       conflicts: ConflictEntry[];
     };
 
-type PublishPlan =
-  | { kind: "done"; done: DraftPublishResult }
-  | {
-      kind: "publish";
-      draft: string;
-      main: string | null;
-      tree: string | null;
-    };
-
-type MergePlan =
-  | { kind: "done"; upToDate: string | null }
-  | { kind: "merge"; draft: string; main: string };
-
 /** Every attempt to move a ref lost its race to another writer. */
 export class DraftBusyError extends Error {
   constructor() {
@@ -107,6 +94,46 @@ export class DraftRefNotAllowedError extends Error {
   }
 }
 
+/** Paths the project's ignore rules keep out of its history. */
+export class DraftIgnoredPathError extends Error {
+  readonly paths: readonly string[];
+  constructor(paths: readonly string[]) {
+    super(
+      `${paths.join(", ")} ${paths.length === 1 ? "is" : "are"} ignored by the project's .gitignore and never become part of the program.`,
+    );
+    this.name = "DraftIgnoredPathError";
+    this.paths = paths;
+  }
+}
+
+/** The conflicts a merge left without a resolution. */
+export class DraftUnresolvedError extends Error {
+  readonly conflicts: ConflictEntry[];
+  constructor(conflicts: ConflictEntry[]) {
+    super(
+      `Resolve ${conflicts.map((conflict) => conflict.path).join(", ")} too.`,
+    );
+    this.name = "DraftUnresolvedError";
+    this.conflicts = conflicts;
+  }
+}
+
+/** An origin that cannot keep drafts safely (ADR 0191). */
+export class DraftsUnsupportedError extends Error {
+  constructor(reason: string) {
+    super(`Member drafts are unavailable on this project storage: ${reason}`);
+    this.name = "DraftsUnsupportedError";
+  }
+}
+
+type PublishPlan =
+  | { kind: "done"; done: DraftPublishResult }
+  | { kind: "publish"; draft: string; main: string | null; tree: string };
+
+type MergePlan =
+  | { kind: "done"; result: MergeResult }
+  | { kind: "merged"; draft: string; main: string; tree: string };
+
 /**
  * A member's draft of a server-hosted project's program (ADR 0191): the ref
  * `refs/work/drafts/<member>` in the project's origin, read and written as
@@ -114,11 +141,13 @@ export class DraftRefNotAllowedError extends Error {
  * is the published `main`. Every write is a draft commit moved in with a
  * compare-and-swap, so any replica sees every earlier write and nothing is
  * lost when one restarts. Publishing squashes the draft into one commit on
- * `main`; only a merge with a `main` that moved since the draft began uses
- * a real, ephemeral checkout.
+ * `main`, merging in memory with a `main` that moved since the draft began.
  *
- * Reads accept `HEAD` (the draft), `main` and published refs, other
- * published branches, and commit ids; never another member's draft.
+ * Reads of `HEAD` within one open see one commit (the one the first read
+ * found, or the latest write through this instance), so several files read
+ * together always come from the same snapshot. Reads accept `HEAD`, `main`
+ * and published refs, other published branches, and commit ids; never
+ * another member's draft or a session branch.
  */
 export class OriginDraftRepo {
   readonly projectId: string;
@@ -127,8 +156,9 @@ export class OriginDraftRepo {
   private readonly tenantId: string;
   private readonly remote: RemoteBackend;
   private readonly cache: GitObjectCache;
-  private readonly openCheckout: () => Promise<ProjectRepo>;
   private readonly author: { name: string; email: string };
+  /** The commit `HEAD` reads see; resolved on first use. */
+  private head: { sha: string | null } | undefined;
 
   constructor(args: {
     tenantId: string;
@@ -136,8 +166,6 @@ export class OriginDraftRepo {
     externalUserId: string;
     remote: RemoteBackend;
     cache: GitObjectCache;
-    /** An ephemeral checkout of the published program, for merges. */
-    openCheckout: () => Promise<ProjectRepo>;
     /** Author of draft commits; publishing records the publisher. */
     author?: { name: string; email: string };
   }) {
@@ -146,7 +174,6 @@ export class OriginDraftRepo {
     this.ref = draftRef(args.externalUserId);
     this.remote = args.remote;
     this.cache = args.cache;
-    this.openCheckout = args.openCheckout;
     this.author = args.author ?? SYSTEM_COMMIT_AUTHOR;
   }
 
@@ -154,6 +181,28 @@ export class OriginDraftRepo {
     return this.remote.withOrigin(this.tenantId, this.projectId, (origin) =>
       fn(new OriginObjects(origin, this.cache)),
     );
+  }
+
+  /**
+   * Run one compare-and-swap attempt; a lost race (inside the attempt, or
+   * reported by the origin when it publishes the ref) yields null.
+   */
+  private async attempt<T>(
+    fn: (objects: OriginObjects) => Promise<T | null>,
+  ): Promise<T | null> {
+    try {
+      return await this.withObjects(async (objects) => {
+        try {
+          return await fn(objects);
+        } catch (error) {
+          if (error instanceof RefMovedError) return null;
+          throw error;
+        }
+      });
+    } catch (error) {
+      if (error instanceof RefMovedError) return null;
+      throw error;
+    }
   }
 
   private async tips(
@@ -166,31 +215,39 @@ export class OriginDraftRepo {
     return { draft, main };
   }
 
+  /**
+   * The commit a ref names, as this member may read it. Every name is
+   * checked against git's ref rules first, then the full ref it maps to
+   * against the private namespaces, so no spelling reaches another
+   * member's draft or a session's branch.
+   */
   private async resolveIn(
     objects: OriginObjects,
     ref: string,
   ): Promise<string | null> {
     if (ref === "HEAD" || ref === this.ref) {
-      const { draft, main } = await this.tips(objects);
-      return draft ?? main;
+      if (!this.head) {
+        const { draft, main } = await this.tips(objects);
+        this.head = { sha: draft ?? main };
+      }
+      return this.head.sha;
     }
     if (SHA_RE.test(ref))
       return (await objects.origin.hasObject(ref)) ? ref : null;
-    const branch = ref.startsWith(`${PUBLISHED_REF_PREFIX}/`)
-      ? ref.slice(PUBLISHED_REF_PREFIX.length + 1)
-      : ref.startsWith("refs/heads/")
-        ? ref.slice("refs/heads/".length)
-        : ref.startsWith("refs/")
-          ? null
-          : ref;
-    // Session branches and other members' drafts stay private.
+    assertValidRefName(ref);
+    const full = ref.startsWith(`${PUBLISHED_REF_PREFIX}/`)
+      ? `${BRANCHES}${ref.slice(PUBLISHED_REF_PREFIX.length + 1)}`
+      : ref.startsWith("refs/")
+        ? ref
+        : `${BRANCHES}${ref}`;
+    assertValidRefName(full);
     if (
-      !branch ||
-      branch.startsWith("sessions/") ||
-      ref.startsWith(DRAFT_REF_PREFIX)
+      !full.startsWith(BRANCHES) ||
+      full.startsWith(SESSION_BRANCHES) ||
+      full.startsWith(`${DRAFT_REF_PREFIX}/`)
     )
       throw new DraftRefNotAllowedError(ref);
-    return objects.origin.resolveRef(`refs/heads/${branch}`);
+    return objects.origin.resolveRef(full);
   }
 
   private async treeAt(objects: OriginObjects, ref: string): Promise<string> {
@@ -217,7 +274,7 @@ export class OriginDraftRepo {
         normalized,
       );
       if (!entry || isTreeMode(entry.mode)) return null;
-      if (entry.mode === "120000")
+      if (entry.mode === SYMLINK_MODE)
         throw new DraftPathError({ code: "ELOOP", path: normalized });
       return objects.blob(entry.oid);
     });
@@ -277,7 +334,7 @@ export class OriginDraftRepo {
   ): Promise<Uint8Array | null> {
     const normalized = normalizePath(filePath);
     const blob = await this.withObjects(async (objects) => {
-      const sha = await this.resolveIn(objects, ref).catch(() => null);
+      const sha = await this.resolveIn(objects, ref);
       if (!sha) return null;
       const entry = await objects
         .entry((await objects.commit(sha)).tree, normalized)
@@ -362,9 +419,15 @@ export class OriginDraftRepo {
 
   /**
    * Apply changes as one draft commit, starting the draft from `main` when
-   * the member has none. A write that loses the race to another writer of
-   * the same draft is rebuilt on the winner and retried. Returns the
-   * draft's tip, unchanged when the changes change nothing.
+   * the member has none. File contents are written to the origin once; a
+   * write that loses the race to another writer of the same draft rebuilds
+   * only its trees on the winner and retries. Returns the draft's tip,
+   * unchanged when the changes change nothing.
+   *
+   * Paths the project's ignore rules keep out of history are refused, or
+   * dropped with `skipIgnored`; with `skipMissingDeletes`, deleting a file
+   * the draft lacks is not an error (a sandbox sync reporting a file it
+   * made and removed again).
    */
   async write(input: {
     changes: readonly DraftChange[];
@@ -374,25 +437,33 @@ export class OriginDraftRepo {
      * the write builds on; a mismatch throws {@link DraftContentChangedError}.
      */
     expected?: Record<string, string>;
+    skipIgnored?: boolean;
+    skipMissingDeletes?: boolean;
   }): Promise<string | null> {
-    const changes = new Map<string, TreeChange>();
-    for (const change of input.changes) {
-      const normalized = normalizePath(change.path);
-      changes.set(
-        normalized,
+    const pending = new Map<string, Uint8Array | null>();
+    for (const change of input.changes)
+      pending.set(
+        normalizePath(change.path),
         "delete" in change
           ? null
           : typeof change.content === "string"
             ? new TextEncoder().encode(change.content)
             : change.content,
       );
-    }
-    if (changes.size === 0) return null;
+    if (pending.size === 0) return null;
     const message =
       input.message ??
-      `Draft: ${[...changes.keys()].slice(0, 3).join(", ")}${changes.size > 3 ? ", ..." : ""}`;
+      `Draft: ${[...pending.keys()].slice(0, 3).join(", ")}${pending.size > 3 ? ", ..." : ""}`;
+    // Contents are immutable objects: write them once, before any race.
+    const written = [...pending].filter(
+      (entry): entry is [string, Uint8Array] => entry[1] !== null,
+    );
+    const oids = await this.withObjects((objects) =>
+      objects.writeBlobs(written.map(([, content]) => content)),
+    );
+    const blobs = new Map(written.map(([file], index) => [file, oids[index]]));
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      const outcome = await this.withObjects(async (objects) => {
+      const outcome = await this.attempt(async (objects) => {
         const { draft, main } = await this.tips(objects);
         const parent = draft ?? main;
         const baseTree = parent ? (await objects.commit(parent)).tree : null;
@@ -406,7 +477,23 @@ export class OriginDraftRepo {
               : null;
           if (current !== content) throw new DraftContentChangedError(file);
         }
-        const tree = await objects.writeTree(baseTree, changes);
+        const rules: IgnoreRules = new Map();
+        const ignored: string[] = [];
+        const changes = new Map<string, TreeChange>();
+        for (const [file] of pending) {
+          if (await objects.isIgnored(baseTree, file, rules)) {
+            ignored.push(file);
+            continue;
+          }
+          const oid = blobs.get(file);
+          changes.set(file, oid ? { oid } : null);
+        }
+        if (ignored.length > 0 && !input.skipIgnored)
+          throw new DraftIgnoredPathError(ignored);
+        if (changes.size === 0) return { sha: parent };
+        const tree = await objects.writeTree(baseTree, changes, {
+          skipMissingDeletes: input.skipMissingDeletes,
+        });
         if (tree === baseTree) return { sha: parent };
         const sha = await objects.writeCommit({
           tree,
@@ -414,19 +501,17 @@ export class OriginDraftRepo {
           author: this.author,
           message,
         });
-        try {
-          await objects.origin.updateRef({
-            ref: this.ref,
-            sha,
-            expected: draft,
-          });
-          return { sha };
-        } catch (error) {
-          if (error instanceof RefMovedError) return null;
-          throw error;
-        }
+        await objects.origin.updateRef({
+          ref: this.ref,
+          sha,
+          expected: draft,
+        });
+        return { sha };
       });
-      if (outcome) return outcome.sha;
+      if (outcome) {
+        this.head = { sha: outcome.sha };
+        return outcome.sha;
+      }
     }
     throw new DraftBusyError();
   }
@@ -436,9 +521,7 @@ export class OriginDraftRepo {
     ref?: string;
   }): Promise<CommitInfo[]> {
     return this.withObjects(async (objects) => {
-      const tip = await this.resolveIn(objects, options?.ref ?? "HEAD").catch(
-        () => null,
-      );
+      const tip = await this.resolveIn(objects, options?.ref ?? "HEAD");
       return tip ? objects.log(tip, options?.maxCount ?? 50) : [];
     });
   }
@@ -505,6 +588,7 @@ export class OriginDraftRepo {
 
   /** Delete the draft: the member's view follows `main` again. */
   async discard(): Promise<boolean> {
+    this.head = undefined;
     return this.withObjects(async (objects) => {
       if (!(await objects.origin.resolveRef(this.ref))) return false;
       await objects.origin.deleteRef({ ref: this.ref });
@@ -514,94 +598,80 @@ export class OriginDraftRepo {
 
   /**
    * Publish the draft as one commit on `main` with `message`, then delete
-   * it. When `main` moved since the draft began, the two are merged in an
-   * ephemeral checkout first; a conflict publishes nothing and reports the
-   * conflicted files. `guard` sees every path the commit changes against
-   * `main` and throws to refuse.
+   * it. When `main` moved since the draft began, the two merge in memory
+   * first; a conflict publishes nothing and reports the conflicted files. A
+   * draft whose merge leaves `main` as it is publishes nothing. `guard`
+   * sees every path the commit changes against `main` and throws to refuse.
    */
   async publish(input: {
     message: string;
     author: { name: string; email: string };
     guard?: (paths: readonly string[]) => void;
   }): Promise<DraftPublishResult> {
+    this.head = undefined;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const plan = await this.withObjects(
         async (objects): Promise<PublishPlan> => {
           const { draft, main } = await this.tips(objects);
-          if (!draft)
+          const nothing = async (): Promise<PublishPlan> => {
+            if (draft) await clearDraft(objects, this.ref, draft);
             return {
               kind: "done",
               done: {
-                status: "nothing-to-deploy" as const,
+                status: "nothing-to-deploy",
                 commitSha: null,
                 remoteSha: main,
                 conflicts: [],
               },
             };
-          const draftTree = (await objects.commit(draft)).tree;
-          const base = main ? (await objects.compare(draft, main)).base : null;
-          const baseTree = base ? (await objects.commit(base)).tree : null;
-          if ((await objects.diffTrees(baseTree, draftTree)).length === 0) {
-            await clearDraft(objects, this.ref, draft);
-            return {
-              kind: "done",
-              done: {
-                status: "nothing-to-deploy" as const,
-                commitSha: null,
-                remoteSha: main,
-                conflicts: [],
-              },
-            };
-          }
-          return {
-            kind: "publish",
-            draft,
-            main,
-            tree: !main || base === main ? draftTree : null,
           };
+          if (!draft) return nothing();
+          const draftTree = (await objects.commit(draft)).tree;
+          if (!main) return { kind: "publish", draft, main, tree: draftTree };
+          const { base } = await objects.compare(draft, main);
+          const mainTree = (await objects.commit(main)).tree;
+          let tree = draftTree;
+          if (base !== main) {
+            const merged = await mergeTrees({
+              objects,
+              base: base ? (await objects.commit(base)).tree : null,
+              ours: draftTree,
+              theirs: mainTree,
+            });
+            if (merged.status === "conflict")
+              return {
+                kind: "done",
+                done: {
+                  status: "conflict",
+                  commitSha: draft,
+                  remoteSha: main,
+                  conflicts: merged.conflicts,
+                },
+              };
+            tree = merged.tree;
+          }
+          if (tree === mainTree) return nothing();
+          return { kind: "publish", draft, main, tree };
         },
       );
       if (plan.kind === "done") return plan.done;
-      const { draft, main } = plan;
-      let tree = plan.tree;
-      if (!tree && main) {
-        // Ours is the member's draft and theirs the published program, as
-        // in every conflict a member resolves.
-        const merged = await this.mergeInCheckout({
-          ours: draft,
-          theirs: main,
-        });
-        if (merged.status === "conflict")
-          return {
-            status: "conflict",
-            commitSha: draft,
-            remoteSha: main,
-            conflicts: merged.conflicts,
-          };
-        tree = merged.tree;
-      }
-      if (!tree) continue;
-      const mergedTree = tree;
-      const published = await this.withObjects(async (objects) => {
-        const mainTree = main ? (await objects.commit(main)).tree : null;
+      const published = await this.attempt(async (objects) => {
+        const mainTree = plan.main
+          ? (await objects.commit(plan.main)).tree
+          : null;
         input.guard?.(
-          (await objects.diffTrees(mainTree, mergedTree)).map(
+          (await objects.diffTrees(mainTree, plan.tree)).map(
             (change) => change.path,
           ),
         );
         const sha = await objects.writeCommit({
-          tree: mergedTree,
-          parents: main ? [main] : [],
+          tree: plan.tree,
+          parents: plan.main ? [plan.main] : [],
           author: input.author,
           message: input.message,
         });
-        try {
-          await objects.origin.updateRef({ ref: MAIN, sha, expected: main });
-        } catch (error) {
-          if (error instanceof RefMovedError) return null;
-          throw error;
-        }
-        await clearDraft(objects, this.ref, draft);
+        await objects.origin.updateRef({ ref: MAIN, sha, expected: plan.main });
+        await clearDraft(objects, this.ref, plan.draft);
         return sha;
       });
       if (published)
@@ -632,9 +702,20 @@ export class OriginDraftRepo {
     resolutions: Record<string, string>;
     message: string;
   }): Promise<string> {
-    const result = await this.mergeMain(input);
-    if (result.status === "conflict" || !result.mergeCommit)
-      throw new Error("The resolutions leave the draft unmerged");
+    const resolutions = Object.fromEntries(
+      Object.entries(input.resolutions).map(([file, content]) => [
+        normalizePath(file),
+        content,
+      ]),
+    );
+    const result = await this.mergeMain({
+      resolutions,
+      message: input.message,
+    });
+    if (result.status === "conflict")
+      throw new DraftUnresolvedError(result.conflicts);
+    if (!result.mergeCommit)
+      throw new Error("There is no draft to resolve conflicts in");
     return result.mergeCommit;
   }
 
@@ -642,151 +723,63 @@ export class OriginDraftRepo {
     resolutions?: Record<string, string>;
     message?: string;
   }): Promise<MergeResult> {
+    this.head = undefined;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const plan = await this.withObjects(
         async (objects): Promise<MergePlan> => {
+          const upToDate = (sha: string | null): MergePlan => ({
+            kind: "done",
+            result: { status: "up-to-date", mergeCommit: sha, conflicts: [] },
+          });
           const { draft, main } = await this.tips(objects);
-          if (!draft || !main) return { kind: "done", upToDate: draft ?? main };
+          if (!draft || !main) return upToDate(draft ?? main);
           const { base } = await objects.compare(draft, main);
+          const baseTree = base ? (await objects.commit(base)).tree : null;
+          const draftTree = (await objects.commit(draft)).tree;
           const changed =
-            (
-              await objects.diffTrees(
-                base ? (await objects.commit(base)).tree : null,
-                (
-                  await objects.commit(draft)
-                ).tree,
-              )
-            ).length > 0;
+            (await objects.diffTrees(baseTree, draftTree)).length > 0;
           if (!changed && !input.resolutions) {
             await clearDraft(objects, this.ref, draft);
-            return { kind: "done", upToDate: main };
+            return upToDate(main);
           }
-          if (base === main && !input.resolutions)
-            return { kind: "done", upToDate: draft };
-          return { kind: "merge", draft, main };
+          if (base === main && !input.resolutions) return upToDate(draft);
+          const merged = await mergeTrees({
+            objects,
+            base: baseTree,
+            ours: draftTree,
+            theirs: (await objects.commit(main)).tree,
+            resolutions: input.resolutions,
+          });
+          if (merged.status === "conflict")
+            return {
+              kind: "done",
+              result: {
+                status: "conflict",
+                mergeCommit: null,
+                conflicts: merged.conflicts,
+              },
+            };
+          return { kind: "merged", draft, main, tree: merged.tree };
         },
       );
-      if (plan.kind === "done")
-        return {
-          status: "up-to-date",
-          mergeCommit: plan.upToDate,
-          conflicts: [],
-        };
-      const merged = await this.mergeInCheckout({
-        ours: plan.draft,
-        theirs: plan.main,
-        resolutions: input.resolutions,
-      });
-      if (merged.status === "conflict")
-        return {
-          status: "conflict",
-          mergeCommit: null,
-          conflicts: merged.conflicts,
-        };
-      const sha = await this.withObjects(async (objects) => {
+      if (plan.kind === "done") return plan.result;
+      const sha = await this.attempt(async (objects) => {
         const commit = await objects.writeCommit({
-          tree: merged.tree,
+          tree: plan.tree,
           parents: [plan.draft, plan.main],
           author: this.author,
           message: input.message ?? "Merge published changes into draft",
         });
-        try {
-          await objects.origin.updateRef({
-            ref: this.ref,
-            sha: commit,
-            expected: plan.draft,
-          });
-          return commit;
-        } catch (error) {
-          if (error instanceof RefMovedError) return null;
-          throw error;
-        }
+        await objects.origin.updateRef({
+          ref: this.ref,
+          sha: commit,
+          expected: plan.draft,
+        });
+        return commit;
       });
       if (sha) return { status: "clean", mergeCommit: sha, conflicts: [] };
     }
     throw new DraftBusyError();
-  }
-
-  /**
-   * Merge `theirs` into `ours` in an ephemeral checkout (removed after)
-   * and publish the merged tree's objects to the origin. With
-   * `resolutions`, conflicted files take the member's content.
-   */
-  private async mergeInCheckout(input: {
-    ours: string;
-    theirs: string;
-    resolutions?: Record<string, string>;
-  }): Promise<
-    | { status: "merged"; tree: string }
-    | { status: "conflict"; conflicts: ConflictEntry[] }
-  > {
-    const checkout = await this.openCheckout();
-    const location = {
-      dev: checkout,
-      remote: this.remote,
-      tenantId: this.tenantId,
-      projectId: this.projectId,
-    };
-    try {
-      for (const sha of [input.ours, input.theirs])
-        await fetchObject({ ...location, sha });
-      const dir = checkout.repoPath;
-      await git.writeRef({
-        fs: nodeFs,
-        dir,
-        ref: "refs/heads/merge",
-        value: input.ours,
-        force: true,
-      });
-      await git.checkout({ fs: nodeFs, dir, ref: "merge", force: true });
-      let conflicts: ConflictEntry[] = [];
-      try {
-        await git.merge({
-          fs: nodeFs,
-          dir,
-          ours: "merge",
-          theirs: input.theirs,
-          author: this.author,
-          committer: this.author,
-          fastForward: true,
-          abortOnConflict: !input.resolutions,
-          message: "Merge",
-        });
-        await git.checkout({ fs: nodeFs, dir, ref: "merge", force: true });
-      } catch (error) {
-        if (!(error instanceof git.Errors.MergeConflictError)) throw error;
-        conflicts = await collectConflicts({
-          dev: checkout,
-          oursSha: input.ours,
-          theirsSha: input.theirs,
-          raw: error.data,
-        });
-        if (!input.resolutions) return { status: "conflict", conflicts };
-      }
-      if (input.resolutions) {
-        const resolved = Object.keys(input.resolutions).map(normalizePath);
-        for (const [file, content] of Object.entries(input.resolutions))
-          await checkout.writeFile(normalizePath(file), content);
-        // Hidden folders are not walked by commit; stage every file the
-        // merge or the member touched so no conflict stage survives.
-        for (const filepath of new Set([
-          ...resolved,
-          ...conflicts.map((entry) => entry.path),
-        ])) {
-          if (nodeFs.existsSync(path.join(dir, filepath)))
-            await git.add({ fs: nodeFs, dir, filepath });
-          else await git.remove({ fs: nodeFs, dir, filepath });
-        }
-        await checkout.commit("Resolve conflicts", this.author);
-      }
-      const head = await checkout.resolveRef("HEAD");
-      const tree = (await git.readCommit({ fs: nodeFs, dir, oid: head })).commit
-        .tree;
-      await pushObject({ ...location, sha: tree });
-      return { status: "merged", tree };
-    } finally {
-      await checkout.dispose();
-    }
   }
 
   async dispose(): Promise<void> {}
@@ -794,8 +787,11 @@ export class OriginDraftRepo {
 
 /**
  * Publish files as one commit on top of `main`, without touching any
- * member's draft (the desktop's publish of a member's local files). A
- * race with another publisher retries on the new `main`.
+ * member's draft (the desktop's publish of a member's local copy). With
+ * `base`, the commit the files were edited from, they merge with what was
+ * published since, and files changed on both sides are reported as
+ * conflicts instead of overwriting. A race with another publisher retries
+ * on the new `main`.
  */
 export async function publishFilesToOrigin(input: {
   remote: RemoteBackend;
@@ -803,25 +799,57 @@ export async function publishFilesToOrigin(input: {
   tenantId: string;
   projectId: string;
   files: Record<string, string>;
+  base?: string;
   message: string;
   author: { name: string; email: string };
   guard?: (paths: readonly string[]) => void;
 }): Promise<DraftPublishResult> {
-  const changes = new Map<string, TreeChange>(
-    Object.entries(input.files).map(([file, content]) => [
-      normalizePath(file),
-      new TextEncoder().encode(content),
-    ]),
+  const files = Object.entries(input.files).map(
+    ([file, content]) =>
+      [normalizePath(file), new TextEncoder().encode(content)] as const,
   );
+  const withOrigin = <T>(fn: (objects: OriginObjects) => Promise<T>) =>
+    input.remote.withOrigin(input.tenantId, input.projectId, (origin) =>
+      fn(new OriginObjects(origin, input.cache)),
+    );
+  const oids = await withOrigin((objects) =>
+    objects.writeBlobs(files.map(([, content]) => content)),
+  );
+  const changes = new Map<string, TreeChange>();
+  files.forEach(([file], index) => {
+    const oid = oids[index];
+    if (oid) changes.set(file, { oid });
+  });
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const result = await input.remote.withOrigin(
-      input.tenantId,
-      input.projectId,
-      async (origin): Promise<DraftPublishResult | null> => {
-        const objects = new OriginObjects(origin, input.cache);
-        const main = await origin.resolveRef(MAIN);
+    const result = await withOrigin(
+      async (objects): Promise<DraftPublishResult | null> => {
+        const main = await objects.origin.resolveRef(MAIN);
         const mainTree = main ? (await objects.commit(main)).tree : null;
-        const tree = await objects.writeTree(mainTree, changes);
+        let tree: string;
+        if (input.base && main && input.base !== main) {
+          if (
+            !SHA_RE.test(input.base) ||
+            !(await objects.origin.hasObject(input.base))
+          )
+            throw new Error(`Unknown base commit: ${input.base}`);
+          const baseTree = (await objects.commit(input.base)).tree;
+          const merged = await mergeTrees({
+            objects,
+            base: baseTree,
+            ours: await objects.writeTree(baseTree, changes),
+            theirs: mainTree ?? baseTree,
+          });
+          if (merged.status === "conflict")
+            return {
+              status: "conflict",
+              commitSha: input.base,
+              remoteSha: main,
+              conflicts: merged.conflicts,
+            };
+          tree = merged.tree;
+        } else {
+          tree = await objects.writeTree(mainTree, changes);
+        }
         if (tree === mainTree)
           return {
             status: "nothing-to-deploy",
@@ -841,7 +869,7 @@ export async function publishFilesToOrigin(input: {
           message: input.message,
         });
         try {
-          await origin.updateRef({ ref: MAIN, sha, expected: main });
+          await objects.origin.updateRef({ ref: MAIN, sha, expected: main });
         } catch (error) {
           if (error instanceof RefMovedError) return null;
           throw error;
@@ -853,7 +881,11 @@ export async function publishFilesToOrigin(input: {
           conflicts: [],
         };
       },
-    );
+    ).catch((error: unknown) => {
+      // The origin itself reports a lost race when it publishes the ref.
+      if (error instanceof RefMovedError) return null;
+      throw error;
+    });
     if (result) return result;
   }
   throw new DraftBusyError();
@@ -871,9 +903,10 @@ export async function refreshPublished(input: {
   branch?: string;
 }): Promise<string | null> {
   const branch = input.branch ?? "main";
+  assertValidRefName(`${BRANCHES}${branch}`);
   if (input.repo instanceof OriginDraftRepo)
     return input.remote.withOrigin(input.tenantId, input.projectId, (origin) =>
-      origin.resolveRef(`refs/heads/${branch}`),
+      origin.resolveRef(`${BRANCHES}${branch}`),
     );
   const fetched = await fetchRemote({
     dev: input.repo,
@@ -903,13 +936,13 @@ async function describeChanges(input: {
   before: string | null;
   after: string | null;
 }): Promise<DiffEntry[]> {
-  const decode = async (oid: string | null) =>
+  const decode = async (oid: string | undefined) =>
     oid ? new TextDecoder().decode(await input.objects.blob(oid)) : null;
   const changes = await input.objects.diffTrees(input.before, input.after);
   return Promise.all(
     changes.map(async (change): Promise<DiffEntry> => {
-      const before = await decode(change.before);
-      const after = await decode(change.after);
+      const before = await decode(change.before?.oid);
+      const after = await decode(change.after?.oid);
       return {
         path: change.path,
         kind:
@@ -921,11 +954,14 @@ async function describeChanges(input: {
   );
 }
 
+/**
+ * A project-relative path in canonical form. Absolute paths are refused, as
+ * the file APIs always did, so no spelling slips past path-based policy.
+ */
 function normalizePath(filePath: string): string {
-  const normalized = path.posix
-    .normalize(filePath.replace(/\\/g, "/"))
-    .replace(/^(\.\/)+/, "")
-    .replace(/^\/+/, "");
+  const slashed = filePath.replace(/\\/g, "/");
+  if (slashed.startsWith("/")) throw new Error("Absolute paths not allowed");
+  const normalized = path.posix.normalize(slashed).replace(/^(\.\/)+/, "");
   assertSafePath(normalized);
   if (!normalized || normalized === ".")
     throw new DraftPathError({ code: "EISDIR", path: filePath });

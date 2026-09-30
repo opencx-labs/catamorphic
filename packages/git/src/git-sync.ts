@@ -3,6 +3,7 @@ import { publishedRef } from "@catamorphic/workflow/project-layout";
 import git from "isomorphic-git";
 import { nativeGit } from "./native-git.js";
 import { NativeProjectRepo } from "./native-project-repo.js";
+import { mapLimit } from "./origin-objects.js";
 import type {
   ConflictEntry,
   MergeResult,
@@ -151,48 +152,6 @@ export async function fetchRemote(opts: FetchOpts): Promise<{
 
       return { sha: remoteSha, alreadyUpToDate };
     },
-  );
-}
-
-/**
- * Copy one object (a commit with its history, or a tree with its files)
- * from the origin into a checkout, without touching refs or the working
- * tree.
- */
-export async function fetchObject(opts: {
-  dev: ProjectRepo;
-  remote: Pick<RemoteBackend, "withOrigin">;
-  tenantId: string;
-  projectId: string;
-  sha: string;
-}): Promise<void> {
-  if (await devHasCommit({ dev: opts.dev, sha: opts.sha })) return;
-  await opts.remote.withOrigin(opts.tenantId, opts.projectId, (origin) =>
-    transferCommits({
-      source: originSource(origin),
-      sink: devSink(opts.dev),
-      sha: opts.sha,
-    }),
-  );
-}
-
-/**
- * Copy one object (a commit with its history, or a tree with its files)
- * from a checkout into the origin, without moving any ref.
- */
-export async function pushObject(opts: {
-  dev: ProjectRepo;
-  remote: Pick<RemoteBackend, "withOrigin">;
-  tenantId: string;
-  projectId: string;
-  sha: string;
-}): Promise<void> {
-  await opts.remote.withOrigin(opts.tenantId, opts.projectId, (origin) =>
-    transferCommits({
-      source: devSource(opts.dev),
-      sink: originSink(origin),
-      sha: opts.sha,
-    }),
   );
 }
 
@@ -376,32 +335,32 @@ async function transferCommits(opts: {
   sink: ObjectSink;
   sha: string;
 }): Promise<void> {
-  const queue: string[] = [opts.sha];
+  // Breadth first, a batch of objects at a time: seeding a checkout from a
+  // network origin is bound by round trips, not by the objects' size.
+  let frontier: string[] = [opts.sha];
   const seen = new Set<string>();
-
-  while (queue.length > 0) {
-    const sha = queue.pop();
-    if (!sha || seen.has(sha)) continue;
-    seen.add(sha);
-
-    const alreadyAtSink = await opts.sink.hasObject(sha);
-    if (alreadyAtSink) continue;
-
-    const obj = await opts.source.readObject(sha);
-    await opts.sink.writeObject(obj);
-
-    if (obj.type === "commit") {
-      const commit = parseCommit(obj.data);
-      queue.push(commit.tree);
-      for (const parent of commit.parents) queue.push(parent);
-    } else if (obj.type === "tree") {
-      const entries = parseTree(obj.data);
-      for (const entry of entries) {
-        if (entry.mode !== "160000") queue.push(entry.oid);
+  while (frontier.length > 0) {
+    const batch = [...new Set(frontier)].filter((sha) => !seen.has(sha));
+    for (const sha of batch) seen.add(sha);
+    const next = await mapLimit(batch, TRANSFER_CONCURRENCY, async (sha) => {
+      if (await opts.sink.hasObject(sha)) return [];
+      const obj = await opts.source.readObject(sha);
+      await opts.sink.writeObject(obj);
+      if (obj.type === "commit") {
+        const commit = parseCommit(obj.data);
+        return [commit.tree, ...commit.parents];
       }
-    }
+      if (obj.type === "tree")
+        return parseTree(obj.data)
+          .filter((entry) => entry.mode !== "160000")
+          .map((entry) => entry.oid);
+      return [];
+    });
+    frontier = next.flat();
   }
 }
+
+const TRANSFER_CONCURRENCY = 16;
 
 interface ParsedCommit {
   tree: string;
@@ -526,8 +485,7 @@ async function syncRemoteTrackingRef(opts: {
   });
 }
 
-/** Each conflicted path of a failed merge, with its base, ours, and theirs. */
-export async function collectConflicts(opts: {
+async function collectConflicts(opts: {
   dev: ProjectRepo;
   oursSha: string;
   theirsSha: string;

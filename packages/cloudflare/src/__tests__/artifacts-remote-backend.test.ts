@@ -2,7 +2,7 @@ import nodeFs from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { draftRef } from "@catamorphic/workflow/project-layout";
+import { RefMovedError } from "@catamorphic/git";
 import git from "isomorphic-git";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ArtifactsClient } from "../artifacts-client.js";
@@ -136,23 +136,36 @@ it("reports a rejected remote deletion instead of acknowledging retirement", asy
   expect(remoteRefs.has(watcherRef)).toBe(true);
 });
 
-it("keeps members' draft refs in the Artifacts origin (ADR 0191)", async () => {
-  const draft = draftRef("member@example.com");
+it("keeps members' drafts out of repositories sandboxes can clone (ADR 0191)", async () => {
+  expect(await backend.draftSupport()).toMatchObject({ supported: false });
+});
+
+it("pushes a compare-and-swap without force and reports a lost race", async () => {
+  const next = "b".repeat(40);
   await backend.withOrigin(tenantId, projectId, (origin) =>
-    origin.updateRef({ ref: draft, sha, expected: null }),
+    origin.updateRef({ ref: mainRef, sha: next, expected: sha }),
   );
   expect(git.push).toHaveBeenCalledWith(
-    expect.objectContaining({ ref: draft, remoteRef: draft }),
+    expect.objectContaining({ remoteRef: mainRef, force: false }),
   );
-  remoteRefs.set(draft, sha);
-  vi.mocked(git.push).mockClear();
+  remoteRefs.set(mainRef, next);
+  vi.mocked(git.push).mockRejectedValueOnce(
+    new git.Errors.PushRejectedError("not-fast-forward"),
+  );
+  await expect(
+    backend.withOrigin(tenantId, projectId, (origin) =>
+      origin.updateRef({ ref: mainRef, sha: "c".repeat(40), expected: next }),
+    ),
+  ).rejects.toBeInstanceOf(RefMovedError);
+});
+
+it("keeps forcing unconditional updates", async () => {
   await backend.withOrigin(tenantId, projectId, (origin) =>
-    origin.deleteRef({ ref: draft, expected: sha }),
+    origin.updateRef({ ref: watcherRef, sha: "d".repeat(40) }),
   );
   expect(git.push).toHaveBeenCalledWith(
-    expect.objectContaining({ delete: true, remoteRef: draft }),
+    expect.objectContaining({ remoteRef: watcherRef, force: true }),
   );
-  expect(remoteRefs.has(draft)).toBe(false);
 });
 
 function deferred() {

@@ -555,6 +555,11 @@ async function createWorkServerInner(
   });
   disposers.push(() => catamorphic.close());
   await catamorphic.migrate();
+  // Members draft in the project origin (ADR 0191); an origin that cannot
+  // keep drafts safely stops the boot instead of failing a member later.
+  const drafts = await catamorphic.core.projectManager.draftSupport();
+  if (!drafts.supported)
+    throw new Error(`Project storage cannot keep drafts: ${drafts.reason}`);
 
   // Better Auth is a Work server concern. Its PGlite database is separate
   // from Catamorphic's long-lived PGlite session; network Postgres uses the

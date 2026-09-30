@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import git from "isomorphic-git";
 import { RefMovedError } from "./ref-moved-error.js";
+import { assertResolvableRef, assertValidRefName } from "./ref-names.js";
 import type { CommitInfo, OriginRepo, RemoteBackend } from "./types.js";
 
 const UUID_RE =
@@ -92,6 +93,7 @@ export class FsOriginRepo implements OriginRepo {
   constructor(readonly gitdir: string) {}
 
   async resolveRef(ref: string): Promise<string | null> {
+    assertResolvableRef(ref);
     try {
       return await git.resolveRef({ fs: nodeFs, gitdir: this.gitdir, ref });
     } catch {
@@ -136,6 +138,7 @@ export class FsOriginRepo implements OriginRepo {
     sha: string;
     expected?: string | null;
   }): Promise<void> {
+    assertValidRefName(opts.ref);
     if (opts.expected !== undefined) {
       const current = await this.resolveRef(opts.ref);
       if (current !== opts.expected) {
@@ -165,6 +168,7 @@ export class FsOriginRepo implements OriginRepo {
     ref: string;
     expected?: string;
   }): Promise<void> {
+    assertValidRefName(input.ref);
     if (input.expected !== undefined) {
       const current = await this.resolveRef(input.ref);
       if (current !== input.expected)

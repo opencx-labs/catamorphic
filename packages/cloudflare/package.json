@@ -21,7 +21,6 @@
   "dependencies": {
     "@catamorphic/git": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
-    "@catamorphic/workflow": "workspace:*",
     "isomorphic-git": "^1.38.6"
   },
   "devDependencies": {

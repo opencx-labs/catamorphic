@@ -11,8 +11,12 @@ import {
 } from "@catamorphic/core";
 import {
   DraftBusyError,
+  DraftIgnoredPathError,
   DraftPathError,
   DraftRefNotAllowedError,
+  DraftsUnsupportedError,
+  DraftUnresolvedError,
+  InvalidRefNameError,
 } from "@catamorphic/git";
 import type { FastifyPluginAsync } from "fastify";
 import {
@@ -202,9 +206,18 @@ export const catamorphicPlugin: FastifyPluginAsync<
     if (
       err instanceof DeploymentBlockedError ||
       err instanceof ServerDraftError ||
-      err instanceof DraftBusyError
+      err instanceof DraftBusyError ||
+      err instanceof DraftUnresolvedError ||
+      err instanceof DraftsUnsupportedError
     ) {
       return reply.status(409).send({ error: err.message });
+    }
+    // A malformed ref, or a path the program never holds.
+    if (
+      err instanceof InvalidRefNameError ||
+      err instanceof DraftIgnoredPathError
+    ) {
+      return reply.status(400).send({ error: err.message });
     }
     // Another member's draft, or a path the draft does not hold.
     if (

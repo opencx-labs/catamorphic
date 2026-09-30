@@ -937,6 +937,14 @@ export const DeployRequestSchema = z.object({
    * the member's draft untouched (ADR 0191).
    */
   files: z.record(z.string(), z.string()).optional(),
+  /**
+   * The published commit `files` were edited from: files changed on the
+   * server since merge with them, or come back as conflicts.
+   */
+  base: z
+    .string()
+    .regex(/^[0-9a-f]{40}$/)
+    .optional(),
 });
 
 export const PullRequestSchema = z.object({

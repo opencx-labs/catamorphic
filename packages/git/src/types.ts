@@ -60,6 +60,12 @@ export interface StorageBackend {
    * disk omit it, and workspaces at a ref are then unavailable.
    */
   mirrorPath?(tenantId: string, projectId: string): string;
+  /**
+   * A folder this host may use as a disposable cache for one project (a
+   * member's store mirror around agent turns). Losing it loses nothing
+   * that is not also elsewhere.
+   */
+  cachePath?(tenantId: string, projectId: string, name: string): string;
 }
 
 export type FileChange =
@@ -226,7 +232,17 @@ export interface RemoteBackend {
     projectId: string,
     opts?: { scope?: "read" | "write" },
   ): Promise<CloneSource>;
+  /**
+   * Whether this origin can keep members' drafts (ADR 0191): ref updates
+   * and deletes that are atomic across every process using it, and draft
+   * refs no sandbox credential can read. Absent means it can.
+   */
+  draftSupport?(): Promise<DraftSupport>;
 }
+
+export type DraftSupport =
+  | { supported: true }
+  | { supported: false; reason: string };
 
 /**
  * Thin git-object-level interface over a bare repo used by {@link git-sync}.

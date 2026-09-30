@@ -93,20 +93,17 @@ polling from their parent `Run` and selected batch scope, including waiting
 scopes, instead of accepting a separate activity flag.
 
 Workflow list and detail queries share the exported `workflowKeys` hierarchy.
-File writes, deploys, commits, and branch checkouts invalidate the project
+File writes, deploys, and commits invalidate the project
 workflow prefix so both list summaries and singular workflow graphs refresh.
 
 ### Git
 
-- `useProjectGit(projectId, { pollMs? })` — repo status (branch + dirty + ahead/behind)
-- `useProjectBranches(projectId)`
+- `useProjectGit(projectId, { pollMs? })`: draft status (changed files, ahead/behind)
 - `useProjectCommits(projectId, { ref?, limit?, before? })`
 - `useProjectConflicts(projectId)`
-- `useCreateBranch(projectId)`
-- `useCheckoutBranch(projectId)`
 - `useCommitChanges(projectId)` — commit + deploy
 - `useDeployProject(projectId)`
-- `useProjectGitState({ projectId, baselineFiles })` — composite hook for multi-branch draft persistence (now reads `apiClient` from the provider; no host adapter required)
+- `useProjectGitState({ projectId, baselineFiles })` — composite hook for client-side draft persistence (now reads `apiClient` from the provider; no host adapter required)
 
 ### Plugins
 

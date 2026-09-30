@@ -9,6 +9,7 @@ import ignore, { type Ignore } from "ignore";
 import git from "isomorphic-git";
 import { type FileReadOptions, readFileSnapshot } from "./file-reads.js";
 import { isPersonalFile } from "./personal-files.js";
+import { assertResolvableRef } from "./ref-names.js";
 import type {
   BranchInfo,
   CommitInfo,
@@ -287,6 +288,7 @@ export class ProjectRepoImpl implements ProjectRepo {
     options?: { maxBytes?: number },
   ): Promise<Uint8Array | null> {
     assertSafePath(filePath);
+    assertResolvableRef(ref);
     let blob: Uint8Array;
     try {
       const oid = await git.resolveRef({ fs: nodeFs, dir: this.repoPath, ref });
@@ -331,6 +333,7 @@ export class ProjectRepoImpl implements ProjectRepo {
     ref: string,
     opts?: { prefix?: string },
   ): Promise<Array<{ path: string; oid: string }>> {
+    assertResolvableRef(ref);
     const oid = await git.resolveRef({ fs: nodeFs, dir: this.repoPath, ref });
     const prefix = opts?.prefix;
     const blobs: Array<{ path: string; oid: string }> = [];
@@ -434,6 +437,7 @@ export class ProjectRepoImpl implements ProjectRepo {
     maxCount?: number;
     ref?: string;
   }): Promise<CommitInfo[]> {
+    if (options?.ref) assertResolvableRef(options.ref);
     try {
       const commits = await git.log({
         fs: nodeFs,
@@ -456,6 +460,7 @@ export class ProjectRepoImpl implements ProjectRepo {
   }
 
   async resolveRef(ref = "HEAD"): Promise<string> {
+    assertResolvableRef(ref);
     return git.resolveRef({
       fs: nodeFs,
       dir: this.repoPath,

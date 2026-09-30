@@ -1,22 +1,27 @@
+import diff3Merge from "diff3";
+import ignore, { type Ignore } from "ignore";
 import {
   type GitObjectType,
   type ParsedCommit,
   parseCommit,
 } from "./git-object-codec.js";
 import { isPersonalFile } from "./personal-files.js";
-import type { OriginRepo } from "./types.js";
+import type { ConflictEntry, OriginRepo } from "./types.js";
 
 /**
  * Object-level reads and writes against a project's origin, with no working
- * copy (ADR 0191): trees are walked and rebuilt in memory, and new blobs,
- * trees, and commits are written straight to the origin. Git objects are
- * immutable, so every read may go through a process-wide cache keyed by
+ * copy (ADR 0191): trees are walked, rebuilt, and merged in memory, and new
+ * blobs, trees, and commits are written straight to the origin. Git objects
+ * are immutable, so every read may go through a process-wide cache keyed by
  * origin and object id, which is safe to lose.
  */
 
 export interface TreeEntry {
   mode: string;
+  /** The name as text, for matching paths. */
   name: string;
+  /** The name exactly as stored, so names that are not UTF-8 survive. */
+  nameBytes: Uint8Array;
   oid: string;
 }
 
@@ -26,13 +31,20 @@ export interface TreeFile {
   mode: string;
 }
 
-/** One change to apply to a tree: new content, or `null` to delete. */
-export type TreeChange = Uint8Array | null;
+/**
+ * One change to apply to a tree: a blob already written (keeping the old
+ * entry's mode unless one is given), or `null` to delete.
+ */
+export type TreeChange = { oid: string; mode?: string } | null;
 
 export const EMPTY_TREE_ID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const FILE_MODE = "100644";
-const SYMLINK_MODE = "120000";
+export const SYMLINK_MODE = "120000";
 const SUBMODULE_MODE = "160000";
+/** Folders a project's history never contains, as the checkout walker skips them. */
+const ALWAYS_IGNORED = new Set(["node_modules", ".git", "dist", ".turbo"]);
+/** Object writes in flight at once. */
+const WRITE_CONCURRENCY = 16;
 
 export function isTreeMode(mode: string): boolean {
   return mode === "40000" || mode === "040000";
@@ -93,6 +105,27 @@ export class GitObjectCache {
   }
 }
 
+/** Map with at most `limit` calls in flight, keeping input order. */
+export async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      const item = items[index];
+      if (item !== undefined) results[index] = await fn(item);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, worker),
+  );
+  return results;
+}
+
 export function parseTree(data: Uint8Array): TreeEntry[] {
   const entries: TreeEntry[] = [];
   const decoder = new TextDecoder("utf-8");
@@ -105,9 +138,11 @@ export function parseTree(data: Uint8Array): TreeEntry[] {
     const oid = Array.from(data.slice(nul + 1, nul + 21))
       .map((byte) => byte.toString(16).padStart(2, "0"))
       .join("");
+    const nameBytes = data.slice(space + 1, nul);
     entries.push({
       mode: decoder.decode(data.slice(i, space)),
-      name: decoder.decode(data.slice(space + 1, nul)),
+      name: decoder.decode(nameBytes),
+      nameBytes,
       oid,
     });
     i = nul + 21;
@@ -115,11 +150,18 @@ export function parseTree(data: Uint8Array): TreeEntry[] {
   return entries;
 }
 
+/** A new entry named by text. */
+function entryNamed(name: string, mode: string, oid: string): TreeEntry {
+  return { name, nameBytes: new TextEncoder().encode(name), mode, oid };
+}
+
 /** Git's tree order: bytewise by name, a tree sorting as if named `name/`. */
 function treeSortKey(entry: TreeEntry): Uint8Array {
-  return new TextEncoder().encode(
-    isTreeMode(entry.mode) ? `${entry.name}/` : entry.name,
-  );
+  if (!isTreeMode(entry.mode)) return entry.nameBytes;
+  const key = new Uint8Array(entry.nameBytes.length + 1);
+  key.set(entry.nameBytes);
+  key[entry.nameBytes.length] = 0x2f;
+  return key;
 }
 
 function compareBytes(a: Uint8Array, b: Uint8Array): number {
@@ -138,10 +180,11 @@ export function serializeTree(entries: readonly TreeEntry[]): Uint8Array {
   const parts: Uint8Array[] = [];
   for (const entry of sorted) {
     const mode = isTreeMode(entry.mode) ? "40000" : entry.mode;
-    parts.push(new TextEncoder().encode(`${mode} ${entry.name}\0`));
-    const oid = new Uint8Array(20);
+    parts.push(new TextEncoder().encode(`${mode} `));
+    parts.push(entry.nameBytes);
+    const oid = new Uint8Array(21);
     for (let i = 0; i < 20; i++)
-      oid[i] = Number.parseInt(entry.oid.slice(i * 2, i * 2 + 2), 16);
+      oid[i + 1] = Number.parseInt(entry.oid.slice(i * 2, i * 2 + 2), 16);
     parts.push(oid);
   }
   const total = parts.reduce((sum, part) => sum + part.length, 0);
@@ -177,6 +220,16 @@ export function serializeCommit(input: {
   return new TextEncoder().encode(`${lines.join("\n")}\n\n${message}`);
 }
 
+/** `.gitignore` matchers by directory, read once per operation. */
+export type IgnoreRules = Map<string, Ignore | null>;
+
+/** One path's difference between two trees. */
+export interface TreeDifference {
+  path: string;
+  before: TreeFile | null;
+  after: TreeFile | null;
+}
+
 /** Reads and writes of one origin's objects through a shared cache. */
 export class OriginObjects {
   constructor(
@@ -200,6 +253,13 @@ export class OriginObjects {
     const oid = await this.origin.writeObject(input);
     this.cache.set(`${this.origin.gitdir}\0${oid}`, input);
     return oid;
+  }
+
+  /** Write file contents as blobs, several at once; ids in input order. */
+  writeBlobs(contents: readonly Uint8Array[]): Promise<string[]> {
+    return mapLimit(contents, WRITE_CONCURRENCY, (data) =>
+      this.write({ type: "blob", data }),
+    );
   }
 
   async commit(oid: string): Promise<ParsedCommit> {
@@ -271,24 +331,64 @@ export class OriginObjects {
   }
 
   /**
-   * `treeOid` with `changes` applied (path to content, or `null` to
-   * delete), written to the origin. Returns the new tree id.
+   * Whether a path the tree does not track is ignored: under a folder no
+   * project history contains, or matched by the `.gitignore` files of the
+   * tree along its way, as a checkout's commit would skip it.
+   */
+  async isIgnored(
+    treeOid: string | null,
+    filePath: string,
+    rules: IgnoreRules = new Map(),
+  ): Promise<boolean> {
+    const segments = filePath.split("/");
+    if (segments.slice(0, -1).some((segment) => ALWAYS_IGNORED.has(segment)))
+      return true;
+    if (!treeOid) return false;
+    if (await this.entry(treeOid, filePath)) return false;
+    let ignored = false;
+    for (let depth = 0; depth < segments.length; depth++) {
+      const directory = segments.slice(0, depth).join("/");
+      const base = directory ? `${directory}/` : "";
+      let matcher = rules.get(directory);
+      if (matcher === undefined) {
+        const entry = await this.entry(treeOid, `${base}.gitignore`).catch(
+          () => null,
+        );
+        matcher =
+          entry && !isTreeMode(entry.mode)
+            ? ignore().add(new TextDecoder().decode(await this.blob(entry.oid)))
+            : null;
+        rules.set(directory, matcher);
+      }
+      if (!matcher) continue;
+      const result = matcher.test(filePath.slice(base.length));
+      if (result.ignored) ignored = true;
+      if (result.unignored) ignored = false;
+    }
+    return ignored;
+  }
+
+  /**
+   * `treeOid` with `changes` applied (path to an existing blob, or `null`
+   * to delete), written to the origin. Returns the new tree id. With
+   * `skipMissingDeletes`, deleting a path the tree lacks is not an error.
    */
   async writeTree(
     treeOid: string | null,
     changes: ReadonlyMap<string, TreeChange>,
+    options?: { skipMissingDeletes?: boolean },
   ): Promise<string> {
-    return (await this.rewrite(treeOid, changes, "")) ?? this.emptyTree();
-  }
-
-  private async emptyTree(): Promise<string> {
-    return this.write({ type: "tree", data: new Uint8Array() });
+    return (
+      (await this.rewrite(treeOid, changes, "", options?.skipMissingDeletes)) ??
+      this.write({ type: "tree", data: new Uint8Array() })
+    );
   }
 
   private async rewrite(
     treeOid: string | null,
     changes: ReadonlyMap<string, TreeChange>,
     base: string,
+    skipMissingDeletes = false,
   ): Promise<string | null> {
     const entries = new Map(
       (treeOid ? await this.tree(treeOid) : []).map((entry) => [
@@ -313,38 +413,57 @@ export class OriginObjects {
       if (existing?.mode === SYMLINK_MODE)
         throw new DraftPathError({ code: "ELOOP", path: fullPath });
       if (change === null) {
-        if (!existing)
+        if (!existing) {
+          if (skipMissingDeletes) continue;
           throw new DraftPathError({ code: "ENOENT", path: fullPath });
+        }
         entries.delete(filePath);
         continue;
       }
-      const oid = await this.write({ type: "blob", data: change });
-      entries.set(filePath, {
-        name: filePath,
-        mode: existing?.mode ?? FILE_MODE,
-        oid,
-      });
-    }
-    for (const [directory, inner] of nested) {
-      const existing = entries.get(directory);
-      const fullPath = `${base}${directory}`;
-      if (existing?.mode === SYMLINK_MODE)
-        throw new DraftPathError({ code: "ELOOP", path: fullPath });
-      if (existing && !isTreeMode(existing.mode)) {
-        const deleting = [...inner.values()].every((change) => change === null);
-        throw new DraftPathError({
-          code: deleting ? "ENOENT" : "ENOTDIR",
-          path: `${fullPath}/${[...inner.keys()][0] ?? ""}`,
-        });
-      }
-      const child = await this.rewrite(
-        existing?.oid ?? null,
-        inner,
-        `${fullPath}/`,
+      entries.set(
+        filePath,
+        existing
+          ? { ...existing, oid: change.oid, mode: change.mode ?? existing.mode }
+          : entryNamed(filePath, change.mode ?? FILE_MODE, change.oid),
       );
-      if (child === null) entries.delete(directory);
+    }
+    const children = await Promise.all(
+      [...nested].map(async ([directory, inner]) => {
+        const existing = entries.get(directory);
+        const fullPath = `${base}${directory}`;
+        if (existing?.mode === SYMLINK_MODE)
+          throw new DraftPathError({ code: "ELOOP", path: fullPath });
+        if (existing && !isTreeMode(existing.mode)) {
+          const deleting = [...inner.values()].every(
+            (change) => change === null,
+          );
+          if (deleting && skipMissingDeletes)
+            return { directory, oid: existing.oid, keep: true };
+          throw new DraftPathError({
+            code: deleting ? "ENOENT" : "ENOTDIR",
+            path: `${fullPath}/${[...inner.keys()][0] ?? ""}`,
+          });
+        }
+        const oid = await this.rewrite(
+          existing?.oid ?? null,
+          inner,
+          `${fullPath}/`,
+          skipMissingDeletes,
+        );
+        return { directory, oid, keep: false };
+      }),
+    );
+    for (const child of children) {
+      if (child.keep) continue;
+      const existing = entries.get(child.directory);
+      if (child.oid === null) entries.delete(child.directory);
       else
-        entries.set(directory, { name: directory, mode: "40000", oid: child });
+        entries.set(
+          child.directory,
+          existing
+            ? { ...existing, mode: "40000", oid: child.oid }
+            : entryNamed(child.directory, "40000", child.oid),
+        );
     }
     if (entries.size === 0) return null;
     return this.write({
@@ -362,18 +481,16 @@ export class OriginObjects {
     return this.write({ type: "commit", data: serializeCommit(input) });
   }
 
-  /** Paths whose blob differs between two trees; equal subtrees are skipped. */
+  /** Paths whose file differs between two trees; equal subtrees are skipped. */
   async diffTrees(
     before: string | null,
     after: string | null,
-  ): Promise<
-    Array<{ path: string; before: string | null; after: string | null }>
-  > {
-    const changes: Array<{
-      path: string;
-      before: string | null;
-      after: string | null;
-    }> = [];
+  ): Promise<TreeDifference[]> {
+    const changes: TreeDifference[] = [];
+    const fileOf = (entry: TreeEntry | undefined): TreeFile | null =>
+      entry && !isTreeMode(entry.mode) && entry.mode !== SUBMODULE_MODE
+        ? { oid: entry.oid, mode: entry.mode }
+        : null;
     const walk = async (
       a: string | null,
       b: string | null,
@@ -397,15 +514,9 @@ export class OriginObjects {
           const lTree = l && isTreeMode(l.mode) ? l.oid : null;
           const rTree = r && isTreeMode(r.mode) ? r.oid : null;
           if (lTree || rTree) await walk(lTree, rTree, `${filePath}/`);
-          const lFile =
-            l && !isTreeMode(l.mode) && l.mode !== SUBMODULE_MODE
-              ? l.oid
-              : null;
-          const rFile =
-            r && !isTreeMode(r.mode) && r.mode !== SUBMODULE_MODE
-              ? r.oid
-              : null;
-          if (lFile !== rFile)
+          const lFile = fileOf(l);
+          const rFile = fileOf(r);
+          if (lFile?.oid !== rFile?.oid || lFile?.mode !== rFile?.mode)
             changes.push({ path: filePath, before: lFile, after: rFile });
         }),
       );
@@ -418,7 +529,9 @@ export class OriginObjects {
    * Where two commits' histories meet, and how many commits each has that
    * the other lacks. Walks newest first from both tips and stops once only
    * shared history is left, so the cost follows the divergence, not the
-   * project's age.
+   * project's age. The meeting point is a common ancestor that no other
+   * common ancestor descends from (the best merge base), chosen by the
+   * commit graph.
    */
   async compare(
     left: string,
@@ -430,14 +543,18 @@ export class OriginObjects {
     const BOTH = 3;
     const flags = new Map<string, number>();
     const times = new Map<string, number>();
+    const parents = new Map<string, string[]>();
     const queue: string[] = [];
     const push = async (oid: string, flag: number) => {
       const current = flags.get(oid) ?? 0;
       const next = current | flag;
       if (next === current) return;
       flags.set(oid, next);
-      if (!times.has(oid))
-        times.set(oid, (await this.commit(oid)).author.timestamp);
+      if (!times.has(oid)) {
+        const commit = await this.commit(oid);
+        times.set(oid, commit.author.timestamp);
+        parents.set(oid, commit.parents);
+      }
       queue.push(oid);
     };
     await push(left, LEFT);
@@ -450,22 +567,35 @@ export class OriginObjects {
       const oid = queue.pop();
       if (!oid) break;
       const flag = flags.get(oid) ?? 0;
-      for (const parent of (await this.commit(oid)).parents)
-        await push(parent, flag);
+      for (const parent of parents.get(oid) ?? []) await push(parent, flag);
     }
-    let base: string | null = null;
     let ahead = 0;
     let behind = 0;
+    const common: string[] = [];
     for (const [oid, flag] of flags) {
       if (flag === LEFT) ahead++;
       else if (flag === RIGHT) behind++;
-      else if (
-        flag === BOTH &&
-        (base === null || (times.get(oid) ?? 0) > (times.get(base) ?? 0))
-      )
-        base = oid;
+      else if (flag === BOTH) common.push(oid);
     }
-    return { base, ahead, behind };
+    // A common commit is not the best base when another common commit
+    // descends from it.
+    const beneath = new Set<string>();
+    for (const oid of common) {
+      const stack = [...(parents.get(oid) ?? [])];
+      while (stack.length > 0) {
+        const ancestor = stack.pop();
+        if (!ancestor || beneath.has(ancestor) || !flags.has(ancestor))
+          continue;
+        beneath.add(ancestor);
+        stack.push(...(parents.get(ancestor) ?? []));
+      }
+    }
+    const best = common
+      .filter((oid) => !beneath.has(oid))
+      .sort(
+        (a, b) => (times.get(b) ?? 0) - (times.get(a) ?? 0) || (a < b ? -1 : 1),
+      );
+    return { base: best[0] ?? null, ahead, behind };
   }
 
   /** Commits reachable from `tip`, newest first. */
@@ -513,4 +643,114 @@ export class OriginObjects {
     }
     return out;
   }
+}
+
+/**
+ * A three-way merge of trees in memory: every path only one side changed
+ * takes that side, a text file both changed merges line by line, and
+ * anything else both changed differently is a conflict. `resolutions`
+ * settle conflicted paths with the member's content. Ours is the member's
+ * side and theirs the published program, as in every conflict a member
+ * resolves.
+ */
+export async function mergeTrees(input: {
+  objects: OriginObjects;
+  base: string | null;
+  ours: string;
+  theirs: string;
+  resolutions?: Record<string, string>;
+}): Promise<
+  | { status: "merged"; tree: string }
+  | { status: "conflict"; conflicts: ConflictEntry[] }
+> {
+  const { objects } = input;
+  const [oursChanges, theirsChanges] = await Promise.all([
+    objects.diffTrees(input.base, input.ours),
+    objects.diffTrees(input.base, input.theirs),
+  ]);
+  const theirsByPath = new Map(
+    theirsChanges.map((change) => [change.path, change]),
+  );
+  const text = async (file: TreeFile | null) =>
+    file ? new TextDecoder().decode(await objects.blob(file.oid)) : null;
+  const changes = new Map<string, TreeChange>();
+  const conflicts: ConflictEntry[] = [];
+  for (const ours of oursChanges) {
+    const theirs = theirsByPath.get(ours.path);
+    if (!theirs) {
+      changes.set(
+        ours.path,
+        ours.after ? { oid: ours.after.oid, mode: ours.after.mode } : null,
+      );
+      continue;
+    }
+    if (
+      ours.after?.oid === theirs.after?.oid &&
+      ours.after?.mode === theirs.after?.mode
+    )
+      continue;
+    const merged = await mergeText({
+      objects,
+      base: ours.before,
+      ours: ours.after,
+      theirs: theirs.after,
+    });
+    if (merged !== null && ours.after) {
+      const [oid] = await objects.writeBlobs([merged]);
+      if (oid) changes.set(ours.path, { oid, mode: ours.after.mode });
+      continue;
+    }
+    conflicts.push({
+      path: ours.path,
+      base: await text(ours.before),
+      ours: await text(ours.after),
+      theirs: await text(theirs.after),
+    });
+  }
+  const resolved = Object.entries(input.resolutions ?? {});
+  if (resolved.length > 0) {
+    const oids = await objects.writeBlobs(
+      resolved.map(([, content]) => new TextEncoder().encode(content)),
+    );
+    resolved.forEach(([file], index) => {
+      const oid = oids[index];
+      if (oid) changes.set(file, { oid });
+    });
+  }
+  const unresolved = conflicts.filter(
+    (conflict) => input.resolutions?.[conflict.path] === undefined,
+  );
+  if (unresolved.length > 0)
+    return { status: "conflict", conflicts: unresolved };
+  return {
+    status: "merged",
+    tree: await objects.writeTree(input.theirs, changes),
+  };
+}
+
+/** Both sides' edits to one text file, merged line by line, or null. */
+async function mergeText(input: {
+  objects: OriginObjects;
+  base: TreeFile | null;
+  ours: TreeFile | null;
+  theirs: TreeFile | null;
+}): Promise<Uint8Array | null> {
+  if (!input.base || !input.ours || !input.theirs) return null;
+  if (input.ours.mode !== input.theirs.mode) return null;
+  const [base, ours, theirs] = await Promise.all(
+    [input.base, input.ours, input.theirs].map((file) =>
+      input.objects.blob(file.oid),
+    ),
+  );
+  if (!base || !ours || !theirs) return null;
+  if ([base, ours, theirs].some((bytes) => bytes.includes(0))) return null;
+  const lines = (bytes: Uint8Array) =>
+    new TextDecoder().decode(bytes).match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const blocks = diff3Merge(lines(ours), lines(base), lines(theirs));
+  const merged: string[] = [];
+  for (const block of blocks) {
+    if (!("ok" in block)) return null;
+    merged.push(...block.ok);
+  }
+  return new TextEncoder().encode(merged.join(""));
 }

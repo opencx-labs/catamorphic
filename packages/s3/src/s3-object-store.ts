@@ -51,7 +51,10 @@ function isPreconditionFailure(err: unknown): boolean {
 /**
  * `ObjectStore` over any S3-compatible API (Cloudflare R2, AWS S3, MinIO).
  * Conditional writes rely on `If-Match` / `If-None-Match` support on
- * PutObject, which all three provide.
+ * PutObject, which all three provide. Members' drafts (ADR 0191) also need
+ * `If-Match` on DeleteObject; some S3-compatible stores ignore it, so
+ * `ObjectRemoteBackend` probes the store once per process and refuses
+ * drafts on one that fails (`ProjectManager.draftSupport()` at boot).
  */
 export class S3ObjectStore implements ObjectStore {
   private readonly client: S3Client;

@@ -931,6 +931,7 @@ export interface paths {
                         files?: {
                             [key: string]: string;
                         };
+                        base?: string;
                     };
                 };
             };

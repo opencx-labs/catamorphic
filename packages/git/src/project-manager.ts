@@ -12,6 +12,7 @@ import { NativeProjectRepo } from "./native-project-repo.js";
 import { cloneFromRemote } from "./network.js";
 import {
   type DraftPublishResult,
+  DraftsUnsupportedError,
   OriginDraftRepo,
   type ProjectDraft,
   publishFilesToOrigin,
@@ -19,6 +20,7 @@ import {
 import { GitObjectCache } from "./origin-objects.js";
 import { ProjectRepoImpl } from "./project-repo.js";
 import type {
+  DraftSupport,
   GitCredentials,
   ProjectPathResolver,
   ProjectRepo,
@@ -51,6 +53,7 @@ const SYSTEM_AUTHOR = {
 export class ProjectManager {
   /** Origin objects this process has read; safe to lose. */
   private readonly objects = new GitObjectCache();
+  private draftCheck: Promise<DraftSupport> | undefined;
 
   constructor(
     private readonly storage: StorageBackend,
@@ -88,24 +91,62 @@ export class ProjectManager {
   }): Promise<ProjectDraft> {
     if (await this.localPath(input))
       return this.open(input.tenantId, input.projectId, input.externalUserId);
-    if (this.remote)
+    if (this.remote) {
+      const support = await this.draftSupport();
+      if (!support.supported) throw new DraftsUnsupportedError(support.reason);
       return new OriginDraftRepo({
         ...input,
         remote: this.remote,
         cache: this.objects,
-        openCheckout: () => this.openEphemeral(input),
       });
+    }
     return this.openCopy(input.tenantId, input.projectId, input.externalUserId);
   }
 
   /**
+   * Whether this host's origin can keep members' drafts (ADR 0191), checked
+   * once per process: hosts call it at boot to fail fast, and
+   * {@link openDraft} refuses drafts on an origin that cannot keep them.
+   */
+  draftSupport(): Promise<DraftSupport> {
+    this.draftCheck ??= this.remote?.draftSupport
+      ? this.remote.draftSupport()
+      : Promise.resolve({ supported: true });
+    return this.draftCheck;
+  }
+
+  /**
+   * The folder a member's `store/` view is mirrored in around agent turns
+   * when their draft has no folder of its own (a server draft), or null
+   * when this storage keeps no local folders. A disposable cache: the
+   * store itself lives behind the documents service.
+   */
+  async draftStoreFolder(input: {
+    tenantId: string;
+    projectId: string;
+    externalUserId: string;
+  }): Promise<string | null> {
+    const folder = this.storage.cachePath?.(
+      input.tenantId,
+      input.projectId,
+      `store-${input.externalUserId}`,
+    );
+    if (!folder) return null;
+    await fs.mkdir(folder, { recursive: true });
+    return folder;
+  }
+
+  /**
    * Publish files as one commit on the origin's `main`, never touching a
-   * member's draft (ADR 0191).
+   * member's draft (ADR 0191). With `base`, the commit the files were
+   * edited from, they merge with what was published since and report
+   * conflicts instead of overwriting.
    */
   async publishFiles(input: {
     tenantId: string;
     projectId: string;
     files: Record<string, string>;
+    base?: string;
     message: string;
     author: { name: string; email: string };
     guard?: (paths: readonly string[]) => void;

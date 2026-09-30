@@ -35,6 +35,12 @@ export interface DeployOptions {
    */
   files?: Record<string, string>;
   /**
+   * The published commit `files` were edited from. Files changed on the
+   * server since then merge with them, or come back as conflicts instead
+   * of being overwritten.
+   */
+  base?: string;
+  /**
    * Checks every path the publish would change against the live program
    * and throws to refuse it. Runs before anything is published.
    */
@@ -194,6 +200,7 @@ export class DeploymentService {
                 tenantId,
                 projectId,
                 files: opts.files,
+                base: opts.base,
                 message,
                 author,
                 guard: opts.guardPublishedPaths,

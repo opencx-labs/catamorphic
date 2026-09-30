@@ -483,6 +483,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
           {
             message: request.body.message,
             files: request.body.files,
+            base: request.body.base,
             // Role files change only with `roles:write`, whoever edited them.
             guardPublishedPaths: (paths) =>
               assertMayManageRolePolicy(identity, projectId, paths),

@@ -89,13 +89,13 @@ export async function syncSandboxChanges(opts: {
         });
     try {
       if (repo instanceof OriginDraftRepo) {
-        // One draft commit for the whole sync (ADR 0191).
-        const present = new Set(await repo.listFiles());
+        // One draft commit for the whole sync (ADR 0191). A file the
+        // agent made and removed again, or one the project ignores, is
+        // judged inside the compare-and-swap, not from an earlier read.
         const draftChanges: DraftChange[] = [];
         for (const change of changes) {
           if (change.kind === "deleted") {
-            if (present.has(change.path))
-              draftChanges.push({ path: change.path, delete: true });
+            draftChanges.push({ path: change.path, delete: true });
           } else {
             draftChanges.push({
               path: change.path,
@@ -106,7 +106,12 @@ export async function syncSandboxChanges(opts: {
             });
           }
         }
-        await repo.write({ changes: draftChanges, message: "Agent changes" });
+        await repo.write({
+          changes: draftChanges,
+          message: "Agent changes",
+          skipMissingDeletes: true,
+          skipIgnored: true,
+        });
       } else {
         for (const change of changes) {
           if (change.kind === "deleted") {

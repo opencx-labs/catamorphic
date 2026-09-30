@@ -1,11 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { DB, Json, JsonObject } from "@catamorphic/db";
-import {
-  moveCheckoutBase,
-  OriginDraftRepo,
-  type ProjectManager,
-} from "@catamorphic/git";
+import { moveCheckoutBase, type ProjectManager } from "@catamorphic/git";
 import {
   getTracer,
   markSpanError,
@@ -101,6 +97,7 @@ import {
 import { DbSandboxStore } from "./db-sandbox-store.js";
 import { DevSandboxService } from "./dev-sandbox-service.js";
 import type { DocumentsService } from "./documents-service.js";
+import { checkpointDraft, draftStoreFolder } from "./draft-workspace.js";
 import type {
   ExecutionAllocation,
   ExecutionAllocationsService,
@@ -7810,8 +7807,13 @@ export class AgentSessionsService {
           externalUserId: identity.externalUserId,
         });
     try {
-      // A server draft lives in the origin, with no folder to sync into.
-      return repo instanceof OriginDraftRepo ? null : repo.repoPath;
+      return await draftStoreFolder({
+        projectManager: this.projectManager,
+        repo,
+        tenantId: identity.tenantId,
+        projectId,
+        externalUserId: identity.externalUserId,
+      });
     } finally {
       await repo.dispose();
     }
@@ -7865,14 +7867,11 @@ export class AgentSessionsService {
             externalUserId: identity.externalUserId,
           });
           try {
-            // The turn's edits reached a server draft as draft commits.
-            if (repo instanceof OriginDraftRepo) return null;
-            const status = await repo.status();
-            if (!status.dirty) return null;
-            return await repo.commit(
-              checkpointMessage(userMessage),
-              CHECKPOINT_AUTHOR,
-            );
+            return await checkpointDraft({
+              repo,
+              message: checkpointMessage(userMessage),
+              author: CHECKPOINT_AUTHOR,
+            });
           } finally {
             await repo.dispose();
           }
