@@ -910,8 +910,8 @@ export class AgentTurnsService {
    * statement, and read which were asked to stop (ADR 0193). A lease
    * belongs to a live process, not to the duration of an API call. A turn
    * missing from the answer is no longer this process's. It leaves
-   * `updated_at` alone: idle release skips every chat with a running turn,
-   * and a turn's settle stamps when it ended.
+   * `updated_at` alone: idle release skips every chat with a queued, held,
+   * or running turn (lease live or not), and a settle stamps its end.
    */
   async renewHeld(input: {
     workerId: string;

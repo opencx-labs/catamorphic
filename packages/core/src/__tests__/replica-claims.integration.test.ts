@@ -118,6 +118,33 @@ describeIf("claims shared by replicas (ADR 0193)", () => {
     ).toEqual({ holder: "other" });
   });
 
+  it("stops the work when its claim could lapse, before anyone may take it", async () => {
+    // Its database goes away: no renewal lands.
+    const unreachable = createDatabase({
+      connectionString,
+      schema,
+      poolSize: 2,
+    });
+    const started = performance.now();
+    const work = withReplicaClaim({
+      db: unreachable,
+      name: "runtime-silent",
+      ttlSeconds: 2,
+      operation: () => new Promise<void>(() => {}),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await unreachable.destroy();
+    await expect(work).rejects.toBeInstanceOf(ReplicaClaimLostError);
+    const elapsed = performance.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(1_900);
+    expect(elapsed).toBeLessThan(2_600);
+    // The database still holds it until then: nobody took it early.
+    await first
+      .deleteFrom("replica_claims")
+      .where("name", "=", "runtime-silent")
+      .execute();
+  });
+
   it("is a schedule when never released: nobody takes it before it lapses", async () => {
     const name = `sync:${crypto.randomUUID()}`;
     const take = (db: Replica, holder: string) =>

@@ -862,10 +862,14 @@ export class AgentSessionsService {
    * Stop this process's turns before its machine goes away (ADR 0190): it
    * claims no more, lets running turns finish for most of `timeoutMs`
    * (default 15 seconds), then asks the harnesses still running to stop and
-   * waits for those turns to settle. Queued turns stay queued for whichever
-   * machine takes the chat next.
+   * waits for those turns to settle (the rest of `timeoutMs`, or `settleMs`).
+   * Queued turns stay queued for whichever machine takes the chat next.
+   * Then it stops renewing leases, so nothing reaches the database after
+   * its host closes it.
    */
-  async stopLocalTurns(input: { timeoutMs?: number } = {}): Promise<void> {
+  async stopLocalTurns(
+    input: { timeoutMs?: number; settleMs?: number } = {},
+  ): Promise<void> {
     this.stoppingTurns = true;
     // A turn parked on a question settles now: the answer continues
     // wherever it is claimed next.
@@ -898,7 +902,7 @@ export class AgentSessionsService {
           // No resolvable agent: nothing to signal; the turn settles alone.
         }
       }
-      await settled(Math.ceil(timeoutMs / 3));
+      await settled(input.settleMs ?? Math.ceil(timeoutMs / 3));
     }
     // Nothing is claimed here any more: stop renewing, so no statement
     // reaches the database after its host closes it. A turn still running
@@ -5467,8 +5471,9 @@ export class AgentSessionsService {
    * this host its own local node's, each under a claim on the Allocation
    * so two never save it at once (ADR 0192). A member's own machine holds
    * no shared capacity; its runner stops its sandboxes when it disconnects.
-   * A chat with any queued, held, or running turn (a parked question too)
-   * is never idle: a quiet turn renews its lease without touching its row,
+   * A chat with any queued, held, or running turn (a parked question too,
+   * its lease live or not) is never idle: a quiet turn renews its lease
+   * without touching its row,
    * so idleness counts from when its last turn settled (ADR 0193).
    */
   async releaseIdleWorkspaces(
@@ -7137,12 +7142,14 @@ export class AgentSessionsService {
     identity: Identity;
     projectId: string;
     sessionId: string;
+    /** How long to wait for another process finishing it. Default 30s. */
+    waitMs?: number;
   }): Promise<void> {
     try {
       await withReplicaClaim({
         db: this.db,
         name: `close:${input.sessionId}`,
-        waitMs: 30_000,
+        waitMs: input.waitMs ?? 30_000,
         operation: ({ signal }) =>
           this.finishClosingClaimed({ ...input, signal }),
       });
@@ -7277,10 +7284,13 @@ export class AgentSessionsService {
           .where("status", "=", "running")
           .where("lease_expires_at", "<=", sql<Date>`now()`)
           .execute();
+        // A chat another process is finishing is left to it: the sweep
+        // never waits.
         await this.finishClosing({
           identity,
           projectId: row.project_id,
           sessionId: row.id,
+          waitMs: 0,
         });
       } catch (error) {
         console.warn(

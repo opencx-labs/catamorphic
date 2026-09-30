@@ -118,6 +118,26 @@ it.skipIf(!process.env.DATABASE_URL)(
       }
       await long;
       expect(slowSynced).toHaveLength(1);
+
+      // A hung sync gives its claim up after the timeout: the project is
+      // synced again once its interval passes.
+      await first.deleteFrom("replica_claims").execute();
+      slowSynced.length = 0;
+      await syncCompanyProjects({
+        services: slowServices(first, 60_000),
+        identity,
+        holder: "replica-a",
+        intervalSeconds: 2,
+        timeoutMs: 300,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 2_500));
+      await syncCompanyProjects({
+        services: slowServices(second, 0),
+        identity,
+        holder: "replica-b",
+        intervalSeconds: 2,
+      });
+      expect(slowSynced).toHaveLength(2);
     } finally {
       for (const db of replicas) await db.destroy();
       await database.drop();
