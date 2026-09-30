@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import {
-  chromeCdpStartupTimeoutMs,
+  CHROME_CDP_STARTUP_TIMEOUT_MS,
   chromeLaunchArgs,
   waitForHttp,
   watchChild,
@@ -23,9 +23,8 @@ describe("PWA E2E Chrome arguments", () => {
     ]);
   });
 
-  it("allows extra Chrome startup time on shared CI runners", () => {
-    expect(chromeCdpStartupTimeoutMs("true")).toBe(30_000);
-    expect(chromeCdpStartupTimeoutMs(undefined)).toBe(15_000);
+  it("gives a busy local machine the startup time a shared CI runner gets", () => {
+    expect(CHROME_CDP_STARTUP_TIMEOUT_MS).toBe(60_000);
   });
 });
 

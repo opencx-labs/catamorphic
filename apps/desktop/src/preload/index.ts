@@ -111,7 +111,7 @@ const api = {
     invoke("catamorphic:dock-drag", input),
   dockResize: (size: DockSize): Promise<void> =>
     invoke("catamorphic:dock-resize", size),
-  dockIgnoreMouse: (ignore: boolean): Promise<void> =>
+  dockIgnoreMouse: (ignore: boolean): Promise<boolean> =>
     invoke("catamorphic:dock-ignore-mouse", ignore),
   dockDetach: (detached: boolean): Promise<void> =>
     invoke("catamorphic:dock-detach", detached),

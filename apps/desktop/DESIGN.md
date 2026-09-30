@@ -485,6 +485,14 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-09-30: The detached dock keeps its clicks on Linux
+
+Electron forwards pointer moves to a click-through window only on macOS and
+Windows. On Linux the dock lost the pointer the moment it let clicks through,
+took them back on the leave, and let them through again on the next move,
+dozens of times a second while the pointer rested over its empty space. There
+the dock now keeps its clicks; the main process answers whether they pass.
+
 ### 2026-09-30: The palette highlight follows the chosen row
 
 The highlight follows the row the keyboard or a moving pointer chose, through

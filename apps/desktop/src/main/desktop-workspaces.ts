@@ -25,6 +25,10 @@ import {
 import type { WindowProfileRegistry } from "./index.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 
+/** Electron forwards pointer moves to a click-through window only here. */
+const DOCK_PASS_THROUGH =
+  process.platform === "darwin" || process.platform === "win32";
+
 /** One owner per project. Presentation can be hidden without disposing resources. */
 export class DesktopWorkspaces {
   private readonly owners = new Map<string, WebContents>();
@@ -348,14 +352,21 @@ export class DesktopWorkspaces {
     );
     // The detached dock carries transparent headroom above its strip so
     // hints can open above bubbles. The renderer reports whether the pointer
-    // is over content; over empty space the window lets clicks through.
+    // is over content; over empty space the window lets clicks through where
+    // the platform keeps forwarding pointer moves to it (macOS, Windows).
+    // Linux does not forward: an ignoring window loses the pointer at once,
+    // its leave restores input, and the next move ignores again, dozens of
+    // times a second while the pointer rests. There the dock keeps its
+    // clicks. Answers whether clicks now pass through.
     ipcMain.handle(
       "catamorphic:dock-ignore-mouse",
       (event, ignore: boolean) => {
         const profileId = options.windows.profileFor(event.sender);
         const window = this.floating.get(profileId);
-        if (!window || window.webContents !== event.sender) return;
-        window.setIgnoreMouseEvents(ignore === true, { forward: true });
+        if (!window || window.webContents !== event.sender) return false;
+        const passThrough = ignore === true && DOCK_PASS_THROUGH;
+        window.setIgnoreMouseEvents(passThrough, { forward: true });
+        return passThrough;
       },
     );
     ipcMain.handle("catamorphic:dock-resize", (event, size: DockSize) => {

@@ -821,18 +821,28 @@ describe("agents and profiles", () => {
 
   it("auto-retries rate-limited turns with a visible countdown", async () => {
     await runWait(`return !!visibleDock();`, { label: "chat open" });
+    // The ticker lives only for the 5 s backoff, and a loaded host can
+    // spend that between two polls: record it as it renders instead.
     await run(`
+      window.__retryTickerSeen = false;
+      window.__retryTickerObserver?.disconnect();
+      window.__retryTickerObserver = new MutationObserver(() => {
+        if ($('[data-testid="chat-error-card"]') && $('[data-testid="chat-auto-retry"]')) {
+          window.__retryTickerSeen = true;
+          window.__retryTickerObserver.disconnect();
+        }
+      });
+      window.__retryTickerObserver.observe(document.body, { childList: true, subtree: true });
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'please hit a rate limit');
       ta.closest('form').requestSubmit();
       return true;
     `);
     // The failure surfaces as a friendly card WITH the auto-retry ticker…
-    await runWait(
-      `return !!$('[data-testid="chat-error-card"]') &&
-              !!$('[data-testid="chat-auto-retry"]');`,
-      { timeoutMs: 30_000, label: "rate-limit card with auto-retry ticker" },
-    );
+    await runWait(`return window.__retryTickerSeen === true;`, {
+      timeoutMs: 30_000,
+      label: "rate-limit card with auto-retry ticker",
+    });
     // …and the scheduled retry (5s backoff) recovers without user action.
     await runWait(
       `return $$('[role="log"] article')
@@ -1162,10 +1172,13 @@ describe("agents and profiles", () => {
       label: "switch-agent picker",
     });
     await runWait(pickOption("Second Fake"), { label: "pick Second Fake" });
+    // The switch round-trips through the server, lands as a streamed marker
+    // and then names the agent from a refetched roster: bounded like the
+    // other server round trips in this file, not like a local render.
     await runWait(
       `return $$('[role="log"] div')
         .some((el) => el.textContent.trim() === 'Switched to Second Fake');`,
-      { timeoutMs: 15_000, label: "agent-change marker in the timeline" },
+      { timeoutMs: 30_000, label: "agent-change marker in the timeline" },
     );
   });
 

@@ -350,12 +350,21 @@ describe("dock modes", () => {
         first.chat.top +
         Math.floor(first.chat.height / 2),
     };
+    // Count every change of what the window does with clicks.
+    await dockRun(`window.__passThroughChanges = 0;
+      new MutationObserver(() => { window.__passThroughChanges += 1; })
+        .observe(document.documentElement, { attributes: true, attributeFilter: ['data-dock-pass-through'] });
+      return true;`);
     await app.movePointer(margin);
     // The dock answers the hover by asking the main process to let clicks
-    // through; the click must come after that has been applied.
+    // through; the click must come after that has been applied. Linux does
+    // not forward pointer moves to a click-through window, so there the
+    // dock keeps its clicks (it used to flip between the two dozens of
+    // times a second while the pointer rested over empty space).
+    const passesThrough = process.platform === "linux" ? "false" : "true";
     await dockWait(
-      `return document.documentElement.dataset.dockPassThrough === 'true';`,
-      { label: "dock lets clicks through over its margin" },
+      `return document.documentElement.dataset.dockPassThrough === '${passesThrough}';`,
+      { label: "dock answers the pointer over its margin" },
     );
     await app.clickPointer(margin);
     const marginHit = await dockRun<string | null>(
@@ -366,8 +375,7 @@ describe("dock modes", () => {
     expect(marginHit).toBe("BODY");
     if (process.platform === "darwin") {
       // macOS honors the window's mouse-ignore, so the click lands behind
-      // it. The private Linux display applies X11 input shapes unevenly
-      // under its window manager, so there only the hit test is asserted.
+      // it. On Linux the dock keeps the click, so only the hit test counts.
       await app
         .waitFor(`window.__throughClicks > 0`, {
           label: "click reached the workspace window",
@@ -392,14 +400,15 @@ describe("dock modes", () => {
       x: first.dock.x - first.main.x + first.composer.x,
       y: first.dock.y - first.main.y + first.composer.y,
     };
+    // A pointer resting over empty space settles: one request, one answer.
+    if (process.platform === "linux")
+      expect(
+        await dockRun<number>("return window.__passThroughChanges;"),
+      ).toBeLessThanOrEqual(2);
     await app.movePointer(inComposer);
-    // This holds on the private Linux display too. There Electron applies
-    // pass-through as an X11 input shape, which Openbox honors unevenly
-    // (the margin click above may stay with the dock), but the dock still
-    // receives pointer moves while passing clicks through, so it sees the
-    // pointer reach the composer and restores its input region. The marker
-    // turns "false" only after the main process has done so; a click sent
-    // before that is the one that fell through in CI.
+    // The marker turns "false" only after the main process takes clicks
+    // again; a click sent before that is the one that fell through in CI.
+    // On Linux the window never stopped taking them.
     await dockWait(
       `return document.documentElement.dataset.dockPassThrough === 'false';`,
       { label: "dock takes clicks over its composer" },

@@ -253,7 +253,8 @@ export function DockHost({
       });
   }, [detachedWindow, expanded, dialogOpen, railWidth, collapsed]);
   // Over the headroom, the margins around the chat, or any other empty
-  // space, the window lets clicks through to whatever is behind it. Only
+  // space, the window lets clicks through to whatever is behind it (where
+  // the platform allows; the main process answers whether it did). Only
   // dock content answers a hit test there: the app root and the body are
   // pointer-transparent (styles.css), so a hit on either is empty space.
   // `data-dock-pass-through` on the root says what the window does with a
@@ -275,9 +276,9 @@ export function DockHost({
       delete root.dataset.dockPassThrough;
       void desktopApi
         .dockIgnoreMouse(requested)
-        .then(() => {
+        .then((passesThrough) => {
           if (passThroughRequest.current === request)
-            root.dataset.dockPassThrough = String(requested);
+            root.dataset.dockPassThrough = String(passesThrough);
         })
         .catch(() => {});
     };

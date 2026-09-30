@@ -41,9 +41,14 @@ export function chromeLaunchArgs({
   ];
 }
 
-export function chromeCdpStartupTimeoutMs(ci: string | undefined): number {
-  return ci === "true" ? 30_000 : 15_000;
-}
+/**
+ * How long Chrome may take to answer on its DevTools port. The wait ends as
+ * soon as it answers; the bound is for a Chrome that never starts. Startup
+ * is CPU-bound, so a busy machine (a local merge gate beside other work, a
+ * shared CI runner) can need many times an idle one's second or two: 15 s
+ * locally failed there with "CDP never became reachable".
+ */
+export const CHROME_CDP_STARTUP_TIMEOUT_MS = 60_000;
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -250,7 +255,7 @@ export async function launchPwa(
     // Chrome keeps its network error page open instead of retrying, which
     // used to make a healthy built PWA look like a blank-screen regression.
     await waitForHttp(previewHealthUrl, {
-      timeoutMs: 10_000,
+      timeoutMs: 30_000,
       childFailure: preview.failure,
     });
     // Allocate CDP only after the backend and preview have bound their ports.
@@ -288,7 +293,7 @@ export async function launchPwa(
       chromeChild,
       cdpPort,
       appUrl,
-      chromeCdpStartupTimeoutMs(process.env.CI),
+      CHROME_CDP_STARTUP_TIMEOUT_MS,
     );
     const client = await createClient(ws, (diagnostic) => {
       browserDiagnostics += `${diagnostic}\n`;
@@ -301,7 +306,7 @@ export async function launchPwa(
       mobile: true,
     });
     await client.waitFor("!!document.querySelector('[data-testid=screen]')", {
-      timeoutMs: 10_000,
+      timeoutMs: 30_000,
       label: "app shell rendered",
     });
     return {

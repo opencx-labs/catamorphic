@@ -1069,7 +1069,8 @@ export interface CatamorphicDesktopApi {
   ) => Promise<void>;
   dockDrag: (input: DockDrag) => Promise<void>;
   dockResize: (size: DockSize) => Promise<void>;
-  dockIgnoreMouse: (ignore: boolean) => Promise<void>;
+  /** Resolves with whether the window now lets clicks through. */
+  dockIgnoreMouse: (ignore: boolean) => Promise<boolean>;
   /** Session-only; the `dockDetached` preference stays the launch default. */
   dockDetach: (detached: boolean) => Promise<void>;
   /** Native context menu for the detached dock window; resolves the action. */
