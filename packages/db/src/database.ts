@@ -84,6 +84,12 @@ export function createDatabase(options: CreateDatabaseOptions) {
     options: poolOptions,
     max: options.poolSize ?? DEFAULT_POOL_SIZE,
   });
+  // The server may end an idle connection (a failover, a pooler restart):
+  // the pool drops it and connects again. Unhandled, it would end the
+  // process.
+  pool.on("error", (error) =>
+    console.warn("[catamorphic] An idle database connection ended", error),
+  );
 
   const db = withJsonArrayParameters(
     new Kysely<import("./generated/db.js").DB>({

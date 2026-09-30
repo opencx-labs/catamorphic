@@ -82,6 +82,10 @@ async function openPostgresAuthDatabase(
     connectionString,
     options: `-c search_path=${authSchema},public`,
   });
+  // An idle connection the server ends is dropped and replaced, never fatal.
+  pool.on("error", (error) =>
+    console.warn("[work] An idle sign-in database connection ended", error),
+  );
   const database: NonNullable<BetterAuthOptions["database"]> = {
     dialect: new SchemaScopedPostgresDialect({ pool, schema: authSchema }),
     type: "postgres",
