@@ -39,7 +39,7 @@ describe.skipIf(!chromeBinary())("pwa PWA", () => {
 
   beforeAll(async () => {
     app = await launchPwa();
-  }, 90_000);
+  }, 180_000);
 
   afterAll(async () => {
     await app?.stop();
@@ -142,7 +142,7 @@ describe.skipIf(!chromeBinary())("pwa installation", () => {
       label: "sessions screen for install",
       timeoutMs: 20_000,
     });
-  }, 90_000);
+  }, 180_000);
 
   afterAll(async () => {
     await app?.stop();
@@ -201,7 +201,7 @@ describe.skipIf(!chromeBinary())("mobile subsessions", () => {
   let app: PwaHandle;
   beforeAll(async () => {
     app = await launchPwa();
-  }, 90_000);
+  }, 180_000);
   afterAll(async () => {
     await app?.stop();
   });

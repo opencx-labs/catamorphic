@@ -485,6 +485,32 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-09-30: On Linux the detached dock takes the shape of what it draws
+
+Electron forwards pointer moves to a click-through window only on macOS and
+Windows. On Linux the dock lost the pointer the moment it let clicks through,
+took them back on the leave, and let them through again on the next move,
+dozens of times a second while the pointer rested over its empty space.
+There the dock no longer toggles click-through: its window takes the shape of
+what it draws (strip, open or lurking chat, a chat still animating out,
+dialogs, tooltips), re-measured on the frame after anything changes, when a
+drawn surface resizes or the pointer arrives over it, and on every frame while
+something moves. Clicks on its empty space reach the screen behind it, as on
+macOS, and nothing flickers. The main process decides the mode once
+(`shared/dock-clicks.ts`), hands it to the dock window, and answers whether
+each change was applied, so the renderer never assumes it.
+
+Limits: the shape includes the visible core of a shadow (half its blur plus
+its spread, where shadow-2xl has faded under 4%); the fainter outer half is
+clipped, because the full extent would cover the whole margin around an open
+chat. On Wayland, where Electron cannot shape or pass clicks through a
+window, the dock keeps every click inside its window, empty space included.
+
+### 2026-09-30: The palette highlight follows the chosen row
+
+The highlight follows the row the keyboard or a moving pointer chose, through
+late re-ranks; a new query or mode returns it to the top result.
+
 ### 2026-09-29: Work reads as it happens
 
 People watching a long turn saw one sentence change every few minutes,

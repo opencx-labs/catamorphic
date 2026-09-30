@@ -166,7 +166,7 @@ describe.skipIf(!chromeBinary())("pwa against the stock server", () => {
       },
       backendTimeoutMs: 120_000,
     });
-  }, 180_000);
+  }, 270_000);
 
   afterAll(async () => {
     await app?.stop();

@@ -9,6 +9,7 @@ let app: AppHandle;
 let temp: string;
 let root: string;
 let linked: string;
+const visible = '[data-workspace-visible="true"]';
 const helper = `const $ = s => document.querySelector(s); const $$ = s => [...document.querySelectorAll(s)]; const byText = (s,t) => $$(s).find(e => e.textContent.trim().includes(t)); const diffText = () => { const read = root => root.textContent + [...root.querySelectorAll("*")].filter(e => e.shadowRoot).map(e => read(e.shadowRoot)).join("\\n"); return $$("[data-testid=code-diff]").map(read).join("\\n").replaceAll("\\u00a0", " "); }; ${setReactValueJs}`;
 const run = <T>(body: string) => app.eval<T>(`(()=>{${helper};${body}})()`);
 const wait = (body: string) =>
@@ -209,34 +210,37 @@ it("brings Changes back after it hid for being empty", async () => {
   await app.eval(
     `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(original)}})`,
   );
-  await wait(`return !!$('[data-worktree-path]');`);
+  // Solo's workspace stays mounted and focused until the switch lands, and
+  // the original one keeps its rows while inert behind it: wait for the
+  // original to be the visible workspace, not merely for its rows.
+  await wait(`return !!$('${visible} [data-worktree-path]');`);
 });
 
 it("updates visible Changes promptly after external writes, staging and removal without stealing focus", async () => {
   const file = path.join(linked, "live-refresh.txt");
-  await run(
-    `setReactValue($('select[aria-label="Changes checkout"]'), ${JSON.stringify(linked)});`,
+  const checkout = `${visible} select[aria-label="Changes checkout"]`;
+  const changes = `${visible} [data-testid="git-changes"]`;
+  await run(`setReactValue($('${checkout}'), ${JSON.stringify(linked)});`);
+  await wait(
+    `return !!$$('${visible} [data-worktree-path]').find(e=>e.dataset.worktreePath===${JSON.stringify(linked)});`,
   );
-  await wait(`return !!$('[data-worktree-path]');`);
   // Focus something the user could be using: a background refresh must
   // not take it. (A hidden pane's input is not a fair witness; it loses
   // focus whenever that pane becomes inert.)
-  await app.eval(
-    "document.querySelector('select[aria-label=\"Changes checkout\"]').focus(); true",
-  );
+  await run(`$('${checkout}').focus(); return true;`);
   const focusedBefore = await app.eval(
     "document.activeElement?.getAttribute('aria-label')",
   );
   expect(focusedBefore).toBe("Changes checkout");
   await fs.writeFile(file, "External editor change\n");
   await app.waitFor(
-    `document.querySelector('[data-testid="git-changes"]')?.textContent.includes('live-refresh.txt')`,
+    `document.querySelector('${changes}')?.textContent.includes('live-refresh.txt')`,
     { timeoutMs: 8_000 },
   );
   // The section reveals with motion; judge focus once that has settled,
   // not on the frame the text landed.
   await app.waitFor(
-    `document.querySelector('[data-sidebar="left"]')?.getAnimations({ subtree: true }).every((animation) => animation.playState !== 'running')`,
+    `document.querySelector('${visible} [data-sidebar="right"]')?.getAnimations({ subtree: true }).every((animation) => animation.playState !== 'running')`,
     { timeoutMs: 8_000, label: "sidebar motion settled" },
   );
   expect(
@@ -244,13 +248,13 @@ it("updates visible Changes promptly after external writes, staging and removal 
   ).toBe(focusedBefore);
   await nativeGit(linked, ["add", "live-refresh.txt"]);
   await app.waitFor(
-    `document.querySelector('[data-worktree-path] [data-change-group="staged"]')?.textContent.includes('live-refresh.txt')`,
+    `document.querySelector('${visible} [data-worktree-path] [data-change-group="staged"]')?.textContent.includes('live-refresh.txt')`,
     { timeoutMs: 8_000 },
   );
   await nativeGit(linked, ["reset", "HEAD", "--", "live-refresh.txt"]);
   await fs.rm(file);
   await app.waitFor(
-    `!document.querySelector('[data-testid="git-changes"]')?.textContent.includes('live-refresh.txt')`,
+    `!document.querySelector('${changes}')?.textContent.includes('live-refresh.txt')`,
     { timeoutMs: 8_000 },
   );
 });

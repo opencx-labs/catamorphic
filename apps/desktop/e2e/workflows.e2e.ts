@@ -16,8 +16,15 @@ afterAll(async () => {
 const helpers = `const $ = s => document.querySelector(s); const $$ = s => [...document.querySelectorAll(s)]; const button = text => $$('.workflow-workbench button').find(el => !el.closest('[inert]') && el.innerText.trim() === text); const status = () => $('[data-testid="workflow-status-trigger"]')?.textContent ?? ''; const title = () => $('[data-testid="workflow-status-trigger"]')?.getAttribute('aria-label')?.split(' status:')[0] ?? ''; const popoverButton = text => $$('[data-testid="workflow-status-content"] button').find(el => el.innerText.trim() === text); const showCode = () => { const toggle = $('button[aria-label="Code"]'); if (toggle.getAttribute('aria-pressed') !== 'true') toggle.click(); }; const tabLabel = () => $('[data-point-key="workflow:linkedWorkflow"]')?.textContent ?? ''; const panel = () => $('.workflow-stage')?.dataset; const node = label => $$('.react-flow__node').find(el => el.textContent.trim() === label); ${setReactValueJs}`;
 const run = <T>(body: string) =>
   app.eval<T>(`(async () => { ${helpers} ${body} })()`);
+// Most of these waits end on a server-side parse or deploy of the workflow
+// (TypeScript analysis of the project), which a loaded host runs many times
+// slower than an idle one: a restored draft sat on "Preparing the workflow"
+// past the default 15 s. The bound is for a stuck preview, not a duration.
 const wait = (body: string, label: string) =>
-  app.waitFor(`(() => { ${helpers} ${body} })()`, { label });
+  app.waitFor(`(() => { ${helpers} ${body} })()`, {
+    label,
+    timeoutMs: 45_000,
+  });
 const writeSource = (content: string) =>
   run(
     `const {url} = await window.catamorphicDesktop.getServerState(); const response = await fetch(url + '/api/projects/${projectId}/files/.work/workflows/linked-workflow.ts', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({content:${JSON.stringify(content)}})}); if (!response.ok) throw new Error(await response.text()); return true;`,

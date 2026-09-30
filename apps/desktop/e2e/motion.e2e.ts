@@ -90,7 +90,12 @@ const helpers = `
     if (raw.endsWith('s')) return parseFloat(raw) * 1000;
     return Number.NaN;
   };
-  /** Sample element state every ~25ms until it unmounts or times out. */
+  /**
+   * Sample element state every ~25ms until it unmounts or times out. The
+   * bound is for a stuck exit, not a duration check: removal waits for the
+   * exit animation's end event, which a busy CI host delivers late.
+   */
+  const EXIT_BOUND_MS = 5000;
   const sampleUntilGone = (el, exitClass, timeoutMs) => new Promise((resolve) => {
     const samples = [];
     const started = performance.now();
@@ -425,7 +430,10 @@ describe("animate-before-unmount", () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
         input.dispatchEvent(new KeyboardEvent('keydown',
           { key: 'Enter', bubbles: true, cancelable: true }));
-        const deadline = performance.now() + 5000;
+        // Ready waits on the pairing listener starting in the main process,
+        // which a busy host takes longer than 5 s to do. The loop ends as
+        // soon as the modal is ready; the bound is for one that never is.
+        const deadline = performance.now() + 30000;
         while (performance.now() < deadline) {
           sampleEntrance();
           if ($('[data-testid="mobile-pairing-modal"]')?.dataset.state === 'ready') break;
@@ -436,7 +444,7 @@ describe("animate-before-unmount", () => {
       }
       const modal = $('[data-testid="mobile-pairing-modal"]');
       if (!loadingLayout || modal?.dataset.state !== 'ready') {
-        throw new Error('Pairing modal did not expose stable loading and ready states');
+        throw new Error('Pairing modal did not expose stable loading and ready states: loading ' + (loadingLayout ? 'seen' : 'missed') + ', state ' + modal?.dataset.state);
       }
       const heading = byText('h2', 'Continue on mobile');
       const overlay = heading.closest('[aria-hidden]');
@@ -492,7 +500,7 @@ describe("animate-before-unmount", () => {
     >(`
       const dock = visibleDock();
       pressKey('Escape');
-      return sampleUntilGone(dock, null, 1500);
+      return sampleUntilGone(dock, null, EXIT_BOUND_MS);
     `);
     // Mid-tween: mounted with partial opacity. End: unmounted.
     expect(
@@ -504,7 +512,9 @@ describe("animate-before-unmount", () => {
       ),
       `samples: ${JSON.stringify(samples)}`,
     ).toBe(true);
-    expect(samples.at(-1)?.gone).toBe(true);
+    expect(samples.at(-1)?.gone, `samples: ${JSON.stringify(samples)}`).toBe(
+      true,
+    );
   });
 
   it("minimizing a floating chat never replays dock-in between the two poses", async () => {
@@ -564,13 +574,15 @@ describe("animate-before-unmount", () => {
       const button = buttons[buttons.length - 1];
       const tab = button.closest('[data-point-key]');
       button.click();
-      return sampleUntilGone(tab, 'animate-tab-out', 1500);
+      return sampleUntilGone(tab, 'animate-tab-out', EXIT_BOUND_MS);
     `);
     expect(
       samples.some((sample) => sample.exiting),
       `samples: ${JSON.stringify(samples)}`,
     ).toBe(true);
-    expect(samples.at(-1)?.gone).toBe(true);
+    expect(samples.at(-1)?.gone, `samples: ${JSON.stringify(samples)}`).toBe(
+      true,
+    );
   });
 
   it("tab hover cards fade out before unmounting", async () => {
@@ -597,13 +609,15 @@ describe("animate-before-unmount", () => {
         bubbles: true,
         relatedTarget: document.body,
       }));
-      return sampleUntilGone(card, 'animate-fade-out', 1000);
+      return sampleUntilGone(card, 'animate-fade-out', EXIT_BOUND_MS);
     `);
     expect(
       samples.some((sample) => sample.exiting),
       `samples: ${JSON.stringify(samples)}`,
     ).toBe(true);
-    expect(samples.at(-1)?.gone).toBe(true);
+    expect(samples.at(-1)?.gone, `samples: ${JSON.stringify(samples)}`).toBe(
+      true,
+    );
   });
 
   it("chat messages tween in on every arrival path", async () => {
@@ -670,12 +684,14 @@ describe("animate-before-unmount", () => {
       const button = $$('.animate-bubble-in button[aria-label^="Close"]').at(-1);
       const bubble = button.closest('.animate-bubble-in');
       button.click();
-      return sampleUntilGone(bubble, 'animate-bubble-out', 1500);
+      return sampleUntilGone(bubble, 'animate-bubble-out', EXIT_BOUND_MS);
     `);
     expect(
       samples.some((sample) => sample.exiting),
       `samples: ${JSON.stringify(samples)}`,
     ).toBe(true);
-    expect(samples.at(-1)?.gone).toBe(true);
+    expect(samples.at(-1)?.gone, `samples: ${JSON.stringify(samples)}`).toBe(
+      true,
+    );
   });
 });

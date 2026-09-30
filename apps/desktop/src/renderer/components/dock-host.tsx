@@ -13,9 +13,11 @@ import type {
   DockData,
   DockSnapshot,
 } from "../../shared/desktop-workspace.js";
+import { parseDockClicks } from "../../shared/dock-clicks.js";
 import { fileUrlFor } from "../../shared/downloads.js";
 import { localPresentations } from "../lib/chat-presentations.js";
 import { desktopApi } from "../lib/desktop-api.js";
+import { drawnDockRects } from "../lib/dock-shape.js";
 import { matchesBinding, useKeybindings } from "../lib/keybindings.js";
 import {
   applyTheme,
@@ -28,6 +30,11 @@ import { ChatBubbles } from "./chat-bubbles.js";
 import { ChatDock } from "./chat-dock.js";
 import { DockDialogs } from "./dock-dialogs.js";
 import { DownloadsBubble } from "./downloads-bubble.js";
+
+/** How this window lets clicks through, as the main process decided. */
+const DOCK_CLICKS = parseDockClicks(
+  new URLSearchParams(location.search).get("clicks"),
+);
 
 const EMPTY: DockSnapshot = {
   chats: [],
@@ -274,17 +281,34 @@ export function DockHost({
     dragging,
   ]);
   // Over the headroom, the margins around the chat, or any other empty
-  // space, the window lets clicks through to whatever is behind it. Only
+  // space, the window lets clicks through to whatever is behind it (where
+  // the platform allows; the main process answers whether it did). Only
   // dock content answers a hit test there: the app root and the body are
   // pointer-transparent (styles.css), so a hit on either is empty space.
+  // `data-dock-pass-through` on the root says what the window does with a
+  // click right now, once the main process has applied it; while a change
+  // is in flight it is absent, never stale. A click that races the change
+  // lands on the other side (the native pointer tests wait for this).
+  const passThroughRequest = useRef(0);
   useEffect(() => {
     if (!detachedWindow) return;
+    const root = document.documentElement;
+    delete root.dataset.dockPassThrough;
     let ignoring = false;
     let last: { x: number; y: number } | null = null;
     const update = (interactive: boolean) => {
       if (ignoring === !interactive) return;
       ignoring = !interactive;
-      void desktopApi.dockIgnoreMouse(ignoring).catch(() => {});
+      const requested = ignoring;
+      const request = ++passThroughRequest.current;
+      delete root.dataset.dockPassThrough;
+      void desktopApi
+        .dockIgnoreMouse(requested)
+        .then((passesThrough) => {
+          if (passThroughRequest.current === request)
+            root.dataset.dockPassThrough = String(passesThrough);
+        })
+        .catch(() => {});
     };
     const hitTest = () => {
       if (!last) return;
@@ -318,7 +342,81 @@ export function DockHost({
       document.removeEventListener("mousemove", move);
       document.documentElement.removeEventListener("mouseleave", leave);
       window.removeEventListener("resize", resized);
+      // Earlier answers no longer describe this window's state.
+      passThroughRequest.current += 1;
+      delete root.dataset.dockPassThrough;
       update(true);
+    };
+  }, [detachedWindow]);
+  // Where the window cannot let clicks through (Linux on X11), it takes the
+  // shape of what it draws, re-measured on the frame after anything changes
+  // (DOM, a drawn surface's size, the pointer arriving over it) and on every
+  // frame while something moves. `data-dock-shape` on the root is the shape
+  // the main process applied (JSON; "null" is the whole window): absent
+  // while a change is in flight, and never set when it was not applied.
+  const shapeRequest = useRef(0);
+  useEffect(() => {
+    if (!detachedWindow || DOCK_CLICKS !== "shape") return;
+    const root = document.documentElement;
+    delete root.dataset.dockShape;
+    let frame = 0;
+    let sent: string | undefined;
+    const moving = () =>
+      document
+        .getAnimations()
+        .some(
+          (animation) =>
+            animation.playState === "running" &&
+            animation.effect?.getTiming().iterations !== Infinity,
+        );
+    const sizes = new ResizeObserver(() => schedule());
+    const measure = () => {
+      frame = 0;
+      const rects = drawnDockRects(document.body, (element) =>
+        sizes.observe(element),
+      );
+      const key = JSON.stringify(rects);
+      if (key !== sent) {
+        sent = key;
+        const request = ++shapeRequest.current;
+        delete root.dataset.dockShape;
+        void desktopApi
+          .dockShape(rects)
+          .then((applied) => {
+            if (applied && shapeRequest.current === request)
+              root.dataset.dockShape = key;
+          })
+          .catch(() => {});
+      }
+      if (moving()) schedule();
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(measure);
+    };
+    const mutations = new MutationObserver(schedule);
+    mutations.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
+    window.addEventListener("resize", schedule);
+    document.addEventListener("transitionrun", schedule, true);
+    document.addEventListener("animationstart", schedule, true);
+    // Hover-only changes (a revealed action, a grown card) move no DOM.
+    document.addEventListener("pointerover", schedule, true);
+    schedule();
+    return () => {
+      cancelAnimationFrame(frame);
+      mutations.disconnect();
+      sizes.disconnect();
+      window.removeEventListener("resize", schedule);
+      document.removeEventListener("transitionrun", schedule, true);
+      document.removeEventListener("animationstart", schedule, true);
+      document.removeEventListener("pointerover", schedule, true);
+      shapeRequest.current += 1;
+      delete root.dataset.dockShape;
+      void desktopApi.dockShape(null).catch(() => {});
     };
   }, [detachedWindow]);
 
