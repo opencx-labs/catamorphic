@@ -325,12 +325,33 @@ export class WorkerNodesService {
   }
 
   /**
-   * A remote executor's own call extends its lease while its epoch is
-   * current (ADR 0192), even after a lapse: nobody else can take it over.
-   * False once a newer epoch took over, or the operator disabled the node.
+   * A remote executor's own call keeps its lease while its epoch is current
+   * (ADR 0192), even after a lapse: nobody else can take it over. Every call
+   * checks the epoch with a read; the row is written only once the lease has
+   * less than `renewWithinMs` left, so frequent calls do not contend on it.
+   * `held` is false once a newer epoch took over or the operator disabled the
+   * node; `extended` says whether this call wrote the lease.
    */
-  async renewRemote(args: { lease: WorkerNodeLease }): Promise<boolean> {
+  async renewRemote(args: {
+    lease: WorkerNodeLease;
+    renewWithinMs?: number;
+  }): Promise<{ held: boolean; extended: boolean }> {
+    const renewWithinSeconds = (args.renewWithinMs ?? 40_000) / 1000;
     const row = await this.db
+      .selectFrom("worker_nodes")
+      .select(
+        sql<boolean>`lease_expires_at < now() + make_interval(secs => ${renewWithinSeconds})`.as(
+          "due",
+        ),
+      )
+      .where("id", "=", args.lease.id)
+      .where("lease_token", "=", args.lease.token)
+      .where("enabled", "=", true)
+      .where("remote", "is not", null)
+      .executeTakeFirst();
+    if (!row) return { held: false, extended: false };
+    if (!row.due) return { held: true, extended: false };
+    const extended = await this.db
       .updateTable("worker_nodes")
       .set({
         lease_expires_at: sql`now() + interval '45 seconds'`,
@@ -342,7 +363,7 @@ export class WorkerNodesService {
       .where("remote", "is not", null)
       .returning("id")
       .executeTakeFirst();
-    return Boolean(row);
+    return { held: Boolean(extended), extended: Boolean(extended) };
   }
 
   /** The node's lease token while its lease is live and it is enabled. */

@@ -124,13 +124,14 @@ export {
   type AgentTodoInput,
   type AgentTodoStatus,
   AgentTurnInProgressError,
-  AgentTurnQueuedError,
   type AgentTurnSettledEvent,
+  AgentTurnUnsettledError,
   type ArchiveSessionResourcesHandler,
   type NativeAgentCheckout,
   PersonalLoginUnavailableError,
   type SessionPlacement,
   type SyncedFileChange,
+  type UnsettledTurnState,
   UnsupportedAgentTopologyError,
 } from "./services/agent-sessions-service.js";
 export {

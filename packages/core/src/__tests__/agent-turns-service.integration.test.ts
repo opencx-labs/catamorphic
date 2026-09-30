@@ -100,7 +100,10 @@ describe("agent turn persistence", () => {
       author: watcherAuthor,
       mode: "next_turn",
     });
-    const turn = await turns.claimNext({ workerId: "remote-server" });
+    const turn = await turns.claimNextForSession({
+      workerId: "remote-server",
+      sessionId: firstSessionId,
+    });
     if (!turn?.leaseToken) throw new Error("Expected a lease");
     const progress = {
       turnId: turn.id,
@@ -189,9 +192,18 @@ describe("agent turn persistence", () => {
     });
 
     const claims = await Promise.all([
-      turns.claimNext({ workerId: "worker-a" }),
-      turns.claimNext({ workerId: "worker-b" }),
-      turns.claimNext({ workerId: "worker-c" }),
+      turns.claimNextForSession({
+        workerId: "worker-a",
+        sessionId: firstSessionId,
+      }),
+      turns.claimNextForSession({
+        workerId: "worker-b",
+        sessionId: firstSessionId,
+      }),
+      turns.claimNextForSession({
+        workerId: "worker-c",
+        sessionId: secondSessionId,
+      }),
     ]);
     const claimedIds = claims.flatMap((claim) => (claim ? [claim.id] : []));
 
@@ -258,7 +270,10 @@ describe("agent turn persistence", () => {
       author: watcherAuthor,
       mode: "next_turn",
     });
-    const turn = await turns.claimNext({ workerId: "first-process" });
+    const turn = await turns.claimNextForSession({
+      workerId: "first-process",
+      sessionId: firstSessionId,
+    });
     if (!turn?.leaseToken) throw new Error("Missing lease");
     expect(
       await turns.renew({ turnId: turn.id, leaseToken: crypto.randomUUID() }),
@@ -296,7 +311,10 @@ describe("agent turn persistence", () => {
       mode: "next_turn",
     });
     expect(
-      await restarted.claimNext({ workerId: "second-process" }),
+      await restarted.claimNextForSession({
+        workerId: "second-process",
+        sessionId: firstSessionId,
+      }),
     ).toBeNull();
     expect(
       await restarted.listPendingMessages({ sessionId: firstSessionId }),
@@ -315,7 +333,10 @@ describe("agent turn persistence", () => {
       .where("id", "=", turn.id)
       .execute();
     expect(
-      await restarted.claimNext({ workerId: "second-process" }),
+      await restarted.claimNextForSession({
+        workerId: "second-process",
+        sessionId: firstSessionId,
+      }),
     ).toMatchObject({ id: turn.id, resultMessageId: reply.id, attempt: 2 });
   });
 
@@ -326,7 +347,10 @@ describe("agent turn persistence", () => {
       author: watcherAuthor,
       mode: "next_turn",
     });
-    const turn = await turns.claimNext({ workerId: "worker" });
+    const turn = await turns.claimNextForSession({
+      workerId: "worker",
+      sessionId: firstSessionId,
+    });
     if (!turn?.leaseToken) throw new Error("Missing lease");
     const reply = await db
       .insertInto("agent_messages")

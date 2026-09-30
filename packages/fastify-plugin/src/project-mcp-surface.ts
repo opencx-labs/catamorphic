@@ -1,7 +1,7 @@
 import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import {
   AccessDeniedError,
-  AgentTurnQueuedError,
+  AgentTurnUnsettledError,
   EVERY_ARTIFACT,
   mayUseProject,
   parseWorkspaceRequest,
@@ -566,9 +566,10 @@ export function surfaceTools(
           );
           return { sessionId, reply: reply.content };
         } catch (error) {
-          // The machine that runs the chat is away: the message waits for it.
-          if (error instanceof AgentTurnQueuedError)
-            return { sessionId, queued: true, reply: error.message };
+          // No reply yet: the message waits for a machine, is held or
+          // cancelled, or its machine stopped. The caller reads the chat.
+          if (error instanceof AgentTurnUnsettledError)
+            return { sessionId, state: error.state, reply: error.message };
           throw error;
         }
       }),

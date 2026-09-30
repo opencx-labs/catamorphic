@@ -76,6 +76,8 @@ import {
   type SessionMessageAuthor,
 } from "./agent-turns-service.js";
 import {
+  type AllocationMaintenanceClaim,
+  AllocationMaintenanceLostError,
   allocationSandboxProvider,
   claimAllocationMaintenance,
   withAllocationMaintenance,
@@ -466,20 +468,34 @@ export class AgentTurnInProgressError extends Error {
   }
 }
 
+/** Where a sent message's turn stands when it has no reply to return. */
+export type UnsettledTurnState =
+  | "queued"
+  | "held"
+  | "cancelled"
+  | "interrupted";
+
+const UNSETTLED_TURN_MESSAGES: Record<UnsettledTurnState, string> = {
+  queued:
+    "The message is queued: the machine that runs this chat is away or busy. It runs when a machine takes it; read the chat for the reply.",
+  held: "The message is held: it runs once it is released.",
+  cancelled: "The message was cancelled before it ran.",
+  interrupted:
+    "The machine running this turn stopped: it is settled as interrupted. Send a new message to continue.",
+};
+
 /**
- * The message was accepted, but no machine has started its turn: the one
- * that runs the chat is away or busy. The turn stays queued and runs when a
- * machine takes it; read the session for its reply.
+ * A message was accepted, but its turn has no reply to return: it waits
+ * for a machine, is held or cancelled, or the machine running it stopped.
  */
-export class AgentTurnQueuedError extends Error {
+export class AgentTurnUnsettledError extends Error {
   constructor(
     readonly sessionId: string,
     readonly turnId: string,
+    readonly state: UnsettledTurnState,
   ) {
-    super(
-      "The message is queued: the machine that runs this chat is away or busy. It runs when the machine takes it; read the chat for the reply.",
-    );
-    this.name = "AgentTurnQueuedError";
+    super(UNSETTLED_TURN_MESSAGES[state]);
+    this.name = "AgentTurnUnsettledError";
   }
 }
 
@@ -4103,14 +4119,21 @@ export class AgentSessionsService {
         .where("id", "=", turnId)
         .executeTakeFirstOrThrow();
       if (current.status === "running") {
-        if (!current.lease_live) break;
+        // Its reply so far is only a placeholder; recovery settles it.
+        if (!current.lease_live)
+          throw new AgentTurnUnsettledError(sessionId, turnId, "interrupted");
         unclaimedSince = Date.now();
+      } else if (current.status === "held" || current.status === "cancelled") {
+        if (current.result_message_id === null)
+          throw new AgentTurnUnsettledError(sessionId, turnId, current.status);
+        break;
       } else if (
         current.status !== "queued" ||
-        current.result_message_id !== null ||
-        Date.now() - unclaimedSince > 5_000
+        current.result_message_id !== null
       )
         break;
+      else if (Date.now() - unclaimedSince > 5_000)
+        throw new AgentTurnUnsettledError(sessionId, turnId, "queued");
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     const turn = await this.db
@@ -4123,7 +4146,7 @@ export class AgentSessionsService {
       .selectAll("agent_messages")
       .where("agent_turns.id", "=", receipt.turnId)
       .executeTakeFirst();
-    if (!turn) throw new AgentTurnQueuedError(sessionId, turnId);
+    if (!turn) throw new AgentTurnUnsettledError(sessionId, turnId, "queued");
     return mapMessage(turn);
   }
 
@@ -4824,6 +4847,14 @@ export class AgentSessionsService {
         }
         continue;
       }
+      // A member's machine that connected again cannot serve its earlier
+      // connection's workspace (ADR 0098): give it back, and the turn is
+      // admitted on the new connection, rebuilt from the session branch.
+      if (
+        allocation?.status === "active" &&
+        (await this.releaseEndedConnection({ identity, session, allocation }))
+      )
+        continue;
       // Any host of the authority runs a turn on a remote node or none; a
       // turn on a local node runs only in the process holding that node's
       // lease (ADR 0192). The claim decides, in Postgres.
@@ -4982,14 +5013,86 @@ export class AgentSessionsService {
    * owner and pool. The next turn's sandbox rehydrates from the session
    * branch. A concurrent readmission by another instance wins quietly.
    */
+  /**
+   * Release a member's-machine workspace whose runner connection ended while
+   * the runner is connected again under a new lease (ADR 0192). True when
+   * this host released it.
+   */
+  private async releaseEndedConnection(input: {
+    identity: Identity;
+    session: SessionRow;
+    allocation: ExecutionAllocation;
+  }): Promise<boolean> {
+    const { allocation, session } = input;
+    const [kind, runnerId, token] = allocation.bindingId.split(":");
+    if (kind !== "client" || !runnerId || !token || allocation.workerNodeId)
+      return false;
+    const runner = await this.db
+      .selectFrom("client_runners")
+      .select("lease_token")
+      .where(sql<boolean>`id::text = ${runnerId}`)
+      .where("lease_expires_at", ">", sql<Date>`now()`)
+      .executeTakeFirst();
+    if (!runner || runner.lease_token === token) return false;
+    const released = await this.db.transaction().execute(async (trx) => {
+      const current = await trx
+        .selectFrom("agent_sessions")
+        .select(["status", "allocation_id"])
+        .where("id", "=", session.id)
+        .forUpdate()
+        .executeTakeFirst();
+      if (
+        current?.status !== "active" ||
+        current.allocation_id !== allocation.id
+      )
+        return false;
+      const running = await trx
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("session_id", "=", session.id)
+        .where("status", "=", "running")
+        .executeTakeFirst();
+      if (running) return false;
+      const done = await this.executionAllocations.release({
+        identity: input.identity,
+        allocationId: allocation.id,
+        reason: "connection_ended",
+        transaction: trx,
+      });
+      if (!done) return false;
+      await trx
+        .updateTable("agent_sessions")
+        .set({ provider_session_id: null, sandbox_id: null })
+        .where("id", "=", session.id)
+        .execute();
+      return true;
+    });
+    if (released)
+      await this.connectionGrants
+        ?.revokeAllocation({ allocationId: allocation.id })
+        .catch(() => {});
+    return released;
+  }
+
   private async readmit(
     identity: Identity,
     projectId: string,
     session: SessionRow,
   ): Promise<void> {
     const agent = await this.resolveAgent(session.agent_id, projectId);
+    // A member's machine is readmitted on the runner it last used.
+    const released = session.allocation_id
+      ? await this.executionAllocations.get({
+          identity,
+          allocationId: session.allocation_id,
+        })
+      : undefined;
+    const [kind, runnerId] = released?.bindingId.split(":") ?? [];
     const admission = await this.executionEnvironments.admit({
-      identity,
+      identity:
+        kind === "client" && runnerId
+          ? { ...identity, clientRunnerId: runnerId }
+          : identity,
       projectId,
       owner: placementOwner(session.external_user_id),
       ...(session.environment_name
@@ -5166,8 +5269,10 @@ export class AgentSessionsService {
           await withAllocationMaintenance({
             db: this.db,
             claim,
-            work: () =>
+            work: (held) =>
               this.releaseIdleWorkspace({
+                claim,
+                held,
                 identity,
                 projectId: row.project_id,
                 sessionId: row.id,
@@ -5192,6 +5297,10 @@ export class AgentSessionsService {
   }
 
   private async releaseIdleWorkspace(input: {
+    /** This host's claim on the workspace (ADR 0192). */
+    claim: AllocationMaintenanceClaim;
+    /** Throws once the claim is lost: call it before each step. */
+    held: () => Promise<void>;
     identity: Identity;
     projectId: string;
     sessionId: string;
@@ -5231,10 +5340,12 @@ export class AgentSessionsService {
         provider: selected,
         ...this.localFence(allocation),
       });
+      await input.held();
       const status = await provider.getSandboxStatus(input.sandboxProviderId);
       if (status === "stopped" || status === "archived")
         await provider.startSandbox(input.sandboxProviderId);
       // Throws when the changes cannot be read: the workspace is kept.
+      await input.held();
       await syncSandboxChanges({
         provider,
         projectManager: this.projectManager,
@@ -5244,6 +5355,7 @@ export class AgentSessionsService {
         sandboxProviderId: input.sandboxProviderId,
         projectDir: this.projectDir(provider),
       });
+      await input.held();
       await this.projectManager.checkpointSession({
         tenantId: identity.tenantId,
         projectId,
@@ -5254,6 +5366,7 @@ export class AgentSessionsService {
     }
     // Personal logins and files leave with the workspace (ADR 0184); the
     // next turn delivers them again into its new one.
+    await input.held();
     if (input.sandboxProviderId)
       await this.withdrawFromSessionSandbox({
         identity,
@@ -5275,6 +5388,17 @@ export class AgentSessionsService {
         this.runningTurns.has(sessionId)
       )
         return false;
+      // Released only while this host still holds the claim, so no turn
+      // was claimed since it began.
+      const claimed = await trx
+        .selectFrom("execution_allocations")
+        .select("id")
+        .where("id", "=", allocation.id)
+        .where("maintenance_claim", "=", input.claim.token)
+        .where("maintenance_claimed_until", ">", sql<Date>`now()`)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!claimed) throw new AllocationMaintenanceLostError();
       const busy = await trx
         .selectFrom("agent_turns")
         .select("id")

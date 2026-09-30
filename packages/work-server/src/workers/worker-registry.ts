@@ -173,12 +173,10 @@ export class WorkWorkerRegistry {
     error?: string;
   }): Promise<void> {
     // A receipt proves the worker is alive; an old epoch's is refused below.
-    if (
-      await this.deps.nodes.renewRemote({
-        lease: { id: args.nodeId, token: args.session },
-      })
-    )
-      await this.seen(args.nodeId);
+    const renewed = await this.deps.nodes.renewRemote({
+      lease: { id: args.nodeId, token: args.session },
+    });
+    if (renewed.extended) await this.seen(args.nodeId);
     await this.queue.complete({
       executor: nodeExecutor(args.nodeId),
       leaseToken: args.session,
@@ -201,20 +199,17 @@ export class WorkWorkerRegistry {
     nodeId: string;
     session: string;
   }): Promise<void> {
-    if (
-      await this.deps.nodes.renewRemote({
-        lease: { id: args.nodeId, token: args.session },
-      })
-    ) {
-      await this.seen(args.nodeId);
-      return;
-    }
+    const renewed = await this.deps.nodes.renewRemote({
+      lease: { id: args.nodeId, token: args.session },
+    });
+    if (renewed.extended) await this.seen(args.nodeId);
+    if (renewed.held) return;
     throw await this.ended(args);
   }
 
   /**
-   * The operator's "last contact": the worker's latest call to any replica,
-   * written at most every five seconds.
+   * The operator's "last contact": written when a worker's call extends its
+   * lease, so about every five seconds while it calls.
    */
   private async seen(nodeId: string): Promise<void> {
     await this.deps.db

@@ -579,14 +579,6 @@ export class AgentTurnsService {
     return result.numUpdatedRows === 1n;
   }
 
-  async claimNext(input: {
-    workerId: string;
-    localNode?: { id: string; token: string };
-    leaseSeconds?: number;
-  }): Promise<AgentTurn | null> {
-    return this.claim(input);
-  }
-
   async claimNextForSession(input: {
     workerId: string;
     sessionId: string;
@@ -608,20 +600,19 @@ export class AgentTurnsService {
    */
   private async claim(input: {
     workerId: string;
-    sessionId?: string;
+    sessionId: string;
     localNode?: { id: string; token: string };
     leaseSeconds?: number;
   }): Promise<AgentTurn | null> {
     const leaseToken = randomUUID();
     const leaseSeconds = input.leaseSeconds ?? 60;
     return this.db.transaction().execute(async (trx) => {
-      if (input.sessionId)
-        await trx
-          .selectFrom("agent_sessions")
-          .select("id")
-          .where("id", "=", input.sessionId)
-          .forShare()
-          .execute();
+      await trx
+        .selectFrom("agent_sessions")
+        .select("id")
+        .where("id", "=", input.sessionId)
+        .forShare()
+        .execute();
       const candidate = await trx
         .selectFrom("agent_turns as turn")
         .selectAll("turn")
@@ -717,9 +708,7 @@ export class AgentTurnsService {
             ),
           ),
         )
-        .$if(input.sessionId !== undefined, (query) =>
-          query.where("turn.session_id", "=", input.sessionId ?? ""),
-        )
+        .where("turn.session_id", "=", input.sessionId)
         .where(({ exists, not, selectFrom }) =>
           not(
             exists(

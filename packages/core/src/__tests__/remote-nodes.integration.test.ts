@@ -8,9 +8,11 @@ import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AgentTurnsService } from "../services/agent-turns-service.js";
 import {
+  AllocationMaintenanceLostError,
   claimAllocationMaintenance,
   releaseAllocationMaintenance,
   renewAllocationMaintenance,
+  withAllocationMaintenance,
 } from "../services/allocation-sandbox-provider.js";
 import {
   EXECUTOR_RESTARTED_ERROR,
@@ -203,19 +205,25 @@ describe("remote nodes own their lease (ADR 0192)", () => {
     await expect(connect(id, first)).rejects.toBeInstanceOf(
       RemoteEpochSupersededError,
     );
-    expect(await nodes.renewRemote({ lease: { id, token: first } })).toBe(
-      false,
-    );
+    expect(
+      (await nodes.renewRemote({ lease: { id, token: first } })).held,
+    ).toBe(false);
     // Its own calls renew the current epoch, even after a lapse.
     await lapse(id);
     expect(await nodes.liveToken({ nodeId: id })).toBeUndefined();
     await expect(provider.executeCommand("sandbox-1", "true")).rejects.toThrow(
       /not connected/,
     );
-    expect(await nodes.renewRemote({ lease: { id, token: second } })).toBe(
-      true,
-    );
+    expect(await nodes.renewRemote({ lease: { id, token: second } })).toEqual({
+      held: true,
+      extended: true,
+    });
     expect(await nodes.liveToken({ nodeId: id })).toBe(second);
+    // A fresh lease is only read: frequent calls write the row once.
+    expect(await nodes.renewRemote({ lease: { id, token: second } })).toEqual({
+      held: true,
+      extended: false,
+    });
     // Once the current lease lapsed, any epoch may connect (a clock that
     // went back must not strand the machine).
     await lapse(id);
@@ -232,9 +240,9 @@ describe("remote nodes own their lease (ADR 0192)", () => {
     await expect(connect(id, epochAt(Date.now()))).rejects.toBeInstanceOf(
       WorkerNodeLeaseHeldError,
     );
-    expect(await nodes.renewRemote({ lease: { id, token: earlier } })).toBe(
-      false,
-    );
+    expect(
+      (await nodes.renewRemote({ lease: { id, token: earlier } })).held,
+    ).toBe(false);
   });
 
   it("lets any host claim a remote node's turns only while its executor's lease is live", async () => {
@@ -364,6 +372,48 @@ describe("remote nodes own their lease (ADR 0192)", () => {
     expect(await renewAllocationMaintenance({ db, claim })).toBe(true);
     await releaseAllocationMaintenance({ db, claim });
     expect(await claimTurn()).not.toBeNull();
+  });
+
+  it("stops maintenance whose claim was lost, and leaves the new holder's claim alone", async () => {
+    const chat = await chatOn(null);
+    await db
+      .deleteFrom("agent_turns")
+      .where("session_id", "=", chat.sessionId)
+      .execute();
+    const claim = await claimAllocationMaintenance({
+      db,
+      allocationId: chat.allocationId,
+      status: "active",
+      sessionId: chat.sessionId,
+    });
+    if (!claim) throw new Error("Expected a claim");
+    const steps: string[] = [];
+    await expect(
+      withAllocationMaintenance({
+        db,
+        claim,
+        work: async (held) => {
+          await held();
+          steps.push("saved");
+          // The host stalled; its claim lapsed and another host took it.
+          await db
+            .updateTable("execution_allocations")
+            .set({ maintenance_claim: crypto.randomUUID() })
+            .where("id", "=", chat.allocationId)
+            .execute();
+          await held();
+          steps.push("released");
+        },
+      }),
+    ).rejects.toBeInstanceOf(AllocationMaintenanceLostError);
+    expect(steps).toEqual(["saved"]);
+    const row = await db
+      .selectFrom("execution_allocations")
+      .select(["maintenance_claim", "maintenance_claimed_until"])
+      .where("id", "=", chat.allocationId)
+      .executeTakeFirstOrThrow();
+    expect(row.maintenance_claim).not.toBe(claim.token);
+    expect(row.maintenance_claimed_until).not.toBeNull();
   });
 
   it("gives up a claim left by a host that stopped", async () => {

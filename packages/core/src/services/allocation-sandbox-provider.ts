@@ -315,24 +315,44 @@ export async function releaseAllocationMaintenance(args: {
     .execute();
 }
 
+/** This host's maintenance claim lapsed or moved: its work must stop. */
+export class AllocationMaintenanceLostError extends Error {
+  constructor() {
+    super("The workspace's maintenance claim lapsed; another host may use it");
+    this.name = "AllocationMaintenanceLostError";
+  }
+}
+
 /**
- * Run `work` under a claim, renewing it each minute, and give it back
- * afterwards whatever the outcome.
+ * Run `work` under a claim, renewing it every 30 seconds. `work` calls
+ * `held` before each step that touches the workspace: it renews the claim
+ * and throws {@link AllocationMaintenanceLostError} once the claim is gone,
+ * so a stalled host never saves or destroys a workspace a turn may already
+ * use. The claim is given back afterwards unless it was lost.
  */
 export async function withAllocationMaintenance<T>(args: {
   db: Kysely<DB>;
   claim: AllocationMaintenanceClaim;
-  work: () => Promise<T>;
+  work: (held: () => Promise<void>) => Promise<T>;
 }): Promise<T> {
+  let lost = false;
+  const held = async () => {
+    if (!lost && !(await renewAllocationMaintenance(args))) lost = true;
+    if (lost) throw new AllocationMaintenanceLostError();
+  };
   const timer = setInterval(() => {
-    void renewAllocationMaintenance(args).catch(() => {});
-  }, 60_000);
+    void renewAllocationMaintenance(args)
+      .then((renewed) => {
+        if (!renewed) lost = true;
+      })
+      .catch(() => {});
+  }, 30_000);
   timer.unref();
   try {
-    return await args.work();
+    return await args.work(held);
   } finally {
     clearInterval(timer);
-    await releaseAllocationMaintenance(args).catch(() => {});
+    if (!lost) await releaseAllocationMaintenance(args).catch(() => {});
   }
 }
 
@@ -426,8 +446,9 @@ export async function cleanupWorkerAllocations(args: {
           await withAllocationMaintenance({
             db: args.db,
             claim,
-            work: async () => {
+            work: async (held) => {
               // Destroying is idempotent: a sandbox already gone counts.
+              await held();
               if (row.sandbox_provider_id)
                 await args.provider.destroySandbox(row.sandbox_provider_id);
               await args.db
@@ -435,6 +456,7 @@ export async function cleanupWorkerAllocations(args: {
                 .set({ capacity_released_at: sql`now()` })
                 .where("id", "=", row.id)
                 .where("status", "=", "released")
+                .where("maintenance_claim", "=", claim.token)
                 .execute();
             },
           });

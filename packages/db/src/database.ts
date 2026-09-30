@@ -84,12 +84,16 @@ export function createDatabase(options: CreateDatabaseOptions) {
     options: poolOptions,
     max: options.poolSize ?? DEFAULT_POOL_SIZE,
   });
-  // The server may end an idle connection (a failover, a pooler restart):
-  // the pool drops it and connects again. Unhandled, it would end the
-  // process.
-  pool.on("error", (error) =>
-    console.warn("[catamorphic] An idle database connection ended", error),
-  );
+  // The server can end an idle pooled connection (a restart, a failover, an
+  // administrator, a dropped database). node-postgres discards that client
+  // and reports it on the pool; without a listener Node treats the report
+  // as an unhandled error and the process dies. A host-owned pool is the
+  // host's to watch.
+  pool.on("error", (error) => {
+    console.warn(
+      `[catamorphic] An idle database connection closed; the pool replaces it: ${error.message}`,
+    );
+  });
 
   const db = withJsonArrayParameters(
     new Kysely<import("./generated/db.js").DB>({

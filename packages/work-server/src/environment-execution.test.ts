@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { AgentTurnQueuedError, type Identity } from "@catamorphic/core";
+import { AgentTurnUnsettledError, type Identity } from "@catamorphic/core";
 import { type DB, DEFAULT_SCHEMA } from "@catamorphic/db";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import {
@@ -400,13 +400,16 @@ it("an authenticated member executes on this machine and loses execution immedia
     // nothing runs it elsewhere.
     await expect(
       sessions.sendMessage(identity, project.id, session.id, "Do not replay"),
-    ).rejects.toBeInstanceOf(AgentTurnQueuedError);
+    ).rejects.toMatchObject({
+      name: AgentTurnUnsettledError.name,
+      state: "queued",
+    });
     expect(
       (await sessions.turns.listPending({ sessionId: session.id })).map(
         (turn) => turn.status,
       ),
     ).toEqual(["queued"]);
-    await service.register({
+    const reconnected = await service.register({
       identity,
       projectId: project.id,
       id: identity.clientRunnerId,
@@ -433,6 +436,40 @@ it("an authenticated member executes on this machine and loses execution immedia
         allocationBindingId: oldBinding,
       }),
     ).toBeUndefined();
+    // The machine is back under a new connection: its chat's workspace is
+    // rebuilt there from the session branch, and the waiting turn runs.
+    runner = startClientRunner({
+      provider,
+      transport: {
+        renew: () => service.renew({ ...reconnected, identity }),
+        poll: ({ pollId, max }) =>
+          service.poll({ ...reconnected, identity, pollId, max }),
+        complete: async (receipt) => {
+          await service.complete({ ...reconnected, identity, ...receipt });
+        },
+        disconnect: () => service.disconnect({ ...reconnected, identity }),
+      },
+    });
+    const back = await sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "Where am I?",
+    );
+    expect(back.content).toContain(path.join(directory, "employee-machine"));
+    const ended = await db
+      .selectFrom("execution_allocations")
+      .select(["status", "release_reason"])
+      .where("root_workload_id", "=", session.id)
+      .orderBy("created_at")
+      .execute();
+    expect(ended).toEqual([
+      { status: "released", release_reason: "connection_ended" },
+      { status: "active", release_reason: null },
+    ]);
+    expect(
+      (await sessions.turns.listPending({ sessionId: session.id })).length,
+    ).toBe(0);
   } finally {
     await runner?.stop();
     await cat.close();

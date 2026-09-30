@@ -265,8 +265,9 @@ stops the runner. A new connection lifetime cannot revive an old allocation.
 The runner renews its own lease through any replica, so its chats belong to no
 replica: any replica runs their turns, and they continue when the replica
 that admitted them stops (ADR 0192). While the runner is away, its chats' turns stay
-queued instead of failing. A new connection cannot revive the old workspace
-(see above), so a turn that waited through a reconnection fails and says so.
+queued instead of failing. When it connects again, a new connection cannot
+revive the old workspace (see above): each chat is admitted on the new
+connection and its workspace rebuilt from its `sessions/<id>` branch.
 
 Stock local execution uses the controller topology: the host model loop and
 connection broker stay on the server; sandbox commands and files run on the
