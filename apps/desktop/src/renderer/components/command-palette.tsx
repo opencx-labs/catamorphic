@@ -50,6 +50,7 @@ import { useSettingRows } from "../palette/rows/settings.js";
 import {
   highlightedRow,
   moveHighlight,
+  settleSelection,
   TOP_ROW,
 } from "../palette/selection.js";
 import type { PaletteItem, PaletteModeRequest } from "../palette/types.js";
@@ -618,6 +619,22 @@ export function CommandPalette({
   const selected = highlightedRow(selection, results);
   const resultsRef = useRef(results);
   resultsRef.current = results;
+  // Rows changed: follow a chosen row to its new place, or give up a
+  // choice whose row left the list.
+  useLayoutEffect(() => {
+    setSelection((current) => settleSelection(current, results));
+  }, [results]);
+  // A chosen row stays in view, whether an arrow key moved the highlight
+  // or a re-rank moved the row.
+  const chosenId = selection.id;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: selected is the "row moved" signal
+  useEffect(() => {
+    if (!chosenId) return;
+    // Group labels and notices share the list, so find the row itself.
+    sizerRef.current
+      ?.querySelector(`[data-item-id="${CSS.escape(chosenId)}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [chosenId, selected]);
 
   // The surface the highlighted row (or the open question) acts on,
   // reported up so the app accents its border.
@@ -704,18 +721,9 @@ export function CommandPalette({
   };
 
   const moveSelection = (delta: number) => {
-    setSelection((current) => {
-      const next = moveHighlight(current, resultsRef.current, delta);
-      const { id } = next;
-      requestAnimationFrame(() => {
-        // Group labels and notices share the list, so find the row itself.
-        if (id)
-          sizerRef.current
-            ?.querySelector(`[data-item-id="${CSS.escape(id)}"]`)
-            ?.scrollIntoView({ block: "nearest" });
-      });
-      return next;
-    });
+    setSelection((current) =>
+      moveHighlight(current, resultsRef.current, delta),
+    );
   };
 
   const onInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {

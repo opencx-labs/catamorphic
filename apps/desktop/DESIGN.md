@@ -485,6 +485,11 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-09-30: The palette highlight follows the chosen row
+
+The highlight follows the row the keyboard or a moving pointer chose, through
+late re-ranks; a new query or mode returns it to the top result.
+
 ### 2026-09-29: Work reads as it happens
 
 People watching a long turn saw one sentence change every few minutes,

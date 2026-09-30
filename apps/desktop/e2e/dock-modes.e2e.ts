@@ -393,6 +393,13 @@ describe("dock modes", () => {
       y: first.dock.y - first.main.y + first.composer.y,
     };
     await app.movePointer(inComposer);
+    // This holds on the private Linux display too. There Electron applies
+    // pass-through as an X11 input shape, which Openbox honors unevenly
+    // (the margin click above may stay with the dock), but the dock still
+    // receives pointer moves while passing clicks through, so it sees the
+    // pointer reach the composer and restores its input region. The marker
+    // turns "false" only after the main process has done so; a click sent
+    // before that is the one that fell through in CI.
     await dockWait(
       `return document.documentElement.dataset.dockPassThrough === 'false';`,
       { label: "dock takes clicks over its composer" },

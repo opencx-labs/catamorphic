@@ -57,12 +57,20 @@ const indicator = `document.querySelector('[data-testid="browser-swipe-indicator
 const recordArrows = () =>
   app.eval(`(() => {
     window.__swipeArrows = [];
-    new MutationObserver(() => {
+    window.__swipeObserver?.disconnect();
+    window.__swipeObserver = new MutationObserver(() => {
       const arrow = ${indicator};
-      if (arrow) window.__swipeArrows.push(arrow.dataset.direction);
-    }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-direction'] });
+      if (!arrow) return;
+      window.__swipeArrows.push(arrow.dataset.direction);
+      if (window.__swipeArrows.length > 20) window.__swipeArrows.shift();
+    });
+    window.__swipeObserver.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-direction'] });
     return true;
   })()`);
+const stopRecordingArrows = () =>
+  app.eval(
+    "window.__swipeObserver?.disconnect(); delete window.__swipeObserver; delete window.__swipeArrows; true",
+  );
 
 describe("trackpad history gestures", () => {
   it("shows the back arrow as the gesture grows and navigates past the threshold", async () => {
@@ -70,17 +78,29 @@ describe("trackpad history gestures", () => {
     await inGuest("document.getElementById('next').click(); true");
     await ready("Two");
     await recordArrows();
+    // Short of the threshold: the arrow shows, the page stays.
     await wheel(-40, 2);
     await app.waitFor("window.__swipeArrows.includes('back')", {
       label: "back arrow shown",
     });
-    // Enough ticks to cross the threshold on their own: the pause above can
-    // outlast the gesture, and a new gesture starts from nothing.
-    await wheel(-40, 6);
+    expect(await inGuest("document.title")).toBe("Two");
+    // The gesture accumulates across batches: 80px, a pause shorter than
+    // the 200ms idle that ends a gesture, then 160px, which alone is short
+    // of the 220px threshold. The pause runs in the page, so its timer
+    // fires before the gesture's idle timer and the two batches are one
+    // gesture however slow the test host is.
+    await inGuest(`(async () => {
+      const tick = () => document.body.dispatchEvent(new WheelEvent('wheel', { deltaX: -40, deltaY: 0, deltaMode: 0, bubbles: true, cancelable: true }));
+      tick(); tick();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      tick(); tick(); tick(); tick();
+      return true;
+    })()`);
     await ready("One");
     await app.waitFor(`!${indicator}`, {
       label: "arrow gone after navigating",
     });
+    await stopRecordingArrows();
   });
 
   it("forward works the same way, and a page with no history shows no arrow", async () => {

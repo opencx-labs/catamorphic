@@ -13,6 +13,9 @@ export interface PaletteSelection {
 /** A fresh query or mode: the top result leads, whatever it becomes. */
 export const TOP_ROW: PaletteSelection = { index: 0, id: null };
 
+const clamp = (index: number, rows: readonly unknown[]) =>
+  Math.max(0, Math.min(index, rows.length - 1));
+
 /** The highlighted row: the chosen one wherever it ranks now, else the position. */
 export function highlightedRow(
   selection: PaletteSelection,
@@ -22,9 +25,25 @@ export function highlightedRow(
     selection.id === null
       ? -1
       : rows.findIndex((row) => row.id === selection.id);
+  return chosen >= 0 ? chosen : clamp(selection.index, rows);
+}
+
+/**
+ * The selection after the rows changed: a chosen row that moved keeps the
+ * highlight at its new position; one that left the list gives up the
+ * choice, so the highlight stays where it is instead of jumping back if
+ * that row returns later. Unchanged selections keep their identity.
+ */
+export function settleSelection(
+  selection: PaletteSelection,
+  rows: readonly { id: string }[],
+): PaletteSelection {
+  if (selection.id === null) return selection;
+  const chosen = rows.findIndex((row) => row.id === selection.id);
+  if (chosen === selection.index) return selection;
   return chosen >= 0
-    ? chosen
-    : Math.min(selection.index, Math.max(rows.length - 1, 0));
+    ? { index: chosen, id: selection.id }
+    : { index: clamp(selection.index, rows), id: null };
 }
 
 /** Arrow keys choose the neighbor of the row highlighted now. */
@@ -33,9 +52,6 @@ export function moveHighlight(
   rows: readonly { id: string }[],
   delta: number,
 ): PaletteSelection {
-  const index = Math.min(
-    Math.max(highlightedRow(selection, rows) + delta, 0),
-    rows.length - 1,
-  );
+  const index = clamp(highlightedRow(selection, rows) + delta, rows);
   return { index, id: rows[index]?.id ?? null };
 }

@@ -197,6 +197,19 @@ describe.skipIf(!databaseUrl)("service connections (ADR 0172)", () => {
     } finally {
       await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
       await admin.query(`DROP ROLE IF EXISTS ${reader}`);
+      // Let the server's pools finish closing before the drop: a forced drop
+      // ends whatever sessions remain, and ending live sessions is what a
+      // server sees as the administrator terminating its connections.
+      // FORCE stays as the backstop for a session that never lets go.
+      const drained = Date.now() + 10_000;
+      while (Date.now() < drained) {
+        const open = await admin.query<{ count: number }>(
+          "SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname = $1",
+          [serverDatabase],
+        );
+        if (open.rows[0]?.count === 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
       await admin.query(
         `DROP DATABASE IF EXISTS ${serverDatabase} WITH (FORCE)`,
       );

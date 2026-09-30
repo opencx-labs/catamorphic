@@ -256,23 +256,28 @@ export function DockHost({
   // space, the window lets clicks through to whatever is behind it. Only
   // dock content answers a hit test there: the app root and the body are
   // pointer-transparent (styles.css), so a hit on either is empty space.
+  // `data-dock-pass-through` on the root says what the window does with a
+  // click right now, once the main process has applied it; while a change
+  // is in flight it is absent, never stale. A click that races the change
+  // lands on the other side (the native pointer tests wait for this).
+  const passThroughRequest = useRef(0);
   useEffect(() => {
     if (!detachedWindow) return;
+    const root = document.documentElement;
+    delete root.dataset.dockPassThrough;
     let ignoring = false;
     let last: { x: number; y: number } | null = null;
     const update = (interactive: boolean) => {
       if (ignoring === !interactive) return;
       ignoring = !interactive;
       const requested = ignoring;
+      const request = ++passThroughRequest.current;
+      delete root.dataset.dockPassThrough;
       void desktopApi
         .dockIgnoreMouse(requested)
         .then(() => {
-          // What the window does with a click right now, once the main
-          // process has applied it: a click that races the change lands
-          // on the other side (the native pointer tests wait for this).
-          if (ignoring === requested)
-            document.documentElement.dataset.dockPassThrough =
-              String(requested);
+          if (passThroughRequest.current === request)
+            root.dataset.dockPassThrough = String(requested);
         })
         .catch(() => {});
     };
@@ -308,6 +313,9 @@ export function DockHost({
       document.removeEventListener("mousemove", move);
       document.documentElement.removeEventListener("mouseleave", leave);
       window.removeEventListener("resize", resized);
+      // Earlier answers no longer describe this window's state.
+      passThroughRequest.current += 1;
+      delete root.dataset.dockPassThrough;
       update(true);
     };
   }, [detachedWindow]);
