@@ -45,6 +45,18 @@ const runs = await db
   .execute();
 ```
 
+Pass JSON values to `jsonb` columns as plain JS values. node-postgres would
+send an array as a Postgres array literal, which `jsonb` stores as `{}` or
+refuses. Core therefore applies `withJsonArrayParameters` from `@catamorphic/db`
+to every host's database, and `createDatabase` applies it to its own, so every
+array parameter is sent as JSON text. As a result, never add a Postgres array
+column (`text[]`) or bind an array for `= ANY(...)`: use `jsonb` or `IN` lists.
+An array on the right of a builder comparison is a list (`@> ($1, $2)`); pass
+`eb.val(array)` to compare against one jsonb value.
+A value that can be a bare string (a cursor, a token, a result) still needs
+`jsonColumn` (`::jsonb`): both drivers send a string as raw text, which
+`jsonb` refuses or misreads.
+
 `WithSchemaPlugin` qualifies builder queries only. In a raw `sql` template, do
 not name a table bare, since a host-owned pool never has Catamorphic's
 `search_path`. Embed a builder fragment so the plugin qualifies it:

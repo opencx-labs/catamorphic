@@ -26,6 +26,8 @@ const databaseUrl = process.env.DATABASE_URL;
 const suffix = randomBytes(4).toString("hex");
 const schema = `replica_${suffix}`;
 const reader = `replica_reader_${suffix}`;
+/** The Work server's own database: its writes go through node-postgres. */
+const serverDatabase = `work_connections_${suffix}`;
 const password = `pw${randomBytes(12).toString("hex")}`;
 
 function readerUrl(): string {
@@ -115,6 +117,9 @@ describe.skipIf(!databaseUrl)("service connections (ADR 0172)", () => {
     await admin.query(`CREATE ROLE ${reader} LOGIN PASSWORD '${password}'`);
     await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${reader}`);
     await admin.query(`GRANT SELECT ON ${schema}.tickets TO ${reader}`);
+    await admin.query(`CREATE DATABASE ${serverDatabase}`);
+    const serverUrl = new URL(databaseUrl ?? "");
+    serverUrl.pathname = `/${serverDatabase}`;
 
     root = fs.mkdtempSync(path.join(os.tmpdir(), "work-service-connections-"));
     const gatewayFile = path.join(root, "gateway.json");
@@ -135,6 +140,9 @@ describe.skipIf(!databaseUrl)("service connections (ADR 0172)", () => {
       testServerOptions({
         dataDir: path.join(root, "control-plane"),
         env: {
+          DATABASE_URL: serverUrl.toString(),
+          WORK_SECRET: "connections-test-secret-with-at-least-32-characters",
+          WORK_VAULT_KEY: Buffer.alloc(32, 5).toString("base64"),
           WORK_FAKE_AGENT: "1",
           WORK_CONTROL_PLANE_WORKLOADS: "workflow",
           WORK_GATEWAY_CONFIG: gatewayFile,
@@ -183,12 +191,18 @@ describe.skipIf(!databaseUrl)("service connections (ADR 0172)", () => {
   }, 120_000);
 
   afterAll(async () => {
-    await worker?.stop();
-    await server?.shutdown();
-    await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-    await admin.query(`DROP ROLE IF EXISTS ${reader}`);
-    await admin.end();
-    if (root) fs.rmSync(root, { recursive: true, force: true });
+    try {
+      await worker?.stop();
+      await server?.shutdown();
+    } finally {
+      await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      await admin.query(`DROP ROLE IF EXISTS ${reader}`);
+      await admin.query(
+        `DROP DATABASE IF EXISTS ${serverDatabase} WITH (FORCE)`,
+      );
+      await admin.end();
+      if (root) fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("only an organization administrator connects a service connection", async () => {

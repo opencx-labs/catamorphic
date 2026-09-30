@@ -1,6 +1,7 @@
 import { Kysely, PostgresDialect, WithSchemaPlugin } from "kysely";
 import pg from "pg";
 import { DEFAULT_SCHEMA } from "./config.js";
+import { JsonArrayParametersPlugin } from "./json-parameters.js";
 
 export type CreateDatabaseOptions =
   | {
@@ -63,10 +64,12 @@ export function knownPoolSize(db: object): number | undefined {
 
 export function createDatabase(options: CreateDatabaseOptions) {
   if ("pool" in options) {
-    const db = new Kysely<import("./generated/db.js").DB>({
-      dialect: new PostgresDialect({ pool: options.pool }),
-      plugins: [new WithSchemaPlugin(options.schema ?? DEFAULT_SCHEMA)],
-    });
+    const db = withJsonArrayParameters(
+      new Kysely<import("./generated/db.js").DB>({
+        dialect: new PostgresDialect({ pool: options.pool }),
+        plugins: [new WithSchemaPlugin(options.schema ?? DEFAULT_SCHEMA)],
+      }),
+    );
     const max = options.pool.options?.max;
     if (typeof max === "number") poolSizes.set(db, max);
     return db;
@@ -82,9 +85,29 @@ export function createDatabase(options: CreateDatabaseOptions) {
     max: options.poolSize ?? DEFAULT_POOL_SIZE,
   });
 
-  const db = new Kysely<import("./generated/db.js").DB>({
-    dialect: new PostgresDialect({ pool }),
-  });
+  const db = withJsonArrayParameters(
+    new Kysely<import("./generated/db.js").DB>({
+      dialect: new PostgresDialect({ pool }),
+    }),
+  );
   poolSizes.set(db, options.poolSize ?? DEFAULT_POOL_SIZE);
   return db;
+}
+
+const withJsonArrays = new WeakSet<object>();
+
+/**
+ * The same database, sending array parameters to Postgres as JSON text
+ * ({@link JsonArrayParametersPlugin}): node-postgres would send them as
+ * Postgres arrays, which jsonb stores as `{}` or refuses. Idempotent, and the
+ * wrapped instance keeps the pool size recorded for the original. Core
+ * applies it to whatever database a host injects.
+ */
+export function withJsonArrayParameters<T>(db: Kysely<T>): Kysely<T> {
+  if (withJsonArrays.has(db)) return db;
+  const wrapped = db.withPlugin(new JsonArrayParametersPlugin());
+  withJsonArrays.add(wrapped);
+  const size = poolSizes.get(db);
+  if (size !== undefined) poolSizes.set(wrapped, size);
+  return wrapped;
 }

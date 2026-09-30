@@ -1,6 +1,12 @@
 import type { DB } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
-import type { Kysely } from "kysely";
+import {
+  DummyDriver,
+  Kysely,
+  PostgresAdapter,
+  PostgresIntrospector,
+  PostgresQueryCompiler,
+} from "kysely";
 import { describe, expect, it, vi } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import { HOST_SKILLS, SEED_SKILLS } from "../seeds.js";
@@ -10,15 +16,24 @@ import { testEnvironmentProvider } from "./test-environment.js";
 /**
  * Doctrine hooks (ADR 0049): `projectSeeds` / `standingAgentPrompt`
  * resolve ONCE at core construction, and every consumer sees the
- * host-final set. Construction is pure wiring, so a dummy
- * db/projectManager suffices here; the on-disk effects are covered by
- * `doctrine-hooks.integration.test.ts`.
+ * host-final set. Construction is pure wiring, so a database that never
+ * connects and a dummy projectManager suffice here; the on-disk effects are
+ * covered by `doctrine-hooks.integration.test.ts`.
  */
+const db = new Kysely<DB>({
+  dialect: {
+    createAdapter: () => new PostgresAdapter(),
+    createDriver: () => new DummyDriver(),
+    createIntrospector: (kysely) => new PostgresIntrospector(kysely),
+    createQueryCompiler: () => new PostgresQueryCompiler(),
+  },
+});
+
 const dummyCore = (
   config: Partial<ConstructorParameters<typeof CatamorphicCore>[0]> = {},
 ) =>
   new CatamorphicCore({
-    db: {} as Kysely<DB>,
+    db,
     projectManager: {} as ProjectManager,
     environmentProvider: testEnvironmentProvider(),
     ...config,
