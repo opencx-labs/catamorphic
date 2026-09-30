@@ -4,6 +4,7 @@ export {
   createDatabase,
   DEFAULT_POOL_SIZE,
   knownPoolSize,
+  withJsonArrayParameters,
 } from "./database.js";
 export type { DB, Json, JsonObject, JsonValue } from "./generated/db.js";
 export type {

@@ -162,4 +162,25 @@ describe("project events", () => {
       await monitors.claim({ workerId: "desktop", placement: "local" }),
     ).toBeNull();
   });
+
+  it("keeps a source's bare string cursor as the string it is", async () => {
+    const monitors = new ProjectEventMonitorsService(db);
+    // A Slack `ts` looks like a number; a page token is plain text.
+    for (const cursor of ["1695.001", "page-token-7"]) {
+      const monitor = await monitors.ensure({
+        identity,
+        projectId,
+        sourceKind: "slack",
+        sourceKey: `channel-${cursor}`,
+        placement: "local",
+        cursor,
+      });
+      const stored = await db
+        .selectFrom("project_event_monitors")
+        .select("cursor")
+        .where("id", "=", monitor.id)
+        .executeTakeFirstOrThrow();
+      expect(stored.cursor).toBe(cursor);
+    }
+  });
 });

@@ -29,6 +29,8 @@ const SUSPENSION_WORDS: Record<string, string> = {
   member_removed: "Paused: its owner is no longer in the project.",
   workflow_denied: "Paused: its owner can no longer run this workflow.",
   environment_denied: "Paused: its owner can no longer use this environment.",
+  environment_policy_invalid:
+    "Paused: the project's environment settings are invalid.",
   connection_unavailable: "Paused: a connection it uses is unavailable.",
   connection_permission_denied:
     "Paused: a connection it uses no longer allows it.",

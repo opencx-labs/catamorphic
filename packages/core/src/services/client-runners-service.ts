@@ -18,7 +18,7 @@ import {
   RemoteExecutorLeaseLostError,
   RemoteOperationQueue,
 } from "./remote-operations.js";
-import { jsonColumn, toJson } from "./run-coordinator.js";
+import { toJson } from "./run-coordinator.js";
 
 const resourceLimitsSchema = z.array(
   z.enum(["cpuMillis", "memoryMb", "storageMb", "gpu"]),
@@ -71,13 +71,11 @@ export class ClientRunnersService {
       );
     await this.authorize(args);
     const token = randomUUID();
-    // Arrays reach jsonb as JSON text: node-postgres would send them as
-    // Postgres arrays, which jsonb reads as `{}` or refuses.
-    const resourceLimits = jsonColumn(
-      toJson(resourceLimitsSchema.parse(args.resourceLimits ?? [])),
+    const resourceLimits = toJson(
+      resourceLimitsSchema.parse(args.resourceLimits ?? []),
     );
-    const capabilities = jsonColumn(
-      toJson(capabilitiesSchema.parse(args.capabilities ?? [])),
+    const capabilities = toJson(
+      capabilitiesSchema.parse(args.capabilities ?? []),
     );
     const row = await this.db
       .insertInto("client_runners")

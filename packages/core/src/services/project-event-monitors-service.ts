@@ -4,6 +4,15 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import { type Kysely, type Selectable, sql } from "kysely";
 import type { Identity } from "../identity.js";
 import { requireTenantProject } from "./projects-service.js";
+import { jsonColumn } from "./run-coordinator.js";
+
+/**
+ * A source's cursor as jsonb. A host's cursor may be a bare string (a Slack
+ * `ts`, a page token), which node-postgres would send as unquoted text.
+ */
+function cursorColumn(cursor: Json | null | undefined) {
+  return cursor === undefined || cursor === null ? null : jsonColumn(cursor);
+}
 
 export type EventSourcePlacement = "local" | "remote" | "any";
 
@@ -83,7 +92,7 @@ export class ProjectEventMonitorsService {
         owner_external_user_id: input.identity.externalUserId,
         placement: input.placement,
         config: input.config ?? {},
-        cursor: input.cursor ?? null,
+        cursor: cursorColumn(input.cursor),
         poll_interval_seconds: input.pollIntervalSeconds ?? 30,
       })
       .onConflict((conflict) =>
@@ -176,7 +185,7 @@ export class ProjectEventMonitorsService {
     await this.db
       .updateTable("project_event_monitors")
       .set(({ ref }) => ({
-        cursor: input.cursor,
+        cursor: cursorColumn(input.cursor),
         next_poll_at: sql`now() + (${ref(
           "poll_interval_seconds",
         )} * interval '1 second')`,

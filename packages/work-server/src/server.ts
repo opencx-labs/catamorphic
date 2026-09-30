@@ -15,6 +15,7 @@ import {
   type DB,
   DEFAULT_SCHEMA,
   migrateToLatest,
+  withJsonArrayParameters,
 } from "@catamorphic/db";
 import {
   createApp,
@@ -279,10 +280,12 @@ async function createWorkServerInner(
     const pglite = new PGlite(path.join(data, "db"), {
       extensions: { pgcrypto },
     });
-    ownDb = new Kysely<DB>({
-      dialect: new PGliteDialect({ pglite }),
-      plugins: [new WithSchemaPlugin(DEFAULT_SCHEMA)],
-    });
+    ownDb = withJsonArrayParameters(
+      new Kysely<DB>({
+        dialect: new PGliteDialect({ pglite }),
+        plugins: [new WithSchemaPlugin(DEFAULT_SCHEMA)],
+      }),
+    );
     disposers.push(() => ownDb!.destroy());
     // WithSchemaPlugin only rewrites built queries; core's raw-SQL paths
     // (the worker's claim CTE) resolve tables via search_path. PGlite is

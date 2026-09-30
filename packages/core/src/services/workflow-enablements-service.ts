@@ -17,7 +17,10 @@ import {
   ConnectionUnavailableError,
 } from "./connections-service.js";
 import type { DeploymentArtifact } from "./deployment-artifacts-service.js";
-import type { ExecutionEnvironmentsService } from "./execution-environments-service.js";
+import {
+  EnvironmentPolicyInvalidError,
+  type ExecutionEnvironmentsService,
+} from "./execution-environments-service.js";
 import { toJson } from "./run-coordinator.js";
 import { workflowEnablementConsentDigest } from "./workflow-enablement-consent.js";
 import type {
@@ -598,8 +601,16 @@ export class WorkflowEnablementsService {
         environment: row.environment_name,
         requirements: { workload: "workflow" },
       });
-    } catch {
-      return this.failRevalidation(row, input.identity, "environment_denied");
+    } catch (error) {
+      // A broken project policy stops every automation; it is not the
+      // owner losing access.
+      return this.failRevalidation(
+        row,
+        input.identity,
+        error instanceof EnvironmentPolicyInvalidError
+          ? "environment_policy_invalid"
+          : "environment_denied",
+      );
     }
     if (connections.length > 0 && !this.deps.connectionAdmission) {
       return this.failRevalidation(
