@@ -57,7 +57,6 @@ function fakeCore() {
           conflicts: [],
         }),
       ),
-      checkoutBranch: vi.fn(async () => ({})),
       discardDraft: vi.fn(async () => ({})),
     },
   };
@@ -113,12 +112,11 @@ describe("program permissions on project routes (ADR 0158)", () => {
     expect(core.plugins.listAttached).not.toHaveBeenCalled();
   });
 
-  it("a program reader cannot deploy, check out or discard", async () => {
+  it("a program reader cannot deploy or discard", async () => {
     const core = fakeCore();
     const reader = appFor(member("program:read"), core);
     for (const [url, payload] of [
       ["deploy", {}],
-      ["checkout", { ref: "work" }],
       ["discard", {}],
     ] as const) {
       const response = await reader.inject({
@@ -129,8 +127,23 @@ describe("program permissions on project routes (ADR 0158)", () => {
       expect(response.statusCode, url).toBe(403);
     }
     expect(core.deployment.deploy).not.toHaveBeenCalled();
-    expect(core.deployment.checkoutBranch).not.toHaveBeenCalled();
     expect(core.deployment.discardDraft).not.toHaveBeenCalled();
+  });
+
+  it("drafts have no server-side branches to list or check out (ADR 0191)", async () => {
+    const app = appFor(member("program:write"), fakeCore());
+    for (const [method, url] of [
+      ["GET", "branches"],
+      ["POST", "branches"],
+      ["POST", "checkout"],
+    ] as const) {
+      const response = await app.inject({
+        method,
+        url: `/api/projects/${PROJECT_ID}/${url}`,
+        ...(method === "POST" ? { payload: {} } : {}),
+      });
+      expect(response.statusCode, url).toBe(404);
+    }
   });
 
   it("publishing guards role files in the published diff", async () => {

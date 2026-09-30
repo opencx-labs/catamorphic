@@ -5,6 +5,7 @@ import {
   wrapObject,
 } from "./git-object-codec.js";
 import { type ObjectStore, PreconditionFailedError } from "./object-store.js";
+import { RefMovedError } from "./ref-moved-error.js";
 import type { CommitInfo, OriginRepo, RemoteBackend } from "./types.js";
 
 const UUID_RE =
@@ -165,11 +166,13 @@ export class ObjectOriginRepo implements OriginRepo {
       return;
     }
 
+    const expected = opts.expected;
     const moved = async (): Promise<never> => {
-      const current = await this.resolveRef(opts.ref);
-      throw new Error(
-        `Ref ${opts.ref} moved (expected ${opts.expected ?? "none"}, got ${current ?? "none"})`,
-      );
+      throw new RefMovedError({
+        ref: opts.ref,
+        expected,
+        actual: await this.resolveRef(opts.ref),
+      });
     };
 
     if (opts.expected === null) {
@@ -198,8 +201,27 @@ export class ObjectOriginRepo implements OriginRepo {
     }
   }
 
-  async deleteRef(input: { ref: string }): Promise<void> {
-    await this.store.delete(this.refKey(input.ref));
+  async deleteRef(input: { ref: string; expected?: string }): Promise<void> {
+    const key = this.refKey(input.ref);
+    if (input.expected === undefined) {
+      await this.store.delete(key);
+      return;
+    }
+    const entry = await this.store.get(key);
+    const actual = entry ? new TextDecoder().decode(entry.data).trim() : null;
+    const moved = () =>
+      new RefMovedError({
+        ref: input.ref,
+        expected: input.expected ?? null,
+        actual,
+      });
+    if (!entry || actual !== input.expected) throw moved();
+    try {
+      await this.store.delete(key, { ifMatch: entry.etag });
+    } catch (err) {
+      if (err instanceof PreconditionFailedError) throw moved();
+      throw err;
+    }
   }
 
   async hasObject(sha: string): Promise<boolean> {

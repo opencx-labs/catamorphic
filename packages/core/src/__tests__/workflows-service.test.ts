@@ -38,7 +38,7 @@ describe("WorkflowsService", () => {
       dispose,
     } as unknown as ProjectRepo;
     const projectManager = {
-      openDev: vi.fn(async () => repo),
+      openDraft: vi.fn(async () => repo),
     } as unknown as ProjectManager;
     const projects = {
       get: vi.fn(async () => ({ id: "project-1" })),
@@ -85,7 +85,7 @@ describe("WorkflowsService.listDeclaredSecrets", () => {
       dispose: vi.fn(async () => {}),
     } as unknown as ProjectRepo;
     const projectManager = {
-      openDev: vi.fn(async () => repo),
+      openDraft: vi.fn(async () => repo),
     } as unknown as ProjectManager;
     const projects = {
       get: vi.fn(async () => ({ id: "project-1" })),

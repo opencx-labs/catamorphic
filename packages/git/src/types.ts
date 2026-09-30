@@ -238,14 +238,22 @@ export interface OriginRepo {
   resolveRef(ref: string): Promise<string | null>;
   /** List refs under a prefix (e.g. `refs/heads/`) with their SHAs. */
   listRefs(prefix: string): Promise<{ ref: string; sha: string }[]>;
-  /** Update a ref to a new SHA; no-op if `expected` is provided and mismatches. */
+  /**
+   * Update a ref to a new SHA. With `expected` (`null`: the ref must not
+   * exist) the update is a compare-and-swap that throws
+   * {@link RefMovedError} when the ref holds something else.
+   */
   updateRef(opts: {
     ref: string;
     sha: string;
     expected?: string | null;
   }): Promise<void>;
-  /** Remove one ref without deleting its immutable objects. Missing is a no-op. */
-  deleteRef(input: { ref: string }): Promise<void>;
+  /**
+   * Remove one ref without deleting its immutable objects. Missing is a
+   * no-op; with `expected`, throws {@link RefMovedError} unless the ref
+   * still holds that SHA.
+   */
+  deleteRef(input: { ref: string; expected?: string }): Promise<void>;
   /** Whether the object is present locally. */
   hasObject(sha: string): Promise<boolean>;
   /** Read the raw git object (returns { type, data }). */

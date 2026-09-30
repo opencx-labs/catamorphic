@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
-  MANAGED_BRANCH_PREFIX,
   PROJECT_GITIGNORE_PATH,
   PROJECT_MANIFEST_PATH,
 } from "@catamorphic/workflow/project-layout";
@@ -11,6 +10,13 @@ import { push } from "./git-sync.js";
 import { discoverLocalFolder } from "./native-git.js";
 import { NativeProjectRepo } from "./native-project-repo.js";
 import { cloneFromRemote } from "./network.js";
+import {
+  type DraftPublishResult,
+  OriginDraftRepo,
+  type ProjectDraft,
+  publishFilesToOrigin,
+} from "./origin-draft.js";
+import { GitObjectCache } from "./origin-objects.js";
 import { ProjectRepoImpl } from "./project-repo.js";
 import type {
   GitCredentials,
@@ -43,6 +49,9 @@ const SYSTEM_AUTHOR = {
 };
 
 export class ProjectManager {
+  /** Origin objects this process has read; safe to lose. */
+  private readonly objects = new GitObjectCache();
+
   constructor(
     private readonly storage: StorageBackend,
     private readonly remote?: RemoteBackend,
@@ -65,11 +74,57 @@ export class ProjectManager {
   }
 
   /**
-   * Open (creating if needed) the dev working copy for a specific user. When
-   * the underlying storage has no clone for this user yet, we initialize one
-   * and pull from origin so the user starts in sync with main.
+   * A member's draft of the program (ADR 0191). A project in a local folder
+   * is its own draft, the folder itself. A project with a durable origin
+   * keeps each member's draft as a ref in it (`refs/work/drafts/<member>`),
+   * read and written as objects: every replica sees the same draft and none
+   * holds it on disk. Only a host without an origin keeps a working copy
+   * per member on this machine.
    */
-  async openDev(
+  async openDraft(input: {
+    tenantId: string;
+    projectId: string;
+    externalUserId: string;
+  }): Promise<ProjectDraft> {
+    if (await this.localPath(input))
+      return this.open(input.tenantId, input.projectId, input.externalUserId);
+    if (this.remote)
+      return new OriginDraftRepo({
+        ...input,
+        remote: this.remote,
+        cache: this.objects,
+        openCheckout: () => this.openEphemeral(input),
+      });
+    return this.openCopy(input.tenantId, input.projectId, input.externalUserId);
+  }
+
+  /**
+   * Publish files as one commit on the origin's `main`, never touching a
+   * member's draft (ADR 0191).
+   */
+  async publishFiles(input: {
+    tenantId: string;
+    projectId: string;
+    files: Record<string, string>;
+    message: string;
+    author: { name: string; email: string };
+    guard?: (paths: readonly string[]) => void;
+  }): Promise<DraftPublishResult> {
+    if (!this.remote)
+      throw new Error("Publishing requires durable project storage");
+    return publishFilesToOrigin({
+      ...input,
+      remote: this.remote,
+      cache: this.objects,
+    });
+  }
+
+  /**
+   * Open (creating if needed) this machine's working copy `copyId` of a
+   * project, seeded from the origin's `main` when it is new: a session's
+   * copy, or a member's copy on a host without an origin.
+   */
+  private async openCopy(
     tenantId: string,
     projectId: string,
     externalUserId: string,
@@ -141,7 +196,7 @@ export class ProjectManager {
       args.projectId,
       userId,
     );
-    const repo = await this.openDev(args.tenantId, args.projectId, userId);
+    const repo = await this.openCopy(args.tenantId, args.projectId, userId);
     try {
       if (this.remote && (!existed || args.refresh)) {
         const { fetchRemote } = await import("./git-sync.js");
@@ -533,26 +588,4 @@ async function seedFromOrigin(opts: {
       force: true,
     });
   }
-}
-
-/**
- * Generate a fresh work-branch name of the form `work/YYYY-MM-DD_HH-mm[-N]`.
- * `isTaken` is consulted so callers can suffix `-N` when the bare name is
- * already used.
- */
-export async function generateWorkBranchName(opts: {
-  now?: Date;
-  isTaken: (name: string) => Promise<boolean>;
-}): Promise<string> {
-  const now = opts.now ?? new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const base = `${MANAGED_BRANCH_PREFIX}${now.getUTCFullYear()}-${pad(
-    now.getUTCMonth() + 1,
-  )}-${pad(now.getUTCDate())}_${pad(now.getUTCHours())}-${pad(
-    now.getUTCMinutes(),
-  )}`;
-  if (!(await opts.isTaken(base))) return base;
-  let suffix = 2;
-  while (await opts.isTaken(`${base}-${suffix}`)) suffix += 1;
-  return `${base}-${suffix}`;
 }

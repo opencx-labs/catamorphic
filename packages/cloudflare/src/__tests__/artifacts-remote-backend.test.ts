@@ -2,6 +2,7 @@ import nodeFs from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { draftRef } from "@catamorphic/workflow/project-layout";
 import git from "isomorphic-git";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ArtifactsClient } from "../artifacts-client.js";
@@ -133,6 +134,25 @@ it("reports a rejected remote deletion instead of acknowledging retirement", asy
     ),
   ).rejects.toThrow("Deletion refused");
   expect(remoteRefs.has(watcherRef)).toBe(true);
+});
+
+it("keeps members' draft refs in the Artifacts origin (ADR 0191)", async () => {
+  const draft = draftRef("member@example.com");
+  await backend.withOrigin(tenantId, projectId, (origin) =>
+    origin.updateRef({ ref: draft, sha, expected: null }),
+  );
+  expect(git.push).toHaveBeenCalledWith(
+    expect.objectContaining({ ref: draft, remoteRef: draft }),
+  );
+  remoteRefs.set(draft, sha);
+  vi.mocked(git.push).mockClear();
+  await backend.withOrigin(tenantId, projectId, (origin) =>
+    origin.deleteRef({ ref: draft, expected: sha }),
+  );
+  expect(git.push).toHaveBeenCalledWith(
+    expect.objectContaining({ delete: true, remoteRef: draft }),
+  );
+  expect(remoteRefs.has(draft)).toBe(false);
 });
 
 function deferred() {

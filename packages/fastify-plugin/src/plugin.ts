@@ -4,10 +4,16 @@ import {
   DeploymentBlockedError,
   EnvironmentPolicyInvalidError,
   ProjectNotFoundError,
+  ServerDraftError,
   SessionArtifactConflictError,
   SessionArtifactNotFoundError,
   SessionArtifactValidationError,
 } from "@catamorphic/core";
+import {
+  DraftBusyError,
+  DraftPathError,
+  DraftRefNotAllowedError,
+} from "@catamorphic/git";
 import type { FastifyPluginAsync } from "fastify";
 import {
   serializerCompiler,
@@ -193,7 +199,21 @@ export const catamorphicPlugin: FastifyPluginAsync<
         .send({ error: err.message, code: "environment_policy_invalid" });
     }
     // A normal state the person resolves (record changes first), not a fault.
-    if (err instanceof DeploymentBlockedError) {
+    if (
+      err instanceof DeploymentBlockedError ||
+      err instanceof ServerDraftError ||
+      err instanceof DraftBusyError
+    ) {
+      return reply.status(409).send({ error: err.message });
+    }
+    // Another member's draft, or a path the draft does not hold.
+    if (
+      err instanceof DraftRefNotAllowedError ||
+      (err instanceof DraftPathError && err.code === "ENOENT")
+    ) {
+      return reply.status(404).send({ error: err.message });
+    }
+    if (err instanceof DraftPathError) {
       return reply.status(409).send({ error: err.message });
     }
     app.log.error(err);

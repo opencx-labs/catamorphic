@@ -371,7 +371,13 @@ describe("plain local folders", () => {
       initialFiles: { "seed.txt": "Never write this" },
     });
     await imported.dispose();
-    const repo = await manager.openDev(tenant, project, "developer");
+    const repo = await manager.openDraft({
+      tenantId: tenant,
+      projectId: project,
+      externalUserId: "developer",
+    });
+    if (!(repo instanceof NativeProjectRepo))
+      throw new Error("A local folder is its own draft");
     try {
       expect(await repo.readAllFiles()).toEqual({
         "notes.md": "Original notes",

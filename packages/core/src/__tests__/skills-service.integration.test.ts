@@ -75,11 +75,11 @@ describeIf("SkillsService host tier (ADR 0049)", () => {
     });
     projectId = project.id;
 
-    const repo = await projectManager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = await projectManager.openDraft({
+      tenantId: identity.tenantId,
+      projectId: projectId,
+      externalUserId: identity.externalUserId,
+    });
     try {
       await repo.writeFile(
         ".work/skills/local-notes/SKILL.md",
@@ -89,10 +89,6 @@ describeIf("SkillsService host tier (ADR 0049)", () => {
         ".work/skills/shadowed/SKILL.md",
         "---\nname: shadowed\ndescription: The PROJECT version.\n---\n\nproject shadow body",
       );
-      await repo.commit("Add project skills", {
-        name: "alice",
-        email: "alice@example.com",
-      });
     } finally {
       await repo.dispose();
     }

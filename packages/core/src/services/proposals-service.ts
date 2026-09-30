@@ -1,17 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import {
-  fetchRemote,
   isPersonalFile,
   type ProjectManager,
   push,
   pushToRemote,
 } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import {
-  MANAGED_BRANCH_PREFIX,
-  publishedRef,
-} from "@catamorphic/workflow/project-layout";
+import { MANAGED_BRANCH_PREFIX } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import { authorFor, type Identity, mayUseProject } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
@@ -70,10 +66,7 @@ export interface ProposeInput {
   changes: readonly ProposedChange[];
 }
 
-/** The working copy proposals are built in — one per project, never a member's. */
 const tracer = getTracer("@catamorphic/core");
-
-const PROPOSALS_WORKER = "catamorphic-proposals";
 
 export class ProposalsUnsupportedError extends Error {
   constructor() {
@@ -85,8 +78,6 @@ export class ProposalsUnsupportedError extends Error {
 }
 
 export class ProposalsService {
-  private readonly queues = new Map<string, Promise<unknown>>();
-
   constructor(
     private readonly db: Kysely<DB>,
     private readonly projectManager: ProjectManager,
@@ -260,9 +251,7 @@ export class ProposalsService {
   async propose(input: ProposeInput): Promise<ProposalResult> {
     const { identity, projectId } = input;
     if (!mayPropose(identity, projectId)) throw new AccessDeniedError();
-    // The worker copy is only dedicated on backends that keep per-user
-    // working copies; on a pathResolver backend (the desktop) openDev
-    // resolves to the user's own folder, which we must never reset.
+    // Proposals are built in an ephemeral checkout of the shared origin.
     if (!this.projectManager.remoteBackend)
       throw new ProposalsUnsupportedError();
     const project = await this.db
@@ -294,29 +283,17 @@ export class ProposalsService {
       return { ...change, path };
     });
 
-    // One proposal at a time per project: they share a working copy.
-    const previous = this.queues.get(projectId) ?? Promise.resolve();
-    const run = previous.then(() =>
-      withSpan(
-        {
-          tracer,
-          name: "project.propose",
-          attributes: {
-            "catamorphic.project.id": projectId,
-            "catamorphic.tenant.id": identity.tenantId,
-          },
+    return withSpan(
+      {
+        tracer,
+        name: "project.propose",
+        attributes: {
+          "catamorphic.project.id": projectId,
+          "catamorphic.tenant.id": identity.tenantId,
         },
-        () => this.build({ ...input, title, changes, project }),
-      ),
+      },
+      () => this.build({ ...input, title, changes, project }),
     );
-    const settled = run
-      .catch(() => {})
-      .finally(() => {
-        if (this.queues.get(projectId) === settled)
-          this.queues.delete(projectId);
-      });
-    this.queues.set(projectId, settled);
-    return run;
   }
 
   private async build(args: {
@@ -335,25 +312,16 @@ export class ProposalsService {
     const remote = this.projectManager.remoteBackend;
     const baseBranch = args.project.remote_branch ?? "main";
     const branch = `${proposalBranch(title, identity.externalUserId, new Date())}-${randomUUID().slice(0, 8)}`;
-    const dev = await this.projectManager.openDev(
-      identity.tenantId,
+    if (!remote) throw new ProposalsUnsupportedError();
+    // Each proposal is built in its own ephemeral checkout of the program
+    // as shared: origin main (the internal origin, kept converged with the
+    // code host by remote sync).
+    const dev = await this.projectManager.openEphemeral({
+      tenantId: identity.tenantId,
       projectId,
-      PROPOSALS_WORKER,
-    );
+    });
     try {
-      // Start from the program as shared: origin main (the internal origin,
-      // kept converged with the code host by remote sync).
-      if (!remote) throw new ProposalsUnsupportedError();
-      await fetchRemote({
-        dev,
-        remote,
-        tenantId: identity.tenantId,
-        projectId,
-        remoteBranch: "main",
-      });
-      const base = await dev.resolveRef(publishedRef()).catch(() => "HEAD");
-      await dev.resetWorkingTree();
-      await dev.createBranch(branch, base);
+      await dev.createBranch(branch);
       for (const change of args.changes) {
         if (change.delete) {
           await dev.deleteFile(change.path).catch(() => {});
@@ -428,8 +396,6 @@ export class ProposalsService {
       }
       return pullRequest ? { branch, pullRequest } : { branch };
     } finally {
-      // Leave the worker copy on main for the next proposal.
-      await dev.checkout("main").catch(() => {});
       await dev.dispose();
     }
   }

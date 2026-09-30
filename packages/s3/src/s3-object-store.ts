@@ -137,10 +137,23 @@ export class S3ObjectStore implements ObjectStore {
     return keys;
   }
 
-  async delete(key: string): Promise<void> {
-    await this.client.send(
-      new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
-    );
+  async delete(key: string, opts?: { ifMatch?: string }): Promise<void> {
+    try {
+      await this.client.send(
+        new DeleteObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+          IfMatch: opts?.ifMatch,
+        }),
+      );
+    } catch (err) {
+      if (
+        opts?.ifMatch !== undefined &&
+        (isPreconditionFailure(err) || isNotFound(err))
+      )
+        throw new PreconditionFailedError(key);
+      throw err;
+    }
   }
 
   async deletePrefix(prefix: string): Promise<void> {

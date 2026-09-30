@@ -1,5 +1,9 @@
 import type { DB, Json } from "@catamorphic/db";
-import { fetchRemote, type ProjectManager } from "@catamorphic/git";
+import {
+  OriginDraftRepo,
+  type ProjectManager,
+  refreshPublished,
+} from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import {
   appApiTypesPath,
@@ -16,7 +20,6 @@ import {
 import {
   PROJECT_CHECK_SCRIPT_PATH,
   PROJECT_WORKFLOWS_PACKAGE_PATH,
-  publishedRef,
 } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import {
@@ -26,6 +29,7 @@ import {
 } from "../identity.js";
 import { PROJECT_CHECK_SCRIPT } from "../seeds.js";
 import { assertProjectPermission, resolveScope } from "./artifact-scope.js";
+import { PROGRAM_READER } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
 import type {
   EnrollmentConflictPolicy,
@@ -272,11 +276,11 @@ export class TriggersService {
   }): Promise<{ paths: string[]; updated: boolean }> {
     await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
     assertProjectPermission(args.identity, args.projectId, "program:write");
-    const repo = await this.deps.projectManager.openDev(
-      args.identity.tenantId,
-      args.projectId,
-      args.identity.externalUserId,
-    );
+    const repo = await this.deps.projectManager.openDraft({
+      tenantId: args.identity.tenantId,
+      projectId: args.projectId,
+      externalUserId: args.identity.externalUserId,
+    });
     try {
       const files = await repo.readAllFiles(WORKFLOW_READ_OPTIONS);
       // Generated types and the check script exist to serve the workflow
@@ -306,10 +310,18 @@ export class TriggersService {
         changes.set(PROJECT_CHECK_SCRIPT_PATH, PROJECT_CHECK_SCRIPT);
       }
       if (changes.size === 0) return { paths: [], updated: false };
-      for (const [path, content] of changes) {
-        await repo.writeFile(path, content);
+      const message = "Sync catamorphic generated types";
+      if (repo instanceof OriginDraftRepo) {
+        await repo.write({
+          changes: [...changes].map(([path, content]) => ({ path, content })),
+          message,
+        });
+      } else {
+        for (const [path, content] of changes) {
+          await repo.writeFile(path, content);
+        }
+        await repo.commit(message, SYSTEM_AUTHOR);
       }
-      await repo.commit("Sync catamorphic generated types", SYSTEM_AUTHOR);
       return { paths: [...changes.keys()], updated: true };
     } finally {
       await repo.dispose();
@@ -726,22 +738,20 @@ export class TriggersService {
   }): Promise<ScanResult> {
     const remote = this.deps.projectManager.remoteBackend;
     if (!remote) return { commitSha: null, bindings: [] };
-    const repo = await this.deps.projectManager.openDev(
-      args.identity.tenantId,
-      args.projectId,
-      args.identity.externalUserId,
-    );
+    const repo = await this.deps.projectManager.openDraft({
+      tenantId: args.identity.tenantId,
+      projectId: args.projectId,
+      externalUserId: args.identity.externalUserId,
+    });
     let commitSha: string | null = null;
     let files: Record<string, string> | undefined;
     try {
-      await fetchRemote({
-        dev: repo,
+      commitSha = await refreshPublished({
+        repo,
         remote,
         tenantId: args.identity.tenantId,
         projectId: args.projectId,
-        remoteBranch: "main",
       });
-      commitSha = await repo.resolveRef(publishedRef()).catch(() => null);
       if (!commitSha) return { commitSha: null, bindings: [] };
       await this.deps.workflowEnablements?.().markUpdateAvailable({
         projectId: args.projectId,
@@ -805,23 +815,22 @@ export class TriggersService {
     if (!remote) {
       throw new Error("Trigger revisions require durable project storage");
     }
-    const repo = await this.deps.projectManager.openDev(
-      args.identity.tenantId,
-      args.projectId,
-      `trigger-scan-${args.commitSha}`,
-    );
+    // The scanner never writes: it reads the published branch where the
+    // host keeps it (the origin, or the project folder).
+    const repo = await this.deps.projectManager.openDraft({
+      tenantId: args.identity.tenantId,
+      projectId: args.projectId,
+      externalUserId: PROGRAM_READER,
+    });
     let files: Record<string, string>;
     try {
-      await fetchRemote({
-        dev: repo,
+      const fetchedCommit = await refreshPublished({
+        repo,
         remote,
         tenantId: args.identity.tenantId,
         projectId: args.projectId,
-        remoteBranch: args.remoteBranch,
+        branch: args.remoteBranch,
       });
-      const fetchedCommit = await repo
-        .resolveRef(publishedRef(args.remoteBranch))
-        .catch(() => null);
       if (fetchedCommit !== args.commitSha) {
         throw new Error(
           `Trigger revision ${args.commitSha} is not available at '${args.remoteBranch}'`,

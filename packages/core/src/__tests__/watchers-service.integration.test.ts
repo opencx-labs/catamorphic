@@ -290,11 +290,10 @@ describe("temporary watchers", () => {
   });
 
   it("requires the selected workflow to be exported by the supplied source", async () => {
-    const repo = await projectManager.openDev(
-      tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = await projectManager.openEphemeral({
+      tenantId: tenantId,
+      projectId: projectId,
+    });
     try {
       await repo.writeFile(
         ".work/workflows/src/existing.ts",
@@ -387,11 +386,10 @@ describe("temporary watchers", () => {
       new RegExp(`^work/artifacts/${watcher.id}-[0-9a-f-]{36}$`),
     );
     expect(watcher.commitSha).toMatch(/^[0-9a-f]{40}$/);
-    const repo = await projectManager.openDev(
-      tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = await projectManager.openEphemeral({
+      tenantId: tenantId,
+      projectId: projectId,
+    });
     try {
       const remote = projectManager.remoteBackend;
       if (!remote) throw new Error("Missing test origin");

@@ -53,7 +53,6 @@ export {
   type AuthorizationChallenge,
   useAuthorizeConnection,
 } from "./hooks/use-authorize-connection.js";
-export { useCheckoutBranch } from "./hooks/use-checkout-branch.js";
 export type {
   CodeEditorRevealRequest,
   UseCodeEditorLinkResult,
@@ -77,10 +76,6 @@ export {
   type CreateAgentSessionInput,
   useCreateAgentSession,
 } from "./hooks/use-create-agent-session.js";
-export {
-  type CreateBranchInput,
-  useCreateBranch,
-} from "./hooks/use-create-branch.js";
 export {
   type CreateProjectInput,
   useCreateProject,
@@ -120,7 +115,6 @@ export { useParseWorkflow } from "./hooks/use-parse-workflow.js";
 // Plugins (Track A)
 export { usePluginCatalog } from "./hooks/use-plugin-catalog.js";
 export { useProject } from "./hooks/use-project.js";
-export { useProjectBranches } from "./hooks/use-project-branches.js";
 export {
   type UseProjectCommitsOptions,
   useProjectCommits,
@@ -142,7 +136,6 @@ export {
 } from "./hooks/use-project-git.js";
 // Phase-2 hook (re-homed but still accepts a host-injected git api adapter)
 export type {
-  BranchInfo,
   CommitInfo,
   ConflictEntry,
   ProjectGitApi,
@@ -297,7 +290,6 @@ export type {
   CancelRunByKeyInput,
   CancelRunInput,
   CommitsList,
-  CreatedBranch,
   DeployResult,
   DiffEntry,
   FilesAtRef,

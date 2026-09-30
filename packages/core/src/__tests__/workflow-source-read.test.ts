@@ -52,7 +52,7 @@ it("workflow graph reads exclude large media and other repositories before loadi
     } as unknown as ProjectsService;
     // Read the exact working copy written above, without a database or server.
     const scopedManager = {
-      openDev: async () => repo,
+      openDraft: async () => repo,
     } as unknown as ProjectManager;
     const service = new WorkflowsService(scopedManager, projects);
     const listed = await service.list({

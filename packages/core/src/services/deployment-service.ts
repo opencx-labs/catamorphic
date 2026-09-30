@@ -1,11 +1,10 @@
 import {
   fetchRemote,
-  generateWorkBranchName,
+  OriginDraftRepo,
+  type ProjectDraft,
   type ProjectManager,
   type ProjectRepo,
-  PushNotFastForwardError,
-  pull,
-  push,
+  refreshPublished,
 } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { publishedRef } from "@catamorphic/workflow/project-layout";
@@ -16,12 +15,6 @@ const tracer = getTracer("@catamorphic/core");
 
 const REMOTE_BRANCH = "main";
 
-/**
- * High-level project-scoped git operations invoked by the HTTP layer. Wraps
- * ProjectRepo / ProjectManager with draft-branch semantics, deploy = commit +
- * push, and AI-assisted pull/merge. Stateless: every call opens its own
- * per-user dev repo.
- */
 /**
  * The project's state blocks the request (unrecorded local changes, a local
  * checkout that syncs through its own remote): the person must act first.
@@ -35,6 +28,11 @@ export class DeploymentBlockedError extends Error {
 
 export interface DeployOptions {
   message?: string;
+  /**
+   * Publish exactly these files as one commit on top of the published
+   * program, leaving the member's draft untouched (a member's local copy
+   * of a server project publishing its files).
+   */
   files?: Record<string, string>;
   /**
    * Checks every path the publish would change against the live program
@@ -43,6 +41,12 @@ export interface DeployOptions {
   guardPublishedPaths?: (paths: readonly string[]) => void;
 }
 
+/**
+ * A member's program draft and its publication (ADR 0191). A server-hosted
+ * project's draft is a ref in its origin, so every call works on any
+ * replica; a project in a local folder is its own draft and publishes the
+ * commit the person recorded. Stateless: every call opens the draft anew.
+ */
 export class DeploymentService {
   constructor(
     private readonly projectManager: ProjectManager,
@@ -53,47 +57,44 @@ export class DeploymentService {
     }) => Promise<void>,
   ) {}
 
-  private async withDev<T>(
+  private async withDraft<T>(
     tenantId: string,
     projectId: string,
     externalUserId: string,
-    fn: (repo: ProjectRepo) => Promise<T>,
+    fn: (draft: ProjectDraft) => Promise<T>,
   ): Promise<T> {
-    const repo = await this.projectManager.openDev(
+    const draft = await this.projectManager.openDraft({
       tenantId,
       projectId,
       externalUserId,
-    );
+    });
     try {
-      return await fn(repo);
+      return await fn(draft);
     } finally {
-      await repo.dispose();
+      await draft.dispose();
     }
   }
 
   async getStatus(tenantId: string, projectId: string, externalUserId: string) {
-    return this.withDev(tenantId, projectId, externalUserId, async (repo) => {
-      await fetchRemote({
-        dev: repo,
-        remote: requireRemote(this.projectManager),
-        tenantId,
-        projectId,
-        remoteBranch: REMOTE_BRANCH,
-      }).catch(() => null);
-
-      const status = await repo.status();
-      const remoteHeadTimestamp = await tipTimestamp(repo, status.remoteHead);
-      return { ...status, remoteHeadTimestamp };
-    });
-  }
-
-  async listBranches(
-    tenantId: string,
-    projectId: string,
-    externalUserId: string,
-  ) {
-    return this.withDev(tenantId, projectId, externalUserId, (repo) =>
-      repo.listBranches(),
+    return this.withDraft(
+      tenantId,
+      projectId,
+      externalUserId,
+      async (draft) => {
+        await refreshPublished({
+          repo: draft,
+          remote: requireRemote(this.projectManager),
+          tenantId,
+          projectId,
+          branch: REMOTE_BRANCH,
+        }).catch(() => null);
+        const status = await draft.status();
+        const remoteHeadTimestamp = await tipTimestamp(
+          draft,
+          status.remoteHead,
+        );
+        return { ...status, remoteHeadTimestamp };
+      },
     );
   }
 
@@ -103,17 +104,22 @@ export class DeploymentService {
     externalUserId: string,
     opts?: { ref?: string; maxCount?: number },
   ) {
-    return this.withDev(tenantId, projectId, externalUserId, async (repo) => {
-      await fetchRemote({
-        dev: repo,
-        remote: requireRemote(this.projectManager),
-        tenantId,
-        projectId,
-        remoteBranch: REMOTE_BRANCH,
-      }).catch(() => null);
-      const ref = opts?.ref ?? publishedRef(REMOTE_BRANCH);
-      return repo.log({ ref, maxCount: opts?.maxCount ?? 50 });
-    });
+    return this.withDraft(
+      tenantId,
+      projectId,
+      externalUserId,
+      async (draft) => {
+        await refreshPublished({
+          repo: draft,
+          remote: requireRemote(this.projectManager),
+          tenantId,
+          projectId,
+          branch: REMOTE_BRANCH,
+        }).catch(() => null);
+        const ref = opts?.ref ?? publishedRef(REMOTE_BRANCH);
+        return draft.log({ ref, maxCount: opts?.maxCount ?? 50 });
+      },
+    );
   }
 
   async workdirDiff(
@@ -121,8 +127,8 @@ export class DeploymentService {
     projectId: string,
     externalUserId: string,
   ) {
-    return this.withDev(tenantId, projectId, externalUserId, (repo) =>
-      repo.workdirDiff(),
+    return this.withDraft(tenantId, projectId, externalUserId, (draft) =>
+      draft.workdirDiff(),
     );
   }
 
@@ -133,8 +139,8 @@ export class DeploymentService {
     base: string,
     head: string,
   ) {
-    return this.withDev(tenantId, projectId, externalUserId, (repo) =>
-      repo.diff({ base, head }),
+    return this.withDraft(tenantId, projectId, externalUserId, (draft) =>
+      draft.diff({ base, head }),
     );
   }
 
@@ -144,70 +150,8 @@ export class DeploymentService {
     externalUserId: string,
     ref: string,
   ) {
-    return this.withDev(tenantId, projectId, externalUserId, (repo) =>
-      repo.readAllFilesAtRef(ref),
-    );
-  }
-
-  async ensureWorkBranch(
-    tenantId: string,
-    projectId: string,
-    externalUserId: string,
-  ) {
-    return withSpan(
-      {
-        tracer,
-        name: "project.ensure_work_branch",
-        attributes: {
-          "catamorphic.tenant.id": tenantId,
-          "catamorphic.project.id": projectId,
-        },
-      },
-      async () => {
-        return this.withDev(
-          tenantId,
-          projectId,
-          externalUserId,
-          async (repo) => {
-            const current = await repo.currentBranch();
-            if (current !== "main") return { branch: current, created: false };
-            const name = await generateWorkBranchName({
-              isTaken: (n) => repo.hasBranch(n),
-            });
-            await repo.createBranch(name);
-            return { branch: name, created: true };
-          },
-        );
-      },
-    );
-  }
-
-  async checkoutBranch(
-    tenantId: string,
-    projectId: string,
-    externalUserId: string,
-    branch: string,
-  ) {
-    return withSpan(
-      {
-        tracer,
-        name: "project.checkout_branch",
-        attributes: {
-          "catamorphic.tenant.id": tenantId,
-          "catamorphic.project.id": projectId,
-        },
-      },
-      async () => {
-        return this.withDev(
-          tenantId,
-          projectId,
-          externalUserId,
-          async (repo) => {
-            await repo.checkout(branch);
-            return repo.status();
-          },
-        );
-      },
+    return this.withDraft(tenantId, projectId, externalUserId, (draft) =>
+      draft.readAllFilesAtRef(ref),
     );
   }
 
@@ -236,57 +180,45 @@ export class DeploymentService {
     externalUserId: string,
     opts?: DeployOptions,
   ) {
-    return this.withDev(tenantId, projectId, externalUserId, async (repo) => {
-      const remote = requireRemote(this.projectManager);
-      // Every path the publish changes against what is live, for the
-      // caller's guard (role files need `roles:write`, ADR 0158).
-      const guard = async (sha: string) => {
-        if (!opts?.guardPublishedPaths) return;
-        await fetchRemote({
-          dev: repo,
-          remote,
-          tenantId,
-          projectId,
-          remoteBranch: REMOTE_BRANCH,
-        }).catch(() => null);
-        const live = await repo
-          .resolveRef(publishedRef(REMOTE_BRANCH))
-          .catch(() => null);
-        const paths = live
-          ? (await repo.diff({ base: live, head: sha })).map(
-              (entry) => entry.path,
-            )
-          : Object.keys(await repo.readAllFilesAtRef(sha));
-        opts.guardPublishedPaths(paths);
-      };
-      if (
-        opts?.files &&
-        (await this.projectManager.localPath({ tenantId, projectId }))
-      ) {
-        throw new DeploymentBlockedError(
-          "Save and record these changes in Git before publishing this local project.",
-        );
-      }
-      if (opts?.files) {
-        // Publishing chosen files never carries along other drafts waiting
-        // in this person's server copy (an agent's or an MCP client's).
-        const drafts = (await repo.status()).modifiedFiles.filter(
-          (file) => !opts.files?.[file],
-        );
-        if (drafts.length > 0)
-          throw new DeploymentBlockedError(
-            `Your server copy has other unpublished changes (${drafts
-              .slice(0, 5)
-              .join(", ")}). Publish or discard them first.`,
-          );
-        for (const [path, content] of Object.entries(opts.files)) {
-          await repo.writeFile(path, content);
+    const remote = requireRemote(this.projectManager);
+    return this.withDraft(
+      tenantId,
+      projectId,
+      externalUserId,
+      async (draft) => {
+        const author = authorFor(externalUserId);
+        const message = opts?.message ?? `Deploy ${new Date().toISOString()}`;
+        if (draft instanceof OriginDraftRepo) {
+          const result = opts?.files
+            ? await this.projectManager.publishFiles({
+                tenantId,
+                projectId,
+                files: opts.files,
+                message,
+                author,
+                guard: opts.guardPublishedPaths,
+              })
+            : await draft.publish({
+                message,
+                author,
+                guard: opts?.guardPublishedPaths,
+              });
+          if (result.status === "deployed")
+            await this.published({
+              tenantId,
+              projectId,
+              commitSha: result.commitSha,
+            });
+          return result;
         }
-      }
-      const status = await repo.status();
-      const author = authorFor(externalUserId);
-
-      if (await this.projectManager.localPath({ tenantId, projectId })) {
+        if (opts?.files) {
+          throw new DeploymentBlockedError(
+            "Save and record these changes in Git before publishing this local project.",
+          );
+        }
+        // A local folder publishes the commit the person recorded; its
+        // pending work and branch stay as they are.
+        const status = await draft.status();
         if (status.dirty)
           throw new DeploymentBlockedError(
             "Record the changes you want to publish in Git first. Publishing keeps your branch and pending work unchanged.",
@@ -299,7 +231,25 @@ export class DeploymentService {
             conflicts: [],
           };
         const publishedSha = status.baseCommit;
-        await guard(publishedSha);
+        if (opts?.guardPublishedPaths) {
+          await fetchRemote({
+            dev: draft,
+            remote,
+            tenantId,
+            projectId,
+            remoteBranch: REMOTE_BRANCH,
+          }).catch(() => null);
+          const live = await draft
+            .resolveRef(publishedRef(REMOTE_BRANCH))
+            .catch(() => null);
+          opts.guardPublishedPaths(
+            live
+              ? (await draft.diff({ base: live, head: publishedSha })).map(
+                  (entry) => entry.path,
+                )
+              : Object.keys(await draft.readAllFilesAtRef(publishedSha)),
+          );
+        }
         await remote.withOrigin(tenantId, projectId, async (origin) => {
           await origin.updateRef({
             ref: "refs/heads/main",
@@ -307,128 +257,36 @@ export class DeploymentService {
             expected: await origin.resolveRef("refs/heads/main"),
           });
         });
-        forgetProgramFetch(this.projectManager, tenantId, projectId);
-        await this.onPublished?.({ projectId, commitSha: publishedSha }).catch(
-          () => {},
-        );
+        await this.published({ tenantId, projectId, commitSha: publishedSha });
         return {
           status: "deployed" as const,
-          commitSha: status.baseCommit,
-          remoteSha: status.baseCommit,
+          commitSha: publishedSha,
+          remoteSha: publishedSha,
           conflicts: [],
         };
-      }
-      const currentBranch = status.branch;
-      const isMainBranch = currentBranch === "main";
-
-      if (isMainBranch && status.dirty) {
-        const name = await generateWorkBranchName({
-          isTaken: (n) => repo.hasBranch(n),
-        });
-        await repo.createBranch(name);
-      }
-
-      let commitSha: string | null = status.baseCommit;
-      if (status.dirty) {
-        commitSha = await repo.commit(
-          opts?.message ?? `Deploy ${new Date().toISOString()}`,
-          author,
-        );
-      }
-
-      await fetchRemote({
-        dev: repo,
-        remote,
-        tenantId,
-        projectId,
-        remoteBranch: REMOTE_BRANCH,
-      }).catch(() => null);
-      const remoteSha = await repo
-        .resolveRef(publishedRef(REMOTE_BRANCH))
-        .catch(() => null);
-
-      if (!commitSha) {
-        return {
-          status: "nothing-to-deploy" as const,
-          commitSha: null,
-          remoteSha,
-          conflicts: [],
-        };
-      }
-
-      if (!status.dirty && remoteSha === commitSha) {
-        return {
-          status: "nothing-to-deploy" as const,
-          commitSha,
-          remoteSha,
-          conflicts: [],
-        };
-      }
-
-      if (remoteSha && remoteSha !== commitSha) {
-        const merge = await pull({
-          dev: repo,
-          remote,
-          tenantId,
-          projectId,
-          remoteBranch: REMOTE_BRANCH,
-          author,
-        });
-        if (merge.status === "conflict") {
-          return {
-            status: "conflict" as const,
-            commitSha,
-            remoteSha,
-            conflicts: merge.conflicts,
-          };
-        }
-        commitSha = await repo.resolveRef("HEAD");
-      }
-
-      const currentBranchAfter = await repo.currentBranch();
-      if (currentBranchAfter !== "main") {
-        await repo.moveBranch("main", commitSha);
-        await repo.checkout("main");
-      }
-
-      await guard(commitSha);
-      try {
-        const result = await push({
-          dev: repo,
-          remote,
-          tenantId,
-          projectId,
-          remoteBranch: REMOTE_BRANCH,
-          localSha: commitSha,
-        });
-        // The shared program just moved: readers holding the 5s fetch
-        // memo (a pre-deploy existence check, a burst of reads) must not
-        // serve the pre-push tree to a role/tool resolution that follows
-        // the deploy immediately.
-        forgetProgramFetch(this.projectManager, tenantId, projectId);
-        await this.onPublished?.({ projectId, commitSha: result.sha }).catch(
-          () => {},
-        );
-        return {
-          status: "deployed" as const,
-          commitSha: result.sha,
-          remoteSha: result.sha,
-          conflicts: [],
-        };
-      } catch (err) {
-        if (err instanceof PushNotFastForwardError) {
-          return {
-            status: "conflict" as const,
-            commitSha,
-            remoteSha,
-            conflicts: [],
-          };
-        }
-        throw err;
-      }
-    });
+      },
+    );
   }
 
+  private async published(input: {
+    tenantId: string;
+    projectId: string;
+    commitSha: string;
+  }): Promise<void> {
+    // The shared program just moved: readers holding the 5s fetch memo (a
+    // pre-deploy existence check, a burst of reads) must not serve the
+    // previous tree to a role or tool resolution that follows at once.
+    forgetProgramFetch(this.projectManager, input.tenantId, input.projectId);
+    await this.onPublished?.({
+      projectId: input.projectId,
+      commitSha: input.commitSha,
+    }).catch(() => {});
+  }
+
+  /**
+   * Bring what others published into the member's draft. `files` are first
+   * written into the draft.
+   */
   async pullFromRemote(
     tenantId: string,
     projectId: string,
@@ -444,37 +302,29 @@ export class DeploymentService {
           "catamorphic.project.id": projectId,
         },
       },
-      async () => {
-        return this.withDev(
-          tenantId,
-          projectId,
-          externalUserId,
-          async (repo) => {
-            if (await this.projectManager.localPath({ tenantId, projectId })) {
-              throw new DeploymentBlockedError(
-                "This project uses its existing Git remote. Use Git sync to download changes; its published snapshot is already available locally.",
-              );
-            }
-            if (opts?.files) {
-              for (const [path, content] of Object.entries(opts.files)) {
-                await repo.writeFile(path, content);
-              }
-            }
-            const author = authorFor(externalUserId);
-            return pull({
-              dev: repo,
-              remote: requireRemote(this.projectManager),
-              tenantId,
-              projectId,
-              remoteBranch: REMOTE_BRANCH,
-              author,
+      async () =>
+        this.withDraft(tenantId, projectId, externalUserId, async (draft) => {
+          if (!(draft instanceof OriginDraftRepo))
+            throw new DeploymentBlockedError(
+              "This project uses its existing Git remote. Use Git sync to download changes; its published snapshot is already available locally.",
+            );
+          if (opts?.files)
+            await draft.write({
+              changes: Object.entries(opts.files).map(([path, content]) => ({
+                path,
+                content,
+              })),
             });
-          },
-        );
-      },
+          return draft.pull();
+        }),
     );
   }
 
+  /**
+   * Throw away the member's unpublished changes: a server-hosted draft is
+   * deleted and follows the published program again; a local folder's
+   * uncommitted changes are reverted.
+   */
   async discardDraft(
     tenantId: string,
     projectId: string,
@@ -489,28 +339,23 @@ export class DeploymentService {
           "catamorphic.project.id": projectId,
         },
       },
-      async () => {
-        return this.withDev(
-          tenantId,
-          projectId,
-          externalUserId,
-          async (repo) => {
-            await repo.resetWorkingTree();
-            const branch = await repo.currentBranch();
-            if (
-              branch !== "main" &&
-              !(await this.projectManager.localPath({ tenantId, projectId }))
-            ) {
-              await repo.checkout("main");
-              await repo.deleteBranch(branch).catch(() => {});
-            }
-            return { discarded: true, branch };
-          },
-        );
-      },
+      async () =>
+        this.withDraft(tenantId, projectId, externalUserId, async (draft) => {
+          if (draft instanceof OriginDraftRepo) {
+            await draft.discard();
+            return { discarded: true, branch: REMOTE_BRANCH };
+          }
+          await draft.resetWorkingTree();
+          return { discarded: true, branch: await draft.currentBranch() };
+        }),
     );
   }
 
+  /**
+   * Record the member's resolutions of a conflicting publish: a server
+   * draft merges the published program in with them as one draft commit,
+   * a local folder commits them.
+   */
   async resolveConflicts(
     tenantId: string,
     projectId: string,
@@ -526,26 +371,22 @@ export class DeploymentService {
           "catamorphic.project.id": projectId,
         },
       },
-      async () => {
-        return this.withDev(
-          tenantId,
-          projectId,
-          externalUserId,
-          async (repo) => {
-            for (const [filepath, content] of Object.entries(
-              opts.resolutions,
-            )) {
-              await repo.writeFile(filepath, content);
-            }
-            const author = authorFor(externalUserId);
-            const sha = await repo.commit(
-              opts.message ?? "Resolve merge conflicts",
-              author,
-            );
-            return { commitSha: sha };
-          },
-        );
-      },
+      async () =>
+        this.withDraft(tenantId, projectId, externalUserId, async (draft) => {
+          const message = opts.message ?? "Resolve merge conflicts";
+          if (draft instanceof OriginDraftRepo)
+            return {
+              commitSha: await draft.resolveConflicts({
+                resolutions: opts.resolutions,
+                message,
+              }),
+            };
+          for (const [filepath, content] of Object.entries(opts.resolutions))
+            await draft.writeFile(filepath, content);
+          return {
+            commitSha: await draft.commit(message, authorFor(externalUserId)),
+          };
+        }),
     );
   }
 }
@@ -558,7 +399,7 @@ function requireRemote(pm: ProjectManager) {
 }
 
 async function tipTimestamp(
-  repo: ProjectRepo,
+  repo: ProjectRepo | OriginDraftRepo,
   sha: string | null,
 ): Promise<number | null> {
   if (!sha) return null;

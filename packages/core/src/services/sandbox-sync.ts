@@ -1,4 +1,8 @@
-import type { ProjectManager } from "@catamorphic/git";
+import {
+  type DraftChange,
+  OriginDraftRepo,
+  type ProjectManager,
+} from "@catamorphic/git";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import { PROJECT_NODE_MODULES_DIR } from "@catamorphic/workflow/project-layout";
 import type { Identity } from "../identity.js";
@@ -78,21 +82,42 @@ export async function syncSandboxChanges(opts: {
           projectId: opts.projectId,
           sessionId: opts.sessionId,
         })
-      : await opts.projectManager.openDev(
-          opts.identity.tenantId,
-          opts.projectId,
-          opts.identity.externalUserId,
-        );
+      : await opts.projectManager.openDraft({
+          tenantId: opts.identity.tenantId,
+          projectId: opts.projectId,
+          externalUserId: opts.identity.externalUserId,
+        });
     try {
-      for (const change of changes) {
-        if (change.kind === "deleted") {
-          await repo.deleteFile(change.path).catch(() => {});
-        } else {
-          const content = await opts.provider.downloadFile(
-            opts.sandboxProviderId,
-            `${dir}/${change.path}`,
-          );
-          await repo.writeFile(change.path, content);
+      if (repo instanceof OriginDraftRepo) {
+        // One draft commit for the whole sync (ADR 0191).
+        const present = new Set(await repo.listFiles());
+        const draftChanges: DraftChange[] = [];
+        for (const change of changes) {
+          if (change.kind === "deleted") {
+            if (present.has(change.path))
+              draftChanges.push({ path: change.path, delete: true });
+          } else {
+            draftChanges.push({
+              path: change.path,
+              content: await opts.provider.downloadFile(
+                opts.sandboxProviderId,
+                `${dir}/${change.path}`,
+              ),
+            });
+          }
+        }
+        await repo.write({ changes: draftChanges, message: "Agent changes" });
+      } else {
+        for (const change of changes) {
+          if (change.kind === "deleted") {
+            await repo.deleteFile(change.path).catch(() => {});
+          } else {
+            const content = await opts.provider.downloadFile(
+              opts.sandboxProviderId,
+              `${dir}/${change.path}`,
+            );
+            await repo.writeFile(change.path, content);
+          }
         }
       }
     } finally {

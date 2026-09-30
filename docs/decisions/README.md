@@ -111,7 +111,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0096](0096-desktop-resource-link-routing.md) | Desktop resource links use workspace targets | Accepted |
 | [0097](0097-host-owned-workflow-inspectors.md) | Host-owned workflow inspectors | Accepted (layout and packaged toolbar amended by 0157) |
 | [0098](0098-project-authorized-local-and-remote-agents.md) | Project-authorized local and remote agent execution | Accepted (`this-machine` binding is `device: "member"`, 0167) |
-| [0099](0099-shared-postgres-server-environments.md) | Shared-Postgres server instances as managed Environments | Accepted (execution machines superseded by 0164) |
+| [0099](0099-shared-postgres-server-environments.md) | Shared-Postgres server instances as managed Environments | Accepted (execution machines superseded by 0164; member drafts leave instance disks per 0191) |
 | [0100](0100-workspace-resource-admission.md) | Workspace reservations and provider-enforced resource limits | Accepted (idle release refined by 0173; container usage by 0176) |
 | [0101](0101-harness-capabilities-and-session-monitors.md) | Harness capabilities and session monitors | Accepted |
 | [0102](0102-tabbed-sidebars-and-app-widgets.md) | Tabbed sidebars and compact app widgets | Accepted (refined by 0107) |
@@ -178,7 +178,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0163](0163-database-gateway-and-reviewed-queries.md) | Production databases through the gateway, with reviewed queries | Accepted (file-declared guards removed by 0183) |
 | [0164](0164-control-plane-and-enrolled-workers.md) | A control plane and enrolled workers without credentials | Accepted (placement refined by 0167; processes by 0174; transport by 0187) |
 | [0165](0165-guests-and-shares.md) | Guests and shares for people outside the company | Accepted |
-| [0166](0166-members-work-from-their-own-agents.md) | Members work from their own agents over the project MCP | Accepted |
+| [0166](0166-members-work-from-their-own-agents.md) | Members work from their own agents over the project MCP | Accepted (drafts are origin refs per 0191) |
 | [0167](0167-machine-pools-access-and-owner-placement.md) | Machine pools, node access, and placement by owner | Accepted (project access and chat placement refined by 0173) |
 | [0168](0168-keyboard-led-focus-rings-and-continuous-sidebar-motion.md) | Keyboard-led focus rings and continuous sidebar motion | Accepted |
 | [0169](0169-work-project-workspace.md) | The project workspace is `.work/`, and what lands in repositories is named Work | Accepted |
@@ -190,7 +190,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0175](0175-grants-reach-sandboxes.md) | Grants reach sandboxes; credentials never do | Accepted (Git implementation notes; workspaces at a ref in 0178; models and harnesses in 0180; amended by 0184) |
 | [0176](0176-environment-images-containers-egress-and-modes.md) | Environments choose images, containers, egress, and what agents may change | Accepted (`mode` renamed sandboxing by 0182) |
 | [0177](0177-github-is-a-connection.md) | GitHub is a connection | Accepted |
-| [0178](0178-session-workspaces-at-a-ref.md) | Session workspaces at a ref of the project's remote | Accepted |
+| [0178](0178-session-workspaces-at-a-ref.md) | Session workspaces at a ref of the project's remote | Accepted (member drafts are origin refs per 0191) |
 | [0179](0179-integrations-from-project-code-slack.md) | Integrations from project code: named HTTP operations and declared delivery ids | Accepted (session event keys in 0181) |
 | [0180](0180-harnesses-run-in-the-sandbox-models-through-the-gateway.md) | Harnesses run in the sandbox; models through the gateway | Accepted (amended by 0184) |
 | [0181](0181-project-chats-use-their-environments-bindings.md) | Project chats use their Environment's bindings; session events carry keys | Accepted |
@@ -201,3 +201,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0186](0186-palette-modes-and-use-ranked-search.md) | Palette modes share one shape, and search ranks by use | Accepted |
 | [0187](0187-remote-executors-ride-out-transient-failures.md) | Remote executors ride out transient failures on one operation queue | Accepted |
 | [0188](0188-back-and-forward-between-surfaces.md) | Back and forward move between surfaces, and tabs keep their way back | Accepted |
+| [0191](0191-member-drafts-are-refs-in-the-project-origin.md) | Member drafts are refs in the project origin | Accepted |

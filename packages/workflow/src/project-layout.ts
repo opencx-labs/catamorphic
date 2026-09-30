@@ -114,6 +114,29 @@ export function publishedRef(branch = "main"): string {
   return `${PUBLISHED_REF_PREFIX}/${branch}`;
 }
 
+/**
+ * Members' program drafts in a project's origin (ADR 0191):
+ * `refs/work/drafts/<member>`. Private to their member; never listed.
+ */
+export const DRAFT_REF_PREFIX = "refs/work/drafts";
+
+/**
+ * The draft ref of one member. The id is escaped to letters, digits, and
+ * `-`, with every other byte written as `_xx` (hex), so any external user
+ * id names exactly one valid ref.
+ */
+export function draftRef(externalUserId: string): string {
+  if (!externalUserId) throw new Error("A draft belongs to a member");
+  let name = "";
+  for (const byte of new TextEncoder().encode(externalUserId)) {
+    const char = String.fromCharCode(byte);
+    name += /[A-Za-z0-9-]/.test(char)
+      ? char
+      : `_${byte.toString(16).padStart(2, "0")}`;
+  }
+  return `${DRAFT_REF_PREFIX}/${name}`;
+}
+
 /** Prefix of every branch the framework creates on the user's behalf. */
 export const MANAGED_BRANCH_PREFIX = "work/";
 

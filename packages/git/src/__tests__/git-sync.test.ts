@@ -16,7 +16,6 @@ import type { ProjectRepo, RemoteBackend } from "../types.js";
 const TENANT = "11111111-1111-1111-1111-111111111111";
 const PROJECT = "22222222-2222-2222-2222-222222222222";
 const USER_A = "user_a";
-const USER_B = "user_b";
 const AUTHOR_A = { name: "Alice", email: "alice@test.dev" };
 const AUTHOR_B = { name: "Bob", email: "bob@test.dev" };
 
@@ -79,7 +78,10 @@ describe("git-sync", () => {
     await repoA.commit("A: add a", AUTHOR_A);
     await push({ dev: repoA, remote, tenantId: TENANT, projectId: PROJECT });
 
-    const repoB = await manager.openDev(TENANT, PROJECT, USER_B);
+    const repoB = await manager.openEphemeral({
+      tenantId: TENANT,
+      projectId: PROJECT,
+    });
     try {
       await repoB.writeFile("src/b.ts", "b");
       await repoB.commit("B: add b", AUTHOR_B);
@@ -107,7 +109,10 @@ describe("git-sync", () => {
   });
 
   it("fetchRemote brings new commits into dev repo tracking ref", async () => {
-    const repoB = await manager.openDev(TENANT, PROJECT, USER_B);
+    const repoB = await manager.openEphemeral({
+      tenantId: TENANT,
+      projectId: PROJECT,
+    });
     try {
       await repoB.writeFile("src/b.ts", "b");
       const bSha = await repoB.commit("B: add b", AUTHOR_B);
@@ -133,7 +138,10 @@ describe("git-sync", () => {
   });
 
   it("pull fast-forwards when local is behind", async () => {
-    const repoB = await manager.openDev(TENANT, PROJECT, USER_B);
+    const repoB = await manager.openEphemeral({
+      tenantId: TENANT,
+      projectId: PROJECT,
+    });
     try {
       await repoB.writeFile("src/b.ts", "b");
       const bSha = await repoB.commit("B: add b", AUTHOR_B);
@@ -165,7 +173,10 @@ describe("git-sync", () => {
     await repoA.commit("base", AUTHOR_A);
     await push({ dev: repoA, remote, tenantId: TENANT, projectId: PROJECT });
 
-    const repoB = await manager.openDev(TENANT, PROJECT, USER_B);
+    const repoB = await manager.openEphemeral({
+      tenantId: TENANT,
+      projectId: PROJECT,
+    });
     try {
       await repoB.writeFile("src/shared.ts", "theirs version");
       await repoB.commit("B: change shared", AUTHOR_B);

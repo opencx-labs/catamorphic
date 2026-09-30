@@ -17,9 +17,7 @@ import { z } from "zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import {
-  BranchInfoSchema,
   CommitSchema,
-  CreateBranchSchema,
   CreateProjectSchema,
   DeployRequestSchema,
   DeployResponseSchema,
@@ -362,110 +360,6 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
           identity.externalUserId,
         );
         return reply.send(status);
-      } catch (err) {
-        if (err instanceof ProjectNotFoundError) {
-          return reply.status(404).send({ error: "Project not found" });
-        }
-        throw err;
-      }
-    },
-  });
-
-  typed.route({
-    method: "GET",
-    url: "/projects/:projectId/branches",
-    schema: {
-      params: ProjectIdParamsSchema,
-      response: {
-        200: BranchInfoSchema.array(),
-        404: ErrorSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      if (!ctx.core)
-        return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request);
-      const { projectId } = request.params;
-      try {
-        await ctx.core.projects.get(identity, projectId);
-        const branches = await ctx.core.deployment.listBranches(
-          identity.tenantId,
-          projectId,
-          identity.externalUserId,
-        );
-        return reply.send(branches);
-      } catch (err) {
-        if (err instanceof ProjectNotFoundError) {
-          return reply.status(404).send({ error: "Project not found" });
-        }
-        throw err;
-      }
-    },
-  });
-
-  typed.route({
-    method: "POST",
-    url: "/projects/:projectId/branches",
-    schema: {
-      params: ProjectIdParamsSchema,
-      body: CreateBranchSchema,
-      response: {
-        200: z.object({ branch: z.string(), created: z.boolean() }),
-        404: ErrorSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      if (!ctx.core)
-        return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request);
-      const { projectId } = request.params;
-      try {
-        await ctx.core.projects.get(identity, projectId);
-        assertProjectPermission(identity, projectId, "program:write");
-        const result = await ctx.core.deployment.ensureWorkBranch(
-          identity.tenantId,
-          projectId,
-          identity.externalUserId,
-        );
-        return reply.send(result);
-      } catch (err) {
-        if (err instanceof ProjectNotFoundError) {
-          return reply.status(404).send({ error: "Project not found" });
-        }
-        throw err;
-      }
-    },
-  });
-
-  typed.route({
-    method: "POST",
-    url: "/projects/:projectId/checkout",
-    schema: {
-      params: ProjectIdParamsSchema,
-      body: z.object({ ref: z.string().min(1) }),
-      response: {
-        200: RepoStatusSchema,
-        404: ErrorSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      if (!ctx.core)
-        return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request);
-      const { projectId } = request.params;
-      try {
-        await ctx.core.projects.get(identity, projectId);
-        assertProjectPermission(identity, projectId, "program:write");
-        const status = await ctx.core.deployment.checkoutBranch(
-          identity.tenantId,
-          projectId,
-          identity.externalUserId,
-          request.body.ref,
-        );
-        return reply.send({ ...status, remoteHeadTimestamp: null });
       } catch (err) {
         if (err instanceof ProjectNotFoundError) {
           return reply.status(404).send({ error: "Project not found" });

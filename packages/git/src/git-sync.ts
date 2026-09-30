@@ -155,6 +155,48 @@ export async function fetchRemote(opts: FetchOpts): Promise<{
 }
 
 /**
+ * Copy one object (a commit with its history, or a tree with its files)
+ * from the origin into a checkout, without touching refs or the working
+ * tree.
+ */
+export async function fetchObject(opts: {
+  dev: ProjectRepo;
+  remote: Pick<RemoteBackend, "withOrigin">;
+  tenantId: string;
+  projectId: string;
+  sha: string;
+}): Promise<void> {
+  if (await devHasCommit({ dev: opts.dev, sha: opts.sha })) return;
+  await opts.remote.withOrigin(opts.tenantId, opts.projectId, (origin) =>
+    transferCommits({
+      source: originSource(origin),
+      sink: devSink(opts.dev),
+      sha: opts.sha,
+    }),
+  );
+}
+
+/**
+ * Copy one object (a commit with its history, or a tree with its files)
+ * from a checkout into the origin, without moving any ref.
+ */
+export async function pushObject(opts: {
+  dev: ProjectRepo;
+  remote: Pick<RemoteBackend, "withOrigin">;
+  tenantId: string;
+  projectId: string;
+  sha: string;
+}): Promise<void> {
+  await opts.remote.withOrigin(opts.tenantId, opts.projectId, (origin) =>
+    transferCommits({
+      source: devSource(opts.dev),
+      sink: originSink(origin),
+      sha: opts.sha,
+    }),
+  );
+}
+
+/**
  * Fetch the remote branch, then merge it into the current branch. Uses a
  * 3-way merge via isomorphic-git. Returns conflicts when the merge cannot be
  * resolved automatically; working tree is left with conflict markers in that
@@ -484,7 +526,8 @@ async function syncRemoteTrackingRef(opts: {
   });
 }
 
-async function collectConflicts(opts: {
+/** Each conflicted path of a failed merge, with its base, ours, and theirs. */
+export async function collectConflicts(opts: {
   dev: ProjectRepo;
   oursSha: string;
   theirsSha: string;

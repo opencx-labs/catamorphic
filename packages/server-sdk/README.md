@@ -42,7 +42,8 @@ export const catamorphic = createCatamorphic({
   //   { db: kyselyInstance }                    — advanced, pre-built Kysely
   database: { connectionString: process.env.DATABASE_URL! },
 
-  // Filesystem git storage (per-user working copies + bare origin remotes),
+  // Filesystem git storage (session copies + bare origin remotes, which
+  // also hold members' draft refs),
   // or { projectManager } for custom backends (e.g. ArtifactsRemoteBackend
   // from @catamorphic/cloudflare for Cloudflare Artifacts).
   storage: {

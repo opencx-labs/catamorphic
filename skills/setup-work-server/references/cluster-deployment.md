@@ -178,14 +178,17 @@ settled session explicitly through its Environment update.
 ## Shared state and recovery
 
 Network Postgres holds core state, Better Auth in its own schema, worker leases,
-permission requests, runner jobs, project origin objects, deployment/app bundles,
-and encrypted vault records. Neither `WORK_SECRET` (sign-in and notification
+permission requests, runner jobs, project origin objects, members' program
+drafts (refs in each project's origin, ADR 0191), deployment/app bundles,
+and encrypted vault records. A member's draft is the same on every replica,
+so any replica answers any `program_*` call, and replacing a replica loses
+no draft. Neither `WORK_SECRET` (sign-in and notification
 signing) nor `WORK_VAULT_KEY` (the credential vault) is stored in these records.
 Back up the database and protect both secrets separately. Rotate the vault key
 by moving the old key to `WORK_VAULT_PREVIOUS_KEYS`; see
 [secrets and the gateway](secrets-and-gateway.md).
 
-Each machine owns local checkouts and sandbox processes. Server agent sessions
+Each machine owns session checkouts and sandbox processes. Server agent sessions
 checkpoint to isolated `sessions/<id>` branches in the shared origin. Relocation
 reconstructs the workspace and model history; it does not migrate a live process
 or publish session edits to project `main`. Failed checkpoint persistence is a

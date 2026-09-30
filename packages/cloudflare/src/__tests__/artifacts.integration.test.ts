@@ -115,12 +115,16 @@ describeIf("ArtifactsRemoteBackend (integration)", () => {
     expect(originMain).toBe(head);
   }, 120_000);
 
-  it("seeds a second user's working copy from the Artifacts origin", async () => {
+  it("reads a member's draft from the Artifacts origin", async () => {
     const manager = new ProjectManager(
       new FsBackend(await tmp("artifacts-dev2-")),
       backend,
     );
-    const repo = await manager.openDev(TENANT, PROJECT, "user-2");
+    const repo = await manager.openDraft({
+      tenantId: TENANT,
+      projectId: PROJECT,
+      externalUserId: "user-2",
+    });
     const files = await repo.readAllFiles();
     await repo.dispose();
 

@@ -40,15 +40,23 @@ export {
 export type { ObjectStore } from "./object-store.js";
 export { PreconditionFailedError } from "./object-store.js";
 export {
+  DraftBusyError,
+  type DraftChange,
+  DraftContentChangedError,
+  type DraftPublishResult,
+  DraftRefNotAllowedError,
+  OriginDraftRepo,
+  type ProjectDraft,
+  refreshPublished,
+} from "./origin-draft.js";
+export { DraftPathError, GitObjectCache } from "./origin-objects.js";
+export {
   ensurePersonalFilesExcluded,
   isPersonalFile,
 } from "./personal-files.js";
-export {
-  generateWorkBranchName,
-  PROJECT_GITIGNORE,
-  ProjectManager,
-} from "./project-manager.js";
+export { PROJECT_GITIGNORE, ProjectManager } from "./project-manager.js";
 export { ProjectRepoImpl } from "./project-repo.js";
+export { RefMovedError } from "./ref-moved-error.js";
 export type {
   BranchInfo,
   CloneSource,

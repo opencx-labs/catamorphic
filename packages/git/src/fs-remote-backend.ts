@@ -2,6 +2,7 @@ import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import git from "isomorphic-git";
+import { RefMovedError } from "./ref-moved-error.js";
 import type { CommitInfo, OriginRepo, RemoteBackend } from "./types.js";
 
 const UUID_RE =
@@ -10,6 +11,24 @@ const UUID_RE =
 function assertUuid(value: string): void {
   if (!UUID_RE.test(value)) {
     throw new Error(`Invalid UUID: ${value}`);
+  }
+}
+
+/**
+ * Ref updates in flight per ref. A bare repository on local disk serves one
+ * process (a single-machine host), so serializing its compare-and-swap in
+ * that process makes it atomic; several processes need an object origin.
+ */
+const refLocks = new Map<string, Promise<unknown>>();
+
+async function withRefLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const previous = refLocks.get(key) ?? Promise.resolve();
+  const run = previous.catch(() => {}).then(fn);
+  refLocks.set(key, run);
+  try {
+    return await run;
+  } finally {
+    if (refLocks.get(key) === run) refLocks.delete(key);
   }
 }
 
@@ -107,12 +126,24 @@ export class FsOriginRepo implements OriginRepo {
     sha: string;
     expected?: string | null;
   }): Promise<void> {
+    await withRefLock(`${this.gitdir}\0${opts.ref}`, () =>
+      this.writeRefChecked(opts),
+    );
+  }
+
+  private async writeRefChecked(opts: {
+    ref: string;
+    sha: string;
+    expected?: string | null;
+  }): Promise<void> {
     if (opts.expected !== undefined) {
       const current = await this.resolveRef(opts.ref);
       if (current !== opts.expected) {
-        throw new Error(
-          `Ref ${opts.ref} moved (expected ${opts.expected ?? "none"}, got ${current ?? "none"})`,
-        );
+        throw new RefMovedError({
+          ref: opts.ref,
+          expected: opts.expected,
+          actual: current,
+        });
       }
     }
     await git.writeRef({
@@ -124,7 +155,25 @@ export class FsOriginRepo implements OriginRepo {
     });
   }
 
-  async deleteRef(input: { ref: string }): Promise<void> {
+  async deleteRef(input: { ref: string; expected?: string }): Promise<void> {
+    await withRefLock(`${this.gitdir}\0${input.ref}`, () =>
+      this.deleteRefChecked(input),
+    );
+  }
+
+  private async deleteRefChecked(input: {
+    ref: string;
+    expected?: string;
+  }): Promise<void> {
+    if (input.expected !== undefined) {
+      const current = await this.resolveRef(input.ref);
+      if (current !== input.expected)
+        throw new RefMovedError({
+          ref: input.ref,
+          expected: input.expected,
+          actual: current,
+        });
+    }
     await git.deleteRef({ fs: nodeFs, gitdir: this.gitdir, ref: input.ref });
   }
 

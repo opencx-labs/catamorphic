@@ -534,6 +534,7 @@ export {
 export {
   type RemoteSyncOutcome,
   RemoteSyncService,
+  ServerDraftError,
 } from "./services/remote-sync-service.js";
 export {
   DEFAULT_RUN_RETENTION_DAYS,

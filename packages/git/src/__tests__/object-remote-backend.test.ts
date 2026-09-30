@@ -19,7 +19,6 @@ import { ObjectRemoteBackend } from "../object-remote-backend.js";
 const TENANT = "11111111-1111-1111-1111-111111111111";
 const PROJECT = "22222222-2222-2222-2222-222222222222";
 const USER_A = "user_a";
-const USER_B = "user_b";
 const AUTHOR_A = { name: "Alice", email: "alice@test.dev" };
 const AUTHOR_B = { name: "Bob", email: "bob@test.dev" };
 
@@ -205,12 +204,15 @@ describe("git-sync over ObjectRemoteBackend", () => {
     expect(remoteSha).toBe(sha);
   });
 
-  it("seeds a second user's working copy from the origin", async () => {
+  it("seeds an ephemeral checkout from the origin", async () => {
     await repoA.writeFile("src/feature.ts", "export const feature = true;");
     await repoA.commit("add feature", AUTHOR_A);
     await push({ dev: repoA, remote, tenantId: TENANT, projectId: PROJECT });
 
-    const repoB = await manager.openDev(TENANT, PROJECT, USER_B);
+    const repoB = await manager.openEphemeral({
+      tenantId: TENANT,
+      projectId: PROJECT,
+    });
     try {
       const files = await repoB.readAllFiles();
       expect(files["src/feature.ts"]).toBe("export const feature = true;");
@@ -221,7 +223,10 @@ describe("git-sync over ObjectRemoteBackend", () => {
   });
 
   it("push throws when not a fast-forward", async () => {
-    const repoB = await manager.openDev(TENANT, PROJECT, USER_B);
+    const repoB = await manager.openEphemeral({
+      tenantId: TENANT,
+      projectId: PROJECT,
+    });
     try {
       await repoB.writeFile("src/b.ts", "b");
       await repoB.commit("B: add b", AUTHOR_B);
@@ -238,7 +243,10 @@ describe("git-sync over ObjectRemoteBackend", () => {
   });
 
   it("fetchRemote updates the tracking ref", async () => {
-    const repoB = await manager.openDev(TENANT, PROJECT, USER_B);
+    const repoB = await manager.openEphemeral({
+      tenantId: TENANT,
+      projectId: PROJECT,
+    });
     try {
       await repoB.writeFile("src/b.ts", "b");
       const bSha = await repoB.commit("B: add b", AUTHOR_B);
@@ -262,7 +270,10 @@ describe("git-sync over ObjectRemoteBackend", () => {
     await repoA.commit("base", AUTHOR_A);
     await push({ dev: repoA, remote, tenantId: TENANT, projectId: PROJECT });
 
-    const repoB = await manager.openDev(TENANT, PROJECT, USER_B);
+    const repoB = await manager.openEphemeral({
+      tenantId: TENANT,
+      projectId: PROJECT,
+    });
     try {
       await repoB.writeFile("src/shared.ts", "theirs version");
       await repoB.commit("B: change shared", AUTHOR_B);

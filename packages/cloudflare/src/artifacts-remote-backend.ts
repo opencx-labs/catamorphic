@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { CloneSource, OriginRepo, RemoteBackend } from "@catamorphic/git";
 import { FsOriginRepo } from "@catamorphic/git";
+import { DRAFT_REF_PREFIX } from "@catamorphic/workflow/project-layout";
 import git, { type PushResult } from "isomorphic-git";
 import http from "isomorphic-git/http/node";
 import {
@@ -176,8 +177,9 @@ export class ArtifactsRemoteBackend implements RemoteBackend {
   }
 
   /**
-   * Pull every remote branch into the mirror's `refs/heads/*`. Returns the
-   * remote's ref snapshot so `pushChangedRefs` can diff after the callback.
+   * Pull every remote branch and member draft (ADR 0191) into the mirror.
+   * Returns the remote's ref snapshot so `pushChangedRefs` can diff after
+   * the callback.
    */
   private async syncMirrorFromRemote(opts: {
     gitdir: string;
@@ -185,12 +187,14 @@ export class ArtifactsRemoteBackend implements RemoteBackend {
     name: string;
   }): Promise<Map<string, string>> {
     const onAuth = await this.onAuth(opts.name, "read");
-    const serverRefs = await git.listServerRefs({
-      http,
-      url: opts.url,
-      prefix: "refs/heads/",
-      onAuth,
-    });
+    const serverRefs = (
+      await git.listServerRefs({
+        http,
+        url: opts.url,
+        prefix: "refs/",
+        onAuth,
+      })
+    ).filter((serverRef) => isSyncedRef(serverRef.ref));
 
     const snapshot = new Map<string, string>();
     for (const serverRef of serverRefs) {
@@ -199,13 +203,13 @@ export class ArtifactsRemoteBackend implements RemoteBackend {
       const localSha = await resolveRefSafe(opts.gitdir, serverRef.ref);
       if (localSha === serverRef.oid) continue;
 
-      const branch = serverRef.ref.replace(/^refs\/heads\//, "");
       await git.fetch({
         fs: nodeFs,
         http,
         gitdir: opts.gitdir,
         url: opts.url,
-        ref: branch,
+        ref: serverRef.ref,
+        remoteRef: serverRef.ref,
         singleBranch: true,
         tags: false,
         onAuth,
@@ -219,43 +223,33 @@ export class ArtifactsRemoteBackend implements RemoteBackend {
       });
     }
     // Deleted remote refs must leave the cache too. Otherwise a later read
-    // would push them back as locally created branches, undoing retirement.
-    for (const branch of await git.listBranches({
-      fs: nodeFs,
-      gitdir: opts.gitdir,
-    })) {
-      const ref = `refs/heads/${branch}`;
+    // would push them back as locally created refs, undoing retirement.
+    for (const ref of await localSyncedRefs(opts.gitdir)) {
       if (!snapshot.has(ref))
         await git.deleteRef({ fs: nodeFs, gitdir: opts.gitdir, ref });
     }
     return snapshot;
   }
 
-  /** Push every `refs/heads/*` ref the callback created, moved, or deleted. */
+  /** Push every branch and draft ref the callback created, moved, or deleted. */
   private async pushChangedRefs(opts: {
     gitdir: string;
     url: string;
     name: string;
     remoteRefs: Map<string, string>;
   }): Promise<void> {
-    const branches = await git.listBranches({
-      fs: nodeFs,
-      gitdir: opts.gitdir,
-    });
+    const refs = await localSyncedRefs(opts.gitdir);
 
     const changed: string[] = [];
-    for (const branch of branches) {
-      const ref = `refs/heads/${branch}`;
+    for (const ref of refs) {
       const localSha = await resolveRefSafe(opts.gitdir, ref);
       if (localSha && opts.remoteRefs.get(ref) !== localSha) {
-        changed.push(branch);
+        changed.push(ref);
       }
     }
-    const currentRefs = new Set(
-      branches.map((branch) => `refs/heads/${branch}`),
-    );
+    const currentRefs = new Set(refs);
     const deleted = [...opts.remoteRefs.keys()].filter(
-      (ref) => ref.startsWith("refs/heads/") && !currentRefs.has(ref),
+      (ref) => isSyncedRef(ref) && !currentRefs.has(ref),
     );
     if (changed.length === 0 && deleted.length === 0) return;
 
@@ -273,14 +267,14 @@ export class ArtifactsRemoteBackend implements RemoteBackend {
       });
       assertPushSucceeded(result);
     }
-    for (const branch of changed) {
+    for (const ref of changed) {
       const result = await git.push({
         fs: nodeFs,
         http,
         gitdir: opts.gitdir,
         url: opts.url,
-        ref: `refs/heads/${branch}`,
-        remoteRef: `refs/heads/${branch}`,
+        ref,
+        remoteRef: ref,
         // git-sync already enforces fast-forward semantics at a higher
         // level; force mirrors FsOriginRepo.updateRef's behavior.
         force: true,
@@ -349,6 +343,25 @@ function assertPushSucceeded(result: PushResult): void {
           .join("; ") ||
           "Artifacts rejected the git push"),
     );
+}
+
+/** Branches and members' drafts: the refs an origin keeps. */
+const SYNCED_REF_PREFIXES = ["refs/heads/", `${DRAFT_REF_PREFIX}/`];
+
+function isSyncedRef(ref: string): boolean {
+  return SYNCED_REF_PREFIXES.some((prefix) => ref.startsWith(prefix));
+}
+
+async function localSyncedRefs(gitdir: string): Promise<string[]> {
+  const refs: string[] = [];
+  for (const prefix of SYNCED_REF_PREFIXES) {
+    const filepath = prefix.slice(0, -1);
+    const names = await git
+      .listRefs({ fs: nodeFs, gitdir, filepath })
+      .catch(() => []);
+    refs.push(...names.map((name) => `${prefix}${name}`));
+  }
+  return refs;
 }
 
 async function resolveRefSafe(
