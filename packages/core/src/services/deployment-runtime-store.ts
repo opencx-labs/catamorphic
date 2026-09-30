@@ -32,9 +32,13 @@ export interface DeploymentRuntimeRecord {
 }
 
 export interface DeploymentRuntimeStore {
+  /**
+   * Run `operation` as the only creator of the artifact's runtime; `signal`
+   * aborts once that is no longer true.
+   */
   withArtifactLock<Result>(args: {
     artifactId: string;
-    operation: () => Promise<Result>;
+    operation: (lock: { signal: AbortSignal }) => Promise<Result>;
   }): Promise<Result>;
   findReusable(args: {
     artifactId: string;
@@ -93,7 +97,7 @@ export class KyselyDeploymentRuntimeStore implements DeploymentRuntimeStore {
    */
   async withArtifactLock<Result>(args: {
     artifactId: string;
-    operation: () => Promise<Result>;
+    operation: (lock: { signal: AbortSignal }) => Promise<Result>;
   }): Promise<Result> {
     return withReplicaClaim({
       db: this.db,

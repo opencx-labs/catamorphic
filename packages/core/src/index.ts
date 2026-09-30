@@ -544,7 +544,9 @@ export {
   RemoteSyncService,
 } from "./services/remote-sync-service.js";
 export {
+  type HeldReplicaClaim,
   ReplicaClaimBusyError,
+  ReplicaClaimLostError,
   releaseReplicaClaim,
   renewReplicaClaim,
   takeReplicaClaim,

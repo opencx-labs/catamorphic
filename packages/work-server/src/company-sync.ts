@@ -2,6 +2,7 @@ import {
   type Identity,
   type Project,
   type RemoteSyncOutcome,
+  renewReplicaClaim,
   takeReplicaClaim,
 } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
@@ -42,8 +43,11 @@ export async function syncCompanyProjects(input: {
   /** This process, as the holder of the claims it takes. */
   holder: string;
   stopped?: () => boolean;
+  /** How often each project syncs (default {@link PROJECT_SYNC_SECONDS}). */
+  intervalSeconds?: number;
 }): Promise<void> {
   const { services, identity } = input;
+  const interval = input.intervalSeconds ?? PROJECT_SYNC_SECONDS;
   for (let offset = 0; !input.stopped?.(); offset += 50) {
     const page = await services.projects.list(identity, {
       limit: 50,
@@ -58,14 +62,26 @@ export async function syncCompanyProjects(input: {
             db: services.db,
             name: `project-sync:${project.id}`,
             holder: input.holder,
-            ttlSeconds: PROJECT_SYNC_SECONDS,
+            ttlSeconds: interval,
           }))
         )
           continue;
-        const result = await services.remoteSync.syncPublished({
-          identity,
-          projectId: project.id,
-        });
+        // A long sync keeps its claim, so no other replica starts the same
+        // project meanwhile; the minute counts from when it ends.
+        const renewal = setInterval(
+          () =>
+            void renewReplicaClaim({
+              db: services.db,
+              name: `project-sync:${project.id}`,
+              holder: input.holder,
+              ttlSeconds: interval,
+            }).catch(() => {}),
+          (interval * 1_000) / 4,
+        );
+        renewal.unref();
+        const result = await services.remoteSync
+          .syncPublished({ identity, projectId: project.id })
+          .finally(() => clearInterval(renewal));
         if (result.status === "pulled" || result.status === "merged") {
           console.info(
             `Company project ${project.id} received published updates`,

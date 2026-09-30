@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import { PROJECT_ROLES_DIR } from "@catamorphic/workflow/project-layout";
@@ -326,7 +327,7 @@ export interface ResolveRolesInput {
 }
 
 interface CachedRoles {
-  /** The program commit the roles were read at. */
+  /** The program commit the roles were read at, or their files' hash. */
   revision: string;
   entries: ProjectRoleEntry[];
 }
@@ -461,6 +462,12 @@ export class RolesService {
     const cached = this.cache.get(key);
     if (revision && cached?.revision === revision) return cached.entries;
     const { files, ref } = await this.readRoleFiles(tenantId, projectId);
+    // A working tree has no commit: its role files, read from local disk,
+    // are their own key, so unchanged files are not parsed again.
+    const contentKey =
+      ref ??
+      `sha256:${createHash("sha256").update(JSON.stringify(files)).digest("hex")}`;
+    if (cached?.revision === contentKey) return cached.entries;
     const entries = Object.entries(files)
       .map(([file, content]): ProjectRoleEntry => {
         const slug = file.slice(
@@ -492,8 +499,7 @@ export class RolesService {
           : { slug, definition: result.definition };
       })
       .sort((a, b) => a.slug.localeCompare(b.slug));
-    if (ref) this.cache.set(key, { revision: ref, entries });
-    else this.cache.delete(key);
+    this.cache.set(key, { revision: contentKey, entries });
     return entries;
   }
 

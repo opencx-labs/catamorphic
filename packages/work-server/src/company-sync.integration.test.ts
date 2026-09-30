@@ -79,6 +79,45 @@ it.skipIf(!process.env.DATABASE_URL)(
       await pass();
       expect(synced).toHaveLength(linked.length * 2);
       expect(new Set(synced.slice(linked.length)).size).toBe(linked.length);
+
+      // A sync longer than the interval keeps its claim: the other replica
+      // does not start the same project meanwhile.
+      const slow = projects.slice(1, 2);
+      const slowSynced: string[] = [];
+      const slowServices = (
+        db: typeof first,
+        ms: number,
+      ): CompanyProjectSyncServices => ({
+        db,
+        projects: {
+          list: async () => ({ items: slow, total: slow.length }),
+        },
+        remoteSync: {
+          syncPublished: async ({ projectId }): Promise<RemoteSyncOutcome> => {
+            slowSynced.push(projectId);
+            await new Promise((resolve) => setTimeout(resolve, ms));
+            return { status: "no-remote" };
+          },
+        },
+      });
+      await first.deleteFrom("replica_claims").execute();
+      const long = syncCompanyProjects({
+        services: slowServices(first, 3_500),
+        identity,
+        holder: "replica-a",
+        intervalSeconds: 2,
+      });
+      for (let pass = 0; pass < 3; pass++) {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        await syncCompanyProjects({
+          services: slowServices(second, 0),
+          identity,
+          holder: "replica-b",
+          intervalSeconds: 2,
+        });
+      }
+      await long;
+      expect(slowSynced).toHaveLength(1);
     } finally {
       for (const db of replicas) await db.destroy();
       await database.drop();

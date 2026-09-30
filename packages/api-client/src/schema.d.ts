@@ -7410,7 +7410,7 @@ export interface paths {
                                 /** @enum {string} */
                                 status: "queued" | "held" | "running" | "completed" | "failed" | "cancelled";
                                 /** @enum {string} */
-                                phase: "preparing" | "working" | "waiting" | "saving";
+                                phase: "preparing" | "working" | "waiting" | "saving" | "parked";
                                 activity: string | null;
                                 activityAt: string | null;
                                 startedAt: string | null;

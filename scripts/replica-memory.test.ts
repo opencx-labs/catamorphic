@@ -10,8 +10,8 @@ import { expect, it } from "vitest";
  * Anything other replicas observe, fence on, or must exclude lives in
  * Postgres.
  *
- * Every class-level `Map` or `Set` in core services and the Work server says
- * which it is, in the comment right above it: `Replica memory (a)`, `(b)`,
+ * Every class-level or module-level `Map` or `Set` in core services and the
+ * Work server says which it is, in the comment right above it: `Replica memory (a)`, `(b)`,
  * or `(c)`, with its reason. An in-memory implementation a host swaps for a
  * shared one when it runs several replicas says `Replica memory (single
  * process)`.
@@ -21,6 +21,9 @@ const SCANNED = ["packages/core/src/services", "packages/work-server/src"];
 
 const FIELD =
   /^\s+(?:(?:private|protected|public|readonly|static|override)\s+)+#?\w+\s*(?::\s*(?:Readonly)?(?:Map|Set|WeakMap|WeakSet)\b[^=]*)?(?:=\s*new\s+(?:Map|Set|WeakMap|WeakSet)\b.*)?[;,]?$/;
+/** A module-level collection: it lives as long as the process. */
+const MODULE =
+  /^(?:export\s+)?(?:const|let)\s+\w+\s*(?::[^=]*)?=\s*new\s+(?:Map|Set|WeakMap|WeakSet)\b/;
 const COLLECTION = /\b(?:Readonly)?(?:Map|Set|WeakMap|WeakSet)\b/;
 const MARKER = /Replica memory \((?:a|b|c|single process)\)/;
 
@@ -63,7 +66,8 @@ it("class-level maps and sets in replicas say why they may live in memory", () =
   for (const file of SCANNED.flatMap(sources)) {
     const lines = fs.readFileSync(path.join(root, file), "utf8").split("\n");
     lines.forEach((line, index) => {
-      if (!COLLECTION.test(line) || !FIELD.test(line)) return;
+      if (!COLLECTION.test(line) || !(FIELD.test(line) || MODULE.test(line)))
+        return;
       if (!MARKER.test(commentAbove(lines, index)))
         unclassified.push(`${file}:${index + 1}: ${line.trim()}`);
     });
@@ -87,6 +91,10 @@ it("recognizes the fields it guards", () => {
     ),
   ).toBe(true);
   expect(FIELD.test("    const seen = new Set<string>();")).toBe(false);
+  expect(MODULE.test("const locks = new Map<string, Promise<void>>();")).toBe(
+    true,
+  );
+  expect(MODULE.test("  const seen = new Set<string>();")).toBe(false);
   expect(
     MARKER.test(commentAbove(["  /** Replica memory (b): by sha. */", "x"], 1)),
   ).toBe(true);

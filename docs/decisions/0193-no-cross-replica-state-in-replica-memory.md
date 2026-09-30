@@ -34,36 +34,43 @@ implementations of injectable stores (a vault, a permission broker) are for
 single-process hosts.
 
 - **Turn status is the lease.** A chat is running while a turn is `running`
-  with a live lease and is not waiting for an answer. Guards read it inside
-  the transaction that writes the change; a turn claim share-locks the
-  session row, so none starts meanwhile.
+  with a live lease and not `parked` (below). A turn `waiting` inside its
+  harness (a blocking ask) runs. Guards read this inside the transaction
+  that writes the change; a turn claim share-locks the session row.
 - **One renewal per process.** Each process renews every turn it runs in one
-  statement a second, which also returns their cancellation flags, so an
-  interrupt through any replica reaches a quiet turn within about a second.
-  No LISTEN/NOTIFY, so it works through a transaction pooler.
+  statement a second, which returns their cancellation flags: an interrupt
+  through any replica reaches a quiet turn within about a second. No
+  LISTEN/NOTIFY, so it works through a transaction pooler. Renewal leaves
+  `updated_at` alone; idle release skips any chat with a live turn.
 - **Close and archive wait on Postgres.** They request cancellation durably
-  and wait for the leases to end. A chat's workspace, sandbox and personal
-  logins are given back only once no turn runs in it: by close, by the
-  process running its last turn when that turn ends, or, if that process
-  died, by any replica's sweep. An archive whose turn did not stop keeps
-  the workspace until idle release.
+  and wait for leases to end. A chat's workspace, sandbox and personal
+  logins are given back only once no turn runs in it, under the chat's
+  `close:<id>` claim: by close, by the process running its last turn, or by
+  any replica's sweep if that process died. An archive whose turn did not
+  stop keeps the workspace until idle release.
 - **Singleton work under claims.** `replica_claims` holds named claims with
-  an expiry: publishing a project, creating a deployment runtime (taken
-  before any sandbox exists), and each company project's sync (the claim is
-  the schedule). Locks guarding a replica's own disk (mirrors, working
-  copies) stay in memory.
-- **Caches by revision.** Roles are cached per published commit, read on
-  every resolve; the program reader reads the origin's current commit each
-  time. Nothing needs invalidating across replicas.
+  an expiry, renewed while their work runs: publishing a project, creating
+  a deployment runtime (taken before any sandbox exists), and each company
+  project's sync (the claim is the schedule). Work whose claim lapses or is
+  taken over is aborted before its next exclusive write. Locks guarding a
+  replica's own disk (mirrors, working copies) stay in memory.
+- **Caches by revision.** Roles are cached per published commit, and every
+  resolve reads the current one (one ref read; concurrent reads of a
+  project share it); a working tree's roles are keyed by their files' hash.
+  The program reader fetches only when its copy is behind. Nothing needs
+  invalidating: hosts lose `rolesCacheTtlMs` and `roles.invalidate`.
 - **Usage totals from Postgres.** A model call's usage row opens before its
-  answer ends and settles after; totals wait for open rows on any replica.
-- **Held questions keep their turn.** When a harness holds a question in
-  memory, the asking turn stays claimed in phase `waiting` with its lease
-  renewed; the next queued message is claimed there in the same transaction
-  that settles the question. A stop, a lost lease, a stopping process, or a
-  changed chat settles it instead, and the answer resumes elsewhere.
-- **Enforced.** A repository test fails on a class-level `Map` or `Set` in
-  core services or the Work server without a comment classifying it.
+  answer ends and settles after; totals wait for open rows on any replica,
+  ignoring rows open longer than a call can stream (30 minutes).
+- **Parked questions keep their turn.** When a harness holds a question in
+  memory (Claude Code's parked AskUserQuestion), the asking turn stays
+  claimed in phase `parked` with its lease renewed; the next queued message
+  is claimed there in the transaction that settles the question. A stop
+  with nothing queued, a lost lease, a stopping process, or a changed chat
+  settles it instead, and the answer resumes elsewhere.
+- **Enforced.** A repository test fails on a class-level or module-level
+  `Map` or `Set` in core services or the Work server without a comment
+  classifying it.
 
 Considered: LISTEN/NOTIFY for interrupts. Rejected: it breaks behind a
 transaction pooler and still needs a fallback poll.
@@ -71,8 +78,8 @@ transaction pooler and still needs a fallback poll.
 ## Consequences
 
 Any replica answers any request about a chat the same way. A process renews
-its turns with one indexed statement a second, cheaper than per-turn
-heartbeats past a handful of turns. Role reads cost one ref read of the
-origin. A replica that dies mid-close leaves a chat's workspace held until
-another replica's sweep, about a minute. Session copies on a replica's disk
-remain until issue 153.
+its turns with one indexed statement a second. A role resolve costs one more
+indexed read on a Postgres object store (about 0.4 to 0.8 ms); on S3 it is a
+GET per resolve. A replica that dies mid-close leaves a chat's workspace held
+until another replica's sweep, about a minute. Session copies on a replica's
+disk remain until issue 153.

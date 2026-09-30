@@ -47,7 +47,12 @@ export type AgentExecutionPhase =
   | "preparing"
   | "working"
   | "waiting"
-  | "saving";
+  | "saving"
+  /**
+   * The turn ended on a question its harness holds in this process; it
+   * stays claimed until the answer arrives (ADR 0193). Not running.
+   */
+  | "parked";
 
 /** Read-only execution truth. Activity and executor health are independent. */
 export interface AgentExecution {
@@ -177,7 +182,8 @@ export class AgentTurnsService {
       phase !== "preparing" &&
       phase !== "working" &&
       phase !== "waiting" &&
-      phase !== "saving"
+      phase !== "saving" &&
+      phase !== "parked"
     )
       throw new Error(`Invalid agent execution phase '${phase}'`);
     return {
@@ -903,7 +909,9 @@ export class AgentTurnsService {
    * Renew every running turn `workerId` still holds among `turns`, in one
    * statement, and read which were asked to stop (ADR 0193). A lease
    * belongs to a live process, not to the duration of an API call. A turn
-   * missing from the answer is no longer this process's.
+   * missing from the answer is no longer this process's. It leaves
+   * `updated_at` alone: idle release skips every chat with a running turn,
+   * and a turn's settle stamps when it ended.
    */
   async renewHeld(input: {
     workerId: string;

@@ -418,4 +418,127 @@ describe("agent turn persistence", () => {
       metadata: { status: "failed", interrupted: true },
     });
   });
+
+  it("hands a parked question to its answer in one transaction, or settles it when the answer cannot start here", async () => {
+    const reply = async () =>
+      (
+        await db
+          .insertInto("agent_messages")
+          .values({
+            session_id: secondSessionId,
+            role: "assistant",
+            content: "Which color?",
+            metadata: { status: "awaiting_input" },
+          })
+          .returning("id")
+          .executeTakeFirstOrThrow()
+      ).id;
+    const ask = async () => {
+      await turns.deliver({
+        sessionId: secondSessionId,
+        content: "ask",
+        author: watcherAuthor,
+        mode: "next_turn",
+      });
+      const asking = await turns.claimNextForSession({
+        workerId: "asking-process",
+        sessionId: secondSessionId,
+      });
+      if (!asking?.leaseToken) throw new Error("Missing lease");
+      return { asking, leaseToken: asking.leaseToken, result: await reply() };
+    };
+    const allocation = await db
+      .insertInto("execution_allocations")
+      .values({
+        tenant_id: tenantId,
+        project_id: projectId,
+        environment_name: "default",
+        binding_id: "default",
+        workload_kind: "agent",
+        root_workload_id: secondSessionId,
+        policy_snapshot: {},
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    await db
+      .updateTable("agent_sessions")
+      .set({ allocation_id: allocation.id })
+      .where("id", "=", secondSessionId)
+      .execute();
+    const anchor = {
+      agentId: null,
+      providerSessionId: null,
+      model: null,
+      modelEffort: null,
+      allocationId: allocation.id,
+    };
+    const status = async (id: string) =>
+      (
+        await db
+          .selectFrom("agent_turns")
+          .select(["status", "lease_owner"])
+          .where("id", "=", id)
+          .executeTakeFirstOrThrow()
+      ).status;
+
+    // Nothing queued: the question keeps waiting, still claimed.
+    let { asking, leaseToken, result } = await ask();
+    const handOver = () =>
+      turns.continueAfterQuestion({
+        turnId: asking.id,
+        leaseToken,
+        resultMessageId: result,
+        sessionId: secondSessionId,
+        workerId: "asking-process",
+        anchor,
+      });
+    expect(await handOver()).toEqual({ status: "waiting" });
+    expect(await status(asking.id)).toBe("running");
+
+    // The answer arrives: the question settles and this process claims it.
+    const answer = await turns.deliver({
+      sessionId: secondSessionId,
+      content: "Blue",
+      author: watcherAuthor,
+      mode: "next_turn",
+    });
+    let outcome = await handOver();
+    if (outcome.status !== "settled") throw new Error("Not settled");
+    expect(outcome.next?.id).toBe(answer.turnId);
+    expect(outcome.next?.leaseOwner).toBe("asking-process");
+    expect(await status(asking.id)).toBe("completed");
+    await db.deleteFrom("agent_turns").execute();
+
+    // The answer is queued, but a host holds the workspace for maintenance:
+    // the question settles, the answer stays queued for whoever can run it,
+    // and the harness gives its question up.
+    ({ asking, leaseToken, result } = await ask());
+    const queued = await turns.deliver({
+      sessionId: secondSessionId,
+      content: "Green",
+      author: watcherAuthor,
+      mode: "next_turn",
+    });
+    await db
+      .updateTable("execution_allocations")
+      .set({ maintenance_claimed_until: new Date(Date.now() + 60_000) })
+      .where("id", "=", allocation.id)
+      .execute();
+    outcome = await handOver();
+    expect(outcome).toEqual({ status: "settled", next: null });
+    expect(await status(asking.id)).toBe("completed");
+    if (!queued.turnId) throw new Error("Missing turn");
+    expect(await status(queued.turnId)).toBe("queued");
+
+    // A lost lease hands nothing over.
+    await db.deleteFrom("agent_turns").execute();
+    await db
+      .updateTable("execution_allocations")
+      .set({ maintenance_claimed_until: null })
+      .where("id", "=", allocation.id)
+      .execute();
+    ({ asking, leaseToken, result } = await ask());
+    leaseToken = crypto.randomUUID();
+    expect(await handOver()).toEqual({ status: "lost" });
+  });
 });

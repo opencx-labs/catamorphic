@@ -604,11 +604,13 @@ export class CodeHostsService {
       db: this.deps.db,
       name: `publish-project:${args.projectId}`,
       waitMs: 120_000,
-      operation: () => this.publishProjectOnce(args),
+      operation: ({ signal }) => this.publishProjectOnce({ ...args, signal }),
     });
   }
 
   private publishProjectOnce(args: {
+    /** Aborts once this publish is no longer the project's only one. */
+    signal: AbortSignal;
     identity: Identity;
     projectId: string;
     provider: string;
@@ -674,6 +676,7 @@ export class CodeHostsService {
             };
           },
         });
+        args.signal.throwIfAborted();
         // Link before pushing: Work created this repository, so a failed
         // first push is completed by the next sync. Only an unlinked project
         // is linked: a publish that raced this one (another replica) keeps

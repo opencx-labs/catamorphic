@@ -79,12 +79,33 @@ export async function releaseReplicaClaim(input: {
     .execute();
 }
 
+/** A held claim lapsed or moved while its work ran; the work stops. */
+export class ReplicaClaimLostError extends Error {
+  constructor(readonly claim: string) {
+    super(
+      `'${claim}' was taken over while its work ran; nothing more was done`,
+    );
+    this.name = "ReplicaClaimLostError";
+  }
+}
+
+/** What a claimed operation sees of its claim. */
+export interface HeldReplicaClaim {
+  /** Aborts once the claim is lost: check it before each write. */
+  signal: AbortSignal;
+}
+
 /**
  * Run `operation` while holding the claim `name`, so no other process (and
  * no other call in this one) runs it at once (ADR 0193). The claim is
  * renewed while the operation runs and released after it; a process that
  * dies holding it frees it once it lapses. Waits up to `waitMs` (default:
  * not at all) for a held claim, then throws {@link ReplicaClaimBusyError}.
+ *
+ * Once the claim is lost (a renewal finds it taken or lapsed, or none lands
+ * before it would expire), `signal` aborts and the call rejects with
+ * {@link ReplicaClaimLostError}, even if the operation ignores the signal.
+ * Operations check the signal before each write that must stay exclusive.
  */
 export async function withReplicaClaim<T>(input: {
   db: Kysely<DB>;
@@ -92,7 +113,7 @@ export async function withReplicaClaim<T>(input: {
   ttlSeconds?: number;
   waitMs?: number;
   pollMs?: number;
-  operation: () => Promise<T>;
+  operation: (claim: HeldReplicaClaim) => Promise<T>;
 }): Promise<T> {
   const ttlSeconds = input.ttlSeconds ?? 60;
   const holder = randomUUID();
@@ -120,20 +141,40 @@ export async function withReplicaClaim<T>(input: {
         );
       }
       span.setAttribute("catamorphic.claim.waited", waited);
+      const lost = new AbortController();
+      let lose = (_error: ReplicaClaimLostError) => {};
+      const abandoned = new Promise<never>((_resolve, reject) => {
+        lose = reject;
+      });
+      abandoned.catch(() => {});
+      const loseClaim = () => {
+        if (lost.signal.aborted) return;
+        const error = new ReplicaClaimLostError(input.name);
+        span.setAttribute("catamorphic.claim.lost", true);
+        lost.abort(error);
+        lose(error);
+      };
+      // Measured from each renewal's dispatch: a hung renewal cannot keep
+      // the work going past the claim's expiry.
+      let heldUntil = performance.now() + ttlSeconds * 1_000;
       let renewing: Promise<unknown> | undefined;
       const renewal = setInterval(
         () => {
-          renewing ??= renewReplicaClaim({
+          if (performance.now() >= heldUntil) {
+            loseClaim();
+            return;
+          }
+          if (renewing) return;
+          const dispatched = performance.now();
+          renewing = renewReplicaClaim({
             db: input.db,
             name: input.name,
             holder,
             ttlSeconds,
           })
             .then((held) => {
-              if (!held)
-                console.warn(
-                  `[catamorphic] The claim '${input.name}' lapsed while its work ran`,
-                );
+              if (held) heldUntil = dispatched + ttlSeconds * 1_000;
+              else loseClaim();
             })
             .catch((error: unknown) =>
               console.warn(
@@ -145,11 +186,14 @@ export async function withReplicaClaim<T>(input: {
               renewing = undefined;
             });
         },
-        Math.max(1_000, Math.floor((ttlSeconds * 1_000) / 3)),
+        Math.max(250, Math.floor((ttlSeconds * 1_000) / 4)),
       );
       renewal.unref();
       try {
-        return await input.operation();
+        return await Promise.race([
+          input.operation({ signal: lost.signal }),
+          abandoned,
+        ]);
       } finally {
         clearInterval(renewal);
         await renewing;

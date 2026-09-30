@@ -24,3 +24,10 @@ UPDATE model_usage SET settled_at = created_at;
 CREATE INDEX model_usage_open
     ON model_usage (agent_session_id, turn_id)
     WHERE settled_at IS NULL;
+
+-- A turn parked on a question its harness holds (ADR 0193): claimed, its
+-- lease renewed, its harness idle until the answer arrives.
+ALTER TABLE agent_turns DROP CONSTRAINT agent_turns_phase_check;
+
+ALTER TABLE agent_turns ADD CONSTRAINT agent_turns_phase_check
+    CHECK (phase IN ('preparing', 'working', 'waiting', 'saving', 'parked'));

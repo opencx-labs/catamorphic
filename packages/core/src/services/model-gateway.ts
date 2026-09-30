@@ -100,7 +100,10 @@ export function modelAllowed(
 
 // --- headers ---
 
-/** Hop-by-hop headers (RFC 9110 7.6.1): they describe one connection. */
+/**
+ * Hop-by-hop headers (RFC 9110 7.6.1): they describe one connection.
+ * Replica memory (c): a constant.
+ */
 const HOP_BY_HOP = new Set([
   "connection",
   "keep-alive",
@@ -114,6 +117,7 @@ const HOP_BY_HOP = new Set([
  * Request headers that stay here: the caller's grant (the stored key
  * replaces it), its host and cookies, and what the transport recomputes
  * (length, and the encodings `fetch` itself negotiates and decodes).
+ * Replica memory (c): a constant.
  */
 const DENIED_REQUEST_HEADERS = new Set([
   "x-api-key",
@@ -129,7 +133,7 @@ const DENIED_REQUEST_HEADERS = new Set([
 /**
  * Response headers that stay upstream: cookies, and what no longer holds
  * once `fetch` decoded the body (its encoding and length) or names the
- * provider's own origin (`alt-svc`).
+ * provider's own origin (`alt-svc`). Replica memory (c): a constant.
  */
 const DENIED_RESPONSE_HEADERS = new Set([
   "set-cookie",
@@ -437,6 +441,12 @@ export interface LiveModelGrant {
   };
 }
 
+/**
+ * The longest a model call's answer streams. A usage row still open after
+ * this belongs to a call whose replica died mid-stream (ADR 0193).
+ */
+export const MAX_OPEN_CALL_MINUTES = 30;
+
 /** What the model gateway reads and writes (ADR 0180). */
 export interface ModelGatewayStore {
   /** The live grant a bearer names, or undefined. */
@@ -455,7 +465,10 @@ export interface ModelGatewayStore {
     usage: ModelCallUsage;
     openId?: string;
   }): Promise<void>;
-  /** How many of a session's (or turn's) calls are still open. */
+  /**
+   * How many of a session's (or turn's) calls are still open, leaving out
+   * those open longer than {@link MAX_OPEN_CALL_MINUTES}.
+   */
   openCalls(args: { sessionId: string; turnId?: string }): Promise<number>;
   /** Token totals of a session's settled calls, or of one of its turns. */
   usage(args: {
@@ -603,6 +616,13 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
           query.where("turn_id", "=", args.turnId ?? ""),
         )
         .where("settled_at", "is", null)
+        // A call open longer than any call streams was lost with its
+        // replica: it never settles, and nothing waits for it.
+        .where(
+          "created_at",
+          ">",
+          sql<Date>`now() - (${MAX_OPEN_CALL_MINUTES} * interval '1 minute')`,
+        )
         .executeTakeFirst();
       return Number(row?.open ?? 0);
     },

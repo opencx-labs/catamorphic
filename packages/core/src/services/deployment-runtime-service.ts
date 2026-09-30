@@ -123,7 +123,7 @@ export class DeploymentRuntimeService {
       async (span) => {
         return this.store.withArtifactLock({
           artifactId: args.artifact.id,
-          operation: async () => {
+          operation: async ({ signal }) => {
             const existing = await this.store.findReusable({
               artifactId: args.artifact.id,
             });
@@ -181,6 +181,9 @@ export class DeploymentRuntimeService {
                   usedAt: now,
                 });
               } else {
+                // Another replica took over the creation: this sandbox is
+                // destroyed below instead of recorded beside its runtime.
+                signal.throwIfAborted();
                 const replicaIndex = 0;
                 await this.store.insert({
                   artifactId: args.artifact.id,

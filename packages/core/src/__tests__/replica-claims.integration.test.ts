@@ -4,6 +4,7 @@ import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   ReplicaClaimBusyError,
+  ReplicaClaimLostError,
   renewReplicaClaim,
   takeReplicaClaim,
   withReplicaClaim,
@@ -77,6 +78,44 @@ describeIf("claims shared by replicas (ADR 0193)", () => {
     ).rejects.toBeInstanceOf(ReplicaClaimBusyError);
     release();
     await held;
+  });
+
+  it("stops the work once its claim is taken over", async () => {
+    let seen: AbortSignal | undefined;
+    const work = withReplicaClaim({
+      db: first,
+      name: "runtime-lapse",
+      ttlSeconds: 2,
+      operation: ({ signal }) => {
+        seen = signal;
+        return new Promise<void>(() => {});
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // The claim lapsed (a frozen process) and another replica took it.
+    await second
+      .updateTable("replica_claims")
+      .set({ expires_at: new Date(Date.now() - 1_000) })
+      .where("name", "=", "runtime-lapse")
+      .execute();
+    expect(
+      await takeReplicaClaim({
+        db: second,
+        name: "runtime-lapse",
+        holder: "other",
+        ttlSeconds: 60,
+      }),
+    ).toBe(true);
+    await expect(work).rejects.toBeInstanceOf(ReplicaClaimLostError);
+    expect(seen?.aborted).toBe(true);
+    // The claim stays the new holder's.
+    expect(
+      await first
+        .selectFrom("replica_claims")
+        .select("holder")
+        .where("name", "=", "runtime-lapse")
+        .executeTakeFirst(),
+    ).toEqual({ holder: "other" });
   });
 
   it("is a schedule when never released: nobody takes it before it lapses", async () => {

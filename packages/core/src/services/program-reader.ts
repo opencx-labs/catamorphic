@@ -24,14 +24,47 @@ import { publishedRef } from "@catamorphic/workflow/project-layout";
 export const PROGRAM_READER = "catamorphic-reader";
 
 /**
- * The commit "the program as shared" stands at now, without reading it:
- * the origin's `main` when the project has a remote, the local published
- * ref (else `HEAD`) for a project folder, and null for a working tree with
- * neither. Caches of what the program says are keyed by it (ADR 0193), so
- * every replica sees a deploy as soon as it lands and nothing needs
- * invalidating.
+ * Replica memory (a), ADR 0193: revision reads in flight, so a burst of
+ * requests for one project shares one read of its origin. An entry lives
+ * only while its read does; nothing is remembered after.
  */
-export async function programRevision(
+const revisionReads = new WeakMap<
+  ProjectManager,
+  Map<string, Promise<string | null>>
+>();
+
+/**
+ * The commit "the program as shared" stands at now, without reading it:
+ * the origin's `main` when the project has a remote (one ref read: an
+ * indexed row on a Postgres object store), the local published ref (else
+ * `HEAD`) for a project folder, and null for a working tree with neither.
+ * Caches of what the program says are keyed by it (ADR 0193), so every
+ * replica sees a deploy as soon as it lands and nothing needs
+ * invalidating. Concurrent calls for one project share one read.
+ */
+export function programRevision(
+  projectManager: ProjectManager,
+  tenantId: string,
+  projectId: string,
+): Promise<string | null> {
+  let reads = revisionReads.get(projectManager);
+  if (!reads) {
+    reads = new Map();
+    revisionReads.set(projectManager, reads);
+  }
+  const key = `${tenantId}:${projectId}`;
+  const inflight = reads.get(key);
+  if (inflight) return inflight;
+  const read = readProgramRevision(projectManager, tenantId, projectId);
+  reads.set(key, read);
+  const forget = () => {
+    if (reads.get(key) === read) reads.delete(key);
+  };
+  read.then(forget, forget);
+  return read;
+}
+
+async function readProgramRevision(
   projectManager: ProjectManager,
   tenantId: string,
   projectId: string,
@@ -86,8 +119,11 @@ export async function withProgram<T>(
     : await projectManager.open(tenantId, projectId);
   try {
     if (!remote) return await fn(repo, null);
-    // The origin's `main` as it is now, on every read: nothing transfers
-    // when this copy already has it, and no replica serves a stale tree.
+    // The origin's `main` as it is now, on every read, so no replica serves
+    // a stale tree: one ref read, and a fetch only when this copy is behind.
+    const origin = await programRevision(projectManager, tenantId, projectId);
+    const local = await repo.resolveRef(publishedRef()).catch(() => null);
+    if (origin && origin === local) return await fn(repo, local);
     await fetchRemote({
       dev: repo,
       remote,
