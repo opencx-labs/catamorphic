@@ -2,6 +2,7 @@ import nodeFs from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { RefMovedError } from "@catamorphic/git";
 import git from "isomorphic-git";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ArtifactsClient } from "../artifacts-client.js";
@@ -133,6 +134,38 @@ it("reports a rejected remote deletion instead of acknowledging retirement", asy
     ),
   ).rejects.toThrow("Deletion refused");
   expect(remoteRefs.has(watcherRef)).toBe(true);
+});
+
+it("keeps members' drafts out of repositories sandboxes can clone (ADR 0191)", async () => {
+  expect(await backend.draftSupport()).toMatchObject({ supported: false });
+});
+
+it("pushes a compare-and-swap without force and reports a lost race", async () => {
+  const next = "b".repeat(40);
+  await backend.withOrigin(tenantId, projectId, (origin) =>
+    origin.updateRef({ ref: mainRef, sha: next, expected: sha }),
+  );
+  expect(git.push).toHaveBeenCalledWith(
+    expect.objectContaining({ remoteRef: mainRef, force: false }),
+  );
+  remoteRefs.set(mainRef, next);
+  vi.mocked(git.push).mockRejectedValueOnce(
+    new git.Errors.PushRejectedError("not-fast-forward"),
+  );
+  await expect(
+    backend.withOrigin(tenantId, projectId, (origin) =>
+      origin.updateRef({ ref: mainRef, sha: "c".repeat(40), expected: next }),
+    ),
+  ).rejects.toBeInstanceOf(RefMovedError);
+});
+
+it("keeps forcing unconditional updates", async () => {
+  await backend.withOrigin(tenantId, projectId, (origin) =>
+    origin.updateRef({ ref: watcherRef, sha: "d".repeat(40) }),
+  );
+  expect(git.push).toHaveBeenCalledWith(
+    expect.objectContaining({ remoteRef: watcherRef, force: true }),
+  );
 });
 
 function deferred() {

@@ -97,11 +97,11 @@ describeIf("doctrine hooks integration", () => {
     const project = await core.projects.create(identity, {
       name: "Existing workflow project",
     });
-    const repo = await core.projectManager.openDev(
-      identity.tenantId,
-      project.id,
-      identity.externalUserId,
-    );
+    const repo = await core.projectManager.openDraft({
+      tenantId: identity.tenantId,
+      projectId: project.id,
+      externalUserId: identity.externalUserId,
+    });
     try {
       await repo.writeFile(".work/workflows/package.json", '{"private":true}');
       await repo.deleteFile(MECHANICS_SKILL_PATH);

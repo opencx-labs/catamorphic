@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
-  MANAGED_BRANCH_PREFIX,
   PROJECT_GITIGNORE_PATH,
   PROJECT_MANIFEST_PATH,
 } from "@catamorphic/workflow/project-layout";
@@ -11,8 +10,17 @@ import { push } from "./git-sync.js";
 import { discoverLocalFolder } from "./native-git.js";
 import { NativeProjectRepo } from "./native-project-repo.js";
 import { cloneFromRemote } from "./network.js";
+import {
+  type DraftPublishResult,
+  DraftsUnsupportedError,
+  OriginDraftRepo,
+  type ProjectDraft,
+  publishFilesToOrigin,
+} from "./origin-draft.js";
+import { GitObjectCache } from "./origin-objects.js";
 import { ProjectRepoImpl } from "./project-repo.js";
 import type {
+  DraftSupport,
   GitCredentials,
   ProjectPathResolver,
   ProjectRepo,
@@ -37,12 +45,29 @@ dist/
 .DS_Store
 `;
 
+/** Stands in a copy while it is seeded; a copy still holding it is unfinished. */
+const SEEDING_MARKER = ".git/work-seeding";
+
+/**
+ * The identity core reads the published program as when no member reads
+ * it (roles, documents, tool rosters). It contains a NUL, which no stored
+ * user id can hold, so it never names a member's draft; `openDraft` opens
+ * the published program for it.
+ */
+export const PROGRAM_READER_ID = "\u0000program-reader";
+
 const SYSTEM_AUTHOR = {
   name: "Work",
   email: "system@work.software",
 };
 
 export class ProjectManager {
+  /** Origin objects this process has read; safe to lose. */
+  private readonly objects = new GitObjectCache();
+  private draftCheck: Promise<DraftSupport> | undefined;
+  /** First-time copy preparations in flight, by tenant, project, and copy. */
+  private readonly preparing = new Map<string, Promise<void>>();
+
   constructor(
     private readonly storage: StorageBackend,
     private readonly remote?: RemoteBackend,
@@ -65,44 +90,199 @@ export class ProjectManager {
   }
 
   /**
-   * Open (creating if needed) the dev working copy for a specific user. When
-   * the underlying storage has no clone for this user yet, we initialize one
-   * and pull from origin so the user starts in sync with main.
+   * A member's draft of the program (ADR 0191). A project in a local folder
+   * is its own draft, the folder itself. A project with a durable origin
+   * keeps each member's draft as a ref in it (`refs/work/drafts/<member>`),
+   * read and written as objects: every replica sees the same draft and none
+   * holds it on disk. Only a host without an origin keeps a working copy
+   * per member on this machine.
    */
-  async openDev(
+  async openDraft(input: {
+    tenantId: string;
+    projectId: string;
+    externalUserId: string;
+  }): Promise<ProjectDraft> {
+    if (input.externalUserId === PROGRAM_READER_ID)
+      return this.openPublished(input);
+    if (await this.localPath(input))
+      return this.open(input.tenantId, input.projectId, input.externalUserId);
+    if (this.remote) {
+      const support = await this.draftSupport();
+      if (!support.supported) throw new DraftsUnsupportedError(support.reason);
+      return new OriginDraftRepo({
+        ...input,
+        remote: this.remote,
+        cache: this.objects,
+      });
+    }
+    return this.openCopy(input.tenantId, input.projectId, input.externalUserId);
+  }
+
+  /**
+   * Whether this host's origin can keep members' drafts (ADR 0191), checked
+   * once per process: hosts call it at boot to fail fast, and
+   * {@link openDraft} refuses drafts on an origin that cannot keep them.
+   */
+  draftSupport(): Promise<DraftSupport> {
+    // A check that could not run (a transient store error) is not an
+    // answer: the next call asks again.
+    this.draftCheck ??= (
+      this.remote?.draftSupport
+        ? this.remote.draftSupport()
+        : Promise.resolve<DraftSupport>({ supported: true })
+    ).catch((error: unknown) => {
+      this.draftCheck = undefined;
+      throw error;
+    });
+    return this.draftCheck;
+  }
+
+  /**
+   * The published program, read by no member: a project's local folder, or
+   * a read-only view of its origin's `main` (no draft is ever read or
+   * created), or this machine's copy on a host without an origin.
+   */
+  async openPublished(input: {
+    tenantId: string;
+    projectId: string;
+  }): Promise<ProjectDraft> {
+    if (this.remote && !(await this.localPath(input)))
+      return new OriginDraftRepo({
+        ...input,
+        externalUserId: null,
+        remote: this.remote,
+        cache: this.objects,
+      });
+    return this.open(input.tenantId, input.projectId);
+  }
+
+  /**
+   * The folder a member's `store/` view is mirrored in around agent turns
+   * when their draft has no folder of its own (a server draft), or null
+   * when this storage keeps no local folders. A disposable cache: the
+   * store itself lives behind the documents service.
+   */
+  async draftStoreFolder(input: {
+    tenantId: string;
+    projectId: string;
+    externalUserId: string;
+  }): Promise<string | null> {
+    const folder = this.storage.cachePath?.(
+      input.tenantId,
+      input.projectId,
+      `store-${input.externalUserId}`,
+    );
+    if (!folder) return null;
+    await fs.mkdir(folder, { recursive: true });
+    return folder;
+  }
+
+  /**
+   * Publish files as one commit on the origin's `main`, never touching a
+   * member's draft (ADR 0191). With `base`, the commit the files were
+   * edited from, they merge with what was published since and report
+   * conflicts instead of overwriting.
+   */
+  async publishFiles(input: {
+    tenantId: string;
+    projectId: string;
+    files: Record<string, string>;
+    base?: string;
+    message: string;
+    author: { name: string; email: string };
+    guard?: (paths: readonly string[]) => void;
+  }): Promise<DraftPublishResult> {
+    if (!this.remote)
+      throw new Error("Publishing requires durable project storage");
+    return publishFilesToOrigin({
+      ...input,
+      remote: this.remote,
+      cache: this.objects,
+    });
+  }
+
+  /**
+   * Open (creating if needed) this machine's working copy `copyId` of a
+   * project, seeded from the origin's `main` when it is new: a session's
+   * copy, or a member's copy on a host without an origin.
+   */
+  private async openCopy(
     tenantId: string,
     projectId: string,
     externalUserId: string,
   ): Promise<ProjectRepo> {
-    const existed = await this.storage.exists(
-      tenantId,
-      projectId,
-      externalUserId,
-    );
-    if (existed) {
-      return this.open(tenantId, projectId, externalUserId);
+    // Two first opens of one copy in this process share one preparation,
+    // so neither reads objects the other has not finished writing.
+    const key = JSON.stringify([tenantId, projectId, externalUserId]);
+    let pending = this.preparing.get(key);
+    if (!pending) {
+      pending = this.prepareCopy({
+        tenantId,
+        projectId,
+        externalUserId,
+      }).finally(() => this.preparing.delete(key));
+      this.preparing.set(key, pending);
     }
+    await pending;
+    return this.open(tenantId, projectId, externalUserId);
+  }
 
+  /**
+   * Create a copy seeded from the origin's `main` unless a complete one
+   * exists. A marker stands in the copy while it is seeded: a seeding that
+   * failed, or a process that stopped part way, leaves a copy the next open
+   * starts over instead of treating as ready.
+   */
+  private async prepareCopy(args: {
+    tenantId: string;
+    projectId: string;
+    externalUserId: string;
+  }): Promise<void> {
+    const { tenantId, projectId, externalUserId } = args;
+    if (await this.storage.exists(tenantId, projectId, externalUserId)) {
+      const { repoPath, release } = await this.storage.acquireProject(
+        tenantId,
+        projectId,
+        externalUserId,
+      );
+      await release();
+      const unfinished = await fs
+        .access(path.join(repoPath, SEEDING_MARKER))
+        .then(
+          () => true,
+          () => false,
+        );
+      if (!unfinished) return;
+      await this.storage.deleteCopy(tenantId, projectId, externalUserId);
+    }
     const repoPath = await this.storage.initProject(tenantId, projectId, {
       externalUserId,
     });
+    if (!this.remote) return;
+    const marker = path.join(repoPath, SEEDING_MARKER);
+    await fs.writeFile(marker, "");
     const { release } = await this.storage.acquireProject(
       tenantId,
       projectId,
       externalUserId,
     );
     const repo = new ProjectRepoImpl(projectId, repoPath, release);
-
-    if (this.remote) {
+    try {
       await seedFromOrigin({
         remote: this.remote,
         tenantId,
         projectId,
         dev: repo,
       });
+      await fs.rm(marker, { force: true });
+    } catch (error) {
+      await repo.dispose();
+      await this.storage
+        .deleteCopy(tenantId, projectId, externalUserId)
+        .catch(() => {});
+      throw error;
     }
-
-    return repo;
+    await repo.dispose();
   }
 
   /** An isolated origin snapshot, removed on disposal even with host-mapped projects. */
@@ -141,7 +321,7 @@ export class ProjectManager {
       args.projectId,
       userId,
     );
-    const repo = await this.openDev(args.tenantId, args.projectId, userId);
+    const repo = await this.openCopy(args.tenantId, args.projectId, userId);
     try {
       if (this.remote && (!existed || args.refresh)) {
         const { fetchRemote } = await import("./git-sync.js");
@@ -533,26 +713,4 @@ async function seedFromOrigin(opts: {
       force: true,
     });
   }
-}
-
-/**
- * Generate a fresh work-branch name of the form `work/YYYY-MM-DD_HH-mm[-N]`.
- * `isTaken` is consulted so callers can suffix `-N` when the bare name is
- * already used.
- */
-export async function generateWorkBranchName(opts: {
-  now?: Date;
-  isTaken: (name: string) => Promise<boolean>;
-}): Promise<string> {
-  const now = opts.now ?? new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const base = `${MANAGED_BRANCH_PREFIX}${now.getUTCFullYear()}-${pad(
-    now.getUTCMonth() + 1,
-  )}-${pad(now.getUTCDate())}_${pad(now.getUTCHours())}-${pad(
-    now.getUTCMinutes(),
-  )}`;
-  if (!(await opts.isTaken(base))) return base;
-  let suffix = 2;
-  while (await opts.isTaken(`${base}-${suffix}`)) suffix += 1;
-  return `${base}-${suffix}`;
 }

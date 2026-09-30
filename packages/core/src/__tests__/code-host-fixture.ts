@@ -170,12 +170,14 @@ export function fakeCodeHost(args: {
   db: Kysely<DB>;
   projectManager: ProjectManager;
   remoteBase: string;
+  /** Shared by the replicas of one test; each gets its own by default. */
+  vault?: MemoryCredentialVault;
 }) {
   const forge = fakeForge(args);
   const providers = new ConnectionProviderRegistry([forge.provider]);
   const connections = new ConnectionsService({
     db: args.db,
-    vault: new MemoryCredentialVault(),
+    vault: args.vault ?? new MemoryCredentialVault(),
     providers,
     bindings: async () => ({}),
   });

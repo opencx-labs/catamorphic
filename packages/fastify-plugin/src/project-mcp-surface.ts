@@ -1,6 +1,7 @@
 import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import {
   AccessDeniedError,
+  AgentTurnUnsettledError,
   EVERY_ARTIFACT,
   mayUseProject,
   parseWorkspaceRequest,
@@ -556,13 +557,21 @@ export function surfaceTools(
                 : {}),
             })
           ).id;
-        const reply = await sessions.sendMessage(
-          identity,
-          projectId,
-          sessionId,
-          message,
-        );
-        return { sessionId, reply: reply.content };
+        try {
+          const reply = await sessions.sendMessage(
+            identity,
+            projectId,
+            sessionId,
+            message,
+          );
+          return { sessionId, reply: reply.content };
+        } catch (error) {
+          // No reply yet: the message waits for a machine, is held or
+          // cancelled, or its machine stopped. The caller reads the chat.
+          if (error instanceof AgentTurnUnsettledError)
+            return { sessionId, state: error.state, reply: error.message };
+          throw error;
+        }
       }),
     });
 

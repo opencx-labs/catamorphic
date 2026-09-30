@@ -5,9 +5,10 @@ import {
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
-  WorkerConnectConflictError,
+  WorkerConnectSchema,
+  WorkerDisabledError,
   WorkerIsolationError,
-  WorkerOfferSchema,
+  WorkerSupersededError,
   type WorkWorkerRegistry,
 } from "./worker-registry.js";
 
@@ -26,11 +27,13 @@ const Completion = z.strictObject({
 });
 
 /**
- * The worker protocol (ADRs 0164, 0187). Every call but enrollment carries
- * the worker's machine credential; a session is the node lease token, so a
- * stale connection is refused as soon as its lease moves on. Any instance
- * answers any call: operations and leases live in Postgres. A 409 from poll
- * or renew ends the session; a 409 from complete refuses only that receipt.
+ * The worker protocol (ADRs 0164, 0187, 0192). Every call but enrollment
+ * carries the worker's machine credential; a session is the epoch the worker
+ * process chose at start, and it is the node's lease token. Any replica
+ * answers any call, and each call renews the lease: operations and leases
+ * live in Postgres. A 409 from poll or renew ends the session, with
+ * `superseded: true` once a newer process of the worker took over; a 409
+ * from complete refuses only that receipt.
  */
 export function registerWorkerRoutes(
   app: FastifyInstance,
@@ -70,19 +73,21 @@ export function registerWorkerRoutes(
   app.post("/api/workers/connect", async (request, reply) => {
     const worker = await authenticated(request, reply);
     if (!worker) return reply;
-    const offer = WorkerOfferSchema.safeParse(request.body);
-    if (!offer.success) {
+    const body = WorkerConnectSchema.safeParse(request.body);
+    if (!body.success) {
       return reply
         .status(400)
-        .send({ error: "Invalid worker offer", issues: offer.error.issues });
+        .send({ error: "Invalid worker offer", issues: body.error.issues });
     }
     try {
-      const session = await registry.connect({ ...worker, offer: offer.data });
-      return { session, nodeId: worker.nodeId };
+      await registry.connect({ ...worker, ...body.data });
+      return { session: body.data.session, nodeId: worker.nodeId };
     } catch (error) {
-      if (error instanceof WorkerConnectConflictError) {
+      if (error instanceof WorkerDisabledError) {
         return reply.status(409).send({ error: error.message });
       }
+      if (error instanceof WorkerSupersededError)
+        return sessionEnded(reply, error);
       if (error instanceof WorkerIsolationError) {
         return reply.status(403).send({ error: error.message });
       }
@@ -103,9 +108,8 @@ export function registerWorkerRoutes(
       });
       return { jobs };
     } catch (error) {
-      if (error instanceof RemoteExecutorLeaseLostError) {
-        return reply.status(409).send({ error: error.message });
-      }
+      if (error instanceof RemoteExecutorLeaseLostError)
+        return sessionEnded(reply, error);
       throw error;
     }
   });
@@ -116,9 +120,14 @@ export function registerWorkerRoutes(
     if (!worker) return reply;
     const body = Session.safeParse(request.body);
     if (!body.success) return reply.status(400).send({ error: "No session" });
-    return (await registry.renew({ nodeId: worker.nodeId, ...body.data }))
-      ? { ok: true }
-      : reply.status(409).send({ error: "The worker's lease moved on" });
+    try {
+      await registry.renew({ nodeId: worker.nodeId, ...body.data });
+      return { ok: true };
+    } catch (error) {
+      if (error instanceof RemoteExecutorLeaseLostError)
+        return sessionEnded(reply, error);
+      throw error;
+    }
   });
 
   app.post(
@@ -152,6 +161,17 @@ export function registerWorkerRoutes(
       }
     },
   );
+}
+
+/** The worker's session ended: 409, marked when a newer process took over. */
+function sessionEnded(
+  reply: FastifyReply,
+  error: RemoteExecutorLeaseLostError,
+) {
+  return reply.status(409).send({
+    error: error.message,
+    ...(error instanceof WorkerSupersededError ? { superseded: true } : {}),
+  });
 }
 
 /**

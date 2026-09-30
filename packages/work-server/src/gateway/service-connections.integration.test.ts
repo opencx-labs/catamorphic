@@ -23,6 +23,7 @@ import { startWorkWorker } from "../workers/worker-runtime.js";
  * sees the connection string.
  */
 const databaseUrl = process.env.DATABASE_URL;
+const OPERATOR_SECRET = "connections-test-operator-secret-with-32-characters";
 const suffix = randomBytes(4).toString("hex");
 const schema = `replica_${suffix}`;
 const reader = `replica_reader_${suffix}`;
@@ -142,6 +143,7 @@ describe.skipIf(!databaseUrl)("service connections (ADR 0172)", () => {
         env: {
           DATABASE_URL: serverUrl.toString(),
           WORK_SECRET: "connections-test-secret-with-at-least-32-characters",
+          WORK_OPERATOR_SECRET: OPERATOR_SECRET,
           WORK_VAULT_KEY: Buffer.alloc(32, 5).toString("base64"),
           WORK_FAKE_AGENT: "1",
           WORK_CONTROL_PLANE_WORKLOADS: "workflow",
@@ -154,9 +156,7 @@ describe.skipIf(!databaseUrl)("service connections (ADR 0172)", () => {
     const address = server.app.server.address();
     if (!address || typeof address === "string") throw new Error("No address");
     base = `http://127.0.0.1:${address.port}`;
-    operatorSecret = fs
-      .readFileSync(path.join(root, "control-plane", "operator-secret"), "utf8")
-      .trim();
+    operatorSecret = OPERATOR_SECRET;
 
     const enrollment = await operator("POST", "/_work/operator/workers", {
       name: "reviewer",
@@ -197,6 +197,19 @@ describe.skipIf(!databaseUrl)("service connections (ADR 0172)", () => {
     } finally {
       await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
       await admin.query(`DROP ROLE IF EXISTS ${reader}`);
+      // Let the server's pools finish closing before the drop: a forced drop
+      // ends whatever sessions remain, and ending live sessions is what a
+      // server sees as the administrator terminating its connections.
+      // FORCE stays as the backstop for a session that never lets go.
+      const drained = Date.now() + 10_000;
+      while (Date.now() < drained) {
+        const open = await admin.query<{ count: number }>(
+          "SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname = $1",
+          [serverDatabase],
+        );
+        if (open.rows[0]?.count === 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
       await admin.query(
         `DROP DATABASE IF EXISTS ${serverDatabase} WITH (FORCE)`,
       );

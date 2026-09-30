@@ -132,17 +132,26 @@ export interface ExecutionAllocation {
   workerNodeId: string | null;
   policy: EnvironmentAllocationPolicy;
   status: "active" | "released";
-  /** `idle`: a chat gave its workspace back while waiting (ADR 0173). */
+  /** Why it was released; see {@link AllocationReleaseReason}. */
   releaseReason: AllocationReleaseReason | null;
   createdAt: string;
   releasedAt: string | null;
 }
 
 /**
- * Why an Allocation ended. Only `idle` invites a fresh admission on the
- * workload's next turn; every other end is final for that Allocation.
+ * Why an Allocation ended. `idle`: a chat gave its workspace back while
+ * waiting (ADR 0173). `node_lost`: its machine stopped for good and the
+ * workload moved on (ADR 0190). `connection_ended`: a member's machine
+ * connected again, and its earlier connection's workspace is gone (ADR
+ * 0192). `retired`: the workload ended. A chat is admitted again on its
+ * next turn after any release; a workflow run moved off a lost machine gets
+ * its new Allocation at once.
  */
-export type AllocationReleaseReason = "idle" | "retired";
+export type AllocationReleaseReason =
+  | "idle"
+  | "node_lost"
+  | "connection_ended"
+  | "retired";
 
 export class ExecutionAllocationConflictError extends Error {
   constructor(readonly rootWorkloadId: string) {
@@ -287,6 +296,15 @@ export class ExecutionAllocationsService {
   }
 }
 
+function releaseReason(value: string | null): AllocationReleaseReason | null {
+  return value === "idle" ||
+    value === "node_lost" ||
+    value === "connection_ended" ||
+    value === "retired"
+    ? value
+    : null;
+}
+
 function mapAllocation(
   row: Selectable<DB["execution_allocations"]>,
 ): ExecutionAllocation {
@@ -301,10 +319,7 @@ function mapAllocation(
     workerNodeId: row.worker_node_id,
     policy,
     status: row.status as "active" | "released",
-    releaseReason:
-      row.release_reason === "idle" || row.release_reason === "retired"
-        ? row.release_reason
-        : null,
+    releaseReason: releaseReason(row.release_reason),
     createdAt: row.created_at.toISOString(),
     releasedAt: row.released_at?.toISOString() ?? null,
   };

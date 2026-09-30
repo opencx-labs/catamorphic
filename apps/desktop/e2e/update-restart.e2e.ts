@@ -34,13 +34,28 @@ describe("update restart", () => {
     const pid = app.processId;
     if (!pid) throw new Error("Missing app process id");
     // Fire and forget: the reply cannot arrive from a process that exits.
-    await app.eval(
-      "(() => { void window.catamorphicDesktop.devUpdateRestart(); return true; })()",
-    );
+    // Even this evaluation's own reply races the exit: the app can close
+    // its windows, and with them the CDP connection, before the answer is
+    // delivered. A connection that closes because the app left is the
+    // outcome under test, so the evaluation settles either way and the
+    // process's exit is what the test judges.
+    const request = app
+      .eval(
+        "(() => { void window.catamorphicDesktop.devUpdateRestart(); return true; })()",
+      )
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
     const deadline = Date.now() + 60_000;
     while (alive(pid) && Date.now() < deadline)
       await new Promise((resolve) => setTimeout(resolve, 250));
     expect(alive(pid)).toBe(false);
+    const failed = await request;
+    if (failed)
+      expect(String(failed)).toContain(
+        "CDP connection closed before the response",
+      );
     // stop() validates the exit status of the process that already left.
   });
 });

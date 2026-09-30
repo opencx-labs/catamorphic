@@ -43,13 +43,16 @@ does not allow:
    `read_skill`. A project with no `.work/workflows/package.json`
    needs the workspace first: copy the support files that
    `work-projects` lists with `program_files` and `program_write`.
-2. `program_write` the workflow or app. Nothing reaches others yet.
+2. `program_write` the workflow or app. Nothing reaches others yet. The
+   draft lives on the server, private to you, and one call's changes land
+   together; every replica sees them, and none loses them on restart.
 3. `program_check` refreshes generated types (the trigger kinds this server
    offers, app API types) and validates the draft: parse errors, trigger
    kinds and configuration, and imports it can see. It is not a full
    TypeScript check; keep code simple, and check locally when you have a
    clone. Fix every error.
-4. `program_deploy` with a commit message. It builds and publishes every app
+4. `program_deploy` with a commit message publishes the draft as one commit,
+   merging what others published meanwhile. It builds and publishes every app
    the change touches and reports each app's build result; a failed build
    keeps the app's previous version. Projects whose program is
    published from GitHub change through pull requests there, or

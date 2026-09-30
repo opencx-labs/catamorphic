@@ -88,8 +88,21 @@ export class PostgresObjectStore implements ObjectStore {
     ).map((row) => row.key);
   }
 
-  async delete(key: string): Promise<void> {
-    await this.db.deleteFrom("stored_objects").where("key", "=", key).execute();
+  async delete(key: string, opts?: { ifMatch?: string }): Promise<void> {
+    if (opts?.ifMatch === undefined) {
+      await this.db
+        .deleteFrom("stored_objects")
+        .where("key", "=", key)
+        .execute();
+      return;
+    }
+    const deleted = await this.db
+      .deleteFrom("stored_objects")
+      .where("key", "=", key)
+      .where("etag", "=", opts.ifMatch)
+      .returning("key")
+      .executeTakeFirst();
+    if (!deleted) throw new PreconditionFailedError(key);
   }
 
   async deletePrefix(prefix: string): Promise<void> {

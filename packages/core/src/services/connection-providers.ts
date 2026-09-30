@@ -190,6 +190,7 @@ export interface ConnectionCredentialVersion {
 }
 
 export class ConnectionProviderRegistry {
+  /** Replica memory (c): built at boot from the host's providers. */
   private readonly providers = new Map<string, ConnectionProvider>();
 
   constructor(providers: readonly ConnectionProvider[] = []) {

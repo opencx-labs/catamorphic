@@ -367,12 +367,13 @@ describe("floating surfaces", () => {
       );
       const row = `document.activeElement.closest('[role=dialog]').querySelector('[data-item-id="${item}"]')`;
       await app.waitFor(`!!${row}`);
-      // Choose this result explicitly; other open palettes and hover-driven
-      // selection must not decide which resource the Enter gesture exercises.
-      await app.eval(
-        `${row}.dispatchEvent(new MouseEvent('mouseover',{bubbles:true}))`,
+      // Choose this result explicitly: walk the keyboard highlight to it,
+      // since rows can still re-rank as sources arrive and only a moving
+      // pointer takes the highlight.
+      await app.waitFor(
+        `(()=>{const rows=[...document.activeElement.closest('[role=dialog]').querySelectorAll('[role="option"]')];const target=rows.findIndex(row=>row.dataset.itemId===${JSON.stringify(item)});const current=rows.findIndex(row=>row.getAttribute('aria-selected')==='true');if(target===current)return true;document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:target>current?'ArrowDown':'ArrowUp',bubbles:true,cancelable:true}));return false})()`,
+        { label: `${item} highlighted` },
       );
-      await app.waitFor(`${row}?.getAttribute('aria-selected')==='true'`);
     };
     await choose("Settings", "tab:settings");
     expect(

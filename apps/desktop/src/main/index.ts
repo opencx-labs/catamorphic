@@ -30,6 +30,7 @@ import {
   desktopApplicationName,
   desktopDataDirFromEnvironment,
 } from "./development-paths.js";
+import { dockClicks } from "./dock-clicks.js";
 import { shouldUseE2ePlainTextEncryption } from "./e2e-safe-storage.js";
 import { IncognitoSessionsStore } from "./incognito-sessions.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
@@ -395,7 +396,7 @@ function createWindow(
   if (process.env.ELECTRON_RENDERER_URL) {
     const query = new URLSearchParams(
       dock
-        ? { surface: "dock" }
+        ? { surface: "dock", clicks: dockClicks() }
         : initialProjectId
           ? { project: initialProjectId }
           : {},
@@ -406,7 +407,7 @@ function createWindow(
       path.join(import.meta.dirname, "../renderer/index.html"),
       {
         query: dock
-          ? { surface: "dock" }
+          ? { surface: "dock", clicks: dockClicks() }
           : initialProjectId
             ? { project: initialProjectId }
             : {},

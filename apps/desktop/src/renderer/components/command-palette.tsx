@@ -47,6 +47,12 @@ import { useDestinationRows } from "../palette/rows/destinations.js";
 import { useHistoryRows } from "../palette/rows/history.js";
 import { useResourceRows } from "../palette/rows/resources.js";
 import { useSettingRows } from "../palette/rows/settings.js";
+import {
+  highlightedRow,
+  moveHighlight,
+  settleSelection,
+  TOP_ROW,
+} from "../palette/selection.js";
 import type { PaletteItem, PaletteModeRequest } from "../palette/types.js";
 import { resolveInput } from "../screens/browser-screen.js";
 import { PILL_SURFACE } from "./context-pill.js";
@@ -156,7 +162,8 @@ export function CommandPalette({
     actionAvailability,
   } = usePaletteHost();
   const [query, setQuery] = useState("");
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  // Stays on a chosen row while late sources re-rank the list under it.
+  const [selection, setSelection] = useState(TOP_ROW);
   // The active mode by id. Modes are built further down from live data;
   // a sidebar search carries its own rows in the request.
   const [modeId, setModeId] = useState<string | null>(null);
@@ -178,7 +185,7 @@ export function CommandPalette({
     setModeId(next);
     setExitingChip(null);
     setQuery("");
-    setSelectedIndex(0);
+    setSelection(TOP_ROW);
     inputRef.current?.focus();
   }, []);
 
@@ -188,7 +195,7 @@ export function CommandPalette({
   useLayoutEffect(() => {
     const reset = () => {
       setQuery("");
-      setSelectedIndex(0);
+      setSelection(TOP_ROW);
       setModeId(null);
       setExitingChip(null);
       listMotionRef.current.reset();
@@ -609,7 +616,25 @@ export function CommandPalette({
   const listMotionRef = useRef(listMotion);
   listMotionRef.current = listMotion;
 
-  const selected = Math.min(selectedIndex, Math.max(results.length - 1, 0));
+  const selected = highlightedRow(selection, results);
+  const resultsRef = useRef(results);
+  resultsRef.current = results;
+  // Rows changed: follow a chosen row to its new place, or give up a
+  // choice whose row left the list.
+  useLayoutEffect(() => {
+    setSelection((current) => settleSelection(current, results));
+  }, [results]);
+  // A chosen row stays in view, whether an arrow key moved the highlight
+  // or a re-rank moved the row.
+  const chosenId = selection.id;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: selected is the "row moved" signal
+  useEffect(() => {
+    if (!chosenId) return;
+    // Group labels and notices share the list, so find the row itself.
+    sizerRef.current
+      ?.querySelector(`[data-item-id="${CSS.escape(chosenId)}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [chosenId, selected]);
 
   // The surface the highlighted row (or the open question) acts on,
   // reported up so the app accents its border.
@@ -696,21 +721,9 @@ export function CommandPalette({
   };
 
   const moveSelection = (delta: number) => {
-    setSelectedIndex((current) => {
-      const next = Math.min(
-        Math.max(Math.min(current, results.length - 1) + delta, 0),
-        results.length - 1,
-      );
-      const id = results[next]?.id;
-      requestAnimationFrame(() => {
-        // Group labels and notices share the list, so find the row itself.
-        if (id)
-          sizerRef.current
-            ?.querySelector(`[data-item-id="${CSS.escape(id)}"]`)
-            ?.scrollIntoView({ block: "nearest" });
-      });
-      return next;
-    });
+    setSelection((current) =>
+      moveHighlight(current, resultsRef.current, delta),
+    );
   };
 
   const onInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -811,7 +824,7 @@ export function CommandPalette({
           value={query}
           onChange={(event) => {
             setQuery(event.target.value);
-            setSelectedIndex(0);
+            setSelection(TOP_ROW);
             if (listRef.current) listRef.current.scrollTop = 0;
           }}
           onKeyDown={onInputKeyDown}
@@ -875,7 +888,8 @@ export function CommandPalette({
                     event.preventDefault();
                   }}
                   onMouseMove={(event) => {
-                    if (pointerMoved(event)) setSelectedIndex(index);
+                    if (pointerMoved(event))
+                      setSelection({ index, id: item.id });
                   }}
                   className={`flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors duration-100 ${
                     item.disabled

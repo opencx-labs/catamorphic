@@ -6,11 +6,8 @@ import { apiUrl, HttpResponse, http } from "../../test/handlers.js";
 import { renderHookWithProviders } from "../../test/render.js";
 import { server } from "../../test/server.js";
 import { workflowKeys } from "../../workflow-keys.js";
-import { useCheckoutBranch } from "../use-checkout-branch.js";
 import { useCommitChanges } from "../use-commit-changes.js";
-import { useCreateBranch } from "../use-create-branch.js";
 import { useDeployProject } from "../use-deploy-project.js";
-import { useProjectBranches } from "../use-project-branches.js";
 import { useProjectCommits } from "../use-project-commits.js";
 import { useProjectGit } from "../use-project-git.js";
 
@@ -66,39 +63,6 @@ describe("useProjectGit", () => {
   });
 });
 
-describe("useProjectBranches", () => {
-  it("returns branches on happy path", async () => {
-    server.use(
-      http.get(apiUrl("/api/projects/p1/branches"), () =>
-        HttpResponse.json([
-          {
-            name: "main",
-            commit: "abc",
-            isCurrent: true,
-            createdAt: null,
-          },
-        ]),
-      ),
-    );
-    const { result } = renderHookWithProviders(() => useProjectBranches("p1"));
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.[0]?.name).toBe("main");
-  });
-
-  it("maps 404 to not_found", async () => {
-    server.use(
-      http.get(apiUrl("/api/projects/missing/branches"), () =>
-        HttpResponse.json({ error: "gone" }, { status: 404 }),
-      ),
-    );
-    const { result } = renderHookWithProviders(() =>
-      useProjectBranches("missing"),
-    );
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(result.current.error?.code).toBe("not_found");
-  });
-});
-
 describe("useProjectCommits", () => {
   it("returns commits list", async () => {
     server.use(
@@ -130,61 +94,6 @@ describe("useProjectCommits", () => {
     const { result } = renderHookWithProviders(() => useProjectCommits("p1"));
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.error?.code).toBe("sandbox_unavailable");
-  });
-});
-
-describe("useCreateBranch", () => {
-  it("creates the branch", async () => {
-    server.use(
-      http.post(apiUrl("/api/projects/p1/branches"), () =>
-        HttpResponse.json({ branch: "dev", created: true }),
-      ),
-    );
-    const { result } = renderHookWithProviders(() => useCreateBranch("p1"));
-    const created = await result.current.mutateAsync({ name: "dev" });
-    expect(created.branch).toBe("dev");
-  });
-
-  it("maps 404 to not_found", async () => {
-    server.use(
-      http.post(apiUrl("/api/projects/p1/branches"), () =>
-        HttpResponse.json({ error: "x" }, { status: 404 }),
-      ),
-    );
-    const { result } = renderHookWithProviders(() => useCreateBranch("p1"));
-    await expect(result.current.mutateAsync()).rejects.toMatchObject({
-      code: "not_found",
-    });
-  });
-});
-
-describe("useCheckoutBranch", () => {
-  it("checks out a branch", async () => {
-    server.use(
-      http.post(apiUrl("/api/projects/p1/checkout"), () =>
-        HttpResponse.json({ ...STATUS, branch: "dev" }),
-      ),
-    );
-    const { result, queryClient } = renderHookWithProviders(() =>
-      useCheckoutBranch("p1"),
-    );
-    const keys = seedWorkflowQueries(queryClient);
-    const status = await result.current.mutateAsync("dev");
-    expect(status.branch).toBe("dev");
-    expect(queryClient.getQueryState(keys.listKey)?.isInvalidated).toBe(true);
-    expect(queryClient.getQueryState(keys.detailKey)?.isInvalidated).toBe(true);
-  });
-
-  it("maps errors", async () => {
-    server.use(
-      http.post(apiUrl("/api/projects/p1/checkout"), () =>
-        HttpResponse.json({ error: "nope" }, { status: 404 }),
-      ),
-    );
-    const { result } = renderHookWithProviders(() => useCheckoutBranch("p1"));
-    await expect(result.current.mutateAsync("dev")).rejects.toMatchObject({
-      code: "not_found",
-    });
   });
 });
 

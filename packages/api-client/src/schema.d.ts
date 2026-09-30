@@ -773,197 +773,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/projects/{projectId}/branches": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    projectId: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Default Response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            name: string;
-                            commit: string;
-                            isCurrent: boolean;
-                            createdAt: number | null;
-                        }[];
-                    };
-                };
-                /** @description Default Response */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        put?: never;
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    projectId: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        name?: string;
-                        fromRef?: string;
-                    };
-                };
-            };
-            responses: {
-                /** @description Default Response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            branch: string;
-                            created: boolean;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/projects/{projectId}/checkout": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    projectId: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        ref: string;
-                    };
-                };
-            };
-            responses: {
-                /** @description Default Response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            branch: string;
-                            dirty: boolean;
-                            modifiedFiles: string[];
-                            ahead: number;
-                            behind: number;
-                            baseCommit: string | null;
-                            remoteHead: string | null;
-                            remoteHeadTimestamp: number | null;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/projects/{projectId}/workdir": {
         parameters: {
             query?: never;
@@ -1122,6 +931,7 @@ export interface paths {
                         files?: {
                             [key: string]: string;
                         };
+                        base?: string;
                     };
                 };
             };
@@ -1142,6 +952,7 @@ export interface paths {
                                 base: string | null;
                                 ours: string | null;
                                 theirs: string | null;
+                                binary?: boolean;
                             }[];
                         };
                     };
@@ -1219,6 +1030,7 @@ export interface paths {
                                 base: string | null;
                                 ours: string | null;
                                 theirs: string | null;
+                                binary?: boolean;
                             }[];
                         };
                     };
@@ -7410,7 +7222,7 @@ export interface paths {
                                 /** @enum {string} */
                                 status: "queued" | "held" | "running" | "completed" | "failed" | "cancelled";
                                 /** @enum {string} */
-                                phase: "preparing" | "working" | "waiting" | "saving";
+                                phase: "preparing" | "working" | "waiting" | "saving" | "parked";
                                 activity: string | null;
                                 activityAt: string | null;
                                 startedAt: string | null;
@@ -12242,6 +12054,7 @@ export interface paths {
                             writtenBy?: string;
                             writtenAt?: string;
                             digest?: string;
+                            commit?: string;
                         }[];
                     };
                 };
@@ -12303,6 +12116,7 @@ export interface paths {
                             writtenBy?: string;
                             writtenAt?: string;
                             digest?: string;
+                            commit?: string;
                             text?: string;
                         };
                     };
@@ -12379,6 +12193,7 @@ export interface paths {
                             writtenBy?: string;
                             writtenAt?: string;
                             digest?: string;
+                            commit?: string;
                         };
                     };
                 };

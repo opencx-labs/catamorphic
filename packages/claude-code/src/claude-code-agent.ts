@@ -380,7 +380,8 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
   /**
    * Sessions whose last turn parked on an AskUserQuestion call: the query
    * is still alive, blocked on the parked `canUseTool` promise, and the
-   * next sendMessage resumes it with the user's answers.
+   * next sendMessage resumes it with the user's answers. The host keeps
+   * the asking turn's lease in this process while one waits here (ADR 0193).
    */
   private readonly awaitingAnswers = new Map<string, LiveTurn>();
   /** The shared gate (ADR 0054/0055); "always allow" answers live for
@@ -456,6 +457,33 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
   /** Abort the in-flight turn; the stream settles with an error event. */
   interrupt(providerSessionId: string): void {
     this.activeAborts.get(providerSessionId)?.abort();
+  }
+
+  /**
+   * A parked AskUserQuestion lives in this process: the host keeps the
+   * asking turn claimed here so the answer continues the same query.
+   */
+  holdsQuestion(providerSessionId: string): boolean {
+    return this.awaitingAnswers.has(providerSessionId);
+  }
+
+  /**
+   * The answer will not come to this process (its turn was stopped, or the
+   * process is going away): unblock the CLI and end the parked query. The
+   * answer then resumes the persisted transcript as an ordinary turn.
+   */
+  releaseQuestion(providerSessionId: string): void {
+    const awaiting = this.awaitingAnswers.get(providerSessionId);
+    if (!awaiting) return;
+    this.awaitingAnswers.delete(providerSessionId);
+    awaiting.ask?.resolve({
+      behavior: "deny",
+      message: "The question was not answered in this session.",
+      interrupt: true,
+    });
+    awaiting.ask = undefined;
+    awaiting.inputAbort?.abort();
+    awaiting.abort.abort();
   }
 
   async *sendMessage(

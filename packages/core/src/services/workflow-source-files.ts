@@ -1,5 +1,9 @@
 import path from "node:path";
-import type { FileReadOptions, ProjectRepo } from "@catamorphic/git";
+import {
+  type FileReadOptions,
+  OriginDraftRepo,
+  type ProjectDraft,
+} from "@catamorphic/git";
 import {
   isProjectPathWithin,
   isProjectSourcePath,
@@ -23,7 +27,7 @@ export const WORKFLOW_READ_OPTIONS: FileReadOptions = {
 
 /** Native Git narrows discovery before ts-morph sees source; relative imports bring their dependencies. */
 export async function workflowSourceFiles(
-  repo: ProjectRepo,
+  repo: ProjectDraft,
   ref?: string,
 ): Promise<Record<string, string>> {
   const files: Record<string, string> = {};
@@ -39,7 +43,11 @@ export async function workflowSourceFiles(
       return null;
     }
   };
-  if (!repo.findFilesContaining) {
+  const find =
+    repo instanceof OriginDraftRepo
+      ? undefined
+      : repo.findFilesContaining?.bind(repo);
+  if (!find) {
     const sources = ref
       ? await repo.readAllFilesAtRef(ref, WORKFLOW_READ_OPTIONS)
       : await repo.readAllFiles(WORKFLOW_READ_OPTIONS);
@@ -60,8 +68,8 @@ export async function workflowSourceFiles(
     ...new Set(
       (
         await Promise.all([
-          repo.findFilesContaining({ text: "defineWorkflow", ref, globs }),
-          repo.findFilesContaining({ text: "defineSecrets", ref, globs }),
+          find({ text: "defineWorkflow", ref, globs }),
+          find({ text: "defineSecrets", ref, globs }),
         ])
       ).flat(),
     ),

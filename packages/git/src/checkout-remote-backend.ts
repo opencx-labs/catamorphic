@@ -96,11 +96,12 @@ class CheckoutOrigin implements OriginRepo {
         : []),
     ]);
   }
-  async deleteRef(input: { ref: string }): Promise<void> {
+  async deleteRef(input: { ref: string; expected?: string }): Promise<void> {
     await nativeGit(this.root, [
       "update-ref",
       "-d",
       this.publicationRef(input.ref),
+      ...(input.expected !== undefined ? [input.expected] : []),
     ]);
   }
   async hasObject(sha: string): Promise<boolean> {

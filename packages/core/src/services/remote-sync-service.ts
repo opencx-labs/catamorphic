@@ -4,6 +4,7 @@ import {
   fetchFromRemote,
   type GitCredentials,
   type NetworkSyncResult,
+  OriginDraftRepo,
   type ProjectManager,
   PushNotFastForwardError,
   push,
@@ -28,6 +29,20 @@ const tracer = getTracer("@catamorphic/core");
 
 const SYNC_AUTHOR = { name: "Work", email: "system@work.software" };
 
+/**
+ * A member's server draft (ADR 0191) has no checkout to sync or push: its
+ * published program syncs with the linked repository by itself, and
+ * changes reach that repository as proposals.
+ */
+export class ServerDraftError extends Error {
+  constructor() {
+    super(
+      "This project's drafts live on its server. Publish your draft, or propose the change as a pull request.",
+    );
+    this.name = "ServerDraftError";
+  }
+}
+
 export type RemoteSyncOutcome = { status: "no-remote" } | NetworkSyncResult;
 
 /**
@@ -40,6 +55,12 @@ export type RemoteSyncOutcome = { status: "no-remote" } | NetworkSyncResult;
  * never run concurrently against one repo nor break its caller.
  */
 export class RemoteSyncService {
+  /**
+   * Replica memory (a): syncs in flight through this process's working
+   * copies. A push to the origin is a compare-and-swap, so replicas never
+   * overwrite each other; the Work server syncs each project on one
+   * replica at a time under a claim (ADR 0193).
+   */
   private readonly inflight = new Map<string, Promise<RemoteSyncOutcome>>();
 
   constructor(
@@ -179,12 +200,13 @@ export class RemoteSyncService {
           // Work pushes only to a repository it created (ADR 0170).
           access: ownership === "owned" ? "write" : "read",
         });
-        const dev = await this.projectManager.openDev(
-          identity.tenantId,
+        const dev = await this.projectManager.openDraft({
+          tenantId: identity.tenantId,
           projectId,
-          identity.externalUserId,
-        );
+          externalUserId: identity.externalUserId,
+        });
         try {
+          if (dev instanceof OriginDraftRepo) throw new ServerDraftError();
           return await syncWithNetworkRemote({
             dev,
             url: row.remote_url,
@@ -266,12 +288,13 @@ export class RemoteSyncService {
               remoteUrl,
               access: "write",
             });
-            const dev = await this.projectManager.openDev(
-              identity.tenantId,
+            const dev = await this.projectManager.openDraft({
+              tenantId: identity.tenantId,
               projectId,
-              identity.externalUserId,
-            );
+              externalUserId: identity.externalUserId,
+            });
             try {
+              if (dev instanceof OriginDraftRepo) throw new ServerDraftError();
               const local = Boolean(
                 await this.projectManager.localPath({
                   tenantId: identity.tenantId,

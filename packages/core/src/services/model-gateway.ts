@@ -100,7 +100,10 @@ export function modelAllowed(
 
 // --- headers ---
 
-/** Hop-by-hop headers (RFC 9110 7.6.1): they describe one connection. */
+/**
+ * Hop-by-hop headers (RFC 9110 7.6.1): they describe one connection.
+ * Replica memory (c): a constant.
+ */
 const HOP_BY_HOP = new Set([
   "connection",
   "keep-alive",
@@ -114,6 +117,7 @@ const HOP_BY_HOP = new Set([
  * Request headers that stay here: the caller's grant (the stored key
  * replaces it), its host and cookies, and what the transport recomputes
  * (length, and the encodings `fetch` itself negotiates and decodes).
+ * Replica memory (c): a constant.
  */
 const DENIED_REQUEST_HEADERS = new Set([
   "x-api-key",
@@ -129,7 +133,7 @@ const DENIED_REQUEST_HEADERS = new Set([
 /**
  * Response headers that stay upstream: cookies, and what no longer holds
  * once `fetch` decoded the body (its encoding and length) or names the
- * provider's own origin (`alt-svc`).
+ * provider's own origin (`alt-svc`). Replica memory (c): a constant.
  */
 const DENIED_RESPONSE_HEADERS = new Set([
   "set-cookie",
@@ -437,18 +441,36 @@ export interface LiveModelGrant {
   };
 }
 
+/**
+ * The longest a model call's answer streams. A usage row still open after
+ * this belongs to a call whose replica died mid-stream (ADR 0193).
+ */
+export const MAX_OPEN_CALL_MINUTES = 30;
+
 /** What the model gateway reads and writes (ADR 0180). */
 export interface ModelGatewayStore {
   /** The live grant a bearer names, or undefined. */
   liveGrant(args: { token: string }): Promise<LiveModelGrant | undefined>;
   /** The turn a session is running now, if any. */
   runningTurn(args: { sessionId: string }): Promise<string | undefined>;
-  /** One call's usage, once its answer ended. */
+  /**
+   * Open a session's call before its answer ends (ADR 0193): its usage
+   * row, settled by `recordUsage`, so totals read on any replica wait for
+   * it. Returns the row's id.
+   */
+  openUsage(args: { record: ModelUsageRecord }): Promise<string>;
+  /** One call's usage, once its answer ended: settles `openId` if given. */
   recordUsage(args: {
     record: ModelUsageRecord;
     usage: ModelCallUsage;
+    openId?: string;
   }): Promise<void>;
-  /** Token totals of a session's calls, or of one of its turns. */
+  /**
+   * How many of a session's (or turn's) calls are still open, leaving out
+   * those open longer than {@link MAX_OPEN_CALL_MINUTES}.
+   */
+  openCalls(args: { sessionId: string; turnId?: string }): Promise<number>;
+  /** Token totals of a session's settled calls, or of one of its turns. */
   usage(args: {
     sessionId: string;
     turnId?: string;
@@ -528,7 +550,42 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
           .where("status", "=", "running")
           .executeTakeFirst()
       )?.id,
-    recordUsage: async ({ record, usage }) => {
+    openUsage: async ({ record }) =>
+      (
+        await db
+          .insertInto("model_usage")
+          .values({
+            tenant_id: record.tenantId,
+            project_id: record.projectId,
+            agent_session_id: record.sessionId,
+            turn_id: record.turnId,
+            allocation_id: record.allocationId,
+            connection_id: record.connectionId,
+            alias: record.alias,
+            endpoint: record.endpoint,
+            model: record.model ?? null,
+            settled_at: null,
+          })
+          .returning("id")
+          .executeTakeFirstOrThrow()
+      ).id,
+    recordUsage: async ({ record, usage, openId }) => {
+      if (openId) {
+        await db
+          .updateTable("model_usage")
+          .set({
+            model: usage.model ?? record.model ?? null,
+            input_tokens: usage.inputTokens,
+            cached_input_tokens: usage.cachedInputTokens,
+            cache_creation_tokens: usage.cacheCreationTokens,
+            output_tokens: usage.outputTokens,
+            reasoning_tokens: usage.reasoningTokens,
+            settled_at: sql<Date>`now()`,
+          })
+          .where("id", "=", openId)
+          .execute();
+        return;
+      }
       await db
         .insertInto("model_usage")
         .values({
@@ -546,13 +603,34 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
           cache_creation_tokens: usage.cacheCreationTokens,
           output_tokens: usage.outputTokens,
           reasoning_tokens: usage.reasoningTokens,
+          settled_at: sql<Date>`now()`,
         })
         .execute();
+    },
+    openCalls: async (args) => {
+      const row = await db
+        .selectFrom("model_usage")
+        .select(sql<string>`count(*)`.as("open"))
+        .where("agent_session_id", "=", args.sessionId)
+        .$if(args.turnId !== undefined, (query) =>
+          query.where("turn_id", "=", args.turnId ?? ""),
+        )
+        .where("settled_at", "is", null)
+        // A call open longer than any call streams was lost with its
+        // replica: it never settles, and nothing waits for it.
+        .where(
+          "created_at",
+          ">",
+          sql<Date>`now() - (${MAX_OPEN_CALL_MINUTES} * interval '1 minute')`,
+        )
+        .executeTakeFirst();
+      return Number(row?.open ?? 0);
     },
     usage: async (args) => {
       let query = db
         .selectFrom("model_usage")
-        .where("agent_session_id", "=", args.sessionId);
+        .where("agent_session_id", "=", args.sessionId)
+        .where("settled_at", "is not", null);
       if (args.turnId) query = query.where("turn_id", "=", args.turnId);
       const row = await query
         .select([
@@ -621,13 +699,16 @@ export type ModelGatewayAdmitResult =
  */
 export class ModelGatewayService {
   private readonly fetch: typeof fetch;
+  /**
+   * Replica memory (b): a grant's resolved alias, keyed by the grant and
+   * its connection's revision, and bounded by the key's expiry.
+   */
   private readonly access = new Map<
     string,
     { revision: number; until: number; access: ModelAccess }
   >();
+  /** Replica memory (a): admissions of requests this process is serving. */
   private readonly admissions = new WeakSet<ModelGatewayAdmission>();
-  /** Usage writes still in flight, per session. */
-  private readonly pending = new Map<string, Set<Promise<void>>>();
 
   constructor(
     private readonly deps: {
@@ -686,15 +767,23 @@ export class ModelGatewayService {
 
   /**
    * Token totals of a session's model calls, or of one of its turns, once
-   * this replica's usage writes for the session have landed.
+   * every call already answered has settled, through whichever replica it
+   * streamed (ADR 0193). A call whose replica died stops being waited for
+   * after `waitMs` (default 10 seconds).
    */
   async sessionUsage(args: {
     sessionId: string;
     turnId?: string;
+    waitMs?: number;
   }): Promise<AgentTurnUsage | undefined> {
-    const pending = this.pending.get(args.sessionId);
-    if (pending) await Promise.allSettled([...pending]);
-    return this.deps.store.usage(args);
+    const { waitMs, ...scope } = args;
+    const deadline = Date.now() + (waitMs ?? 10_000);
+    while (
+      Date.now() < deadline &&
+      (await this.deps.store.openCalls(scope)) > 0
+    )
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    return this.deps.store.usage(scope);
   }
 
   private async handleUninstrumented(
@@ -811,17 +900,23 @@ export class ModelGatewayService {
       : contentType.includes("json")
         ? new JsonUsageReader(access.api)
         : undefined;
+    // A session's call is open in the database before its answer ends, so
+    // the turn's totals, read on any replica, wait for it.
+    const opened = access.sessionId
+      ? this.openUsage({ access, path, fields, turn })
+      : undefined;
     return {
       status: upstream.status,
       headers,
       body: relay({
         source: upstream.body,
         ...(tap ? { tap } : {}),
+        ...(opened ? { beforeEnd: opened } : {}),
         // After the answer ended, off its critical path.
         onEnd: (finished) =>
           setImmediate(() => {
             const usage = tap?.finish() ?? emptyUsage();
-            this.recordUsage({ access, path, fields, usage, turn });
+            this.recordUsage({ access, path, fields, usage, turn, opened });
             audit("allowed", {
               status: upstream.status,
               usage: { ...usage },
@@ -832,6 +927,22 @@ export class ModelGatewayService {
     };
   }
 
+  /** The row a call's usage lands in, opened while it streams. */
+  private openUsage(args: {
+    access: ModelAccess;
+    path: string;
+    fields: RequestFields;
+    turn: Promise<string | undefined> | undefined;
+  }): Promise<string | undefined> {
+    return (async () =>
+      this.deps.store.openUsage({
+        record: await usageRecord(args),
+      }))().catch((error: unknown) => {
+      console.warn("[catamorphic] Could not open model usage", error);
+      return undefined;
+    });
+  }
+
   /** Write a call's usage without anyone waiting on it. */
   private recordUsage(args: {
     access: ModelAccess;
@@ -839,36 +950,18 @@ export class ModelGatewayService {
     fields: RequestFields;
     usage: ModelCallUsage;
     turn: Promise<string | undefined> | undefined;
+    opened?: Promise<string | undefined>;
   }): void {
-    const { access } = args;
-    const write = (async () => {
-      const turnId = (await args.turn) ?? null;
+    void (async () => {
+      const openId = await args.opened;
       await this.deps.store.recordUsage({
-        record: {
-          tenantId: access.identity.tenantId,
-          projectId: access.projectId,
-          sessionId: access.sessionId,
-          turnId,
-          allocationId: access.allocationId,
-          connectionId: access.connectionId,
-          alias: access.alias,
-          endpoint: args.path,
-          ...(args.fields.model ? { model: args.fields.model } : {}),
-        },
+        record: await usageRecord(args),
         usage: args.usage,
+        ...(openId ? { openId } : {}),
       });
     })().catch((error: unknown) =>
       console.warn("[catamorphic] Could not record model usage", error),
     );
-    const sessionId = access.sessionId;
-    if (!sessionId) return;
-    const pending = this.pending.get(sessionId) ?? new Set();
-    pending.add(write);
-    this.pending.set(sessionId, pending);
-    void write.finally(() => {
-      pending.delete(write);
-      if (pending.size === 0) this.pending.delete(sessionId);
-    });
   }
 
   /** The grant, checked on every call, and its alias, resolved at most every 30 seconds. */
@@ -995,14 +1088,36 @@ function requestFields(body: Uint8Array | undefined): RequestFields {
   };
 }
 
+/** A call's usage row: its session, and the turn running when it began. */
+async function usageRecord(args: {
+  access: ModelAccess;
+  path: string;
+  fields: RequestFields;
+  turn: Promise<string | undefined> | undefined;
+}): Promise<ModelUsageRecord> {
+  const { access } = args;
+  return {
+    tenantId: access.identity.tenantId,
+    projectId: access.projectId,
+    sessionId: access.sessionId,
+    turnId: (await args.turn) ?? null,
+    allocationId: access.allocationId,
+    connectionId: access.connectionId,
+    alias: access.alias,
+    endpoint: args.path,
+    ...(args.fields.model ? { model: args.fields.model } : {}),
+  };
+}
+
 /**
  * Pass an answer through unchanged, feeding `tap`; `onEnd` hears once,
  * when it ended (`finished`) or the caller stopped reading, and is never
- * awaited.
+ * awaited. The answer does not end before `beforeEnd` settles.
  */
 async function* relay(args: {
   source: ReadableStream<Uint8Array>;
   tap?: UsageTap;
+  beforeEnd?: Promise<unknown>;
   onEnd: (finished: boolean) => void;
 }): AsyncIterable<Uint8Array> {
   const reader = args.source.getReader();
@@ -1011,6 +1126,7 @@ async function* relay(args: {
     for (;;) {
       const next = await reader.read();
       if (next.done) {
+        await args.beforeEnd;
         finished = true;
         break;
       }

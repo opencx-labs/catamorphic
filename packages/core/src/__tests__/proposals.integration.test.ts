@@ -73,11 +73,10 @@ describeIf("ProposalsService (ADR 0055)", () => {
     });
     const project = await core.projects.create(root, { name: "brain" });
     projectId = project.id;
-    const repo = await projectManager.openDev(
-      root.tenantId,
-      projectId,
-      root.externalUserId,
-    );
+    const repo = await projectManager.openEphemeral({
+      tenantId: root.tenantId,
+      projectId: projectId,
+    });
     try {
       await repo.writeFile(
         "docs/handbook.md",
@@ -123,11 +122,10 @@ describeIf("ProposalsService (ADR 0055)", () => {
     expect(result.pullRequest).toBeUndefined();
 
     // Read the branch back from the origin through a fresh working copy.
-    const reviewer = await projectManager.openDev(
-      root.tenantId,
-      projectId,
-      "reviewer",
-    );
+    const reviewer = await projectManager.openEphemeral({
+      tenantId: root.tenantId,
+      projectId: projectId,
+    });
     try {
       const remote = projectManager.remoteBackend;
       if (!remote) throw new Error("expected remote");

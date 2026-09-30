@@ -3,8 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { type BetterAuthOptions, betterAuth } from "better-auth";
+import { Kysely, sql } from "kysely";
 import { Pool } from "pg";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { openWorkAuthDatabase } from "./auth-database.js";
 
 const temporaryDirectories: string[] = [];
@@ -103,6 +104,45 @@ describePostgres("openWorkAuthDatabase with Postgres", () => {
       );
       expect(limits.rows).toEqual([{ schema }]);
     } finally {
+      await database.close();
+      await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      await admin.end();
+    }
+  });
+
+  it("survives the server ending an idle auth connection, and keeps serving", async () => {
+    if (!databaseUrl) throw new Error("DATABASE_URL is required");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const schema = `catamorphic_auth_idle_${randomUUID().replaceAll("-", "")}`;
+    const admin = new Pool({ connectionString: databaseUrl });
+    const database = await openWorkAuthDatabase({
+      dataDir: createDataDirectory(),
+      databaseUrl,
+      authSchema: schema,
+    });
+    try {
+      const { database: config } = database;
+      if (!("dialect" in config)) throw new Error("Expected a Kysely dialect");
+      const db = new Kysely<Record<string, never>>({ dialect: config.dialect });
+      const backend = () =>
+        sql<{ pid: number }>`SELECT pg_backend_pid() AS pid`
+          .execute(db)
+          .then((result) => result.rows[0]?.pid);
+      const pid = await backend();
+      expect(pid).toBeTypeOf("number");
+      // As a restart or a forced database drop would: 57P01. Unheard, it is
+      // an unhandled 'error' event that fails the run.
+      await admin.query("SELECT pg_terminate_backend($1)", [pid]);
+      await vi.waitFor(
+        () =>
+          expect(warn).toHaveBeenCalledWith(
+            expect.stringContaining("An idle auth database connection closed"),
+          ),
+        { timeout: 10_000, interval: 20 },
+      );
+      expect(await backend()).not.toBe(pid);
+    } finally {
+      warn.mockRestore();
       await database.close();
       await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
       await admin.end();

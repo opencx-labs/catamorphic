@@ -14,7 +14,7 @@ Related: [`AGENTS.md`](./AGENTS.md), [`packages/cloudflare/README.md`](packages/
 
 - **Sandbox provider (default)**: [Cloudflare Sandbox](https://developers.cloudflare.com/sandbox/) — isolated VM per deployment — accessed through a thin Worker we deploy called the **Sandbox Bridge**. `CloudflareSandboxProvider` in `@catamorphic/cloudflare`.
 - **Sandbox provider (alternate)**: Daytona, via the `@catamorphic/daytona` plugin package.
-- **Git code storage**: [Cloudflare Artifacts](https://developers.cloudflare.com/artifacts/) — versioned repos with a Git-compatible HTTPS remote — `ArtifactsRemoteBackend` in `@catamorphic/cloudflare` (REST + [`isomorphic-git`](https://isomorphic-git.org/)). Requires the Artifacts closed beta; hosts fall back to filesystem remotes until access is granted.
+- **Git code storage**: [Cloudflare Artifacts](https://developers.cloudflare.com/artifacts/) — versioned repos with a Git-compatible HTTPS remote — `ArtifactsRemoteBackend` in `@catamorphic/cloudflare` (REST + [`isomorphic-git`](https://isomorphic-git.org/)). Requires the Artifacts closed beta; hosts fall back to filesystem remotes until access is granted. Artifacts origins do not keep members' drafts (ADR 0191): sandbox clone tokens read every ref of the repository, so hosts that let members draft on the server use an object-store (R2, S3, Postgres) or bare-repository origin.
 - **Worker deploy**: `wrangler deploy` to Cloudflare's edge — nothing to self-host.
 - **Fastify host**: unchanged — runs on your existing container platform and calls the Bridge Worker over HTTPS when the Cloudflare path is selected.
 

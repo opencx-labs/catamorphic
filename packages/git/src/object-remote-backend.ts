@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   type GitObjectType,
   parseCommit,
@@ -5,7 +6,14 @@ import {
   wrapObject,
 } from "./git-object-codec.js";
 import { type ObjectStore, PreconditionFailedError } from "./object-store.js";
-import type { CommitInfo, OriginRepo, RemoteBackend } from "./types.js";
+import { RefMovedError } from "./ref-moved-error.js";
+import { InvalidRefNameError, isValidRefName } from "./ref-names.js";
+import type {
+  CommitInfo,
+  DraftSupport,
+  OriginRepo,
+  RemoteBackend,
+} from "./types.js";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -20,8 +28,57 @@ const SHA_RE = /^[0-9a-f]{40}$/;
 const REF_RE = /^refs\/[A-Za-z0-9._/-]+$/;
 
 function assertRefName(ref: string): void {
-  if (!REF_RE.test(ref) || ref.includes("..")) {
-    throw new Error(`Invalid ref name: ${ref}`);
+  if (!REF_RE.test(ref) || !isValidRefName(ref))
+    throw new InvalidRefNameError(ref);
+}
+
+/**
+ * Check that a store enforces the preconditions drafts rely on: a put with
+ * `ifNoneMatch` on an existing key, and deletes with a stale or the current
+ * `ifMatch`. Returns why it does not, or null when it does. The probe key
+ * is removed afterwards.
+ */
+export async function probeConditionalWrites(input: {
+  store: ObjectStore;
+  key: string;
+}): Promise<string | null> {
+  const { store, key } = input;
+  const refused = async (write: () => Promise<void>) =>
+    write().then(
+      () => false,
+      (error: unknown) => {
+        if (error instanceof PreconditionFailedError) return true;
+        throw error;
+      },
+    );
+  try {
+    // A stale ETag the store itself issued: the one before an overwrite.
+    await store.put(key, new TextEncoder().encode(`probe ${randomUUID()}`));
+    const stale = await store.get(key);
+    await store.put(key, new TextEncoder().encode(`probe ${randomUUID()}`));
+    const entry = await store.get(key);
+    if (!stale || !entry) return "the store did not keep a written object";
+    if (stale.etag === entry.etag)
+      return "the store kept an object's ETag when its content changed";
+    if (
+      !(await refused(() =>
+        store.put(key, new TextEncoder().encode("again"), {
+          ifNoneMatch: "*",
+        }),
+      ))
+    )
+      return "the store ignores If-None-Match on writes";
+    if (
+      !(await refused(() => store.delete(key, { ifMatch: stale.etag }))) ||
+      !(await store.has(key))
+    )
+      return "the store ignores If-Match on deletes, so a draft could be deleted after another replica moved it";
+    await store.delete(key, { ifMatch: entry.etag });
+    if (await store.has(key))
+      return "the store did not delete an object whose ETag matched";
+    return null;
+  } finally {
+    await store.delete(key).catch(() => {});
   }
 }
 
@@ -49,6 +106,7 @@ export interface ObjectRemoteBackendOpts {
 export class ObjectRemoteBackend implements RemoteBackend {
   private readonly store: ObjectStore;
   private readonly keyPrefix: string;
+  private draftCheck: Promise<DraftSupport> | undefined;
 
   constructor(opts: ObjectRemoteBackendOpts) {
     this.store = opts.store;
@@ -85,6 +143,29 @@ export class ObjectRemoteBackend implements RemoteBackend {
 
   async exists(tenantId: string, projectId: string): Promise<boolean> {
     return this.store.has(this.markerKey(tenantId, projectId));
+  }
+
+  /**
+   * Drafts need conditional puts and deletes that the store really
+   * enforces (ADR 0191). Some S3-compatible stores ignore `If-Match` on
+   * DeleteObject, so the store is probed once per process before any draft
+   * is written, and drafts are refused on a store that fails.
+   */
+  draftSupport(): Promise<DraftSupport> {
+    this.draftCheck ??= probeConditionalWrites({
+      store: this.store,
+      key: `${this.keyPrefix}conformance/${randomUUID()}`,
+    }).then(
+      (failure): DraftSupport =>
+        failure ? { supported: false, reason: failure } : { supported: true },
+      (error: unknown) => {
+        // A probe that could not run (a transient store error) is not an
+        // answer: the next call probes again.
+        this.draftCheck = undefined;
+        throw error;
+      },
+    );
+    return this.draftCheck;
   }
 
   async withOrigin<T>(
@@ -165,11 +246,13 @@ export class ObjectOriginRepo implements OriginRepo {
       return;
     }
 
+    const expected = opts.expected;
     const moved = async (): Promise<never> => {
-      const current = await this.resolveRef(opts.ref);
-      throw new Error(
-        `Ref ${opts.ref} moved (expected ${opts.expected ?? "none"}, got ${current ?? "none"})`,
-      );
+      throw new RefMovedError({
+        ref: opts.ref,
+        expected,
+        actual: await this.resolveRef(opts.ref),
+      });
     };
 
     if (opts.expected === null) {
@@ -198,8 +281,27 @@ export class ObjectOriginRepo implements OriginRepo {
     }
   }
 
-  async deleteRef(input: { ref: string }): Promise<void> {
-    await this.store.delete(this.refKey(input.ref));
+  async deleteRef(input: { ref: string; expected?: string }): Promise<void> {
+    const key = this.refKey(input.ref);
+    if (input.expected === undefined) {
+      await this.store.delete(key);
+      return;
+    }
+    const entry = await this.store.get(key);
+    const actual = entry ? new TextDecoder().decode(entry.data).trim() : null;
+    const moved = () =>
+      new RefMovedError({
+        ref: input.ref,
+        expected: input.expected ?? null,
+        actual,
+      });
+    if (!entry || actual !== input.expected) throw moved();
+    try {
+      await this.store.delete(key, { ifMatch: entry.etag });
+    } catch (err) {
+      if (err instanceof PreconditionFailedError) throw moved();
+      throw err;
+    }
   }
 
   async hasObject(sha: string): Promise<boolean> {

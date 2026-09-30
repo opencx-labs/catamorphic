@@ -113,6 +113,11 @@ export interface SyncReport {
   /** Remote changed AND local changed: server copy written beside. */
   conflicts: Array<{ path: string; serverCopy: string; serverVersion: number }>;
   unchanged: number;
+  /**
+   * The published program commit this sync read, when the server names it:
+   * the base for publishing the folder's program edits (ADR 0191).
+   */
+  programCommit?: string;
 }
 
 export interface ShipReport {
@@ -438,6 +443,10 @@ export function localStatus(root: string): LocalStatus {
   return { modified, deleted, programEdits, conflicts };
 }
 
+/**
+ * Replica memory (a), ADR 0193: one sync at a time per folder on this
+ * process's own disk.
+ */
 const pendingOperations = new Map<string, Promise<unknown>>();
 async function serializeSync<T>(
   root: string,
@@ -477,11 +486,15 @@ async function syncRemoteProjectInner(
 ): Promise<SyncReport> {
   const manifest = readManifest(root);
   const remote = await client.list();
+  const programCommit = remote.find(
+    (entry) => entry.source === "program" && entry.commit,
+  )?.commit;
   const report: SyncReport = {
     pulled: [],
     removed: [],
     conflicts: [],
     unchanged: 0,
+    ...(programCommit ? { programCommit } : {}),
   };
   const remotePaths = new Set<string>();
 

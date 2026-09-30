@@ -1,8 +1,7 @@
 import type { DB } from "@catamorphic/db";
 import type { GitCredentials, ProjectManager } from "@catamorphic/git";
-import { fetchRemote, pushToRemote } from "@catamorphic/git";
+import { pushToRemote } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import { publishedRef } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
 import { hasProjectPermission } from "../identity.js";
@@ -30,6 +29,7 @@ import {
   ProjectNotFoundError,
   type ProjectsService,
 } from "./projects-service.js";
+import { withReplicaClaim } from "./replica-claims.js";
 
 /** Project ids are UUIDs; anything else names no project. */
 const PROJECT_ID =
@@ -78,6 +78,14 @@ export class ProjectAlreadyLinkedError extends Error {
   }
 }
 
+/** A server project with nothing published has no `main` to push yet. */
+export class ProjectNotDeployedError extends Error {
+  constructor(readonly projectId: string) {
+    super("Deploy the project before publishing it");
+    this.name = "ProjectNotDeployedError";
+  }
+}
+
 interface ResolvedHost {
   provider: ConnectionProvider & {
     git: NonNullable<ConnectionProvider["git"]>;
@@ -96,9 +104,6 @@ interface ResolvedHost {
  * control plane.
  */
 export class CodeHostsService {
-  /** Publishes in flight in this process, per project. */
-  private readonly publishing = new Map<string, Promise<unknown>>();
-
   constructor(
     private readonly deps: {
       db: Kysely<DB>;
@@ -599,22 +604,20 @@ export class CodeHostsService {
     visibility?: "private" | "public";
   }): Promise<{ fullName: string; remoteUrl: string }> {
     assertProjectPermission(args.identity, args.projectId, "program:publish");
-    // One publish per project at a time here, so a repeated request finds
-    // the project linked instead of creating a second repository.
-    const previous = this.publishing.get(args.projectId);
-    const run = (previous ?? Promise.resolve())
-      .catch(() => {})
-      .then(() => this.publishProjectOnce(args));
-    this.publishing.set(args.projectId, run);
-    const forget = () => {
-      if (this.publishing.get(args.projectId) === run)
-        this.publishing.delete(args.projectId);
-    };
-    void run.then(forget, forget);
-    return run;
+    // One publish per project at a time on every replica (ADR 0193), so a
+    // repeated request waits and then finds the project linked instead of
+    // creating a second repository.
+    return withReplicaClaim({
+      db: this.deps.db,
+      name: `publish-project:${args.projectId}`,
+      waitMs: 120_000,
+      operation: ({ signal }) => this.publishProjectOnce({ ...args, signal }),
+    });
   }
 
   private publishProjectOnce(args: {
+    /** Aborts once this publish is no longer the project's only one. */
+    signal: AbortSignal;
     identity: Identity;
     projectId: string;
     provider: string;
@@ -656,10 +659,30 @@ export class CodeHostsService {
           principal: "member",
         });
         if (!connection) throw new CodeHostNotConnectedError(args.provider);
+        const manager = this.deps.projectManager;
+        // A local folder pushes its checkout; a server project pushes its
+        // published program from an ephemeral checkout (ADR 0191), so one
+        // with nothing published is refused before anything is created.
+        const local = Boolean(
+          await manager.localPath({ tenantId: identity.tenantId, projectId }),
+        );
+        const origin = manager.remoteBackend;
+        if (
+          !local &&
+          origin &&
+          !(await origin.withOrigin(identity.tenantId, projectId, (repo) =>
+            repo.resolveRef("refs/heads/main"),
+          ))
+        )
+          throw new ProjectNotDeployedError(projectId);
         const { repository, credentials } = await this.withCredential({
           identity,
           connection,
           use: async (credential) => {
+            // Checked before the code host creates anything: a publish that
+            // lost its claim leaves no repository behind. Past this point
+            // the conditional link below decides.
+            args.signal.throwIfAborted();
             const repository = await create({
               credential,
               name: args.name,
@@ -699,36 +722,20 @@ export class CodeHostsService {
           .executeTakeFirst();
         if (!linked.numUpdatedRows)
           throw new ProjectAlreadyLinkedError(projectId);
-        const manager = this.deps.projectManager;
-        const dev = await manager.openDev(
-          identity.tenantId,
-          projectId,
-          identity.externalUserId,
-        );
+        const dev = local
+          ? await manager.open(identity.tenantId, projectId)
+          : await manager.openEphemeral({
+              tenantId: identity.tenantId,
+              projectId,
+            });
         try {
-          const remote = manager.remoteBackend;
-          const local = Boolean(
-            await manager.localPath({ tenantId: identity.tenantId, projectId }),
-          );
-          const published =
-            remote && !local
-              ? (
-                  await fetchRemote({
-                    dev,
-                    remote,
-                    tenantId: identity.tenantId,
-                    projectId,
-                    remoteBranch: "main",
-                  })
-                ).sha
-              : null;
           await pushToRemote({
             repoPath: dev.repoPath,
             native: local,
             url: repository.cloneUrl,
             credentials,
             ownership: "owned",
-            ref: local ? "HEAD" : published ? publishedRef() : "main",
+            ref: local ? "HEAD" : "main",
             remoteBranch: repository.defaultBranch,
           });
         } finally {

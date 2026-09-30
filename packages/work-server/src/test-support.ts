@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import pg from "pg";
 import { workServerConfigFromEnv } from "./config.js";
 import type { WorkServerOptions } from "./server.js";
 
@@ -13,6 +14,32 @@ export function testServerOptions(args: {
       ...workServerConfigFromEnv({ WORK_DATA_DIR: args.dataDir, ...args.env }),
       dataDir: args.dataDir,
       ...(args.publicBases ? { publicBases: args.publicBases } : {}),
+    },
+  };
+}
+
+/**
+ * A database of its own on the server at `DATABASE_URL`: a deployment's
+ * replicas share one origin and secrets, which other suites do not.
+ */
+export async function createTestDatabase(prefix: string): Promise<{
+  url: string;
+  drop(): Promise<void>;
+}> {
+  const admin = new pg.Client({ connectionString: process.env.DATABASE_URL });
+  const database = `${prefix}_${randomBytes(4).toString("hex")}`;
+  await admin.connect();
+  await admin.query(`CREATE DATABASE ${database}`);
+  const url = new URL(process.env.DATABASE_URL ?? "");
+  url.pathname = `/${database}`;
+  return {
+    url: url.toString(),
+    drop: async () => {
+      try {
+        await admin.query(`DROP DATABASE ${database} WITH (FORCE)`);
+      } finally {
+        await admin.end();
+      }
     },
   };
 }

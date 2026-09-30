@@ -7,6 +7,7 @@ import {
   AccessDeniedError,
   assertMayManageRolePolicy,
   assertProjectPermission,
+  DeploymentBlockedError,
   effectiveProjectPermissions,
   hasProjectPermission,
   mayUseProject,
@@ -29,10 +30,11 @@ import type { SurfaceTool } from "./project-mcp-surface.js";
  * call goes through the core service that already enforces the member's
  * permissions; nothing is checked by hand beyond choosing what to list.
  *
- * The draft is the member's own working copy of the program (their dev
- * branch): `program_write` changes it, `program_check` validates it, and
- * `program_deploy` publishes it as the project's new production commit.
- * The documents tools keep reading what is live.
+ * The draft is the member's own, private draft of the program: on a server
+ * a ref in the project's origin (ADR 0191), so every replica sees every
+ * write. `program_write` changes it, `program_check` validates it, and
+ * `program_deploy` publishes it as one new production commit. The
+ * documents tools keep reading what is live.
  */
 
 const READ_ONLY = { readOnlyHint: true } as const;
@@ -105,24 +107,23 @@ export function programTools(
           const changes = Array.isArray(args.changes) ? args.changes : [];
           if (changes.length === 0) throw new Error("changes is required");
           await refreshDraft(core, identity, projectId);
-          const written: string[] = [];
-          for (const raw of changes) {
+          const draftChanges = changes.map((raw) => {
             const change = asRecord(raw);
             const path = str(change.path);
             if (!path) throw new Error("Each change needs a path");
-            if (change.delete === true) {
-              await core.projects.deleteFile(identity, projectId, path);
-            } else {
-              const content = str(change.content);
-              if (content === undefined)
-                throw new Error(`${path}: pass content or delete: true`);
-              await core.projects.writeFile(identity, projectId, path, {
-                content,
-              });
-            }
-            written.push(path);
-          }
-          return { written };
+            if (change.delete === true) return { path, delete: true as const };
+            const content = str(change.content);
+            if (content === undefined)
+              throw new Error(`${path}: pass content or delete: true`);
+            return { path, content };
+          });
+          // One draft commit: every change lands, or none does.
+          await core.projects.writeFiles({
+            identity,
+            projectId,
+            changes: draftChanges,
+          });
+          return { written: draftChanges.map((change) => change.path) };
         }),
       },
       {
@@ -356,7 +357,7 @@ function overviewTool(
 
 /**
  * The caller's draft, first brought up to the published program when it has
- * no unpublished edits, so a member never works from a stale copy. A draft
+ * no unpublished edits, so a member never works from a stale draft. A draft
  * with edits keeps them; publishing merges.
  */
 async function refreshDraft(
@@ -366,9 +367,15 @@ async function refreshDraft(
 ) {
   const args = [identity.tenantId, projectId, identity.externalUserId] as const;
   const status = await core.deployment.getStatus(...args);
-  if (status.dirty || status.ahead > 0 || status.behind === 0) return status;
-  await core.deployment.pullFromRemote(...args);
-  return core.deployment.getStatus(...args);
+  if (status.dirty || status.behind === 0) return status;
+  // A local folder syncs through its own Git remote instead.
+  const pulled = await core.deployment
+    .pullFromRemote(...args)
+    .catch((error: unknown) => {
+      if (error instanceof DeploymentBlockedError) return null;
+      throw error;
+    });
+  return pulled ? core.deployment.getStatus(...args) : status;
 }
 
 function draftSummary(status: {

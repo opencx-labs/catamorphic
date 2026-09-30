@@ -1,8 +1,13 @@
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { CloneSource, OriginRepo, RemoteBackend } from "@catamorphic/git";
-import { FsOriginRepo } from "@catamorphic/git";
+import type {
+  CloneSource,
+  DraftSupport,
+  OriginRepo,
+  RemoteBackend,
+} from "@catamorphic/git";
+import { FsOriginRepo, RefMovedError } from "@catamorphic/git";
 import git, { type PushResult } from "isomorphic-git";
 import http from "isomorphic-git/http/node";
 import {
@@ -137,8 +142,15 @@ export class ArtifactsRemoteBackend implements RemoteBackend {
           url,
           name,
         });
-        const result = await fn(new FsOriginRepo(gitdir));
-        await this.pushChangedRefs({ gitdir, url, name, remoteRefs });
+        const origin = new MirrorOrigin(gitdir);
+        const result = await fn(origin);
+        await this.pushChangedRefs({
+          gitdir,
+          url,
+          name,
+          remoteRefs,
+          conditional: origin.conditional,
+        });
         return result;
       });
     this.originOperations.set(name, operation);
@@ -237,6 +249,8 @@ export class ArtifactsRemoteBackend implements RemoteBackend {
     url: string;
     name: string;
     remoteRefs: Map<string, string>;
+    /** Refs the callback moved with a compare-and-swap. */
+    conditional: ReadonlySet<string>;
   }): Promise<void> {
     const branches = await git.listBranches({
       fs: nodeFs,
@@ -274,20 +288,51 @@ export class ArtifactsRemoteBackend implements RemoteBackend {
       assertPushSucceeded(result);
     }
     for (const branch of changed) {
-      const result = await git.push({
-        fs: nodeFs,
-        http,
-        gitdir: opts.gitdir,
-        url: opts.url,
-        ref: `refs/heads/${branch}`,
-        remoteRef: `refs/heads/${branch}`,
-        // git-sync already enforces fast-forward semantics at a higher
-        // level; force mirrors FsOriginRepo.updateRef's behavior.
-        force: true,
-        onAuth,
-      });
+      const ref = `refs/heads/${branch}`;
+      // A compare-and-swap in the mirror only holds across replicas when
+      // the push may not overwrite: every conditional update is a
+      // fast-forward of the ref it read, so the server refuses it when
+      // another replica moved the ref meanwhile. Unconditional updates
+      // (a session branch whose base moved) keep forcing.
+      const conditional = opts.conditional.has(ref);
+      const moved = () =>
+        new RefMovedError({
+          ref,
+          expected: opts.remoteRefs.get(ref) ?? null,
+          actual: null,
+        });
+      const result = await git
+        .push({
+          fs: nodeFs,
+          http,
+          gitdir: opts.gitdir,
+          url: opts.url,
+          ref,
+          remoteRef: ref,
+          force: !conditional,
+          onAuth,
+        })
+        .catch((error: unknown) => {
+          if (conditional && error instanceof git.Errors.PushRejectedError)
+            throw moved();
+          throw error;
+        });
+      if (conditional && !pushSucceeded(result)) throw moved();
       assertPushSucceeded(result);
     }
+  }
+
+  /**
+   * Members' drafts (ADR 0191) are not kept in Artifacts: a sandbox's clone
+   * token reads every ref of the repository, so drafts would not stay
+   * private, and ref deletes cannot be made conditional across replicas.
+   */
+  async draftSupport(): Promise<DraftSupport> {
+    return {
+      supported: false,
+      reason:
+        "Cloudflare Artifacts repositories are readable by every sandbox given a clone token, so drafts could not stay private. Keep project origins in an object store (Postgres or S3) or bare repositories to let members draft on the server.",
+    };
   }
 
   private async remoteUrl(name: string): Promise<string> {
@@ -337,11 +382,29 @@ export class ArtifactsRemoteBackend implements RemoteBackend {
   }
 }
 
+function pushSucceeded(result: PushResult): boolean {
+  return result.ok && Object.values(result.refs).every((status) => status.ok);
+}
+
+/** The mirror's origin, remembering which refs moved by compare-and-swap. */
+class MirrorOrigin extends FsOriginRepo {
+  readonly conditional = new Set<string>();
+
+  override async updateRef(opts: {
+    ref: string;
+    sha: string;
+    expected?: string | null;
+  }): Promise<void> {
+    await super.updateRef(opts);
+    if (opts.expected !== undefined) this.conditional.add(opts.ref);
+  }
+}
+
 function assertPushSucceeded(result: PushResult): void {
   const rejected = Object.entries(result.refs).filter(
     ([, status]) => !status.ok,
   );
-  if (!result.ok || rejected.length > 0)
+  if (!pushSucceeded(result))
     throw new Error(
       result.error ??
         (rejected

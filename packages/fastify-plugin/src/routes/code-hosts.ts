@@ -5,7 +5,9 @@ import {
   ConnectionPermissionDeniedError,
   ConnectionUnavailableError,
   ProjectAlreadyLinkedError,
+  ProjectNotDeployedError,
   ProjectNotFoundError,
+  ReplicaClaimBusyError,
 } from "@catamorphic/core";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
@@ -231,7 +233,9 @@ function codeHostError(error: unknown, reply: FastifyReply): FastifyReply {
     return reply.status(404).send({ error: error.message });
   if (
     error instanceof ProjectAlreadyLinkedError ||
-    error instanceof ConnectionUnavailableError
+    error instanceof ProjectNotDeployedError ||
+    error instanceof ConnectionUnavailableError ||
+    error instanceof ReplicaClaimBusyError
   )
     return reply.status(409).send({ error: error.message });
   if (error instanceof Error && "status" in error) {

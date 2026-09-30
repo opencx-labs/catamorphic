@@ -1,5 +1,5 @@
 import type { DB, Json } from "@catamorphic/db";
-import { fetchRemote, type ProjectManager } from "@catamorphic/git";
+import { type ProjectManager, refreshPublished } from "@catamorphic/git";
 import { getTracer, setSpanCorrelation, withSpan } from "@catamorphic/otel";
 import {
   executionFiles,
@@ -526,7 +526,9 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 export class RunsService {
+  /** Replica memory (b): sizes of the prepared sources below. */
   private readonly preparedSourceBytes = new Map<string, number>();
+  /** Replica memory (b): prepared sources keyed by commit sha. */
   private readonly preparedSources = new Map<string, Promise<PreparedSource>>();
 
   constructor(
@@ -1120,6 +1122,7 @@ export class RunsService {
         if (new Date(job.availableAt).getTime() > Date.now()) {
           return suspended("backoff");
         }
+        const claimedAt = performance.now();
         const claimed = await this.deps.executionJobs.claimById({
           jobId: job.id,
           workerId,
@@ -1130,6 +1133,7 @@ export class RunsService {
           job: claimed,
           workerId,
           leaseSeconds: SYNC_LEASE_SECONDS,
+          claimedAt,
           signal: controller.signal,
         });
         // Every disposition — completed, deferred, failed, lease lost — is
@@ -2115,15 +2119,15 @@ export class RunsService {
       );
       if (hit) return hit;
     }
-    const repo = await this.deps.projectManager.openDev(
-      args.identity.tenantId,
-      args.projectId,
-      args.identity.externalUserId,
-    );
+    const repo = await this.deps.projectManager.openDraft({
+      tenantId: args.identity.tenantId,
+      projectId: args.projectId,
+      externalUserId: args.identity.externalUserId,
+    });
     try {
-      // A preview app build (the `dev` channel) is compiled from the project
-      // as it is on this host, uncommitted edits included, so its calls read
-      // the same working tree; HEAD is recorded as provenance only.
+      // A preview app build (the `dev` channel) is compiled from the caller's
+      // draft, so its calls read the same files; HEAD is recorded as
+      // provenance only.
       if (!args.commitSha && callsPreviewApp(args.identity)) {
         return await prepareSource({
           projectId: args.projectId,
@@ -2132,12 +2136,12 @@ export class RunsService {
           commitSha: await repo.resolveRef("HEAD").catch(() => null),
         });
       }
-      await fetchRemote({
-        dev: repo,
+      await refreshPublished({
+        repo,
         remote,
         tenantId: args.identity.tenantId,
         projectId: args.projectId,
-        remoteBranch: args.remoteBranch ?? "main",
+        branch: args.remoteBranch ?? "main",
       });
       // Without a sha the caller asks for "whatever main is now": the ref is
       // resolved first so that an unchanged main is still a cache hit.

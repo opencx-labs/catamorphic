@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  fetchRemote,
   NativeProjectRepo,
+  PROGRAM_READER_ID,
+  type ProjectDraft,
   type ProjectManager,
-  type ProjectRepo,
 } from "@catamorphic/git";
 import { publishedRef } from "@catamorphic/workflow/project-layout";
 
@@ -17,37 +17,85 @@ import { publishedRef } from "@catamorphic/workflow/project-layout";
  * collaborator with a working copy — role files, the documents surface —
  * so viewers never get a clone of their own.
  *
- * The reader identity names one shared dev copy per project on backends
- * that keep per-user working copies; on `pathResolver` backends (the
- * desktop) it is the project folder itself.
+ * The reader is no member (a reserved id no user can hold): on a host
+ * with an origin it reads the published `main` straight from the origin,
+ * never a draft (ADR 0191); on `pathResolver` backends (the desktop) it is
+ * the project folder itself.
  */
-export const PROGRAM_READER = "catamorphic-reader";
+export const PROGRAM_READER = PROGRAM_READER_ID;
 
 /**
- * How long a fetched origin sha is trusted before re-fetching. Reads of the
- * program come in bursts (a sync of N files, a search over a tree); one
- * fetch per burst is plenty, and roles/tools already tolerate this lag.
+ * Replica memory (a), ADR 0193: revision reads in flight, so a burst of
+ * requests for one project shares one read of its origin. An entry lives
+ * only while its read does; nothing is remembered after.
  */
-const FETCH_TTL_MS = 5_000;
-const managerFetches = new WeakMap<
+const revisionReads = new WeakMap<
   ProjectManager,
-  Map<string, { at: number; sha: string | null }>
+  Map<string, Promise<string | null>>
 >();
 
-/** Drop the memoized origin fetch (a push just landed; read fresh). */
-export function forgetProgramFetch(
+/**
+ * The commit "the program as shared" stands at now, without reading it:
+ * the origin's `main` when the project has a remote (one ref read: an
+ * indexed row on a Postgres object store), the local published ref (else
+ * `HEAD`) for a project folder, and null for a working tree with neither.
+ * Caches of what the program says are keyed by it (ADR 0193), so every
+ * replica sees a deploy as soon as it lands and nothing needs
+ * invalidating. Concurrent calls for one project share one read.
+ */
+export function programRevision(
   projectManager: ProjectManager,
   tenantId: string,
   projectId: string,
-): void {
-  managerFetches.get(projectManager)?.delete(`${tenantId}:${projectId}`);
+): Promise<string | null> {
+  let reads = revisionReads.get(projectManager);
+  if (!reads) {
+    reads = new Map();
+    revisionReads.set(projectManager, reads);
+  }
+  const key = `${tenantId}:${projectId}`;
+  const inflight = reads.get(key);
+  if (inflight) return inflight;
+  const read = readProgramRevision(projectManager, tenantId, projectId);
+  reads.set(key, read);
+  const forget = () => {
+    if (reads.get(key) === read) reads.delete(key);
+  };
+  read.then(forget, forget);
+  return read;
 }
 
+async function readProgramRevision(
+  projectManager: ProjectManager,
+  tenantId: string,
+  projectId: string,
+): Promise<string | null> {
+  if (await projectManager.localPath({ tenantId, projectId })) {
+    const repo = await projectManager.open(tenantId, projectId);
+    try {
+      return await repo
+        .resolveRef(publishedRef())
+        .catch(() => repo.resolveRef("HEAD").catch(() => null));
+    } finally {
+      await repo.dispose();
+    }
+  }
+  const remote = projectManager.remoteBackend;
+  if (!remote) return null;
+  return remote.withOrigin(tenantId, projectId, (origin) =>
+    origin.resolveRef("refs/heads/main"),
+  );
+}
+
+/**
+ * Read the program as shared. `fn` receives the commit it reads at (null
+ * for a working tree), which is what callers key their caches by.
+ */
 export async function withProgram<T>(
   projectManager: ProjectManager,
   tenantId: string,
   projectId: string,
-  fn: (repo: ProjectRepo, ref: string | null) => Promise<T>,
+  fn: (repo: ProjectDraft, ref: string | null) => Promise<T>,
   options?: { workingTree?: boolean; publishedOnly?: boolean },
 ): Promise<T> {
   if (await projectManager.localPath({ tenantId, projectId })) {
@@ -67,35 +115,20 @@ export async function withProgram<T>(
     }
   }
   const remote = projectManager.remoteBackend;
+  // With an origin the reader opens the published view: objects read
+  // straight from the origin, never a draft and never a copy on this
+  // machine (ADR 0191). Without one, this machine's copy is the truth.
   const repo = remote
-    ? await projectManager.openDev(tenantId, projectId, PROGRAM_READER)
+    ? await projectManager.openPublished({ tenantId, projectId })
     : await projectManager.open(tenantId, projectId);
   try {
     if (!remote) return await fn(repo, null);
-    let recentFetches = managerFetches.get(projectManager);
-    if (!recentFetches) {
-      recentFetches = new Map();
-      managerFetches.set(projectManager, recentFetches);
-    }
-    const key = `${tenantId}:${projectId}`;
-    const recent = recentFetches.get(key);
-    if (recent && Date.now() - recent.at < FETCH_TTL_MS) {
-      return await fn(repo, recent.sha);
-    }
-    await fetchRemote({
-      dev: repo,
-      remote,
-      tenantId,
-      projectId,
-      remoteBranch: "main",
-    });
-    const sha = await repo.resolveRef(publishedRef()).catch(() => null);
-    for (const [cachedKey, value] of recentFetches) {
-      if (Date.now() - value.at >= FETCH_TTL_MS || recentFetches.size >= 256)
-        recentFetches.delete(cachedKey);
-    }
-    recentFetches.set(key, { at: Date.now(), sha });
-    return await fn(repo, sha);
+    // The origin's `main` as it is now, on every read, so no replica serves
+    // a stale tree (ADR 0193); concurrent reads share one ref read.
+    return await fn(
+      repo,
+      await programRevision(projectManager, tenantId, projectId),
+    );
   } finally {
     await repo.dispose();
   }
@@ -103,7 +136,7 @@ export async function withProgram<T>(
 
 /** File paths of the program under a prefix (`""` = whole tree). */
 export async function listProgramFiles(
-  repo: ProjectRepo,
+  repo: ProjectDraft,
   ref: string | null,
   prefix: string,
 ): Promise<string[]> {
@@ -118,7 +151,7 @@ export async function listProgramFiles(
  * a syncing client skip unchanged files without fetching them.
  */
 export async function listProgramBlobs(
-  repo: ProjectRepo,
+  repo: ProjectDraft,
   ref: string | null,
   prefix: string,
 ): Promise<Array<{ path: string; digest: string }>> {
@@ -155,7 +188,7 @@ export async function listProgramBlobs(
 
 /** Contents of the program's files under a prefix. */
 export async function readProgramFiles(
-  repo: ProjectRepo,
+  repo: ProjectDraft,
   ref: string | null,
   prefix: string,
 ): Promise<Record<string, string>> {
@@ -181,7 +214,7 @@ export async function readProgramFiles(
 
 /** One program file's raw bytes (binaries intact), or null when absent. */
 export async function readProgramBytes(
-  repo: ProjectRepo,
+  repo: ProjectDraft,
   ref: string | null,
   path: string,
 ): Promise<Uint8Array | null> {
@@ -190,7 +223,7 @@ export async function readProgramBytes(
 
 /** One program file, or null when absent. */
 export async function readProgramFile(
-  repo: ProjectRepo,
+  repo: ProjectDraft,
   ref: string | null,
   path: string,
 ): Promise<string | null> {

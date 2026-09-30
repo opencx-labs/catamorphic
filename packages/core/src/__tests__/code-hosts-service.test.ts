@@ -2,7 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { type DB, DEFAULT_SCHEMA, migrateToLatest } from "@catamorphic/db";
-import { FsBackend, nativeGit, ProjectManager } from "@catamorphic/git";
+import {
+  FsBackend,
+  InMemoryObjectStore,
+  nativeGit,
+  ObjectRemoteBackend,
+  ProjectManager,
+} from "@catamorphic/git";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
@@ -11,8 +17,10 @@ import type { Identity } from "../identity.js";
 import {
   CodeHostNotConnectedError,
   ProjectAlreadyLinkedError,
+  ProjectNotDeployedError,
 } from "../services/code-hosts-service.js";
-import { fakeCodeHost } from "./code-host-fixture.js";
+import { MemoryCredentialVault } from "../services/credential-vault.js";
+import { fakeCodeHost, gitHttpServer } from "./code-host-fixture.js";
 
 /** ADR 0177: every code-host operation acts through one connection. */
 const database = new PGlite({ extensions: { pgcrypto } });
@@ -316,13 +324,91 @@ describe("CodeHostsService", () => {
     ).rejects.toThrow(ProjectAlreadyLinkedError);
   });
 
+  it("publishes a server project's published program, and refuses one with nothing published before creating anything", async () => {
+    // A server project: no folder of its own, its program in an origin.
+    const server = new ProjectManager(
+      new FsBackend(path.join(temp, "server")),
+      new ObjectRemoteBackend({ store: new InMemoryObjectStore() }),
+    );
+    // An ephemeral checkout pushes over HTTP, as it would to a code host.
+    const bare = await bareRepository("server-published", {});
+    const http = await gitHttpServer(path.join(temp, "remotes"));
+    const cloneUrl = `${http.url}/server-published.git`;
+    const forge = fakeCodeHost({
+      db,
+      projectManager: server,
+      remoteBase: http.url,
+    });
+    const gail: Identity = { tenantId, externalUserId: "gail" };
+    await forge.connectPersonal(gail, "gail-token");
+    const created: string[] = [];
+    forge.host.createRepository = async ({ name }) => {
+      created.push(name);
+      return {
+        fullName: `gail/${name}`,
+        name,
+        owner: "gail",
+        private: true,
+        defaultBranch: "trunk",
+        cloneUrl,
+        description: null,
+        pushedAt: null,
+      };
+    };
+    const project = await db
+      .insertInto("projects")
+      .values({ id: crypto.randomUUID(), tenant_id: tenantId, name: "plan" })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const publish = () =>
+      forge.codeHosts.publishProject({
+        identity: gail,
+        projectId: project.id,
+        provider: "forge",
+        name: "plan",
+      });
+
+    try {
+      await expect(publish()).rejects.toThrow(ProjectNotDeployedError);
+      expect(created).toEqual([]);
+      expect(
+        await db
+          .selectFrom("projects")
+          .select("remote_url")
+          .where("id", "=", project.id)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ remote_url: null });
+
+      await server.publishFiles({
+        tenantId,
+        projectId: project.id,
+        files: { "plan.md": "ship it" },
+        message: "Plan",
+        author: { name: "Gail", email: "gail@example.invalid" },
+      });
+      expect(await publish()).toEqual({
+        fullName: "gail/plan",
+        remoteUrl: cloneUrl,
+      });
+      expect(created).toEqual(["plan"]);
+      expect((await nativeGit(bare, ["show", "trunk:plan.md"])).trim()).toBe(
+        "ship it",
+      );
+    } finally {
+      await http.close();
+    }
+  });
+
   it("links one repository when publishes race, here or on another replica", async () => {
     const frank: Identity = { tenantId, externalUserId: "frank" };
+    // Replicas share the organization's vault, as they would in production.
+    const vault = new MemoryCredentialVault();
     const replica = async (name: string) => {
       const forge = fakeCodeHost({
         db,
         projectManager: manager,
         remoteBase: temp,
+        vault,
       });
       await forge.connectPersonal(frank, "frank-token");
       const bare = await bareRepository(name, {});
@@ -374,31 +460,42 @@ describe("CodeHostsService", () => {
     });
     expect(here.created).toEqual(["race"]);
 
-    // Another replica that got as far as creating one never relinks.
+    // Two replicas publishing at once create one repository between them:
+    // the claim in Postgres makes the second wait, and it then finds the
+    // project linked (ADR 0193).
     await db
       .updateTable("projects")
       .set({ remote_url: null, remote_ownership: null })
       .where("id", "=", project.id)
       .execute();
     const there = await replica("race-there");
-    const racing = await replica("race-racing");
-    const original = racing.forge.host.createRepository;
-    racing.forge.host.createRepository = async (input) => {
-      // The other replica links while this one creates its repository.
-      await there.forge.connectPersonal(frank, "frank-token");
-      await publish(there.forge);
-      if (!original) throw new Error("No repository creation");
-      return original(input);
-    };
-    await expect(publish(racing.forge)).rejects.toThrow(
-      ProjectAlreadyLinkedError,
-    );
+    const elsewhere = await replica("race-elsewhere");
+    for (const side of [there, elsewhere]) {
+      const create = side.forge.host.createRepository;
+      if (!create) throw new Error("No repository creation");
+      side.forge.host.createRepository = async (input) => {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        return create(input);
+      };
+    }
+    const raced = await Promise.allSettled([
+      publish(there.forge),
+      publish(elsewhere.forge),
+    ]);
+    expect(
+      raced.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(raced.find((result) => result.status === "rejected")).toMatchObject({
+      reason: expect.any(ProjectAlreadyLinkedError),
+    });
+    expect([...there.created, ...elsewhere.created]).toEqual(["race"]);
+    const linked = there.created.length > 0 ? there : elsewhere;
     expect(
       await db
         .selectFrom("projects")
         .select("remote_url")
         .where("id", "=", project.id)
         .executeTakeFirstOrThrow(),
-    ).toEqual({ remote_url: there.bare });
+    ).toEqual({ remote_url: linked.bare });
   });
 });

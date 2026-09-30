@@ -11,7 +11,11 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { FsBackend, ProjectManager } from "@catamorphic/git";
+import {
+  DraftsUnsupportedError,
+  FsBackend,
+  ProjectManager,
+} from "@catamorphic/git";
 import { afterAll, describe, expect, it } from "vitest";
 import { ArtifactsApiError, ArtifactsClient } from "../artifacts-client.js";
 import { ArtifactsRemoteBackend } from "../artifacts-remote-backend.js";
@@ -115,17 +119,27 @@ describeIf("ArtifactsRemoteBackend (integration)", () => {
     expect(originMain).toBe(head);
   }, 120_000);
 
-  it("seeds a second user's working copy from the Artifacts origin", async () => {
+  it("seeds a checkout from the Artifacts origin and refuses member drafts (ADR 0191)", async () => {
     const manager = new ProjectManager(
       new FsBackend(await tmp("artifacts-dev2-")),
       backend,
     );
-    const repo = await manager.openDev(TENANT, PROJECT, "user-2");
+    const repo = await manager.openEphemeral({
+      tenantId: TENANT,
+      projectId: PROJECT,
+    });
     const files = await repo.readAllFiles();
     await repo.dispose();
 
     expect(files["src/index.ts"]).toContain("artifacts");
     expect(files[".work/project.json"]).toContain("artifacts-e2e");
+    await expect(
+      manager.openDraft({
+        tenantId: TENANT,
+        projectId: PROJECT,
+        externalUserId: "user-2",
+      }),
+    ).rejects.toBeInstanceOf(DraftsUnsupportedError);
   }, 120_000);
 
   it("hands out a clone source usable by a plain git client", async () => {

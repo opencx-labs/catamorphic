@@ -387,7 +387,7 @@ Most hosts do not want to hand-write scopes. Commit roles into the project — `
 { "version": 1, "name": "Brain Maintainer", "permissions": ["brain:maintain"], "agents": ["brain-maintainer"] }
 ```
 
-`{param}` placeholders are filled from per-user **grants** (`{ customer: ["acme", "globex"] }`), one ref per value; an entry whose placeholder has no grant yields nothing. `permissions` become the identity's `projectPermissions`; an admin who may not see the whole store simply lists fewer documents. Writing, committing or publishing any `.work/roles/*.json` needs `roles:write`, whoever made the edit. Role files are read from the shared origin `main` (a project without a remote reads its working tree), cached briefly (`rolesCacheTtlMs`, default 10s), and never throw: a broken file is reported by `GET /projects/:id/roles` and contributes nothing.
+`{param}` placeholders are filled from per-user **grants** (`{ customer: ["acme", "globex"] }`), one ref per value; an entry whose placeholder has no grant yields nothing. `permissions` become the identity's `projectPermissions`; an admin who may not see the whole store simply lists fewer documents. Writing, committing or publishing any `.work/roles/*.json` needs `roles:write`, whoever made the edit. Role files are read from the shared origin `main` (a project without a remote reads its working tree), cached per published commit (every resolve reads the current one, so a deploy applies on every replica at once, ADR 0193), and never throw: a broken file is reported by `GET /projects/:id/roles` and contributes nothing.
 
 Two ways to turn a verified user into an identity:
 
@@ -535,7 +535,7 @@ Hooks shipped:
 
 - **Projects + workflows + files**: `useProjects`, `useProject`, `useCreateProject`, `useUpdateProject`, `useDeleteProject`, `useProjectFiles`, `useProjectFile`, `useWriteProjectFile`, `useWorkflows`, `useWorkflow`.
 - **Runs**: `useRuns`, `useRun`, `useTriggerRun`, `useCancelRun`, `usePauseRunProcessing`, `useResumeRunProcessing`, `useSubmitRunInput`, `useRunItems`, `useRunItemSteps`.
-- **Git**: `useProjectGit`, `useProjectBranches`, `useProjectCommits`, `useProjectConflicts`, `useCreateBranch`, `useCheckoutBranch`, `useCommitChanges`, `useDeployProject`, plus the composite `useProjectGitState({ projectId, baselineFiles })` for multi-branch draft persistence.
+- **Git**: `useProjectGit`, `useProjectCommits`, `useProjectConflicts`, `useCommitChanges`, `useDeployProject`, plus the composite `useProjectGitState({ projectId, baselineFiles })` for client-side draft persistence.
 - **Plugins + secrets**: `usePluginCatalog`, `useProjectPlugins`, `useAttachPlugin`, `useDetachPlugin`, `useProjectSecrets`, `useUpsertProjectSecret`, `useDeleteProjectSecret`.
 - **Agent sessions**: `useAgentSessions`, `useAgentSession`, `useCreateAgentSession`, `useSendAgentMessage`, `useAcknowledgeAgentSessionAttention`, `useArchiveAgentSession`, `useUnarchiveAgentSession`.
 - **Workflow enablement**: `useWorkflowEnablements`, `usePreviewWorkflowEnablement`, `useCreateWorkflowEnablement`, `useUpdateWorkflowEnablement`.
@@ -919,6 +919,17 @@ as **This machine** and does not require database credentials (ADR 0098).
 The stock Postgres host implements shared objects, machine leases, auth, and
 durable approvals. Custom hosts register `WorkerNodesService` leases, inject
 `workerNode: { id, token }`, and renew/release them with their host lifecycle.
+A host whose instances keep nothing durable on disk registers each process as
+a new `disposable: true` node and calls `core.nodeRecovery.recoverLostNodes({
+authorityId })` periodically: a disposable node that released its lease, or
+whose lease lapsed past `LOST_NODE_GRACE_MS`, has its workflow runs moved to a
+live node and its chats released for readmission
+([ADR 0190](docs/decisions/0190-disposable-control-plane-replicas.md)).
+A remote executor owns its node lease (ADR 0192): the host connects it with
+`WorkerNodesService.connectRemote({ epoch, offer, ... })`, renews it from the
+executor's own calls with `renewRemote`, and builds its sandbox provider from
+the row with `remoteProvider`; any host of the authority then claims its
+turns. `workerNode` names only the process's own local node.
 Enable `clientExecution: true` to accept authenticated member sandbox runners;
 `startClientRunner` supplies the transport-independent client loop. See the
 [cluster setup reference](skills/setup-work-server/references/cluster-deployment.md)

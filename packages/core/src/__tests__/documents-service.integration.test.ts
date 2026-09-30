@@ -156,11 +156,10 @@ describeIf("DocumentsService (ADR 0055)", () => {
     };
 
     // The program: a handbook and a workflow, pushed to origin.
-    const repo = await projectManager.openDev(
-      root.tenantId,
-      projectId,
-      root.externalUserId,
-    );
+    const repo = await projectManager.openEphemeral({
+      tenantId: root.tenantId,
+      projectId: projectId,
+    });
     try {
       await repo.writeFile(
         "docs/handbook.md",

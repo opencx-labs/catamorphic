@@ -1,6 +1,6 @@
 # 0173 — Keyed chats: project keys, close, idle release, and their own placement
 
-- **Status:** Accepted
+- **Status:** Accepted; idle release runs on any replica under a claim (0192)
 - **Date:** 2026-09-27
 - **Refines:** 0100, 0156, 0167
 

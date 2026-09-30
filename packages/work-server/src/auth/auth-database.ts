@@ -96,6 +96,14 @@ async function openPostgresAuthDatabase(
           : types.getTypeParser(oid, format),
     },
   });
+  // The server can end an idle pooled connection (a restart, a dropped
+  // database); node-postgres discards it and reports it here, and an
+  // unheard report would crash the process.
+  pool.on("error", (error) => {
+    console.warn(
+      `[catamorphic] An idle auth database connection closed; the pool replaces it: ${error.message}`,
+    );
+  });
   const database: NonNullable<BetterAuthOptions["database"]> = {
     dialect: new BetterAuthTypeNames(
       new SchemaScopedPostgresDialect({ pool, schema: authSchema }),

@@ -99,19 +99,41 @@ Point an AI setup agent at skills/setup-work-server in the Work repository to
 configure authentication, projects, ordinary roles, and the first user.
 `);
 
+/**
+ * Leave before a supervisor's kill: Kubernetes sends SIGKILL 30 seconds
+ * after SIGTERM by default, and a step that will not stop must not keep
+ * the machine's lease from being given back (ADR 0190).
+ */
+const SHUTDOWN_DEADLINE_MS = 25_000;
+
 let stopping = false;
-async function stop(signal: string) {
+async function stop(reason: string, exitCode: number) {
   if (stopping) return;
   stopping = true;
-  console.log(`${signal}: shutting down…`);
+  console.log(`${reason}: shutting down…`);
+  const deadline = setTimeout(() => {
+    console.error("Shutdown did not finish in time; exiting now");
+    process.exit(1);
+  }, SHUTDOWN_DEADLINE_MS);
+  let code = exitCode;
   mdns?.close();
   try {
     await server.shutdown();
+  } catch (error) {
+    console.error("Shutdown failed:", error);
+    code = 1;
   } finally {
     emitLog({ scope: "work-server", body: "Server stopped" });
-    await telemetry.shutdown();
+    await telemetry.shutdown().catch(() => {});
   }
-  process.exit(0);
+  clearTimeout(deadline);
+  process.exit(code);
 }
-process.on("SIGTERM", () => void stop("SIGTERM"));
-process.on("SIGINT", () => void stop("SIGINT"));
+process.on("SIGTERM", () => void stop("SIGTERM", 0));
+process.on("SIGINT", () => void stop("SIGINT", 0));
+// A machine lease that lapsed never renews (ADR 0190): exit so the
+// supervisor (a restart policy, a Kubernetes Deployment) starts a fresh
+// process, which registers a new lease.
+void server.lost.then(() =>
+  stop("This machine's lease is lost and cannot be renewed", 1),
+);

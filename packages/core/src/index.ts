@@ -125,11 +125,13 @@ export {
   type AgentTodoStatus,
   AgentTurnInProgressError,
   type AgentTurnSettledEvent,
+  AgentTurnUnsettledError,
   type ArchiveSessionResourcesHandler,
   type NativeAgentCheckout,
   PersonalLoginUnavailableError,
   type SessionPlacement,
   type SyncedFileChange,
+  type UnsettledTurnState,
   UnsupportedAgentTopologyError,
 } from "./services/agent-sessions-service.js";
 export {
@@ -216,6 +218,7 @@ export {
   CodeHostUnsupportedError,
   ProjectAlreadyLinkedError,
   ProjectHasNoRemoteError,
+  ProjectNotDeployedError,
 } from "./services/code-hosts-service.js";
 export {
   type CodingAgentRegistry,
@@ -422,6 +425,11 @@ export {
   usageFromJson,
 } from "./services/model-gateway.js";
 export {
+  LOST_NODE_GRACE_MS,
+  type NodeRecoveryResult,
+  NodeRecoveryService,
+} from "./services/node-recovery-service.js";
+export {
   gitignoreLiteral,
   personalExcludeBlock,
   personalLoginHome,
@@ -451,7 +459,6 @@ export {
   PluginsService,
   UndeclaredSecretError,
 } from "./services/plugins-service.js";
-export { forgetProgramFetch } from "./services/program-reader.js";
 export {
   DEFAULT_ENVIRONMENT,
   DEFAULT_IDLE_RELEASE_MINUTES,
@@ -523,6 +530,8 @@ export {
   RateReservationsService,
 } from "./services/rate-reservations-service.js";
 export {
+  EXECUTOR_RESTARTED_ERROR,
+  nodeExecutor,
   type RemoteExecutorLease,
   RemoteExecutorLeaseLostError,
   type RemoteOperation,
@@ -534,7 +543,17 @@ export {
 export {
   type RemoteSyncOutcome,
   RemoteSyncService,
+  ServerDraftError,
 } from "./services/remote-sync-service.js";
+export {
+  type HeldReplicaClaim,
+  ReplicaClaimBusyError,
+  ReplicaClaimLostError,
+  releaseReplicaClaim,
+  renewReplicaClaim,
+  takeReplicaClaim,
+  withReplicaClaim,
+} from "./services/replica-claims.js";
 export {
   DEFAULT_RUN_RETENTION_DAYS,
   type PurgeResult,
@@ -740,6 +759,10 @@ export {
   EnvironmentCapacityError,
 } from "./services/worker-capacity.js";
 export {
+  REMOTE_EPOCH_PATTERN,
+  RemoteEpochSupersededError,
+  type RemoteNodeOffer,
+  RemoteNodeOfferSchema,
   WORKER_NODE_LEASE_MS,
   type WorkerNode,
   type WorkerNodeLease,
