@@ -28,6 +28,17 @@ import type { ProfileConfigManager } from "./profile-config.js";
 /** Electron forwards pointer moves to a click-through window only here. */
 const DOCK_PASS_THROUGH =
   process.platform === "darwin" || process.platform === "win32";
+const dockShapeSchema = z
+  .array(
+    z.object({
+      x: z.number().int().min(0),
+      y: z.number().int().min(0),
+      width: z.number().int().positive(),
+      height: z.number().int().positive(),
+    }),
+  )
+  .max(256)
+  .nullable();
 
 /** One owner per project. Presentation can be hidden without disposing resources. */
 export class DesktopWorkspaces {
@@ -356,8 +367,9 @@ export class DesktopWorkspaces {
     // the platform keeps forwarding pointer moves to it (macOS, Windows).
     // Linux does not forward: an ignoring window loses the pointer at once,
     // its leave restores input, and the next move ignores again, dozens of
-    // times a second while the pointer rests. There the dock keeps its
-    // clicks. Answers whether clicks now pass through.
+    // times a second while the pointer rests. There the window is shaped to
+    // its content instead (dock-shape below). Answers whether clicks now
+    // pass through.
     ipcMain.handle(
       "catamorphic:dock-ignore-mouse",
       (event, ignore: boolean) => {
@@ -369,6 +381,25 @@ export class DesktopWorkspaces {
         return passThrough;
       },
     );
+    // Where clicks cannot pass through (Linux), the window takes the shape
+    // of what the dock draws, so its empty space is simply not the dock's:
+    // clicks there reach whatever is behind, and nothing flickers.
+    ipcMain.handle("catamorphic:dock-shape", (event, raw: unknown) => {
+      if (DOCK_PASS_THROUGH) return;
+      const profileId = options.windows.profileFor(event.sender);
+      const window = this.floating.get(profileId);
+      if (!window || window.webContents !== event.sender) return;
+      const rects = dockShapeSchema.parse(raw);
+      // An empty list restores the whole window, so "nothing drawn" is one
+      // transparent pixel in the corner.
+      window.setShape(
+        rects === null
+          ? []
+          : rects.length > 0
+            ? rects
+            : [{ x: 0, y: 0, width: 1, height: 1 }],
+      );
+    });
     ipcMain.handle("catamorphic:dock-resize", (event, size: DockSize) => {
       const profileId = options.windows.profileFor(event.sender);
       const window = this.floating.get(profileId);

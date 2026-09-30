@@ -415,7 +415,8 @@ function signalProcessGroup(
     // all exiting (zombies not yet reaped) refuses signals; it is on its
     // way out, and processGroupIsLive keeps waiting until it is gone.
     const code = errorCode(error);
-    if (code !== "ESRCH" && code !== "EPERM") throw error;
+    const exiting = code === "EPERM" && process.platform === "darwin";
+    if (code !== "ESRCH" && !exiting) throw error;
   }
 }
 

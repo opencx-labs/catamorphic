@@ -219,9 +219,17 @@ describe("observed Git overviews", { timeout: 90_000 }, () => {
       string,
       (name: string | null, event?: string) => void
     >();
+    let reading = 0;
+    let lastReadEnd = Date.now();
     const read = vi.fn(async (...args: Parameters<typeof gitOverview>) => {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      return gitOverview(...args);
+      reading += 1;
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return await gitOverview(...args);
+      } finally {
+        reading -= 1;
+        lastReadEnd = Date.now();
+      }
     });
     const monitor = makeMonitor({
       read,
@@ -246,6 +254,12 @@ describe("observed Git overviews", { timeout: 90_000 }, () => {
     // times the last scan, so on a loaded machine the first scan (with its
     // Git discovery) can hold the next one back past the whole burst.
     await waitFor(() => expect(scans()).toBeGreaterThanOrEqual(1));
+    // Then let the count settle, so the throttle's tail is counted too: the
+    // saves have stopped, so a refresh still owed fires within one capped
+    // cooldown (5 s) plus the debounce ceiling (1 s) after the last scan.
+    await waitFor(() =>
+      expect(reading === 0 && Date.now() - lastReadEnd > 6_000).toBe(true),
+    );
     // 30 saves: 30 scans unthrottled, about 4 with a 100 ms scan and its
     // 400 ms cooldown. A loaded machine scans slower and cools longer, so
     // it only scans less.

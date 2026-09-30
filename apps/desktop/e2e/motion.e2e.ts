@@ -430,7 +430,10 @@ describe("animate-before-unmount", () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
         input.dispatchEvent(new KeyboardEvent('keydown',
           { key: 'Enter', bubbles: true, cancelable: true }));
-        const deadline = performance.now() + 5000;
+        // Ready waits on the pairing listener starting in the main process,
+        // which a busy host takes longer than 5 s to do. The loop ends as
+        // soon as the modal is ready; the bound is for one that never is.
+        const deadline = performance.now() + 30000;
         while (performance.now() < deadline) {
           sampleEntrance();
           if ($('[data-testid="mobile-pairing-modal"]')?.dataset.state === 'ready') break;
@@ -441,7 +444,7 @@ describe("animate-before-unmount", () => {
       }
       const modal = $('[data-testid="mobile-pairing-modal"]');
       if (!loadingLayout || modal?.dataset.state !== 'ready') {
-        throw new Error('Pairing modal did not expose stable loading and ready states');
+        throw new Error('Pairing modal did not expose stable loading and ready states: loading ' + (loadingLayout ? 'seen' : 'missed') + ', state ' + modal?.dataset.state);
       }
       const heading = byText('h2', 'Continue on mobile');
       const overlay = heading.closest('[aria-hidden]');

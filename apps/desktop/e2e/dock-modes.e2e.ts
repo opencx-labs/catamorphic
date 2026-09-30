@@ -230,6 +230,11 @@ describe("dock modes", () => {
   }, 60_000);
 
   it("in its own window, lurks when the window blurs while the agent works", async () => {
+    // The private display parks its pointer mid-screen, where the detached
+    // dock opens: a pointer resting on the chat rightly keeps it expanded
+    // (on Linux the dock's shape changing under it reports it there). Park
+    // it on the workspace, away from the dock, as a person reading would.
+    await app.movePointer({ x: 1, y: 1 });
     await app.eval(`window.catamorphicDesktop.dockDetach(true)`);
     const dock = await app.connectToFrame("surface=dock");
     const dockHelpers = `${helpers}`;
@@ -355,42 +360,60 @@ describe("dock modes", () => {
       new MutationObserver(() => { window.__passThroughChanges += 1; })
         .observe(document.documentElement, { attributes: true, attributeFilter: ['data-dock-pass-through'] });
       return true;`);
-    await app.movePointer(margin);
-    // The dock answers the hover by asking the main process to let clicks
-    // through; the click must come after that has been applied. Linux does
-    // not forward pointer moves to a click-through window, so there the
-    // dock keeps its clicks (it used to flip between the two dozens of
-    // times a second while the pointer rested over empty space).
-    const passesThrough = process.platform === "linux" ? "false" : "true";
-    await dockWait(
-      `return document.documentElement.dataset.dockPassThrough === '${passesThrough}';`,
-      { label: "dock answers the pointer over its margin" },
-    );
+    const marginInDock = {
+      x: Math.floor(first.chat.left / 2),
+      y: first.chat.top + Math.floor(first.chat.height / 2),
+    };
+    const shaped = process.platform === "linux";
+    if (shaped) {
+      // Linux cannot let clicks through a window while telling it where the
+      // pointer is; the window takes the shape of what the dock draws. The
+      // click may only come once that shape leaves the margin out and
+      // keeps the composer in.
+      await dockWait(
+        `const shape = document.documentElement.dataset.dockShape;
+         if (!shape) return false;
+         const rects = JSON.parse(shape);
+         if (!Array.isArray(rects)) return false;
+         const inside = (x, y) => rects.some((r) => x >= r.x && y >= r.y && x < r.x + r.width && y < r.y + r.height);
+         return !inside(${marginInDock.x}, ${marginInDock.y}) &&
+           inside(${first.composer.x}, ${first.composer.y});`,
+        { label: "dock window shaped to its content" },
+      );
+      await app.movePointer(margin);
+    } else {
+      await app.movePointer(margin);
+      // The dock answers the hover by asking the main process to let clicks
+      // through; the click must come after that has been applied.
+      await dockWait(
+        `return document.documentElement.dataset.dockPassThrough === 'true';`,
+        { label: "dock lets clicks through over its margin" },
+      );
+    }
     await app.clickPointer(margin);
     const marginHit = await dockRun<string | null>(
-      `const hit = document.elementFromPoint(${Math.floor(first.chat.left / 2)}, ${first.chat.top + Math.floor(first.chat.height / 2)});
+      `const hit = document.elementFromPoint(${marginInDock.x}, ${marginInDock.y});
        return hit ? hit.tagName : null;`,
     );
     // The dock reads the margin as empty space (only the body answers).
     expect(marginHit).toBe("BODY");
-    if (process.platform === "darwin") {
-      // macOS honors the window's mouse-ignore, so the click lands behind
-      // it. On Linux the dock keeps the click, so only the hit test counts.
-      await app
-        .waitFor(`window.__throughClicks > 0`, {
-          label: "click reached the workspace window",
-          timeoutMs: 10_000,
-        })
-        .catch(async (error: unknown) => {
-          const state = await dockRun(`return {
-            hasFocus: document.hasFocus(),
-            dockPointerDowns: window.__dockPointerDowns,
-          };`);
-          throw new Error(
-            `${String(error)}; margin ${JSON.stringify(margin)}; dock state: ${JSON.stringify(state)}`,
-          );
-        });
-    }
+    // The click lands behind the dock: macOS honors the window's
+    // mouse-ignore, Linux its shape.
+    await app
+      .waitFor(`window.__throughClicks > 0`, {
+        label: "click reached the workspace window",
+        timeoutMs: 10_000,
+      })
+      .catch(async (error: unknown) => {
+        const state = await dockRun(`return {
+          hasFocus: document.hasFocus(),
+          dockPointerDowns: window.__dockPointerDowns,
+          shape: document.documentElement.dataset.dockShape,
+        };`);
+        throw new Error(
+          `${String(error)}; margin ${JSON.stringify(margin)}; dock state: ${JSON.stringify(state)}`,
+        );
+      });
     // A real click in the composer focuses the dock window, as typing would,
     // and focus on the dock keeps it resting where it was rather than
     // moving it to the display's edge. The pointer arrives first: a click
@@ -400,19 +423,21 @@ describe("dock modes", () => {
       x: first.dock.x - first.main.x + first.composer.x,
       y: first.dock.y - first.main.y + first.composer.y,
     };
-    // A pointer resting over empty space settles: one request, one answer.
-    if (process.platform === "linux")
+    // Nothing flips between passing and taking clicks on Linux: at most one
+    // request and its answer (it used to flip dozens of times a second).
+    if (shaped)
       expect(
         await dockRun<number>("return window.__passThroughChanges;"),
       ).toBeLessThanOrEqual(2);
     await app.movePointer(inComposer);
     // The marker turns "false" only after the main process takes clicks
     // again; a click sent before that is the one that fell through in CI.
-    // On Linux the window never stopped taking them.
-    await dockWait(
-      `return document.documentElement.dataset.dockPassThrough === 'false';`,
-      { label: "dock takes clicks over its composer" },
-    );
+    // A shaped window never stopped taking them over its content.
+    if (!shaped)
+      await dockWait(
+        `return document.documentElement.dataset.dockPassThrough === 'false';`,
+        { label: "dock takes clicks over its composer" },
+      );
     await app.clickPointer(inComposer);
     await dockWait(
       `return document.hasFocus() && document.activeElement === composer();`,
@@ -445,12 +470,22 @@ describe("dock modes", () => {
     // dock deliberately keeps its hover for a leave without a recent move
     // (the layout moving under a parked pointer), so the chat never lurks.
     await dockRun(`window.__dockLastMove = null; return true;`);
-    await app.movePointer(margin);
+    if (shaped)
+      // Over a shaped window's empty space the pointer is outside the
+      // window, so the dock learns the pointer left from a move just inside
+      // the chat's edge followed at once by the leave, as a person's
+      // pointer crossing the edge produces (the dock ignores a leave with
+      // no move in the last 400 ms: layout sliding under a parked pointer).
+      await app.movePointerThrough([
+        { x: first.dock.x - first.main.x + first.chat.left + 6, y: margin.y },
+        margin,
+      ]);
+    else await app.movePointer(margin);
     await dockWait(
       `const move = window.__dockLastMove;
        if (!move) return false;
        const box = frontDock().getBoundingClientRect();
-       return (move.x < box.left || move.x > box.right ||
+       return (${shaped} || move.x < box.left || move.x > box.right ||
          move.y < box.top || move.y > box.bottom) &&
          !frontDock().matches(':hover');`,
       { label: "the dock saw the pointer leave the chat" },

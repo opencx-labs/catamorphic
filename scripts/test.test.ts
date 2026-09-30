@@ -456,7 +456,8 @@ describe("test process orchestration", () => {
   });
 
   it("settles a process group that refuses signals while its members exit", async () => {
-    if (process.platform === "win32") return;
+    // A macOS answer; elsewhere EPERM stays a real error.
+    if (process.platform !== "darwin") return;
     const directory = await temporaryDirectory();
     const signals = new TestSignalController();
     // macOS answers EPERM, not ESRCH, when a group's remaining members are

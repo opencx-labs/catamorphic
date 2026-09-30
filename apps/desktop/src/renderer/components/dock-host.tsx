@@ -16,6 +16,7 @@ import type {
 import { fileUrlFor } from "../../shared/downloads.js";
 import { localPresentations } from "../lib/chat-presentations.js";
 import { desktopApi } from "../lib/desktop-api.js";
+import { DOCK_WINDOW_SHAPED, drawnDockRects } from "../lib/dock-shape.js";
 import { matchesBinding, useKeybindings } from "../lib/keybindings.js";
 import {
   applyTheme,
@@ -318,6 +319,67 @@ export function DockHost({
       passThroughRequest.current += 1;
       delete root.dataset.dockPassThrough;
       update(true);
+    };
+  }, [detachedWindow]);
+  // Where the window cannot let clicks through (Linux), it takes the shape
+  // of what it draws, re-measured on the frame after anything changes and
+  // on every frame while something moves. `data-dock-shape` on the root is
+  // the applied shape (JSON; "null" is the whole window), absent while a
+  // change is in flight.
+  const shapeRequest = useRef(0);
+  useEffect(() => {
+    if (!detachedWindow || !DOCK_WINDOW_SHAPED) return;
+    const root = document.documentElement;
+    delete root.dataset.dockShape;
+    let frame = 0;
+    let sent: string | undefined;
+    const moving = () =>
+      document
+        .getAnimations()
+        .some(
+          (animation) =>
+            animation.playState === "running" &&
+            animation.effect?.getTiming().iterations !== Infinity,
+        );
+    const measure = () => {
+      frame = 0;
+      const rects = drawnDockRects(document.body);
+      const key = JSON.stringify(rects);
+      if (key !== sent) {
+        sent = key;
+        const request = ++shapeRequest.current;
+        delete root.dataset.dockShape;
+        void desktopApi
+          .dockShape(rects)
+          .then(() => {
+            if (shapeRequest.current === request) root.dataset.dockShape = key;
+          })
+          .catch(() => {});
+      }
+      if (moving()) schedule();
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(measure);
+    };
+    const mutations = new MutationObserver(schedule);
+    mutations.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+    });
+    window.addEventListener("resize", schedule);
+    document.addEventListener("transitionrun", schedule, true);
+    document.addEventListener("animationstart", schedule, true);
+    schedule();
+    return () => {
+      cancelAnimationFrame(frame);
+      mutations.disconnect();
+      window.removeEventListener("resize", schedule);
+      document.removeEventListener("transitionrun", schedule, true);
+      document.removeEventListener("animationstart", schedule, true);
+      shapeRequest.current += 1;
+      delete root.dataset.dockShape;
+      void desktopApi.dockShape(null).catch(() => {});
     };
   }, [detachedWindow]);
 

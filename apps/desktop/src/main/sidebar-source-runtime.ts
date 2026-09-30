@@ -1,11 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import {
-  type FSWatcher,
-  readFileSync,
-  unwatchFile,
-  watch,
-  watchFile,
-} from "node:fs";
+import { type FSWatcher, readFileSync, watch } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { z } from "zod";
@@ -236,14 +230,13 @@ export class SidebarSourceRuntime {
           this.stop(error, true);
         });
         // FSEvents starts delivering a moment after the watch is created
-        // and can drop an edit made in between (or under load); a slow stat
-        // poll catches what the watch missed, as the config layers do.
-        watchFile(
-          this.opts.modulePath,
-          { interval: MODULE_POLL_MS, persistent: false },
-          changed,
-        );
-        this.unpoll = () => unwatchFile(this.opts.modulePath, changed);
+        // and can drop an edit made in between (or under load). A slow poll
+        // compares the contents with those read above, so it catches what
+        // the watch missed; a stat poll would not, since its baseline stat
+        // is taken asynchronously and can already include the edit.
+        const poll = setInterval(changed, MODULE_POLL_MS);
+        poll.unref();
+        this.unpoll = () => clearInterval(poll);
       } catch (cause) {
         this.listeners.delete(listener);
         this.scheduleIdle();

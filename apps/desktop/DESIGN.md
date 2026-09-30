@@ -485,13 +485,18 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
-### 2026-09-30: The detached dock keeps its clicks on Linux
+### 2026-09-30: On Linux the detached dock takes the shape of what it draws
 
 Electron forwards pointer moves to a click-through window only on macOS and
 Windows. On Linux the dock lost the pointer the moment it let clicks through,
 took them back on the leave, and let them through again on the next move,
-dozens of times a second while the pointer rested over its empty space. There
-the dock now keeps its clicks; the main process answers whether they pass.
+dozens of times a second while the pointer rested over its empty space.
+There the dock no longer toggles click-through: its window takes the shape of
+what it draws (strip, open chat, lurking chat, dialogs, tooltips, with room
+for shadows), re-measured on the frame after anything changes and on every
+frame while something moves. Clicks on its empty space reach the screen
+behind it, as on macOS, and nothing flickers. The main process answers
+whether clicks pass through, so the renderer never assumes it.
 
 ### 2026-09-30: The palette highlight follows the chosen row
 

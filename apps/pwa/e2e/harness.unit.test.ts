@@ -2,12 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
-import {
-  CHROME_CDP_STARTUP_TIMEOUT_MS,
-  chromeLaunchArgs,
-  waitForHttp,
-  watchChild,
-} from "./harness.js";
+import { chromeLaunchArgs, waitForHttp, watchChild } from "./harness.js";
 
 describe("PWA E2E Chrome arguments", () => {
   it("keeps CDP on the probed IPv4 loopback address", () => {
@@ -21,10 +16,6 @@ describe("PWA E2E Chrome arguments", () => {
     expect(chromeLaunchArgs({ ci: "true", platform: "darwin" })).toEqual([
       "--remote-debugging-address=127.0.0.1",
     ]);
-  });
-
-  it("gives a busy local machine the startup time a shared CI runner gets", () => {
-    expect(CHROME_CDP_STARTUP_TIMEOUT_MS).toBe(60_000);
   });
 });
 

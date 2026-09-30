@@ -3,6 +3,28 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { assertIsolatedDesktopTestHost } from "../../../scripts/desktop-test-environment.js";
 
+/**
+ * Move through several points in one gesture, as a hand crossing an edge
+ * does: on Linux one xdotool run emits the moves back to back, so the app
+ * sees the last move inside a window just before the pointer leaves it
+ * (separate runs leave process-spawn gaps a loaded host stretches).
+ */
+export async function moveNativePointerThrough(
+  points: readonly { x: number; y: number }[],
+) {
+  assertIsolatedDesktopTestHost();
+  if (process.platform !== "linux") {
+    for (const point of points) await moveNativePointer(point);
+    return;
+  }
+  const args = points.flatMap((point) => [
+    "mousemove",
+    String(Math.round(point.x)),
+    String(Math.round(point.y)),
+  ]);
+  await promisify(execFile)("xdotool", args, { timeout: 10_000 });
+}
+
 /** CDP moves Chromium's pointer, but native hover reads the OS cursor. */
 export async function moveNativePointer(point: { x: number; y: number }) {
   assertIsolatedDesktopTestHost();
