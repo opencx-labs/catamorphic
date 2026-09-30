@@ -263,7 +263,18 @@ export function DockHost({
     const update = (interactive: boolean) => {
       if (ignoring === !interactive) return;
       ignoring = !interactive;
-      void desktopApi.dockIgnoreMouse(ignoring).catch(() => {});
+      const requested = ignoring;
+      void desktopApi
+        .dockIgnoreMouse(requested)
+        .then(() => {
+          // What the window does with a click right now, once the main
+          // process has applied it: a click that races the change lands
+          // on the other side (the native pointer tests wait for this).
+          if (ignoring === requested)
+            document.documentElement.dataset.dockPassThrough =
+              String(requested);
+        })
+        .catch(() => {});
     };
     const hitTest = () => {
       if (!last) return;

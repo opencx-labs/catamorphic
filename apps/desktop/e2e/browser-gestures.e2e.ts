@@ -49,17 +49,34 @@ const wheel = (deltaX: number, ticks: number, target = "document.body") =>
     `for (let i = 0; i < ${ticks}; i++) ${target}.dispatchEvent(new WheelEvent('wheel', { deltaX: ${deltaX}, deltaY: 0, deltaMode: 0, bubbles: true, cancelable: true })); true`,
   );
 const indicator = `document.querySelector('[data-testid="browser-swipe-indicator"]')`;
+/**
+ * A gesture ends 200ms after its last tick and takes its arrow with it,
+ * which is about one poll of waitFor: record every arrow the host draws
+ * instead of sampling the page and hoping to land inside that window.
+ */
+const recordArrows = () =>
+  app.eval(`(() => {
+    window.__swipeArrows = [];
+    new MutationObserver(() => {
+      const arrow = ${indicator};
+      if (arrow) window.__swipeArrows.push(arrow.dataset.direction);
+    }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-direction'] });
+    return true;
+  })()`);
 
 describe("trackpad history gestures", () => {
   it("shows the back arrow as the gesture grows and navigates past the threshold", async () => {
     await ready("One");
     await inGuest("document.getElementById('next').click(); true");
     await ready("Two");
+    await recordArrows();
     await wheel(-40, 2);
-    await app.waitFor(`${indicator}?.dataset.direction === 'back'`, {
+    await app.waitFor("window.__swipeArrows.includes('back')", {
       label: "back arrow shown",
     });
-    await wheel(-40, 5);
+    // Enough ticks to cross the threshold on their own: the pause above can
+    // outlast the gesture, and a new gesture starts from nothing.
+    await wheel(-40, 6);
     await ready("One");
     await app.waitFor(`!${indicator}`, {
       label: "arrow gone after navigating",

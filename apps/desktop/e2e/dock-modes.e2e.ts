@@ -290,7 +290,24 @@ describe("dock modes", () => {
       `return !!composer() && !frontDock().getAnimations({ subtree: true }).some((animation) =>
          animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);`,
       { label: "chat open in the dock window" },
-    );
+    ).catch(async (error: unknown) => {
+      // Say what is still moving (or that no chat arrived), so a stall
+      // here points at its cause.
+      const state = await dockRun(`return {
+        visibility: document.visibilityState,
+        composer: !!composer(),
+        sections: $$('section[aria-label]').map((el) => ({ inert: el.inert, composer: !!el.querySelector('[data-composer-input]') })),
+        running: (frontDock()?.getAnimations({ subtree: true }) ?? [])
+          .filter((animation) => animation.playState === 'running')
+          .map((animation) => ({
+            name: animation.transitionProperty ?? animation.animationName ?? animation.id,
+            target: animation.effect?.target?.getAttribute?.('class')?.slice(0, 80),
+            time: animation.currentTime,
+            iterations: animation.effect?.getTiming().iterations,
+          })),
+      };`);
+      throw new Error(`${String(error)}; dock state: ${JSON.stringify(state)}`);
+    });
     const bounds = async () => ({
       dock: await dock.eval<{ x: number; y: number }>(
         "window.catamorphicDesktop.devWindow('get').then((state) => state.contentBounds)",
@@ -334,9 +351,12 @@ describe("dock modes", () => {
         Math.floor(first.chat.height / 2),
     };
     await app.movePointer(margin);
-    // The dock answers the hover by letting the window through; the OS
-    // applies that a moment later, and the click must come after it.
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // The dock answers the hover by asking the main process to let clicks
+    // through; the click must come after that has been applied.
+    await dockWait(
+      `return document.documentElement.dataset.dockPassThrough === 'true';`,
+      { label: "dock lets clicks through over its margin" },
+    );
     await app.clickPointer(margin);
     const marginHit = await dockRun<string | null>(
       `const hit = document.elementFromPoint(${Math.floor(first.chat.left / 2)}, ${first.chat.top + Math.floor(first.chat.height / 2)});
@@ -346,8 +366,8 @@ describe("dock modes", () => {
     expect(marginHit).toBe("BODY");
     if (process.platform === "darwin") {
       // macOS honors the window's mouse-ignore, so the click lands behind
-      // it. The private Linux display's window manager does not apply X11
-      // input shapes, so there the click stays with the dock window.
+      // it. The private Linux display applies X11 input shapes unevenly
+      // under its window manager, so there only the hit test is asserted.
       await app
         .waitFor(`window.__throughClicks > 0`, {
           label: "click reached the workspace window",
@@ -365,11 +385,19 @@ describe("dock modes", () => {
     }
     // A real click in the composer focuses the dock window, as typing would,
     // and focus on the dock keeps it resting where it was rather than
-    // moving it to the display's edge.
-    await app.clickPointer({
+    // moving it to the display's edge. The pointer arrives first: a click
+    // that lands before the dock stops letting clicks through reaches the
+    // workspace behind it instead (a person's pointer never teleports).
+    const inComposer = {
       x: first.dock.x - first.main.x + first.composer.x,
       y: first.dock.y - first.main.y + first.composer.y,
-    });
+    };
+    await app.movePointer(inComposer);
+    await dockWait(
+      `return document.documentElement.dataset.dockPassThrough === 'false';`,
+      { label: "dock takes clicks over its composer" },
+    );
+    await app.clickPointer(inComposer);
     await dockWait(
       `return document.hasFocus() && document.activeElement === composer();`,
       { label: "dock window focused through its composer" },
@@ -379,7 +407,10 @@ describe("dock modes", () => {
         pointerDowns: window.__dockPointerDowns,
         active: document.activeElement?.outerHTML.slice(0, 200),
       };`);
-      throw new Error(`${String(error)}; dock state: ${JSON.stringify(state)}`);
+      const through = await app.eval("window.__throughClicks");
+      throw new Error(
+        `${String(error)}; dock state: ${JSON.stringify(state)}; workspace clicks: ${through}`,
+      );
     });
     const focused = await bounds();
     expect(focused.dock.x).toBe(first.dock.x);

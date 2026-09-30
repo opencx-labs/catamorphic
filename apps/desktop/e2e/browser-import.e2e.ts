@@ -376,8 +376,11 @@ describe("shared browser import and personal history", () => {
     await app.press("Space");
     await app.waitFor(`${input}?.placeholder==='Search history…'`);
     await app.insertText("field-notes.md");
+    // Enter opens the highlighted row, so wait for the document to be that
+    // row, not merely listed while the history search settles.
     await app.waitFor(
-      `[...document.querySelectorAll('[role="option"]')].some(el=>el.textContent.includes('field-notes.md') && el.textContent.includes('History documents'))`,
+      `[...(${input}?.closest('[role="dialog"]')?.querySelectorAll('[role="option"][aria-selected="true"]') ?? [])].some(el=>el.textContent.includes('field-notes.md') && el.textContent.includes('History documents'))`,
+      { label: "document highlighted" },
     );
     await app.press("Enter");
     await app.waitFor(
