@@ -4,10 +4,24 @@ import {
   DeploymentBlockedError,
   EnvironmentPolicyInvalidError,
   ProjectNotFoundError,
+  ServerDraftError,
   SessionArtifactConflictError,
   SessionArtifactNotFoundError,
   SessionArtifactValidationError,
 } from "@catamorphic/core";
+import {
+  DraftBinaryResolutionError,
+  DraftBusyError,
+  DraftIgnoredPathError,
+  DraftPathError,
+  DraftRefNotAllowedError,
+  DraftsUnsupportedError,
+  DraftUnresolvedError,
+  InvalidBaseError,
+  InvalidRefNameError,
+  NoDraftError,
+  RefMovedError,
+} from "@catamorphic/git";
 import type { FastifyPluginAsync } from "fastify";
 import {
   serializerCompiler,
@@ -193,7 +207,41 @@ export const catamorphicPlugin: FastifyPluginAsync<
         .send({ error: err.message, code: "environment_policy_invalid" });
     }
     // A normal state the person resolves (record changes first), not a fault.
-    if (err instanceof DeploymentBlockedError) {
+    if (
+      err instanceof DeploymentBlockedError ||
+      err instanceof ServerDraftError ||
+      err instanceof DraftBusyError ||
+      err instanceof DraftUnresolvedError ||
+      err instanceof DraftsUnsupportedError
+    ) {
+      return reply.status(409).send({ error: err.message });
+    }
+    // A publish that lost its race to another change of the project.
+    if (err instanceof RefMovedError) {
+      return reply.status(409).send({
+        error:
+          "The project changed on the server while publishing. Download its changes, then publish again.",
+      });
+    }
+    // A malformed ref or base, a path the program never holds, a text
+    // resolution for a binary file, or a change to a read-only view.
+    if (
+      err instanceof InvalidRefNameError ||
+      err instanceof InvalidBaseError ||
+      err instanceof DraftIgnoredPathError ||
+      err instanceof DraftBinaryResolutionError ||
+      err instanceof NoDraftError
+    ) {
+      return reply.status(400).send({ error: err.message });
+    }
+    // Another member's draft, or a path the draft does not hold.
+    if (
+      err instanceof DraftRefNotAllowedError ||
+      (err instanceof DraftPathError && err.code === "ENOENT")
+    ) {
+      return reply.status(404).send({ error: err.message });
+    }
+    if (err instanceof DraftPathError) {
       return reply.status(409).send({ error: err.message });
     }
     app.log.error(err);

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
+import type { ProjectDraft, ProjectManager } from "@catamorphic/git";
 import {
   type DeclaredSecret,
   layoutGraph,
@@ -221,13 +221,13 @@ export class WorkflowsService {
   private async withDev<T>(
     identity: Identity,
     projectId: string,
-    fn: (repo: ProjectRepo) => Promise<T>,
+    fn: (repo: ProjectDraft) => Promise<T>,
   ): Promise<T> {
-    const repo = await this.projectManager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = await this.projectManager.openDraft({
+      tenantId: identity.tenantId,
+      projectId: projectId,
+      externalUserId: identity.externalUserId,
+    });
     try {
       return await fn(repo);
     } finally {

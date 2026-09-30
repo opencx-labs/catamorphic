@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DB } from "@catamorphic/db";
-import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
+import type { ProjectDraft, ProjectManager } from "@catamorphic/git";
 import {
   CLAUDE_CODE_PERMISSION_MODES,
   CODEX_APPROVAL_POLICIES,
@@ -512,8 +512,8 @@ export function definitionHash(
 /**
  * Read-only view over a project's committed `.work/agents/` directory. Writes go
  * through the normal project file APIs (definitions are just files in the
- * repo). Mirrors {@link SkillsService}: reads the caller's dev working copy
- * so uncommitted edits are visible, and NEVER throws on a bad file — each
+ * repo). Mirrors {@link SkillsService}: reads the caller's draft
+ * so unpublished edits are visible, and NEVER throws on a bad file — each
  * unusable definition is reported as an invalid entry so one typo can't
  * take down the whole roster.
  */
@@ -656,13 +656,13 @@ export class AgentDefinitionsService {
   private async withDev<T>(
     identity: Identity,
     projectId: string,
-    fn: (repo: ProjectRepo) => Promise<T>,
+    fn: (repo: ProjectDraft) => Promise<T>,
   ): Promise<T> {
-    const repo = await this.projectManager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = await this.projectManager.openDraft({
+      tenantId: identity.tenantId,
+      projectId: projectId,
+      externalUserId: identity.externalUserId,
+    });
     try {
       return await fn(repo);
     } finally {

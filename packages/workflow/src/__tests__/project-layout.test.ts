@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   appWorkspaceName,
+  draftRef,
   hasProjectLockfile,
   isProjectPathWithin,
   isProjectSourcePath,
@@ -40,6 +41,24 @@ describe("project layout", () => {
       undefined,
     );
     expect(appWorkspaceName(".work/workflows/package.json")).toBe(undefined);
+  });
+
+  it("names one valid draft ref per member", () => {
+    expect(draftRef("alice")).toBe("refs/work/drafts/alice");
+    expect(draftRef("user-1")).toBe("refs/work/drafts/user-1");
+    expect(draftRef("bob@example.com")).toBe(
+      "refs/work/drafts/bob_40example_2ecom",
+    );
+    expect(draftRef("a_b")).not.toBe(draftRef("a/b"));
+    // Ids that differ only by case never share a ref on a case-insensitive disk.
+    expect(draftRef("Alice")).toBe("refs/work/drafts/_41lice");
+    expect(draftRef("Alice").toLowerCase()).not.toBe(
+      draftRef("alice").toLowerCase(),
+    );
+    expect(draftRef("../../heads/main")).toMatch(
+      /^refs\/work\/drafts\/[A-Za-z0-9_-]+$/,
+    );
+    expect(() => draftRef("")).toThrow();
   });
 
   it("detects either capability lockfile", () => {

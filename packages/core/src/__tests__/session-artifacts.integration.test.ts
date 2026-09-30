@@ -95,11 +95,11 @@ suite("session artifact source lifecycle", () => {
   });
 
   it("creates isolated app source without editing or staging the user's files", async () => {
-    const repo = await manager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = await manager.openDraft({
+      tenantId: identity.tenantId,
+      projectId: projectId,
+      externalUserId: identity.externalUserId,
+    });
     try {
       await repo.writeFile("unrelated.txt", "Do not capture");
       const head = await repo.resolveRef("HEAD");

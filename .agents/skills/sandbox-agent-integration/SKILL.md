@@ -186,7 +186,7 @@ Rules that hold across harnesses:
   deterministic protocol test.
 - Shell polling is `watch_command` (host background work). Session watchers
   (`create_watcher`) cover Project Events and workflow IO. Author temporary
-  watcher source with `ProjectManager.openEphemeral`, never a user's `openDev`.
+  watcher source with `ProjectManager.openEphemeral`, never a member's draft (`openDraft`).
   Dispose checkouts on failure, stop activations on close/archive/expiry, and
   abort and join polling before closing the database.
 

@@ -78,5 +78,5 @@ is `/healthz`, the readiness probe `/readyz`, and
 `terminationGracePeriodSeconds` of at least 30 gives stopping replicas time
 to settle their turns and move their work. Chats on a lost replica lose uncheckpointed sandbox
 state, exactly as after an idle release; a replica restart rebuilds its
-sandboxes. Workers keep stable identities and are not reaped. Member draft
-working copies on a replica's disk remain until issue 148.
+sandboxes. Workers keep stable identities and are not reaped. Member drafts
+are refs in the project origin (ADR 0191), so no replica holds one.

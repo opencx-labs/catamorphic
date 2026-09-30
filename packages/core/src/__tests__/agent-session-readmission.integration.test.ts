@@ -97,9 +97,11 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
   /** Whom the host resolves; a person who left resolves to nobody. */
   const members = new Map<string, Identity>([["alice", alice]]);
 
+  /** Every service made here, stopped before the database closes. */
+  const services: AgentSessionsService[] = [];
   const service = (workerNode?: { id: string; token: string }) => {
     const agent = { id: "worker", provider, topology: "native" as const };
-    return new AgentSessionsService(db, {
+    const sessions = new AgentSessionsService(db, {
       hostId: HOST,
       ...(workerNode ? { workerNode } : {}),
       projectManager,
@@ -117,6 +119,8 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
         resolve: () => ({ path: tmpDir, owned: false }),
       },
     });
+    services.push(sessions);
+    return sessions;
   };
   const resolveIdentity = async (args: { externalUserId: string }) =>
     members.get(args.externalUserId) ?? null;
@@ -156,8 +160,10 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
   }, 60_000);
 
   afterAll(async () => {
+    // A stopped worker leaves the drains it started running, as a host's
+    // would: they settle before the database closes and the folder goes.
+    await Promise.all(services.map((sessions) => sessions.stopLocalTurns()));
     await db.destroy();
-    // A drain scheduled by the last test may still be writing a copy.
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5 });
   });
 

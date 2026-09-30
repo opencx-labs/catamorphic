@@ -158,7 +158,7 @@ lives in Postgres or in its configuration, so any replica can be replaced by a
 fresh one with an empty disk at any time.
 
 1. Provision the same version with its own `WORK_DATA_DIR`. It may be empty
-   and need not persist: it holds only working copies and sandboxes. Never
+   and need not persist: it holds only session checkouts and sandboxes. Never
    share one data directory between two running replicas: a replica removes
    the sandboxes it finds there when it starts.
 2. Supply the deployment's `DATABASE_URL`, `WORK_SECRET`, `WORK_VAULT_KEY`,
@@ -226,8 +226,11 @@ different machine.
 ## Shared state and recovery
 
 Network Postgres holds core state, Better Auth in its own schema, worker leases,
-permission requests, runner jobs, project origin objects, deployment/app bundles,
-and encrypted vault records. Neither `WORK_SECRET` (sign-in and notification
+permission requests, runner jobs, project origin objects, members' program
+drafts (refs in each project's origin, ADR 0191), deployment/app bundles,
+and encrypted vault records. A member's draft is the same on every replica,
+so any replica answers any `program_*` call, and replacing a replica loses
+no draft. Neither `WORK_SECRET` (sign-in and notification
 signing) nor `WORK_VAULT_KEY` (the credential vault) is stored in these records.
 Back up the database and protect both secrets separately. Rotate the vault key
 by moving the old key to `WORK_VAULT_PREVIOUS_KEYS`; see
@@ -261,7 +264,8 @@ and model history; it does not migrate a live process or publish session edits
 to project `main`. Failed checkpoint persistence is a failed turn requiring
 recovery. Work not checkpointed before a machine is lost, and a chat's
 background processes, are gone with it and never automatically replayed.
-Member draft working copies still live on the replica that holds them.
+Members' program drafts live in the project origin (ADR 0191), never on a
+replica, so losing one loses no draft.
 
 ## A member's This machine
 

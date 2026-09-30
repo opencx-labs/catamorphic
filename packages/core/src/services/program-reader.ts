@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  fetchRemote,
   NativeProjectRepo,
+  PROGRAM_READER_ID,
+  type ProjectDraft,
   type ProjectManager,
-  type ProjectRepo,
 } from "@catamorphic/git";
 import { publishedRef } from "@catamorphic/workflow/project-layout";
 
@@ -17,11 +17,12 @@ import { publishedRef } from "@catamorphic/workflow/project-layout";
  * collaborator with a working copy — role files, the documents surface —
  * so viewers never get a clone of their own.
  *
- * The reader identity names one shared dev copy per project on backends
- * that keep per-user working copies; on `pathResolver` backends (the
- * desktop) it is the project folder itself.
+ * The reader is no member (a reserved id no user can hold): on a host
+ * with an origin it reads the published `main` straight from the origin,
+ * never a draft (ADR 0191); on `pathResolver` backends (the desktop) it is
+ * the project folder itself.
  */
-export const PROGRAM_READER = "catamorphic-reader";
+export const PROGRAM_READER = PROGRAM_READER_ID;
 
 /**
  * Replica memory (a), ADR 0193: revision reads in flight, so a burst of
@@ -94,7 +95,7 @@ export async function withProgram<T>(
   projectManager: ProjectManager,
   tenantId: string,
   projectId: string,
-  fn: (repo: ProjectRepo, ref: string | null) => Promise<T>,
+  fn: (repo: ProjectDraft, ref: string | null) => Promise<T>,
   options?: { workingTree?: boolean; publishedOnly?: boolean },
 ): Promise<T> {
   if (await projectManager.localPath({ tenantId, projectId })) {
@@ -114,25 +115,20 @@ export async function withProgram<T>(
     }
   }
   const remote = projectManager.remoteBackend;
+  // With an origin the reader opens the published view: objects read
+  // straight from the origin, never a draft and never a copy on this
+  // machine (ADR 0191). Without one, this machine's copy is the truth.
   const repo = remote
-    ? await projectManager.openDev(tenantId, projectId, PROGRAM_READER)
+    ? await projectManager.openPublished({ tenantId, projectId })
     : await projectManager.open(tenantId, projectId);
   try {
     if (!remote) return await fn(repo, null);
     // The origin's `main` as it is now, on every read, so no replica serves
-    // a stale tree: one ref read, and a fetch only when this copy is behind.
-    const origin = await programRevision(projectManager, tenantId, projectId);
-    const local = await repo.resolveRef(publishedRef()).catch(() => null);
-    if (origin && origin === local) return await fn(repo, local);
-    await fetchRemote({
-      dev: repo,
-      remote,
-      tenantId,
-      projectId,
-      remoteBranch: "main",
-    });
-    const sha = await repo.resolveRef(publishedRef()).catch(() => null);
-    return await fn(repo, sha);
+    // a stale tree (ADR 0193); concurrent reads share one ref read.
+    return await fn(
+      repo,
+      await programRevision(projectManager, tenantId, projectId),
+    );
   } finally {
     await repo.dispose();
   }
@@ -140,7 +136,7 @@ export async function withProgram<T>(
 
 /** File paths of the program under a prefix (`""` = whole tree). */
 export async function listProgramFiles(
-  repo: ProjectRepo,
+  repo: ProjectDraft,
   ref: string | null,
   prefix: string,
 ): Promise<string[]> {
@@ -155,7 +151,7 @@ export async function listProgramFiles(
  * a syncing client skip unchanged files without fetching them.
  */
 export async function listProgramBlobs(
-  repo: ProjectRepo,
+  repo: ProjectDraft,
   ref: string | null,
   prefix: string,
 ): Promise<Array<{ path: string; digest: string }>> {
@@ -192,7 +188,7 @@ export async function listProgramBlobs(
 
 /** Contents of the program's files under a prefix. */
 export async function readProgramFiles(
-  repo: ProjectRepo,
+  repo: ProjectDraft,
   ref: string | null,
   prefix: string,
 ): Promise<Record<string, string>> {
@@ -218,7 +214,7 @@ export async function readProgramFiles(
 
 /** One program file's raw bytes (binaries intact), or null when absent. */
 export async function readProgramBytes(
-  repo: ProjectRepo,
+  repo: ProjectDraft,
   ref: string | null,
   path: string,
 ): Promise<Uint8Array | null> {
@@ -227,7 +223,7 @@ export async function readProgramBytes(
 
 /** One program file, or null when absent. */
 export async function readProgramFile(
-  repo: ProjectRepo,
+  repo: ProjectDraft,
   ref: string | null,
   path: string,
 ): Promise<string | null> {

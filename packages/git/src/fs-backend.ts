@@ -124,6 +124,18 @@ export class FsBackend implements StorageBackend {
     return path.join(this.basePath, ".mirrors", tenantId, `${projectId}.git`);
   }
 
+  cachePath(tenantId: string, projectId: string, name: string): string {
+    assertUuid(tenantId);
+    assertUuid(projectId);
+    return path.join(
+      this.basePath,
+      tenantId,
+      projectId,
+      "cache",
+      sanitizeUserId(name),
+    );
+  }
+
   async deleteProject(tenantId: string, projectId: string): Promise<void> {
     // Only internal storage is removed. Explicitly-rooted folders belong to
     // the user; the host decides separately whether to trash them.
@@ -175,17 +187,20 @@ export class FsBackend implements StorageBackend {
 /**
  * One directory name per identity. Principals such as the project's own
  * (`catamorphic:project`, ADR 0156) carry characters that are not safe in
- * every filesystem, so anything outside `[A-Za-z0-9._-]` is percent-encoded;
- * plain ids keep their existing directory.
+ * every filesystem, so they are percent-encoded.
  */
 function sanitizeUserId(value: string): string {
-  const encoded = encodeURIComponent(value);
-  if (
-    !/^[A-Za-z0-9._%-]+$/.test(encoded) ||
-    encoded === "." ||
-    encoded === ".."
-  ) {
-    throw new Error(`Invalid externalUserId: ${value}`);
+  // Ids that differ only by case must not share a folder on a
+  // case-insensitive disk: every byte outside `[a-z0-9._-]`, upper-case
+  // letters included, becomes `%xx` (lower-case hex), one to one.
+  let encoded = "";
+  for (const byte of new TextEncoder().encode(value)) {
+    const char = String.fromCharCode(byte);
+    encoded += /[a-z0-9._-]/.test(char)
+      ? char
+      : `%${byte.toString(16).padStart(2, "0")}`;
   }
+  if (!encoded || encoded === "." || encoded === "..")
+    throw new Error(`Invalid externalUserId: ${value}`);
   return encoded;
 }

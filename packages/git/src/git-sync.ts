@@ -3,6 +3,7 @@ import { publishedRef } from "@catamorphic/workflow/project-layout";
 import git from "isomorphic-git";
 import { nativeGit } from "./native-git.js";
 import { NativeProjectRepo } from "./native-project-repo.js";
+import { mapLimit } from "./origin-objects.js";
 import type {
   ConflictEntry,
   MergeResult,
@@ -334,32 +335,32 @@ async function transferCommits(opts: {
   sink: ObjectSink;
   sha: string;
 }): Promise<void> {
-  const queue: string[] = [opts.sha];
+  // Breadth first, a batch of objects at a time: seeding a checkout from a
+  // network origin is bound by round trips, not by the objects' size.
+  let frontier: string[] = [opts.sha];
   const seen = new Set<string>();
-
-  while (queue.length > 0) {
-    const sha = queue.pop();
-    if (!sha || seen.has(sha)) continue;
-    seen.add(sha);
-
-    const alreadyAtSink = await opts.sink.hasObject(sha);
-    if (alreadyAtSink) continue;
-
-    const obj = await opts.source.readObject(sha);
-    await opts.sink.writeObject(obj);
-
-    if (obj.type === "commit") {
-      const commit = parseCommit(obj.data);
-      queue.push(commit.tree);
-      for (const parent of commit.parents) queue.push(parent);
-    } else if (obj.type === "tree") {
-      const entries = parseTree(obj.data);
-      for (const entry of entries) {
-        if (entry.mode !== "160000") queue.push(entry.oid);
+  while (frontier.length > 0) {
+    const batch = [...new Set(frontier)].filter((sha) => !seen.has(sha));
+    for (const sha of batch) seen.add(sha);
+    const next = await mapLimit(batch, TRANSFER_CONCURRENCY, async (sha) => {
+      if (await opts.sink.hasObject(sha)) return [];
+      const obj = await opts.source.readObject(sha);
+      await opts.sink.writeObject(obj);
+      if (obj.type === "commit") {
+        const commit = parseCommit(obj.data);
+        return [commit.tree, ...commit.parents];
       }
-    }
+      if (obj.type === "tree")
+        return parseTree(obj.data)
+          .filter((entry) => entry.mode !== "160000")
+          .map((entry) => entry.oid);
+      return [];
+    });
+    frontier = next.flat();
   }
 }
+
+const TRANSFER_CONCURRENCY = 16;
 
 interface ParsedCommit {
   tree: string;

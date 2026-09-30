@@ -2,7 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { type DB, DEFAULT_SCHEMA, migrateToLatest } from "@catamorphic/db";
-import { FsBackend, nativeGit, ProjectManager } from "@catamorphic/git";
+import {
+  FsBackend,
+  InMemoryObjectStore,
+  nativeGit,
+  ObjectRemoteBackend,
+  ProjectManager,
+} from "@catamorphic/git";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
@@ -11,9 +17,10 @@ import type { Identity } from "../identity.js";
 import {
   CodeHostNotConnectedError,
   ProjectAlreadyLinkedError,
+  ProjectNotDeployedError,
 } from "../services/code-hosts-service.js";
 import { MemoryCredentialVault } from "../services/credential-vault.js";
-import { fakeCodeHost } from "./code-host-fixture.js";
+import { fakeCodeHost, gitHttpServer } from "./code-host-fixture.js";
 
 /** ADR 0177: every code-host operation acts through one connection. */
 const database = new PGlite({ extensions: { pgcrypto } });
@@ -315,6 +322,81 @@ describe("CodeHostsService", () => {
         name: "notes",
       }),
     ).rejects.toThrow(ProjectAlreadyLinkedError);
+  });
+
+  it("publishes a server project's published program, and refuses one with nothing published before creating anything", async () => {
+    // A server project: no folder of its own, its program in an origin.
+    const server = new ProjectManager(
+      new FsBackend(path.join(temp, "server")),
+      new ObjectRemoteBackend({ store: new InMemoryObjectStore() }),
+    );
+    // An ephemeral checkout pushes over HTTP, as it would to a code host.
+    const bare = await bareRepository("server-published", {});
+    const http = await gitHttpServer(path.join(temp, "remotes"));
+    const cloneUrl = `${http.url}/server-published.git`;
+    const forge = fakeCodeHost({
+      db,
+      projectManager: server,
+      remoteBase: http.url,
+    });
+    const gail: Identity = { tenantId, externalUserId: "gail" };
+    await forge.connectPersonal(gail, "gail-token");
+    const created: string[] = [];
+    forge.host.createRepository = async ({ name }) => {
+      created.push(name);
+      return {
+        fullName: `gail/${name}`,
+        name,
+        owner: "gail",
+        private: true,
+        defaultBranch: "trunk",
+        cloneUrl,
+        description: null,
+        pushedAt: null,
+      };
+    };
+    const project = await db
+      .insertInto("projects")
+      .values({ id: crypto.randomUUID(), tenant_id: tenantId, name: "plan" })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const publish = () =>
+      forge.codeHosts.publishProject({
+        identity: gail,
+        projectId: project.id,
+        provider: "forge",
+        name: "plan",
+      });
+
+    try {
+      await expect(publish()).rejects.toThrow(ProjectNotDeployedError);
+      expect(created).toEqual([]);
+      expect(
+        await db
+          .selectFrom("projects")
+          .select("remote_url")
+          .where("id", "=", project.id)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ remote_url: null });
+
+      await server.publishFiles({
+        tenantId,
+        projectId: project.id,
+        files: { "plan.md": "ship it" },
+        message: "Plan",
+        author: { name: "Gail", email: "gail@example.invalid" },
+      });
+      expect(await publish()).toEqual({
+        fullName: "gail/plan",
+        remoteUrl: cloneUrl,
+      });
+      expect(created).toEqual(["plan"]);
+      expect((await nativeGit(bare, ["show", "trunk:plan.md"])).trim()).toBe(
+        "ship it",
+      );
+    } finally {
+      await http.close();
+    }
   });
 
   it("links one repository when publishes race, here or on another replica", async () => {

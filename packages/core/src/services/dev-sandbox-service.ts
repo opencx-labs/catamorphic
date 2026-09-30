@@ -1,7 +1,7 @@
 import type {
   CloneSource,
+  ProjectDraft,
   ProjectManager,
-  ProjectRepo,
 } from "@catamorphic/git";
 import type { SandboxProvider, SandboxResources } from "@catamorphic/sandbox";
 import {
@@ -66,11 +66,11 @@ export class DevSandboxService {
           sessionId: this.deps.sessionId,
           refresh: opts.refresh,
         })
-      : await this.deps.projectManager.openDev(
-          opts.identity.tenantId,
-          opts.projectId,
-          opts.identity.externalUserId,
-        );
+      : await this.deps.projectManager.openDraft({
+          tenantId: opts.identity.tenantId,
+          projectId: opts.projectId,
+          externalUserId: opts.identity.externalUserId,
+        });
     try {
       const baseCommitSha = await repo.resolveRef("HEAD").catch(() => null);
       const existing = await this.deps.store.findSandbox({
@@ -132,7 +132,7 @@ export class DevSandboxService {
   }
 
   /**
-   * Mirror the caller's dev-sandbox changes into the dev working copy right
+   * Mirror the caller's dev-sandbox changes into the caller's draft right
    * now, without waiting for the current agent turn to finish. No-op when
    * the caller has no dev sandbox (host-execution agents edit the dev tree
    * directly). Used by builds that must see the agent's in-flight work.
@@ -172,7 +172,7 @@ export class DevSandboxService {
   private async cloneSourceIfInSync(opts: {
     identity: Identity;
     projectId: string;
-    repo: ProjectRepo;
+    repo: ProjectDraft;
   }): Promise<CloneSource | undefined> {
     const remoteBackend = this.deps.projectManager.remoteBackend;
     if (!remoteBackend?.getCloneSource) return undefined;

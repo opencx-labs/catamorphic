@@ -42,11 +42,10 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
   let builder: Identity;
 
   async function commitRoles(files: Record<string, string>) {
-    const repo = await projectManager.openDev(
-      root.tenantId,
-      projectId,
-      root.externalUserId,
-    );
+    const repo = await projectManager.openEphemeral({
+      tenantId: root.tenantId,
+      projectId: projectId,
+    });
     try {
       for (const [file, content] of Object.entries(files)) {
         await repo.writeFile(file, content);
@@ -315,11 +314,10 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
 
   it("resolves one user across every current project membership", async () => {
     const second = await core.projects.create(root, { name: "second" });
-    const secondRepo = await projectManager.openDev(
-      root.tenantId,
-      second.id,
-      root.externalUserId,
-    );
+    const secondRepo = await projectManager.openEphemeral({
+      tenantId: root.tenantId,
+      projectId: second.id,
+    });
     try {
       await secondRepo.writeFile(
         ".work/roles/viewer.json",

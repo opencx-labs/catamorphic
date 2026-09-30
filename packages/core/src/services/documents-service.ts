@@ -69,6 +69,11 @@ export interface DocumentEntry {
   /** Program only: a content digest (`git:<oid>` / `sha256:<hex>`) so a
    * syncing client can skip unchanged files without fetching them. */
   digest?: string;
+  /**
+   * Program only: the published commit the listing read, so a client that
+   * publishes these files back can name its base (ADR 0191).
+   */
+  commit?: string;
 }
 
 export interface DocumentContent extends DocumentEntry {
@@ -384,11 +389,14 @@ export class DocumentsService {
         `${STORE_ROOT}/`.startsWith(prefix));
 
     if (wantsProgram && (await this.programVisible(args))) {
-      const blobs = await withProgram(
+      const { blobs, commit } = await withProgram(
         this.projectManager,
         args.identity.tenantId,
         args.projectId,
-        (repo, ref) => listProgramBlobs(repo, ref, prefix),
+        async (repo, ref) => ({
+          blobs: await listProgramBlobs(repo, ref, prefix),
+          commit: ref,
+        }),
         { workingTree: args.identity.scope === undefined },
       );
       for (const { path, digest } of blobs) {
@@ -404,6 +412,7 @@ export class DocumentsService {
           contentType: contentTypeFor(path),
           size: -1,
           digest,
+          ...(commit ? { commit } : {}),
         });
       }
     }

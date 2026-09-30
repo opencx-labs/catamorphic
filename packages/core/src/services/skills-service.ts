@@ -1,5 +1,5 @@
 import type { DB } from "@catamorphic/db";
-import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
+import type { ProjectDraft, ProjectManager } from "@catamorphic/git";
 import { PROJECT_SKILLS_DIR } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import {
@@ -173,7 +173,7 @@ export class SkillsService {
     return content === undefined ? null : { skill: host, content };
   }
 
-  private async listProjectSkills(repo: ProjectRepo): Promise<ProjectSkill[]> {
+  private async listProjectSkills(repo: ProjectDraft): Promise<ProjectSkill[]> {
     const files = await repo.listFiles({ prefix: `${PROJECT_SKILLS_DIR}/` });
     const skillFiles = files.filter(
       (file) =>
@@ -210,13 +210,13 @@ export class SkillsService {
   private async withDev<T>(
     identity: Identity,
     projectId: string,
-    fn: (repo: ProjectRepo) => Promise<T>,
+    fn: (repo: ProjectDraft) => Promise<T>,
   ): Promise<T> {
-    const repo = await this.projectManager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = await this.projectManager.openDraft({
+      tenantId: identity.tenantId,
+      projectId: projectId,
+      externalUserId: identity.externalUserId,
+    });
     try {
       return await fn(repo);
     } finally {

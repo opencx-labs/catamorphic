@@ -158,11 +158,11 @@ describeIf("unified RunsService integration", () => {
     // Every boundary and every batch item resolves the source before invoking.
     // Uncached, a 10k-item batch fetches and parses the project 10k times.
     let opened = 0;
-    const openDev = projectManager.openDev.bind(projectManager);
-    projectManager.openDev = ((...args: Parameters<typeof openDev>) => {
+    const openDraft = projectManager.openDraft.bind(projectManager);
+    projectManager.openDraft = ((...args: Parameters<typeof openDraft>) => {
       opened += 1;
-      return openDev(...args);
-    }) as typeof openDev;
+      return openDraft(...args);
+    }) as typeof openDraft;
     try {
       const first = await core.runs.resolveProductionExecution({
         identity,
@@ -196,7 +196,7 @@ describeIf("unified RunsService integration", () => {
       ).rejects.toBeDefined();
       expect(opened).toBeGreaterThan(afterFirst);
     } finally {
-      projectManager.openDev = openDev;
+      projectManager.openDraft = openDraft;
     }
   });
 

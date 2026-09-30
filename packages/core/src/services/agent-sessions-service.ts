@@ -106,6 +106,7 @@ import {
 import { DbSandboxStore } from "./db-sandbox-store.js";
 import { DevSandboxService } from "./dev-sandbox-service.js";
 import type { DocumentsService } from "./documents-service.js";
+import { checkpointDraft, draftStoreFolder } from "./draft-workspace.js";
 import type {
   ExecutionAllocation,
   ExecutionAllocationsService,
@@ -778,7 +779,7 @@ interface LocalTurn {
  *    dev sandbox) is anchored on the first turn. Switching a session to a
  *    different agent just clears the anchor; the next turn re-anchors.
  * 2. `controller` agents run against the dev sandbox and their changes sync
- *    back into the user's dev working copy as an uncommitted draft.
+ *    back into the user's draft (a draft commit on a server, ADR 0191).
  *    `native` agents run directly in the project's WorkerNode directory. Their
  *    edits land in place, so no sync step and no draft.
  * 3. The conversation persists to `agent_sessions` / `agent_messages`.
@@ -2396,7 +2397,7 @@ export class AgentSessionsService {
 
   /**
    * Whether this session works in its own copy (`session-<id>`) rather than
-   * its member's dev copy: every session on a worker host, and a session
+   * its member's draft: every session on a worker host, and a session
    * whose workspace stands on a ref (ADR 0178).
    */
   private usesSessionCopy(session: Pick<SessionRow, "workspace">): boolean {
@@ -8432,9 +8433,9 @@ export class AgentSessionsService {
 
   /**
    * Ensure the (project, user) dev sandbox exists and reflects the user's
-   * current dev working copy. New sandboxes clone from the project origin
-   * when the working copy is clean and in sync with it (the Artifacts-native
-   * path); otherwise the working copy files are uploaded. Reused sandboxes
+   * current draft. New sandboxes clone from the project origin
+   * when the draft is clean and in sync with it (the Artifacts-native
+   * path); otherwise the draft's files are uploaded. Reused sandboxes
    * are refreshed by upload so the agent always sees the user's drafts.
    */
   private async prepareDevSandbox(
@@ -8491,7 +8492,7 @@ export class AgentSessionsService {
 
   /**
    * Diff the sandbox project dir against its git baseline and mirror every
-   * change into the user's dev working copy (as an uncommitted draft). The
+   * change into the user's draft. The
    * sandbox baseline is then advanced so the next turn diffs incrementally.
    */
   private async syncBackChanges(
@@ -8513,13 +8514,10 @@ export class AgentSessionsService {
   }
 
   /**
-   * Commit the dev tree as this turn's checkpoint (ADR 0044). Returns the
-   * commit sha (stamped on the assistant message), null when the tree was
-   * clean or the commit failed — a checkpoint must never break a turn.
-   */
-  /**
-   * The folder whose `.work/app-data/store/` mirrors the caller's store view: the caller's
-   * own dev copy, which sandbox agents' edits sync back into. Host-execution
+   * The folder whose `.work/app-data/store/` mirrors the caller's store
+   * view: the session's copy, the caller's local folder, or for a server
+   * draft (which has no folder) a disposable folder the host keeps for the
+   * caller (ADR 0191). Host-execution
    * agents work in ONE folder per project shared by every caller, so their
    * store/ is never synced (one member's pulled files would be readable by
    * the next member's agent, and ships would carry the wrong author) —
@@ -8541,18 +8539,30 @@ export class AgentSessionsService {
           projectId,
           sessionId,
         })
-      : await this.projectManager.openDev(
-          identity.tenantId,
+      : await this.projectManager.openDraft({
+          tenantId: identity.tenantId,
           projectId,
-          identity.externalUserId,
-        );
+          externalUserId: identity.externalUserId,
+        });
     try {
-      return repo.repoPath;
+      return await draftStoreFolder({
+        projectManager: this.projectManager,
+        repo,
+        tenantId: identity.tenantId,
+        projectId,
+        externalUserId: identity.externalUserId,
+      });
     } finally {
       await repo.dispose();
     }
   }
 
+  /**
+   * This turn's checkpoint (ADR 0044): the session copy's commit, a local
+   * folder's commit, or a server draft's tip (ADR 0191). Returns the commit
+   * sha (stamped on the assistant message), null when nothing changed or
+   * the checkpoint failed; a checkpoint must never break a turn.
+   */
   private async checkpointTurn(
     identity: Identity,
     projectId: string,
@@ -8595,18 +8605,17 @@ export class AgentSessionsService {
               message: checkpointMessage(userMessage),
               author: CHECKPOINT_AUTHOR,
             });
-          const repo = await this.projectManager.openDev(
-            identity.tenantId,
+          const repo = await this.projectManager.openDraft({
+            tenantId: identity.tenantId,
             projectId,
-            identity.externalUserId,
-          );
+            externalUserId: identity.externalUserId,
+          });
           try {
-            const status = await repo.status();
-            if (!status.dirty) return null;
-            return await repo.commit(
-              checkpointMessage(userMessage),
-              CHECKPOINT_AUTHOR,
-            );
+            return await checkpointDraft({
+              repo,
+              message: checkpointMessage(userMessage),
+              author: CHECKPOINT_AUTHOR,
+            });
           } finally {
             await repo.dispose();
           }

@@ -28,7 +28,7 @@ function onAuthFor(credentials?: GitCredentials) {
  * Populate a freshly-initialized repo from a network git remote (e.g. a
  * GitHub repository). The remote's history lands on the local `main` branch
  * regardless of the remote's branch name — catamorphic's internal sync
- * (`git-sync`, `openDev` seeding) assumes `main` throughout, so the remote
+ * (`git-sync`, drafts, checkout seeding) assumes `main` throughout, so the remote
  * branch name is only remembered by the caller for push-back.
  *
  * Returns the checked-out sha and the remote's branch name.

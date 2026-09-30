@@ -20,6 +20,8 @@ class FakeServer implements RemoteDocumentsClient {
     { version: number; text: string; deleted: boolean }
   >();
   readonly writes: string[] = [];
+  /** The published commit program listings name, when the server has one. */
+  programCommit: string | undefined;
 
   async list(): Promise<RemoteDocumentEntry[]> {
     const entries: RemoteDocumentEntry[] = [];
@@ -30,6 +32,7 @@ class FakeServer implements RemoteDocumentsClient {
         contentType: "text/markdown",
         size: -1,
         digest: `git:${text.length}:${text}`,
+        ...(this.programCommit ? { commit: this.programCommit } : {}),
       });
     }
     for (const [p, doc] of this.store) {
@@ -165,6 +168,16 @@ describe("remote project sync (ADR 0055)", () => {
     const again = await syncRemoteProject(root, server);
     expect(again.pulled).toEqual([]);
     expect(again.unchanged).toBe(2);
+  });
+
+  it("reports the published commit it read, the base for publishing (ADR 0191)", async () => {
+    expect(
+      (await syncRemoteProject(root, server)).programCommit,
+    ).toBeUndefined();
+    server.programCommit = "c".repeat(40);
+    expect((await syncRemoteProject(root, server)).programCommit).toBe(
+      "c".repeat(40),
+    );
   });
 
   it("ship pushes local store edits and new files with the synced version; program edits are not shippable", async () => {

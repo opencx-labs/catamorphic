@@ -2,12 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DB } from "@catamorphic/db";
 import type {
+  DraftChange,
   GitCredentials,
+  ProjectDraft,
   ProjectManager,
-  ProjectRepo,
   RemoteOwnership,
 } from "@catamorphic/git";
-import { discoverLocalFolder } from "@catamorphic/git";
+import {
+  DraftContentChangedError,
+  discoverLocalFolder,
+  OriginDraftRepo,
+} from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely, Selectable, Transaction } from "kysely";
 import {
@@ -549,10 +554,11 @@ export class ProjectsService {
         return this.withDev(identity, projectId, async (repo) => {
           try {
             if (
-              await this.projectManager.localPath({
+              !(repo instanceof OriginDraftRepo) &&
+              (await this.projectManager.localPath({
                 tenantId: identity.tenantId,
                 projectId,
-              })
+              }))
             ) {
               const stat = await fs.stat(path.join(repo.repoPath, filePath));
               if (!stat.isFile() || stat.size > 2 * 1024 * 1024)
@@ -598,10 +604,11 @@ export class ProjectsService {
   }
 
   /**
-   * Commit whatever is dirty in the caller's working copy under one message
+   * Commit whatever is dirty in the caller's local folder under one message
    * (the desktop's "Sync from server" checkpoint after materializing a remote
    * project's program files, ADR 0055). Returns the new sha, or the current
-   * HEAD when the tree was clean.
+   * HEAD when the tree was clean. A server draft has nothing to commit: its
+   * tip is returned (ADR 0191).
    */
   async commitAll(
     identity: Identity,
@@ -622,12 +629,16 @@ export class ProjectsService {
       },
       async () => {
         await this.requireExists(identity, projectId, "program:write");
-        const repo = await this.projectManager.openDev(
-          identity.tenantId,
-          projectId,
-          identity.externalUserId,
-        );
+        const repo = await this.projectManager.openDraft({
+          tenantId: identity.tenantId,
+          projectId: projectId,
+          externalUserId: identity.externalUserId,
+        });
         try {
+          // A server draft has nothing uncommitted: every write is a draft
+          // commit (ADR 0191).
+          if (repo instanceof OriginDraftRepo)
+            return await repo.resolveRef("HEAD");
           const status = await repo.status();
           if (!status.dirty) return await repo.resolveRef("HEAD");
           // Committing a role file is changing access policy.
@@ -664,6 +675,25 @@ export class ProjectsService {
         await this.requireExists(identity, projectId, "program:write");
         assertMayManageRolePolicy(identity, projectId, [filePath]);
         return this.withDev(identity, projectId, async (repo) => {
+          if (repo instanceof OriginDraftRepo) {
+            // The expected content is checked in the same compare-and-swap
+            // that moves the draft, so no other replica slips in between.
+            await repo
+              .write({
+                changes: [{ path: filePath, content: input.content }],
+                message: input.commitMessage,
+                expected:
+                  input.expectedContent === undefined
+                    ? undefined
+                    : { [filePath]: input.expectedContent },
+              })
+              .catch((error: unknown) => {
+                if (error instanceof DraftContentChangedError)
+                  throw new ProjectFileConflictError();
+                throw error;
+              });
+            return input.content;
+          }
           if (
             input.expectedContent !== undefined &&
             (await repo.readFile(filePath)) !== input.expectedContent
@@ -683,7 +713,7 @@ export class ProjectsService {
     );
   }
 
-  /** Remove a file from the caller's working copy (their draft). */
+  /** Remove a file from the caller's draft. */
   async deleteFile(
     identity: Identity,
     projectId: string,
@@ -705,6 +735,57 @@ export class ProjectsService {
         await this.withDev(identity, projectId, (repo) =>
           repo.deleteFile(filePath),
         );
+      },
+    );
+  }
+
+  /**
+   * Apply several writes and deletes to the caller's draft at once: on a
+   * server, one draft commit that lands whole or not at all (ADR 0191).
+   */
+  async writeFiles(input: {
+    identity: Identity;
+    projectId: string;
+    changes: readonly DraftChange[];
+    message?: string;
+  }): Promise<void> {
+    const { identity, projectId } = input;
+    return withSpan(
+      {
+        tracer,
+        name: "project.write_files",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        await this.requireExists(identity, projectId, "program:write");
+        assertMayManageRolePolicy(
+          identity,
+          projectId,
+          input.changes.map((change) => change.path),
+        );
+        await this.withDev(identity, projectId, async (repo) => {
+          if (repo instanceof OriginDraftRepo) {
+            await repo.write({
+              changes: input.changes,
+              message: input.message,
+            });
+            return;
+          }
+          for (const change of input.changes) {
+            if ("delete" in change) await repo.deleteFile(change.path);
+            else if (typeof change.content === "string")
+              await repo.writeFile(change.path, change.content);
+            else
+              await repo.writeFile(
+                change.path,
+                new TextDecoder().decode(change.content),
+              );
+          }
+        });
       },
     );
   }
@@ -756,13 +837,13 @@ export class ProjectsService {
   private async withDev<T>(
     identity: Identity,
     projectId: string,
-    fn: (repo: ProjectRepo) => Promise<T>,
+    fn: (repo: ProjectDraft) => Promise<T>,
   ): Promise<T> {
-    const repo = await this.projectManager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = await this.projectManager.openDraft({
+      tenantId: identity.tenantId,
+      projectId: projectId,
+      externalUserId: identity.externalUserId,
+    });
     try {
       return await fn(repo);
     } finally {

@@ -218,6 +218,7 @@ export {
   CodeHostUnsupportedError,
   ProjectAlreadyLinkedError,
   ProjectHasNoRemoteError,
+  ProjectNotDeployedError,
 } from "./services/code-hosts-service.js";
 export {
   type CodingAgentRegistry,
@@ -542,6 +543,7 @@ export {
 export {
   type RemoteSyncOutcome,
   RemoteSyncService,
+  ServerDraftError,
 } from "./services/remote-sync-service.js";
 export {
   type HeldReplicaClaim,

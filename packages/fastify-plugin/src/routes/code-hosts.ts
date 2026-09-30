@@ -5,6 +5,7 @@ import {
   ConnectionPermissionDeniedError,
   ConnectionUnavailableError,
   ProjectAlreadyLinkedError,
+  ProjectNotDeployedError,
   ProjectNotFoundError,
   ReplicaClaimBusyError,
 } from "@catamorphic/core";
@@ -232,6 +233,7 @@ function codeHostError(error: unknown, reply: FastifyReply): FastifyReply {
     return reply.status(404).send({ error: error.message });
   if (
     error instanceof ProjectAlreadyLinkedError ||
+    error instanceof ProjectNotDeployedError ||
     error instanceof ConnectionUnavailableError ||
     error instanceof ReplicaClaimBusyError
   )

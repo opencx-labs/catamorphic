@@ -4,7 +4,7 @@ import {
   resolveAppIcon,
 } from "@catamorphic/app";
 import type { DB } from "@catamorphic/db";
-import type { ProjectManager } from "@catamorphic/git";
+import { OriginDraftRepo, type ProjectManager } from "@catamorphic/git";
 import { getTracer, markSpanError, withSpan } from "@catamorphic/otel";
 import {
   type AppApiSurface,
@@ -815,12 +815,15 @@ export class AppsService {
           identity: args.identity,
           projectId: args.projectId,
         });
-        const repo = await this.deps.projectManager.openDev(
-          args.identity.tenantId,
-          args.projectId,
-          args.identity.externalUserId,
-        );
+        const repo = await this.deps.projectManager.openDraft({
+          tenantId: args.identity.tenantId,
+          projectId: args.projectId,
+          externalUserId: args.identity.externalUserId,
+        });
         try {
+          // A server draft's tip already records every write (ADR 0191).
+          if (repo instanceof OriginDraftRepo)
+            return await repo.resolveRef("HEAD");
           const status = await repo.status();
           if (!status.dirty) return await repo.resolveRef("HEAD");
           return await repo.commit(args.message, AGENT_COMMIT_AUTHOR);
@@ -1250,11 +1253,11 @@ export class AppsService {
     kind: AppVersionKind;
     commitSha?: string;
   }): Promise<Record<string, string>> {
-    const repo = await this.deps.projectManager.openDev(
-      args.identity.tenantId,
-      args.projectId,
-      args.identity.externalUserId,
-    );
+    const repo = await this.deps.projectManager.openDraft({
+      tenantId: args.identity.tenantId,
+      projectId: args.projectId,
+      externalUserId: args.identity.externalUserId,
+    });
     try {
       return args.kind === "published" && args.commitSha
         ? await repo.readAllFilesAtRef(args.commitSha, {
@@ -1317,11 +1320,11 @@ export class AppsService {
     identity: Identity;
     projectId: string;
   }): Promise<string[]> {
-    const repo = await this.deps.projectManager.openDev(
-      args.identity.tenantId,
-      args.projectId,
-      args.identity.externalUserId,
-    );
+    const repo = await this.deps.projectManager.openDraft({
+      tenantId: args.identity.tenantId,
+      projectId: args.projectId,
+      externalUserId: args.identity.externalUserId,
+    });
     try {
       const files = await repo.listFiles();
       const names = new Set<string>();

@@ -98,12 +98,6 @@ export type RunItemStep =
 export type RepoStatus =
   paths["/api/projects/{projectId}/status"]["get"]["responses"][200]["content"]["application/json"];
 
-export type BranchInfo =
-  paths["/api/projects/{projectId}/branches"]["get"]["responses"][200]["content"]["application/json"][number];
-
-export type CreatedBranch =
-  paths["/api/projects/{projectId}/branches"]["post"]["responses"][200]["content"]["application/json"];
-
 export type CommitInfo =
   paths["/api/projects/{projectId}/commits"]["get"]["responses"][200]["content"]["application/json"]["items"][number];
 

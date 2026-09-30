@@ -8,6 +8,7 @@ import type {
   RemoteDocumentsClient,
   RemoteDocumentVersion,
 } from "@catamorphic/core";
+import { syncRemoteProject } from "@catamorphic/core";
 
 export {
   type LocalStatus,
@@ -276,6 +277,38 @@ export interface RemoteProjectClient extends RemoteDocumentsClient {
   }): Promise<RemoteProposalResult>;
   /** Deploy program files directly; the member must hold `program:publish`. */
   publishProgram(input: DeployBody): Promise<DeployResult>;
+}
+
+/**
+ * Publish a member's program edits from their folder (ADR 0191). The folder
+ * downloads first, so a file someone else published since its last sync is
+ * reconciled here and never overwritten; the publish then names the commit
+ * that download read as its base, so a change landing in between comes back
+ * as a conflict instead of being overwritten.
+ */
+export async function publishProgramFromFolder(input: {
+  root: string;
+  client: RemoteDocumentsClient & Pick<RemoteProjectClient, "publishProgram">;
+  message: string;
+  paths: readonly string[];
+  /** The selected files' contents, read after the download. */
+  readChanges: () => Array<{ path: string; content: string }>;
+}): Promise<DeployResult> {
+  const report = await syncRemoteProject(input.root, input.client);
+  const changedThere = report.conflicts
+    .map((conflict) => conflict.path)
+    .filter((conflicted) => input.paths.includes(conflicted));
+  if (changedThere.length > 0)
+    throw new Error(
+      `${changedThere.join(", ")} changed on the server since your last download. Compare your version with the server copy beside it, then publish again.`,
+    );
+  return input.client.publishProgram({
+    message: input.message,
+    files: Object.fromEntries(
+      input.readChanges().map((change) => [change.path, change.content]),
+    ),
+    ...(report.programCommit ? { base: report.programCommit } : {}),
+  });
 }
 
 /** Builder clones own program files; remote sync may only materialize store. */

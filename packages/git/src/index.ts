@@ -36,25 +36,53 @@ export {
   ObjectOriginRepo,
   ObjectRemoteBackend,
   type ObjectRemoteBackendOpts,
+  probeConditionalWrites,
 } from "./object-remote-backend.js";
 export type { ObjectStore } from "./object-store.js";
 export { PreconditionFailedError } from "./object-store.js";
+export {
+  DraftBusyError,
+  type DraftChange,
+  DraftContentChangedError,
+  type DraftPublishResult,
+  DraftRefNotAllowedError,
+  DraftsUnsupportedError,
+  DraftUnresolvedError,
+  InvalidBaseError,
+  NoDraftError,
+  OriginDraftRepo,
+  type ProjectDraft,
+  refreshPublished,
+} from "./origin-draft.js";
+export {
+  DraftBinaryResolutionError,
+  DraftIgnoredPathError,
+  DraftPathError,
+  GitObjectCache,
+} from "./origin-objects.js";
 export {
   ensurePersonalFilesExcluded,
   isPersonalFile,
 } from "./personal-files.js";
 export {
-  generateWorkBranchName,
+  PROGRAM_READER_ID,
   PROJECT_GITIGNORE,
   ProjectManager,
 } from "./project-manager.js";
 export { ProjectRepoImpl } from "./project-repo.js";
+export { RefMovedError } from "./ref-moved-error.js";
+export {
+  assertValidRefName,
+  InvalidRefNameError,
+  isValidRefName,
+} from "./ref-names.js";
 export type {
   BranchInfo,
   CloneSource,
   CommitInfo,
   ConflictEntry,
   DiffEntry,
+  DraftSupport,
   FileChange,
   GitCredentials,
   InitProjectOptions,

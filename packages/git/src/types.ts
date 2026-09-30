@@ -60,6 +60,12 @@ export interface StorageBackend {
    * disk omit it, and workspaces at a ref are then unavailable.
    */
   mirrorPath?(tenantId: string, projectId: string): string;
+  /**
+   * A folder this host may use as a disposable cache for one project (a
+   * member's store mirror around agent turns). Losing it loses nothing
+   * that is not also elsewhere.
+   */
+  cachePath?(tenantId: string, projectId: string, name: string): string;
 }
 
 export type FileChange =
@@ -99,9 +105,12 @@ export interface MergeResult {
 
 export interface ConflictEntry {
   path: string;
+  /** Text of each side; null when absent there, or when the file is binary. */
   base: string | null;
   ours: string | null;
   theirs: string | null;
+  /** A file that is not text: resolved by keeping a side, not by text. */
+  binary?: boolean;
 }
 
 export interface ProjectRepo {
@@ -226,7 +235,17 @@ export interface RemoteBackend {
     projectId: string,
     opts?: { scope?: "read" | "write" },
   ): Promise<CloneSource>;
+  /**
+   * Whether this origin can keep members' drafts (ADR 0191): ref updates
+   * and deletes that are atomic across every process using it, and draft
+   * refs no sandbox credential can read. Absent means it can.
+   */
+  draftSupport?(): Promise<DraftSupport>;
 }
+
+export type DraftSupport =
+  | { supported: true }
+  | { supported: false; reason: string };
 
 /**
  * Thin git-object-level interface over a bare repo used by {@link git-sync}.
@@ -238,14 +257,22 @@ export interface OriginRepo {
   resolveRef(ref: string): Promise<string | null>;
   /** List refs under a prefix (e.g. `refs/heads/`) with their SHAs. */
   listRefs(prefix: string): Promise<{ ref: string; sha: string }[]>;
-  /** Update a ref to a new SHA; no-op if `expected` is provided and mismatches. */
+  /**
+   * Update a ref to a new SHA. With `expected` (`null`: the ref must not
+   * exist) the update is a compare-and-swap that throws
+   * {@link RefMovedError} when the ref holds something else.
+   */
   updateRef(opts: {
     ref: string;
     sha: string;
     expected?: string | null;
   }): Promise<void>;
-  /** Remove one ref without deleting its immutable objects. Missing is a no-op. */
-  deleteRef(input: { ref: string }): Promise<void>;
+  /**
+   * Remove one ref without deleting its immutable objects. Missing is a
+   * no-op; with `expected`, throws {@link RefMovedError} unless the ref
+   * still holds that SHA.
+   */
+  deleteRef(input: { ref: string; expected?: string }): Promise<void>;
   /** Whether the object is present locally. */
   hasObject(sha: string): Promise<boolean>;
   /** Read the raw git object (returns { type, data }). */

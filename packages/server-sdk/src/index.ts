@@ -68,6 +68,7 @@ export {
   ProjectAlreadyLinkedError,
   ProjectFileNotFoundError,
   ProjectHasNoRemoteError,
+  ProjectNotDeployedError,
   ProjectNotFoundError,
   RunCapabilityError,
   RunEnrollmentConflictError,

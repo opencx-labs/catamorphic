@@ -916,13 +916,6 @@ export const RepoStatusSchema = z.object({
   remoteHeadTimestamp: z.number().nullable(),
 });
 
-export const BranchInfoSchema = z.object({
-  name: z.string(),
-  commit: z.string(),
-  isCurrent: z.boolean(),
-  createdAt: z.number().nullable(),
-});
-
 export const DiffEntrySchema = z.object({
   path: z.string(),
   kind: z.enum(["added", "modified", "deleted"]),
@@ -935,16 +928,29 @@ export const ConflictEntrySchema = z.object({
   base: z.string().nullable(),
   ours: z.string().nullable(),
   theirs: z.string().nullable(),
+  /** A file that is not text: its sides are not rendered as text. */
+  binary: z.boolean().optional(),
 });
 
 export const DeployRequestSchema = z.object({
   message: z.string().min(1).optional(),
-  /** Optional draft files to write to the working tree before committing. */
+  /**
+   * Files to publish as one commit on top of the published program, leaving
+   * the member's draft untouched (ADR 0191).
+   */
   files: z.record(z.string(), z.string()).optional(),
+  /**
+   * The published commit `files` were edited from: files changed on the
+   * server since merge with them, or come back as conflicts.
+   */
+  base: z
+    .string()
+    .regex(/^[0-9a-f]{40}$/)
+    .optional(),
 });
 
 export const PullRequestSchema = z.object({
-  /** Optional draft files to write to the working tree before merging. */
+  /** Files to write into the member's draft before merging. */
   files: z.record(z.string(), z.string()).optional(),
 });
 
@@ -964,12 +970,6 @@ export const PullResponseSchema = z.object({
 export const DiscardResponseSchema = z.object({
   discarded: z.boolean(),
   branch: z.string(),
-});
-
-export const CreateBranchSchema = z.object({
-  /** Optional explicit name; when omitted the server generates `work/YYYY-MM-DD_HH-mm`. */
-  name: z.string().optional(),
-  fromRef: z.string().optional(),
 });
 
 export const ResolveConflictsSchema = z.object({
@@ -1729,6 +1729,8 @@ export const DocumentEntrySchema = z.object({
   writtenBy: z.string().optional(),
   writtenAt: z.string().optional(),
   digest: z.string().optional(),
+  /** Program only: the published commit the listing read (ADR 0191). */
+  commit: z.string().optional(),
 });
 
 export const DocumentContentSchema = DocumentEntrySchema.extend({

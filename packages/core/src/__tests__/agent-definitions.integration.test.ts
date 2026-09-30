@@ -51,11 +51,11 @@ describeIf("AgentDefinitionsService (ADR 0050)", () => {
     // Author the agents/ directory the way a collaborator would: committed
     // files in the project repo (one valid + persona, one valid without a
     // persona, one broken).
-    const repo = await projectManager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = await projectManager.openDraft({
+      tenantId: identity.tenantId,
+      projectId: projectId,
+      externalUserId: identity.externalUserId,
+    });
     try {
       await repo.writeFile(
         ".work/agents/triage.json",
@@ -73,10 +73,6 @@ describeIf("AgentDefinitionsService (ADR 0050)", () => {
         JSON.stringify({ version: 1, name: "Reviewer", kind: "codex" }),
       );
       await repo.writeFile(".work/agents/broken.json", "{ not json");
-      await repo.commit("Add project agents", {
-        name: "alice",
-        email: "alice@example.com",
-      });
     } finally {
       await repo.dispose();
     }

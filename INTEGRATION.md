@@ -535,7 +535,7 @@ Hooks shipped:
 
 - **Projects + workflows + files**: `useProjects`, `useProject`, `useCreateProject`, `useUpdateProject`, `useDeleteProject`, `useProjectFiles`, `useProjectFile`, `useWriteProjectFile`, `useWorkflows`, `useWorkflow`.
 - **Runs**: `useRuns`, `useRun`, `useTriggerRun`, `useCancelRun`, `usePauseRunProcessing`, `useResumeRunProcessing`, `useSubmitRunInput`, `useRunItems`, `useRunItemSteps`.
-- **Git**: `useProjectGit`, `useProjectBranches`, `useProjectCommits`, `useProjectConflicts`, `useCreateBranch`, `useCheckoutBranch`, `useCommitChanges`, `useDeployProject`, plus the composite `useProjectGitState({ projectId, baselineFiles })` for multi-branch draft persistence.
+- **Git**: `useProjectGit`, `useProjectCommits`, `useProjectConflicts`, `useCommitChanges`, `useDeployProject`, plus the composite `useProjectGitState({ projectId, baselineFiles })` for client-side draft persistence.
 - **Plugins + secrets**: `usePluginCatalog`, `useProjectPlugins`, `useAttachPlugin`, `useDetachPlugin`, `useProjectSecrets`, `useUpsertProjectSecret`, `useDeleteProjectSecret`.
 - **Agent sessions**: `useAgentSessions`, `useAgentSession`, `useCreateAgentSession`, `useSendAgentMessage`, `useAcknowledgeAgentSessionAttention`, `useArchiveAgentSession`, `useUnarchiveAgentSession`.
 - **Workflow enablement**: `useWorkflowEnablements`, `usePreviewWorkflowEnablement`, `useCreateWorkflowEnablement`, `useUpdateWorkflowEnablement`.
