@@ -175,12 +175,14 @@ fresh one with an empty disk at any time.
 4. Probe it. `/readyz` (readiness) answers 503 while its lease is not
    renewing, for example during a database failover, or while the machine is
    disabled; the balancer then routes around it. `/healthz` (liveness) answers
-   503 only once the lease is lost, which is permanent: the process then exits
-   and its supervisor starts a fresh one. Never point liveness at `/readyz`:
+   503 only once the lease is lost, which is permanent (the database refused
+   a renewal, or none landed for 45 seconds): the process then exits and its
+   supervisor starts a fresh one. Never point liveness at `/readyz`:
    a database blip shorter than the 45 second lease would restart every
    replica. On Kubernetes, also set `terminationGracePeriodSeconds` to at
    least 30, so a stopping replica can let its chat turns finish (up to 15
-   seconds) and move its work before it is killed.
+   seconds) and move its work before it is killed. The image exits within 25
+   seconds of SIGTERM whatever is still running.
 5. Workers reach the replicas through the load balancer, and any replica
    answers any worker call (ADR 0187). A worker retries a failed call, such as
    a 502 or a replica restarting, without ending its session or interrupting

@@ -57,7 +57,10 @@ sandbox physically lives on one machine, so placement is unchanged.
   - the node row is deleted once nothing active is left on it.
 - **Liveness is the lease; readiness is renewing it.** `/healthz` answers
   503 only once a disposable node's lease is lost, which it can never renew:
-  the Work server image then exits so its supervisor starts a fresh process.
+  the database refused a renewal, or none has landed for the 45 second lease
+  (a hung connection counts). The Work server image then interrupts its
+  turns at once and exits so its supervisor starts a fresh process; any
+  shutdown ends within 25 seconds.
   `/readyz` answers 503 while renewals fail or hang, or the machine is
   disabled, so a database failover shorter than the lease takes replicas out
   of rotation without restarting them.
