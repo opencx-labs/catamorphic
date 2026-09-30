@@ -76,12 +76,14 @@ Register the provider's redirect URI as
 
 ### Sign-in limits
 
-Sign-in is limited per client address: three attempts every 10 seconds on
-each sign-in endpoint (local password and starting a provider sign-in), and
-100 requests every 10 seconds on the other `/api/auth` endpoints, such as the
-OAuth token endpoint. The fourth attempt gets `429` and the sign-in page says
-to wait. Counts live in the auth schema of the database, so replicas share
-one budget (ADR 0189).
+Sign-in is limited per client address: three password attempts every 10
+seconds, 30 provider sign-in starts every 10 seconds (the identity provider
+authenticates, so an office behind one address is not held up), and 100
+requests every 10 seconds on the other `/api/auth` endpoints, such as the
+OAuth token endpoint and the provider's return. A refused attempt gets `429`,
+and the sign-in page says to wait. Counts live in the auth schema of the
+database, so replicas share one budget (ADR 0189). `WORK_AUTH_RATE_LIMIT=off`
+logs a warning at boot.
 
 The client address is the connection's peer unless that peer is listed in
 `WORK_TRUSTED_PROXIES`. Behind a load balancer or CDN, list every proxy hop
@@ -91,8 +93,9 @@ make sure each appends to `x-forwarded-for`. The server then walks that
 header from the nearest hop and takes the first address no trusted proxy
 owns, so a client cannot choose its own. Leave it unset when clients connect
 directly. If it is missing behind a proxy, every person shares the proxy's
-address and one budget; a range that includes client addresses lets those
-clients pick theirs.
+address and one budget, and the server logs a warning the first time a
+private address forwards a request; a range that includes client addresses
+lets those clients pick theirs.
 
 ## A custom server
 

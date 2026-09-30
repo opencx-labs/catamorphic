@@ -66,6 +66,30 @@ export function clientAddress(args: {
   return client;
 }
 
+const PRIVATE_NETWORKS = trustedProxies([
+  "10.0.0.0/8",
+  "172.16.0.0/12",
+  "192.168.0.0/16",
+  "100.64.0.0/10",
+  "127.0.0.0/8",
+  "169.254.0.0/16",
+  "fc00::/7",
+  "fe80::/10",
+  "::1",
+]);
+
+/**
+ * A loopback, private, or link-local address: where a load balancer or
+ * reverse proxy in front of the server usually connects from.
+ */
+export function isPrivateAddress(address: string | undefined): boolean {
+  return (
+    address !== undefined &&
+    isIP(address) !== 0 &&
+    isTrusted(PRIVATE_NETWORKS, address)
+  );
+}
+
 function isTrusted(list: BlockList, address: string): boolean {
   return list.check(address, isIP(address) === 4 ? "ipv4" : "ipv6");
 }

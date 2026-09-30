@@ -195,8 +195,11 @@ it.skipIf(!process.env.DATABASE_URL)(
     } finally {
       for (const server of servers) await server.shutdown();
       await fs.rm(dir, { recursive: true, force: true });
-      await dropTestDatabase({ admin, database });
-      await admin.end();
+      try {
+        await dropTestDatabase({ admin, database });
+      } finally {
+        await admin.end();
+      }
     }
   },
   180_000,

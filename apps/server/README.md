@@ -62,10 +62,10 @@ minute sweep, access tokens last 15 minutes, refresh tokens rotate with reuse
 detection, and directory groups can grant project roles. See
 [company identity](../../skills/setup-work-server/references/company-identity.md).
 
-Sign-in is limited per client address (three attempts every 10 seconds),
-counted in the database so every replica shares the limit. Behind a load
-balancer or CDN, set `WORK_TRUSTED_PROXIES` to their addresses so the limit
-counts each person's address; see
+Password sign-in is limited per client address (three attempts every 10
+seconds), counted in the database so every replica shares the limit. Behind a
+load balancer or CDN, set `WORK_TRUSTED_PROXIES` to their addresses so the
+limit counts each person's address; see
 [sign-in limits](../../skills/setup-work-server/references/stock-server.md#sign-in-limits).
 
 Use [`../../skills/setup-work-server/SKILL.md`](../../skills/setup-work-server/SKILL.md)

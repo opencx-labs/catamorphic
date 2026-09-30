@@ -8,8 +8,9 @@ import {
   type Dialect,
   type Kysely,
   PGliteDialect,
+  type PostgresPool,
 } from "kysely";
-import { Pool, types } from "pg";
+import { Pool, type PoolClient, types } from "pg";
 import { SchemaScopedPostgresDialect } from "./schema-scoped-postgres-dialect.js";
 
 const AUTH_SCHEMA = "catamorphic_auth";
@@ -105,16 +106,30 @@ async function openPostgresAuthDatabase(
   return {
     database,
     migrate: async (args) => {
-      // Replicas migrate one at a time. The lock lives in a transaction
-      // held open for the migration, never in the session, so it ends with
-      // the transaction even behind a transaction-mode pooler.
+      // Replicas migrate one at a time. The lock lives in the transaction
+      // the migration runs in, never in the session, so it ends with the
+      // transaction even behind a transaction-mode pooler, and a failed
+      // migration leaves no half-created tables.
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
           `catamorphic-auth:${authSchema}`,
         ]);
-        await migrateBetterAuth(args);
+        await migrateBetterAuth({
+          options: {
+            ...args.options,
+            database: {
+              dialect: new BetterAuthTypeNames(
+                new SchemaScopedPostgresDialect({
+                  pool: onConnection(client),
+                  schema: authSchema,
+                }),
+              ),
+              type: "postgres",
+            },
+          },
+        });
         await client.query("COMMIT");
       } catch (error) {
         await client.query("ROLLBACK").catch(() => undefined);
@@ -132,6 +147,22 @@ async function migrateBetterAuth(args: {
 }): Promise<void> {
   const migrations = await getMigrations(args.options);
   await migrations.runMigrations();
+}
+
+/**
+ * A pool of the one connection holding the migration's transaction. Kysely
+ * releases a connection after every query; this one stays checked out
+ * until the transaction ends.
+ */
+function onConnection(client: PoolClient): PostgresPool {
+  return {
+    options: {},
+    connect: async () => ({
+      query: client.query.bind(client),
+      release: () => undefined,
+    }),
+    end: async () => undefined,
+  };
 }
 
 /**

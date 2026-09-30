@@ -108,7 +108,8 @@ export async function oauthAccessToken(args: {
 /**
  * Drop a test's own database once the servers that used it have closed
  * their connections. Forcing it while a pool is still closing a client
- * terminates that client, which surfaces as an uncaught error.
+ * terminates that client, which surfaces as an uncaught error; a
+ * connection still open after 10 seconds is a leak, so the test fails.
  */
 export async function dropTestDatabase(args: {
   admin: {
@@ -120,13 +121,19 @@ export async function dropTestDatabase(args: {
   database: string;
 }): Promise<void> {
   const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
+  let open = 0;
+  do {
     const { rows } = await args.admin.query(
       "SELECT count(*)::int AS connections FROM pg_stat_activity WHERE datname = $1",
       [args.database],
     );
-    if (!rows[0]?.connections) break;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
+    open = rows[0]?.connections ?? 0;
+    if (open > 0) await new Promise((resolve) => setTimeout(resolve, 100));
+  } while (open > 0 && Date.now() < deadline);
   await args.admin.query(`DROP DATABASE ${args.database} WITH (FORCE)`);
+  if (open > 0) {
+    throw new Error(
+      `${open} connection(s) to ${args.database} were still open 10 seconds after the servers shut down`,
+    );
+  }
 }

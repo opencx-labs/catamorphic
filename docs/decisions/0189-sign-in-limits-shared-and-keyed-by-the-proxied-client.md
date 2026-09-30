@@ -21,10 +21,16 @@ shared bucket per path (issue #150).
 **On by default, whatever the environment.** `createWorkAuth` sets
 `rateLimit.enabled` from `config.authRateLimit` (default true; the image reads
 `WORK_AUTH_RATE_LIMIT=off`). Tests that sign in many times turn it off through
-that config, never through `NODE_ENV`. Better Auth's limits stay as they are:
-three per 10 seconds on sign-in, sign-up, and credential changes, 100 per 10
-seconds elsewhere. Authorization codes and refresh tokens are random, so the
-token endpoint needs no stricter rule.
+that config, never through `NODE_ENV`, and the server warns at boot when
+they are off. Better Auth's limits stay for what can be guessed: three per 10
+seconds on password sign-in, sign-up, and credential changes, 100 per 10
+seconds elsewhere. Starting a provider sign-in (`/sign-in/oauth2`,
+`/sign-in/social`) guesses nothing, since the identity provider
+authenticates, so it allows 30 per 10 seconds; under Better Auth's default
+matching of every `/sign-in` path, an office behind one address would get
+about 18 provider sign-ins a minute, and anyone there could use them up.
+Authorization codes and refresh tokens are random, so the token endpoint
+needs no stricter rule.
 
 **Counted in Postgres.** `rateLimit.storage` is always `database`: a
 `rateLimit` table in the auth schema (PGlite or Postgres), created by the
@@ -39,7 +45,10 @@ The hops are the `x-forwarded-for` entries followed by the peer; walking from
 the nearest, an entry is believed only when the hop that appended it is in
 `config.trustedProxies` (`WORK_TRUSTED_PROXIES`, addresses or CIDR ranges),
 and the first hop outside that list is the client.
-With no trusted proxies the client is the peer and the header is ignored.
+With no trusted proxies the client is the peer and the header is ignored;
+when such a request comes from a private or loopback peer and carries
+`x-forwarded-for`, the server warns once that a proxy is probably in front of
+it untrusted.
 Passing the list to Better Auth's own `trustedProxies` instead was rejected:
 it would believe a forged chain from any client that reaches the server
 directly.
@@ -48,8 +57,8 @@ directly.
 
 - Every `/api/auth` request costs a read and a conditional update in the
   auth schema.
-- An office behind one NAT shares one sign-in budget, as with any
-  address-keyed limit.
+- An office behind one NAT shares one password sign-in budget, as with any
+  address-keyed limit; provider sign-ins have a budget ten times larger.
 - A deployment behind proxies must list them; the setup skill's stock server
   and cluster references say how, and what happens when they are missing.
 - Per-account lockout (independent of address) is not part of this; it would

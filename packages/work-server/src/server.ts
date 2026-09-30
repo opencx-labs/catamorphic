@@ -229,7 +229,13 @@ async function createWorkServerInner(
   // Config is data, validated by the schemas the image's files use; only
   // the image's environment layer reads files for it (ADR 0183).
   const workAuthConfig = parseWorkAuthConfig(config.auth ?? {});
-  const proxies = trustedProxies(config.trustedProxies ?? []);
+  // Validated here too, for servers that build their config in code.
+  trustedProxies(config.trustedProxies ?? []);
+  if (config.authRateLimit === false) {
+    log(
+      "Warning: sign-in rate limits are off (WORK_AUTH_RATE_LIMIT=off). Passwords can be guessed without limit; use this only for tests.",
+    );
+  }
   const gateway = config.gateway ? parseGatewayConfig(config.gateway) : null;
   if (
     config.connectionGuardTimeoutMs !== undefined &&
@@ -942,7 +948,8 @@ async function createWorkServerInner(
     methods: workAuthConfig.publicMethods(),
     shareMethods: workAuthConfig.publicMethods("shares"),
     tokenGate: accountLifecycle,
-    trustedProxies: proxies,
+    trustedProxies: config.trustedProxies ?? [],
+    log,
   });
   registerShareRoutes(app, {
     core,

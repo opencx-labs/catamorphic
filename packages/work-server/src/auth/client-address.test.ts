@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { clientAddress, trustedProxies } from "./client-address.js";
+import {
+  clientAddress,
+  isPrivateAddress,
+  trustedProxies,
+} from "./client-address.js";
 
 describe("clientAddress", () => {
   const behindBalancer = trustedProxies(["10.0.0.0/8", "fd00::/8"]);
@@ -74,6 +78,30 @@ describe("clientAddress", () => {
         trusted: behindBalancer,
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("isPrivateAddress", () => {
+  it("recognizes where a proxy in front of the server connects from", () => {
+    for (const address of [
+      "10.1.2.3",
+      "172.20.0.4",
+      "192.168.1.1",
+      "127.0.0.1",
+      "::1",
+      "::ffff:10.0.0.5",
+      "fd12::1",
+    ]) {
+      expect(isPrivateAddress(address)).toBe(true);
+    }
+    for (const address of [
+      "203.0.113.7",
+      "2001:db8::7",
+      "unknown",
+      undefined,
+    ]) {
+      expect(isPrivateAddress(address)).toBe(false);
+    }
   });
 });
 

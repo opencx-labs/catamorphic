@@ -80,6 +80,9 @@ export interface WorkAuth {
   close(): Promise<void>;
 }
 
+/** Provider sign-in starts per client address (Better Auth's window is seconds). */
+const PROVIDER_SIGN_IN_LIMIT = { window: 10, max: 30 };
+
 export function createWorkAuth(options: {
   database: WorkAuthDatabase;
   baseURL: string;
@@ -108,7 +111,16 @@ export function createWorkAuth(options: {
     // Better Auth's own limits (3 sign-ins per 10 seconds, 100 requests to
     // any other endpoint) whatever NODE_ENV says, counted in the auth schema
     // so every replica spends one budget. The table exists either way.
-    rateLimit: { enabled: options.rateLimit ?? true, storage: "database" },
+    rateLimit: {
+      enabled: options.rateLimit ?? true,
+      storage: "database",
+      // Starting a provider sign-in guesses nothing: the identity provider
+      // authenticates. An office behind one address must not queue for it.
+      customRules: {
+        "/sign-in/oauth2": PROVIDER_SIGN_IN_LIMIT,
+        "/sign-in/social": PROVIDER_SIGN_IN_LIMIT,
+      },
+    },
     // The Work server resolves the client behind trusted proxies itself;
     // Better Auth sees only headers, never the connection's peer.
     advanced: { ipAddress: { ipAddressHeaders: [CLIENT_ADDRESS_HEADER] } },

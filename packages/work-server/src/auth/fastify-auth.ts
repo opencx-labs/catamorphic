@@ -1,5 +1,4 @@
 import { randomBytes } from "node:crypto";
-import type { BlockList } from "node:net";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { workMark } from "../brand.js";
 import type {
@@ -9,6 +8,7 @@ import type {
 import {
   CLIENT_ADDRESS_HEADER,
   clientAddress,
+  isPrivateAddress,
   trustedProxies,
 } from "./client-address.js";
 import type { WorkAuth } from "./work-auth.js";
@@ -40,10 +40,39 @@ export function registerWorkAuthRoutes(
     /** Sign-in choices on a share link: member and guest providers. */
     shareMethods?: PublicAuthMethods;
     tokenGate?: TokenGate;
-    /** Proxies whose `x-forwarded-for` entries name the client. */
-    trustedProxies?: BlockList;
+    /**
+     * Proxies whose `x-forwarded-for` entries name the client, as
+     * addresses or CIDR ranges (`WORK_TRUSTED_PROXIES`).
+     */
+    trustedProxies?: readonly string[];
+    /** Operator-facing warnings, such as a proxy nobody trusted. */
+    log?: (line: string) => void;
   },
 ): void {
+  const warn = options.log ?? ((line: string) => app.log.warn(line));
+  const trusted = trustedProxies(options.trustedProxies ?? []);
+  const proxied = (options.trustedProxies ?? []).length > 0;
+  let warnedUntrustedProxy = false;
+  const routed: BetterAuthRoute = {
+    auth: options.auth,
+    baseURL: options.baseURL,
+    clientAddress: (request) => {
+      const peer = request.raw.socket?.remoteAddress;
+      const forwardedFor = request.headers["x-forwarded-for"];
+      if (
+        !proxied &&
+        !warnedUntrustedProxy &&
+        forwardedFor !== undefined &&
+        isPrivateAddress(peer)
+      ) {
+        warnedUntrustedProxy = true;
+        warn(
+          `Warning: requests arrive through a proxy at ${peer} with x-forwarded-for, but WORK_TRUSTED_PROXIES is not set. Sign-in limits count every client as the proxy's address, so a few failed attempts refuse everyone. Set WORK_TRUSTED_PROXIES to the proxy's addresses.`,
+        );
+      }
+      return clientAddress({ peer, forwardedFor, trusted });
+    },
+  };
   const methodsFor = (request: FastifyRequest) =>
     shareNext(request)
       ? (options.shareMethods ?? options.methods)
@@ -60,7 +89,7 @@ export function registerWorkAuthRoutes(
     request: FastifyRequest,
     reply: FastifyReply,
     pathname?: string,
-  ) => forwardToBetterAuth(options, request, reply, pathname);
+  ) => forwardToBetterAuth(routed, request, reply, pathname);
 
   app.route({
     method: ["GET", "POST", "OPTIONS"],
@@ -72,7 +101,10 @@ export function registerWorkAuthRoutes(
       ) {
         // A refused upstream account (wrong Workspace, suspended, not in a
         // required group) ends on the sign-in page, never on a raw error.
-        const response = await callBetterAuth(options, request, {});
+        const response = await callBetterAuth(routed, request, {});
+        if (response.status === 429) {
+          return reply.redirect("/login?error=limited");
+        }
         if (response.status >= 500) {
           request.log.warn(
             { status: response.status },
@@ -119,7 +151,7 @@ export function registerWorkAuthRoutes(
       });
       if (!decision.allow) return sendTokenError(reply, decision);
     }
-    const response = await callBetterAuth(options, request, {});
+    const response = await callBetterAuth(routed, request, {});
     if (!response.ok) return sendResponse(response, reply);
     const body: unknown = await response
       .clone()
@@ -161,7 +193,7 @@ export function registerWorkAuthRoutes(
   });
   app.post("/login/local", async (request, reply) => {
     const form = formBody(request.body);
-    const response = await callBetterAuth(options, request, {
+    const response = await callBetterAuth(routed, request, {
       pathname: "/api/auth/sign-in/username",
       body: JSON.stringify({
         username: form.get("username") ?? "",
@@ -201,7 +233,7 @@ export function registerWorkAuthRoutes(
         shareNext(request) ?? `/api/auth/mcp/authorize?${query}`,
         options.baseURL,
       ).toString();
-      const response = await callBetterAuth(options, request, {
+      const response = await callBetterAuth(routed, request, {
         pathname: "/api/auth/sign-in/oauth2",
         body: JSON.stringify({
           providerId: request.params.providerId,
@@ -227,7 +259,7 @@ export function registerWorkAuthRoutes(
   );
   app.post("/oauth/consent", async (request, reply) => {
     const form = formBody(request.body);
-    const response = await callBetterAuth(options, request, {
+    const response = await callBetterAuth(routed, request, {
       pathname: "/api/auth/oauth2/consent",
       body: JSON.stringify({
         accept: form.get("accept") === "true",
@@ -252,7 +284,7 @@ export function registerWorkAuthRoutes(
 }
 
 async function forwardToBetterAuth(
-  options: { auth: WorkAuth; baseURL: string; trustedProxies?: BlockList },
+  options: BetterAuthRoute,
   request: FastifyRequest,
   reply: FastifyReply,
   pathname?: string,
@@ -304,10 +336,15 @@ async function sendResponse(
   return reply.send(bytes.byteLength > 0 ? Buffer.from(bytes) : null);
 }
 
-const NO_PROXIES = trustedProxies([]);
+/** How a request reaches Better Auth, and whose address it counts as. */
+interface BetterAuthRoute {
+  auth: WorkAuth;
+  baseURL: string;
+  clientAddress: (request: FastifyRequest) => string | undefined;
+}
 
 async function callBetterAuth(
-  options: { auth: WorkAuth; baseURL: string; trustedProxies?: BlockList },
+  options: BetterAuthRoute,
   request: FastifyRequest,
   overrides: {
     pathname?: string;
@@ -328,11 +365,7 @@ async function callBetterAuth(
   }
   // Better Auth keys its limits by this header; only the server sets it.
   headers.delete(CLIENT_ADDRESS_HEADER);
-  const client = clientAddress({
-    peer: request.raw.socket?.remoteAddress,
-    forwardedFor: request.headers["x-forwarded-for"],
-    trusted: options.trustedProxies ?? NO_PROXIES,
-  });
+  const client = options.clientAddress(request);
   if (client) headers.set(CLIENT_ADDRESS_HEADER, client);
   if (overrides.contentType) {
     headers.set("content-type", overrides.contentType);
