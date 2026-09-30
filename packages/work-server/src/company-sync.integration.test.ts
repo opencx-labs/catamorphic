@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { Identity, RemoteSyncOutcome } from "@catamorphic/core";
-import { createDatabase, migrateToLatest } from "@catamorphic/db";
+import {
+  createDatabase,
+  DEFAULT_SCHEMA,
+  migrateToLatest,
+} from "@catamorphic/db";
 import { expect, it } from "vitest";
 import {
   type CompanyProjectSyncServices,
@@ -19,13 +23,21 @@ it.skipIf(!process.env.DATABASE_URL)(
   async () => {
     const database = await createTestDatabase("work_company_sync");
     const replicas = [
-      createDatabase({ connectionString: database.url, poolSize: 4 }),
-      createDatabase({ connectionString: database.url, poolSize: 4 }),
+      createDatabase({
+        connectionString: database.url,
+        schema: DEFAULT_SCHEMA,
+        poolSize: 4,
+      }),
+      createDatabase({
+        connectionString: database.url,
+        schema: DEFAULT_SCHEMA,
+        poolSize: 4,
+      }),
     ];
     try {
       const [first, second] = replicas;
       if (!first || !second) throw new Error("No replicas");
-      await migrateToLatest({ db: first });
+      await migrateToLatest({ db: first, schema: DEFAULT_SCHEMA });
       const projects = Array.from({ length: 12 }, (_, index) => ({
         id: randomUUID(),
         remoteUrl: index === 0 ? null : `https://forge.example.test/${index}`,
