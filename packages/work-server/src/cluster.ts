@@ -28,6 +28,9 @@ import {
 } from "./workers/placement.js";
 import { isWorkerNode } from "./workers/worker-registry.js";
 
+/** A lease renewal that takes longer than this is abandoned and retried. */
+const RENEWAL_TIMEOUT_MS = 10_000;
+
 /** Work server deployment policy. Core only sees leased nodes and runtime bindings. */
 export async function registerWorkMachine(args: {
   db: Kysely<DB>;
@@ -232,6 +235,8 @@ export async function registerWorkMachine(args: {
   // Renewing: the lease is current and the node takes work. False while a
   // renewal fails or hangs, and while the node is disabled.
   // A disabled single server starts idle.
+  // When the last renewal that landed was sent: the lease runs from then.
+  let renewedFrom = performance.now();
   let ready = await nodes.renew({ lease });
   // A disposable node whose lease lapsed or was disabled never renews: it
   // is lost for good, and the process should stop so its orchestrator
@@ -241,15 +246,36 @@ export async function registerWorkMachine(args: {
     markLost = resolve;
   });
   let isLost = false;
+  // A renewal that never settles (a dead connection) must not hold the
+  // heartbeat forever: give up on it after one interval and try again.
+  const renew = () =>
+    new Promise<boolean>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error("Lease renewal timed out")),
+        RENEWAL_TIMEOUT_MS,
+      );
+      nodes
+        .renew({ lease })
+        .then(resolve, reject)
+        .finally(() => {
+          clearTimeout(timeout);
+        });
+    });
+  const markNodeLost = () => {
+    ready = false;
+    isLost = true;
+    markLost();
+  };
   const beat = async (): Promise<void> => {
-    if (await nodes.renew({ lease })) {
+    const sentAt = performance.now();
+    if (await renew()) {
+      renewedFrom = sentAt;
       ready = true;
       return;
     }
     ready = false;
     if (args.disposable) {
-      isLost = true;
-      markLost();
+      markNodeLost();
       return;
     }
     // A single server's identity outlives a lapse (a sleeping laptop, a
@@ -259,13 +285,24 @@ export async function registerWorkMachine(args: {
     try {
       const next = await register();
       lease.token = next.token;
-      ready = await nodes.renew({ lease });
+      const retakenAt = performance.now();
+      ready = await renew();
+      if (ready) renewedFrom = retakenAt;
     } catch (error) {
       if (!(error instanceof WorkerNodeLeaseHeldError)) throw error;
     }
   };
   const timer = setInterval(() => {
     if (isLost) return;
+    // Whatever the database says, a disposable node whose lease could have
+    // lapsed is lost: another replica may already be recovering it.
+    if (
+      args.disposable &&
+      performance.now() - renewedFrom > WORKER_NODE_LEASE_MS
+    ) {
+      markNodeLost();
+      return;
+    }
     if (heartbeat) {
       // The last renewal has not answered in a whole interval: the
       // database is unreachable or hung.

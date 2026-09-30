@@ -876,7 +876,11 @@ async function createWorkServerInner(
     // their sandboxes go away (ADR 0190).
     disposers.push(async () => {
       await agentWorker.stop();
-      await agentSessions.stopLocalTurns();
+      // A lost machine's turns may already belong to another replica: stop
+      // them at once rather than letting them finish.
+      await agentSessions.stopLocalTurns(
+        machine.isLost() ? { timeoutMs: 0 } : {},
+      );
     });
   }
   if (directories.length > 0) {

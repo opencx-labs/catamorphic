@@ -53,7 +53,13 @@ export interface NodeRecoveryResult {
 }
 
 type AllocationRow = Selectable<DB["execution_allocations"]>;
-type RunOutcome = "moved" | "failed" | "waiting" | "released" | "skipped";
+type RunOutcome =
+  | "moved"
+  | "failed"
+  | "waiting"
+  | "released"
+  | "skipped"
+  | "stuck";
 
 /**
  * Recovers the work of disposable nodes that are gone for good (ADR 0190):
@@ -162,6 +168,7 @@ export class NodeRecoveryService {
                 result.waitingRuns += 1;
                 remaining += 1;
               }
+              if (outcome === "stuck") remaining += 1;
             } catch (error) {
               remaining += 1;
               failures.push(error);
@@ -265,7 +272,15 @@ export class NodeRecoveryService {
           identity,
           allocationId: allocation.id,
         });
-        if (!previous) return "skipped";
+        if (!previous) {
+          // Nothing to rebuild the run from: keep the node (and say so)
+          // rather than dropping the run silently.
+          console.warn(
+            `[catamorphic] Run ${run.id} on lost machine ${args.nodeId} has an unreadable Allocation ${allocation.id}; leaving it for an operator`,
+          );
+          span.setAttribute("catamorphic.recovery.outcome", "stuck");
+          return "stuck";
+        }
         let admission: Awaited<
           ReturnType<ExecutionEnvironmentsService["admit"]>
         >;
@@ -436,12 +451,42 @@ function isLost(eb: ExpressionBuilder<DB, "worker_nodes">, graceMs: number) {
   ]);
 }
 
-/** Lock an Allocation still active on the lost node, or report it moved on. */
+/**
+ * Lock an Allocation still active on the lost node, or report it moved on.
+ * Its workload's rows are locked first, in the order the run coordinator
+ * (a run, then its tree, then its Allocation) and chats (the session, then
+ * its Allocation) take them, so recovery never deadlocks with them.
+ */
 async function lockLostAllocation(args: {
   trx: Transaction<DB>;
   allocation: AllocationRow;
   nodeId: string;
 }): Promise<boolean> {
+  const { allocation, trx } = args;
+  if (allocation.workload_kind === "workflow") {
+    await trx
+      .selectFrom("workflow_runs")
+      .select("id")
+      .where("id", "=", allocation.root_workload_id)
+      .forUpdate()
+      .execute();
+    await trx
+      .selectFrom("workflow_runs")
+      .select("id")
+      .where("allocation_id", "=", allocation.id)
+      .where("id", "!=", allocation.root_workload_id)
+      .orderBy("id")
+      .forUpdate()
+      .execute();
+  } else {
+    await trx
+      .selectFrom("agent_sessions")
+      .select("id")
+      .where("allocation_id", "=", allocation.id)
+      .orderBy("id")
+      .forUpdate()
+      .execute();
+  }
   const row = await args.trx
     .selectFrom("execution_allocations")
     .select("id")

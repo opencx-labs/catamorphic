@@ -308,6 +308,7 @@ export class ExecutionWorkerService {
   }): Promise<void> {
     const { signal } = args.controller;
     await this.sweepMaintenance({ swept: args.swept });
+    const claimedAt = performance.now();
     const claimed = await this.jobs.claim({
       workerId: args.workerId,
       kinds: args.kinds,
@@ -333,6 +334,7 @@ export class ExecutionWorkerService {
         job,
         workerId: args.workerId,
         leaseSeconds: args.leaseSeconds,
+        claimedAt,
         signal,
       });
     }
@@ -342,6 +344,7 @@ export class ExecutionWorkerService {
     job: ExecutionJob;
     workerId: string;
     leaseSeconds: number;
+    claimedAt: number;
     signal: AbortSignal;
   }): Promise<void> {
     await this.runClaimedJob(args).catch(() => undefined);
@@ -357,6 +360,11 @@ export class ExecutionWorkerService {
     job: ExecutionJob;
     workerId: string;
     leaseSeconds: number;
+    /**
+     * `performance.now()` when the claim was sent: the lease runs from
+     * then, not from when this job's turn in a claimed batch came.
+     */
+    claimedAt?: number;
     signal: AbortSignal;
   }): Promise<ClaimedJobDisposition> {
     // A telemetry lookup failure must not prevent execution or leak a caller's scope.
@@ -392,6 +400,7 @@ export class ExecutionWorkerService {
     job: ExecutionJob;
     workerId: string;
     leaseSeconds: number;
+    claimedAt?: number;
     signal: AbortSignal;
   }): Promise<ClaimedJobDisposition> {
     const handler = this.handlers.get(args.job.kind);
@@ -418,7 +427,14 @@ export class ExecutionWorkerService {
     // on the sandbox again, since another worker may own the job by then.
     const leaseMs = args.leaseSeconds * 1_000;
     const safeLeaseMs = leaseMs - Math.max(1_000, Math.floor(leaseMs / 6));
-    let fence = setTimeout(abortJob, safeLeaseMs);
+    let fence = setTimeout(
+      abortJob,
+      Math.max(
+        0,
+        safeLeaseMs -
+          (performance.now() - (args.claimedAt ?? performance.now())),
+      ),
+    );
     const heartbeat = setInterval(
       () => {
         const sentAt = performance.now();

@@ -574,3 +574,57 @@ it.skipIf(!process.env.DATABASE_URL)(
   },
   90_000,
 );
+
+it.skipIf(!process.env.DATABASE_URL)(
+  "a replica whose renewals never settle counts its lease as lost once it could have lapsed",
+  async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "work-hung-"));
+    const database = await createTestDatabase("work_hung");
+    const server = await createWorkServer(
+      testServerOptions({
+        publicBases: ["https://hung.example.test"],
+        dataDir: dir,
+        env: {
+          DATABASE_URL: database.url,
+          WORK_SECRET: "hung-test-secret-with-at-least-32-characters",
+          WORK_OPERATOR_SECRET: "hung-test-operator-secret-with-32-chars",
+          WORK_VAULT_KEY: Buffer.alloc(32, 6).toString("base64"),
+          WORK_CONTROL_PLANE_WORKLOADS: "workflow",
+          WORK_FAKE_AGENT: "1",
+          PATH: process.env.PATH,
+        },
+      }),
+    );
+    const blocker = new pg.Client({ connectionString: database.url });
+    try {
+      const node: string = (
+        await server.app.inject({ method: "GET", url: "/healthz" })
+      ).json().machine.id;
+      let lost = false;
+      void server.lost.then(() => {
+        lost = true;
+      });
+      // Every renewal from now on waits on this lock and never answers.
+      await blocker.connect();
+      await blocker.query("BEGIN");
+      await blocker.query(
+        "SELECT id FROM catamorphic.worker_nodes WHERE id = $1 FOR UPDATE",
+        [node],
+      );
+      await expect
+        .poll(() => lost, { timeout: 75_000, interval: 1_000 })
+        .toBe(true);
+      expect(
+        (await server.app.inject({ method: "GET", url: "/healthz" }))
+          .statusCode,
+      ).toBe(503);
+      await blocker.query("ROLLBACK");
+    } finally {
+      await blocker.end().catch(() => {});
+      await server.shutdown();
+      await fs.rm(dir, { recursive: true, force: true });
+      await database.drop();
+    }
+  },
+  120_000,
+);
