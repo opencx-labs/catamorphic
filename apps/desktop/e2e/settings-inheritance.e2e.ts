@@ -286,10 +286,16 @@ it("edits workspace padding, rounding and dividers independently and persists th
     "getComputedStyle(document.querySelector('[data-sidebar=right]')).borderLeftWidth === '1px'",
   );
   await app.reload();
+  // Until preferences load, the workspace draws an unframed main: a 0px
+  // radius and a 0px margin. The saved 0px radius alone cannot tell the
+  // saved state from that first frame, so wait for the saved padding too.
   await app.waitFor(
-    "document.querySelector('main') && getComputedStyle(document.querySelector('main')).borderRadius === '0px'",
-  );
-  expect(await run("return getComputedStyle($('main')).marginTop")).toBe(
-    "12px",
+    `(() => {
+      const main = document.querySelector('main');
+      if (!main) return false;
+      const style = getComputedStyle(main);
+      return style.marginTop === '12px' && style.borderRadius === '0px';
+    })()`,
+    { label: "saved padding and rounding after reload" },
   );
 });
