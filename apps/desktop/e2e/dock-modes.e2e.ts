@@ -365,22 +365,33 @@ describe("dock modes", () => {
       y: first.chat.top + Math.floor(first.chat.height / 2),
     };
     const shaped = process.platform === "linux";
+    // Where the empty-space click goes, in main-window coordinates. On
+    // Linux the window takes the shape of what the dock draws, including the
+    // visible part of the chat's shadow, so the click goes to a point the
+    // applied shape leaves out, wherever that is.
+    let empty = margin;
+    let emptyInDock = marginInDock;
     if (shaped) {
-      // Linux cannot let clicks through a window while telling it where the
-      // pointer is; the window takes the shape of what the dock draws. The
-      // click may only come once that shape leaves the margin out and
-      // keeps the composer in.
-      await dockWait(
+      // The click may only come once the shape keeps the composer in and
+      // leaves some empty space out.
+      emptyInDock = await dockWait<{ x: number; y: number }>(
         `const shape = document.documentElement.dataset.dockShape;
          if (!shape) return false;
          const rects = JSON.parse(shape);
          if (!Array.isArray(rects)) return false;
          const inside = (x, y) => rects.some((r) => x >= r.x && y >= r.y && x < r.x + r.width && y < r.y + r.height);
-         return !inside(${marginInDock.x}, ${marginInDock.y}) &&
-           inside(${first.composer.x}, ${first.composer.y});`,
+         if (!inside(${first.composer.x}, ${first.composer.y})) return false;
+         for (let y = 4; y < innerHeight; y += 4)
+           for (let x = 4; x < innerWidth; x += 4)
+             if (!inside(x, y) && document.elementFromPoint(x, y) === document.body) return { x, y };
+         return false;`,
         { label: "dock window shaped to its content" },
       );
-      await app.movePointer(margin);
+      empty = {
+        x: first.dock.x - first.main.x + emptyInDock.x,
+        y: first.dock.y - first.main.y + emptyInDock.y,
+      };
+      await app.movePointer(empty);
     } else {
       await app.movePointer(margin);
       // The dock answers the hover by asking the main process to let clicks
@@ -390,13 +401,13 @@ describe("dock modes", () => {
         { label: "dock lets clicks through over its margin" },
       );
     }
-    await app.clickPointer(margin);
-    const marginHit = await dockRun<string | null>(
-      `const hit = document.elementFromPoint(${marginInDock.x}, ${marginInDock.y});
+    await app.clickPointer(empty);
+    const emptyHit = await dockRun<string | null>(
+      `const hit = document.elementFromPoint(${emptyInDock.x}, ${emptyInDock.y});
        return hit ? hit.tagName : null;`,
     );
-    // The dock reads the margin as empty space (only the body answers).
-    expect(marginHit).toBe("BODY");
+    // The dock reads the point as empty space (only the body answers).
+    expect(emptyHit).toBe("BODY");
     // The click lands behind the dock: macOS honors the window's
     // mouse-ignore, Linux its shape.
     await app
@@ -411,7 +422,7 @@ describe("dock modes", () => {
           shape: document.documentElement.dataset.dockShape,
         };`);
         throw new Error(
-          `${String(error)}; margin ${JSON.stringify(margin)}; dock state: ${JSON.stringify(state)}`,
+          `${String(error)}; point ${JSON.stringify(empty)}; dock state: ${JSON.stringify(state)}`,
         );
       });
     // A real click in the composer focuses the dock window, as typing would,
@@ -502,6 +513,50 @@ describe("dock modes", () => {
       `return !frontDock().querySelector('[data-testid="session-inspector-trigger"]')?.getAttribute('aria-label')?.includes(', Working,');`,
       { label: "turn finished", timeoutMs: 40_000 },
     );
+    if (shaped) {
+      // A chat minimizing gives up the pointer on its first exit frame but
+      // draws until the exit ends: the shape keeps it in the whole time
+      // rather than clipping it away mid-animation.
+      await dockWait(
+        `return frontDock().getAnimations().every((animation) => animation.playState !== 'running');`,
+        { label: "chat settled before minimizing" },
+      );
+      const exit = await dockRun<{
+        samples: number;
+        clipped: number;
+      }>(`return new Promise((resolve) => {
+        const chat = frontDock();
+        const box = chat.getBoundingClientRect();
+        const middle = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+        let samples = 0;
+        let clipped = 0;
+        let exiting = false;
+        const sample = () => {
+          const leaving = chat.classList.contains('animate-dock-out');
+          const shape = document.documentElement.dataset.dockShape;
+          if (leaving) exiting = true;
+          // Still visibly drawing: the applied shape trails the page by at
+          // most a frame, and a finished exit (opacity 0) rightly leaves it.
+          if (leaving && shape && Number(getComputedStyle(chat).opacity) >= 0.1) {
+            const rects = JSON.parse(shape) ?? [];
+            samples += 1;
+            if (!rects.some((r) => middle.x >= r.x && middle.y >= r.y && middle.x < r.x + r.width && middle.y < r.y + r.height))
+              clipped += 1;
+          }
+          if (exiting && !leaving) resolve({ samples, clipped });
+          else requestAnimationFrame(sample);
+        };
+        document.querySelector('[data-chat-bubble] button').click();
+        requestAnimationFrame(sample);
+      });`);
+      expect(exit.samples).toBeGreaterThan(0);
+      expect(exit.clipped).toBe(0);
+      // Open the chat again so it can move back into the workspace window.
+      await dockRun(
+        "document.querySelector('[data-chat-bubble] button').click(); return true;",
+      );
+      await dockWait(`return !!composer();`, { label: "chat open again" });
+    }
     await app.eval(`window.catamorphicDesktop.dockDetach(false)`);
     await runWait(`return !!composer();`, { label: "chat back in the window" });
   }, 120_000);

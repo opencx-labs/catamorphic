@@ -22,12 +22,10 @@ import {
   type DockSize,
   dockPosition,
 } from "../shared/dock-position.js";
+import { dockClicks } from "./dock-clicks.js";
 import type { WindowProfileRegistry } from "./index.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 
-/** Electron forwards pointer moves to a click-through window only here. */
-const DOCK_PASS_THROUGH =
-  process.platform === "darwin" || process.platform === "win32";
 const dockShapeSchema = z
   .array(
     z.object({
@@ -368,37 +366,52 @@ export class DesktopWorkspaces {
     // Linux does not forward: an ignoring window loses the pointer at once,
     // its leave restores input, and the next move ignores again, dozens of
     // times a second while the pointer rests. There the window is shaped to
-    // its content instead (dock-shape below). Answers whether clicks now
-    // pass through.
+    // its content instead (dock-shape below; see dockClicks). Answers
+    // whether clicks now pass through.
     ipcMain.handle(
       "catamorphic:dock-ignore-mouse",
       (event, ignore: boolean) => {
         const profileId = options.windows.profileFor(event.sender);
         const window = this.floating.get(profileId);
         if (!window || window.webContents !== event.sender) return false;
-        const passThrough = ignore === true && DOCK_PASS_THROUGH;
+        const passThrough = ignore === true && dockClicks() === "pass-through";
         window.setIgnoreMouseEvents(passThrough, { forward: true });
         return passThrough;
       },
     );
-    // Where clicks cannot pass through (Linux), the window takes the shape
-    // of what the dock draws, so its empty space is simply not the dock's:
-    // clicks there reach whatever is behind, and nothing flickers.
+    // Where clicks cannot pass through (Linux on X11), the window takes the
+    // shape of what the dock draws, so its empty space is simply not the
+    // dock's: clicks there reach whatever is behind, and nothing flickers.
+    // Wayland has no window shapes in Electron, so there the dock keeps its
+    // clicks. Answers whether the shape was applied. The renderer measures
+    // in CSS pixels; the window is shaped in window pixels.
     ipcMain.handle("catamorphic:dock-shape", (event, raw: unknown) => {
-      if (DOCK_PASS_THROUGH) return;
+      if (dockClicks() !== "shape") return false;
       const profileId = options.windows.profileFor(event.sender);
       const window = this.floating.get(profileId);
-      if (!window || window.webContents !== event.sender) return;
+      if (!window || window.webContents !== event.sender) return false;
       const rects = dockShapeSchema.parse(raw);
+      const zoom = window.webContents.getZoomFactor();
+      const scaled = rects?.map((rect) => {
+        const x = Math.floor(rect.x * zoom);
+        const y = Math.floor(rect.y * zoom);
+        return {
+          x,
+          y,
+          width: Math.ceil((rect.x + rect.width) * zoom) - x,
+          height: Math.ceil((rect.y + rect.height) * zoom) - y,
+        };
+      });
       // An empty list restores the whole window, so "nothing drawn" is one
       // transparent pixel in the corner.
       window.setShape(
-        rects === null
+        scaled === undefined
           ? []
-          : rects.length > 0
-            ? rects
+          : scaled.length > 0
+            ? scaled
             : [{ x: 0, y: 0, width: 1, height: 1 }],
       );
+      return true;
     });
     ipcMain.handle("catamorphic:dock-resize", (event, size: DockSize) => {
       const profileId = options.windows.profileFor(event.sender);

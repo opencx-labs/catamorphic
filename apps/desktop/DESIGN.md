@@ -492,11 +492,19 @@ Windows. On Linux the dock lost the pointer the moment it let clicks through,
 took them back on the leave, and let them through again on the next move,
 dozens of times a second while the pointer rested over its empty space.
 There the dock no longer toggles click-through: its window takes the shape of
-what it draws (strip, open chat, lurking chat, dialogs, tooltips, with room
-for shadows), re-measured on the frame after anything changes and on every
-frame while something moves. Clicks on its empty space reach the screen
-behind it, as on macOS, and nothing flickers. The main process answers
-whether clicks pass through, so the renderer never assumes it.
+what it draws (strip, open or lurking chat, a chat still animating out,
+dialogs, tooltips), re-measured on the frame after anything changes, when a
+drawn surface resizes or the pointer arrives over it, and on every frame while
+something moves. Clicks on its empty space reach the screen behind it, as on
+macOS, and nothing flickers. The main process decides the mode once
+(`shared/dock-clicks.ts`), hands it to the dock window, and answers whether
+each change was applied, so the renderer never assumes it.
+
+Limits: the shape includes the visible core of a shadow (half its blur plus
+its spread, where shadow-2xl has faded under 4%); the fainter outer half is
+clipped, because the full extent would cover the whole margin around an open
+chat. On Wayland, where Electron cannot shape or pass clicks through a
+window, the dock keeps every click inside its window, empty space included.
 
 ### 2026-09-30: The palette highlight follows the chosen row
 

@@ -120,7 +120,7 @@ const api = {
       width: number;
       height: number;
     }> | null,
-  ): Promise<void> => invoke("catamorphic:dock-shape", rects),
+  ): Promise<boolean> => invoke("catamorphic:dock-shape", rects),
   dockDetach: (detached: boolean): Promise<void> =>
     invoke("catamorphic:dock-detach", detached),
   dockMenu: (

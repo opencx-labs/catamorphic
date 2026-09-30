@@ -1073,7 +1073,7 @@ export interface CatamorphicDesktopApi {
   dockIgnoreMouse: (ignore: boolean) => Promise<boolean>;
   /**
    * The detached dock's drawn rectangles on platforms that shape it; null
-   * keeps the whole window.
+   * keeps the whole window. Resolves with whether the shape was applied.
    */
   dockShape: (
     rects: Array<{
@@ -1082,7 +1082,7 @@ export interface CatamorphicDesktopApi {
       width: number;
       height: number;
     }> | null,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   /** Session-only; the `dockDetached` preference stays the launch default. */
   dockDetach: (detached: boolean) => Promise<void>;
   /** Native context menu for the detached dock window; resolves the action. */
