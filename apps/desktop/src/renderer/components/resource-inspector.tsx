@@ -130,7 +130,10 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
-  const triggerInterested = useRef(false);
+  // The pointer and keyboard focus hold the inspector open independently: a
+  // pointer leaving a focused trigger must not close what focus opened.
+  const triggerHovered = useRef(false);
+  const triggerFocused = useRef(false);
   const panelInterested = useRef(false);
   const pointerFocus = useRef(false);
   const pinned = useRef(false);
@@ -170,7 +173,8 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
       clearTimeout(openTimer.current);
       clearTimeout(closeTimer.current);
       pinned.current = false;
-      triggerInterested.current = false;
+      triggerHovered.current = false;
+      triggerFocused.current = false;
       panelInterested.current = false;
       setOpen(false);
       setMounted(false);
@@ -199,7 +203,8 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
     closeTimer.current = setTimeout(() => {
       if (
         !pinned.current &&
-        !triggerInterested.current &&
+        !triggerHovered.current &&
+        !triggerFocused.current &&
         !panelInterested.current
       )
         setOpen(false);
@@ -213,7 +218,8 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
       event.preventDefault();
       event.stopPropagation();
       pinned.current = false;
-      triggerInterested.current = false;
+      triggerHovered.current = false;
+      triggerFocused.current = false;
       panelInterested.current = false;
       setOpen(false);
       pointerFocus.current = true;
@@ -243,7 +249,8 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
         return;
       }
       pinned.current = false;
-      triggerInterested.current = false;
+      triggerHovered.current = false;
+      triggerFocused.current = false;
       panelInterested.current = false;
       setOpen(false);
     };
@@ -257,7 +264,8 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
         return;
       }
       pinned.current = false;
-      triggerInterested.current = false;
+      triggerHovered.current = false;
+      triggerFocused.current = false;
       panelInterested.current = false;
       setOpen(false);
     };
@@ -290,11 +298,11 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
       {children({
         ref: triggerRef,
         onPointerEnter: () => {
-          triggerInterested.current = true;
+          triggerHovered.current = true;
           scheduleOpen();
         },
         onPointerLeave: () => {
-          triggerInterested.current = false;
+          triggerHovered.current = false;
           scheduleClose();
         },
         onPointerDown: () => {
@@ -315,8 +323,11 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
           else setOpen(false);
         },
         onFocus: () => {
-          triggerInterested.current = true;
-          if (!pointerFocus.current) scheduleOpen(true);
+          // Focus from a click or from Escape returning to the trigger leaves
+          // the preview to the pointer.
+          if (pointerFocus.current) return;
+          triggerFocused.current = true;
+          scheduleOpen(true);
         },
         onBlur: (event) => {
           if (
@@ -324,7 +335,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
             triggerRef.current?.contains(event.relatedTarget)
           )
             return;
-          triggerInterested.current = false;
+          triggerFocused.current = false;
           scheduleClose();
         },
         "aria-details": open ? id : undefined,
@@ -352,7 +363,8 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
                 clearTimeout(openTimer.current);
                 clearTimeout(closeTimer.current);
                 pinned.current = false;
-                triggerInterested.current = false;
+                triggerHovered.current = false;
+                triggerFocused.current = false;
                 panelInterested.current = false;
                 setOpen(false);
               })

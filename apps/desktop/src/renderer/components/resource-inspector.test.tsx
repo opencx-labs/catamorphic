@@ -147,6 +147,47 @@ describe("ResourceInspector", () => {
     expect(dialog?.getAttribute("data-open")).toBeNull();
   });
 
+  it("stays open for focus when the pointer leaves the trigger, and closes on blur", async () => {
+    await act(async () => {
+      root.render(
+        <ResourceInspector label="File preview" content={<p>Linked notes</p>}>
+          {(props) => (
+            <button type="button" {...props}>
+              Notes
+            </button>
+          )}
+        </ResourceInspector>,
+      );
+    });
+    const trigger = container.querySelector("button");
+    const dialog = () => document.querySelector('[role="dialog"]');
+    await act(async () => trigger?.focus());
+    expect(dialog()?.getAttribute("data-open")).toBe("true");
+    // React derives enter and leave from pointerover and pointerout.
+    await act(async () => {
+      trigger?.dispatchEvent(
+        new MouseEvent("pointerover", {
+          bubbles: true,
+          relatedTarget: document.body,
+        }),
+      );
+      trigger?.dispatchEvent(
+        new MouseEvent("pointerout", {
+          bubbles: true,
+          relatedTarget: document.body,
+        }),
+      );
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(dialog()?.getAttribute("data-open")).toBe("true");
+
+    await act(async () => {
+      trigger?.blur();
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(dialog()?.className).toContain("animate-inspector-out-");
+  });
+
   it("pins on click and dismisses on an outside pointer", async () => {
     await act(async () => {
       root.render(
