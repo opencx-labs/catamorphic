@@ -422,6 +422,11 @@ export {
   usageFromJson,
 } from "./services/model-gateway.js";
 export {
+  LOST_NODE_GRACE_MS,
+  type NodeRecoveryResult,
+  NodeRecoveryService,
+} from "./services/node-recovery-service.js";
+export {
   gitignoreLiteral,
   personalExcludeBlock,
   personalLoginHome,

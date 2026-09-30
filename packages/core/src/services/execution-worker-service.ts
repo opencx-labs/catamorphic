@@ -308,6 +308,7 @@ export class ExecutionWorkerService {
   }): Promise<void> {
     const { signal } = args.controller;
     await this.sweepMaintenance({ swept: args.swept });
+    const claimedAt = performance.now();
     const claimed = await this.jobs.claim({
       workerId: args.workerId,
       kinds: args.kinds,
@@ -333,6 +334,7 @@ export class ExecutionWorkerService {
         job,
         workerId: args.workerId,
         leaseSeconds: args.leaseSeconds,
+        claimedAt,
         signal,
       });
     }
@@ -342,6 +344,7 @@ export class ExecutionWorkerService {
     job: ExecutionJob;
     workerId: string;
     leaseSeconds: number;
+    claimedAt: number;
     signal: AbortSignal;
   }): Promise<void> {
     await this.runClaimedJob(args).catch(() => undefined);
@@ -357,6 +360,11 @@ export class ExecutionWorkerService {
     job: ExecutionJob;
     workerId: string;
     leaseSeconds: number;
+    /**
+     * `performance.now()` when the claim was sent: the lease runs from
+     * then, not from when this job's turn in a claimed batch came.
+     */
+    claimedAt?: number;
     signal: AbortSignal;
   }): Promise<ClaimedJobDisposition> {
     // A telemetry lookup failure must not prevent execution or leak a caller's scope.
@@ -392,6 +400,7 @@ export class ExecutionWorkerService {
     job: ExecutionJob;
     workerId: string;
     leaseSeconds: number;
+    claimedAt?: number;
     signal: AbortSignal;
   }): Promise<ClaimedJobDisposition> {
     const handler = this.handlers.get(args.job.kind);
@@ -412,8 +421,23 @@ export class ExecutionWorkerService {
     const jobController = new AbortController();
     const abortJob = () => jobController.abort();
     args.signal.addEventListener("abort", abortJob, { once: true });
+    // Stop the step before its lease could have lapsed, measured from when
+    // the last renewal that landed was sent. A process frozen past its lease
+    // (a paused VM, a stalled host) wakes to this deadline before it can act
+    // on the sandbox again, since another worker may own the job by then.
+    const leaseMs = args.leaseSeconds * 1_000;
+    const safeLeaseMs = leaseMs - Math.max(1_000, Math.floor(leaseMs / 6));
+    let fence = setTimeout(
+      abortJob,
+      Math.max(
+        0,
+        safeLeaseMs -
+          (performance.now() - (args.claimedAt ?? performance.now())),
+      ),
+    );
     const heartbeat = setInterval(
       () => {
+        const sentAt = performance.now();
         void this.jobs
           .heartbeat({
             jobId: args.job.id,
@@ -423,11 +447,19 @@ export class ExecutionWorkerService {
             leaseSeconds: args.leaseSeconds,
           })
           .then((owned) => {
-            if (!owned) jobController.abort();
+            if (!owned) {
+              jobController.abort();
+              return;
+            }
+            clearTimeout(fence);
+            fence = setTimeout(
+              abortJob,
+              Math.max(0, safeLeaseMs - (performance.now() - sentAt)),
+            );
           })
           .catch(() => jobController.abort());
       },
-      Math.max(1_000, Math.floor((args.leaseSeconds * 1_000) / 3)),
+      Math.max(1_000, Math.floor(leaseMs / 3)),
     );
     try {
       await handler({ job: args.job, signal: jobController.signal });
@@ -490,6 +522,7 @@ export class ExecutionWorkerService {
       };
     } finally {
       clearInterval(heartbeat);
+      clearTimeout(fence);
       args.signal.removeEventListener("abort", abortJob);
     }
   }

@@ -1120,6 +1120,7 @@ export class RunsService {
         if (new Date(job.availableAt).getTime() > Date.now()) {
           return suspended("backoff");
         }
+        const claimedAt = performance.now();
         const claimed = await this.deps.executionJobs.claimById({
           jobId: job.id,
           workerId,
@@ -1130,6 +1131,7 @@ export class RunsService {
           job: claimed,
           workerId,
           leaseSeconds: SYNC_LEASE_SECONDS,
+          claimedAt,
           signal: controller.signal,
         });
         // Every disposition — completed, deferred, failed, lease lost — is

@@ -1,6 +1,6 @@
 # 0099: Shared-Postgres server instances as managed Environments
 
-- **Status:** Accepted; execution machines superseded by [0164](0164-control-plane-and-enrolled-workers.md)
+- **Status:** Accepted; execution machines superseded by [0164](0164-control-plane-and-enrolled-workers.md); replica working state superseded by [0190](0190-disposable-control-plane-replicas.md)
 - **Date:** 2026-09-07
 - **Refines:** 0064, 0067, 0071, 0095, 0098
 - **Supersedes:** 0059's single-node storage assumption for managed multi-machine deployments

@@ -46,8 +46,8 @@ Start small and add only what the situation needs:
   shares for customer material ([sharing](references/sharing.md)). Members
   then work from the Work app or from their own agents over the project MCP
   ([working from your own agent](references/members-over-mcp.md)).
-- **High availability:** control-plane replicas on shared Postgres, only on
-  machines trusted with every secret.
+- **High availability:** disposable control-plane replicas on shared
+  Postgres, only on machines trusted with every secret.
 
 ## 2. Read the matching reference
 

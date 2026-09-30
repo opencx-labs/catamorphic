@@ -102,6 +102,7 @@ it.skipIf(!process.env.DATABASE_URL)(
     const env = {
       DATABASE_URL: databaseUrl.toString(),
       WORK_SECRET: "transport-test-secret-with-at-least-32-characters",
+      WORK_OPERATOR_SECRET: "transport-test-operator-secret-with-32-characters",
       WORK_VAULT_KEY: Buffer.alloc(32, 9).toString("base64"),
       WORK_CONTROL_PLANE_WORKLOADS: "workflow",
       WORK_FAKE_AGENT: "1",
@@ -125,9 +126,7 @@ it.skipIf(!process.env.DATABASE_URL)(
       }
       const first = servers.get("a");
       if (!first) throw new Error("Replica a must boot");
-      const operatorSecret = (
-        await fs.readFile(path.join(dir, "a", "operator-secret"), "utf8")
-      ).trim();
+      const operatorSecret = env.WORK_OPERATOR_SECRET;
       const enrollment = await first.operatorApp.inject({
         method: "POST",
         url: "/_work/operator/workers",

@@ -998,10 +998,12 @@ export interface WorkerNodes {
   capacity: Json | null;
   default_resources: Generated<Json>;
   descriptor: Json;
+  disposable: Generated<boolean>;
   enabled: Generated<boolean>;
   id: string;
   lease_expires_at: Timestamp;
   lease_token: string;
+  recovery_attempted_at: Timestamp | null;
   tenant_id: string;
   updated_at: Generated<Timestamp>;
 }
