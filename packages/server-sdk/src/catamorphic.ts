@@ -134,8 +134,6 @@ export interface CatamorphicHostConfig {
   clientExecution?: boolean;
   credentialVault?: CredentialVault;
   connectionProviders?: readonly ConnectionProvider[];
-  /** Every node lease this process holds, including remote workers (ADR 0164). */
-  heldWorkerNodes?: CatamorphicCoreConfig["heldWorkerNodes"];
   /** Review every brokered connection action (ADR 0162). */
   connectionGuards?: CatamorphicCoreConfig["connectionGuards"];
   /** How long one guard may take before its action escalates (ADR 0183). */
@@ -276,12 +274,11 @@ export interface CatamorphicHostConfig {
    */
   standingAgentPrompt?: string | false;
   /**
-   * ADR 0055 knobs, passed through to core: where store bytes live, the
-   * roles cache, and whether agents' `store/` writes ship around turns
+   * ADR 0055 knobs, passed through to core: where store bytes live, and
+   * whether agents' `store/` writes ship around turns
    * (default on; a host whose folders are the truth sets false).
    */
   documentBlobStore?: CatamorphicCoreConfig["documentBlobStore"];
-  rolesCacheTtlMs?: number;
   storeSyncAroundTurns?: boolean;
   /**
    * The HTTP answer surface for tool-permission asks (ADR 0054): harnesses
@@ -368,9 +365,6 @@ export class Catamorphic {
       hostId: config.hostId,
       agentCapabilities: config.agentCapabilities,
       workerNode: config.workerNode,
-      ...(config.heldWorkerNodes
-        ? { heldWorkerNodes: config.heldWorkerNodes }
-        : {}),
       db,
       projectManager: resolveStorage(config.storage),
       sandboxProvider: config.sandboxProvider,
@@ -415,7 +409,6 @@ export class Catamorphic {
       userSkills: config.userSkills,
       standingAgentPrompt: config.standingAgentPrompt,
       documentBlobStore: config.documentBlobStore,
-      rolesCacheTtlMs: config.rolesCacheTtlMs,
       storeSyncAroundTurns: config.storeSyncAroundTurns,
       toolPermissions: config.toolPermissions,
       gatewayHosts: config.gatewayHosts,

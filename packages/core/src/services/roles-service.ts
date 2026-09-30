@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import { PROJECT_ROLES_DIR } from "@catamorphic/workflow/project-layout";
@@ -13,7 +14,7 @@ import {
 } from "../identity.js";
 import { assertProjectPermission } from "./artifact-scope.js";
 import {
-  forgetProgramFetch,
+  programRevision,
   readProgramFiles,
   withProgram,
 } from "./program-reader.js";
@@ -325,11 +326,9 @@ export interface ResolveRolesInput {
   grants?: RoleGrants;
 }
 
-/** How long a project's parsed role set is trusted before re-reading. */
-const DEFAULT_TTL_MS = 10_000;
-
 interface CachedRoles {
-  loadedAt: number;
+  /** The program commit the roles were read at, or their files' hash. */
+  revision: string;
   entries: ProjectRoleEntry[];
 }
 
@@ -342,16 +341,16 @@ interface CachedRoles {
  * caller is anyone, so it never touches a caller's working copy.
  */
 export class RolesService {
+  /**
+   * Replica memory (b): each project's parsed roles, keyed by the program
+   * commit they were read at; a deploy on any replica is a new commit.
+   */
   private readonly cache = new Map<string, CachedRoles>();
-  private readonly ttlMs: number;
 
   constructor(
     private readonly db: Kysely<DB>,
     private readonly projectManager: ProjectManager,
-    opts?: { ttlMs?: number },
-  ) {
-    this.ttlMs = opts?.ttlMs ?? DEFAULT_TTL_MS;
-  }
+  ) {}
 
   /** The project's roles, for those who may read them (`roles:read`). */
   async list(
@@ -360,21 +359,7 @@ export class RolesService {
   ): Promise<ProjectRoleEntry[]> {
     assertProjectPermission(identity, projectId, "roles:read");
     await this.requireProject(identity.tenantId, projectId);
-    return this.load(identity.tenantId, projectId, { fresh: true });
-  }
-
-  /** Drop the cached role set (a checkpoint, a push, a deploy landed). */
-  invalidate(projectId: string): void {
-    for (const key of this.cache.keys()) {
-      if (key.endsWith(`:${projectId}`)) {
-        this.cache.delete(key);
-        forgetProgramFetch(
-          this.projectManager,
-          key.slice(0, -projectId.length - 1),
-          projectId,
-        );
-      }
-    }
+    return this.load(identity.tenantId, projectId);
   }
 
   /**
@@ -459,17 +444,30 @@ export class RolesService {
     });
   }
 
+  /**
+   * The project's roles as its program says now (ADR 0193): read once per
+   * program commit, and at the current commit on every call, so a role a
+   * deploy just changed applies on every replica at once.
+   */
   private async load(
     tenantId: string,
     projectId: string,
-    opts?: { fresh?: boolean },
   ): Promise<ProjectRoleEntry[]> {
     const key = `${tenantId}:${projectId}`;
+    const revision = await programRevision(
+      this.projectManager,
+      tenantId,
+      projectId,
+    );
     const cached = this.cache.get(key);
-    if (!opts?.fresh && cached && Date.now() - cached.loadedAt < this.ttlMs) {
-      return cached.entries;
-    }
-    const files = await this.readRoleFiles(tenantId, projectId);
+    if (revision && cached?.revision === revision) return cached.entries;
+    const { files, ref } = await this.readRoleFiles(tenantId, projectId);
+    // A working tree has no commit: its role files, read from local disk,
+    // are their own key, so unchanged files are not parsed again.
+    const contentKey =
+      ref ??
+      `sha256:${createHash("sha256").update(JSON.stringify(files)).digest("hex")}`;
+    if (cached?.revision === contentKey) return cached.entries;
     const entries = Object.entries(files)
       .map(([file, content]): ProjectRoleEntry => {
         const slug = file.slice(
@@ -501,7 +499,7 @@ export class RolesService {
           : { slug, definition: result.definition };
       })
       .sort((a, b) => a.slug.localeCompare(b.slug));
-    this.cache.set(key, { loadedAt: Date.now(), entries });
+    this.cache.set(key, { revision: contentKey, entries });
     return entries;
   }
 
@@ -509,20 +507,26 @@ export class RolesService {
   private async readRoleFiles(
     tenantId: string,
     projectId: string,
-  ): Promise<Record<string, string>> {
+  ): Promise<{ files: Record<string, string>; ref: string | null }> {
     const prefix = `${PROJECT_ROLES_DIR}/`;
-    const files = await withProgram(
+    const { files, ref } = await withProgram(
       this.projectManager,
       tenantId,
       projectId,
-      (repo, ref) => readProgramFiles(repo, ref, prefix),
+      async (repo, ref) => ({
+        files: await readProgramFiles(repo, ref, prefix),
+        ref,
+      }),
     );
-    return Object.fromEntries(
-      Object.entries(files).filter(
-        ([file]) =>
-          file.endsWith(".json") && !file.slice(prefix.length).includes("/"),
+    return {
+      files: Object.fromEntries(
+        Object.entries(files).filter(
+          ([file]) =>
+            file.endsWith(".json") && !file.slice(prefix.length).includes("/"),
+        ),
       ),
-    );
+      ref,
+    };
   }
 
   private requireProject(tenantId: string, projectId: string) {

@@ -381,6 +381,21 @@ export interface CodingAgentProvider {
   interrupt?(providerSessionId: string): void;
 
   /**
+   * Whether the session's last turn ended on a question this provider
+   * holds in memory (a query parked until the answer, which the next
+   * {@link sendMessage} continues). The host then keeps the asking turn
+   * claimed in this process until its answer is queued, so the answer
+   * reaches the process holding the question.
+   */
+  holdsQuestion?(providerSessionId: string): boolean;
+
+  /**
+   * Give up a held question whose answer will not come to this process:
+   * its query ends, and the answer continues as an ordinary next turn.
+   */
+  releaseQuestion?(providerSessionId: string): void;
+
+  /**
    * Whether this provider still holds live state for the session. Only
    * meaningful for harnesses whose sessions are in-memory (ai-sdk): a
    * `false` tells the host the session died with a restart or provider

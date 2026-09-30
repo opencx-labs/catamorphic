@@ -47,7 +47,8 @@ brain become replicas. Never add a replica just for capacity.
    `DATABASE_URL`, `WORK_SECRET`, or `WORK_VAULT_KEY` is set. It dials out; open
    no inbound port.
 3. Check `GET /_work/operator/machines` for `worker.build-1` with
-   `available: true`, and `GET /_work/operator/workers` for its last contact.
+   `available: true`, and `GET /_work/operator/workers` for its last contact
+   (its last call to any replica).
 4. Nothing in projects changes: the `default` Environment already runs agents
    on any machine open to their owner. To reserve machines for some work, give
    them a label and select it in `.work/project.json`
@@ -152,28 +153,75 @@ directory has placed them in the group.
 
 ## Add a control-plane replica
 
-1. Provision the same version with its own empty `WORK_DATA_DIR`; never copy
-   another machine's identity or data volume.
+A replica on network Postgres is disposable (ADR 0190): everything durable
+lives in Postgres or in its configuration, so any replica can be replaced by a
+fresh one with an empty disk at any time.
+
+1. Provision the same version with its own `WORK_DATA_DIR`. It may be empty
+   and need not persist: it holds only working copies and sandboxes. Never
+   share one data directory between two running replicas: a replica removes
+   the sandboxes it finds there when it starts.
 2. Supply the deployment's `DATABASE_URL`, `WORK_SECRET`, `WORK_VAULT_KEY`,
-   `WORK_PUBLIC_URL`, sign-in configuration (`WORK_AUTH_CONFIG`), and gateway
-   configuration (`WORK_GATEWAY_CONFIG`) through the secret mechanism. All
-   replicas share one public HTTPS origin behind the load balancer.
-3. Start the normal server. Boot migrates with database coordination, checks
-   that origin, secrets, vault key id, and sign-in configuration match, and
-   registers its machine with a renewable lease.
-4. Workers reach the replicas through the load balancer, and any replica
+   `WORK_OPERATOR_SECRET`, `WORK_PUBLIC_URL`, sign-in configuration
+   (`WORK_AUTH_CONFIG`), and gateway configuration (`WORK_GATEWAY_CONFIG`)
+   through the secret mechanism. Boot refuses a Postgres deployment without
+   `WORK_OPERATOR_SECRET`, since every replica must answer the same operator
+   credential. All replicas share one public HTTPS origin behind the load
+   balancer; set `WORK_MDNS=off`.
+3. Start the normal server under a restart policy. Boot migrates with
+   database coordination, checks that origin, secrets, vault key id, and
+   sign-in configuration match, and registers a new machine
+   (`node.<uuid>`, `plane=control`) with a renewable lease. The machine lives
+   as long as the process: a restarted replica is a new machine.
+4. Probe it. `/readyz` (readiness) answers 503 while its lease is not
+   renewing, for example during a database failover, or while the machine is
+   disabled; the balancer then routes around it. `/healthz` (liveness) answers
+   503 only once the lease is lost, which is permanent (the database refused
+   a renewal, or none landed for 45 seconds): the process then exits and its
+   supervisor starts a fresh one. Never point liveness at `/readyz`:
+   a database blip shorter than the 45 second lease would restart every
+   replica. On Kubernetes, also set `terminationGracePeriodSeconds` to at
+   least 30, so a stopping replica can let its chat turns finish (up to 15
+   seconds) and move its work before it is killed. The image exits within 25
+   seconds of SIGTERM whatever is still running.
+5. Workers reach the replicas through the load balancer, and any replica
    answers any worker call (ADR 0187). A worker retries a failed call, such as
    a 502 or a replica restarting, without ending its session or interrupting
    its agents. Set the balancer's idle timeout above 30 seconds (a poll waits
-   up to 20) and allow 64 MiB request bodies. The replica that took a worker's
-   lease runs its agents; if that replica stops, the lease lapses within about
-   a minute and the worker's next connection moves it.
+   up to 20) and allow 64 MiB request bodies. A worker owns its lease (ADR
+   0192): its own calls renew it, and any replica runs its agents. Stopping a
+   replica affects only the turns that replica was running: a stopping
+   replica lets them finish or interrupts them (see below), and a crashed
+   one's are settled as interrupted by another replica once their turn lease
+   lapses, about a minute later. The chats' next turns run on any replica. A
+   worker that is away for more than 45 seconds is unavailable: its chats'
+   turns wait, and in-flight operations its controllers stopped waiting for
+   fail as uncertain. When it calls again, the same process simply carries
+   on.
+6. No replica keeps state another replica needs in memory (ADR 0193).
+   Whether a chat is running, and whether it may be changed, comes from its
+   turn's lease in Postgres, so every replica answers the same. An interrupt,
+   close, or archive sent to any replica reaches the turn within about a
+   second; a closed chat's workspace is given back only once its turn has
+   stopped. One replica at a time publishes a project, creates a deployment
+   runtime, or syncs a company project, under a claim in Postgres. A deploy
+   applies on every replica at once: roles and program reads follow the
+   published commit.
+
+A restarted worker process connects under a new epoch. The operations it had
+in flight fail as uncertain and are never replayed; its sandboxes and chats
+carry on. Two processes must never share one worker's data volume: the older
+one stops for good once the newer one connects. A new process whose clock is
+behind its predecessor's waits up to 45 seconds for the old lease to lapse.
 
 The operator can disable any machine with
 `PATCH /_work/operator/machines/:id` and `{ "enabled": false }`. Lease fencing
-blocks new claims and renewal of old execution ownership. Existing sessions do
-not silently move to a different machine. Inspect uncertain actions and move a
-settled session explicitly through its Environment update.
+blocks new claims and renewal of old execution ownership. A disabled
+replica's lease lapses, its process exits, and its work is recovered like a
+lost replica's. A disabled single server keeps running, answers 503 on
+`/readyz`, takes no work, and resumes when its own operator API enables it
+again. A disabled worker keeps its sessions: they do not silently move to a
+different machine.
 
 ## Shared state and recovery
 
@@ -188,12 +236,36 @@ Back up the database and protect both secrets separately. Rotate the vault key
 by moving the old key to `WORK_VAULT_PREVIOUS_KEYS`; see
 [secrets and the gateway](secrets-and-gateway.md).
 
-Each machine owns session checkouts and sandbox processes. Server agent sessions
-checkpoint to isolated `sessions/<id>` branches in the shared origin. Relocation
-reconstructs the workspace and model history; it does not migrate a live process
-or publish session edits to project `main`. Failed checkpoint persistence is a
-failed turn requiring recovery. Work not checkpointed before a machine is lost
-remains uncertain and is never automatically replayed.
+A replica that stops (SIGTERM) stops claiming work, returns its running
+workflow jobs to the queue, lets its running chat turns finish (and
+interrupts any still running after about ten seconds), gives its machine
+back, moves its work to the other replicas at once, and removes its
+sandboxes. A replica that dies is lost once its lease has lapsed
+for 30 seconds (about a minute and a quarter after its last renewal). Every
+replica checks for lost replicas every ten seconds and recovers their work:
+
+- each workflow run, paused durable runs included, gets a workspace on a
+  live replica in its own Environment. Its sandbox is rebuilt from the
+  deployed commit and its step journal carries on; a step whose outcome was
+  uncertain retries as after a restart. The run is placed for its owner
+  with their current access, as a chat's next turn is. A run that no replica
+  can take waits for one; a run whose Environment the project removed, or
+  whose owner may no longer act, fails with the reason.
+  Tenant run capacity is freed when the run ends, as always;
+- each chat's workspace on that replica is released; its next turn is
+  admitted on a live machine and restores the workspace from its
+  `sessions/<id>` branch. Chats on workers and on members' machines keep
+  their workspaces: any replica runs their turns;
+- the lost machine disappears from `GET /_work/operator/machines`.
+
+Server agent sessions checkpoint to isolated `sessions/<id>` branches in the
+shared origin after every settled turn. Relocation reconstructs the workspace
+and model history; it does not migrate a live process or publish session edits
+to project `main`. Failed checkpoint persistence is a failed turn requiring
+recovery. Work not checkpointed before a machine is lost, and a chat's
+background processes, are gone with it and never automatically replayed.
+Members' program drafts live in the project origin (ADR 0191), never on a
+replica, so losing one loses no draft.
 
 ## A member's This machine
 
@@ -203,6 +275,12 @@ an authenticated SDK runner using its local sandbox provider. It receives no
 Postgres credentials. Discovery and every operation retain the member's current
 project and Environment permissions. Closing the desktop or losing authorization
 stops the runner. A new connection lifetime cannot revive an old allocation.
+The runner renews its own lease through any replica, so its chats belong to no
+replica: any replica runs their turns, and they continue when the replica
+that admitted them stops (ADR 0192). While the runner is away, its chats' turns stay
+queued instead of failing. When it connects again, a new connection cannot
+revive the old workspace (see above): each chat is admitted on the new
+connection and its workspace rebuilt from its `sessions/<id>` branch.
 
 Stock local execution uses the controller topology: the host model loop and
 connection broker stay on the server; sandbox commands and files run on the
@@ -456,12 +534,17 @@ data volume across updates.
 2. Stop submitting new work through the host's maintenance controls. Wait for
    turns and external actions to settle and verify their checkpoints. Inspect
    retained workspace processes and data that require persistence.
-3. Disable the machine through the operator API before replacing its process.
-   Disabling fences claims and lease renewal; it is not a graceful drain of
-   running work. Never use it as evidence that an external action was undone.
-4. Update the service/image while preserving that machine's own data volume and
-   identity. Boot applies coordinated migrations. Re-enable the machine through
-   the operator API and verify heartbeat, capabilities, and capacity before use.
+3. Stop each control-plane replica with SIGTERM: its work moves to the
+   replicas still running, or waits for the next one to start. Then start the
+   new version; boot applies coordinated migrations. A replica needs no data
+   volume or identity carried over.
+4. For a worker or a single server, disable the machine through the operator
+   API before replacing its process. Disabling fences claims and lease
+   renewal; it is not a graceful drain of running work. Never use it as
+   evidence that an external action was undone. Update the service/image while
+   preserving that machine's own data volume and identity. Re-enable the
+   machine through the operator API and verify heartbeat, capabilities, and
+   capacity before use.
 5. Test sign-in, a permitted session, private HTTP access, and checkpoint
    persistence. Explicitly recover or relocate interrupted sessions. A service
    restart does not move a live process or promise automatic replay.

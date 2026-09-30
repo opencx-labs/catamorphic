@@ -1579,7 +1579,7 @@ export const AgentExecutionSchema = z.object({
     "failed",
     "cancelled",
   ]),
-  phase: z.enum(["preparing", "working", "waiting", "saving"]),
+  phase: z.enum(["preparing", "working", "waiting", "saving", "parked"]),
   activity: z.string().nullable(),
   activityAt: z.string().nullable(),
   startedAt: z.string().nullable(),

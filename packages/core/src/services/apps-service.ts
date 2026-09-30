@@ -208,6 +208,7 @@ export class AppsService {
    * interleaved previews could install against restored manifests or restore
    * a stripped manifest as the "original". Published builds get their own
    * per-version scratch root and never contend.
+   * Replica memory (a): guards build roots on this process's own disk.
    */
   private readonly buildLocks = new Map<string, Promise<unknown>>();
 

@@ -836,6 +836,43 @@ export class RunCoordinator {
     return outcome.invocations;
   }
 
+  /**
+   * Fail a run and every active run in its tree with one error: the tree
+   * can no longer execute anywhere, such as when its machine was lost and
+   * its Environment cannot place it again (ADR 0190). Releases the root's
+   * Allocation. A run already terminal is left as it is.
+   */
+  async failRunTree(args: {
+    runId: string;
+    error: string;
+    /** Run inside the caller's transaction, which holds its own locks. */
+    trx?: Transaction<DB>;
+  }): Promise<void> {
+    if (!args.trx)
+      return this.db
+        .transaction()
+        .execute((trx) => this.failRunTree({ ...args, trx }));
+    const trx = args.trx;
+    {
+      const root = await lockRun({ trx, runId: args.runId });
+      if (!root) return;
+      const runs = await lockRunHierarchy({ trx, root });
+      const now = await databaseNow(trx);
+      // An operator-paused run cannot resume anywhere either.
+      const statuses = [...ACTIVE_RUN_STATUSES, "paused"] as const;
+      for (const run of runs) {
+        if (!statuses.some((status) => status === run.status)) continue;
+        await this.failRun({
+          trx,
+          runId: run.id,
+          error: args.error,
+          now,
+          statuses,
+        });
+      }
+    }
+  }
+
   async handleExhaustedJob(args: {
     job: ExecutionJob;
     error: string;
@@ -1018,6 +1055,8 @@ export class RunCoordinator {
     error: string;
     now: Date;
     excludeJobId?: string;
+    /** The statuses a run may fail from; active ones unless named. */
+    statuses?: readonly string[];
   }): Promise<void> {
     await this.cleanupRunScope(args);
     const failed = await args.trx
@@ -1029,7 +1068,7 @@ export class RunCoordinator {
         updated_at: args.now,
       })
       .where("id", "=", args.runId)
-      .where("status", "in", [...ACTIVE_RUN_STATUSES])
+      .where("status", "in", [...(args.statuses ?? ACTIVE_RUN_STATUSES)])
       .returning(["id", "parent_run_id", "allocation_id"])
       .executeTakeFirst();
     if (failed) {

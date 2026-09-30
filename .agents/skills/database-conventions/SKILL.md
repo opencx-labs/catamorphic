@@ -134,3 +134,10 @@ Rules that are easy to break:
   the same transaction. `status = 'released'` retires the work;
   `capacity_released_at` confirms teardown. Never reclaim capacity from an
   expired lease alone.
+- Nothing other replicas observe or must exclude lives in a replica's memory
+  ([ADR 0193](../../../docs/decisions/0193-no-cross-replica-state-in-replica-memory.md)).
+  A chat is running while its turn is `running` with a live lease; read that,
+  never a process-local set. Work one replica does for all takes a named
+  claim in `replica_claims` (`withReplicaClaim`, or `takeReplicaClaim` for a
+  schedule). Key caches by commit or row revision, never by a timer.
+

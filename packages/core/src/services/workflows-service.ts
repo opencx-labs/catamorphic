@@ -215,6 +215,7 @@ export class WorkflowsService {
     );
   }
 
+  /** Replica memory (b): keyed by a hash of the workflow sources. */
   private readonly declaredSecretsCache = new Map<string, DeclaredSecret[]>();
 
   private async withDev<T>(

@@ -213,3 +213,76 @@ describe("execution worker resilience", () => {
     await expect(worker.stop()).resolves.toBeUndefined();
   });
 });
+
+describe("execution worker lease fence", () => {
+  it("stops a step before its lease could lapse when renewals stop landing", async () => {
+    const released: string[] = [];
+    const jobs = {
+      correlationForJob: async () => ({}),
+      // The database hangs (or the process was frozen): no renewal lands.
+      heartbeat: () => new Promise<boolean>(() => {}),
+      complete: async () => true,
+      fail: async () => "completed" as const,
+      release: async ({ jobId }: { jobId: string }) => {
+        released.push(jobId);
+        return true;
+      },
+    } as unknown as ExecutionJobsService;
+    const service = new ExecutionWorkerService(jobs);
+    let abortedAfter = Number.POSITIVE_INFINITY;
+    const started = performance.now();
+    service.registerHandler({
+      kind: "durable_boundary",
+      handler: ({ signal }) =>
+        new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => {
+            abortedAfter = performance.now() - started;
+            resolve();
+          });
+        }),
+    });
+    const disposition = await service.runClaimedJob({
+      job: job("job-frozen"),
+      workerId: "worker",
+      leaseSeconds: 3,
+      signal: new AbortController().signal,
+    });
+    expect(disposition).toEqual({ outcome: "released" });
+    expect(released).toEqual(["job-frozen"]);
+    // A 3 second lease is fenced a second before it could lapse.
+    expect(abortedAfter).toBeGreaterThanOrEqual(1_900);
+    expect(abortedAfter).toBeLessThan(2_900);
+  });
+
+  it("counts the lease from the claim, not from when the step started", async () => {
+    const jobs = {
+      correlationForJob: async () => ({}),
+      heartbeat: () => new Promise<boolean>(() => {}),
+      complete: async () => true,
+      fail: async () => "completed" as const,
+      release: async () => true,
+    } as unknown as ExecutionJobsService;
+    const service = new ExecutionWorkerService(jobs);
+    let abortedAfter = Number.POSITIVE_INFINITY;
+    const started = performance.now();
+    service.registerHandler({
+      kind: "durable_boundary",
+      handler: ({ signal }) =>
+        new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => {
+            abortedAfter = performance.now() - started;
+            resolve();
+          });
+        }),
+    });
+    // Claimed in a batch 1.5 seconds ago; its turn comes only now.
+    await service.runClaimedJob({
+      job: job("job-batched"),
+      workerId: "worker",
+      leaseSeconds: 3,
+      claimedAt: started - 1_500,
+      signal: new AbortController().signal,
+    });
+    expect(abortedAfter).toBeLessThan(1_000);
+  });
+});

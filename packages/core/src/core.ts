@@ -78,6 +78,7 @@ import {
   dbModelGatewayStore,
   ModelGatewayService,
 } from "./services/model-gateway.js";
+import { NodeRecoveryService } from "./services/node-recovery-service.js";
 import { PersonalEnvironmentService } from "./services/personal-environment-service.js";
 import { PluginsService } from "./services/plugins-service.js";
 import { ProjectEnvironmentsService } from "./services/project-environments-service.js";
@@ -133,20 +134,12 @@ export interface CatamorphicCoreConfig {
   agentCapabilities?: AgentCapabilityOptions;
   /** Stable host identity. Required when `codingAgent` enables sessions. */
   hostId?: string;
-  /** Distinct leased execution instance beneath the logical host authority. */
+  /**
+   * This process's own local node lease beneath the logical host authority.
+   * Work on it runs only here; work on remote nodes and on no node runs on
+   * any host of the authority (ADR 0192).
+   */
   workerNode?: { id: string; token: string };
-  /**
-   * Every node lease this process currently holds: its own plus remote
-   * workers it serves (ADR 0164). Agent sessions placed on any of them run
-   * their controller loop here. Defaults to `workerNode` alone.
-   */
-  heldWorkerNodes?: () => readonly { id: string; token: string }[];
-  /**
-   * How long a project's parsed `.work/roles/*.json` set is trusted before it is
-   * re-read from the shared origin (ADR 0055). Role *definitions* may lag
-   * by this much; membership is read fresh on every resolve. Default 10s.
-   */
-  rolesCacheTtlMs?: number;
   /**
    * Where project-store bytes live when a document is not text (ADR 0055):
    * inline in Postgres by default; a filesystem or S3-compatible store
@@ -400,6 +393,8 @@ export class CatamorphicCore {
   readonly executionEnvironments: ExecutionEnvironmentsService;
   readonly agentCapabilities: AgentCapabilitiesService;
   readonly executionAllocations: ExecutionAllocationsService;
+  /** Moves the work of lost disposable machines (ADR 0190). */
+  readonly nodeRecovery: NodeRecoveryService;
   readonly connections?: ConnectionsService;
   readonly connectionAdmission?: ConnectionAdmissionService;
   readonly connectionBroker?: ConnectionBroker;
@@ -740,11 +735,9 @@ export class CatamorphicCore {
       config.environmentProvider,
       clientRunners
         ? {
-            get: (args) =>
-              clientRunners.binding({
-                ...args,
-                workerNodeId: args.workerNodeId ?? config.workerNode?.id,
-              }),
+            // A member's own machine is no host's node: any host runs its
+            // chats while its runner's lease is live (ADR 0192).
+            get: (args) => clientRunners.binding(args),
           }
         : undefined,
       { gatewayHosts: config.gatewayHosts ?? [] },
@@ -969,6 +962,14 @@ export class CatamorphicCore {
     }
 
     const coordinator = new RunCoordinator(this.db, executionJobs);
+    this.nodeRecovery = new NodeRecoveryService({
+      db: this.db,
+      environments: this.executionEnvironments,
+      allocations: this.executionAllocations,
+      coordinator,
+      // Read at call time: memberships are constructed further down.
+      resolveOwner: (args) => this.resolveMember(args),
+    });
     executionWorker.registerExhaustedHandler((args) =>
       coordinator.handleExhaustedJob(args),
     );
@@ -1112,11 +1113,7 @@ export class CatamorphicCore {
       this.projectManager,
       { allowE2eFake: process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1" },
     );
-    this.roles = new RolesService(this.db, this.projectManager, {
-      ...(config.rolesCacheTtlMs !== undefined
-        ? { ttlMs: config.rolesCacheTtlMs }
-        : {}),
-    });
+    this.roles = new RolesService(this.db, this.projectManager);
     this.memberships = new MembershipsService(this.db, this.roles);
     this.documents = new DocumentsService(this.db, {
       projectManager: this.projectManager,
@@ -1143,9 +1140,6 @@ export class CatamorphicCore {
         agentCapabilities: this.agentCapabilities,
         hostId: config.hostId,
         workerNode: config.workerNode,
-        ...(config.heldWorkerNodes
-          ? { heldWorkerNodes: config.heldWorkerNodes }
-          : {}),
         projectManager: this.projectManager,
         codingAgents,
         nativeAgentCheckout: config.nativeAgentCheckout,

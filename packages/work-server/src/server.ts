@@ -69,6 +69,7 @@ import {
   workAuthorityId,
   workPushKeys,
 } from "./cluster.js";
+import { startCompanyProjectSync } from "./company-sync.js";
 import type { WorkServerConfig } from "./config.js";
 import { EncryptedFileCredentialVault } from "./credential-vault.js";
 import { workExecution } from "./execution-config.js";
@@ -187,6 +188,13 @@ export interface WorkServer {
   /** Account lifecycle: directory standing, disabling, sweeps (ADR 0161). */
   accounts: AccountLifecycle;
   agentsDescription: string;
+  /**
+   * Resolves when a replica's machine lease is lost: lapsed or disabled,
+   * it can never be renewed, so the host should shut down and let its
+   * supervisor start a fresh process (ADR 0190). A single server never
+   * loses its lease; it takes it again after a lapse.
+   */
+  lost: Promise<void>;
   shutdown(): Promise<void>;
 }
 
@@ -245,15 +253,35 @@ async function createWorkServerInner(
       "Postgres deployments require the same WORK_SECRET on every instance",
     );
   }
+  // Every replica must answer the same loopback operator credential; one
+  // generated into a replica's disposable data directory would not.
+  if (config.databaseUrl && !config.operatorSecret) {
+    throw new Error(
+      "Postgres deployments require the same WORK_OPERATOR_SECRET on every instance",
+    );
+  }
 
-  for (const dir of ["db", "projects", "remotes", "app-bundles", "sandboxes"]) {
+  // A replica on network Postgres is disposable (ADR 0190): everything
+  // durable lives in the database, so its node is new at every start and
+  // its disk holds only working copies and sandboxes. Sandboxes a previous
+  // process left behind belong to a node that no longer exists. A single
+  // server keeps its PGlite database, origins, and machine identity here.
+  if (config.databaseUrl) {
+    fs.rmSync(path.join(data, "sandboxes"), { recursive: true, force: true });
+  }
+  const dirs = config.databaseUrl
+    ? ["projects", "sandboxes"]
+    : ["db", "projects", "remotes", "app-bundles", "sandboxes"];
+  for (const dir of dirs) {
     fs.mkdirSync(path.join(data, dir), { recursive: true });
   }
-  const machineIdentity = loadOrCreateHostId(path.join(data, "host-id"));
-  const nodeId = `node.${createHash("sha256").update(machineIdentity).digest("hex").slice(0, 24)}`;
+  const disposable = Boolean(config.databaseUrl);
   const hostId = config.databaseUrl
     ? workAuthorityId(publicBase)
-    : machineIdentity;
+    : loadOrCreateHostId(path.join(data, "host-id"));
+  const nodeId = disposable
+    ? `node.${randomUUID()}`
+    : `node.${createHash("sha256").update(hostId).digest("hex").slice(0, 24)}`;
   const authSecret = loadWorkAuthSecret({
     dataDir: data,
     ...(config.secret ? { configuredSecret: config.secret } : {}),
@@ -393,8 +421,8 @@ async function createWorkServerInner(
     userId: string,
   ) => Promise<{ userId: string; groups: string[] } | undefined> = async () =>
     undefined;
-  // Enrolled remote workers (ADR 0164): this instance holds the leases of
-  // the workers connected to it and forwards their sandbox operations.
+  // Enrolled remote workers (ADR 0164). Each worker owns its node lease
+  // (ADR 0192), so any replica serves its calls and runs its agents.
   const workers = new WorkWorkerRegistry({
     db: ownDb,
     nodes: new WorkerNodesService(ownDb),
@@ -402,12 +430,12 @@ async function createWorkServerInner(
     authorityId: hostId,
     log,
   });
-  disposers.push(() => workers.releaseAll());
   const machine = await registerWorkMachine({
     db: ownDb,
     tenantId: SERVER_TENANT_ID,
     authorityId: hostId,
     nodeId,
+    disposable,
     label: config.machineName,
     labels: config.machineLabels,
     capacity: execution.capacity,
@@ -416,7 +444,6 @@ async function createWorkServerInner(
     workloads: config.execution.workloads,
     capabilities: execution.machineCapabilities,
     sandboxProvider,
-    workers,
     placement: {
       workers: () => workers.placements(),
       owner: (userId) => placementOwner(userId),
@@ -478,7 +505,6 @@ async function createWorkServerInner(
           })
         : null,
     workerNode: machine.lease,
-    heldWorkerNodes: () => [machine.lease, ...workers.heldLeases()],
     clientExecution: true,
     database: databaseConfig,
     storage: objectStore
@@ -584,6 +610,15 @@ async function createWorkServerInner(
     auth: workAuth,
   });
 
+  // Stopping gives the node back for good once the workers below stopped
+  // claiming, and moves its work to a live replica at once rather than
+  // after its lease would have lapsed (ADR 0190). Placement still reads
+  // sign-in, so this runs before that database closes.
+  let recoverOwnNode: (() => Promise<void>) | undefined;
+  disposers.push(async () => {
+    await machine.stop();
+    await recoverOwnNode?.();
+  });
   // PGlite is a single serialized connection: one worker lane there;
   // real Postgres gets a few.
   const worker = catamorphic.startExecutionWorker({
@@ -592,6 +627,74 @@ async function createWorkServerInner(
   });
   disposers.push(() => worker.stop());
   const core = catamorphic.core;
+  // Any replica recovers the work of replicas that are gone for good: runs
+  // move to a live machine, chats are admitted again on their next turn.
+  {
+    const recover = (nodeIds?: readonly string[]) =>
+      core.nodeRecovery
+        .recoverLostNodes({
+          authorityId: hostId,
+          ...(nodeIds ? { nodeIds } : {}),
+        })
+        .then((result) => {
+          if (
+            result.movedRuns +
+              result.failedRuns +
+              result.releasedChats +
+              result.deletedNodes >
+            0
+          )
+            log(
+              `Recovered ${result.nodes} stopped machine(s): ${result.movedRuns} run(s) moved, ${result.releasedChats} chat(s) released, ${result.failedRuns} run(s) failed, ${result.waitingRuns} run(s) waiting for a machine`,
+            );
+        })
+        .catch((error) =>
+          log(
+            `Machine recovery failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          ),
+        );
+    if (disposable)
+      recoverOwnNode = async () => {
+        await recover([machine.lease.id]);
+        // Every sandbox this machine still holds (moved off, released idle
+        // or retired but not yet cleaned) lives here and no Allocation will
+        // use it again: remove them before the process ends.
+        const sandboxes = await core.db
+          .selectFrom("execution_allocations")
+          .select("sandbox_provider_id")
+          .where("worker_node_id", "=", machine.lease.id)
+          .where("sandbox_provider_id", "is not", null)
+          .where((eb) =>
+            eb.or([
+              eb("capacity_released_at", "is", null),
+              eb("release_reason", "=", "node_lost"),
+            ]),
+          )
+          .execute();
+        await Promise.allSettled(
+          sandboxes.flatMap((row) =>
+            row.sandbox_provider_id
+              ? [sandboxProvider.destroySandbox(row.sandbox_provider_id)]
+              : [],
+          ),
+        );
+      };
+    let recovering: Promise<void> | undefined;
+    const tick = () => {
+      recovering ??= recover().finally(() => {
+        recovering = undefined;
+      });
+    };
+    const timer = setInterval(tick, 10_000);
+    timer.unref();
+    disposers.push(async () => {
+      clearInterval(timer);
+      await recovering;
+    });
+    tick();
+  }
   // Webhooks, chat and polled events start workflows whether or not
   // coding agents are configured.
   const eventDispatcher = startEventDispatcher({ core });
@@ -602,63 +705,12 @@ async function createWorkServerInner(
     tenantId: SERVER_TENANT_ID,
     externalUserId: SETUP_AGENT_USER,
   };
-  {
-    let stopped = false;
-    let activeSync: Promise<void> | undefined;
-    const syncProjects = async () => {
-      for (let offset = 0; !stopped; offset += 50) {
-        const page = await core.projects.list(rootIdentity, {
-          limit: 50,
-          offset,
-        });
-        for (const project of page.items) {
-          if (stopped) return;
-          if (!project.remoteUrl) continue;
-          try {
-            const result = await core.remoteSync.syncPublished({
-              identity: rootIdentity,
-              projectId: project.id,
-            });
-            if (result.status === "pulled" || result.status === "merged") {
-              core.roles.invalidate(project.id);
-              console.info(
-                `Company project ${project.id} received published updates`,
-              );
-            }
-            // Accepted changes (a merged roles pull request, say) stop
-            // arriving until someone reconciles the two histories. Said once,
-            // when it starts; the project carries it as remoteDivergedAt.
-            if (result.status === "diverged" && !project.remoteDivergedAt)
-              console.warn(
-                `Company project ${project.id} no longer receives updates from ${project.remoteUrl}: its main (${result.localSha?.slice(0, 12)}) has diverged from the code host's (${result.remoteSha?.slice(0, 12)}). Share its own changes as a pull request and reconcile the two.`,
-              );
-          } catch (error) {
-            console.warn(
-              `Company project sync failed for ${project.id}:`,
-              error,
-            );
-          }
-        }
-        if (offset + page.items.length >= page.total) return;
-      }
-    };
-    const tick = () => {
-      if (activeSync || stopped) return;
-      activeSync = syncProjects()
-        .catch((error) => console.warn("Company project sync failed:", error))
-        .finally(() => {
-          activeSync = undefined;
-        });
-    };
-    const timer = setInterval(tick, 60_000);
-    timer.unref();
-    disposers.push(async () => {
-      stopped = true;
-      clearInterval(timer);
-      await activeSync;
-    });
-    tick();
-  }
+  const companySync = startCompanyProjectSync({
+    services: core,
+    identity: rootIdentity,
+    holder: nodeId,
+  });
+  disposers.push(() => companySync.stop());
   const admission = new WorkAdmissionService({
     db: core.db,
     membershipWriterIdentity: rootIdentity,
@@ -764,12 +816,23 @@ async function createWorkServerInner(
         : undefined,
     log,
   });
-  if (core.agentSessions) {
-    catamorphic.startAgentWorker({
+  const agentSessions = core.agentSessions;
+  if (agentSessions) {
+    const agentWorker = catamorphic.startAgentWorker({
       resolveIdentity: async (args) =>
         (await accountLifecycle.isActive(args.externalUserId))
           ? core.memberships.identityFor(args)
           : null,
+    });
+    // Stopping: this process's turns finish or stop before its machine and
+    // their sandboxes go away (ADR 0190).
+    disposers.push(async () => {
+      await agentWorker.stop();
+      // A lost machine's turns may already belong to another replica: stop
+      // them at once rather than letting them finish.
+      await agentSessions.stopLocalTurns(
+        machine.isLost() ? { timeoutMs: 0 } : {},
+      );
     });
   }
   if (directories.length > 0) {
@@ -992,8 +1055,11 @@ async function createWorkServerInner(
     admission,
   });
 
-  app.get("/healthz", async () => ({
-    ok: machine.healthy(),
+  // Liveness and readiness (ADR 0190). `/healthz` fails only once the
+  // machine's lease is lost for good, so a database failover shorter than
+  // the lease never restarts a replica. `/readyz` fails while renewals fail
+  // or hang, or the machine is disabled, so a balancer can route around it.
+  const health = () => ({
     machine: {
       id: nodeId,
       label: config.machineName,
@@ -1002,7 +1068,15 @@ async function createWorkServerInner(
       isolation: execution.isolation,
     },
     agentSessions: Boolean(core.agentSessions),
-  }));
+  });
+  app.get("/healthz", async (_request, reply) => {
+    const ok = !machine.isLost();
+    return reply.status(ok ? 200 : 503).send({ ok, ...health() });
+  });
+  app.get("/readyz", async (_request, reply) => {
+    const ok = !machine.isLost() && machine.ready();
+    return reply.status(ok ? 200 : 503).send({ ok, ...health() });
+  });
 
   // Machine-local setup authority lives on a separate server, not merely a
   // guarded route on the public app. Binding this app only to loopback keeps
@@ -1170,6 +1244,7 @@ async function createWorkServerInner(
     workAuth,
     accounts: accountLifecycle,
     agentsDescription: agents.description,
+    lost: machine.lost,
     shutdown: close,
   };
 }

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type {
@@ -42,7 +43,10 @@ export function allocationSandboxProvider(args: {
   db: Kysely<DB>;
   allocation: ExecutionAllocation;
   provider: SandboxProvider;
-  /** The node lease this instance holds now; read at each check. */
+  /**
+   * The lease of this process's own local node, read at each check. A
+   * remote node's provider fences its own operations (ADR 0192).
+   */
   workerLeaseToken?: string | (() => string | undefined);
 }): SandboxProvider {
   const { db, allocation, provider } = args;
@@ -216,10 +220,151 @@ export function allocationSandboxProvider(args: {
   };
 }
 
-/** Run on the physical owner. Successful destruction is the capacity release fence. */
+/** A host's claim on an Allocation's maintenance (ADR 0192). */
+export interface AllocationMaintenanceClaim {
+  allocationId: string;
+  token: string;
+}
+
+const MAINTENANCE_MINUTES = 5;
+
+/**
+ * Claim an Allocation for saving or destroying its workspace (ADR 0192), so
+ * two hosts never do it at once. For an idle chat's active workspace, pass
+ * its session: the claim locks the session row and is refused while the chat
+ * has a queued, held, or running turn, and turns wait while it is held. The
+ * claim lapses on its own if the host stops midway; {@link
+ * withAllocationMaintenance} renews it while the work runs.
+ */
+export async function claimAllocationMaintenance(args: {
+  db: Kysely<DB>;
+  allocationId: string;
+  status: "active" | "released";
+  sessionId?: string;
+}): Promise<AllocationMaintenanceClaim | undefined> {
+  const token = randomUUID();
+  return args.db.transaction().execute(async (trx) => {
+    if (args.sessionId) {
+      const session = await trx
+        .selectFrom("agent_sessions")
+        .select(["status", "allocation_id"])
+        .where("id", "=", args.sessionId)
+        .forUpdate()
+        .executeTakeFirst();
+      if (
+        session?.status !== "active" ||
+        session.allocation_id !== args.allocationId
+      )
+        return undefined;
+      const busy = await trx
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("session_id", "=", args.sessionId)
+        .where("status", "in", ["queued", "held", "running"])
+        .executeTakeFirst();
+      if (busy) return undefined;
+    }
+    const claimed = await trx
+      .updateTable("execution_allocations")
+      .set({
+        maintenance_claim: token,
+        maintenance_claimed_until: sql`now() + make_interval(mins => ${MAINTENANCE_MINUTES})`,
+      })
+      .where("id", "=", args.allocationId)
+      .where("status", "=", args.status)
+      .where("capacity_released_at", "is", null)
+      .where((eb) =>
+        eb.or([
+          eb("maintenance_claimed_until", "is", null),
+          eb("maintenance_claimed_until", "<", sql<Date>`now()`),
+        ]),
+      )
+      .returning("id")
+      .executeTakeFirst();
+    return claimed ? { allocationId: args.allocationId, token } : undefined;
+  });
+}
+
+/** Extend a claim this host still holds; false once it lapsed or moved. */
+export async function renewAllocationMaintenance(args: {
+  db: Kysely<DB>;
+  claim: AllocationMaintenanceClaim;
+}): Promise<boolean> {
+  const renewed = await args.db
+    .updateTable("execution_allocations")
+    .set({
+      maintenance_claimed_until: sql`now() + make_interval(mins => ${MAINTENANCE_MINUTES})`,
+    })
+    .where("id", "=", args.claim.allocationId)
+    .where("maintenance_claim", "=", args.claim.token)
+    .returning("id")
+    .executeTakeFirst();
+  return Boolean(renewed);
+}
+
+/** Give a claim back; a claim another host has since taken is left alone. */
+export async function releaseAllocationMaintenance(args: {
+  db: Kysely<DB>;
+  claim: AllocationMaintenanceClaim;
+}): Promise<void> {
+  await args.db
+    .updateTable("execution_allocations")
+    .set({ maintenance_claim: null, maintenance_claimed_until: null })
+    .where("id", "=", args.claim.allocationId)
+    .where("maintenance_claim", "=", args.claim.token)
+    .execute();
+}
+
+/** This host's maintenance claim lapsed or moved: its work must stop. */
+export class AllocationMaintenanceLostError extends Error {
+  constructor() {
+    super("The workspace's maintenance claim lapsed; another host may use it");
+    this.name = "AllocationMaintenanceLostError";
+  }
+}
+
+/**
+ * Run `work` under a claim, renewing it every 30 seconds. `work` calls
+ * `held` before each step that touches the workspace: it renews the claim
+ * and throws {@link AllocationMaintenanceLostError} once the claim is gone,
+ * so a stalled host never saves or destroys a workspace a turn may already
+ * use. The claim is given back afterwards unless it was lost.
+ */
+export async function withAllocationMaintenance<T>(args: {
+  db: Kysely<DB>;
+  claim: AllocationMaintenanceClaim;
+  work: (held: () => Promise<void>) => Promise<T>;
+}): Promise<T> {
+  let lost = false;
+  const held = async () => {
+    if (!lost && !(await renewAllocationMaintenance(args))) lost = true;
+    if (lost) throw new AllocationMaintenanceLostError();
+  };
+  const timer = setInterval(() => {
+    void renewAllocationMaintenance(args)
+      .then((renewed) => {
+        if (!renewed) lost = true;
+      })
+      .catch(() => {});
+  }, 30_000);
+  timer.unref();
+  try {
+    return await args.work(held);
+  } finally {
+    clearInterval(timer);
+    if (!lost) await releaseAllocationMaintenance(args).catch(() => {});
+  }
+}
+
+/**
+ * Destroy the workspaces of a node's released Allocations. Successful
+ * destruction is the capacity release fence. A local node is cleaned only by
+ * the process holding its lease; a remote node by any host while its
+ * executor's lease is live (ADR 0192), each Allocation under a claim.
+ */
 export async function cleanupWorkerAllocations(args: {
   db: Kysely<DB>;
-  workerNode: { id: string; token: string };
+  workerNode: { id: string; token: string } | { id: string; remote: true };
   provider: SandboxProvider;
 }): Promise<number> {
   return withSpan(
@@ -229,12 +374,18 @@ export async function cleanupWorkerAllocations(args: {
       attributes: { "catamorphic.worker.id": args.workerNode.id },
     },
     async () => {
+      const node = args.workerNode;
       const live = await args.db
         .selectFrom("worker_nodes")
         .select("id")
-        .where("id", "=", args.workerNode.id)
-        .where("lease_token", "=", args.workerNode.token)
+        .where("id", "=", node.id)
         .where("lease_expires_at", ">", sql<Date>`now()`)
+        .$if("token" in node, (query) =>
+          query.where("lease_token", "=", "token" in node ? node.token : ""),
+        )
+        .$if(!("token" in node), (query) =>
+          query.where("enabled", "=", true).where("remote", "is not", null),
+        )
         .executeTakeFirst();
       if (!live) return 0;
       const rows = await args.db
@@ -285,15 +436,30 @@ export async function cleanupWorkerAllocations(args: {
       const failures: unknown[] = [];
       for (const row of rows) {
         if (row.sandbox_creation_started && !row.sandbox_provider_id) continue;
+        const claim = await claimAllocationMaintenance({
+          db: args.db,
+          allocationId: row.id,
+          status: "released",
+        });
+        if (!claim) continue;
         try {
-          if (row.sandbox_provider_id)
-            await args.provider.destroySandbox(row.sandbox_provider_id);
-          await args.db
-            .updateTable("execution_allocations")
-            .set({ capacity_released_at: sql`now()` })
-            .where("id", "=", row.id)
-            .where("status", "=", "released")
-            .execute();
+          await withAllocationMaintenance({
+            db: args.db,
+            claim,
+            work: async (held) => {
+              // Destroying is idempotent: a sandbox already gone counts.
+              await held();
+              if (row.sandbox_provider_id)
+                await args.provider.destroySandbox(row.sandbox_provider_id);
+              await args.db
+                .updateTable("execution_allocations")
+                .set({ capacity_released_at: sql`now()` })
+                .where("id", "=", row.id)
+                .where("status", "=", "released")
+                .where("maintenance_claim", "=", claim.token)
+                .execute();
+            },
+          });
           cleaned++;
         } catch (error) {
           failures.push(error);

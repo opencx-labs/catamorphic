@@ -434,9 +434,9 @@ class FakeDeploymentRuntimeStore implements DeploymentRuntimeStore {
 
   async withArtifactLock<Result>(args: {
     artifactId: string;
-    operation: () => Promise<Result>;
+    operation: (lock: { signal: AbortSignal }) => Promise<Result>;
   }): Promise<Result> {
-    return args.operation();
+    return args.operation({ signal: new AbortController().signal });
   }
 
   get(runtimeId: string): DeploymentRuntimeRecord | null {

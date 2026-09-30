@@ -75,6 +75,7 @@ export class PluginsService {
     /**
      * Names of the host's registered capability providers (ADR 0046).
      * Attach validates plugin `requires` against this set, fail-closed.
+     * Replica memory (c): capabilities the host registers at boot.
      */
     private readonly registeredCapabilities: ReadonlySet<string> = new Set(),
   ) {}

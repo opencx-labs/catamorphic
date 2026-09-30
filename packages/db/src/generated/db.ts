@@ -477,6 +477,8 @@ export interface ExecutionAllocations {
   created_at: Generated<Timestamp>;
   environment_name: string;
   id: Generated<string>;
+  maintenance_claim: string | null;
+  maintenance_claimed_until: Timestamp | null;
   policy_snapshot: Json;
   project_id: string;
   release_reason: string | null;
@@ -554,6 +556,7 @@ export interface ModelUsage {
   output_tokens: Generated<Int8>;
   project_id: string;
   reasoning_tokens: Generated<Int8>;
+  settled_at: Timestamp | null;
   tenant_id: string;
   turn_id: string | null;
 }
@@ -722,6 +725,12 @@ export interface RemoteOperations {
   poll_id: string | null;
   response: Json | null;
   status: Generated<string>;
+}
+
+export interface ReplicaClaims {
+  expires_at: Timestamp;
+  holder: string;
+  name: string;
 }
 
 export interface ScheduleBindings {
@@ -998,10 +1007,13 @@ export interface WorkerNodes {
   capacity: Json | null;
   default_resources: Generated<Json>;
   descriptor: Json;
+  disposable: Generated<boolean>;
   enabled: Generated<boolean>;
   id: string;
   lease_expires_at: Timestamp;
   lease_token: string;
+  recovery_attempted_at: Timestamp | null;
+  remote: Json | null;
   tenant_id: string;
   updated_at: Generated<Timestamp>;
 }
@@ -1346,6 +1358,7 @@ export interface DB {
   push_subscriptions: PushSubscriptions;
   rate_reservation_buckets: RateReservationBuckets;
   remote_operations: RemoteOperations;
+  replica_claims: ReplicaClaims;
   schedule_bindings: ScheduleBindings;
   schedule_occurrences: ScheduleOccurrences;
   session_actions: SessionActions;

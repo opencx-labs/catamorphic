@@ -14,7 +14,10 @@ One process, zero external services by default: PGlite, bare Git origins,
 and local-process execution under one data directory (`/data` in the image).
 It is **single-tenant only**: local-process execution gives processes the
 host's filesystem and network (ADR 0047). It serves the API at `/api`, sign-in
-at `/login`, the mobile PWA at `/`, and `/healthz`.
+at `/login`, the mobile PWA at `/`, `/readyz` (503 while the machine's
+lease is not renewing, or the machine is disabled), and `/healthz` (503 only
+once a replica's lease is lost for good, when the process also exits; run it
+under a restart policy).
 
 ## Configuration
 
@@ -29,9 +32,9 @@ Environment variables parsed by `workServerConfigFromEnv` in
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` | Model for the built-in agent. `WORK_MODEL`, `WORK_EFFORT` tune it. `WORK_FAKE_AGENT=1` runs a deterministic echo agent. Claude Code and Codex agents never see these; they use model connections ([Harnesses on the server](harnesses.md)). |
 | `WORK_AUTH_CONFIG` | Path to the sign-in config (default `<data>/auth-config.json`), read at boot. |
 | `WORK_OPERATOR_PORT` | Loopback-only setup listener (default 4701). |
-| `WORK_OPERATOR_SECRET` | Supplies the operator credential instead of the generated `<data>/operator-secret`. |
+| `WORK_OPERATOR_SECRET` | Supplies the operator credential instead of the generated `<data>/operator-secret`. Required with `DATABASE_URL`: every replica answers the same one. |
 | `WORK_MDNS` | `off`, or a hostname (default a unique `work-<id>.local`). |
-| `DATABASE_URL` | Network Postgres instead of PGlite; then `WORK_SECRET`, `WORK_VAULT_KEY`, and a public URL are required. |
+| `DATABASE_URL` | Network Postgres instead of PGlite; then `WORK_SECRET`, `WORK_VAULT_KEY`, `WORK_OPERATOR_SECRET`, and a public URL are required, and the server is a disposable replica (see [replicas](cluster-deployment.md#add-a-control-plane-replica)). |
 | `WORK_SECRET` | Deployment secret for sign-in state. Generated under the data directory when absent (PGlite only). |
 | `WORK_VAULT_KEY`, `WORK_VAULT_PREVIOUS_KEYS` | Credential vault keys (32 bytes, base64); see [secrets and the gateway](secrets-and-gateway.md). |
 | `WORK_GATEWAY_CONFIG` | Connections the gateway brokers (MCP, HTTP APIs, databases, Git hosts, model APIs); see [secrets and the gateway](secrets-and-gateway.md). The image ships no guards. |
@@ -92,7 +95,9 @@ data and its `hooks` are code (ADR 0183):
 - Guards, directories, and providers go in `hooks`; see
   [Guards are host code](secrets-and-gateway.md#guards-are-host-code).
 - Generated state stays under the data directory: the vault key, generated
-  secrets, the host id, and worker credentials.
+  secrets, the host id, and worker credentials. A server on `DATABASE_URL`
+  generates none of these: its configuration supplies every secret, and its
+  machine identity lasts one process (ADR 0190).
 
 ## Provisioning the first project and person
 

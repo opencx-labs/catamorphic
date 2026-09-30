@@ -19,6 +19,10 @@ export interface CredentialVault {
 
 /** Test and ephemeral-host implementation. Stored bytes are never returned. */
 export class MemoryCredentialVault implements CredentialVault {
+  /**
+   * Replica memory (single process): hosts with several replicas give
+   * each the same shared vault.
+   */
   private readonly records = new Map<string, Uint8Array>();
 
   async put(args: {

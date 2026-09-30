@@ -120,6 +120,7 @@ export class ReservedCapabilityEnvError extends Error {
  * construction; duplicate names fail at boot rather than shadowing.
  */
 export class CapabilityRegistry {
+  /** Replica memory (c): built at boot from the host's providers. */
   private readonly providers = new Map<string, CapabilityProviderRuntime>();
 
   constructor(providers: readonly CapabilityProviderRuntime[] = []) {

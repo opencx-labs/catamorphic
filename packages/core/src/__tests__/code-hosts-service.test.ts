@@ -12,6 +12,7 @@ import {
   CodeHostNotConnectedError,
   ProjectAlreadyLinkedError,
 } from "../services/code-hosts-service.js";
+import { MemoryCredentialVault } from "../services/credential-vault.js";
 import { fakeCodeHost } from "./code-host-fixture.js";
 
 /** ADR 0177: every code-host operation acts through one connection. */
@@ -318,11 +319,14 @@ describe("CodeHostsService", () => {
 
   it("links one repository when publishes race, here or on another replica", async () => {
     const frank: Identity = { tenantId, externalUserId: "frank" };
+    // Replicas share the organization's vault, as they would in production.
+    const vault = new MemoryCredentialVault();
     const replica = async (name: string) => {
       const forge = fakeCodeHost({
         db,
         projectManager: manager,
         remoteBase: temp,
+        vault,
       });
       await forge.connectPersonal(frank, "frank-token");
       const bare = await bareRepository(name, {});
@@ -374,31 +378,42 @@ describe("CodeHostsService", () => {
     });
     expect(here.created).toEqual(["race"]);
 
-    // Another replica that got as far as creating one never relinks.
+    // Two replicas publishing at once create one repository between them:
+    // the claim in Postgres makes the second wait, and it then finds the
+    // project linked (ADR 0193).
     await db
       .updateTable("projects")
       .set({ remote_url: null, remote_ownership: null })
       .where("id", "=", project.id)
       .execute();
     const there = await replica("race-there");
-    const racing = await replica("race-racing");
-    const original = racing.forge.host.createRepository;
-    racing.forge.host.createRepository = async (input) => {
-      // The other replica links while this one creates its repository.
-      await there.forge.connectPersonal(frank, "frank-token");
-      await publish(there.forge);
-      if (!original) throw new Error("No repository creation");
-      return original(input);
-    };
-    await expect(publish(racing.forge)).rejects.toThrow(
-      ProjectAlreadyLinkedError,
-    );
+    const elsewhere = await replica("race-elsewhere");
+    for (const side of [there, elsewhere]) {
+      const create = side.forge.host.createRepository;
+      if (!create) throw new Error("No repository creation");
+      side.forge.host.createRepository = async (input) => {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        return create(input);
+      };
+    }
+    const raced = await Promise.allSettled([
+      publish(there.forge),
+      publish(elsewhere.forge),
+    ]);
+    expect(
+      raced.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(raced.find((result) => result.status === "rejected")).toMatchObject({
+      reason: expect.any(ProjectAlreadyLinkedError),
+    });
+    expect([...there.created, ...elsewhere.created]).toEqual(["race"]);
+    const linked = there.created.length > 0 ? there : elsewhere;
     expect(
       await db
         .selectFrom("projects")
         .select("remote_url")
         .where("id", "=", project.id)
         .executeTakeFirstOrThrow(),
-    ).toEqual({ remote_url: there.bare });
+    ).toEqual({ remote_url: linked.bare });
   });
 });

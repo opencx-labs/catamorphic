@@ -36,7 +36,7 @@ const DELIVERY_ID_HEADERS = [
   "x-request-id",
 ];
 
-/** Never stored or handed to a workflow. */
+/** Never stored or handed to a workflow. Replica memory (c): a constant. */
 const DROPPED_HEADERS = new Set([
   "authorization",
   "proxy-authorization",

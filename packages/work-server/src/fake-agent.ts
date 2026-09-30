@@ -15,7 +15,15 @@ import { z } from "zod";
  */
 export class FakeEchoAgent implements CodingAgentProvider {
   readonly name = "fake-echo";
+  /** Replica memory (a): the sessions this process's turns started. */
   private readonly sessions = new Map<string, StartSessionOpts>();
+  /**
+   * Replica memory (a): stops for the `run` turns in flight here, by
+   * provider session id and by chat id.
+   */
+  private readonly running = new Map<string, () => void>();
+  /** Replica memory (a): sessions whose `ask` question waits here. */
+  private readonly asked = new Set<string>();
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
     const providerSessionId = randomUUID();
@@ -29,6 +37,18 @@ export class FakeEchoAgent implements CodingAgentProvider {
     };
   }
 
+  interrupt(providerSessionId: string): void {
+    this.running.get(providerSessionId)?.();
+  }
+
+  holdsQuestion(providerSessionId: string): boolean {
+    return this.asked.has(providerSessionId);
+  }
+
+  releaseQuestion(providerSessionId: string): void {
+    this.asked.delete(providerSessionId);
+  }
+
   async *sendMessage(
     session: ProviderSession,
     message: string,
@@ -39,23 +59,68 @@ export class FakeEchoAgent implements CodingAgentProvider {
     // Workflow deliveries arrive under a provenance header: act on the last line.
     const request = message.trim().split("\n").at(-1) ?? "";
     const [command, name, ...text] = request.split(" ");
+    const providerSessionId = session.providerSessionId ?? "";
+    if (this.asked.delete(providerSessionId)) {
+      // The answer to `ask`, in the process that asked.
+      yield { type: "text", content: `Answered where asked: ${request}` };
+      yield { type: "done" };
+      return;
+    }
+    if (command === "ask") {
+      // `ask <question>`: a question this process holds until answered, as
+      // Claude Code's AskUserQuestion does (ADR 0193).
+      this.asked.add(providerSessionId);
+      yield {
+        type: "question",
+        questions: [
+          {
+            question: [name, ...text].join(" "),
+            header: "Question",
+            multiSelect: false,
+            options: [],
+          },
+        ],
+      };
+      yield { type: "done" };
+      return;
+    }
     if (command === "run" || command === "mcp") {
       // `run <shell>`: any command in the workspace, answering `exit=<code>`
       // then its output (tests of sandbox Git, ADR 0175). `mcp <alias>
       // <tool> <json>`: a tool of the session's connection MCP server, as a
       // harness calls it with its grant. ` ;; ` chains steps in one turn.
-      const opts = this.sessions.get(session.providerSessionId ?? "");
-      const results: string[] = [];
-      for (const step of request.split(" ;; ")) {
-        results.push(
-          step.startsWith("mcp ")
-            ? await callConnectionTool(opts, step.slice("mcp ".length))
-            : await runInWorkspace(opts, session, step.slice("run ".length)),
-        );
+      // An interrupt ends the turn at once; the step's command is left to
+      // finish on its own.
+      const opts = this.sessions.get(providerSessionId);
+      let stop = () => {};
+      const stopped = new Promise<"stopped">((resolve) => {
+        stop = () => resolve("stopped");
+      });
+      const ids = [providerSessionId, session.sessionId];
+      for (const id of ids) this.running.set(id, stop);
+      try {
+        const results: string[] = [];
+        for (const step of request.split(" ;; ")) {
+          const result = await Promise.race([
+            step.startsWith("mcp ")
+              ? callConnectionTool(opts, step.slice("mcp ".length))
+              : runInWorkspace(opts, session, step.slice("run ".length)),
+            stopped,
+          ]);
+          if (result === "stopped") {
+            yield { type: "error", content: "Interrupted." };
+            yield { type: "done" };
+            return;
+          }
+          results.push(result);
+        }
+        yield { type: "text", content: results.join("\n---\n") };
+        yield { type: "done" };
+        return;
+      } finally {
+        for (const id of ids)
+          if (this.running.get(id) === stop) this.running.delete(id);
       }
-      yield { type: "text", content: results.join("\n---\n") };
-      yield { type: "done" };
-      return;
     }
     const workspaceCommand =
       command === "execution-location"
@@ -139,6 +204,7 @@ export class FakeEchoAgent implements CodingAgentProvider {
   async dispose(session: ProviderSession): Promise<void> {
     if (session.providerSessionId) {
       this.sessions.delete(session.providerSessionId);
+      this.asked.delete(session.providerSessionId);
     }
   }
 }

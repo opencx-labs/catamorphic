@@ -226,8 +226,12 @@ const MAX_SYNC_BUDGET_MS = 300_000;
  * leaving the next job pending for the polling workers.
  */
 export class TriggersService {
+  /** Replica memory (c): trigger kinds the host registers at boot. */
   private readonly registry: Map<string, TriggerKindRuntime>;
-  /** Scan memo keyed `projectId:commitSha`; sha-immutable, so hits are valid. */
+  /**
+   * Scan memo keyed `projectId:commitSha`; sha-immutable, so hits are valid.
+   * Replica memory (b): keyed by commit sha.
+   */
   private readonly scans = new Map<string, Promise<TriggerBindingInfo[]>>();
 
   constructor(

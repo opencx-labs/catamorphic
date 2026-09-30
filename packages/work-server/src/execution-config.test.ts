@@ -208,6 +208,7 @@ it("a shared control plane refuses to run agent code as its own subprocess", asy
             // Never contacted: the execution policy is checked first.
             DATABASE_URL: "postgres://127.0.0.1:1/unreachable",
             WORK_SECRET: "execution-guard-secret-with-at-least-32-chars",
+            WORK_OPERATOR_SECRET: "execution-guard-operator-with-32-chars",
             WORK_VAULT_KEY: Buffer.alloc(32, 3).toString("base64"),
             WORK_FAKE_AGENT: "1",
             PATH: process.env.PATH,

@@ -9,7 +9,6 @@ import {
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { publishedRef } from "@catamorphic/workflow/project-layout";
 import { authorFor } from "../identity.js";
-import { forgetProgramFetch } from "./program-reader.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -280,10 +279,6 @@ export class DeploymentService {
     projectId: string;
     commitSha: string;
   }): Promise<void> {
-    // The shared program just moved: readers holding the 5s fetch memo (a
-    // pre-deploy existence check, a burst of reads) must not serve the
-    // previous tree to a role or tool resolution that follows at once.
-    forgetProgramFetch(this.projectManager, input.tenantId, input.projectId);
     await this.onPublished?.({
       projectId: input.projectId,
       commitSha: input.commitSha,

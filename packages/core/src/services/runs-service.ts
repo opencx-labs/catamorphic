@@ -526,7 +526,9 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 export class RunsService {
+  /** Replica memory (b): sizes of the prepared sources below. */
   private readonly preparedSourceBytes = new Map<string, number>();
+  /** Replica memory (b): prepared sources keyed by commit sha. */
   private readonly preparedSources = new Map<string, Promise<PreparedSource>>();
 
   constructor(
@@ -1120,6 +1122,7 @@ export class RunsService {
         if (new Date(job.availableAt).getTime() > Date.now()) {
           return suspended("backoff");
         }
+        const claimedAt = performance.now();
         const claimed = await this.deps.executionJobs.claimById({
           jobId: job.id,
           workerId,
@@ -1130,6 +1133,7 @@ export class RunsService {
           job: claimed,
           workerId,
           leaseSeconds: SYNC_LEASE_SECONDS,
+          claimedAt,
           signal: controller.signal,
         });
         // Every disposition — completed, deferred, failed, lease lost — is
