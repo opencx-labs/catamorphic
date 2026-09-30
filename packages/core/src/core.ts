@@ -141,12 +141,6 @@ export interface CatamorphicCoreConfig {
    */
   workerNode?: { id: string; token: string };
   /**
-   * How long a project's parsed `.work/roles/*.json` set is trusted before it is
-   * re-read from the shared origin (ADR 0055). Role *definitions* may lag
-   * by this much; membership is read fresh on every resolve. Default 10s.
-   */
-  rolesCacheTtlMs?: number;
-  /**
    * Where project-store bytes live when a document is not text (ADR 0055):
    * inline in Postgres by default; a filesystem or S3-compatible store
    * (`FsBundleStore`, `S3ObjectStore`) when configured. Metadata, versions,
@@ -1119,11 +1113,7 @@ export class CatamorphicCore {
       this.projectManager,
       { allowE2eFake: process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1" },
     );
-    this.roles = new RolesService(this.db, this.projectManager, {
-      ...(config.rolesCacheTtlMs !== undefined
-        ? { ttlMs: config.rolesCacheTtlMs }
-        : {}),
-    });
+    this.roles = new RolesService(this.db, this.projectManager);
     this.memberships = new MembershipsService(this.db, this.roles);
     this.documents = new DocumentsService(this.db, {
       projectManager: this.projectManager,

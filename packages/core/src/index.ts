@@ -458,7 +458,6 @@ export {
   PluginsService,
   UndeclaredSecretError,
 } from "./services/plugins-service.js";
-export { forgetProgramFetch } from "./services/program-reader.js";
 export {
   DEFAULT_ENVIRONMENT,
   DEFAULT_IDLE_RELEASE_MINUTES,
@@ -544,6 +543,13 @@ export {
   type RemoteSyncOutcome,
   RemoteSyncService,
 } from "./services/remote-sync-service.js";
+export {
+  ReplicaClaimBusyError,
+  releaseReplicaClaim,
+  renewReplicaClaim,
+  takeReplicaClaim,
+  withReplicaClaim,
+} from "./services/replica-claims.js";
 export {
   DEFAULT_RUN_RETENTION_DAYS,
   type PurgeResult,

@@ -109,6 +109,8 @@ function harness(options: {
     body: Uint8Array | undefined;
   }> = [];
   const recorded: Array<ModelUsageRecord & { usage: ModelCallUsage }> = [];
+  /** Calls whose usage row is open: their answer has not settled yet. */
+  const open = new Set<string>();
   const audits: Array<{ outcome: string; metadata: unknown }> = [];
   const reviews: Array<{ action: string; input: JsonObject }> = [];
   const counts = { resolved: 0, liveGrant: 0 };
@@ -142,10 +144,17 @@ function harness(options: {
         options.runningTurn === false
           ? undefined
           : (options.runningTurn ?? "turn-1"),
-      recordUsage: async ({ record, usage }) => {
+      openUsage: async () => {
+        const id = String(open.size + recorded.length + 1);
+        open.add(id);
+        return id;
+      },
+      recordUsage: async ({ record, usage, openId }) => {
         await slow();
         recorded.push({ ...record, usage });
+        if (openId) open.delete(openId);
       },
+      openCalls: async () => open.size,
       usage: async () => undefined,
     },
     broker: {

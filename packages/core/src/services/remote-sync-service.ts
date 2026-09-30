@@ -40,6 +40,12 @@ export type RemoteSyncOutcome = { status: "no-remote" } | NetworkSyncResult;
  * never run concurrently against one repo nor break its caller.
  */
 export class RemoteSyncService {
+  /**
+   * Replica memory (a): syncs in flight through this process's working
+   * copies. A push to the origin is a compare-and-swap, so replicas never
+   * overwrite each other; the Work server syncs each project on one
+   * replica at a time under a claim (ADR 0193).
+   */
   private readonly inflight = new Map<string, Promise<RemoteSyncOutcome>>();
 
   constructor(

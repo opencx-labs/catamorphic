@@ -45,7 +45,6 @@ function services(repositoryRoles: ProjectRoleEntry[] = []) {
     deployment: { deploy: vi.fn(async () => ({ commitSha: "abc123" })) },
     roles: {
       list: vi.fn(async () => repositoryRoles),
-      invalidate: vi.fn(),
     },
     proposals: {
       propose: vi.fn(async () => ({
@@ -95,7 +94,6 @@ describe("provisionWorkProject", () => {
         },
       },
     );
-    expect(provided.roles.invalidate).toHaveBeenCalledWith("project-1");
     expect(provided.admission.setPolicy).toHaveBeenCalledWith({
       identity: operatorIdentity,
       projectId: "project-1",

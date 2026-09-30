@@ -39,6 +39,7 @@ export type GrantDecision =
  * accounts keep their memberships and history; they cannot authenticate.
  */
 export class AccountLifecycle {
+  /** Replica memory (c): directory providers configured at boot. */
   private readonly directories: Map<string, DirectoryProvider>;
 
   constructor(

@@ -556,6 +556,7 @@ export interface ModelUsage {
   output_tokens: Generated<Int8>;
   project_id: string;
   reasoning_tokens: Generated<Int8>;
+  settled_at: Timestamp | null;
   tenant_id: string;
   turn_id: string | null;
 }
@@ -724,6 +725,12 @@ export interface RemoteOperations {
   poll_id: string | null;
   response: Json | null;
   status: Generated<string>;
+}
+
+export interface ReplicaClaims {
+  expires_at: Timestamp;
+  holder: string;
+  name: string;
 }
 
 export interface ScheduleBindings {
@@ -1351,6 +1358,7 @@ export interface DB {
   push_subscriptions: PushSubscriptions;
   rate_reservation_buckets: RateReservationBuckets;
   remote_operations: RemoteOperations;
+  replica_claims: ReplicaClaims;
   schedule_bindings: ScheduleBindings;
   schedule_occurrences: ScheduleOccurrences;
   session_actions: SessionActions;

@@ -43,7 +43,9 @@ function appWithGateway() {
           : undefined;
       },
       runningTurn: async () => undefined,
+      openUsage: async () => "1",
       recordUsage: async () => {},
+      openCalls: async () => 0,
       usage: async () => undefined,
     },
     broker: {

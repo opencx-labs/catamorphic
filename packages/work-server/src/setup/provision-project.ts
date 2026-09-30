@@ -150,7 +150,6 @@ interface WorkProjectProvisioningServices {
   };
   roles: {
     list(identity: Identity, projectId: string): Promise<ProjectRoleEntry[]>;
-    invalidate(projectId: string): void;
   };
   proposals: {
     propose(input: ProposeInput): Promise<ProposalResult>;
@@ -218,7 +217,6 @@ export async function provisionWorkProject(args: {
       operatorIdentity.externalUserId,
       { message: "Configure project roles", files },
     );
-    services.roles.invalidate(project.id);
     await policy(project.id);
     return { project, roles: { source: "committed", slugs } };
   }

@@ -69,6 +69,7 @@ import {
   workAuthorityId,
   workPushKeys,
 } from "./cluster.js";
+import { startCompanyProjectSync } from "./company-sync.js";
 import type { WorkServerConfig } from "./config.js";
 import { EncryptedFileCredentialVault } from "./credential-vault.js";
 import { workExecution } from "./execution-config.js";
@@ -699,63 +700,12 @@ async function createWorkServerInner(
     tenantId: SERVER_TENANT_ID,
     externalUserId: SETUP_AGENT_USER,
   };
-  {
-    let stopped = false;
-    let activeSync: Promise<void> | undefined;
-    const syncProjects = async () => {
-      for (let offset = 0; !stopped; offset += 50) {
-        const page = await core.projects.list(rootIdentity, {
-          limit: 50,
-          offset,
-        });
-        for (const project of page.items) {
-          if (stopped) return;
-          if (!project.remoteUrl) continue;
-          try {
-            const result = await core.remoteSync.syncPublished({
-              identity: rootIdentity,
-              projectId: project.id,
-            });
-            if (result.status === "pulled" || result.status === "merged") {
-              core.roles.invalidate(project.id);
-              console.info(
-                `Company project ${project.id} received published updates`,
-              );
-            }
-            // Accepted changes (a merged roles pull request, say) stop
-            // arriving until someone reconciles the two histories. Said once,
-            // when it starts; the project carries it as remoteDivergedAt.
-            if (result.status === "diverged" && !project.remoteDivergedAt)
-              console.warn(
-                `Company project ${project.id} no longer receives updates from ${project.remoteUrl}: its main (${result.localSha?.slice(0, 12)}) has diverged from the code host's (${result.remoteSha?.slice(0, 12)}). Share its own changes as a pull request and reconcile the two.`,
-              );
-          } catch (error) {
-            console.warn(
-              `Company project sync failed for ${project.id}:`,
-              error,
-            );
-          }
-        }
-        if (offset + page.items.length >= page.total) return;
-      }
-    };
-    const tick = () => {
-      if (activeSync || stopped) return;
-      activeSync = syncProjects()
-        .catch((error) => console.warn("Company project sync failed:", error))
-        .finally(() => {
-          activeSync = undefined;
-        });
-    };
-    const timer = setInterval(tick, 60_000);
-    timer.unref();
-    disposers.push(async () => {
-      stopped = true;
-      clearInterval(timer);
-      await activeSync;
-    });
-    tick();
-  }
+  const companySync = startCompanyProjectSync({
+    services: core,
+    identity: rootIdentity,
+    holder: nodeId,
+  });
+  disposers.push(() => companySync.stop());
   const admission = new WorkAdmissionService({
     db: core.db,
     membershipWriterIdentity: rootIdentity,

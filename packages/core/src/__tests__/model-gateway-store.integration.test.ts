@@ -162,5 +162,16 @@ describeIf("the model gateway's store (ADR 0180)", () => {
     });
     expect((await store.usage({ sessionId }))?.outputTokens).toBe(36);
     expect(await store.runningTurn({ sessionId })).toBeUndefined();
+
+    // A call still streaming is open: it counts once it settles.
+    const openId = await store.openUsage({ record: { ...record, turnId } });
+    expect(await store.openCalls({ sessionId, turnId })).toBe(1);
+    expect(
+      await store.openCalls({ sessionId, turnId: crypto.randomUUID() }),
+    ).toBe(0);
+    expect((await store.usage({ sessionId, turnId }))?.outputTokens).toBe(24);
+    await store.recordUsage({ record: { ...record, turnId }, usage, openId });
+    expect(await store.openCalls({ sessionId })).toBe(0);
+    expect((await store.usage({ sessionId, turnId }))?.outputTokens).toBe(36);
   });
 });

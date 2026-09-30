@@ -95,7 +95,12 @@ export type ClaimedJobDisposition =
   | { outcome: "failed"; error: string; exhausted: boolean };
 
 export class ExecutionWorkerService {
+  /** Replica memory (c): job handlers the host registers at boot. */
   private readonly handlers = new Map<ExecutionJobKind, ExecutionJobHandler>();
+  /**
+   * Replica memory (a): the poll loops this process runs; each job is
+   * claimed in Postgres.
+   */
   private readonly workers = new Map<string, WorkerGroup>();
   // Shared across loops so N concurrent loops still sweep once per interval.
   private lastRetentionSweepAt = 0;

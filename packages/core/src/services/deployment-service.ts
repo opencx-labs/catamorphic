@@ -10,7 +10,6 @@ import {
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { publishedRef } from "@catamorphic/workflow/project-layout";
 import { authorFor } from "../identity.js";
-import { forgetProgramFetch } from "./program-reader.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -307,7 +306,6 @@ export class DeploymentService {
             expected: await origin.resolveRef("refs/heads/main"),
           });
         });
-        forgetProgramFetch(this.projectManager, tenantId, projectId);
         await this.onPublished?.({ projectId, commitSha: publishedSha }).catch(
           () => {},
         );
@@ -401,11 +399,6 @@ export class DeploymentService {
           remoteBranch: REMOTE_BRANCH,
           localSha: commitSha,
         });
-        // The shared program just moved: readers holding the 5s fetch
-        // memo (a pre-deploy existence check, a burst of reads) must not
-        // serve the pre-push tree to a role/tool resolution that follows
-        // the deploy immediately.
-        forgetProgramFetch(this.projectManager, tenantId, projectId);
         await this.onPublished?.({ projectId, commitSha: result.sha }).catch(
           () => {},
         );

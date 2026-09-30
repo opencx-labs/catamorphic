@@ -198,6 +198,15 @@ fresh one with an empty disk at any time.
    turns wait, and in-flight operations its controllers stopped waiting for
    fail as uncertain. When it calls again, the same process simply carries
    on.
+6. No replica keeps state another replica needs in memory (ADR 0193).
+   Whether a chat is running, and whether it may be changed, comes from its
+   turn's lease in Postgres, so every replica answers the same. An interrupt,
+   close, or archive sent to any replica reaches the turn within about a
+   second; a closed chat's workspace is given back only once its turn has
+   stopped. One replica at a time publishes a project, creates a deployment
+   runtime, or syncs a company project, under a claim in Postgres. A deploy
+   applies on every replica at once: roles and program reads follow the
+   published commit.
 
 A restarted worker process connects under a new epoch. The operations it had
 in flight fail as uncertain and are never replayed; its sandboxes and chats

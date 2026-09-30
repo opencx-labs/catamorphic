@@ -438,6 +438,10 @@ export function localStatus(root: string): LocalStatus {
   return { modified, deleted, programEdits, conflicts };
 }
 
+/**
+ * Replica memory (a), ADR 0193: one sync at a time per folder on this
+ * process's own disk.
+ */
 const pendingOperations = new Map<string, Promise<unknown>>();
 async function serializeSync<T>(
   root: string,

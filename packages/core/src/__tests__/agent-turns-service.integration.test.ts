@@ -113,7 +113,10 @@ describe("agent turn persistence", () => {
     };
     expect(await turns.progress(progress)).toBe(true);
     const before = await turns.execution({ sessionId: firstSessionId });
-    await turns.renew({ turnId: turn.id, leaseToken: turn.leaseToken });
+    await turns.renewHeld({
+      workerId: "remote-server",
+      turns: [{ turnId: turn.id, leaseToken: turn.leaseToken }],
+    });
     const otherClient = new AgentTurnsService(db);
     expect(await otherClient.execution({ sessionId: firstSessionId })).toEqual(
       before,
@@ -276,11 +279,40 @@ describe("agent turn persistence", () => {
     });
     if (!turn?.leaseToken) throw new Error("Missing lease");
     expect(
-      await turns.renew({ turnId: turn.id, leaseToken: crypto.randomUUID() }),
-    ).toBe(false);
+      await turns.renewHeld({
+        workerId: "first-process",
+        turns: [{ turnId: turn.id, leaseToken: crypto.randomUUID() }],
+      }),
+    ).toEqual([]);
     expect(
-      await turns.renew({ turnId: turn.id, leaseToken: turn.leaseToken }),
-    ).toBe(true);
+      await turns.renewHeld({
+        workerId: "another-process",
+        turns: [{ turnId: turn.id, leaseToken: turn.leaseToken }],
+      }),
+    ).toEqual([]);
+    expect(
+      await turns.renewHeld({
+        workerId: "first-process",
+        turns: [{ turnId: turn.id, leaseToken: turn.leaseToken }],
+      }),
+    ).toEqual([{ turnId: turn.id, cancellationRequested: false }]);
+    // A stop requested through any process arrives with the next renewal.
+    await db
+      .updateTable("agent_turns")
+      .set({ cancellation_requested_at: new Date() })
+      .where("id", "=", turn.id)
+      .execute();
+    expect(
+      await turns.renewHeld({
+        workerId: "first-process",
+        turns: [{ turnId: turn.id, leaseToken: turn.leaseToken }],
+      }),
+    ).toEqual([{ turnId: turn.id, cancellationRequested: true }]);
+    await db
+      .updateTable("agent_turns")
+      .set({ cancellation_requested_at: null })
+      .where("id", "=", turn.id)
+      .execute();
     const reply = await db
       .insertInto("agent_messages")
       .values({
@@ -325,8 +357,11 @@ describe("agent turn persistence", () => {
       turnId: later.turnId,
     });
     expect(
-      await restarted.renew({ turnId: turn.id, leaseToken: turn.leaseToken }),
-    ).toBe(false);
+      await restarted.renewHeld({
+        workerId: "first-process",
+        turns: [{ turnId: turn.id, leaseToken: turn.leaseToken }],
+      }),
+    ).toEqual([]);
     await db
       .updateTable("agent_turns")
       .set({ available_at: new Date(0) })

@@ -604,8 +604,6 @@ export class AgentTurnsService {
     localNode?: { id: string; token: string };
     leaseSeconds?: number;
   }): Promise<AgentTurn | null> {
-    const leaseToken = randomUUID();
-    const leaseSeconds = input.leaseSeconds ?? 60;
     return this.db.transaction().execute(async (trx) => {
       await trx
         .selectFrom("agent_sessions")
@@ -613,158 +611,267 @@ export class AgentTurnsService {
         .where("id", "=", input.sessionId)
         .forShare()
         .execute();
-      const candidate = await trx
-        .selectFrom("agent_turns as turn")
-        .selectAll("turn")
-        .where("turn.status", "=", "queued")
-        .where("turn.available_at", "<=", sql<Date>`now()`)
-        .where(({ exists, not, selectFrom }) =>
-          not(
-            exists(
-              selectFrom("agent_sessions as session")
-                .innerJoin(
-                  "execution_allocations as allocation",
-                  "allocation.id",
-                  "session.allocation_id",
-                )
-                .select("session.id")
-                .whereRef("session.id", "=", "turn.session_id")
-                .where((blocked) =>
-                  blocked.or([
-                    // A host is saving or releasing the idle workspace.
-                    blocked(
-                      "allocation.maintenance_claimed_until",
-                      ">",
-                      sql<Date>`now()`,
-                    ),
-                    // On a node: active, and a node this host may drive.
-                    blocked.and([
-                      blocked("allocation.worker_node_id", "is not", null),
-                      blocked.or([
-                        blocked("allocation.status", "!=", "active"),
-                        blocked.not(
-                          blocked.exists(
-                            blocked
-                              .selectFrom("worker_nodes as node")
-                              .select("node.id")
-                              .whereRef(
-                                "node.id",
-                                "=",
-                                "allocation.worker_node_id",
-                              )
-                              .where("node.enabled", "=", true)
-                              .where(
-                                "node.lease_expires_at",
-                                ">",
-                                sql<Date>`now()`,
-                              )
-                              .where((node) =>
-                                node.or([
-                                  node("node.remote", "is not", null),
-                                  ...(input.localNode
-                                    ? [
-                                        node.and([
-                                          node(
-                                            "node.id",
-                                            "=",
-                                            input.localNode.id,
-                                          ),
-                                          node(
-                                            "node.lease_token",
-                                            "=",
-                                            input.localNode.token,
-                                          ),
-                                        ]),
-                                      ]
-                                    : []),
-                                ]),
-                              ),
-                          ),
-                        ),
-                      ]),
-                    ]),
-                    // A member's own machine while its runner is away.
-                    blocked.and([
-                      blocked("allocation.worker_node_id", "is", null),
-                      blocked("allocation.binding_id", "like", "client:%"),
+      return this.claimIn(trx, input);
+    });
+  }
+
+  private async claimIn(
+    trx: Transaction<DB>,
+    input: {
+      workerId: string;
+      sessionId: string;
+      localNode?: { id: string; token: string };
+      leaseSeconds?: number;
+    },
+  ): Promise<AgentTurn | null> {
+    const leaseToken = randomUUID();
+    const leaseSeconds = input.leaseSeconds ?? 60;
+    const candidate = await trx
+      .selectFrom("agent_turns as turn")
+      .selectAll("turn")
+      .where("turn.status", "=", "queued")
+      .where("turn.available_at", "<=", sql<Date>`now()`)
+      .where(({ exists, not, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("agent_sessions as session")
+              .innerJoin(
+                "execution_allocations as allocation",
+                "allocation.id",
+                "session.allocation_id",
+              )
+              .select("session.id")
+              .whereRef("session.id", "=", "turn.session_id")
+              .where((blocked) =>
+                blocked.or([
+                  // A host is saving or releasing the idle workspace.
+                  blocked(
+                    "allocation.maintenance_claimed_until",
+                    ">",
+                    sql<Date>`now()`,
+                  ),
+                  // On a node: active, and a node this host may drive.
+                  blocked.and([
+                    blocked("allocation.worker_node_id", "is not", null),
+                    blocked.or([
+                      blocked("allocation.status", "!=", "active"),
                       blocked.not(
                         blocked.exists(
                           blocked
-                            .selectFrom("client_runners as runner")
-                            .select("runner.id")
-                            .where(
-                              sql<boolean>`runner.id::text = split_part(allocation.binding_id, ':', 2)`,
+                            .selectFrom("worker_nodes as node")
+                            .select("node.id")
+                            .whereRef(
+                              "node.id",
+                              "=",
+                              "allocation.worker_node_id",
                             )
+                            .where("node.enabled", "=", true)
                             .where(
-                              "runner.lease_expires_at",
+                              "node.lease_expires_at",
                               ">",
                               sql<Date>`now()`,
+                            )
+                            .where((node) =>
+                              node.or([
+                                node("node.remote", "is not", null),
+                                ...(input.localNode
+                                  ? [
+                                      node.and([
+                                        node(
+                                          "node.id",
+                                          "=",
+                                          input.localNode.id,
+                                        ),
+                                        node(
+                                          "node.lease_token",
+                                          "=",
+                                          input.localNode.token,
+                                        ),
+                                      ]),
+                                    ]
+                                  : []),
+                              ]),
                             ),
                         ),
                       ),
                     ]),
                   ]),
-                ),
-            ),
-          ),
-        )
-        .where("turn.session_id", "=", input.sessionId)
-        .where(({ exists, not, selectFrom }) =>
-          not(
-            exists(
-              selectFrom("agent_turns as active")
-                .select("active.id")
-                .whereRef("active.session_id", "=", "turn.session_id")
-                .where("active.status", "=", "running"),
-            ),
-          ),
-        )
-        .where(({ exists, not, or, and, selectFrom }) =>
-          not(
-            exists(
-              selectFrom("agent_turns as ahead")
-                .select("ahead.id")
-                .whereRef("ahead.session_id", "=", "turn.session_id")
-                .where("ahead.status", "=", "queued")
-                .where(
-                  or([
-                    sql<boolean>`ahead.priority > turn.priority`,
-                    and([
-                      sql<boolean>`ahead.priority = turn.priority`,
-                      sql<boolean>`ahead.created_at < turn.created_at`,
-                    ]),
+                  // A member's own machine while its runner is away.
+                  blocked.and([
+                    blocked("allocation.worker_node_id", "is", null),
+                    blocked("allocation.binding_id", "like", "client:%"),
+                    blocked.not(
+                      blocked.exists(
+                        blocked
+                          .selectFrom("client_runners as runner")
+                          .select("runner.id")
+                          .where(
+                            sql<boolean>`runner.id::text = split_part(allocation.binding_id, ':', 2)`,
+                          )
+                          .where(
+                            "runner.lease_expires_at",
+                            ">",
+                            sql<Date>`now()`,
+                          ),
+                      ),
+                    ),
                   ]),
-                ),
-            ),
+                ]),
+              ),
           ),
-        )
-        .orderBy("turn.priority", "desc")
-        .orderBy("turn.created_at")
-        .forUpdate()
-        .skipLocked()
-        .executeTakeFirst();
-      if (!candidate) return null;
+        ),
+      )
+      .where("turn.session_id", "=", input.sessionId)
+      .where(({ exists, not, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("agent_turns as active")
+              .select("active.id")
+              .whereRef("active.session_id", "=", "turn.session_id")
+              .where("active.status", "=", "running"),
+          ),
+        ),
+      )
+      .where(({ exists, not, or, and, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("agent_turns as ahead")
+              .select("ahead.id")
+              .whereRef("ahead.session_id", "=", "turn.session_id")
+              .where("ahead.status", "=", "queued")
+              .where(
+                or([
+                  sql<boolean>`ahead.priority > turn.priority`,
+                  and([
+                    sql<boolean>`ahead.priority = turn.priority`,
+                    sql<boolean>`ahead.created_at < turn.created_at`,
+                  ]),
+                ]),
+              ),
+          ),
+        ),
+      )
+      .orderBy("turn.priority", "desc")
+      .orderBy("turn.created_at")
+      .forUpdate()
+      .skipLocked()
+      .executeTakeFirst();
+    if (!candidate) return null;
 
-      const row = await trx
-        .updateTable("agent_turns")
-        .set(({ ref }) => ({
-          status: "running",
-          cancellation_requested_at: null,
-          phase: "preparing",
-          activity: "Preparing agent",
-          activity_at: sql`now()`,
-          lease_owner: input.workerId,
-          lease_token: leaseToken,
-          lease_expires_at: sql`now() + (${leaseSeconds} * interval '1 second')`,
-          started_at: sql`coalesce(${ref("started_at")}, now())`,
-          attempt: sql`${ref("attempt")} + 1`,
-          updated_at: new Date(),
-        }))
-        .where("id", "=", candidate.id)
-        .where("status", "=", "queued")
-        .returningAll()
+    const row = await trx
+      .updateTable("agent_turns")
+      .set(({ ref }) => ({
+        status: "running",
+        cancellation_requested_at: null,
+        phase: "preparing",
+        activity: "Preparing agent",
+        activity_at: sql`now()`,
+        lease_owner: input.workerId,
+        lease_token: leaseToken,
+        lease_expires_at: sql`now() + (${leaseSeconds} * interval '1 second')`,
+        started_at: sql`coalesce(${ref("started_at")}, now())`,
+        attempt: sql`${ref("attempt")} + 1`,
+        updated_at: new Date(),
+      }))
+      .where("id", "=", candidate.id)
+      .where("status", "=", "queued")
+      .returningAll()
+      .executeTakeFirst();
+    return row ? mapTurn(row) : null;
+  }
+
+  /**
+   * Hand a turn that asked a question on to the message that answers it,
+   * in this process (ADR 0193): the asking turn settles and the session's
+   * next queued turn is claimed by `workerId` in one transaction, so no
+   * other replica can take the answer from the process whose harness holds
+   * the question. While nothing is queued the turn keeps waiting. A chat
+   * whose anchor changed (another agent, model, or workspace) or that
+   * closed settles the question without continuing it here.
+   */
+  async continueAfterQuestion(input: {
+    turnId: string;
+    leaseToken: string;
+    resultMessageId: string;
+    sessionId: string;
+    workerId: string;
+    localNode?: { id: string; token: string };
+    anchor: {
+      agentId: string | null;
+      providerSessionId: string | null;
+      model: string | null;
+      modelEffort: string | null;
+      allocationId: string | null;
+    };
+  }): Promise<
+    | { status: "waiting" }
+    | { status: "lost" }
+    | { status: "settled"; next: AgentTurn | null }
+  > {
+    return this.db.transaction().execute(async (trx) => {
+      const session = await trx
+        .selectFrom("agent_sessions")
+        .select([
+          "status",
+          "agent_id",
+          "provider_session_id",
+          "model",
+          "model_effort",
+          "allocation_id",
+        ])
+        .where("id", "=", input.sessionId)
+        .forShare()
         .executeTakeFirst();
-      return row ? mapTurn(row) : null;
+      const asking = await trx
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("id", "=", input.turnId)
+        .where("status", "=", "running")
+        .where("lease_token", "=", input.leaseToken)
+        .where("lease_expires_at", ">", sql<Date>`now()`)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!asking) return { status: "lost" };
+      const unchanged =
+        session?.status === "active" &&
+        session.agent_id === input.anchor.agentId &&
+        session.provider_session_id === input.anchor.providerSessionId &&
+        session.model === input.anchor.model &&
+        session.model_effort === input.anchor.modelEffort &&
+        session.allocation_id === input.anchor.allocationId;
+      if (unchanged) {
+        const answer = await trx
+          .selectFrom("agent_turns")
+          .select("id")
+          .where("session_id", "=", input.sessionId)
+          .where("status", "=", "queued")
+          .where("available_at", "<=", sql<Date>`now()`)
+          .executeTakeFirst();
+        if (!answer) return { status: "waiting" };
+      }
+      await trx
+        .updateTable("agent_turns")
+        .set({
+          status: "completed",
+          result_message_id: input.resultMessageId,
+          error: null,
+          completed_at: new Date(),
+          lease_owner: null,
+          lease_token: null,
+          lease_expires_at: null,
+          updated_at: new Date(),
+        })
+        .where("id", "=", input.turnId)
+        .execute();
+      if (!unchanged) return { status: "settled", next: null };
+      return {
+        status: "settled",
+        next: await this.claimIn(trx, {
+          workerId: input.workerId,
+          sessionId: input.sessionId,
+          ...(input.localNode ? { localNode: input.localNode } : {}),
+        }),
+      };
     });
   }
 
@@ -792,20 +899,39 @@ export class AgentTurnsService {
     return result.numUpdatedRows === 1n;
   }
 
-  /** A lease belongs to a live executor, not to the duration of an API call. */
-  async renew(input: { turnId: string; leaseToken: string }): Promise<boolean> {
-    const result = await this.db
+  /**
+   * Renew every running turn `workerId` still holds among `turns`, in one
+   * statement, and read which were asked to stop (ADR 0193). A lease
+   * belongs to a live process, not to the duration of an API call. A turn
+   * missing from the answer is no longer this process's.
+   */
+  async renewHeld(input: {
+    workerId: string;
+    turns: ReadonlyArray<{ turnId: string; leaseToken: string }>;
+  }): Promise<Array<{ turnId: string; cancellationRequested: boolean }>> {
+    if (input.turns.length === 0) return [];
+    const rows = await this.db
       .updateTable("agent_turns")
-      .set({
-        lease_expires_at: sql`now() + interval '60 seconds'`,
-        updated_at: new Date(),
-      })
-      .where("id", "=", input.turnId)
+      .set({ lease_expires_at: sql`now() + interval '60 seconds'` })
+      .where("lease_owner", "=", input.workerId)
       .where("status", "=", "running")
-      .where("lease_token", "=", input.leaseToken)
       .where("lease_expires_at", ">", sql<Date>`now()`)
-      .executeTakeFirst();
-    return result.numUpdatedRows === 1n;
+      .where(({ and, eb, or }) =>
+        or(
+          input.turns.map((turn) =>
+            and([
+              eb("id", "=", turn.turnId),
+              eb("lease_token", "=", turn.leaseToken),
+            ]),
+          ),
+        ),
+      )
+      .returning(["id", "cancellation_requested_at"])
+      .execute();
+    return rows.map((row) => ({
+      turnId: row.id,
+      cancellationRequested: row.cancellation_requested_at !== null,
+    }));
   }
 
   /** Persist the outcome and retry deadline together; never rely on a timer. */

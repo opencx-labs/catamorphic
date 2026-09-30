@@ -59,7 +59,6 @@ import {
   formatProjectAgentId,
   parseProjectAgentId,
 } from "./agent-definitions-service.js";
-import { startAgentLeaseHeartbeat } from "./agent-lease-heartbeat.js";
 import { sameCanonicalRuntimeJson } from "./agent-runtime-json.js";
 import {
   AgentRequestAlreadyResolvedError,
@@ -68,7 +67,13 @@ import {
 } from "./agent-runtime-requests-service.js";
 import { assertAgentSessionAccess } from "./agent-session-access.js";
 import {
+  type HeldTurnLease,
+  type RenewedTurnLease,
+  startTurnLeaseRenewal,
+} from "./agent-turn-leases.js";
+import {
   type AgentExecution,
+  type AgentTurn,
   AgentTurnsService,
   type PendingSessionTurn,
   type SessionDeliveryMode,
@@ -128,6 +133,7 @@ import {
   withProgram,
 } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
+import { takeReplicaClaim } from "./replica-claims.js";
 import {
   configureSandboxGateway,
   ensureSandboxBaseline,
@@ -746,6 +752,20 @@ export interface ArchiveSessionResourcesHandler {
   }): Promise<void>;
 }
 
+/** A turn this process claimed and runs (ADR 0193). */
+interface LocalTurn {
+  turnId: string;
+  session: SessionRow;
+  /** This process's local node, when the turn's workspace is on it. */
+  nodeLease?: { id: string; token: string };
+  /** `waiting` while it holds a question its answer continues. */
+  phase: "working" | "waiting";
+  /** Someone asked the turn to stop, through any replica. */
+  cancelRequested: boolean;
+  /** Wakes the turn while it waits for an answer. */
+  wake?: () => void;
+}
+
 /**
  * Orchestrates coding-agent sessions across the host's registry of agents:
  *
@@ -765,10 +785,10 @@ export class AgentSessionsService {
   readonly hostId: string;
   private readonly workerNode?: { id: string; token: string };
   /**
-   * The line a running turn shows while it works, in the agent's own words:
-   * the latest harness status, step description or in-progress todo. Kept
-   * per session for the life of a turn; generic labels fill in only while
-   * the agent has said nothing.
+   * Replica memory (a): the line a running turn shows while it works, in
+   * the agent's own words: the latest harness status, step description or
+   * in-progress todo. Kept per session for the life of a turn this process
+   * runs; generic labels fill in only while the agent has said nothing.
    */
   private readonly liveStatus = new Map<string, string>();
   readonly authorityLeaseMs: number;
@@ -783,11 +803,17 @@ export class AgentSessionsService {
   private readonly workspaces?: SessionWorkspaces;
   private readonly sandboxGateway?: AgentSessionsDeps["sandboxGateway"];
   private readonly personalEnvironments?: PersonalEnvironmentService;
-  /** Sandbox grant renewals of the turns running in this process. */
+  /** Replica memory (a): sandbox grant renewals of this process's turns. */
   private readonly grantRenewals = new Map<string, NodeJS.Timeout>();
-  /** Running turns' connection MCP grant renewals, by session (#122). */
+  /**
+   * Replica memory (a): this process's running turns' connection MCP grant
+   * renewals, by session (#122).
+   */
   private readonly mcpGrantRenewals = new Map<string, NodeJS.Timeout>();
-  /** A renewal's login write still in flight, per session (ADR 0184). */
+  /**
+   * Replica memory (a): a renewal's login write still in flight, per session
+   * of a turn this process runs (ADR 0184).
+   */
   private readonly loginRenewals = new Map<string, Promise<void>>();
   private readonly plugins?: PluginsService;
   private readonly pluginResolver?: PluginResolver;
@@ -798,14 +824,22 @@ export class AgentSessionsService {
   private readonly appPolicies?: AppPoliciesService;
   private readonly storeSync?: AgentSessionsDeps["storeSync"];
   /**
-   * Sessions with a turn currently executing in this process. Turns run
-   * inside the send request, so an `in_progress` message whose session is
-   * not in this set is orphaned (the app/server died mid-turn) — reads
-   * settle it as failed so clients never spin on a dead turn.
+   * Replica memory (a): the turns this process claimed and is running, by
+   * session. Other processes know them only by their leases in Postgres:
+   * whether a chat is running, and every guard on it, reads the lease
+   * (ADR 0193).
    */
-  private readonly runningTurns = new Set<string>();
-  /** Sessions whose in-flight turn was interrupted by the user. */
+  private readonly localTurns = new Map<string, LocalTurn>();
+  /** Renews every local turn's lease in one statement a second. */
+  private readonly turnLeases: ReturnType<typeof startTurnLeaseRenewal>;
+  /**
+   * Replica memory (a): sessions whose turn running here was asked to stop.
+   */
   private readonly interruptedTurns = new Set<string>();
+  /**
+   * Replica memory (a): this process's drain loop per session; the turn
+   * claim in Postgres decides which process runs a turn.
+   */
   private readonly drainers = new Map<string, Promise<void>>();
   /** Set by {@link stopLocalTurns}: this process claims no more turns. */
   private stoppingTurns = false;
@@ -828,6 +862,9 @@ export class AgentSessionsService {
    */
   async stopLocalTurns(input: { timeoutMs?: number } = {}): Promise<void> {
     this.stoppingTurns = true;
+    // A turn waiting for an answer settles now: the answer continues
+    // wherever it is claimed next.
+    for (const turn of this.localTurns.values()) turn.wake?.();
     const timeoutMs = input.timeoutMs ?? 15_000;
     const settled = (ms: number) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -839,7 +876,7 @@ export class AgentSessionsService {
       ]).finally(() => clearTimeout(timer));
     };
     await settled(Math.floor((timeoutMs * 2) / 3));
-    const running = [...this.runningTurns];
+    const running = [...this.localTurns.keys()];
     if (running.length === 0) return;
     const sessions = await this.db
       .selectFrom("agent_sessions")
@@ -999,6 +1036,9 @@ export class AgentSessionsService {
         await this.releaseIdleWorkspaces().catch((error) =>
           console.warn("[catamorphic] Idle workspace release failed", error),
         );
+        await this.finishAbandonedClosings().catch((error) =>
+          console.warn("[catamorphic] Finishing closed chats failed", error),
+        );
       }
     };
     const tick = () => {
@@ -1051,6 +1091,116 @@ export class AgentSessionsService {
     this.mcpToolNames = deps.mcpToolNames;
     this.appPolicies = deps.appPolicies;
     this.storeSync = deps.storeSync;
+    this.turnLeases = startTurnLeaseRenewal({
+      renew: (held) => this.renewHeldTurns(held),
+      onError: (error) =>
+        console.warn("[catamorphic] Agent lease renewal failed", error),
+    });
+  }
+
+  /**
+   * Renew the leases of the turns this process runs, and read who asked
+   * them to stop (ADR 0193). A turn on this process's local node ends with
+   * that node's lease; a turn on a remote node is fenced by its own lease
+   * alone, so the executor restarting never interrupts it (ADR 0192).
+   */
+  private async renewHeldTurns(
+    held: readonly HeldTurnLease[],
+  ): Promise<readonly RenewedTurnLease[]> {
+    const byTurn = new Map(
+      [...this.localTurns.values()].map((turn) => [turn.turnId, turn]),
+    );
+    const nodeIds = [
+      ...new Set(
+        held.flatMap((turn) => {
+          const node = byTurn.get(turn.turnId)?.nodeLease;
+          return node ? [node.id] : [];
+        }),
+      ),
+    ];
+    const liveNodes = new Map(
+      nodeIds.length === 0
+        ? []
+        : (
+            await this.db
+              .selectFrom("worker_nodes")
+              .select(["id", "lease_token"])
+              .where("id", "in", nodeIds)
+              .where("enabled", "=", true)
+              .where("lease_expires_at", ">", sql<Date>`now()`)
+              .execute()
+          ).map((node) => [node.id, node.lease_token]),
+    );
+    return this.turns.renewHeld({
+      workerId: this.turnWorkerId,
+      turns: held
+        .filter((turn) => {
+          const node = byTurn.get(turn.turnId)?.nodeLease;
+          return !node || liveNodes.get(node.id) === node.token;
+        })
+        .map((turn) => ({
+          turnId: turn.turnId,
+          leaseToken: turn.leaseToken,
+        })),
+    });
+  }
+
+  /**
+   * Sessions with a turn running now, on any replica (ADR 0193): claimed,
+   * its lease live. A turn waiting to hear its question answered counts
+   * only with `includeWaiting`: the chat shows as not running, and it may
+   * be changed meanwhile.
+   */
+  private async sessionsWithRunningTurns(input: {
+    sessionIds: readonly string[];
+    includeWaiting?: boolean;
+    executor?: Kysely<DB> | Transaction<DB>;
+  }): Promise<Set<string>> {
+    if (input.sessionIds.length === 0) return new Set();
+    const rows = await (input.executor ?? this.db)
+      .selectFrom("agent_turns")
+      .select("session_id")
+      .distinct()
+      .where("session_id", "in", [...input.sessionIds])
+      .where("status", "=", "running")
+      .where("lease_expires_at", ">", sql<Date>`now()`)
+      .$if(!input.includeWaiting, (query) =>
+        query.where("phase", "!=", "waiting"),
+      )
+      .execute();
+    return new Set(rows.map((row) => row.session_id));
+  }
+
+  /** Refuse a change while a turn runs in the session, on any replica. */
+  private async assertNoRunningTurn(input: {
+    sessionId: string;
+    executor?: Kysely<DB> | Transaction<DB>;
+  }): Promise<void> {
+    const running = await this.sessionsWithRunningTurns({
+      sessionIds: [input.sessionId],
+      ...(input.executor ? { executor: input.executor } : {}),
+    });
+    if (running.size > 0) throw new AgentTurnInProgressError(input.sessionId);
+  }
+
+  /**
+   * Lock the session row for a change, and refuse it while a turn runs: a
+   * turn claim share-locks the row, so none starts until the change lands.
+   */
+  private async lockIdleSession(input: {
+    sessionId: string;
+    transaction: Transaction<DB>;
+  }): Promise<void> {
+    await input.transaction
+      .selectFrom("agent_sessions")
+      .select("id")
+      .where("id", "=", input.sessionId)
+      .forUpdate()
+      .execute();
+    await this.assertNoRunningTurn({
+      sessionId: input.sessionId,
+      executor: input.transaction,
+    });
   }
 
   /** Late-bound because WatchersService itself depends on this service. */
@@ -1114,11 +1264,14 @@ export class AgentSessionsService {
         { id: message.id, content: message.content },
       ]),
     );
+    const running = await this.sessionsWithRunningTurns({
+      sessionIds: rows.map((row) => row.id),
+    });
     return rows
       .map((row) => ({
         ...mapSession(
           row,
-          this.runningTurns.has(row.id),
+          running.has(row.id),
           this.hostId,
           this.authorityLeaseMs,
           presentations.get(row.id),
@@ -1560,7 +1713,9 @@ export class AgentSessionsService {
     return {
       ...mapSession(
         row,
-        execution?.status === "running",
+        execution?.status === "running" &&
+          execution.executorHealthy &&
+          execution.phase !== "waiting",
         this.hostId,
         this.authorityLeaseMs,
         presentation,
@@ -1582,16 +1737,9 @@ export class AgentSessionsService {
     };
   }
 
-  private async runningSessionIds(sessionIds: string[]): Promise<Set<string>> {
-    if (!sessionIds.length) return new Set();
-    const rows = await this.db
-      .selectFrom("agent_turns")
-      .select("session_id")
-      .distinct()
-      .where("session_id", "in", sessionIds)
-      .where("status", "=", "running")
-      .execute();
-    return new Set(rows.map((row) => row.session_id));
+  /** Sessions whose chats show as running now, on any replica. */
+  private runningSessionIds(sessionIds: string[]): Promise<Set<string>> {
+    return this.sessionsWithRunningTurns({ sessionIds });
   }
 
   /** Resolve one question batch and durably deliver its answer to its session. */
@@ -3087,7 +3235,9 @@ export class AgentSessionsService {
       .executeTakeFirstOrThrow();
     return mapSession(
       row,
-      this.runningTurns.has(sessionId),
+      (await this.sessionsWithRunningTurns({ sessionIds: [sessionId] })).has(
+        sessionId,
+      ),
       this.hostId,
       this.authorityLeaseMs,
     );
@@ -3139,9 +3289,7 @@ export class AgentSessionsService {
         ) {
           throw new AccessDeniedError();
         }
-        if (existing && this.runningTurns.has(sessionId)) {
-          throw new AgentTurnInProgressError(sessionId);
-        }
+        if (existing) await this.assertNoRunningTurn({ sessionId });
         if (
           existing &&
           existing.authority_host_id !== "unassigned" &&
@@ -3362,9 +3510,10 @@ export class AgentSessionsService {
     if (session.status !== "active") {
       throw new AgentSessionClosedError(sessionId);
     }
-    if (this.runningTurns.has(sessionId)) {
-      throw new AgentTurnInProgressError(sessionId);
-    }
+    // Changing a chat mid-turn would drop the anchor the turn runs on. The
+    // turn may run on any replica: its lease decides, here and again in the
+    // transaction that writes the change (ADR 0193).
+    await this.assertNoRunningTurn({ sessionId });
 
     const updates: Partial<{
       agent_id: string;
@@ -3455,6 +3604,7 @@ export class AgentSessionsService {
       reallocatedRow = await this.db
         .transaction()
         .execute(async (transaction) => {
+          await this.lockIdleSession({ sessionId, transaction });
           await this.executionAllocations.release({
             identity,
             allocationId: previousAllocationId,
@@ -3492,12 +3642,15 @@ export class AgentSessionsService {
 
     const row =
       reallocatedRow ??
-      (await this.db
-        .updateTable("agent_sessions")
-        .set({ ...updates, updated_at: new Date() })
-        .where("id", "=", sessionId)
-        .returningAll()
-        .executeTakeFirstOrThrow());
+      (await this.db.transaction().execute(async (transaction) => {
+        await this.lockIdleSession({ sessionId, transaction });
+        return transaction
+          .updateTable("agent_sessions")
+          .set({ ...updates, updated_at: new Date() })
+          .where("id", "=", sessionId)
+          .returningAll()
+          .executeTakeFirstOrThrow();
+      }));
 
     // Leave a marker in the transcript so the conversation shows where the
     // agent or effort changed. System rows with `metadata.marker` render as
@@ -4569,9 +4722,6 @@ export class AgentSessionsService {
               Number(session.authority_revision),
             );
           }
-          if (this.runningTurns.has(sessionId)) {
-            throw new AgentTurnInProgressError(sessionId);
-          }
           const pending = await transaction
             .selectFrom("agent_turns")
             .select("id")
@@ -4816,12 +4966,18 @@ export class AgentSessionsService {
       session: delivered,
     });
     if (!identity) return;
+    // The turn that answers a question this process holds, claimed with the
+    // question's settling (ADR 0193).
+    let handed: AgentTurn | null = null;
     while (true) {
       const session = await this.requireSession(identity, projectId, sessionId);
+      let turn = handed;
+      handed = null;
       if (
-        session.status !== "active" ||
-        session.handoff_status !== "none" ||
-        session.authority_host_id !== this.hostId
+        !turn &&
+        (session.status !== "active" ||
+          session.handoff_status !== "none" ||
+          session.authority_host_id !== this.hostId)
       )
         return;
       const allocation = session.allocation_id
@@ -4830,53 +4986,64 @@ export class AgentSessionsService {
             allocationId: session.allocation_id,
           })
         : undefined;
-      // A chat whose workspace was released (idle, or archived) gets a fresh
-      // one when work arrives; the turn rehydrates it from the session branch.
-      if (
-        allocation?.status === "released" &&
-        (await this.turns.listPending({ sessionId })).some(
-          (turn) => turn.status === "queued",
-        )
-      ) {
-        try {
-          await this.readmit(identity, projectId, session);
-        } catch (error) {
-          // Full machines retry on the next poll; the turn stays queued.
-          if (error instanceof EnvironmentCapacityError) return;
-          throw error;
+      if (!turn) {
+        // A chat whose workspace was released (idle, or archived) gets a
+        // fresh one when work arrives; the turn rehydrates it from the
+        // session branch.
+        if (
+          allocation?.status === "released" &&
+          (await this.turns.listPending({ sessionId })).some(
+            (pending) => pending.status === "queued",
+          )
+        ) {
+          try {
+            await this.readmit(identity, projectId, session);
+          } catch (error) {
+            // Full machines retry on the next poll; the turn stays queued.
+            if (error instanceof EnvironmentCapacityError) return;
+            throw error;
+          }
+          continue;
         }
-        continue;
+        // A member's machine that connected again cannot serve its earlier
+        // connection's workspace (ADR 0098): give it back, and the turn is
+        // admitted on the new connection, rebuilt from the session branch.
+        if (
+          allocation?.status === "active" &&
+          (await this.releaseEndedConnection({ identity, session, allocation }))
+        )
+          continue;
+        // Any host of the authority runs a turn on a remote node or none; a
+        // turn on a local node runs only in the process holding that node's
+        // lease (ADR 0192). The claim decides, in Postgres.
+        if (this.stoppingTurns) return;
+        turn = await this.turns.claimNextForSession({
+          workerId: this.turnWorkerId,
+          sessionId,
+          ...(this.workerNode ? { localNode: this.workerNode } : {}),
+        });
+        if (!turn) return;
       }
-      // A member's machine that connected again cannot serve its earlier
-      // connection's workspace (ADR 0098): give it back, and the turn is
-      // admitted on the new connection, rebuilt from the session branch.
-      if (
-        allocation?.status === "active" &&
-        (await this.releaseEndedConnection({ identity, session, allocation }))
-      )
-        continue;
-      // Any host of the authority runs a turn on a remote node or none; a
-      // turn on a local node runs only in the process holding that node's
-      // lease (ADR 0192). The claim decides, in Postgres.
       const nodeLease = this.localLease(allocation);
-      if (this.stoppingTurns) return;
-      const turn = await this.turns.claimNextForSession({
-        workerId: this.turnWorkerId,
-        sessionId,
-        ...(this.workerNode ? { localNode: this.workerNode } : {}),
-      });
-      if (!turn) return;
       if (!turn.leaseToken) throw new Error("Claimed turn has no lease token");
       const message = await this.turns.messageForTurn({ turnId: turn.id });
       const attachments = message.metadata?.attachments as
         | AgentAttachment[]
         | undefined;
-      this.runningTurns.add(sessionId);
+      const local: LocalTurn = {
+        turnId: turn.id,
+        session,
+        phase: "working",
+        cancelRequested: false,
+        ...(nodeLease ? { nodeLease } : {}),
+      };
+      this.localTurns.set(sessionId, local);
       const leaseToken = turn.leaseToken;
       let leaseLost = false;
       const stopAfterLeaseLoss = () => {
         if (leaseLost) return;
         leaseLost = true;
+        local.wake?.();
         try {
           void this.resolveAgent(session.agent_id, projectId)
             .then((agent) =>
@@ -4897,30 +5064,18 @@ export class AgentSessionsService {
           );
         }
       };
-      const heartbeat = startAgentLeaseHeartbeat({
-        renew: async () => {
-          // A turn on this host's local node ends with that node's lease; a
-          // turn on a remote node is fenced by its own lease alone, so the
-          // executor restarting never interrupts it (ADR 0192).
-          if (nodeLease) {
-            const owned = await this.db
-              .selectFrom("worker_nodes")
-              .select("id")
-              .where("id", "=", nodeLease.id)
-              .where("lease_token", "=", nodeLease.token)
-              .where("enabled", "=", true)
-              .where("lease_expires_at", ">", sql<Date>`now()`)
-              .executeTakeFirst();
-            if (!owned) return false;
-          }
-          const owned = await this.turns.renew({ turnId: turn.id, leaseToken });
-          if (owned) await this.honorCancellation({ session, turnId: turn.id });
-          return owned;
-        },
+      // The lease is renewed with every other turn this process runs, and
+      // an interrupt sent through any replica arrives with a renewal.
+      const releaseLease = this.turnLeases.hold({
+        turnId: turn.id,
+        leaseToken,
         onLost: stopAfterLeaseLoss,
-        onError: (error) =>
-          console.warn("[catamorphic] Agent lease renewal failed", error),
+        onCancel: () =>
+          void this.cancelLocalTurn(local).catch((error) =>
+            console.warn("[catamorphic] Could not stop an agent turn", error),
+          ),
       });
+      let answeredHere = false;
       try {
         const previousResult = turn.resultMessageId
           ? await this.db
@@ -4955,6 +5110,19 @@ export class AgentSessionsService {
               },
             ),
         );
+        if (result.metadata?.status === "awaiting_input" && !leaseLost) {
+          const waited = await this.awaitAnswer({
+            local,
+            projectId,
+            leaseToken,
+            resultMessageId: result.id,
+            leaseLost: () => leaseLost,
+          });
+          if (waited.settled) {
+            answeredHere = true;
+            handed = waited.next;
+          }
+        }
         const failed = result.metadata?.status === "failed";
         const retryable =
           failed &&
@@ -4965,45 +5133,156 @@ export class AgentSessionsService {
         const delay =
           [5_000, 15_000, 30_000, 60_000][Math.min(turn.attempt - 1, 3)] ??
           60_000;
-        await this.turns.settle({
-          turnId: turn.id,
-          leaseToken,
-          resultMessageId: result.id,
-          attempt: turn.attempt,
-          ...(failed ? { error: result.content } : {}),
-          ...(retryable
-            ? {
-                retryAt: new Date(
-                  Date.now() + delay + Math.floor(Math.random() * delay * 0.2),
-                ),
-              }
-            : {}),
-        });
+        if (!answeredHere)
+          await this.turns.settle({
+            turnId: turn.id,
+            leaseToken,
+            resultMessageId: result.id,
+            attempt: turn.attempt,
+            ...(failed ? { error: result.content } : {}),
+            ...(retryable
+              ? {
+                  retryAt: new Date(
+                    Date.now() +
+                      delay +
+                      Math.floor(Math.random() * delay * 0.2),
+                  ),
+                }
+              : {}),
+          });
       } catch (error) {
         await this.turns.fail({
           turnId: turn.id,
-          leaseToken: turn.leaseToken,
+          leaseToken,
           error: error instanceof Error ? error.message : String(error),
         });
         throw error;
       } finally {
-        heartbeat.stop();
-        this.runningTurns.delete(sessionId);
+        releaseLease();
+        if (this.localTurns.get(sessionId) === local)
+          this.localTurns.delete(sessionId);
       }
-      // Closed while this turn ran: its checkpoint may have pushed again.
+      if (handed) continue;
+      // Closed while this turn ran, on this or another replica: what the
+      // chat holds is given back now that its turn ended. The share lock
+      // orders this read after a close's own, so one of the two does it.
       const after = await this.db
         .selectFrom("agent_sessions")
-        .select(["id", "status", "agent_id", "allocation_id", "workspace"])
+        .select("status")
         .where("id", "=", sessionId)
+        .forShare()
         .executeTakeFirst();
       if (after?.status === "closed") {
-        await this.releaseClosedResources({
-          identity,
-          projectId,
-          session: after,
-        });
+        await this.finishClosing({ identity, projectId, sessionId });
         return;
       }
+    }
+  }
+
+  /**
+   * Stop a turn this process runs because someone asked, through any
+   * replica. A turn waiting for its question's answer stops waiting.
+   */
+  private async cancelLocalTurn(local: LocalTurn): Promise<void> {
+    local.cancelRequested = true;
+    if (local.phase === "waiting") {
+      local.wake?.();
+      return;
+    }
+    await this.honorCancellation({
+      session: local.session,
+      turnId: local.turnId,
+    });
+  }
+
+  /**
+   * A harness that holds its question in this process (a parked
+   * AskUserQuestion) continues it when the answer arrives. The asking turn
+   * stays claimed here, its lease renewed and its phase `waiting`, until a
+   * message is queued for the chat; then the question settles and the
+   * answer's turn is claimed here in one transaction (ADR 0193). A stop
+   * request with nothing queued, this process stopping, a lost lease, or a
+   * changed chat settles the question instead, and its answer continues
+   * wherever it is claimed, through the harness's resume path.
+   */
+  private async awaitAnswer(input: {
+    local: LocalTurn;
+    projectId: string;
+    leaseToken: string;
+    resultMessageId: string;
+    leaseLost: () => boolean;
+  }): Promise<{ settled: false } | { settled: true; next: AgentTurn | null }> {
+    const { local } = input;
+    const sessionId = local.session.id;
+    const current = await this.db
+      .selectFrom("agent_sessions")
+      .select([
+        "agent_id",
+        "provider_session_id",
+        "model",
+        "model_effort",
+        "allocation_id",
+      ])
+      .where("id", "=", sessionId)
+      .executeTakeFirst();
+    if (!current) return { settled: false };
+    const providerSessionId = current.provider_session_id ?? sessionId;
+    const provider = await this.resolveAgent(
+      current.agent_id,
+      input.projectId,
+    ).then(
+      (agent) => agent.provider,
+      () => undefined,
+    );
+    if (!provider?.holdsQuestion?.(providerSessionId))
+      return { settled: false };
+    local.phase = "waiting";
+    await this.turns
+      .progress({
+        turnId: local.turnId,
+        leaseToken: input.leaseToken,
+        phase: "waiting",
+        activity: "Waiting for an answer",
+      })
+      .catch(() => false);
+    try {
+      while (!input.leaseLost() && !this.stoppingTurns) {
+        // A message queued with a stop request ("send now") still answers
+        // the question here; a stop with nothing queued gives it up.
+        const outcome = await this.turns.continueAfterQuestion({
+          turnId: local.turnId,
+          leaseToken: input.leaseToken,
+          resultMessageId: input.resultMessageId,
+          sessionId,
+          workerId: this.turnWorkerId,
+          ...(this.workerNode ? { localNode: this.workerNode } : {}),
+          anchor: {
+            agentId: current.agent_id,
+            providerSessionId: current.provider_session_id,
+            model: current.model,
+            modelEffort: current.model_effort,
+            allocationId: current.allocation_id,
+          },
+        });
+        if (outcome.status === "lost") break;
+        if (outcome.status === "settled") {
+          if (!outcome.next) provider.releaseQuestion?.(providerSessionId);
+          return { settled: true, next: outcome.next };
+        }
+        if (local.cancelRequested) break;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 1_000);
+          local.wake = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+        });
+        local.wake = undefined;
+      }
+      provider.releaseQuestion?.(providerSessionId);
+      return { settled: false };
+    } finally {
+      local.wake = undefined;
     }
   }
 
@@ -5230,7 +5509,7 @@ export class AgentSessionsService {
     const limits = new Map<string, number>();
     const released: string[] = [];
     for (const row of rows) {
-      if (this.runningTurns.has(row.id) || this.drainers.has(row.id)) continue;
+      if (this.drainers.has(row.id)) continue;
       const identity: Identity = {
         tenantId: row.tenant_id,
         externalUserId: PROJECT_PRINCIPAL_ID,
@@ -5384,8 +5663,7 @@ export class AgentSessionsService {
         .executeTakeFirst();
       if (
         current?.status !== "active" ||
-        current.allocation_id !== allocation.id ||
-        this.runningTurns.has(sessionId)
+        current.allocation_id !== allocation.id
       )
         return false;
       // Released only while this host still holds the claim, so no turn
@@ -5469,9 +5747,7 @@ export class AgentSessionsService {
         if (session.status !== "active") {
           throw new AgentSessionClosedError(sessionId);
         }
-        if (this.runningTurns.has(sessionId)) {
-          throw new AgentTurnInProgressError(sessionId);
-        }
+        await this.assertNoRunningTurn({ sessionId });
 
         const messages = await this.db
           .selectFrom("agent_messages")
@@ -5575,7 +5851,15 @@ export class AgentSessionsService {
           .executeTakeFirst();
         if (opts.expectedTurnId && !active) return;
         await this.cancelAutoRetry(sessionId);
-        if (active && this.runningTurns.has(sessionId)) {
+        // A turn this process runs stops now; one on another replica reads
+        // the request with its next lease renewal, within about a second
+        // (ADR 0193).
+        const local = this.localTurns.get(sessionId);
+        if (active && local?.phase === "waiting") {
+          local.cancelRequested = true;
+          local.wake?.();
+        } else if (active && local) {
+          local.cancelRequested = true;
           this.interruptedTurns.add(sessionId);
           try {
             const agent = await this.resolveAgent(session.agent_id, projectId);
@@ -6769,49 +7053,31 @@ export class AgentSessionsService {
           input.origin?.author.kind === "agent"
             ? input.origin.author.sessionId
             : undefined;
+        // Running turns stop through their leases, on whichever replica runs
+        // them (ADR 0193).
         await this.waitForTurnsToStop(
           sessionIds.filter((id) => id !== caller),
           { timeoutMs: 30_000 },
         );
-        // Personal logins and files leave before the workspace is given
-        // back (ADR 0184).
-        for (const id of sessionIds)
-          await this.withdrawFromSessionSandbox({
-            identity,
-            projectId,
-            sessionId: id,
-          });
 
-        const closed = await this.db.transaction().execute(async (trx) => {
+        const busy = await this.db.transaction().execute(async (trx) => {
           if (input.origin)
             await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
               trx,
             );
-          // The provider session stays recorded until it is disposed below,
-          // so a close retried after a crash still finds it.
-          const rows = await trx
+          await trx
             .updateTable("agent_sessions")
-            .set({
-              status: "closed",
-              sandbox_id: null,
-              activity: null,
-              updated_at: new Date(),
-            })
+            .set({ status: "closed", activity: null, updated_at: new Date() })
             .where("id", "in", sessionIds)
-            .returningAll()
             .execute();
           // Work delivered while the running turns stopped would wait on a
           // closed chat forever: cancel it with the closing, under the lock.
           await cancelOpenTurns(trx);
-          for (const row of rows) {
-            if (row.allocation_id)
-              await this.executionAllocations.release({
-                identity,
-                allocationId: row.allocation_id,
-                transaction: trx,
-              });
-          }
-          return rows;
+          return this.sessionsWithRunningTurns({
+            sessionIds,
+            includeWaiting: true,
+            executor: trx,
+          });
         });
         // Admission rechecks status under this session's row lock. Sweep any
         // watcher that committed before closure, after further admission is barred.
@@ -6820,21 +7086,13 @@ export class AgentSessionsService {
           projectId,
           sessionIds,
         });
-        for (const row of closed) {
-          await this.releaseClosedResources({
-            identity,
-            projectId,
-            session: row,
-            providerSessionId: row.provider_session_id,
-          });
-          if (row.provider_session_id)
-            await this.db
-              .updateTable("agent_sessions")
-              .set({ provider_session_id: null })
-              .where("id", "=", row.id)
-              .where("provider_session_id", "=", row.provider_session_id)
-              .execute();
-        }
+        // What a chat holds outside its row is given back once no turn runs
+        // in it: now, or by the process running its last turn, when that
+        // turn ends. Its sandbox is never taken from under a running turn,
+        // nor its logins withdrawn (ADR 0193).
+        for (const id of sessionIds)
+          if (!busy.has(id))
+            await this.finishClosing({ identity, projectId, sessionId: id });
         const sessions = await this.db
           .selectFrom("agent_sessions")
           .selectAll()
@@ -6845,6 +7103,150 @@ export class AgentSessionsService {
         return mapSession(root, false, this.hostId, this.authorityLeaseMs);
       },
     );
+  }
+
+  /**
+   * Give back what a closed chat holds outside its row (ADR 0173), once no
+   * turn runs in it on any replica: personal logins and files leave its
+   * sandbox (ADR 0184), its Allocation is released (the node destroys the
+   * sandbox), and its provider session, grants, and session workspace go.
+   * Safe to repeat. The process running a closed chat's last turn calls it
+   * when that turn ends, and any replica finishes a chat whose process died
+   * (ADR 0193).
+   */
+  private async finishClosing(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+  }): Promise<void> {
+    const { identity, projectId, sessionId } = input;
+    const running = await this.sessionsWithRunningTurns({
+      sessionIds: [sessionId],
+      includeWaiting: true,
+    });
+    if (running.size > 0) return;
+    await this.withdrawFromSessionSandbox({ identity, projectId, sessionId });
+    const row = await this.db.transaction().execute(async (trx) => {
+      const session = await trx
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", sessionId)
+        .where("status", "=", "closed")
+        .forUpdate()
+        .executeTakeFirst();
+      if (!session) return undefined;
+      const busy = await this.sessionsWithRunningTurns({
+        sessionIds: [sessionId],
+        includeWaiting: true,
+        executor: trx,
+      });
+      if (busy.size > 0) return undefined;
+      if (session.allocation_id)
+        await this.executionAllocations.release({
+          identity,
+          allocationId: session.allocation_id,
+          transaction: trx,
+        });
+      await trx
+        .updateTable("agent_sessions")
+        .set({ sandbox_id: null })
+        .where("id", "=", sessionId)
+        .execute();
+      return session;
+    });
+    if (!row) return;
+    // The provider session stays recorded until it is disposed, so a close
+    // retried after a crash still finds it.
+    await this.releaseClosedResources({
+      identity,
+      projectId,
+      session: row,
+      providerSessionId: row.provider_session_id,
+    });
+    if (row.provider_session_id)
+      await this.db
+        .updateTable("agent_sessions")
+        .set({ provider_session_id: null })
+        .where("id", "=", row.id)
+        .where("provider_session_id", "=", row.provider_session_id)
+        .execute();
+  }
+
+  /**
+   * Finish closing chats whose last turn ran in a process that died before
+   * it could (ADR 0193): closed, still holding an active Allocation, and no
+   * live turn. A claim per chat keeps two replicas from doing it at once.
+   */
+  private async finishAbandonedClosings(input: { limit?: number } = {}) {
+    const rows = await this.db
+      .selectFrom("agent_sessions as session")
+      .innerJoin("projects", "projects.id", "session.project_id")
+      .innerJoin(
+        "execution_allocations as allocation",
+        "allocation.id",
+        "session.allocation_id",
+      )
+      .select(["session.id", "session.project_id", "projects.tenant_id"])
+      .where("session.status", "=", "closed")
+      .where("session.authority_host_id", "=", this.hostId)
+      .where("allocation.status", "=", "active")
+      .where(({ exists, not, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("agent_turns")
+              .select("agent_turns.id")
+              .whereRef("agent_turns.session_id", "=", "session.id")
+              .where("agent_turns.status", "=", "running")
+              .where("agent_turns.lease_expires_at", ">", sql<Date>`now()`),
+          ),
+        ),
+      )
+      .limit(input.limit ?? 50)
+      .execute();
+    for (const row of rows) {
+      if (
+        !(await takeReplicaClaim({
+          db: this.db,
+          name: `close:${row.id}`,
+          holder: this.turnWorkerId,
+          ttlSeconds: 60,
+        }))
+      )
+        continue;
+      const identity: Identity = {
+        tenantId: row.tenant_id,
+        externalUserId: PROJECT_PRINCIPAL_ID,
+        scope: [],
+      };
+      try {
+        // Its turn's process died: the turn settles as interrupted first.
+        await this.db
+          .updateTable("agent_turns")
+          .set({
+            status: "failed",
+            error: "The host stopped while this turn was running",
+            completed_at: new Date(),
+            lease_owner: null,
+            lease_token: null,
+            lease_expires_at: null,
+            updated_at: new Date(),
+          })
+          .where("session_id", "=", row.id)
+          .where("status", "=", "running")
+          .where("lease_expires_at", "<=", sql<Date>`now()`)
+          .execute();
+        await this.finishClosing({
+          identity,
+          projectId: row.project_id,
+          sessionId: row.id,
+        });
+      } catch (error) {
+        console.warn(
+          `[catamorphic] Could not finish closing session ${row.id}`,
+          error,
+        );
+      }
+    }
   }
 
   /**
@@ -6919,10 +7321,7 @@ export class AgentSessionsService {
       .where("status", "in", ["queued", "held", "running"])
       .execute();
     const runningSessionIds = [
-      ...new Set([
-        ...sessionIds.filter((id) => this.runningTurns.has(id)),
-        ...activeTurns.map((turn) => turn.session_id),
-      ]),
+      ...new Set(activeTurns.map((turn) => turn.session_id)),
     ];
     const watcherRows = await this.db
       .selectFrom("watchers")
@@ -7010,7 +7409,9 @@ export class AgentSessionsService {
       projectId,
       sessionIds: impact.sessionIds,
     });
-    await this.waitForTurnsToStop(impact.sessionIds);
+    // Running turns stop through their leases, on whichever replica runs
+    // them (ADR 0193).
+    await this.waitForTurnsToStop(impact.sessionIds, { timeoutMs: 30_000 });
 
     const { archivedRows, resourceRows } = await this.db
       .transaction()
@@ -7029,21 +7430,43 @@ export class AgentSessionsService {
           .selectFrom("agent_sessions")
           .selectAll()
           .where("id", "in", impact.sessionIds)
+          .forUpdate()
           .execute();
-        const archived = await transaction
-          .updateTable("agent_sessions")
-          .set({
-            provider_session_id: null,
-            sandbox_id: null,
-            activity: null,
-            updated_at: new Date(),
-          })
-          .where("id", "in", impact.sessionIds)
-          .returningAll()
-          .execute();
+        // A turn that did not stop keeps its workspace: it is never taken
+        // from under a running turn, on any replica. Idle release gives it
+        // back once the chat rests (ADR 0193).
+        const busy = await this.sessionsWithRunningTurns({
+          sessionIds: impact.sessionIds,
+          includeWaiting: true,
+          executor: transaction,
+        });
+        const idle = impact.sessionIds.filter((id) => !busy.has(id));
+        const archived = [
+          ...(idle.length > 0
+            ? await transaction
+                .updateTable("agent_sessions")
+                .set({
+                  provider_session_id: null,
+                  sandbox_id: null,
+                  activity: null,
+                  updated_at: new Date(),
+                })
+                .where("id", "in", idle)
+                .returningAll()
+                .execute()
+            : []),
+          ...(busy.size > 0
+            ? await transaction
+                .updateTable("agent_sessions")
+                .set({ updated_at: new Date() })
+                .where("id", "in", [...busy])
+                .returningAll()
+                .execute()
+            : []),
+        ];
         const now = new Date();
         for (const row of archived) {
-          if (row.allocation_id) {
+          if (row.allocation_id && !busy.has(row.id)) {
             const allocation = await transaction
               .selectFrom("execution_allocations")
               .select("worker_node_id")
@@ -7078,7 +7501,10 @@ export class AgentSessionsService {
             )
             .execute();
         }
-        return { archivedRows: archived, resourceRows: resources };
+        return {
+          archivedRows: archived,
+          resourceRows: resources.filter((row) => !busy.has(row.id)),
+        };
       });
 
     // A watcher may finish admission while the first cleanup is stopping work.
@@ -7139,22 +7565,26 @@ export class AgentSessionsService {
     };
   }
 
+  /**
+   * Wait until no turn runs in these sessions on any replica, or the
+   * timeout passes: a turn's lease in Postgres says whether it runs
+   * (ADR 0193).
+   */
   private async waitForTurnsToStop(
     sessionIds: readonly string[],
-    options: { timeoutMs?: number } = {},
+    options: { timeoutMs: number },
   ): Promise<void> {
-    const deadline =
-      options.timeoutMs === undefined
-        ? Number.POSITIVE_INFINITY
-        : Date.now() + options.timeoutMs;
+    const deadline = Date.now() + options.timeoutMs;
     while (
-      sessionIds.some((id) => this.runningTurns.has(id)) &&
-      Date.now() < deadline
-    ) {
-      // Do not attach another reaction to each still-pending drainer on
-      // every tick. Polling the running set already supplies the wake-up.
-      await new Promise<void>((resolve) => setTimeout(resolve, 25));
-    }
+      Date.now() < deadline &&
+      (
+        await this.sessionsWithRunningTurns({
+          sessionIds,
+          includeWaiting: true,
+        })
+      ).size > 0
+    )
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
   }
 
   async unarchive(
@@ -8506,7 +8936,9 @@ export class AgentSessionsService {
     );
     return mapSession(
       row,
-      this.runningTurns.has(sessionId),
+      (await this.sessionsWithRunningTurns({ sessionIds: [sessionId] })).has(
+        sessionId,
+      ),
       this.hostId,
       this.authorityLeaseMs,
       presentation,

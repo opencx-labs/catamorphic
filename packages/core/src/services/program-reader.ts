@@ -24,25 +24,39 @@ import { publishedRef } from "@catamorphic/workflow/project-layout";
 export const PROGRAM_READER = "catamorphic-reader";
 
 /**
- * How long a fetched origin sha is trusted before re-fetching. Reads of the
- * program come in bursts (a sync of N files, a search over a tree); one
- * fetch per burst is plenty, and roles/tools already tolerate this lag.
+ * The commit "the program as shared" stands at now, without reading it:
+ * the origin's `main` when the project has a remote, the local published
+ * ref (else `HEAD`) for a project folder, and null for a working tree with
+ * neither. Caches of what the program says are keyed by it (ADR 0193), so
+ * every replica sees a deploy as soon as it lands and nothing needs
+ * invalidating.
  */
-const FETCH_TTL_MS = 5_000;
-const managerFetches = new WeakMap<
-  ProjectManager,
-  Map<string, { at: number; sha: string | null }>
->();
-
-/** Drop the memoized origin fetch (a push just landed; read fresh). */
-export function forgetProgramFetch(
+export async function programRevision(
   projectManager: ProjectManager,
   tenantId: string,
   projectId: string,
-): void {
-  managerFetches.get(projectManager)?.delete(`${tenantId}:${projectId}`);
+): Promise<string | null> {
+  if (await projectManager.localPath({ tenantId, projectId })) {
+    const repo = await projectManager.open(tenantId, projectId);
+    try {
+      return await repo
+        .resolveRef(publishedRef())
+        .catch(() => repo.resolveRef("HEAD").catch(() => null));
+    } finally {
+      await repo.dispose();
+    }
+  }
+  const remote = projectManager.remoteBackend;
+  if (!remote) return null;
+  return remote.withOrigin(tenantId, projectId, (origin) =>
+    origin.resolveRef("refs/heads/main"),
+  );
 }
 
+/**
+ * Read the program as shared. `fn` receives the commit it reads at (null
+ * for a working tree), which is what callers key their caches by.
+ */
 export async function withProgram<T>(
   projectManager: ProjectManager,
   tenantId: string,
@@ -72,16 +86,8 @@ export async function withProgram<T>(
     : await projectManager.open(tenantId, projectId);
   try {
     if (!remote) return await fn(repo, null);
-    let recentFetches = managerFetches.get(projectManager);
-    if (!recentFetches) {
-      recentFetches = new Map();
-      managerFetches.set(projectManager, recentFetches);
-    }
-    const key = `${tenantId}:${projectId}`;
-    const recent = recentFetches.get(key);
-    if (recent && Date.now() - recent.at < FETCH_TTL_MS) {
-      return await fn(repo, recent.sha);
-    }
+    // The origin's `main` as it is now, on every read: nothing transfers
+    // when this copy already has it, and no replica serves a stale tree.
     await fetchRemote({
       dev: repo,
       remote,
@@ -90,11 +96,6 @@ export async function withProgram<T>(
       remoteBranch: "main",
     });
     const sha = await repo.resolveRef(publishedRef()).catch(() => null);
-    for (const [cachedKey, value] of recentFetches) {
-      if (Date.now() - value.at >= FETCH_TTL_MS || recentFetches.size >= 256)
-        recentFetches.delete(cachedKey);
-    }
-    recentFetches.set(key, { at: Date.now(), sha });
     return await fn(repo, sha);
   } finally {
     await repo.dispose();

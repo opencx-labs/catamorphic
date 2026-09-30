@@ -85,6 +85,10 @@ export class ProposalsUnsupportedError extends Error {
 }
 
 export class ProposalsService {
+  /**
+   * Replica memory (a): one proposal at a time through this process's
+   * working copy; each lands on its own branch of the origin.
+   */
   private readonly queues = new Map<string, Promise<unknown>>();
 
   constructor(
