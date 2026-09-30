@@ -42,7 +42,10 @@ export function allocationSandboxProvider(args: {
   db: Kysely<DB>;
   allocation: ExecutionAllocation;
   provider: SandboxProvider;
-  /** The node lease this instance holds now; read at each check. */
+  /**
+   * The lease of this process's own local node, read at each check. A
+   * remote node's provider fences its own operations (ADR 0192).
+   */
   workerLeaseToken?: string | (() => string | undefined);
 }): SandboxProvider {
   const { db, allocation, provider } = args;
@@ -216,10 +219,57 @@ export function allocationSandboxProvider(args: {
   };
 }
 
-/** Run on the physical owner. Successful destruction is the capacity release fence. */
+/**
+ * Claim an Allocation for saving or destroying its workspace (ADR 0192), so
+ * two hosts never do it at once. The claim lapses on its own if the host
+ * stops midway.
+ */
+export async function claimAllocationMaintenance(args: {
+  db: Kysely<DB>;
+  allocationId: string;
+  status: "active" | "released";
+  minutes?: number;
+}): Promise<boolean> {
+  const claimed = await args.db
+    .updateTable("execution_allocations")
+    .set({
+      maintenance_claimed_until: sql`now() + make_interval(mins => ${args.minutes ?? 10})`,
+    })
+    .where("id", "=", args.allocationId)
+    .where("status", "=", args.status)
+    .where("capacity_released_at", "is", null)
+    .where((eb) =>
+      eb.or([
+        eb("maintenance_claimed_until", "is", null),
+        eb("maintenance_claimed_until", "<", sql<Date>`now()`),
+      ]),
+    )
+    .returning("id")
+    .executeTakeFirst();
+  return Boolean(claimed);
+}
+
+/** Give a maintenance claim back once the work is done or failed. */
+export async function releaseAllocationMaintenance(args: {
+  db: Kysely<DB>;
+  allocationId: string;
+}): Promise<void> {
+  await args.db
+    .updateTable("execution_allocations")
+    .set({ maintenance_claimed_until: null })
+    .where("id", "=", args.allocationId)
+    .execute();
+}
+
+/**
+ * Destroy the workspaces of a node's released Allocations. Successful
+ * destruction is the capacity release fence. A local node is cleaned only by
+ * the process holding its lease; a remote node by any host while its
+ * executor's lease is live (ADR 0192), each Allocation under a claim.
+ */
 export async function cleanupWorkerAllocations(args: {
   db: Kysely<DB>;
-  workerNode: { id: string; token: string };
+  workerNode: { id: string; token: string } | { id: string; remote: true };
   provider: SandboxProvider;
 }): Promise<number> {
   return withSpan(
@@ -229,12 +279,18 @@ export async function cleanupWorkerAllocations(args: {
       attributes: { "catamorphic.worker.id": args.workerNode.id },
     },
     async () => {
+      const node = args.workerNode;
       const live = await args.db
         .selectFrom("worker_nodes")
         .select("id")
-        .where("id", "=", args.workerNode.id)
-        .where("lease_token", "=", args.workerNode.token)
+        .where("id", "=", node.id)
         .where("lease_expires_at", ">", sql<Date>`now()`)
+        .$if("token" in node, (query) =>
+          query.where("lease_token", "=", "token" in node ? node.token : ""),
+        )
+        .$if(!("token" in node), (query) =>
+          query.where("enabled", "=", true).where("remote", "is not", null),
+        )
         .executeTakeFirst();
       if (!live) return 0;
       const rows = await args.db
@@ -285,17 +341,32 @@ export async function cleanupWorkerAllocations(args: {
       const failures: unknown[] = [];
       for (const row of rows) {
         if (row.sandbox_creation_started && !row.sandbox_provider_id) continue;
+        if (
+          !(await claimAllocationMaintenance({
+            db: args.db,
+            allocationId: row.id,
+            status: "released",
+          }))
+        )
+          continue;
         try {
           if (row.sandbox_provider_id)
             await args.provider.destroySandbox(row.sandbox_provider_id);
           await args.db
             .updateTable("execution_allocations")
-            .set({ capacity_released_at: sql`now()` })
+            .set({
+              capacity_released_at: sql`now()`,
+              maintenance_claimed_until: null,
+            })
             .where("id", "=", row.id)
             .where("status", "=", "released")
             .execute();
           cleaned++;
         } catch (error) {
+          await releaseAllocationMaintenance({
+            db: args.db,
+            allocationId: row.id,
+          }).catch(() => {});
           failures.push(error);
         }
       }

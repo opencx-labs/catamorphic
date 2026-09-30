@@ -1,14 +1,17 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   cleanupWorkerAllocations,
+  nodeExecutor,
+  REMOTE_EPOCH_PATTERN,
+  RemoteEpochSupersededError,
+  RemoteExecutorLeaseLostError,
   RemoteOperationQueue,
   type WorkerCapacity,
-  type WorkerNodeLease,
   WorkerNodeLeaseHeldError,
   type WorkerNodesService,
 } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
-import type { EnvironmentBinding, SandboxProvider } from "@catamorphic/sandbox";
+import type { EnvironmentBinding } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
 import {
@@ -19,11 +22,6 @@ import {
 } from "./placement.js";
 
 export const WORKER_NODE_PREFIX = "worker.";
-
-/** A worker node's address in the remote operation queue. */
-function nodeExecutor(nodeId: string): string {
-  return `node:${nodeId}`;
-}
 
 const WorkerName = z
   .string()
@@ -71,10 +69,14 @@ export const WorkerOfferSchema = z.strictObject({
 });
 export type WorkerOffer = z.infer<typeof WorkerOfferSchema>;
 
-interface HeldWorker {
-  lease: WorkerNodeLease;
-  provider: SandboxProvider;
-}
+/**
+ * What a worker sends to connect: the epoch its process chose at start
+ * (ADR 0192), which every later call repeats as its session, and its offer.
+ */
+export const WorkerConnectSchema = z.strictObject({
+  session: z.string().regex(REMOTE_EPOCH_PATTERN, "Use a UUIDv7 epoch"),
+  offer: WorkerOfferSchema,
+});
 
 export class WorkerIsolationError extends Error {
   constructor(name: string) {
@@ -85,24 +87,37 @@ export class WorkerIsolationError extends Error {
   }
 }
 
-export class WorkerConnectConflictError extends Error {
+/** The operator disabled this worker's node; it may connect once enabled. */
+export class WorkerDisabledError extends Error {
   constructor() {
-    super(
-      "Another control-plane instance still holds this worker's lease; retry after it expires",
-    );
-    this.name = "WorkerConnectConflictError";
+    super("The operator disabled this worker; it connects once enabled again");
+    this.name = "WorkerDisabledError";
+  }
+}
+
+/**
+ * A newer process of this worker connected under a new epoch (ADR 0192).
+ * The old process must stop: connecting again would take the lease back.
+ */
+export class WorkerSupersededError extends RemoteExecutorLeaseLostError {
+  constructor() {
+    super();
+    this.message =
+      "A newer process of this worker connected; this one must stop";
+    this.name = "WorkerSupersededError";
   }
 }
 
 /**
  * Enrolled remote workers (ADR 0164). A worker proves itself with a machine
  * credential issued once at enrollment; it never receives database, vault,
- * or sign-in secrets. The control-plane instance a worker connects to holds
- * the worker node's lease, runs its agents' controller loops, and forwards
- * sandbox operations to it. Leases lapse when the worker stops polling.
+ * or sign-in secrets. The worker owns its node lease (ADR 0192): its token
+ * is the epoch the worker process chose at start, and each of its calls to
+ * any replica renews it. Any replica runs the worker's agents and forwards
+ * their sandbox operations through the queue in Postgres. Nothing about a
+ * worker lives in a replica's memory.
  */
 export class WorkWorkerRegistry {
-  private readonly held = new Map<string, HeldWorker>();
   private readonly queue: RemoteOperationQueue;
 
   constructor(
@@ -111,8 +126,6 @@ export class WorkWorkerRegistry {
       nodes: WorkerNodesService;
       tenantId: string;
       authorityId: string;
-      /** A worker unseen for this long loses its lease here. */
-      livenessMs?: number;
       log?: (line: string) => void;
     },
   ) {
@@ -121,7 +134,8 @@ export class WorkWorkerRegistry {
 
   /**
    * The worker takes up to `max` operations, waiting up to 20 seconds. Any
-   * instance serves it: the queue and the lease live in Postgres.
+   * replica serves it: the queue and the lease live in Postgres. The call
+   * renews the worker's lease.
    */
   async poll(args: {
     nodeId: string;
@@ -130,19 +144,27 @@ export class WorkWorkerRegistry {
     max: number;
     signal: AbortSignal;
   }) {
-    await this.touch(args.nodeId);
-    return this.queue.poll({
-      executor: nodeExecutor(args.nodeId),
-      leaseToken: args.session,
-      pollId: args.pollId,
-      max: args.max,
-      signal: args.signal,
-      waitMs: 20_000,
-      leaseHeld: () => this.leaseHeld(args.nodeId, args.session),
-    });
+    await this.renewOrThrow(args);
+    try {
+      return await this.queue.poll({
+        executor: nodeExecutor(args.nodeId),
+        leaseToken: args.session,
+        pollId: args.pollId,
+        max: args.max,
+        signal: args.signal,
+        waitMs: 20_000,
+        leaseHeld: async () =>
+          (await this.deps.nodes.liveToken({ nodeId: args.nodeId })) ===
+          args.session,
+      });
+    } catch (error) {
+      if (error instanceof RemoteExecutorLeaseLostError)
+        throw await this.ended(args);
+      throw error;
+    }
   }
 
-  /** The worker reports one operation's outcome, to any instance. */
+  /** The worker reports one operation's outcome, to any replica. */
   async complete(args: {
     nodeId: string;
     session: string;
@@ -150,7 +172,10 @@ export class WorkWorkerRegistry {
     response?: unknown;
     error?: string;
   }): Promise<void> {
-    await this.touch(args.nodeId);
+    // A receipt proves the worker is alive; an old epoch's is refused below.
+    await this.deps.nodes.renewRemote({
+      lease: { id: args.nodeId, token: args.session },
+    });
     await this.queue.complete({
       executor: nodeExecutor(args.nodeId),
       leaseToken: args.session,
@@ -161,22 +186,40 @@ export class WorkWorkerRegistry {
   }
 
   /** A keepalive while operations run and no poll is pending. */
-  async renew(args: { nodeId: string; session: string }): Promise<boolean> {
-    await this.touch(args.nodeId);
-    return this.leaseHeld(args.nodeId, args.session);
+  async renew(args: { nodeId: string; session: string }): Promise<void> {
+    await this.renewOrThrow(args);
   }
 
-  private async leaseHeld(nodeId: string, leaseToken: string) {
-    return Boolean(
-      await this.deps.db
-        .selectFrom("worker_nodes")
-        .select("id")
-        .where("id", "=", nodeId)
-        .where("lease_token", "=", leaseToken)
-        .where("enabled", "=", true)
-        .where("lease_expires_at", ">", sql<Date>`now()`)
-        .executeTakeFirst(),
-    );
+  /**
+   * Renew the lease for this epoch, or say why the session ended: a newer
+   * process took over, or the operator disabled the worker.
+   */
+  private async renewOrThrow(args: {
+    nodeId: string;
+    session: string;
+  }): Promise<void> {
+    if (
+      await this.deps.nodes.renewRemote({
+        lease: { id: args.nodeId, token: args.session },
+      })
+    )
+      return;
+    throw await this.ended(args);
+  }
+
+  /** Why this epoch's session ended: superseded, or disabled and lapsed. */
+  private async ended(args: {
+    nodeId: string;
+    session: string;
+  }): Promise<RemoteExecutorLeaseLostError> {
+    const node = await this.deps.db
+      .selectFrom("worker_nodes")
+      .select(["lease_token", "enabled"])
+      .where("id", "=", args.nodeId)
+      .executeTakeFirst();
+    if (node?.enabled && node.lease_token !== args.session)
+      return new WorkerSupersededError();
+    return new RemoteExecutorLeaseLostError();
   }
 
   /** Operator: a one-time code a new worker exchanges for its credential. */
@@ -301,12 +344,18 @@ export class WorkWorkerRegistry {
     return { nodeId: row.node_id, name: row.name };
   }
 
-  /** Worker: take this instance's hold on the worker node's lease. */
+  /**
+   * Worker: connect under the epoch its process chose at start (ADR 0192).
+   * Any replica accepts it; the machine credential is the authority. The
+   * same epoch again only refreshes the offer and the lease. A new epoch
+   * takes over at once and fails the old epoch's operations as uncertain.
+   */
   async connect(args: {
     nodeId: string;
     name: string;
+    session: string;
     offer: WorkerOffer;
-  }): Promise<string> {
+  }): Promise<void> {
     const policy = await this.placement(args.nodeId);
     if (
       args.offer.isolation === "process" &&
@@ -314,11 +363,6 @@ export class WorkWorkerRegistry {
       !policy.trusted
     ) {
       throw new WorkerIsolationError(args.name);
-    }
-    const previous = this.held.get(args.nodeId);
-    if (previous) {
-      this.held.delete(args.nodeId);
-      await this.deps.nodes.release({ lease: previous.lease });
     }
     const descriptor: EnvironmentBinding = {
       id: args.nodeId,
@@ -341,55 +385,29 @@ export class WorkWorkerRegistry {
       resourceLimits: args.offer.resourceLimits,
       labels: { ...policy.labels, node: args.nodeId, plane: "worker" },
     };
-    let lease: WorkerNodeLease;
     try {
-      lease = await this.deps.nodes.register({
+      const connected = await this.deps.nodes.connectRemote({
         tenantId: this.deps.tenantId,
         authorityId: this.deps.authorityId,
         descriptor,
         capacity: args.offer.capacity satisfies WorkerCapacity,
         defaults: args.offer.defaults,
+        epoch: args.session,
+        offer: {
+          workspaceRoot: args.offer.workspaceRoot,
+          processes: args.offer.processes,
+        },
       });
+      if (connected.superseded)
+        this.deps.log?.(`Worker ${args.name} restarted and connected`);
+      else this.deps.log?.(`Worker ${args.name} connected`);
     } catch (error) {
       if (error instanceof WorkerNodeLeaseHeldError)
-        throw new WorkerConnectConflictError();
+        throw new WorkerDisabledError();
+      if (error instanceof RemoteEpochSupersededError)
+        throw new WorkerSupersededError();
       throw error;
     }
-    this.held.set(args.nodeId, {
-      lease,
-      provider: this.providerFor(args.nodeId, args.offer),
-    });
-    await this.touch(args.nodeId);
-    this.deps.log?.(`Worker ${args.name} connected`);
-    return lease.token;
-  }
-
-  private readonly providers = new Map<string, SandboxProvider>();
-
-  /**
-   * One provider per worker node for this instance's lifetime: it fences
-   * each operation with whatever lease this instance holds at that moment,
-   * so sessions survive the worker reconnecting.
-   */
-  private providerFor(
-    nodeId: string,
-    offer: Pick<WorkerOffer, "workspaceRoot" | "processes">,
-  ): SandboxProvider {
-    const existing = this.providers.get(nodeId);
-    // An upgraded worker may offer more than it did; its sessions follow.
-    if (existing && Boolean(existing.processes) === offer.processes)
-      return existing;
-    const provider = this.queue.provider({
-      executor: nodeExecutor(nodeId),
-      leaseToken: () => this.held.get(nodeId)?.lease.token,
-      leaseHeld: (token) => this.leaseHeld(nodeId, token),
-      label: "The worker",
-      workspaceRoot: offer.workspaceRoot,
-      processes: offer.processes,
-      attributes: { "catamorphic.worker.id": nodeId },
-    });
-    this.providers.set(nodeId, provider);
-    return provider;
   }
 
   /** One enrolled worker's placement policy. */
@@ -445,52 +463,14 @@ export class WorkWorkerRegistry {
     return [...groups];
   }
 
-  private async touch(nodeId: string): Promise<void> {
-    await this.deps.db
-      .updateTable("work_workers")
-      .set({ last_seen_at: sql`now()` })
-      .where("node_id", "=", nodeId)
-      .execute();
-  }
-
-  /** Leases this instance holds for connected workers. */
-  heldLeases(): WorkerNodeLease[] {
-    return [...this.held.values()].map((held) => held.lease);
-  }
-
-  /** The forwarding provider when this instance holds the node's lease. */
-  heldProvider(
-    nodeId: string,
-  ): { provider: SandboxProvider; lease: WorkerNodeLease } | undefined {
-    return this.held.get(nodeId);
-  }
-
   /**
-   * Renew leases of workers seen recently and release the rest, then
-   * retire workspaces of their ended allocations through the worker. The
-   * cleanup waits on the worker, so it runs on its own and never holds up
-   * the next renewal: a slow workspace removal must not cost a live
-   * session its worker.
+   * Retire workspaces of ended allocations on every connected worker,
+   * through the worker, and drop abandoned queue rows. Any replica runs it:
+   * each Allocation is claimed in Postgres before its workspace is
+   * destroyed (ADR 0192). The cleanup waits on workers, so a pass in
+   * progress is never started twice.
    */
   async maintain(): Promise<void> {
-    const livenessMs = this.deps.livenessMs ?? 30_000;
-    for (const [nodeId, held] of this.held) {
-      const worker = await this.deps.db
-        .selectFrom("work_workers")
-        .select(["last_seen_at", "revoked_at"])
-        .where("node_id", "=", nodeId)
-        .executeTakeFirst();
-      const alive =
-        !worker?.revoked_at &&
-        worker?.last_seen_at &&
-        Date.now() - worker.last_seen_at.getTime() < livenessMs;
-      if (!alive || !(await this.deps.nodes.renew({ lease: held.lease }))) {
-        // A reconnect during this pass holds a new lease; keep that one.
-        if (this.held.get(nodeId) === held) this.held.delete(nodeId);
-        await this.deps.nodes.release({ lease: held.lease });
-        this.deps.log?.(`Worker ${nodeId} disconnected`);
-      }
-    }
     await this.queue.sweep().catch(() => {});
     this.cleaning ??= this.cleanup().finally(() => {
       this.cleaning = undefined;
@@ -500,14 +480,23 @@ export class WorkWorkerRegistry {
   private cleaning: Promise<void> | undefined;
 
   private async cleanup(): Promise<void> {
-    for (const [nodeId, held] of [...this.held]) {
+    const nodes = await this.deps.nodes.list({
+      tenantId: this.deps.tenantId,
+      authorityId: this.deps.authorityId,
+    });
+    for (const node of nodes) {
+      if (!node.remote || !node.available || !isWorkerNode(node.id)) continue;
       await cleanupWorkerAllocations({
         db: this.deps.db,
-        workerNode: held.lease,
-        provider: held.provider,
+        workerNode: { id: node.id, remote: true },
+        provider: this.deps.nodes.remoteProvider({
+          nodeId: node.id,
+          offer: node.remote,
+          label: "The worker",
+        }),
       }).catch((error) =>
         this.deps.log?.(
-          `Workspace cleanup on ${nodeId} deferred: ${
+          `Workspace cleanup on ${node.id} deferred: ${
             error instanceof Error ? error.message : String(error)
           }`,
         ),
@@ -537,11 +526,6 @@ export class WorkWorkerRegistry {
       nodeId: row.node_id,
       enabled: false,
     });
-    const held = this.held.get(row.node_id);
-    if (held) {
-      this.held.delete(row.node_id);
-      await this.deps.nodes.release({ lease: held.lease });
-    }
     return true;
   }
 
@@ -670,11 +654,14 @@ export class WorkWorkerRegistry {
       machine: { rule: string; ref: string | null } | null;
     }>
   > {
+    // A worker is last seen when its own call last renewed its lease.
     const rows = await this.deps.db
       .selectFrom("work_workers")
-      .selectAll()
-      .where("tenant_id", "=", this.deps.tenantId)
-      .orderBy("name")
+      .leftJoin("worker_nodes", "worker_nodes.id", "work_workers.node_id")
+      .selectAll("work_workers")
+      .select("worker_nodes.updated_at as last_seen_at")
+      .where("work_workers.tenant_id", "=", this.deps.tenantId)
+      .orderBy("work_workers.name")
       .execute();
     return rows.map((row) => ({
       name: row.name,
@@ -687,14 +674,6 @@ export class WorkWorkerRegistry {
         ? { rule: row.machine_rule, ref: row.machine_ref }
         : null,
     }));
-  }
-
-  /** Release every lease this instance holds (shutdown). */
-  async releaseAll(): Promise<void> {
-    for (const held of this.held.values()) {
-      await this.deps.nodes.release({ lease: held.lease }).catch(() => {});
-    }
-    this.held.clear();
   }
 }
 

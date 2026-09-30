@@ -581,6 +581,7 @@ export class AgentTurnsService {
 
   async claimNext(input: {
     workerId: string;
+    localNode?: { id: string; token: string };
     leaseSeconds?: number;
   }): Promise<AgentTurn | null> {
     return this.claim(input);
@@ -589,28 +590,43 @@ export class AgentTurnsService {
   async claimNextForSession(input: {
     workerId: string;
     sessionId: string;
-    workerNode?: { id: string; token: string };
+    localNode?: { id: string; token: string };
     leaseSeconds?: number;
   }): Promise<AgentTurn | null> {
     return this.claim(input);
   }
 
+  /**
+   * Claim the next turn this host may run (ADR 0192): a turn whose workspace
+   * is on no node, on a remote node whose executor's lease is live (any host
+   * runs those), or on this host's own local node. A turn on another host's
+   * local node, on a released workspace, or on a remote node while its
+   * executor is away stays queued. The session row is share-locked, so a
+   * workspace released while idle and a claim never overlap.
+   */
   private async claim(input: {
     workerId: string;
     sessionId?: string;
-    workerNode?: { id: string; token: string };
+    localNode?: { id: string; token: string };
     leaseSeconds?: number;
   }): Promise<AgentTurn | null> {
     const leaseToken = randomUUID();
     const leaseSeconds = input.leaseSeconds ?? 60;
     return this.db.transaction().execute(async (trx) => {
+      if (input.sessionId)
+        await trx
+          .selectFrom("agent_sessions")
+          .select("id")
+          .where("id", "=", input.sessionId)
+          .forShare()
+          .execute();
       const candidate = await trx
         .selectFrom("agent_turns as turn")
         .selectAll("turn")
         .where("turn.status", "=", "queued")
         .where("turn.available_at", "<=", sql<Date>`now()`)
-        .$if(input.workerNode !== undefined, (query) =>
-          query.where(({ exists, selectFrom }) =>
+        .where(({ exists, not, selectFrom }) =>
+          not(
             exists(
               selectFrom("agent_sessions as session")
                 .innerJoin(
@@ -618,18 +634,41 @@ export class AgentTurnsService {
                   "allocation.id",
                   "session.allocation_id",
                 )
-                .innerJoin(
-                  "worker_nodes as node",
-                  "node.id",
-                  "allocation.worker_node_id",
-                )
                 .select("session.id")
                 .whereRef("session.id", "=", "turn.session_id")
-                .where("allocation.status", "=", "active")
-                .where("node.id", "=", input.workerNode?.id ?? "")
-                .where("node.lease_token", "=", input.workerNode?.token ?? "")
-                .where("node.enabled", "=", true)
-                .where("node.lease_expires_at", ">", sql<Date>`now()`),
+                .where("allocation.worker_node_id", "is not", null)
+                .where((blocked) =>
+                  blocked.or([
+                    blocked("allocation.status", "!=", "active"),
+                    blocked.not(
+                      blocked.exists(
+                        blocked
+                          .selectFrom("worker_nodes as node")
+                          .select("node.id")
+                          .whereRef("node.id", "=", "allocation.worker_node_id")
+                          .where("node.enabled", "=", true)
+                          .where("node.lease_expires_at", ">", sql<Date>`now()`)
+                          .where((node) =>
+                            node.or([
+                              node("node.remote", "is not", null),
+                              ...(input.localNode
+                                ? [
+                                    node.and([
+                                      node("node.id", "=", input.localNode.id),
+                                      node(
+                                        "node.lease_token",
+                                        "=",
+                                        input.localNode.token,
+                                      ),
+                                    ]),
+                                  ]
+                                : []),
+                            ]),
+                          ),
+                      ),
+                    ),
+                  ]),
+                ),
             ),
           ),
         )

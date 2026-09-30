@@ -925,6 +925,11 @@ authorityId })` periodically: a disposable node that released its lease, or
 whose lease lapsed past `LOST_NODE_GRACE_MS`, has its workflow runs moved to a
 live node and its chats released for readmission
 ([ADR 0190](docs/decisions/0190-disposable-control-plane-replicas.md)).
+A remote executor owns its node lease (ADR 0192): the host connects it with
+`WorkerNodesService.connectRemote({ epoch, offer, ... })`, renews it from the
+executor's own calls with `renewRemote`, and builds its sandbox provider from
+the row with `remoteProvider`; any host of the authority then claims its
+turns. `workerNode` names only the process's own local node.
 Enable `clientExecution: true` to accept authenticated member sandbox runners;
 `startClientRunner` supplies the transport-independent client loop. See the
 [cluster setup reference](skills/setup-work-server/references/cluster-deployment.md)

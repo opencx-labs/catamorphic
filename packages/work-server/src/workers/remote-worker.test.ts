@@ -418,9 +418,13 @@ describe("placement by owner (ADR 0167)", () => {
       url: "/api/workers/connect",
       headers: { authorization: `Worker ${enrolled.json().credential}` },
       payload: {
-        isolation: "process",
-        workspaceRoot: "/workspace",
-        capacity: { workspaces: 1 },
+        // An epoch is a UUIDv7 (ADR 0192).
+        session: "01920000-0000-7000-8000-000000000001",
+        offer: {
+          isolation: "process",
+          workspaceRoot: "/workspace",
+          capacity: { workspaces: 1 },
+        },
       },
     });
     expect(connect.statusCode).toBe(403);

@@ -134,14 +134,12 @@ export interface CatamorphicCoreConfig {
   agentCapabilities?: AgentCapabilityOptions;
   /** Stable host identity. Required when `codingAgent` enables sessions. */
   hostId?: string;
-  /** Distinct leased execution instance beneath the logical host authority. */
-  workerNode?: { id: string; token: string };
   /**
-   * Every node lease this process currently holds: its own plus remote
-   * workers it serves (ADR 0164). Agent sessions placed on any of them run
-   * their controller loop here. Defaults to `workerNode` alone.
+   * This process's own local node lease beneath the logical host authority.
+   * Work on it runs only here; work on remote nodes and on no node runs on
+   * any host of the authority (ADR 0192).
    */
-  heldWorkerNodes?: () => readonly { id: string; token: string }[];
+  workerNode?: { id: string; token: string };
   /**
    * How long a project's parsed `.work/roles/*.json` set is trusted before it is
    * re-read from the shared origin (ADR 0055). Role *definitions* may lag
@@ -743,11 +741,9 @@ export class CatamorphicCore {
       config.environmentProvider,
       clientRunners
         ? {
-            get: (args) =>
-              clientRunners.binding({
-                ...args,
-                workerNodeId: args.workerNodeId ?? config.workerNode?.id,
-              }),
+            // A member's own machine is no host's node: any host runs its
+            // chats while its runner's lease is live (ADR 0192).
+            get: (args) => clientRunners.binding(args),
           }
         : undefined,
       { gatewayHosts: config.gatewayHosts ?? [] },
@@ -1154,9 +1150,6 @@ export class CatamorphicCore {
         agentCapabilities: this.agentCapabilities,
         hostId: config.hostId,
         workerNode: config.workerNode,
-        ...(config.heldWorkerNodes
-          ? { heldWorkerNodes: config.heldWorkerNodes }
-          : {}),
         projectManager: this.projectManager,
         codingAgents,
         nativeAgentCheckout: config.nativeAgentCheckout,

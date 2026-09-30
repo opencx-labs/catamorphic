@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { SandboxProvider } from "@catamorphic/sandbox";
@@ -46,6 +47,9 @@ const CALL_TIMEOUT_MS = {
  * controller loops run on the control plane. It holds only its own machine
  * credential, never database access, vault keys, or member tokens, and it
  * reaches the control plane over outbound HTTPS, so it needs no open port.
+ * It owns its node lease (ADR 0192): the lease token is an epoch this
+ * process chooses once at start, so any replica can serve any of its calls
+ * and reconnecting never interrupts running work.
  */
 export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   nodeId: string;
@@ -83,6 +87,10 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     defaults: execution.defaults,
     ...(options.version ? { version: options.version } : {}),
   };
+  // This process's epoch: the node's lease token while it runs. A restart
+  // chooses a later one, and the control plane fails what the old one was
+  // sent as uncertain.
+  const epoch = uuidV7();
   /**
    * One call to the control plane. Definite answers become the runner's
    * errors; anything else (no answer, a timeout, a 5xx from a load balancer
@@ -118,6 +126,14 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         : `Control plane answered ${response.status} on ${route}`;
     if (response.status === 401) throw new WorkerRevokedError();
     if (response.status === 403) throw new WorkerRefusedError(reason);
+    if (
+      response.status === 409 &&
+      typeof answer === "object" &&
+      answer !== null &&
+      "superseded" in answer &&
+      answer.superseded === true
+    )
+      throw new WorkerSupersededError(reason);
     if (route === "complete" && response.status === 409)
       throw new ReceiptRefusedError(reason);
     if (route === "complete" && [400, 413].includes(response.status))
@@ -150,21 +166,17 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   let lastRetryLog = 0;
   let backoffMs = 1_000;
 
-  /** One session: a node lease, held until the control plane ends it. */
+  /**
+   * One session under this process's epoch, until the control plane ends
+   * it. Connecting again with the same epoch keeps everything running.
+   */
   const session = async (): Promise<void> => {
-    const connected = await call({
+    await call({
       route: "connect",
-      body: offer,
+      body: { session: epoch, offer },
       signal: stopping.signal,
     });
-    const token =
-      typeof connected === "object" &&
-      connected !== null &&
-      "session" in connected &&
-      typeof connected.session === "string"
-        ? connected.session
-        : undefined;
-    if (!token) throw new Error("The control plane returned no session");
+    const token = epoch;
     log(`Connected to ${base} as ${nodeId}`);
     backoffMs = 1_000;
     let failure: unknown;
@@ -243,7 +255,10 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         await session();
       } catch (error) {
         if (stopping.signal.aborted) break;
-        if (error instanceof WorkerRevokedError) {
+        if (
+          error instanceof WorkerRevokedError ||
+          error instanceof WorkerSupersededError
+        ) {
           log(error.message);
           break;
         }
@@ -274,6 +289,19 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       );
     },
   };
+}
+
+/**
+ * A UUIDv7: the millisecond clock, then random bits. A later process's
+ * epoch sorts after an earlier one's (ADR 0192).
+ */
+function uuidV7(): string {
+  const bytes = randomBytes(16);
+  bytes.writeUIntBE(Date.now(), 0, 6);
+  bytes.writeUInt8(((bytes.readUInt8(6) & 0x0f) | 0x70) >>> 0, 6);
+  bytes.writeUInt8(((bytes.readUInt8(8) & 0x3f) | 0x80) >>> 0, 8);
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 async function loadOrEnroll(args: {
@@ -327,6 +355,17 @@ class WorkerRefusedError extends RunnerSessionEndedError {
   constructor(message: string) {
     super(message);
     this.name = "WorkerRefusedError";
+  }
+}
+
+/**
+ * A newer process of this worker connected (ADR 0192): this one stops for
+ * good, since connecting again would take the lease back from it.
+ */
+class WorkerSupersededError extends RunnerSessionEndedError {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkerSupersededError";
   }
 }
 

@@ -77,6 +77,8 @@ import {
 } from "./agent-turns-service.js";
 import {
   allocationSandboxProvider,
+  claimAllocationMaintenance,
+  releaseAllocationMaintenance,
   withAllocationSandboxPolicy,
 } from "./allocation-sandbox-provider.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
@@ -616,9 +618,11 @@ export interface NativeAgentCheckout {
 interface AgentSessionsDeps {
   /** Stable, host-owned identity used to fence cross-host session delivery. */
   hostId: string;
+  /**
+   * This process's own local node. Its work runs only here; work on remote
+   * nodes and on no node runs on any host of the authority (ADR 0192).
+   */
   workerNode?: { id: string; token: string };
-  /** All node leases this process holds; defaults to `workerNode` alone. */
-  heldWorkerNodes?: () => readonly { id: string; token: string }[];
   /** Source-host presence window before a mirrored session is shown paused. */
   authorityLeaseMs?: number;
   projectManager: ProjectManager;
@@ -727,10 +731,6 @@ export class AgentSessionsService {
   readonly mailboxes: SessionMailboxesService;
   readonly hostId: string;
   private readonly workerNode?: { id: string; token: string };
-  private readonly heldWorkerNodes: () => readonly {
-    id: string;
-    token: string;
-  }[];
   /**
    * The line a running turn shows while it works, in the agent's own words:
    * the latest harness status, step description or in-progress todo. Kept
@@ -776,7 +776,8 @@ export class AgentSessionsService {
   private readonly drainers = new Map<string, Promise<void>>();
   /** Set by {@link stopLocalTurns}: this process claims no more turns. */
   private stoppingTurns = false;
-  private readonly turnWorkerId = `agent-sessions:${randomUUID()}`;
+  /** This process's name as a running turn's lease owner. */
+  readonly turnWorkerId = `agent-sessions:${randomUUID()}`;
   private archiveResources?: ArchiveSessionResourcesHandler;
   /** The host's identity resolver, from {@link startWorker}. */
   private resolveOwner?: (args: {
@@ -851,23 +852,41 @@ export class AgentSessionsService {
           "projects.tenant_id",
         ])
         .where("agent_sessions.authority_host_id", "=", this.hostId)
-        // Work on a node this instance holds, and chats whose workspace was
-        // released (idle, archive): they are admitted again wherever they
-        // fit, even when the machine they left is gone (ADR 0173). The
-        // authority check above keeps each chat to one host.
+        // Work this host may run (ADR 0192): on its own local node, on a
+        // remote node or none (any host of the authority runs those; the
+        // turn claim decides which), and chats whose workspace was released
+        // (idle, archive): they are admitted again wherever they fit, even
+        // when the machine they left is gone (ADR 0173). Another host's
+        // local node is left to that host.
         .$if(this.workerNode !== undefined, (query) =>
           query.where(({ exists, selectFrom }) =>
             exists(
               selectFrom("execution_allocations")
-                .select("id")
-                .whereRef("id", "=", "agent_sessions.allocation_id")
+                .leftJoin(
+                  "worker_nodes",
+                  "worker_nodes.id",
+                  "execution_allocations.worker_node_id",
+                )
+                .select("execution_allocations.id")
+                .whereRef(
+                  "execution_allocations.id",
+                  "=",
+                  "agent_sessions.allocation_id",
+                )
                 .where((allocation) =>
                   allocation.or([
-                    allocation("worker_node_id", "in", [
-                      "",
-                      ...this.heldWorkerNodes().map((node) => node.id),
-                    ]),
-                    allocation("status", "=", "released"),
+                    allocation(
+                      "execution_allocations.worker_node_id",
+                      "is",
+                      null,
+                    ),
+                    allocation(
+                      "execution_allocations.worker_node_id",
+                      "=",
+                      this.workerNode?.id ?? "",
+                    ),
+                    allocation("worker_nodes.remote", "is not", null),
+                    allocation("execution_allocations.status", "=", "released"),
                   ]),
                 ),
             ),
@@ -978,9 +997,6 @@ export class AgentSessionsService {
     this.turns = new AgentTurnsService(db);
     this.hostId = deps.hostId;
     this.workerNode = deps.workerNode;
-    this.heldWorkerNodes =
-      deps.heldWorkerNodes ??
-      (() => (deps.workerNode ? [deps.workerNode] : []));
     this.authorityLeaseMs = deps.authorityLeaseMs ?? 90_000;
     this.mailboxes = new SessionMailboxesService(db, deps.hostId);
     this.projectManager = deps.projectManager;
@@ -2829,10 +2845,7 @@ export class AgentSessionsService {
         db: this.db,
         allocation,
         provider: selected,
-        workerLeaseToken: () =>
-          this.heldWorkerNodes().find(
-            (node) => node.id === allocation.workerNodeId,
-          )?.token,
+        ...this.localFence(allocation),
       });
       await this.withdrawPersonalEnvironment({
         projectId: input.projectId,
@@ -4056,6 +4069,33 @@ export class AgentSessionsService {
     );
     if (!receipt.turnId) throw new Error("A queued send must create a turn");
     await this.scheduleDrain(identity, projectId, sessionId);
+    // Another host may run the turn (ADR 0192): wait for its result in
+    // Postgres while a live executor runs it, and briefly for a host to
+    // claim it. A lapsed lease belongs to recovery, not to this wait.
+    const turnId = receipt.turnId;
+    let unclaimedSince = Date.now();
+    for (;;) {
+      const current = await this.db
+        .selectFrom("agent_turns")
+        .select(["status", "result_message_id"])
+        .select(
+          sql<boolean>`coalesce(lease_expires_at > now(), false)`.as(
+            "lease_live",
+          ),
+        )
+        .where("id", "=", turnId)
+        .executeTakeFirstOrThrow();
+      if (current.status === "running") {
+        if (!current.lease_live) break;
+        unclaimedSince = Date.now();
+      } else if (
+        current.status !== "queued" ||
+        current.result_message_id !== null ||
+        Date.now() - unclaimedSince > 5_000
+      )
+        break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
     const turn = await this.db
       .selectFrom("agent_turns")
       .innerJoin(
@@ -4650,6 +4690,29 @@ export class AgentSessionsService {
     throw new SessionMirrorDivergedError(session.id);
   }
 
+  /** This process's own node lease when the Allocation is on it (ADR 0192). */
+  private localLease(
+    allocation: { workerNodeId: string | null } | undefined,
+  ): { id: string; token: string } | undefined {
+    return this.workerNode && allocation?.workerNodeId === this.workerNode.id
+      ? this.workerNode
+      : undefined;
+  }
+
+  /**
+   * The lease an Allocation's sandbox calls are fenced by in this process:
+   * the local node's own. A remote node's provider fences its operations by
+   * its executor's epoch, and a member's machine by its runner's lease.
+   */
+  private localFence(allocation: {
+    workerNodeId: string | null;
+  }): { workerLeaseToken: () => string | undefined } | Record<string, never> {
+    const lease = this.localLease(allocation);
+    // Read at each call: a single server takes its lease again under a new
+    // token after a lapse (ADR 0190).
+    return lease ? { workerLeaseToken: () => lease.token } : {};
+  }
+
   private scheduleDrain(
     identity: Identity,
     projectId: string,
@@ -4743,20 +4806,15 @@ export class AgentSessionsService {
         }
         continue;
       }
-      // The controller loop runs where the allocation's node lease is held:
-      // this instance's own node or a remote worker it serves (ADR 0164).
-      const nodeLease = this.workerNode
-        ? this.heldWorkerNodes().find(
-            (node) => node.id === allocation?.workerNodeId,
-          )
-        : undefined;
-      if (this.workerNode ? !nodeLease : allocation?.workerNodeId !== null)
-        return;
+      // Any host of the authority runs a turn on a remote node or none; a
+      // turn on a local node runs only in the process holding that node's
+      // lease (ADR 0192). The claim decides, in Postgres.
+      const nodeLease = this.localLease(allocation);
       if (this.stoppingTurns) return;
       const turn = await this.turns.claimNextForSession({
         workerId: this.turnWorkerId,
         sessionId,
-        ...(nodeLease ? { workerNode: nodeLease } : {}),
+        ...(this.workerNode ? { localNode: this.workerNode } : {}),
       });
       if (!turn) return;
       if (!turn.leaseToken) throw new Error("Claimed turn has no lease token");
@@ -4792,6 +4850,9 @@ export class AgentSessionsService {
       };
       const heartbeat = startAgentLeaseHeartbeat({
         renew: async () => {
+          // A turn on this host's local node ends with that node's lease; a
+          // turn on a remote node is fenced by its own lease alone, so the
+          // executor restarting never interrupts it (ADR 0192).
           if (nodeLease) {
             const owned = await this.db
               .selectFrom("worker_nodes")
@@ -4987,13 +5048,14 @@ export class AgentSessionsService {
    * released, and the node destroys the sandbox and frees its slot and
    * reservation. The chat's next turn admits a fresh workspace and
    * rehydrates it from the branch, so capacity follows activity rather than
-   * open chats. Runs on the instance holding each node's lease.
+   * open chats. Any host releases a chat's workspace on a remote node, and
+   * this host its own local node's, each under a claim on the Allocation
+   * so two never save it at once (ADR 0192). A member's own machine holds
+   * no shared capacity; its runner stops its sandboxes when it disconnects.
    */
   async releaseIdleWorkspaces(
     input: { now?: Date; limit?: number } = {},
   ): Promise<number> {
-    const held = this.heldWorkerNodes().map((node) => node.id);
-    if (held.length === 0) return 0;
     const now = input.now ?? new Date();
     const rows = await this.db
       .selectFrom("agent_sessions as session")
@@ -5003,6 +5065,7 @@ export class AgentSessionsService {
         "session.allocation_id",
       )
       .innerJoin("projects", "projects.id", "session.project_id")
+      .innerJoin("worker_nodes as node", "node.id", "allocation.worker_node_id")
       .select([
         "session.id",
         "session.project_id",
@@ -5024,7 +5087,12 @@ export class AgentSessionsService {
       )
       .where("session.status", "=", "active")
       .where("allocation.status", "=", "active")
-      .where("allocation.worker_node_id", "in", held)
+      .where((node) =>
+        node.or([
+          node("node.remote", "is not", null),
+          node("node.id", "=", this.workerNode?.id ?? ""),
+        ]),
+      )
       .where(({ not, exists, selectFrom }) =>
         not(
           exists(
@@ -5066,6 +5134,14 @@ export class AgentSessionsService {
         : 0;
       const idleSince = Math.max(row.allocated_at.getTime(), lastTurnAt);
       if (now.getTime() - idleSince < minutes * 60_000) continue;
+      if (
+        !(await claimAllocationMaintenance({
+          db: this.db,
+          allocationId: row.allocation_id,
+          status: "active",
+        }))
+      )
+        continue;
       try {
         if (
           await this.releaseIdleWorkspace({
@@ -5086,6 +5162,11 @@ export class AgentSessionsService {
           `[catamorphic] Idle workspace of session ${row.id} kept`,
           error,
         );
+      } finally {
+        await releaseAllocationMaintenance({
+          db: this.db,
+          allocationId: row.allocation_id,
+        }).catch(() => {});
       }
     }
     return released.length;
@@ -5129,10 +5210,7 @@ export class AgentSessionsService {
         db: this.db,
         allocation,
         provider: selected,
-        workerLeaseToken: () =>
-          this.heldWorkerNodes().find(
-            (node) => node.id === allocation.workerNodeId,
-          )?.token,
+        ...this.localFence(allocation),
       });
       const status = await provider.getSandboxStatus(input.sandboxProviderId);
       if (status === "stopped" || status === "archived")
@@ -7399,12 +7477,9 @@ export class AgentSessionsService {
             db: this.db,
             allocation,
             provider: selectedProvider,
-            // The node's lease as this instance holds it at each call, so a
-            // worker that reconnected keeps serving its live sessions.
-            workerLeaseToken: () =>
-              this.heldWorkerNodes().find(
-                (node) => node.id === allocation.workerNodeId,
-              )?.token ?? admitted.runtime.workerLeaseToken,
+            // A local node's lease fences each call here; a remote node's
+            // provider fences its own operations (ADR 0192).
+            ...this.localFence(allocation),
           })
         : selectedProvider &&
           withAllocationSandboxPolicy({
