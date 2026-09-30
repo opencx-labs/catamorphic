@@ -28,6 +28,8 @@ Environment variables parsed by `workServerConfigFromEnv` in
 | `WORK_PUBLIC_URL` | Public origin for OAuth, invitations, and webhook URLs. Must be HTTPS unless loopback. |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` | Model for the built-in agent. `WORK_MODEL`, `WORK_EFFORT` tune it. `WORK_FAKE_AGENT=1` runs a deterministic echo agent. Claude Code and Codex agents never see these; they use model connections ([Harnesses on the server](harnesses.md)). |
 | `WORK_AUTH_CONFIG` | Path to the sign-in config (default `<data>/auth-config.json`), read at boot. |
+| `WORK_TRUSTED_PROXIES` | Addresses or CIDR ranges of the load balancers and proxies in front of the server (`10.0.0.0/8,fd00::/8`). Their `x-forwarded-for` entries name the client; without it, the connection's peer is the client. See [sign-in limits](#sign-in-limits). |
+| `WORK_AUTH_RATE_LIMIT` | `on` (default) or `off`. Turn the sign-in limits off only for tests that sign in many times. |
 | `WORK_OPERATOR_PORT` | Loopback-only setup listener (default 4701). |
 | `WORK_OPERATOR_SECRET` | Supplies the operator credential instead of the generated `<data>/operator-secret`. |
 | `WORK_MDNS` | `off`, or a hostname (default a unique `work-<id>.local`). |
@@ -71,6 +73,26 @@ providers with `"audience": "guests"` sign customers in to shares only
 Register the provider's redirect URI as
 `<WORK_PUBLIC_URL>/api/auth/oauth2/callback/<id>`. `scopes` defaults to
 `openid email profile`. Keep client secrets out of the repository.
+
+### Sign-in limits
+
+Sign-in is limited per client address: three attempts every 10 seconds on
+each sign-in endpoint (local password and starting a provider sign-in), and
+100 requests every 10 seconds on the other `/api/auth` endpoints, such as the
+OAuth token endpoint. The fourth attempt gets `429` and the sign-in page says
+to wait. Counts live in the auth schema of the database, so replicas share
+one budget (ADR 0189).
+
+The client address is the connection's peer unless that peer is listed in
+`WORK_TRUSTED_PROXIES`. Behind a load balancer or CDN, list every proxy hop
+between the internet and the server (the load balancer's private range,
+and the CDN's published ranges when it connects to the balancer), and
+make sure each appends to `x-forwarded-for`. The server then walks that
+header from the nearest hop and takes the first address no trusted proxy
+owns, so a client cannot choose its own. Leave it unset when clients connect
+directly. If it is missing behind a proxy, every person shares the proxy's
+address and one budget; a range that includes client addresses lets those
+clients pick theirs.
 
 ## A custom server
 

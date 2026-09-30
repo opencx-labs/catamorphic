@@ -78,6 +78,8 @@ export class MachineReconciler {
       controlPlaneUrl: string;
       /** A user's sign-in email, for dedicated machines' access. */
       emailOf: (userId: string) => Promise<string | undefined>;
+      /** How long a pass holds the lease without renewing (default 2 minutes). */
+      leaseMs?: number;
       log?: (line: string) => void;
     },
   ) {}
@@ -130,7 +132,11 @@ export class MachineReconciler {
     ];
   }
 
-  /** One pass; concurrent callers share it, and replicas take turns. */
+  /**
+   * One pass; concurrent callers share it, and replicas take turns: a pass
+   * runs only while this reconciler holds the tenant's lease row, renewed
+   * as it goes and checked before every change it makes.
+   */
   reconcile(): Promise<ReconcileSummary> {
     this.running ??= this.guardedPass().finally(() => {
       this.running = undefined;
@@ -140,39 +146,106 @@ export class MachineReconciler {
 
   private readonly holder = randomUUID();
 
-  private async guardedPass(): Promise<ReconcileSummary> {
+  private get leaseMs(): number {
+    return this.deps.leaseMs ?? 120_000;
+  }
+
+  /** Take the lease if it is free, expired, or already this reconciler's. */
+  private async claim(): Promise<boolean> {
     const held = await sql<{ holder: string }>`
       INSERT INTO work_machine_reconciler (tenant_id, holder, expires_at)
-      VALUES (${this.deps.tenantId}, ${this.holder}, now() + interval '10 minutes')
+      VALUES (${this.deps.tenantId}, ${this.holder}, now() + make_interval(secs => ${this.leaseMs / 1000}))
       ON CONFLICT (tenant_id) DO UPDATE
         SET holder = EXCLUDED.holder, expires_at = EXCLUDED.expires_at
         WHERE work_machine_reconciler.expires_at < now()
            OR work_machine_reconciler.holder = EXCLUDED.holder
       RETURNING holder
     `.execute(this.deps.db);
-    if (held.rows.length === 0) {
+    return held.rows.length > 0;
+  }
+
+  /**
+   * Extend the lease while nobody else took it. An expired lease nobody
+   * claimed is still this reconciler's: no other pass ran meanwhile.
+   */
+  private async renew(): Promise<boolean> {
+    const renewed = await sql<{ holder: string }>`
+      UPDATE work_machine_reconciler
+      SET expires_at = now() + make_interval(secs => ${this.leaseMs / 1000})
+      WHERE tenant_id = ${this.deps.tenantId} AND holder = ${this.holder}
+      RETURNING holder
+    `.execute(this.deps.db);
+    return renewed.rows.length > 0;
+  }
+
+  private async guardedPass(): Promise<ReconcileSummary> {
+    if (!(await this.claim())) {
       // Another replica is reconciling; its pass covers this one.
       return { created: [], updated: [], removed: [], failed: [] };
     }
-    try {
-      return await this.pass();
-    } finally {
-      await this.deps.db
-        .deleteFrom("work_machine_reconciler")
-        .where("tenant_id", "=", this.deps.tenantId)
-        .where("holder", "=", this.holder)
-        .execute();
-    }
-  }
-
-  private async pass(): Promise<ReconcileSummary> {
+    const lease = { lost: false };
+    // A platform call can outlast the lease; keep it while the pass runs.
+    const heartbeat = setInterval(
+      () => {
+        void this.renew()
+          .then((held) => {
+            if (!held) lease.lost = true;
+          })
+          .catch(() => undefined);
+      },
+      Math.max(1_000, this.leaseMs / 4),
+    );
+    heartbeat.unref();
+    const fence = async () => {
+      if (lease.lost || !(await this.renew())) {
+        lease.lost = true;
+        throw new ReconcilerLeaseLostError();
+      }
+    };
     const summary: ReconcileSummary = {
       created: [],
       updated: [],
       removed: [],
       failed: [],
     };
+    try {
+      await this.pass({ fence, summary });
+    } catch (error) {
+      if (!(error instanceof ReconcilerLeaseLostError)) throw error;
+      this.deps.log?.(
+        "Machine reconciliation stopped: another replica took over the pass",
+      );
+    } finally {
+      clearInterval(heartbeat);
+      await this.deps.db
+        .deleteFrom("work_machine_reconciler")
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("holder", "=", this.holder)
+        .execute();
+    }
+    const changed =
+      summary.created.length + summary.updated.length + summary.removed.length;
+    if (changed > 0 || summary.failed.length > 0) {
+      this.deps.log?.(
+        `Machines: ${summary.created.length} created, ${summary.updated.length} updated, ${summary.removed.length} removed, ${summary.failed.length} failed`,
+      );
+    }
+    return summary;
+  }
+
+  /**
+   * Records what it changes in `summary`; `fence` throws once another
+   * reconciler holds the lease, ending the pass with what it did so far.
+   */
+  private async pass({
+    fence,
+    summary,
+  }: {
+    fence: () => Promise<void>;
+    summary: ReconcileSummary;
+  }): Promise<void> {
     const destroy = async (machine: { name: string; ref: string | null }) => {
+      await fence();
       try {
         await this.deps.provisioner.destroy(machine);
         await this.deps.workers.forgetMachine(machine);
@@ -197,6 +270,7 @@ export class MachineReconciler {
         !desired.has(machine.name);
       if (!unwanted) continue;
       if (machine.state === "enrolled" || machine.state === "pending") {
+        await fence();
         await this.deps.workers.revoke({ name: machine.name });
         await this.deps.workers.cancelEnrollments({ name: machine.name });
       }
@@ -210,24 +284,30 @@ export class MachineReconciler {
           candidate.name === machine.name &&
           (candidate.state === "enrolled" || candidate.state === "pending"),
       );
+      if (current?.state === "pending") continue;
+      if (
+        current?.state === "enrolled" &&
+        canonical(current.placement) === canonical(machine.placement)
+      )
+        continue;
+      await fence();
       try {
-        if (current?.state === "enrolled") {
-          if (canonical(current.placement) !== canonical(machine.placement)) {
-            await this.deps.workers.setPlacement({
-              name: machine.name,
-              placement: machine.placement,
-            });
-            summary.updated.push(machine.name);
-          }
+        if (current) {
+          await this.deps.workers.setPlacement({
+            name: machine.name,
+            placement: machine.placement,
+          });
+          summary.updated.push(machine.name);
           continue;
         }
-        if (current) continue;
-        const enrollment = await this.deps.workers.createEnrollment({
+        const enrollment = await this.deps.workers.createMachineEnrollment({
           name: machine.name,
+          rule: machine.rule,
           ttlMinutes: 60,
           placement: machine.placement,
-          machine: { rule: machine.rule },
         });
+        // Its machine enrolled or is being created since this pass looked.
+        if (!enrollment) continue;
         const { ref } = await this.deps.provisioner.create({
           name: machine.name,
           class: machine.class,
@@ -246,14 +326,6 @@ export class MachineReconciler {
         summary.failed.push({ name: machine.name, error: message(error) });
       }
     }
-    const changed =
-      summary.created.length + summary.updated.length + summary.removed.length;
-    if (changed > 0 || summary.failed.length > 0) {
-      this.deps.log?.(
-        `Machines: ${summary.created.length} created, ${summary.updated.length} updated, ${summary.removed.length} removed, ${summary.failed.length} failed`,
-      );
-    }
-    return summary;
   }
 
   private async desired(): Promise<Map<string, DesiredMachine>> {
@@ -310,6 +382,14 @@ export class MachineReconciler {
       if (email) members.push({ userId: row.user_id, email });
     }
     return members;
+  }
+}
+
+/** Another reconciler holds the lease: this pass stops before changing more. */
+class ReconcilerLeaseLostError extends Error {
+  constructor() {
+    super("The machine reconciler lease moved to another replica");
+    this.name = "ReconcilerLeaseLostError";
   }
 }
 

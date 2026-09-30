@@ -29,6 +29,8 @@ function optionsFor(
     secret: "work-auth-database-test-secret-at-least-32-characters",
     database,
     emailAndPassword: { enabled: true },
+    // The Work server counts sign-in limits in its auth schema.
+    rateLimit: { enabled: true, storage: "database" },
   };
 }
 
@@ -94,6 +96,12 @@ describePostgres("openWorkAuthDatabase with Postgres", () => {
         [schema],
       );
       expect(tables.rows[0]?.present).toBe(true);
+      const limits = await admin.query<{ schema: string }>(
+        `SELECT table_schema AS schema FROM information_schema.tables
+         WHERE table_name = 'rateLimit' AND table_schema = $1`,
+        [schema],
+      );
+      expect(limits.rows).toEqual([{ schema }]);
     } finally {
       await database.close();
       await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);

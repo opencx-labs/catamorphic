@@ -50,3 +50,23 @@ it("reads sign-in configuration files into typed config (ADR 0183)", () => {
     }),
   ).toThrow(configured);
 });
+
+it("reads trusted proxies and the sign-in limit switch", () => {
+  const env = { WORK_DATA_DIR: dir };
+  const defaults = workServerConfigFromEnv(env);
+  expect(defaults.trustedProxies).toBeUndefined();
+  expect(defaults.authRateLimit).toBeUndefined();
+  const configured = workServerConfigFromEnv({
+    ...env,
+    WORK_TRUSTED_PROXIES: " 10.0.0.0/8, fd00::/8 ,",
+    WORK_AUTH_RATE_LIMIT: "off",
+  });
+  expect(configured.trustedProxies).toEqual(["10.0.0.0/8", "fd00::/8"]);
+  expect(configured.authRateLimit).toBe(false);
+  expect(() =>
+    workServerConfigFromEnv({ ...env, WORK_TRUSTED_PROXIES: "10.0.0.0/40" }),
+  ).toThrow("WORK_TRUSTED_PROXIES");
+  expect(() =>
+    workServerConfigFromEnv({ ...env, WORK_AUTH_RATE_LIMIT: "false" }),
+  ).toThrow("WORK_AUTH_RATE_LIMIT");
+});

@@ -8,6 +8,7 @@ import {
   type ResolvedWorkAuthConfig,
 } from "./auth-config.js";
 import type { WorkAuthDatabase } from "./auth-database.js";
+import { CLIENT_ADDRESS_HEADER } from "./client-address.js";
 
 export interface WorkAuthUser {
   id: string;
@@ -86,6 +87,11 @@ export function createWorkAuth(options: {
   config?: ResolvedWorkAuthConfig;
   /** Runs at every upstream sign-in after the provider's own checks. */
   signInGate?: WorkSignInGate;
+  /**
+   * Per client address limits on the auth endpoints (default on). Requests
+   * reach `handler` with the address in {@link CLIENT_ADDRESS_HEADER}.
+   */
+  rateLimit?: boolean;
 }): WorkAuth {
   const config = options.config ?? parseWorkAuthConfig({});
   const auth = betterAuth({
@@ -99,6 +105,13 @@ export function createWorkAuth(options: {
     // A guest sign-in must never attach to a member with the same email
     // (ADR 0165), so accounts are never linked implicitly.
     account: { accountLinking: { enabled: false } },
+    // Better Auth's own limits (3 sign-ins per 10 seconds, 100 requests to
+    // any other endpoint) whatever NODE_ENV says, counted in the auth schema
+    // so every replica spends one budget. The table exists either way.
+    rateLimit: { enabled: options.rateLimit ?? true, storage: "database" },
+    // The Work server resolves the client behind trusted proxies itself;
+    // Better Auth sees only headers, never the connection's peer.
+    advanced: { ipAddress: { ipAddressHeaders: [CLIENT_ADDRESS_HEADER] } },
     plugins: [
       username(),
       bearer(),

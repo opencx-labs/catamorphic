@@ -104,3 +104,29 @@ export async function oauthAccessToken(args: {
   expectStatus("token", token.statusCode, 200);
   return String(token.json().access_token);
 }
+
+/**
+ * Drop a test's own database once the servers that used it have closed
+ * their connections. Forcing it while a pool is still closing a client
+ * terminates that client, which surfaces as an uncaught error.
+ */
+export async function dropTestDatabase(args: {
+  admin: {
+    query(
+      text: string,
+      values?: unknown[],
+    ): Promise<{ rows: Array<{ connections?: number }> }>;
+  };
+  database: string;
+}): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const { rows } = await args.admin.query(
+      "SELECT count(*)::int AS connections FROM pg_stat_activity WHERE datname = $1",
+      [args.database],
+    );
+    if (!rows[0]?.connections) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  await args.admin.query(`DROP DATABASE ${args.database} WITH (FORCE)`);
+}

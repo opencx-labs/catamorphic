@@ -144,10 +144,13 @@ worker command with `WORK_CONTROL_PLANE_URL` and the one-time
 - `GET /_work/operator/machine-rules` lists rules; `DELETE` removes one and its
   machines; `POST /_work/operator/machine-rules/reconcile` runs a pass now.
 
-The server reconciles every minute and when an account is disabled: members
-who left the group or were suspended lose their machine (revoked, then
-destroyed), and a machine that never enrolls within an hour is destroyed and
-replaced. A person gets a machine after their first sign-in, once the
+The server reconciles every minute and when an account is disabled, one
+replica at a time: a pass holds a lease in Postgres, renews it while platform
+calls run, and stops changing anything once another replica took it over; a
+machine whose enrollment code is still waiting is never provisioned twice.
+Members who left the group or were suspended lose their machine (revoked,
+then destroyed), and a machine that never enrolls within an hour is destroyed
+and replaced. A person gets a machine after their first sign-in, once the
 directory has placed them in the group.
 
 ## Add a control-plane replica
@@ -157,7 +160,10 @@ directory has placed them in the group.
 2. Supply the deployment's `DATABASE_URL`, `WORK_SECRET`, `WORK_VAULT_KEY`,
    `WORK_PUBLIC_URL`, sign-in configuration (`WORK_AUTH_CONFIG`), and gateway
    configuration (`WORK_GATEWAY_CONFIG`) through the secret mechanism. All
-   replicas share one public HTTPS origin behind the load balancer.
+   replicas share one public HTTPS origin behind the load balancer. Set
+   `WORK_TRUSTED_PROXIES` to the balancer's (and any CDN's) addresses so
+   sign-in limits count each person's address, not the balancer's; the
+   limits are shared by every replica ([sign-in limits](stock-server.md#sign-in-limits)).
 3. Start the normal server. Boot migrates with database coordination, checks
    that origin, secrets, vault key id, and sign-in configuration match, and
    registers its machine with a renewable lease.

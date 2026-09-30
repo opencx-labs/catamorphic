@@ -1,10 +1,16 @@
 import { randomBytes } from "node:crypto";
+import type { BlockList } from "node:net";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { workMark } from "../brand.js";
 import type {
   GrantDecision,
   TokenResponse,
 } from "../identity/account-lifecycle.js";
+import {
+  CLIENT_ADDRESS_HEADER,
+  clientAddress,
+  trustedProxies,
+} from "./client-address.js";
 import type { WorkAuth } from "./work-auth.js";
 
 /** Account lifecycle checks around the OAuth token endpoint (ADR 0161). */
@@ -34,6 +40,8 @@ export function registerWorkAuthRoutes(
     /** Sign-in choices on a share link: member and guest providers. */
     shareMethods?: PublicAuthMethods;
     tokenGate?: TokenGate;
+    /** Proxies whose `x-forwarded-for` entries name the client. */
+    trustedProxies?: BlockList;
   },
 ): void {
   const methodsFor = (request: FastifyRequest) =>
@@ -142,7 +150,11 @@ export function registerWorkAuthRoutes(
       loginPage(
         methodsFor(request),
         continuationQuery(request),
-        error === "account" ? "account" : error ? "credentials" : undefined,
+        error === "account" || error === "limited"
+          ? error
+          : error
+            ? "credentials"
+            : undefined,
         nonce,
       ),
     );
@@ -159,6 +171,9 @@ export function registerWorkAuthRoutes(
     });
     copyCookies(response, reply);
     const query = continuationQuery(request);
+    if (response.status === 429) {
+      return reply.redirect(`/login?${query}&error=limited`);
+    }
     const resumed = response.headers.get("location");
     if (resumed && response.status >= 300 && response.status < 400) {
       return reply.redirect(resumed);
@@ -200,7 +215,9 @@ export function registerWorkAuthRoutes(
       };
       return response.ok && typeof result.url === "string"
         ? reply.redirect(result.url)
-        : reply.redirect(`/login?${query}&error=1`);
+        : reply.redirect(
+            `/login?${query}&error=${response.status === 429 ? "limited" : "1"}`,
+          );
     },
   );
   app.get("/oauth/consent", (request, reply) =>
@@ -235,7 +252,7 @@ export function registerWorkAuthRoutes(
 }
 
 async function forwardToBetterAuth(
-  options: { auth: WorkAuth; baseURL: string },
+  options: { auth: WorkAuth; baseURL: string; trustedProxies?: BlockList },
   request: FastifyRequest,
   reply: FastifyReply,
   pathname?: string,
@@ -287,8 +304,10 @@ async function sendResponse(
   return reply.send(bytes.byteLength > 0 ? Buffer.from(bytes) : null);
 }
 
+const NO_PROXIES = trustedProxies([]);
+
 async function callBetterAuth(
-  options: { auth: WorkAuth; baseURL: string },
+  options: { auth: WorkAuth; baseURL: string; trustedProxies?: BlockList },
   request: FastifyRequest,
   overrides: {
     pathname?: string;
@@ -307,6 +326,14 @@ async function callBetterAuth(
       if (entry !== undefined) headers.append(name, String(entry));
     }
   }
+  // Better Auth keys its limits by this header; only the server sets it.
+  headers.delete(CLIENT_ADDRESS_HEADER);
+  const client = clientAddress({
+    peer: request.raw.socket?.remoteAddress,
+    forwardedFor: request.headers["x-forwarded-for"],
+    trusted: options.trustedProxies ?? NO_PROXIES,
+  });
+  if (client) headers.set(CLIENT_ADDRESS_HEADER, client);
   if (overrides.contentType) {
     headers.set("content-type", overrides.contentType);
   }
@@ -353,7 +380,7 @@ function requestBody(
 function loginPage(
   methods: PublicAuthMethods,
   continuation: string,
-  failure: "credentials" | "account" | undefined,
+  failure: "credentials" | "account" | "limited" | undefined,
   nonce: string,
 ): string {
   const failed = failure !== undefined;
@@ -383,9 +410,11 @@ function loginPage(
   const error =
     failure === "account"
       ? '<p id="sign-in-error" class="error" role="alert">This account cannot sign in here. Use your company account, or ask an administrator to check your access.</p>'
-      : failure
-        ? '<p id="sign-in-error" class="error" role="alert">Those credentials did not work. Check them and try again.</p>'
-        : "";
+      : failure === "limited"
+        ? '<p id="sign-in-error" class="error" role="alert">Too many sign-in attempts. Wait a few seconds and try again.</p>'
+        : failure
+          ? '<p id="sign-in-error" class="error" role="alert">Those credentials did not work. Check them and try again.</p>'
+          : "";
   const divider =
     providers && local ? '<div class="divider"><span>or</span></div>' : "";
   const script = local
