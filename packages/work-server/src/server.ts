@@ -57,6 +57,7 @@ import { workAgentCapabilities } from "./agent-capabilities.js";
 import { buildAgentRegistry } from "./agents.js";
 import { parseWorkAuthConfig } from "./auth/auth-config.js";
 import { openWorkAuthDatabase } from "./auth/auth-database.js";
+import { trustedProxies } from "./auth/client-address.js";
 import { registerWorkAuthRoutes } from "./auth/fastify-auth.js";
 import {
   createWorkAuth,
@@ -236,6 +237,13 @@ async function createWorkServerInner(
   // Config is data, validated by the schemas the image's files use; only
   // the image's environment layer reads files for it (ADR 0183).
   const workAuthConfig = parseWorkAuthConfig(config.auth ?? {});
+  // Validated here too, for servers that build their config in code.
+  trustedProxies(config.trustedProxies ?? []);
+  if (config.authRateLimit === false) {
+    log(
+      "Warning: sign-in rate limits are off (WORK_AUTH_RATE_LIMIT=off). Passwords can be guessed without limit; use this only for tests.",
+    );
+  }
   const gateway = config.gateway ? parseGatewayConfig(config.gateway) : null;
   if (
     config.connectionGuardTimeoutMs !== undefined &&
@@ -601,6 +609,7 @@ async function createWorkServerInner(
     secret: authSecret,
     config: workAuthConfig,
     signInGate: (account) => accountLifecycle.admitSignIn(account),
+    rateLimit: config.authRateLimit ?? true,
   });
   await workAuth.migrate();
   // Organization administrators hold the host-issued connections
@@ -1007,6 +1016,8 @@ async function createWorkServerInner(
     methods: workAuthConfig.publicMethods(),
     shareMethods: workAuthConfig.publicMethods("shares"),
     tokenGate: accountLifecycle,
+    trustedProxies: config.trustedProxies ?? [],
+    log,
   });
   registerShareRoutes(app, {
     core,

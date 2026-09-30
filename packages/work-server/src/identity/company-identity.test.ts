@@ -68,7 +68,12 @@ beforeAll(async () => {
   server = await createWorkServer({
     ...testServerOptions({
       dataDir,
-      env: { WORK_FAKE_AGENT: "1", PATH: process.env.PATH },
+      // Many people sign in from one test address within seconds.
+      env: {
+        WORK_FAKE_AGENT: "1",
+        WORK_AUTH_RATE_LIMIT: "off",
+        PATH: process.env.PATH,
+      },
     }),
     hooks: { directories: [directory] },
   });

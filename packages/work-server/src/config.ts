@@ -3,6 +3,7 @@ import {
   type WorkAuthConfig,
   workAuthConfigFromFile,
 } from "./auth/auth-config.js";
+import { trustedProxies } from "./auth/client-address.js";
 import {
   executionSettingsFromEnv,
   type WorkExecutionSettings,
@@ -58,6 +59,21 @@ export interface WorkServerConfig {
   vaultKeys?: Uint8Array[];
   /** Network Postgres. Absent means PGlite under `dataDir`. */
   databaseUrl?: string;
+  /**
+   * Addresses of the load balancers and proxies in front of the server, as
+   * IPs or CIDR ranges, from `WORK_TRUSTED_PROXIES=10.0.0.0/8,fd00::/8`. The
+   * client address is the nearest `x-forwarded-for` entry that is not a
+   * trusted proxy's own; with none, it is the connection's peer and the
+   * header is ignored.
+   */
+  trustedProxies?: string[];
+  /**
+   * Per client address limits on sign-in and the other `/api/auth`
+   * endpoints, counted in the database so every replica enforces one limit.
+   * On unless `false`; `WORK_AUTH_RATE_LIMIT=off` turns them off, for tests
+   * that sign in many times.
+   */
+  authRateLimit?: boolean;
   /**
    * Sign-in providers and session policy. Absent means local sign-in only,
    * with default policies. The image reads it from `WORK_AUTH_CONFIG`
@@ -131,6 +147,17 @@ export function workServerConfigFromEnv(
         }
       : {}),
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
+    ...(env.WORK_TRUSTED_PROXIES
+      ? { trustedProxies: proxyEntries(env.WORK_TRUSTED_PROXIES) }
+      : {}),
+    ...(env.WORK_AUTH_RATE_LIMIT
+      ? {
+          authRateLimit: onOff(
+            "WORK_AUTH_RATE_LIMIT",
+            env.WORK_AUTH_RATE_LIMIT,
+          ),
+        }
+      : {}),
     auth: workAuthConfigFromFile(
       env.WORK_AUTH_CONFIG ?? path.join(dataDir, "auth-config.json"),
     ),
@@ -157,6 +184,27 @@ export function workServerConfigFromEnv(
       ? { webhookMaxBodyBytes: webhookMaxBytes(env.WORK_WEBHOOK_MAX_BYTES) }
       : {}),
   };
+}
+
+function proxyEntries(value: string): string[] {
+  const entries = value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  try {
+    trustedProxies(entries);
+  } catch (error) {
+    throw new Error(
+      `WORK_TRUSTED_PROXIES: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return entries;
+}
+
+function onOff(name: string, value: string): boolean {
+  if (value === "on") return true;
+  if (value === "off") return false;
+  throw new Error(`${name} is on or off, got '${value}'`);
 }
 
 function webhookMaxBytes(value: string): number {

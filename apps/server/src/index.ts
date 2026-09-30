@@ -18,6 +18,8 @@ import { lanAddresses, startMdnsResponder } from "./mdns.js";
  *   WORK_OPERATOR_PORT   loopback-only setup port (default 4701)
  *   WORK_DATA_DIR        data dir (default /data)
  *   WORK_PUBLIC_URL      public base for OAuth and connection links
+ *   WORK_TRUSTED_PROXIES load balancers whose x-forwarded-for names the
+ *                        client (CIDRs), for sign-in limits
  *   WORK_MDNS            "off" disables LAN discovery; any other value is
  *                        the hostname (default work-<id>.local, unique per server)
  *   ANTHROPIC_API_KEY | OPENROUTER_API_KEY | OPENAI_API_KEY  enable chat

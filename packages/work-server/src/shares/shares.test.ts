@@ -212,6 +212,8 @@ beforeAll(async () => {
       env: {
         WORK_FAKE_AGENT: "1",
         WORK_AUTH_CONFIG: authConfig,
+        // Many people sign in from one test address within seconds.
+        WORK_AUTH_RATE_LIMIT: "off",
         PATH: process.env.PATH,
       },
     }),

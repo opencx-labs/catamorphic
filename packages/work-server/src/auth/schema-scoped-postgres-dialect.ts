@@ -4,18 +4,18 @@ import {
   type Dialect,
   type Kysely,
   PostgresDialect,
+  type PostgresPool,
   type SchemaMetadata,
   sql,
   type TableMetadata,
 } from "kysely";
-import type { Pool } from "pg";
 
 /** PostgreSQL dialect whose metadata surface is limited to one host schema. */
 export class SchemaScopedPostgresDialect implements Dialect {
   readonly base: PostgresDialect;
   readonly schema: string;
 
-  constructor(options: { pool: Pool; schema: string }) {
+  constructor(options: { pool: PostgresPool; schema: string }) {
     this.base = new PostgresDialect({ pool: options.pool });
     this.schema = options.schema;
   }

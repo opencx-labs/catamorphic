@@ -245,40 +245,83 @@ export class WorkWorkerRegistry {
     name: string;
     ttlMinutes?: number;
     placement?: z.input<typeof WorkerPlacementSchema>;
-    /** Set by the machine reconciler for machines it provisions. */
-    machine?: { rule: string; ref?: string };
   }): Promise<{ code: string; nodeId: string; expiresAt: Date }> {
-    const name = WorkerName.parse(args.name);
-    const placement = WorkerPlacementSchema.parse(args.placement ?? {});
-    const existing = await this.deps.db
-      .selectFrom("work_workers")
-      .select("node_id")
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("name", "=", name)
-      .where("revoked_at", "is", null)
-      .executeTakeFirst();
-    if (existing) {
+    const enrollment = await this.issueEnrollment(args);
+    if (!enrollment) {
       throw new Error(
-        `A worker named '${name}' is already enrolled; revoke it first`,
+        `A worker named '${args.name}' is already enrolled; revoke it first`,
       );
     }
-    const code = `wke_${randomBytes(24).toString("base64url")}`;
-    const expiresAt = new Date(Date.now() + (args.ttlMinutes ?? 30) * 60_000);
-    await this.deps.db
-      .insertInto("work_worker_enrollments")
-      .values({
-        code_hash: hash(code),
-        tenant_id: this.deps.tenantId,
-        name,
-        labels: JSON.stringify(placement.labels),
-        access: JSON.stringify(placement.access),
-        trusted: placement.trusted,
-        machine_rule: args.machine?.rule ?? null,
-        machine_ref: args.machine?.ref ?? null,
-        expires_at: expiresAt,
-      })
-      .execute();
-    return { code, nodeId: `${WORKER_NODE_PREFIX}${name}`, expiresAt };
+    return enrollment;
+  }
+
+  /**
+   * Machine reconciler: the code for a machine it is about to provision
+   * under a rule, or null when that machine already enrolled or has a code
+   * waiting. Replicas asking at once get one code, so a person never gets
+   * two machines.
+   */
+  createMachineEnrollment(args: {
+    name: string;
+    rule: string;
+    ttlMinutes: number;
+    placement: z.input<typeof WorkerPlacementSchema>;
+  }): Promise<{ code: string; nodeId: string; expiresAt: Date } | null> {
+    return this.issueEnrollment({ ...args, machineRule: args.rule });
+  }
+
+  private async issueEnrollment(args: {
+    name: string;
+    ttlMinutes?: number;
+    placement?: z.input<typeof WorkerPlacementSchema>;
+    machineRule?: string;
+  }): Promise<{ code: string; nodeId: string; expiresAt: Date } | null> {
+    const name = WorkerName.parse(args.name);
+    const placement = WorkerPlacementSchema.parse(args.placement ?? {});
+    return this.deps.db.transaction().execute(async (trx) => {
+      // One issuer per name at a time, across replicas, until commit.
+      await sql`SELECT pg_advisory_xact_lock(hashtext(${`work-worker-name:${this.deps.tenantId}:${name}`}))`.execute(
+        trx,
+      );
+      const enrolled = await trx
+        .selectFrom("work_workers")
+        .select("node_id")
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("name", "=", name)
+        .where("revoked_at", "is", null)
+        .executeTakeFirst();
+      if (enrolled) return null;
+      if (args.machineRule) {
+        // A code nobody used yet: its machine is being created, or the
+        // reconciler destroys it before issuing another.
+        const waiting = await trx
+          .selectFrom("work_worker_enrollments")
+          .select("code_hash")
+          .where("tenant_id", "=", this.deps.tenantId)
+          .where("name", "=", name)
+          .where("machine_rule", "is not", null)
+          .where("used_at", "is", null)
+          .executeTakeFirst();
+        if (waiting) return null;
+      }
+      const code = `wke_${randomBytes(24).toString("base64url")}`;
+      const expiresAt = new Date(Date.now() + (args.ttlMinutes ?? 30) * 60_000);
+      await trx
+        .insertInto("work_worker_enrollments")
+        .values({
+          code_hash: hash(code),
+          tenant_id: this.deps.tenantId,
+          name,
+          labels: JSON.stringify(placement.labels),
+          access: JSON.stringify(placement.access),
+          trusted: placement.trusted,
+          machine_rule: args.machineRule ?? null,
+          machine_ref: null,
+          expires_at: expiresAt,
+        })
+        .execute();
+      return { code, nodeId: `${WORKER_NODE_PREFIX}${name}`, expiresAt };
+    });
   }
 
   /** Worker: exchange a one-time code for a machine credential. */

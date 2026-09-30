@@ -1,15 +1,21 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { WorkerNodesService } from "@catamorphic/core";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createWorkServer, type WorkServer } from "../server.js";
+import {
+  createWorkServer,
+  SERVER_TENANT_ID,
+  type WorkServer,
+} from "../server.js";
 import { testServerOptions } from "../test-support.js";
 import {
   dedicatedName,
   type MachineProvisioner,
   sharedName,
 } from "./machine-rules.js";
+import { WorkWorkerRegistry } from "./worker-registry.js";
 
 /**
  * Machine rules (ADR 0167): the directory decides who gets a machine. A
@@ -189,6 +195,50 @@ describe("machine rules", () => {
         sharedName("support", "small", 2),
       ].sort(),
     );
+  });
+
+  it("issues one code per machine and leaves a pass to the replica holding the lease", async () => {
+    const db = server.catamorphic.core.db;
+    const registry = new WorkWorkerRegistry({
+      db,
+      nodes: new WorkerNodesService(db),
+      tenantId: SERVER_TENANT_ID,
+      authorityId: "test",
+    });
+    const machine = {
+      name: "desk-once",
+      rule: "desk",
+      ttlMinutes: 60,
+      placement: {},
+    };
+    expect((await registry.createMachineEnrollment(machine))?.code).toMatch(
+      /^wke_/,
+    );
+    // Its code is still waiting: the machine is being created.
+    expect(await registry.createMachineEnrollment(machine)).toBeNull();
+    // An operator may still hand out another code for any name.
+    expect(
+      (await registry.createEnrollment({ name: "desk-once" })).nodeId,
+    ).toBe("worker.desk-once");
+    await registry.cancelEnrollments({ name: "desk-once" });
+
+    const carol = await member("carol", ["eng@example.com"]);
+    await sql`
+      INSERT INTO work_machine_reconciler (tenant_id, holder, expires_at)
+      VALUES (${SERVER_TENANT_ID}, 'another-replica', now() + interval '1 minute')
+    `.execute(db);
+    const skipped = (
+      await operator("POST", "/_work/operator/machine-rules/reconcile")
+    ).json();
+    expect(skipped.created).toEqual([]);
+    // The other replica stopped without releasing; its lease runs out.
+    await sql`
+      UPDATE work_machine_reconciler SET expires_at = now() - interval '1 second'
+    `.execute(db);
+    const taken = (
+      await operator("POST", "/_work/operator/machine-rules/reconcile")
+    ).json();
+    expect(taken.created).toEqual([dedicatedName("desk", carol, "standard-4")]);
   });
 
   it("refuses rules without a provisioner and with a bad group", async () => {
