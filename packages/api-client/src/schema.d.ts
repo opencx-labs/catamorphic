@@ -12052,6 +12052,7 @@ export interface paths {
                             writtenBy?: string;
                             writtenAt?: string;
                             digest?: string;
+                            commit?: string;
                         }[];
                     };
                 };
@@ -12113,6 +12114,7 @@ export interface paths {
                             writtenBy?: string;
                             writtenAt?: string;
                             digest?: string;
+                            commit?: string;
                             text?: string;
                         };
                     };
@@ -12189,6 +12191,7 @@ export interface paths {
                             writtenBy?: string;
                             writtenAt?: string;
                             digest?: string;
+                            commit?: string;
                         };
                     };
                 };

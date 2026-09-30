@@ -27309,6 +27309,9 @@
                       },
                       "digest": {
                         "type": "string"
+                      },
+                      "commit": {
+                        "type": "string"
                       }
                     },
                     "required": ["path", "source", "contentType", "size"],
@@ -27403,6 +27406,9 @@
                       "type": "string"
                     },
                     "digest": {
+                      "type": "string"
+                    },
+                    "commit": {
                       "type": "string"
                     },
                     "text": {
@@ -27544,6 +27550,9 @@
                       "type": "string"
                     },
                     "digest": {
+                      "type": "string"
+                    },
+                    "commit": {
                       "type": "string"
                     }
                   },

@@ -1727,6 +1727,8 @@ export const DocumentEntrySchema = z.object({
   writtenBy: z.string().optional(),
   writtenAt: z.string().optional(),
   digest: z.string().optional(),
+  /** Program only: the published commit the listing read (ADR 0191). */
+  commit: z.string().optional(),
 });
 
 export const DocumentContentSchema = DocumentEntrySchema.extend({

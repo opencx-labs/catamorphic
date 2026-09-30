@@ -141,6 +141,7 @@ import {
   ensureRemoteProjectAccess,
   httpDocumentsClient,
   localStatus,
+  publishProgramFromFolder,
   type RemoteMe,
   shipRemoteProject,
   storeOnlyDocumentsClient,
@@ -2354,22 +2355,17 @@ export function registerIpcHandlers(
         throw new Error(
           "This folder is a checkout of the project's repository. Commit and open a pull request instead.",
         );
-      const report = await syncRemoteProject(rootPath, client);
-      notifyGitChanged(input.projectId);
-      const changedThere = report.conflicts
-        .map((conflict) => conflict.path)
-        .filter((conflicted) => input.paths.includes(conflicted));
-      if (changedThere.length > 0)
-        throw new Error(
-          `${changedThere.join(", ")} changed on the server since your last download. Compare your version with the server copy beside it, then publish again.`,
-        );
-      const changes = readProgramChanges(rootPath, input.paths);
-      return client.publishProgram({
-        message: input.message,
-        files: Object.fromEntries(
-          changes.map((change) => [change.path, change.content]),
-        ),
-      });
+      try {
+        return await publishProgramFromFolder({
+          root: rootPath,
+          client,
+          message: input.message,
+          paths: input.paths,
+          readChanges: () => readProgramChanges(rootPath, input.paths),
+        });
+      } finally {
+        notifyGitChanged(input.projectId);
+      }
     },
   );
 
