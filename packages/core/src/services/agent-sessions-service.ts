@@ -882,23 +882,28 @@ export class AgentSessionsService {
     };
     await settled(Math.floor((timeoutMs * 2) / 3));
     const running = [...this.localTurns.keys()];
-    if (running.length === 0) return;
-    const sessions = await this.db
-      .selectFrom("agent_sessions")
-      .select(["id", "agent_id", "project_id", "provider_session_id"])
-      .where("id", "in", running)
-      .execute();
-    for (const session of sessions) {
-      this.interruptedTurns.add(session.id);
-      try {
-        (
-          await this.resolveAgent(session.agent_id, session.project_id)
-        ).provider.interrupt?.(session.provider_session_id ?? session.id);
-      } catch {
-        // No resolvable agent: nothing to signal; the turn settles alone.
+    if (running.length > 0) {
+      const sessions = await this.db
+        .selectFrom("agent_sessions")
+        .select(["id", "agent_id", "project_id", "provider_session_id"])
+        .where("id", "in", running)
+        .execute();
+      for (const session of sessions) {
+        this.interruptedTurns.add(session.id);
+        try {
+          (
+            await this.resolveAgent(session.agent_id, session.project_id)
+          ).provider.interrupt?.(session.provider_session_id ?? session.id);
+        } catch {
+          // No resolvable agent: nothing to signal; the turn settles alone.
+        }
       }
+      await settled(Math.ceil(timeoutMs / 3));
     }
-    await settled(Math.ceil(timeoutMs / 3));
+    // Nothing is claimed here any more: stop renewing, so no statement
+    // reaches the database after its host closes it. A turn still running
+    // loses its lease on schedule and is recovered where it is claimed next.
+    this.turnLeases.stop();
   }
 
   /** Hosts start this alongside their workflow worker, after migrations. */
