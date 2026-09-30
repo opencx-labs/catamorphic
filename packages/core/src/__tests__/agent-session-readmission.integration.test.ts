@@ -164,7 +164,7 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
     // would: they settle before the database closes and the folder goes.
     await Promise.all(services.map((sessions) => sessions.stopLocalTurns()));
     await db.destroy();
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5 });
   });
 
   /** An idle chat of Alice's whose workspace was given back. */

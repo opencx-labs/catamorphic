@@ -64,7 +64,8 @@ single-process hosts.
 - **Caches by revision.** Roles are cached per published commit, and every
   resolve reads the current one (one ref read; concurrent reads of a
   project share it); a working tree's roles are keyed by their files' hash.
-  The program reader fetches only when its copy is behind. Nothing needs
+  The program reader reads the origin's published view at the current
+  revision and keeps no copy (ADR 0191). Nothing needs
   invalidating: hosts lose `rolesCacheTtlMs` and `roles.invalidate`.
 - **Usage totals from Postgres.** A model call's usage row opens before its
   answer ends and settles after; totals wait for open rows on any replica,

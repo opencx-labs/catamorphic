@@ -218,6 +218,7 @@ export {
   CodeHostUnsupportedError,
   ProjectAlreadyLinkedError,
   ProjectHasNoRemoteError,
+  ProjectNotDeployedError,
 } from "./services/code-hosts-service.js";
 export {
   type CodingAgentRegistry,

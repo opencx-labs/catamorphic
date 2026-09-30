@@ -158,7 +158,7 @@ lives in Postgres or in its configuration, so any replica can be replaced by a
 fresh one with an empty disk at any time.
 
 1. Provision the same version with its own `WORK_DATA_DIR`. It may be empty
-   and need not persist: it holds only working copies and sandboxes. Never
+   and need not persist: it holds only session checkouts and sandboxes. Never
    share one data directory between two running replicas: a replica removes
    the sandboxes it finds there when it starts.
 2. Supply the deployment's `DATABASE_URL`, `WORK_SECRET`, `WORK_VAULT_KEY`,

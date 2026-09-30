@@ -78,6 +78,14 @@ export class ProjectAlreadyLinkedError extends Error {
   }
 }
 
+/** A server project with nothing published has no `main` to push yet. */
+export class ProjectNotDeployedError extends Error {
+  constructor(readonly projectId: string) {
+    super("Deploy the project before publishing it");
+    this.name = "ProjectNotDeployedError";
+  }
+}
+
 interface ResolvedHost {
   provider: ConnectionProvider & {
     git: NonNullable<ConnectionProvider["git"]>;
@@ -651,6 +659,22 @@ export class CodeHostsService {
           principal: "member",
         });
         if (!connection) throw new CodeHostNotConnectedError(args.provider);
+        const manager = this.deps.projectManager;
+        // A local folder pushes its checkout; a server project pushes its
+        // published program from an ephemeral checkout (ADR 0191), so one
+        // with nothing published is refused before anything is created.
+        const local = Boolean(
+          await manager.localPath({ tenantId: identity.tenantId, projectId }),
+        );
+        const origin = manager.remoteBackend;
+        if (
+          !local &&
+          origin &&
+          !(await origin.withOrigin(identity.tenantId, projectId, (repo) =>
+            repo.resolveRef("refs/heads/main"),
+          ))
+        )
+          throw new ProjectNotDeployedError(projectId);
         const { repository, credentials } = await this.withCredential({
           identity,
           connection,
@@ -698,12 +722,6 @@ export class CodeHostsService {
           .executeTakeFirst();
         if (!linked.numUpdatedRows)
           throw new ProjectAlreadyLinkedError(projectId);
-        const manager = this.deps.projectManager;
-        // A local folder pushes its checkout; a server project pushes its
-        // published program from an ephemeral checkout (ADR 0191).
-        const local = Boolean(
-          await manager.localPath({ tenantId: identity.tenantId, projectId }),
-        );
         const dev = local
           ? await manager.open(identity.tenantId, projectId)
           : await manager.openEphemeral({
