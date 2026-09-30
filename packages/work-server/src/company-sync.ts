@@ -11,6 +11,20 @@ import type { Kysely } from "kysely";
 /** How often each company project receives its code host's changes. */
 export const PROJECT_SYNC_SECONDS = 60;
 
+/**
+ * The longest one project's sync keeps its claim. A sync still running
+ * after this stops holding the project, so another replica may try again.
+ */
+export const PROJECT_SYNC_TIMEOUT_MS = 10 * 60_000;
+
+/** A project's sync ran past {@link PROJECT_SYNC_TIMEOUT_MS}. */
+export class CompanyProjectSyncTimeoutError extends Error {
+  constructor(readonly projectId: string) {
+    super(`Company project ${projectId} took too long to sync`);
+    this.name = "CompanyProjectSyncTimeoutError";
+  }
+}
+
 /** What the company project sync reads and runs. */
 export interface CompanyProjectSyncServices {
   db: Kysely<DB>;
@@ -45,9 +59,12 @@ export async function syncCompanyProjects(input: {
   stopped?: () => boolean;
   /** How often each project syncs (default {@link PROJECT_SYNC_SECONDS}). */
   intervalSeconds?: number;
+  /** Default {@link PROJECT_SYNC_TIMEOUT_MS}. */
+  timeoutMs?: number;
 }): Promise<void> {
   const { services, identity } = input;
   const interval = input.intervalSeconds ?? PROJECT_SYNC_SECONDS;
+  const timeoutMs = input.timeoutMs ?? PROJECT_SYNC_TIMEOUT_MS;
   for (let offset = 0; !input.stopped?.(); offset += 50) {
     const page = await services.projects.list(identity, {
       limit: 50,
@@ -67,7 +84,8 @@ export async function syncCompanyProjects(input: {
         )
           continue;
         // A long sync keeps its claim, so no other replica starts the same
-        // project meanwhile; the minute counts from when it ends.
+        // project meanwhile; the minute counts from when it ends. A hung
+        // one gives the claim up after the timeout.
         const renewal = setInterval(
           () =>
             void renewReplicaClaim({
@@ -79,9 +97,22 @@ export async function syncCompanyProjects(input: {
           (interval * 1_000) / 4,
         );
         renewal.unref();
-        const result = await services.remoteSync
-          .syncPublished({ identity, projectId: project.id })
-          .finally(() => clearInterval(renewal));
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const result = await Promise.race([
+          services.remoteSync.syncPublished({
+            identity,
+            projectId: project.id,
+          }),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(
+              () => reject(new CompanyProjectSyncTimeoutError(project.id)),
+              timeoutMs,
+            );
+          }),
+        ]).finally(() => {
+          clearInterval(renewal);
+          clearTimeout(timer);
+        });
         if (result.status === "pulled" || result.status === "merged") {
           console.info(
             `Company project ${project.id} received published updates`,

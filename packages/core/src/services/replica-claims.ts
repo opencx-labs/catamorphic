@@ -102,8 +102,9 @@ export interface HeldReplicaClaim {
  * dies holding it frees it once it lapses. Waits up to `waitMs` (default:
  * not at all) for a held claim, then throws {@link ReplicaClaimBusyError}.
  *
- * Once the claim is lost (a renewal finds it taken or lapsed, or none lands
- * before it would expire), `signal` aborts and the call rejects with
+ * Once the claim could be lost (no renewal landed in time: aborted exactly at
+ * the deadline, before the database lets another process take it) or is
+ * found lost by a renewal, `signal` aborts and the call rejects with
  * {@link ReplicaClaimLostError}, even if the operation ignores the signal.
  * Operations check the signal before each write that must stay exclusive.
  */
@@ -156,15 +157,24 @@ export async function withReplicaClaim<T>(input: {
       };
       // Measured from each renewal's dispatch: a hung renewal cannot keep
       // the work going past the claim's expiry.
-      let heldUntil = performance.now() + ttlSeconds * 1_000;
+      // The work stops the moment its claim could lapse: the expiry timer is
+      // set from each landed renewal's dispatch, never later than the
+      // database's own expiry, so no other process can take the claim
+      // while the work still runs.
+      let expiry: ReturnType<typeof setTimeout> | undefined;
+      const holdUntil = (deadline: number) => {
+        clearTimeout(expiry);
+        expiry = setTimeout(
+          loseClaim,
+          Math.max(0, deadline - performance.now()),
+        );
+        expiry.unref();
+      };
+      holdUntil(performance.now() + ttlSeconds * 1_000);
       let renewing: Promise<unknown> | undefined;
       const renewal = setInterval(
         () => {
-          if (performance.now() >= heldUntil) {
-            loseClaim();
-            return;
-          }
-          if (renewing) return;
+          if (renewing || lost.signal.aborted) return;
           const dispatched = performance.now();
           renewing = renewReplicaClaim({
             db: input.db,
@@ -173,7 +183,8 @@ export async function withReplicaClaim<T>(input: {
             ttlSeconds,
           })
             .then((held) => {
-              if (held) heldUntil = dispatched + ttlSeconds * 1_000;
+              if (held && !lost.signal.aborted)
+                holdUntil(dispatched + ttlSeconds * 1_000);
               else loseClaim();
             })
             .catch((error: unknown) =>
@@ -196,6 +207,7 @@ export async function withReplicaClaim<T>(input: {
         ]);
       } finally {
         clearInterval(renewal);
+        clearTimeout(expiry);
         await renewing;
         await releaseReplicaClaim({
           db: input.db,

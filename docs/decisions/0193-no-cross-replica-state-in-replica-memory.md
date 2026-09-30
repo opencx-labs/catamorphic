@@ -41,7 +41,10 @@ single-process hosts.
   statement a second, which returns their cancellation flags: an interrupt
   through any replica reaches a quiet turn within about a second. No
   LISTEN/NOTIFY, so it works through a transaction pooler. Renewal leaves
-  `updated_at` alone; idle release skips any chat with a live turn.
+  `updated_at` alone; idle release skips any chat with a queued, held, or
+  running turn, its lease live or not. A stopping process stops renewing once
+  its turns settle; the SDK's `close()` interrupts them at once and waits
+  briefly, so nothing reaches a database it then destroys.
 - **Close and archive wait on Postgres.** They request cancellation durably
   and wait for leases to end. A chat's workspace, sandbox and personal
   logins are given back only once no turn runs in it, under the chat's
@@ -51,9 +54,13 @@ single-process hosts.
 - **Singleton work under claims.** `replica_claims` holds named claims with
   an expiry, renewed while their work runs: publishing a project, creating
   a deployment runtime (taken before any sandbox exists), and each company
-  project's sync (the claim is the schedule). Work whose claim lapses or is
-  taken over is aborted before its next exclusive write. Locks guarding a
-  replica's own disk (mirrors, working copies) stay in memory.
+  project's sync (the claim is the schedule; a sync stops holding it after
+  ten minutes). The holder aborts its work the moment the claim could
+  lapse, before the database lets anyone else take it; the work checks
+  before each exclusive step (a publish before creating the repository, a
+  runtime before recording itself), and aborted work records nothing but
+  removes its own sandbox. Locks guarding a replica's own disk (mirrors,
+  working copies) stay in memory.
 - **Caches by revision.** Roles are cached per published commit, and every
   resolve reads the current one (one ref read; concurrent reads of a
   project share it); a working tree's roles are keyed by their files' hash.

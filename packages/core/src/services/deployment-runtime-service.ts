@@ -206,6 +206,15 @@ export class DeploymentRuntimeService {
               span.setAttribute("catamorphic.runtime.id", runtime.runtimeId);
               return runtime;
             } catch (error) {
+              // Another replica took over this creation: its outcome is
+              // theirs to record. Only this replica's sandbox goes.
+              if (signal.aborted) {
+                if (!existing)
+                  await this.deps.provider
+                    .destroySandbox(sandboxId)
+                    .catch(() => {});
+                throw error;
+              }
               await this.deps.artifacts.markStatus({
                 artifactId: args.artifact.id,
                 status: "failed",

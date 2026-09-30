@@ -656,6 +656,10 @@ export class CodeHostsService {
           identity,
           connection,
           use: async (credential) => {
+            // Checked before the code host creates anything: a publish that
+            // lost its claim leaves no repository behind. Past this point
+            // the conditional link below decides.
+            args.signal.throwIfAborted();
             const repository = await create({
               credential,
               name: args.name,
@@ -676,7 +680,6 @@ export class CodeHostsService {
             };
           },
         });
-        args.signal.throwIfAborted();
         // Link before pushing: Work created this repository, so a failed
         // first push is completed by the next sync. Only an unlinked project
         // is linked: a publish that raced this one (another replica) keeps

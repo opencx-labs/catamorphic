@@ -553,6 +553,14 @@ export class Catamorphic {
     await Promise.allSettled(
       [...this.agentWorkerHandles].map((handle) => handle.stop()),
     );
+    // Turns running here are interrupted at once and settle before the
+    // database goes; lease renewals stop (ADR 0193). A host that wants to
+    // let turns finish calls stopLocalTurns with a grace period first.
+    await this.core.agentSessions
+      ?.stopLocalTurns({ timeoutMs: 0, settleMs: 3_000 })
+      .catch((error: unknown) =>
+        console.warn("[catamorphic] Could not stop local turns", error),
+      );
     await Promise.allSettled(
       [...this.workerHandles].map((handle) => handle.stop()),
     );
