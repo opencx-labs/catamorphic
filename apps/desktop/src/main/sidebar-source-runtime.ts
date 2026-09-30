@@ -1,5 +1,11 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { type FSWatcher, readFileSync, watch } from "node:fs";
+import {
+  type FSWatcher,
+  readFileSync,
+  unwatchFile,
+  watch,
+  watchFile,
+} from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { z } from "zod";
@@ -16,6 +22,8 @@ const responseSchema = z.object({
   move: z.boolean().optional(),
   drop: z.boolean().optional(),
 });
+/** How often a subscribed source checks its module for edits the watch missed. */
+const MODULE_POLL_MS = 2_000;
 /** A shared, lazy process per module. Idle sources cost no process or polling. */
 export class SidebarSourceRuntime {
   /** Reported by the worker once its module loads; false until then. */
@@ -24,6 +32,7 @@ export class SidebarSourceRuntime {
   private starting?: Promise<ChildProcess>;
   private idle?: ReturnType<typeof setTimeout>;
   private watcher?: FSWatcher;
+  private unpoll?: () => void;
   private disposed = false;
   private generation = 0;
   private listeners = new Set<(error?: string) => void>();
@@ -209,22 +218,32 @@ export class SidebarSourceRuntime {
         }
       };
       let source = readSource();
+      // macOS coalesces directory events, and atomic replacement may report
+      // a temporary filename. Compare the entry's contents so those edits
+      // reload without restarting on unrelated changes.
+      const changed = () => {
+        const next = readSource();
+        if (next === source) return;
+        source = next;
+        this.stop(new Error("Sidebar source changed. Reloading."));
+        for (const notify of this.listeners) notify();
+      };
       try {
-        this.watcher = watch(path.dirname(this.opts.modulePath), () => {
-          // macOS coalesces directory events, and atomic replacement may
-          // report a temporary filename. Compare the entry's contents so
-          // those edits reload without restarting on unrelated changes.
-          const next = readSource();
-          if (next === source) return;
-          source = next;
-          this.stop(new Error("Sidebar source changed. Reloading."));
-          for (const notify of this.listeners) notify();
-        });
+        this.watcher = watch(path.dirname(this.opts.modulePath), changed);
         this.watcher.on("error", (error) => {
           this.watcher?.close();
           this.watcher = undefined;
           this.stop(error, true);
         });
+        // FSEvents starts delivering a moment after the watch is created
+        // and can drop an edit made in between (or under load); a slow stat
+        // poll catches what the watch missed, as the config layers do.
+        watchFile(
+          this.opts.modulePath,
+          { interval: MODULE_POLL_MS, persistent: false },
+          changed,
+        );
+        this.unpoll = () => unwatchFile(this.opts.modulePath, changed);
       } catch (cause) {
         this.listeners.delete(listener);
         this.scheduleIdle();
@@ -237,6 +256,8 @@ export class SidebarSourceRuntime {
         this.send({ method: "unsubscribe" });
         this.watcher?.close();
         this.watcher = undefined;
+        this.unpoll?.();
+        this.unpoll = undefined;
         this.scheduleIdle();
       }
     };
@@ -245,6 +266,8 @@ export class SidebarSourceRuntime {
     this.disposed = true;
     clearTimeout(this.idle);
     this.watcher?.close();
+    this.unpoll?.();
+    this.unpoll = undefined;
     this.listeners.clear();
     this.stop(new Error("Sidebar source was closed."));
   }

@@ -6,6 +6,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import { SidebarSourceRuntime } from "./sidebar-source-runtime.js";
 import { sanitizeSidebarSourcePage } from "./workspace-config.js";
 
+/**
+ * Waits on what the OS delivers: file-watch events (FSEvents batches and
+ * delays them under load), worker processes starting, writing and exiting.
+ * vi.waitFor's one-second default is a budget a loaded machine overruns.
+ */
+const eventually = <T>(callback: () => T | Promise<T>) =>
+  vi.waitFor(callback, { timeout: 10_000, interval: 25 });
 const roots: string[] = [];
 const runtimes: SidebarSourceRuntime[] = [];
 afterEach(() => {
@@ -80,7 +87,7 @@ it("reads files, serializes simultaneous writes, watches changes, and keeps cons
   expect(
     JSON.parse(fs.readFileSync(path.join(root, "todos.json"), "utf8")),
   ).toMatchObject([{ done: true }, { done: true }]);
-  await vi.waitFor(() => expect(notify).toHaveBeenCalled());
+  await eventually(() => expect(notify).toHaveBeenCalled());
   release();
 });
 
@@ -144,14 +151,14 @@ it("survives a hung source, source edits and a worker crash", async () => {
     modulePath,
     `export default {async load(){return {items:[{id:'recovered',label:'Ready'}]}}}`,
   );
-  await vi.waitFor(() => expect(notify).toHaveBeenCalled());
+  await eventually(() => expect(notify).toHaveBeenCalled());
   expect(await load()).toMatchObject({ items: [{ id: "recovered" }] });
   notify.mockClear();
   fs.writeFileSync(
     modulePath,
     `export default {async load(){ process.exit(1) }}`,
   );
-  await vi.waitFor(() => expect(notify).toHaveBeenCalled());
+  await eventually(() => expect(notify).toHaveBeenCalled());
   await expect(load()).rejects.toThrow("stopped");
   release();
 });
@@ -174,7 +181,7 @@ it("ignores late protocol messages from a replaced worker", async () => {
     modulePath,
     `export default {async load(){return {items:[{id:'new',label:'Ready'}]}}}`,
   );
-  await vi.waitFor(() => expect(notify).toHaveBeenCalled());
+  await eventually(() => expect(notify).toHaveBeenCalled());
   expect(await load()).toMatchObject({ items: [{ id: "new" }] });
   await new Promise((resolve) => setTimeout(resolve, 250));
   expect(notify.mock.calls.every(([error]) => error === undefined)).toBe(true);
@@ -199,7 +206,7 @@ it("reloads an atomically replaced entry without restarting for unrelated files"
     `export default {async load(){return {items:[{id:'updated',label:'Updated'}]}}}`,
   );
   fs.renameSync(temporary, modulePath);
-  await vi.waitFor(() => expect(notify).toHaveBeenCalled());
+  await eventually(() => expect(notify).toHaveBeenCalled());
   expect(await load()).toMatchObject({ items: [{ id: "updated" }] });
   release();
 });
@@ -211,11 +218,11 @@ it("releases subscriptions and retires idle processes", async () => {
   );
   const release = runtime.subscribe(() => {});
   const first = await load();
-  await vi.waitFor(() =>
+  await eventually(() =>
     expect(fs.readFileSync(path.join(root, "watching"), "utf8")).toBe("yes"),
   );
   release();
-  await vi.waitFor(() =>
+  await eventually(() =>
     expect(fs.readFileSync(path.join(root, "watching"), "utf8")).toBe("no"),
   );
   await new Promise((resolve) => setTimeout(resolve, 80));

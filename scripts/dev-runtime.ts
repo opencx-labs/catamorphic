@@ -411,7 +411,11 @@ function signalProcessGroup(
       signal,
     );
   } catch (error) {
-    if (errorCode(error) !== "ESRCH") throw error;
+    // ESRCH: the group is gone. EPERM: on macOS a group whose members are
+    // all exiting (zombies not yet reaped) refuses signals; it is on its
+    // way out, and processGroupIsLive keeps waiting until it is gone.
+    const code = errorCode(error);
+    if (code !== "ESRCH" && code !== "EPERM") throw error;
   }
 }
 

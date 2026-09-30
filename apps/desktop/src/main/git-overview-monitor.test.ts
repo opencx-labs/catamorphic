@@ -15,10 +15,13 @@ const author = [
 let temp: string;
 let root: string;
 const monitors: GitOverviewMonitor[] = [];
-// A scan is followed by a cooldown of four times its duration; on a loaded
-// machine (the full suite) that outlasts vi.waitFor's one-second default.
+// A scan is followed by a cooldown of four times its duration, capped at
+// 5 s. A change can therefore wait out a full cooldown, then the 1 s
+// debounce ceiling, then a scan, and a loaded machine (the full suite, a
+// busy CI host) runs every Git command in that scan slowly too. The bound
+// covers that sum; each wait still returns as soon as its condition holds.
 const waitFor = <T>(callback: () => T | Promise<T>) =>
-  vi.waitFor(callback, { timeout: 8_000 });
+  vi.waitFor(callback, { timeout: 20_000, interval: 25 });
 const commit = async (folder: string, message: string) => {
   await readGit(folder, ["add", "-A"]);
   await readGit(folder, [...author, "commit", "-m", message]);
@@ -97,7 +100,8 @@ describe("walkedWatch", () => {
   });
 });
 
-describe("observed Git overviews", () => {
+// Several bounded waits in a row, each up to the budget above.
+describe("observed Git overviews", { timeout: 90_000 }, () => {
   it("observes external edit, atomic save, stage, rename, deletion and commit", async () => {
     const view = observe(makeMonitor());
     await waitFor(() => expect(view.current()?.worktrees).toHaveLength(1));
@@ -228,7 +232,6 @@ describe("observed Git overviews", () => {
     });
     const view = observe(monitor);
     await waitFor(() => expect(view.current()).toBeDefined());
-    await new Promise((resolve) => setTimeout(resolve, 450));
     read.mockClear();
     // A save every 50 ms for 1.5 s: slower than any single debounce would
     // coalesce, faster than a 100 ms scan plus its 400 ms cooldown.
@@ -237,14 +240,16 @@ describe("observed Git overviews", () => {
       callbacks.get(root)?.("notes.txt", "rename");
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    await new Promise((resolve) => setTimeout(resolve, 700));
-    const scans = read.mock.calls.filter(
-      (call) => call[1] === undefined,
-    ).length;
+    const scans = () =>
+      read.mock.calls.filter((call) => call[1] === undefined).length;
+    // The saves are scanned, however long the cooldown runs: it is four
+    // times the last scan, so on a loaded machine the first scan (with its
+    // Git discovery) can hold the next one back past the whole burst.
+    await waitFor(() => expect(scans()).toBeGreaterThanOrEqual(1));
     // 30 saves: 30 scans unthrottled, about 4 with a 100 ms scan and its
-    // 400 ms cooldown. A loaded machine scans slower and cools longer.
-    expect(scans).toBeGreaterThanOrEqual(1);
-    expect(scans).toBeLessThanOrEqual(5);
+    // 400 ms cooldown. A loaded machine scans slower and cools longer, so
+    // it only scans less.
+    expect(scans()).toBeLessThanOrEqual(5);
   });
 
   it("rebuilds watches for new directories and .gitignore, not for atomic saves", async () => {

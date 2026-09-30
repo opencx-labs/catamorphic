@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createTestRunResources,
   runLoggedProcess,
@@ -452,6 +452,50 @@ describe("test process orchestration", () => {
       if (processGroupIsLive(processGroupId)) {
         process.kill(-processGroupId, "SIGKILL");
       }
+    }
+  });
+
+  it("settles a process group that refuses signals while its members exit", async () => {
+    if (process.platform === "win32") return;
+    const directory = await temporaryDirectory();
+    const signals = new TestSignalController();
+    // macOS answers EPERM, not ESRCH, when a group's remaining members are
+    // exiting zombies: the group is still found, but cannot take a signal.
+    // Script that answer for the finished group: found, refuses, then gone.
+    const groupAnswers: Array<"found" | "EPERM" | "ESRCH"> = [
+      "found",
+      "EPERM",
+      "ESRCH",
+    ];
+    const groupCalls: Array<string | number | undefined> = [];
+    const kill = process.kill.bind(process);
+    const spy = vi
+      .spyOn(process, "kill")
+      .mockImplementation((pid: number, signal?: string | number) => {
+        if (pid >= 0) return kill(pid, signal);
+        groupCalls.push(signal);
+        const answer = groupAnswers.shift() ?? "ESRCH";
+        if (answer === "found") return true;
+        throw Object.assign(new Error(`kill ${answer}`), { code: answer });
+      });
+    try {
+      await expect(
+        runLoggedProcess({
+          command: "/bin/sh",
+          args: ["-c", "exit 0"],
+          cwd: directory,
+          env: process.env,
+          logPath: path.join(directory, "refusing.log"),
+          signals,
+        }),
+      ).resolves.toEqual({ code: 0, signal: null });
+      // Probed, signalled once (refused while exiting), then only probed
+      // until gone: no escalation to SIGKILL.
+      expect(groupCalls.slice(0, 2)).toEqual([0, "SIGTERM"]);
+      expect(groupCalls.slice(2).every((signal) => signal === 0)).toBe(true);
+    } finally {
+      spy.mockRestore();
+      signals.close();
     }
   });
 
