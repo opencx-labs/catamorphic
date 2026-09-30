@@ -91,3 +91,21 @@ describe("trackpad history gestures", () => {
     expect(await inGuest("document.title")).toBe("Wide");
   });
 });
+
+it("a tab reopened with Cmd+Shift+T keeps its way back", async () => {
+  await ready("Wide");
+  // The tab reads its back list a beat after each navigation.
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  const press = (key: string, shiftKey = false) =>
+    app.eval(
+      `window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, shiftKey: ${shiftKey}, metaKey: /Mac/.test(navigator.platform), ctrlKey: !/Mac/.test(navigator.platform), bubbles: true, cancelable: true }))`,
+    );
+  await press("w");
+  await app.waitFor(`!${guest}`, { label: "browser tab closed" });
+  await press("T", true);
+  await ready("Wide");
+  expect(await app.eval(`${guest}.canGoBack()`)).toBe(true);
+  await app.eval(`${guest}.goBack()`);
+  await ready("Two");
+  expect(await app.eval(`${guest}.canGoForward()`)).toBe(true);
+});

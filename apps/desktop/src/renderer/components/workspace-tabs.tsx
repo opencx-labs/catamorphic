@@ -203,6 +203,9 @@ function CloseButton({
  * Tab strip only — the host owns the surrounding top bar (drag region,
  * sidebar toggle) so tabs and window chrome share one row.
  */
+/** Where a tab's stretch of its group's eyebrow ends. */
+type EyebrowEnd = "bridge" | "chevron" | "tab";
+
 export interface TabGroup {
   /** The owning chat's tab key. */
   parentKey: string;
@@ -615,16 +618,15 @@ function TabStrip({
               !neighbor.exiting &&
               neighbor.tab.groupId === tab.groupId,
           );
+        const eyebrowEnd: EyebrowEnd =
+          closesGroup && onToggleGroup
+            ? "chevron"
+            : sameGroup(rendered[index + 1])
+              ? "bridge"
+              : "tab";
         const eyebrow =
           !vertical && !exiting && tab.groupId
-            ? {
-                starts: !sameGroup(rendered[index - 1]),
-                end: closesGroup
-                  ? ("chevron" as const)
-                  : sameGroup(rendered[index + 1])
-                    ? ("bridge" as const)
-                    : ("tab" as const),
-              }
+            ? { starts: !sameGroup(rendered[index - 1]), end: eyebrowEnd }
             : undefined;
         return (
           <Fragment key={key}>
@@ -728,12 +730,19 @@ function TabStrip({
                   aria-hidden="true"
                   data-tab-group-eyebrow={eyebrow.starts ? "start" : "rest"}
                   className={`pointer-events-none absolute -top-[4px] h-0.5 bg-accent/50 ${
-                    eyebrow.starts ? "left-1.5 rounded-l-full" : "-left-px"
+                    eyebrow.starts
+                      ? "left-1.5 rounded-l-full"
+                      : mergeLeft
+                        ? "left-0"
+                        : "-left-px"
                   } ${
-                    // Past this tab's border: gap-1 to the next member, or
-                    // gap-1 and the size-6 fold chevron after the last.
+                    // Past this tab's border: gap-1 to the next member (none
+                    // across a merged split pair), or gap-1 and the size-6
+                    // fold chevron after the last.
                     eyebrow.end === "bridge"
-                      ? "-right-[5px]"
+                      ? mergeRight
+                        ? "right-0"
+                        : "-right-[5px]"
                       : eyebrow.end === "chevron"
                         ? "-right-[29px] rounded-r-full"
                         : "right-1.5 rounded-r-full"

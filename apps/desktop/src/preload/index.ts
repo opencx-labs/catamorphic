@@ -24,6 +24,7 @@ import type {
   BookmarkMove,
   BookmarkPlacement,
 } from "../shared/bookmark-target.js";
+import type { BrowserHistory } from "../shared/browser-history.js";
 import type { DefaultBrowserState } from "../shared/default-browser.js";
 import type {
   ChatDraft,
@@ -782,6 +783,10 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:site-settings-changed", handler);
   },
+  browserNavigationHistory: (input: {
+    guestId: number;
+  }): Promise<BrowserHistory | null> =>
+    invoke("catamorphic:browser-navigation-history", input),
   browserRecordHistory: (input: unknown): Promise<void> =>
     invoke("catamorphic:browser-history-record", input),
   browserRetitleHistory: (input: {
@@ -858,6 +863,8 @@ const api = {
     listener: (command: {
       webContentsId: number | null;
       direction: "back" | "forward";
+      /** A mouse side button (or app command), or a three-finger swipe. */
+      gesture: "button" | "swipe";
     }) => void,
   ): (() => void) => {
     const handler = (

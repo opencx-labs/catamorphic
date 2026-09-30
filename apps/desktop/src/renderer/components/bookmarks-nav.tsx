@@ -723,10 +723,15 @@ export function BookmarksNav({
   };
 
   const hasPinned = pinnedCount > 0;
-  // A pinned bookmark lives in the pins above; the lists below leave it out
-  // (a saved bookmark keeps its place there, and returns when unpinned).
+  // A pin shown above leaves the lists below (a saved bookmark keeps its
+  // place there, and returns when unpinned). A pin the section hides stays
+  // reachable in them.
   const pinnedKeys = new Set(
-    data?.pinned.bookmarks.flatMap((bookmark) => [bookmark.id, bookmark.url]),
+    data?.pinned.bookmarks
+      .filter(
+        (bookmark) => !contribution?.section.itemOverrides?.[bookmark.id]?.hide,
+      )
+      .flatMap((bookmark) => [bookmark.id, bookmark.url]),
   );
   const unpinned = (scope: ProjectBookmarks): ProjectBookmarks => ({
     ...scope,

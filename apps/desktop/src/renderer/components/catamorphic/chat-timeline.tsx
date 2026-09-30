@@ -1684,8 +1684,11 @@ function TurnSteps({
   useEffect(() => {
     if (defaultExpanded) setChosen(true);
   }, [defaultExpanded]);
-  // The rows the list first shows are already there; a step that arrives
-  // later joins at the end with its own entrance, and nothing above it moves.
+  // The rows the list first shows are already there. A row that arrives
+  // later plays its own entrance while the rows already shown keep their
+  // nodes: a new step at the end, earlier work folding in above, or a
+  // background command that ended moving from the running rows into the
+  // list.
   const shown = useRef(false);
   useEffect(() => {
     shown.current = true;

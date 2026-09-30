@@ -3,8 +3,9 @@ import {
   EMPTY_SURFACE_HISTORY,
   restoreSurface,
   type SurfaceHistory,
+  settleSurface,
   stepSurface,
-  surfaceExists,
+  surfaceChanges,
   surfaceLocation,
   visitSurface,
 } from "./surface-history.js";
@@ -65,7 +66,7 @@ it("counts a chat opening over the tab, and the tab changing under it", () => {
   ]);
 });
 
-it("steps back over closed places and drops the way ahead on a new visit", () => {
+it("steps over places that would change nothing, and settles where it lands", () => {
   const ws = workspace();
   const history = walk(ws, [
     { ...ws, activeTabKey: "palette:b" },
@@ -73,16 +74,19 @@ it("steps back over closed places and drops the way ahead on a new visit", () =>
   ]);
   const closed: Workspace = {
     ...ws,
+    activeTabKey: "chat:c",
     tabs: ws.tabs.filter((tab) => tab.name !== "b"),
   };
   const back = stepSurface(history, -1, (place) =>
-    surfaceExists(closed, place),
+    surfaceChanges(closed, place),
   );
   expect(back?.entries[back.index]).toEqual({ tab: "palette:a" });
-  expect(back && stepSurface(back, -1, () => true)).toBeNull();
-  expect((back && stepSurface(back, 1, () => true))?.index).toBe(1);
+  // Arriving settles the entry; the way forward stays.
+  const settled = back && settleSurface(back, { tab: "palette:a" });
+  expect(settled?.entries).toHaveLength(3);
+  expect(settled && stepSurface(settled, 1, () => true)?.index).toBe(1);
   // Somewhere new from the middle: what was ahead is gone.
-  const branched = visitSurface(back ?? history, {
+  const branched = visitSurface(settled ?? history, {
     tab: "palette:a",
     overlay: "chat:f",
   });
@@ -90,7 +94,7 @@ it("steps back over closed places and drops the way ahead on a new visit", () =>
   expect(stepSurface(branched, 1, () => true)).toBeNull();
 });
 
-it("restores a place as it was: its tab, with or without the chat over it", () => {
+it("restores a place as clicking there would", () => {
   const ws = { ...workspace(), activeTabKey: "chat:c" };
   const over = restoreSurface(ws, { tab: "palette:b", overlay: "chat:f" });
   expect(surfaceLocation(over)).toEqual({
@@ -109,4 +113,28 @@ it("restores a place as it was: its tab, with or without the chat over it", () =
     tab: "palette:a",
     overlay: "chat:f",
   });
+});
+
+it("keeps a split and leaves chats where the user has since put them", () => {
+  const split: Workspace = {
+    ...workspace(),
+    activeTabKey: "palette:b",
+    split: { leftKey: "palette:a", rightKey: "palette:b", ratio: 0.5 },
+  };
+  const left = restoreSurface(split, { tab: "palette:a" });
+  expect(left.split).toEqual(split.split);
+  expect(left.activeTabKey).toBe("palette:a");
+  // "f" was floating then; it is a tab now, and back does not pull it out.
+  const tabbed: Workspace = {
+    ...workspace(),
+    chats: [
+      { localId: "c", mode: "tab", sessionId: "one" },
+      { localId: "f", mode: "tab", sessionId: "two" },
+    ],
+  };
+  const place = { tab: "palette:a", overlay: "chat:f" };
+  expect(
+    restoreSurface(tabbed, place).chats.find((c) => c.localId === "f")?.mode,
+  ).toBe("tab");
+  expect(surfaceChanges(tabbed, place)).toBe(false);
 });

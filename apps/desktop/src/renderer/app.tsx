@@ -172,8 +172,9 @@ import {
   EMPTY_SURFACE_HISTORY,
   restoreSurface,
   type SurfaceHistory,
+  settleSurface,
   stepSurface,
-  surfaceExists,
+  surfaceChanges,
   surfaceLocation,
   visitSurface,
 } from "./lib/surface-history.js";
@@ -1996,6 +1997,9 @@ export function App({
                 url: state.url || browser.url,
                 title: state.title || browser.title,
                 faviconUrl: state.faviconUrl ?? browser.faviconUrl,
+                ...(state.history !== undefined
+                  ? { history: state.history ?? undefined }
+                  : {}),
               }
             : browser,
         ),
@@ -3849,46 +3853,57 @@ export function App({
   // the places its workspace was at, and the mouse's side buttons walk
   // them, except on a browser, which walks its own pages.
   const surfaceHistoriesRef = useRef(new Map<string, SurfaceHistory>());
+  // Set while back or forward moves the workspace, so arriving there
+  // settles the entry instead of counting as a new visit.
+  const surfaceSteppingRef = useRef(false);
   useEffect(() => {
     if (!projectId) return;
     const histories = surfaceHistoriesRef.current;
+    const history = histories.get(projectId) ?? EMPTY_SURFACE_HISTORY;
+    const location = surfaceLocation(workspace);
     histories.set(
       projectId,
-      visitSurface(
-        histories.get(projectId) ?? EMPTY_SURFACE_HISTORY,
-        surfaceLocation(workspace),
-      ),
+      surfaceSteppingRef.current
+        ? settleSurface(history, location)
+        : visitSurface(history, location),
     );
+    surfaceSteppingRef.current = false;
   }, [projectId, workspace]);
   const navigateBackForwardRef = useRef(
     (_direction: "back" | "forward", _at: Element | null) => {},
   );
   navigateBackForwardRef.current = (direction, at) => {
-    const ws = workspaceRef.current;
+    // A dialog takes the press; nothing behind it moves.
+    if (at?.closest('[aria-modal="true"]')) return;
     // A press on a browser's page or toolbar walks that browser's pages;
     // anywhere else (a chat, the sidebar, the tab strip) walks surfaces.
-    const browser = at?.closest("[data-chat-local-id]")
+    const surface = at?.closest("[data-chat-local-id]")
       ? undefined
-      : at?.closest("[data-browser-toolbar]")
-        ? (ws.floatingKey ?? ws.activeTabKey)
-        : at?.closest<HTMLElement>("[data-surface-key]")?.dataset.surfaceKey;
-    if (browser?.startsWith("browser:")) {
+      : at?.closest<HTMLElement>("[data-surface-key]")?.dataset.surfaceKey;
+    if (surface?.startsWith("browser:")) {
       browserHistoryNavigatorsRef.current.get(
-        browser.slice("browser:".length),
+        surface.slice("browser:".length),
       )?.(direction);
       return;
     }
     const id = projectIdRef.current;
     if (!id) return;
+    const ws = workspaceRef.current;
     const next = stepSurface(
       surfaceHistoriesRef.current.get(id) ?? EMPTY_SURFACE_HISTORY,
       direction === "back" ? -1 : 1,
-      (location) => surfaceExists(ws, location),
+      (location) => surfaceChanges(ws, location),
     );
     const target = next?.entries[next.index];
     if (!next || !target) return;
     surfaceHistoriesRef.current.set(id, next);
-    updateWorkspace((current) => restoreSurface(current, target));
+    surfaceSteppingRef.current = true;
+    updateWorkspace((current) => {
+      const restored = restoreSurface(current, target);
+      // Nothing moved, so no visit follows for the flag to settle.
+      if (restored === current) surfaceSteppingRef.current = false;
+      return restored;
+    });
   };
   useEffect(() => {
     // Windows and Linux report the buttons as app commands (main forwards
@@ -3907,11 +3922,19 @@ export function App({
     const mac = /Mac/.test(navigator.platform);
     if (mac) window.addEventListener("mouseup", onMouseUp, true);
     const stop = desktopApi.onBrowserNavigate((command) => {
-      if (command.webContentsId === null)
-        navigateBackForwardRef.current(
-          command.direction,
-          document.activeElement,
-        );
+      // A focused page's own tab takes it (browser-screen).
+      if (command.webContentsId !== null) return;
+      if (command.gesture === "swipe") {
+        // Swiping turns the front browser's pages, as it always has.
+        const ws = workspaceRef.current;
+        const front = ws.floatingKey ?? ws.activeTabKey;
+        if (front?.startsWith("browser:"))
+          browserHistoryNavigatorsRef.current.get(
+            front.slice("browser:".length),
+          )?.(command.direction);
+        return;
+      }
+      navigateBackForwardRef.current(command.direction, document.activeElement);
     });
     return () => {
       if (mac) window.removeEventListener("mouseup", onMouseUp, true);
@@ -5986,6 +6009,8 @@ export function App({
                         // Remounts (project/profile switches) resume at the
                         // last known URL, not the tab's original one.
                         initialUrl={browser.url || browser.initialUrl}
+                        history={browser.history}
+                        surfaceKey={browserTabKey(browser.localId)}
                         active={
                           runtime.visible &&
                           browser.localId === activeBrowserTabId
@@ -6542,6 +6567,8 @@ export function App({
                       projectId={null}
                       floatingDismissShortcut={keybindings["dismiss-floating"]}
                       initialUrl={browser.url || browser.initialUrl}
+                      history={browser.history}
+                      surfaceKey={browserTabKey(browser.localId)}
                       active={
                         runtime.visible &&
                         browser.localId === activeBrowserTabId

@@ -246,17 +246,33 @@ export function DockHost({
   // Transparent headroom above the strip gives hints room to open above a
   // bubble instead of being clamped onto it.
   const DOCK_HEADROOM = 48;
+  const windowWidth = expanded || dialogOpen ? 780 : railWidth;
+  const windowHeight = expanded || dialogOpen ? 560 : 76 + DOCK_HEADROOM;
+  // Collapsing the strip with a chat open plays the chat's exit first; the
+  // window keeps the open placement until that chat has minimized, then
+  // moves to the collapsed corner with the bubble.
+  const windowExpanded = !collapsed || Boolean(expanded);
+  // The size main last applied: a drag lands with its size (nativeDrag), and
+  // sending it again would cut the landing's motion short.
+  const sentSizeRef = useRef("");
+  const sizeKey = `${windowWidth}x${windowHeight}:${windowExpanded}`;
   useEffect(() => {
-    if (detachedWindow && !dragging)
-      void desktopApi.dockResize({
-        width: expanded || dialogOpen ? 780 : railWidth,
-        height: expanded || dialogOpen ? 560 : 76 + DOCK_HEADROOM,
-        // Collapsing the strip with a chat open plays the chat's exit first;
-        // the window keeps the open placement until that chat has minimized,
-        // then moves to the collapsed corner with the bubble.
-        expanded: !collapsed || Boolean(expanded),
-      });
-  }, [detachedWindow, expanded, dialogOpen, railWidth, collapsed, dragging]);
+    // Never mid-drag: resizing would move the window from under the pointer.
+    if (!detachedWindow || dragging || sentSizeRef.current === sizeKey) return;
+    sentSizeRef.current = sizeKey;
+    void desktopApi.dockResize({
+      width: windowWidth,
+      height: windowHeight,
+      expanded: windowExpanded,
+    });
+  }, [
+    detachedWindow,
+    windowWidth,
+    windowHeight,
+    windowExpanded,
+    sizeKey,
+    dragging,
+  ]);
   // Over the headroom, the margins around the chat, or any other empty
   // space, the window lets clicks through to whatever is behind it. Only
   // dock content answers a hit test there: the app root and the body are
@@ -437,12 +453,23 @@ export function DockHost({
     phase: "start" | "move" | "end" | "cancel",
     screenX: number,
   ) => {
+    const lands = phase === "end" || phase === "cancel";
+    if (lands) sentSizeRef.current = sizeKey;
     void desktopApi
       .dockDrag({
         phase,
         screenX,
         reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)")
           .matches,
+        ...(lands
+          ? {
+              size: {
+                width: windowWidth,
+                height: windowHeight,
+                expanded: windowExpanded,
+              },
+            }
+          : {}),
       })
       .catch(() =>
         setPositionError("Could not move the dock. Try dragging it again."),

@@ -1391,7 +1391,9 @@ The mouse's side buttons only worked in browser tabs. Now they work across
 the workspace (ADR 0188): back from a chat returns to the tab you came
 from, back again reopens the chat that floated over it. A browser keeps its
 own pages; press back on one and it goes back a page, and stops at its
-first page instead of leaving the tab.
+first page instead of leaving the tab. A browser tab closed and reopened
+with Cmd+Shift+T, or restored with its window, can still go back: its
+back list rides on the tab and goes into the new page before it loads.
 
 ### 2026-09-29: Work arrives at the end
 

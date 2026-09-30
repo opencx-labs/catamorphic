@@ -21,9 +21,11 @@ floated or restored. A collapsed tab group affects the strip, not materializatio
 
 The mouse's back and forward buttons move between the places a project's
 workspace was at: the focused tab and the chat or surface floating over it
-(ADR 0188, `lib/surface-history.ts`). A press on a browser's page or
-toolbar walks that browser's pages instead and stops at its first and last
-page; a press anywhere else walks surfaces.
+(ADR 0188, `lib/surface-history.ts`), selecting tabs as a click would. A
+press on a browser's page or toolbar walks that browser's pages instead and
+stops at its first and last page; a press on a dialog does nothing; a press
+anywhere else walks surfaces. A browser tab reopened with Cmd+Shift+T, or
+restored with its window, keeps its back and forward list.
 
 ## Chat presentation and visibility
 

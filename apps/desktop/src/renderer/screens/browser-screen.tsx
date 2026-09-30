@@ -11,6 +11,10 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import {
+  type BrowserHistory,
+  browserHistorySource,
+} from "../../shared/browser-history.js";
 import type { HistoryProject } from "../../shared/history.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { siteOrigin } from "../../shared/site-settings.js";
@@ -70,6 +74,8 @@ export interface BrowserPageState {
   url: string;
   title: string;
   faviconUrl: string | null;
+  /** Present when read: the tab's back and forward list, or null for none. */
+  history?: BrowserHistory | null;
 }
 
 /** "cnn.com" → https URL; anything not URL-shaped becomes a search. */
@@ -125,6 +131,8 @@ export function BrowserScreen({
   projectId,
   projectName,
   initialUrl,
+  history,
+  surfaceKey,
   active,
   toolbarActive = active,
   visible = active,
@@ -154,6 +162,16 @@ export function BrowserScreen({
   /** Names the project in the profile's history (ADR 0154). */
   projectName?: string;
   initialUrl: string;
+  /**
+   * The tab's saved back and forward list (a reopened or restored tab): a
+   * fresh guest takes it instead of loading `initialUrl`.
+   */
+  history?: BrowserHistory;
+  /**
+   * The tab's workspace key, on its toolbar wherever that renders, so a
+   * press there is known to belong to this browser (ADR 0188).
+   */
+  surfaceKey: string;
   /** This browser tab is the focused workspace tab. */
   active: boolean;
   /** Keep the anchor page's toolbar available behind a floating panel. */
@@ -236,6 +254,15 @@ export function BrowserScreen({
   // (Electron's oldest webview wart) and a crashed/never-attached guest
   // can only be revived by replacing the element.
   const [webviewNonce, setWebviewNonce] = useState(0);
+  // A guest with a saved history is created from it (see
+  // browserHistorySource) instead of from its URL, so it can still go back.
+  // Fixed per guest: a webview navigates whenever its src changes, and the
+  // history changes with every page.
+  const historyRef = useRef(history);
+  historyRef.current = history;
+  const [historySource, setHistorySource] = useState(() =>
+    history ? browserHistorySource(history) : null,
+  );
   const pageUrlRef = useRef(pageUrl);
   pageUrlRef.current = pageUrl;
   // Navigations issued before the guest can accept them (not yet
@@ -351,6 +378,11 @@ export function BrowserScreen({
     }
     guestReadyRef.current = false;
     const target = pendingUrlRef.current ?? pageUrlRef.current ?? null;
+    // The replacement keeps the way back unless a navigation was waiting.
+    const saved = historyRef.current;
+    setHistorySource(
+      !pendingUrlRef.current && saved ? browserHistorySource(saved) : null,
+    );
     pendingUrlRef.current = null;
     if (target) {
       setFirstUrl(target);
@@ -509,6 +541,29 @@ export function BrowserScreen({
           ...patch,
         });
       };
+      // The back and forward list, read a beat after the page settles, so
+      // closing the tab (or the app) keeps the way back.
+      let historyTimer: number | undefined;
+      const readHistory = () => {
+        window.clearTimeout(historyTimer);
+        historyTimer = window.setTimeout(() => {
+          let guestId: number;
+          try {
+            guestId = view.getWebContentsId();
+          } catch {
+            return;
+          }
+          void desktopApi
+            .browserNavigationHistory({ guestId })
+            .then((read) => {
+              if (!listeners.signal.aborted) report({ history: read });
+            })
+            .catch(() => {});
+        }, 300);
+      };
+      listeners.signal.addEventListener("abort", () =>
+        window.clearTimeout(historyTimer),
+      );
 
       listen("did-start-loading", () => {
         setLoading(true);
@@ -525,6 +580,7 @@ export function BrowserScreen({
         closeAutofillRef.current();
         sync();
         report({ url });
+        readHistory();
         void desktopApi.browserRecordHistory({
           url,
           title: view.getTitle() || url,
@@ -541,6 +597,7 @@ export function BrowserScreen({
         setInputValue(url);
         sync();
         report({ url });
+        readHistory();
         void desktopApi.browserRecordHistory({
           url,
           title: view.getTitle() || url,
@@ -551,6 +608,7 @@ export function BrowserScreen({
         const { title } = event as unknown as { title: string };
         pageTitleRef.current = title;
         report({ title });
+        readHistory();
         void desktopApi.browserRetitleHistory({
           url: view.getURL(),
           title,
@@ -1028,6 +1086,7 @@ export function BrowserScreen({
   const toolbar = (
     <div
       data-browser-toolbar
+      data-surface-key={surfaceKey}
       className={`app-no-drag relative flex min-w-0 shrink-0 items-center gap-1 ${integratedToolbar ? "h-full flex-1" : "h-10 border-b border-border bg-bg px-2"}`}
     >
       {!sidebarToolbar && navigation}
@@ -1156,7 +1215,12 @@ export function BrowserScreen({
       {sidebarToolbar &&
         toolbarActive &&
         navigationHost &&
-        createPortal(navigation, navigationHost)}
+        createPortal(
+          <div className="contents" data-surface-key={surfaceKey}>
+            {navigation}
+          </div>,
+          navigationHost,
+        )}
       {integratedToolbar
         ? toolbarActive && toolbarHost && createPortal(toolbar, toolbarHost)
         : toolbar}
@@ -1168,7 +1232,7 @@ export function BrowserScreen({
           <webview
             key={webviewNonce}
             ref={attachWebview}
-            src={firstUrl}
+            src={historySource ?? firstUrl}
             partition={partition}
             preload={preloadPath}
             // Chromium's built-in PDF viewer is exposed as a plugin. Local
