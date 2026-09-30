@@ -274,12 +274,11 @@ export interface CatamorphicHostConfig {
    */
   standingAgentPrompt?: string | false;
   /**
-   * ADR 0055 knobs, passed through to core: where store bytes live, the
-   * roles cache, and whether agents' `store/` writes ship around turns
+   * ADR 0055 knobs, passed through to core: where store bytes live, and
+   * whether agents' `store/` writes ship around turns
    * (default on; a host whose folders are the truth sets false).
    */
   documentBlobStore?: CatamorphicCoreConfig["documentBlobStore"];
-  rolesCacheTtlMs?: number;
   storeSyncAroundTurns?: boolean;
   /**
    * The HTTP answer surface for tool-permission asks (ADR 0054): harnesses
@@ -410,7 +409,6 @@ export class Catamorphic {
       userSkills: config.userSkills,
       standingAgentPrompt: config.standingAgentPrompt,
       documentBlobStore: config.documentBlobStore,
-      rolesCacheTtlMs: config.rolesCacheTtlMs,
       storeSyncAroundTurns: config.storeSyncAroundTurns,
       toolPermissions: config.toolPermissions,
       gatewayHosts: config.gatewayHosts,
@@ -555,6 +553,14 @@ export class Catamorphic {
     await Promise.allSettled(
       [...this.agentWorkerHandles].map((handle) => handle.stop()),
     );
+    // Turns running here are interrupted at once and settle before the
+    // database goes; lease renewals stop (ADR 0193). A host that wants to
+    // let turns finish calls stopLocalTurns with a grace period first.
+    await this.core.agentSessions
+      ?.stopLocalTurns({ timeoutMs: 0, settleMs: 3_000 })
+      .catch((error: unknown) =>
+        console.warn("[catamorphic] Could not stop local turns", error),
+      );
     await Promise.allSettled(
       [...this.workerHandles].map((handle) => handle.stop()),
     );

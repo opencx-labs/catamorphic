@@ -36,6 +36,10 @@ type EventListener = (event: AgentRuntimeEvent) => void;
 
 /** Durable event log for a provider-owned, long-lived agent session. */
 export class AgentRuntimeEventsService {
+  /**
+   * Replica memory (a): subscribers of streams this process serves; other
+   * replicas' subscribers read the durable log.
+   */
   private readonly listeners = new Map<string, Set<EventListener>>();
   private readonly pollIntervalMs: number;
 

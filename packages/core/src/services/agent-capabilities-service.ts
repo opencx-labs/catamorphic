@@ -225,6 +225,7 @@ export interface AgentCapabilityOptions {
 }
 
 export class AgentCapabilitiesService {
+  /** Replica memory (c): capabilities the host registers at boot. */
   private readonly registry = new Map<string, AgentCapability>();
   constructor(
     private readonly deps: {

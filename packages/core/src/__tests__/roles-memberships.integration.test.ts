@@ -58,7 +58,6 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
     } finally {
       await repo.dispose();
     }
-    core.roles.invalidate(projectId);
   }
 
   beforeAll(async () => {
@@ -73,7 +72,6 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
       db,
       projectManager,
       environmentProvider: testEnvironmentProvider(),
-      rolesCacheTtlMs: 0,
     });
     const project = await core.projects.create(root, { name: "brain" });
     projectId = project.id;
@@ -347,7 +345,6 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
     } finally {
       await secondRepo.dispose();
     }
-    core.roles.invalidate(second.id);
 
     await core.memberships.grant({
       identity: admin,

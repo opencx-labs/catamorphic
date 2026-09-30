@@ -142,6 +142,74 @@ describe("DeploymentRuntimeService lifecycle", () => {
     },
   );
 
+  it("leaves a creation another replica took over to that replica", async () => {
+    const lock = new AbortController();
+    const store = new FakeDeploymentRuntimeStore({ runtimes: [], lock });
+    const provider = createProvider({
+      deploymentRuntime: createRuntimeProvider({
+        // The claim is lost while the runtime starts (ADR 0193).
+        ensureRuntime: async () => {
+          lock.abort(new Error("claim lost"));
+          return {
+            runtimeId: "provider-new",
+            sandboxId: "sandbox-new",
+            deploymentArtifactId: "artifact-new",
+            artifactDigest: "b".repeat(64),
+            transformVersion: EXECUTION_TRANSFORM_VERSION,
+            runtimeVersion: DEPLOYMENT_RUNTIME_VERSION,
+            generation: "1",
+            status: "healthy",
+          };
+        },
+      }),
+    });
+    vi.mocked(provider.createSandbox).mockResolvedValue({
+      id: "sandbox-new",
+      providerId: "sandbox-new",
+      sandboxType: "execution",
+      status: "started",
+    });
+    vi.mocked(provider.executeCommand).mockResolvedValue({
+      exitCode: 0,
+      result: "",
+    });
+    const markStatus = vi.fn(async () => {});
+    const service = new DeploymentRuntimeService(store, {
+      provider,
+      artifacts: { markStatus, verify: vi.fn(async () => true) },
+      now: () => now,
+    });
+    await expect(
+      service.ensure({
+        projectId: "project-1",
+        artifact: {
+          id: "artifact-new",
+          projectId: "project-1",
+          commitSha: "a".repeat(40),
+          artifactDigest: "b".repeat(64),
+          pluginDigest: "c".repeat(64),
+          transformVersion: EXECUTION_TRANSFORM_VERSION,
+          runtimeVersion: DEPLOYMENT_RUNTIME_VERSION,
+          status: "ready",
+          createdAt: old.toISOString(),
+          readyAt: old.toISOString(),
+          lastUsedAt: old.toISOString(),
+        },
+        files: { ".work/package.json": "{}" },
+      }),
+    ).rejects.toThrow("claim lost");
+    // Its own sandbox goes; the artifact's status and records are the
+    // other replica's to write.
+    expect(provider.destroySandbox).toHaveBeenCalledWith("sandbox-new");
+    expect(markStatus).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed" }),
+    );
+    expect(markStatus).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "ready" }),
+    );
+    expect(await store.findReusable({ artifactId: "artifact-new" })).toBeNull();
+  });
+
   it("restarts an idle retired runtime instead of rematerializing it", async () => {
     const store = new FakeDeploymentRuntimeStore({
       runtimes: [
@@ -419,12 +487,16 @@ class FakeDeploymentRuntimeStore implements DeploymentRuntimeStore {
   private readonly runtimes = new Map<string, DeploymentRuntimeRecord>();
   private readonly pinnedArtifactIds: ReadonlySet<string>;
   private readonly oldRuntimeIds: ReadonlySet<string>;
+  private readonly lock: AbortController;
 
   constructor(args: {
     runtimes: readonly DeploymentRuntimeRecord[];
     pinnedArtifactIds?: readonly string[];
     oldRuntimeIds?: readonly string[];
+    /** Aborted to stand for a creation claim another replica took over. */
+    lock?: AbortController;
   }) {
+    this.lock = args.lock ?? new AbortController();
     for (const record of args.runtimes) {
       this.runtimes.set(record.id, record);
     }
@@ -434,9 +506,9 @@ class FakeDeploymentRuntimeStore implements DeploymentRuntimeStore {
 
   async withArtifactLock<Result>(args: {
     artifactId: string;
-    operation: () => Promise<Result>;
+    operation: (lock: { signal: AbortSignal }) => Promise<Result>;
   }): Promise<Result> {
-    return args.operation();
+    return args.operation({ signal: this.lock.signal });
   }
 
   get(runtimeId: string): DeploymentRuntimeRecord | null {

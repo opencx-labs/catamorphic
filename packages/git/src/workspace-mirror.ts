@@ -50,6 +50,10 @@ export function isCommitId(ref: string): boolean {
   return COMMIT.test(ref);
 }
 
+/**
+ * Replica memory (a), ADR 0193: guards a bare mirror on this process's own
+ * disk. The mirror is a cache of commits, and each process has its own.
+ */
 const mirrorLocks = new Map<string, Promise<unknown>>();
 
 /** One Git operation per mirror at a time, in this process. */

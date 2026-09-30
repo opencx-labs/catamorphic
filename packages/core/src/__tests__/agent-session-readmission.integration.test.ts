@@ -157,7 +157,8 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
 
   afterAll(async () => {
     await db.destroy();
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    // A drain scheduled by the last test may still be writing a copy.
+    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5 });
   });
 
   /** An idle chat of Alice's whose workspace was given back. */

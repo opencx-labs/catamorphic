@@ -526,7 +526,9 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 export class RunsService {
+  /** Replica memory (b): sizes of the prepared sources below. */
   private readonly preparedSourceBytes = new Map<string, number>();
+  /** Replica memory (b): prepared sources keyed by commit sha. */
   private readonly preparedSources = new Map<string, Promise<PreparedSource>>();
 
   constructor(

@@ -58,6 +58,10 @@ export interface ToolPermissionChannel {
 }
 
 export class ToolPermissionBroker {
+  /**
+   * Replica memory (single process): asks of harnesses this process runs.
+   * Hosts with several replicas use DurableToolPermissionBroker.
+   */
   private readonly pending = new Map<
     string,
     PendingToolPermission & {
@@ -65,6 +69,7 @@ export class ToolPermissionBroker {
       timer: ReturnType<typeof setTimeout>;
     }
   >();
+  /** Replica memory (single process): see `pending`. */
   private readonly listeners = new Set<() => void>();
   private readonly timeoutMs: number;
 

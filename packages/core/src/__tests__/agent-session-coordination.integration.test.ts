@@ -17,7 +17,10 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
-import { AgentSessionsService } from "../services/agent-sessions-service.js";
+import {
+  AgentSessionsService,
+  AgentTurnInProgressError,
+} from "../services/agent-sessions-service.js";
 import { projectChatIdentity } from "../services/chat-delivery.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
@@ -483,6 +486,19 @@ describe("agent session coordination", () => {
       ).toHaveLength(1),
     );
     expect(continued).not.toHaveBeenCalled();
+    // A blocking ask waits inside the running harness: the turn runs, and
+    // another service refuses changes to the chat (ADR 0193).
+    expect(
+      (await answerReceiver.get(identity, project.id, session.id)).running,
+    ).toBe(true);
+    await expect(
+      answerReceiver.update(identity, project.id, session.id, {
+        effort: "high",
+      }),
+    ).rejects.toBeInstanceOf(AgentTurnInProgressError);
+    await expect(
+      answerReceiver.retry(identity, project.id, session.id),
+    ).rejects.toBeInstanceOf(AgentTurnInProgressError);
     const request = (await sessions.get(identity, project.id, session.id))
       .questions?.[0];
     if (!request) throw new Error("Question was not persisted");

@@ -30,6 +30,7 @@ import {
   ProjectNotFoundError,
   type ProjectsService,
 } from "./projects-service.js";
+import { withReplicaClaim } from "./replica-claims.js";
 
 /** Project ids are UUIDs; anything else names no project. */
 const PROJECT_ID =
@@ -96,9 +97,6 @@ interface ResolvedHost {
  * control plane.
  */
 export class CodeHostsService {
-  /** Publishes in flight in this process, per project. */
-  private readonly publishing = new Map<string, Promise<unknown>>();
-
   constructor(
     private readonly deps: {
       db: Kysely<DB>;
@@ -599,22 +597,20 @@ export class CodeHostsService {
     visibility?: "private" | "public";
   }): Promise<{ fullName: string; remoteUrl: string }> {
     assertProjectPermission(args.identity, args.projectId, "program:publish");
-    // One publish per project at a time here, so a repeated request finds
-    // the project linked instead of creating a second repository.
-    const previous = this.publishing.get(args.projectId);
-    const run = (previous ?? Promise.resolve())
-      .catch(() => {})
-      .then(() => this.publishProjectOnce(args));
-    this.publishing.set(args.projectId, run);
-    const forget = () => {
-      if (this.publishing.get(args.projectId) === run)
-        this.publishing.delete(args.projectId);
-    };
-    void run.then(forget, forget);
-    return run;
+    // One publish per project at a time on every replica (ADR 0193), so a
+    // repeated request waits and then finds the project linked instead of
+    // creating a second repository.
+    return withReplicaClaim({
+      db: this.deps.db,
+      name: `publish-project:${args.projectId}`,
+      waitMs: 120_000,
+      operation: ({ signal }) => this.publishProjectOnce({ ...args, signal }),
+    });
   }
 
   private publishProjectOnce(args: {
+    /** Aborts once this publish is no longer the project's only one. */
+    signal: AbortSignal;
     identity: Identity;
     projectId: string;
     provider: string;
@@ -660,6 +656,10 @@ export class CodeHostsService {
           identity,
           connection,
           use: async (credential) => {
+            // Checked before the code host creates anything: a publish that
+            // lost its claim leaves no repository behind. Past this point
+            // the conditional link below decides.
+            args.signal.throwIfAborted();
             const repository = await create({
               credential,
               name: args.name,

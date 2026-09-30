@@ -1,6 +1,6 @@
 # 0192 — Workers own their lease: any replica runs any worker's turns
 
-- **Status:** Accepted
+- **Status:** Accepted; turn status, guards, and interrupts through the lease by 0193
 - **Date:** 2026-09-30
 - **Supersedes:** 0164's "the control-plane instance a worker connects to holds that node's lease, runs its agents' controller loops" and its session pinning
 - **Refines:** 0098, 0164, 0173, 0187, 0190
@@ -83,6 +83,6 @@ A worker's restart costs the operations in flight, not its chats: sandboxes
 persist and the next turn continues. A turn that moves to another replica
 re-anchors its harness and refreshes the workspace's files from the session
 branch, so an interrupted turn's uncheckpointed edits are not kept. Session
-copies on a replica's disk remain until issue 153; turn status and in-memory
-guards remain until issue 154. Workers and control planes must run the same
+copies on a replica's disk remain until issue 153; turn status and guards
+come from the lease in Postgres (ADR 0193). Workers and control planes must run the same
 release.

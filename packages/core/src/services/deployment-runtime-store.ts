@@ -1,8 +1,14 @@
 import type { DB } from "@catamorphic/db";
 import type { Kysely, Selectable } from "kysely";
+import { withReplicaClaim } from "./replica-claims.js";
 
 type DeploymentRuntimeRow = Selectable<DB["deployment_runtimes"]>;
-const artifactLocks = new Map<string, Promise<void>>();
+
+/**
+ * How long a runtime's creation may keep others waiting: installing a
+ * deployment's dependencies is the slow part.
+ */
+const RUNTIME_CREATION_WAIT_MS = 15 * 60_000;
 
 export type DeploymentRuntimeRecordStatus =
   | "creating"
@@ -26,9 +32,13 @@ export interface DeploymentRuntimeRecord {
 }
 
 export interface DeploymentRuntimeStore {
+  /**
+   * Run `operation` as the only creator of the artifact's runtime; `signal`
+   * aborts once that is no longer true.
+   */
   withArtifactLock<Result>(args: {
     artifactId: string;
-    operation: () => Promise<Result>;
+    operation: (lock: { signal: AbortSignal }) => Promise<Result>;
   }): Promise<Result>;
   findReusable(args: {
     artifactId: string;
@@ -80,25 +90,22 @@ export class KyselyDeploymentRuntimeStore implements DeploymentRuntimeStore {
     private readonly bindingId = "default",
   ) {}
 
+  /**
+   * One creation of an artifact's runtime per binding across every replica
+   * (ADR 0193): the reservation is a claim taken before any sandbox exists,
+   * so a second caller waits and then finds the runtime the first made.
+   */
   async withArtifactLock<Result>(args: {
     artifactId: string;
-    operation: () => Promise<Result>;
+    operation: (lock: { signal: AbortSignal }) => Promise<Result>;
   }): Promise<Result> {
-    const lockKey = `${this.bindingId}:${args.artifactId}`;
-    const previous = artifactLocks.get(lockKey) ?? Promise.resolve();
-    const operation = previous.then(args.operation);
-    const queued = operation.then(
-      () => undefined,
-      () => undefined,
-    );
-    artifactLocks.set(lockKey, queued);
-    try {
-      return await operation;
-    } finally {
-      if (artifactLocks.get(lockKey) === queued) {
-        artifactLocks.delete(lockKey);
-      }
-    }
+    return withReplicaClaim({
+      db: this.db,
+      name: `deployment-runtime:${this.bindingId}:${args.artifactId}`,
+      waitMs: RUNTIME_CREATION_WAIT_MS,
+      pollMs: 250,
+      operation: args.operation,
+    });
   }
 
   async findReusable(args: {

@@ -123,7 +123,7 @@ export class DeploymentRuntimeService {
       async (span) => {
         return this.store.withArtifactLock({
           artifactId: args.artifact.id,
-          operation: async () => {
+          operation: async ({ signal }) => {
             const existing = await this.store.findReusable({
               artifactId: args.artifact.id,
             });
@@ -181,6 +181,9 @@ export class DeploymentRuntimeService {
                   usedAt: now,
                 });
               } else {
+                // Another replica took over the creation: this sandbox is
+                // destroyed below instead of recorded beside its runtime.
+                signal.throwIfAborted();
                 const replicaIndex = 0;
                 await this.store.insert({
                   artifactId: args.artifact.id,
@@ -203,6 +206,15 @@ export class DeploymentRuntimeService {
               span.setAttribute("catamorphic.runtime.id", runtime.runtimeId);
               return runtime;
             } catch (error) {
+              // Another replica took over this creation: its outcome is
+              // theirs to record. Only this replica's sandbox goes.
+              if (signal.aborted) {
+                if (!existing)
+                  await this.deps.provider
+                    .destroySandbox(sandboxId)
+                    .catch(() => {});
+                throw error;
+              }
               await this.deps.artifacts.markStatus({
                 artifactId: args.artifact.id,
                 status: "failed",

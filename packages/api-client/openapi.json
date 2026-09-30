@@ -17095,7 +17095,13 @@
                         },
                         "phase": {
                           "type": "string",
-                          "enum": ["preparing", "working", "waiting", "saving"]
+                          "enum": [
+                            "preparing",
+                            "working",
+                            "waiting",
+                            "saving",
+                            "parked"
+                          ]
                         },
                         "activity": {
                           "nullable": true,
