@@ -23,10 +23,14 @@ epoch connecting again only refreshes the worker's offer. A later epoch (a
 restarted process) takes over at once and, in the same transaction, fails
 every operation the old epoch was sent as uncertain: none is delivered again,
 and late receipts are refused. An earlier epoch is refused while the current
-one is live, so a stale process stops for good instead of taking the machine
-back; after a lapse any epoch may connect. Every poll, renewal, and receipt
-renews the lease while its epoch is current. The lease lapses 45 seconds
-after the worker stops calling. No replica keeps a worker in memory.
+one is live; after a lapse any epoch may connect. Only epochs order: a lease
+taken before epochs existed never refuses one. A process refused on its first
+connect waits for the lease to lapse (its clock may have gone back); one
+refused after it held the lease was superseded and stops for good, instead of
+taking the machine back. Every poll, renewal, and receipt renews the lease
+while its epoch is current, even after a lapse. The lease lapses 45 seconds
+after the worker stops calling. No replica keeps a worker in memory; the
+operator's last contact is written at most every five seconds.
 
 **Remote nodes are built from rows.** `worker_nodes.remote` records the
 executor's offer (workspace root, background processes). Any replica builds
@@ -36,8 +40,9 @@ current epoch and fails at once while the lease is not live.
 **Any replica runs a remote node's turns.** The `agent_turns` claim decides,
 in Postgres. A turn may be claimed when its workspace is on no node, on a
 remote node that is enabled with a live lease, or on the claiming process's
-own local node. So turns wait while a worker is away, and a replica's own
-node stays its own. A running turn is fenced by its own turn lease; the
+own local node, and a member runner's workspace only while its runner's
+lease is live. So turns wait while a worker or runner is away, and a
+replica's own node stays its own. A running turn is fenced by its own turn lease; the
 epoch fences operations, not turns, so a worker restart fails the operation
 in flight and never the turn wholesale. A replica that stops lets its own
 turns finish or interrupts them (0190); a turn whose replica crashed is
@@ -46,12 +51,19 @@ recovery: interrupted, never replayed.
 
 **Maintenance runs under claims.** Any replica releases idle workspaces
 (ADR 0173) and destroys released ones on remote nodes, each Allocation under
-a row claim with expiry (`maintenance_claimed_until`). A turn claim
-share-locks its session row, so an idle release and a claim never overlap.
+a claim: a token and an expiry the holder renews while it works and compares
+when it gives the claim back. An idle release takes its claim with the
+session row locked and only while the chat has no queued, held, or running
+turn; a turn claim share-locks the same row and waits while the claim is
+held, so a workspace is never saved or released under a running turn.
+Destroying an already destroyed sandbox succeeds, so a cleanup whose receipt
+was lost is retried safely.
 
 **This machine is no replica's node.** A member runner already owned its
 lease. Its chats' Allocations name no node, so any replica runs their turns
-while the runner's lease is live, and they hold no replica capacity. A
+while the runner's lease is live (they wait while it is away; a new
+connection still cannot revive the old workspace, 0098), and they hold no
+replica capacity. A
 member's machine is not idle-released; the runner stops its sandboxes when
 it disconnects.
 

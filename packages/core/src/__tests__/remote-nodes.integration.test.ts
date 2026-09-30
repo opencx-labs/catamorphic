@@ -10,6 +10,7 @@ import { AgentTurnsService } from "../services/agent-turns-service.js";
 import {
   claimAllocationMaintenance,
   releaseAllocationMaintenance,
+  renewAllocationMaintenance,
 } from "../services/allocation-sandbox-provider.js";
 import {
   EXECUTOR_RESTARTED_ERROR,
@@ -76,6 +77,49 @@ async function lapse(id: string) {
     .set({ lease_expires_at: sql`now() - interval '1 second'` })
     .where("id", "=", id)
     .execute();
+}
+
+/** A chat whose workspace is on `nodeId` (or on none), with a queued turn. */
+async function chatOn(
+  nodeId: string | null,
+  bindingId = nodeId ?? "host-binding",
+): Promise<{ sessionId: string; allocationId: string }> {
+  const sessionId = crypto.randomUUID();
+  await db
+    .insertInto("agent_sessions")
+    .values({
+      id: sessionId,
+      project_id: projectId,
+      external_user_id: "member",
+      provider: "test",
+    })
+    .execute();
+  const allocation = await db
+    .insertInto("execution_allocations")
+    .values({
+      tenant_id: tenantId,
+      project_id: projectId,
+      environment_name: "default",
+      binding_id: bindingId,
+      workload_kind: "agent",
+      root_workload_id: sessionId,
+      worker_node_id: nodeId,
+      policy_snapshot: JSON.stringify({}),
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow();
+  await db
+    .updateTable("agent_sessions")
+    .set({ allocation_id: allocation.id })
+    .where("id", "=", sessionId)
+    .execute();
+  await new AgentTurnsService(db).deliver({
+    sessionId,
+    content: "Work",
+    author: { kind: "user", externalUserId: "member" },
+    mode: "next_turn",
+  });
+  return { sessionId, allocationId: allocation.id };
 }
 
 describe("remote nodes own their lease (ADR 0192)", () => {
@@ -207,45 +251,6 @@ describe("remote nodes own their lease (ADR 0192)", () => {
       authorityId,
       descriptor: descriptor(`node.${crypto.randomUUID()}`),
     });
-    /** A chat whose workspace is on `nodeId` (or on none), with a turn. */
-    const chatOn = async (nodeId: string | null) => {
-      const sessionId = crypto.randomUUID();
-      await db
-        .insertInto("agent_sessions")
-        .values({
-          id: sessionId,
-          project_id: projectId,
-          external_user_id: "member",
-          provider: "test",
-        })
-        .execute();
-      const allocation = await db
-        .insertInto("execution_allocations")
-        .values({
-          tenant_id: tenantId,
-          project_id: projectId,
-          environment_name: "default",
-          binding_id: nodeId ?? "client:runner:token",
-          workload_kind: "agent",
-          root_workload_id: sessionId,
-          worker_node_id: nodeId,
-          policy_snapshot: JSON.stringify({}),
-        })
-        .returning("id")
-        .executeTakeFirstOrThrow();
-      await db
-        .updateTable("agent_sessions")
-        .set({ allocation_id: allocation.id })
-        .where("id", "=", sessionId)
-        .execute();
-      await turns.deliver({
-        sessionId,
-        content: "Work",
-        author: { kind: "user", externalUserId: "member" },
-        mode: "next_turn",
-      });
-      return { sessionId, allocationId: allocation.id };
-    };
     const claim = (sessionId: string) =>
       turns.claimNextForSession({
         workerId: "this-host",
@@ -291,35 +296,135 @@ describe("remote nodes own their lease (ADR 0192)", () => {
     expect(await claim(released.sessionId)).toBeNull();
   });
 
-  it("gives one host at a time an Allocation's maintenance", async () => {
-    const sessionId = crypto.randomUUID();
-    const allocation = await db
-      .insertInto("execution_allocations")
-      .values({
-        tenant_id: tenantId,
-        project_id: projectId,
-        environment_name: "default",
-        binding_id: "binding",
-        workload_kind: "agent",
-        root_workload_id: sessionId,
-        policy_snapshot: JSON.stringify({}),
-      })
-      .returning("id")
-      .executeTakeFirstOrThrow();
-    const args = { db, allocationId: allocation.id, status: "active" as const };
-    expect(await claimAllocationMaintenance(args)).toBe(true);
-    expect(await claimAllocationMaintenance(args)).toBe(false);
-    await releaseAllocationMaintenance(args);
-    expect(await claimAllocationMaintenance(args)).toBe(true);
-    // A claim left by a host that stopped lapses on its own.
+  it("takes over a lease an executor held before it had epochs", async () => {
+    // A worker node from before epochs: a random (v4) token, no offer.
+    const id = `worker.${crypto.randomUUID().slice(0, 8)}`;
+    const legacy = "ffffffff-ffff-4fff-bfff-ffffffffffff";
+    await nodes.register({ tenantId, authorityId, descriptor: descriptor(id) });
+    await db
+      .updateTable("worker_nodes")
+      .set({ lease_token: legacy })
+      .where("id", "=", id)
+      .execute();
+    // Its first epoch sorts before the old token, and still takes over.
+    expect((await connect(id, epochAt(Date.now()))).superseded).toBe(legacy);
+  });
+
+  it("keeps a workspace's turns waiting while a host saves it, and never saves a busy one", async () => {
+    const turns = new AgentTurnsService(db);
+    const remote = `worker.${crypto.randomUUID().slice(0, 8)}`;
+    await connect(remote, epochAt(Date.now()));
+    const chat = await chatOn(remote);
+    const claimTurn = () =>
+      turns.claimNextForSession({
+        workerId: "host",
+        sessionId: chat.sessionId,
+      });
+    const claimIdle = () =>
+      claimAllocationMaintenance({
+        db,
+        allocationId: chat.allocationId,
+        status: "active",
+        sessionId: chat.sessionId,
+      });
+
+    // A chat with a queued turn is not idle.
+    expect(await claimIdle()).toBeUndefined();
+    const running = await claimTurn();
+    if (!running?.leaseToken) throw new Error("Expected a turn");
+    expect(await claimIdle()).toBeUndefined();
+    await turns.complete({
+      turnId: running.id,
+      leaseToken: running.leaseToken,
+      resultMessageId: running.messageId,
+    });
+
+    // Idle: one host takes the claim, and a turn arriving meanwhile waits.
+    const claim = await claimIdle();
+    if (!claim) throw new Error("Expected a claim");
+    expect(await claimIdle()).toBeUndefined();
+    await turns.deliver({
+      sessionId: chat.sessionId,
+      content: "More work",
+      author: { kind: "user", externalUserId: "member" },
+      mode: "next_turn",
+    });
+    expect(await claimTurn()).toBeNull();
+
+    // Only its holder renews or gives it back.
+    const stranger = {
+      allocationId: chat.allocationId,
+      token: crypto.randomUUID(),
+    };
+    expect(await renewAllocationMaintenance({ db, claim: stranger })).toBe(
+      false,
+    );
+    await releaseAllocationMaintenance({ db, claim: stranger });
+    expect(await claimTurn()).toBeNull();
+    expect(await renewAllocationMaintenance({ db, claim })).toBe(true);
+    await releaseAllocationMaintenance({ db, claim });
+    expect(await claimTurn()).not.toBeNull();
+  });
+
+  it("gives up a claim left by a host that stopped", async () => {
+    const chat = await chatOn(null);
+    await db
+      .deleteFrom("agent_turns")
+      .where("session_id", "=", chat.sessionId)
+      .execute();
+    const args = {
+      db,
+      allocationId: chat.allocationId,
+      status: "active" as const,
+      sessionId: chat.sessionId,
+    };
+    const first = await claimAllocationMaintenance(args);
+    expect(first).toBeDefined();
     await db
       .updateTable("execution_allocations")
       .set({ maintenance_claimed_until: sql`now() - interval '1 second'` })
-      .where("id", "=", allocation.id)
+      .where("id", "=", chat.allocationId)
       .execute();
-    expect(await claimAllocationMaintenance(args)).toBe(true);
+    const second = await claimAllocationMaintenance(args);
+    expect(second?.token).not.toBe(first?.token);
+    // The stopped host's late release does not free the new holder's claim.
+    if (first) await releaseAllocationMaintenance({ db, claim: first });
+    expect(await claimAllocationMaintenance(args)).toBeUndefined();
     expect(
       await claimAllocationMaintenance({ ...args, status: "released" }),
-    ).toBe(false);
+    ).toBeUndefined();
+  });
+
+  it("keeps a member's machine's turns queued while its runner is away", async () => {
+    const turns = new AgentTurnsService(db);
+    const runnerId = crypto.randomUUID();
+    const token = crypto.randomUUID();
+    await db
+      .insertInto("client_runners")
+      .values({
+        id: runnerId,
+        tenant_id: tenantId,
+        project_id: projectId,
+        external_user_id: "member",
+        environment_name: "laptop",
+        label: "Laptop",
+        workspace_root: "/workspace",
+        lease_token: token,
+        lease_expires_at: sql<Date>`now() - interval '1 second'`,
+      })
+      .execute();
+    const chat = await chatOn(null, `client:${runnerId}:${token}`);
+    const claim = () =>
+      turns.claimNextForSession({
+        workerId: "host",
+        sessionId: chat.sessionId,
+      });
+    expect(await claim()).toBeNull();
+    await db
+      .updateTable("client_runners")
+      .set({ lease_expires_at: sql<Date>`now() + interval '45 seconds'` })
+      .where("id", "=", runnerId)
+      .execute();
+    expect(await claim()).not.toBeNull();
   });
 });

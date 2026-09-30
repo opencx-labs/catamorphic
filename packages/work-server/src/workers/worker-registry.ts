@@ -173,9 +173,12 @@ export class WorkWorkerRegistry {
     error?: string;
   }): Promise<void> {
     // A receipt proves the worker is alive; an old epoch's is refused below.
-    await this.deps.nodes.renewRemote({
-      lease: { id: args.nodeId, token: args.session },
-    });
+    if (
+      await this.deps.nodes.renewRemote({
+        lease: { id: args.nodeId, token: args.session },
+      })
+    )
+      await this.seen(args.nodeId);
     await this.queue.complete({
       executor: nodeExecutor(args.nodeId),
       leaseToken: args.session,
@@ -202,9 +205,29 @@ export class WorkWorkerRegistry {
       await this.deps.nodes.renewRemote({
         lease: { id: args.nodeId, token: args.session },
       })
-    )
+    ) {
+      await this.seen(args.nodeId);
       return;
+    }
     throw await this.ended(args);
+  }
+
+  /**
+   * The operator's "last contact": the worker's latest call to any replica,
+   * written at most every five seconds.
+   */
+  private async seen(nodeId: string): Promise<void> {
+    await this.deps.db
+      .updateTable("work_workers")
+      .set({ last_seen_at: sql`now()` })
+      .where("node_id", "=", nodeId)
+      .where((eb) =>
+        eb.or([
+          eb("last_seen_at", "is", null),
+          eb("last_seen_at", "<", sql<Date>`now() - interval '5 seconds'`),
+        ]),
+      )
+      .execute();
   }
 
   /** Why this epoch's session ended: superseded, or disabled and lapsed. */
@@ -398,6 +421,7 @@ export class WorkWorkerRegistry {
           processes: args.offer.processes,
         },
       });
+      await this.seen(args.nodeId);
       if (connected.superseded)
         this.deps.log?.(`Worker ${args.name} restarted and connected`);
       else this.deps.log?.(`Worker ${args.name} connected`);
@@ -654,14 +678,11 @@ export class WorkWorkerRegistry {
       machine: { rule: string; ref: string | null } | null;
     }>
   > {
-    // A worker is last seen when its own call last renewed its lease.
     const rows = await this.deps.db
       .selectFrom("work_workers")
-      .leftJoin("worker_nodes", "worker_nodes.id", "work_workers.node_id")
-      .selectAll("work_workers")
-      .select("worker_nodes.updated_at as last_seen_at")
-      .where("work_workers.tenant_id", "=", this.deps.tenantId)
-      .orderBy("work_workers.name")
+      .selectAll()
+      .where("tenant_id", "=", this.deps.tenantId)
+      .orderBy("name")
       .execute();
     return rows.map((row) => ({
       name: row.name,

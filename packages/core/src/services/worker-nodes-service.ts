@@ -250,7 +250,13 @@ export class WorkerNodesService {
             .execute();
           const current = await trx
             .selectFrom("worker_nodes")
-            .select(["lease_token", "enabled", "tenant_id", "authority_id"])
+            .select([
+              "lease_token",
+              "enabled",
+              "tenant_id",
+              "authority_id",
+              "remote",
+            ])
             .select(sql<boolean>`lease_expires_at > now()`.as("live"))
             .where("id", "=", descriptor.id)
             .forUpdate()
@@ -262,8 +268,11 @@ export class WorkerNodesService {
               current.authority_id !== args.authorityId)
           )
             throw new WorkerNodeLeaseHeldError();
+          // Only epochs order: a lease an executor took before it had one
+          // (a random token) never refuses a newer process.
           if (
             current?.live &&
+            current.remote !== null &&
             current.lease_token !== args.epoch &&
             args.epoch < current.lease_token
           )

@@ -124,6 +124,7 @@ export {
   type AgentTodoInput,
   type AgentTodoStatus,
   AgentTurnInProgressError,
+  AgentTurnQueuedError,
   type AgentTurnSettledEvent,
   type ArchiveSessionResourcesHandler,
   type NativeAgentCheckout,

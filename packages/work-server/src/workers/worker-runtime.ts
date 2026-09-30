@@ -91,6 +91,10 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   // chooses a later one, and the control plane fails what the old one was
   // sent as uncertain.
   const epoch = uuidV7();
+  // Whether this epoch has held the lease: only then does being superseded
+  // mean a newer process took over. Refused before that, this process may
+  // be the newer one behind a clock that went back; it waits for the lease.
+  let connectedOnce = false;
   /**
    * One call to the control plane. Definite answers become the runner's
    * errors; anything else (no answer, a timeout, a 5xx from a load balancer
@@ -176,6 +180,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       body: { session: epoch, offer },
       signal: stopping.signal,
     });
+    connectedOnce = true;
     const token = epoch;
     log(`Connected to ${base} as ${nodeId}`);
     backoffMs = 1_000;
@@ -257,10 +262,17 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         if (stopping.signal.aborted) break;
         if (
           error instanceof WorkerRevokedError ||
-          error instanceof WorkerSupersededError
+          (error instanceof WorkerSupersededError && connectedOnce)
         ) {
           log(error.message);
           break;
+        }
+        if (error instanceof WorkerSupersededError) {
+          log(
+            "Another process of this worker holds its lease; connecting once it lapses",
+          );
+          await pause(5_000);
+          continue;
         }
         log(
           error instanceof WorkerRefusedError

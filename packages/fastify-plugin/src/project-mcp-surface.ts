@@ -1,6 +1,7 @@
 import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import {
   AccessDeniedError,
+  AgentTurnQueuedError,
   EVERY_ARTIFACT,
   mayUseProject,
   parseWorkspaceRequest,
@@ -556,13 +557,20 @@ export function surfaceTools(
                 : {}),
             })
           ).id;
-        const reply = await sessions.sendMessage(
-          identity,
-          projectId,
-          sessionId,
-          message,
-        );
-        return { sessionId, reply: reply.content };
+        try {
+          const reply = await sessions.sendMessage(
+            identity,
+            projectId,
+            sessionId,
+            message,
+          );
+          return { sessionId, reply: reply.content };
+        } catch (error) {
+          // The machine that runs the chat is away: the message waits for it.
+          if (error instanceof AgentTurnQueuedError)
+            return { sessionId, queued: true, reply: error.message };
+          throw error;
+        }
       }),
     });
 

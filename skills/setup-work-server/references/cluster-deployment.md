@@ -194,13 +194,16 @@ fresh one with an empty disk at any time.
    replica lets them finish or interrupts them (see below), and a crashed
    one's are settled as interrupted by another replica once their turn lease
    lapses, about a minute later. The chats' next turns run on any replica. A
-   worker that is away for more than 45 seconds loses its lease, and its
-   chats' turns wait for it.
+   worker that is away for more than 45 seconds is unavailable: its chats'
+   turns wait, and in-flight operations its controllers stopped waiting for
+   fail as uncertain. When it calls again, the same process simply carries
+   on.
 
 A restarted worker process connects under a new epoch. The operations it had
 in flight fail as uncertain and are never replayed; its sandboxes and chats
 carry on. Two processes must never share one worker's data volume: the older
-one stops for good once the newer one connects.
+one stops for good once the newer one connects. A new process whose clock is
+behind its predecessor's waits up to 45 seconds for the old lease to lapse.
 
 The operator can disable any machine with
 `PATCH /_work/operator/machines/:id` and `{ "enabled": false }`. Lease fencing
@@ -261,7 +264,9 @@ project and Environment permissions. Closing the desktop or losing authorization
 stops the runner. A new connection lifetime cannot revive an old allocation.
 The runner renews its own lease through any replica, so its chats belong to no
 replica: any replica runs their turns, and they continue when the replica
-that admitted them stops (ADR 0192).
+that admitted them stops (ADR 0192). While the runner is away, its chats' turns stay
+queued instead of failing. A new connection cannot revive the old workspace
+(see above), so a turn that waited through a reconnection fails and says so.
 
 Stock local execution uses the controller topology: the host model loop and
 connection broker stay on the server; sandbox commands and files run on the

@@ -78,7 +78,7 @@ import {
 import {
   allocationSandboxProvider,
   claimAllocationMaintenance,
-  releaseAllocationMaintenance,
+  withAllocationMaintenance,
   withAllocationSandboxPolicy,
 } from "./allocation-sandbox-provider.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
@@ -463,6 +463,23 @@ export class AgentTurnInProgressError extends Error {
   constructor(readonly sessionId: string) {
     super(`Agent session '${sessionId}' has a turn in progress`);
     this.name = "AgentTurnInProgressError";
+  }
+}
+
+/**
+ * The message was accepted, but no machine has started its turn: the one
+ * that runs the chat is away or busy. The turn stays queued and runs when a
+ * machine takes it; read the session for its reply.
+ */
+export class AgentTurnQueuedError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly turnId: string,
+  ) {
+    super(
+      "The message is queued: the machine that runs this chat is away or busy. It runs when the machine takes it; read the chat for the reply.",
+    );
+    this.name = "AgentTurnQueuedError";
   }
 }
 
@@ -4105,7 +4122,8 @@ export class AgentSessionsService {
       )
       .selectAll("agent_messages")
       .where("agent_turns.id", "=", receipt.turnId)
-      .executeTakeFirstOrThrow();
+      .executeTakeFirst();
+    if (!turn) throw new AgentTurnQueuedError(sessionId, turnId);
     return mapMessage(turn);
   }
 
@@ -5134,25 +5152,31 @@ export class AgentSessionsService {
         : 0;
       const idleSince = Math.max(row.allocated_at.getTime(), lastTurnAt);
       if (now.getTime() - idleSince < minutes * 60_000) continue;
-      if (
-        !(await claimAllocationMaintenance({
-          db: this.db,
-          allocationId: row.allocation_id,
-          status: "active",
-        }))
-      )
-        continue;
+      // Locks the chat and is refused while it has work; turns then wait
+      // until the workspace is saved and released (ADR 0192).
+      const claim = await claimAllocationMaintenance({
+        db: this.db,
+        allocationId: row.allocation_id,
+        status: "active",
+        sessionId: row.id,
+      });
+      if (!claim) continue;
       try {
         if (
-          await this.releaseIdleWorkspace({
-            identity,
-            projectId: row.project_id,
-            sessionId: row.id,
-            agentId: row.agent_id,
-            providerSessionId: row.provider_session_id,
-            allocationId: row.allocation_id,
-            sandboxProviderId: row.sandbox_provider_id,
-            owner: placementOwner(row.external_user_id),
+          await withAllocationMaintenance({
+            db: this.db,
+            claim,
+            work: () =>
+              this.releaseIdleWorkspace({
+                identity,
+                projectId: row.project_id,
+                sessionId: row.id,
+                agentId: row.agent_id,
+                providerSessionId: row.provider_session_id,
+                allocationId: row.allocation_id,
+                sandboxProviderId: row.sandbox_provider_id,
+                owner: placementOwner(row.external_user_id),
+              }),
           })
         )
           released.push(row.id);
@@ -5162,11 +5186,6 @@ export class AgentSessionsService {
           `[catamorphic] Idle workspace of session ${row.id} kept`,
           error,
         );
-      } finally {
-        await releaseAllocationMaintenance({
-          db: this.db,
-          allocationId: row.allocation_id,
-        }).catch(() => {});
       }
     }
     return released.length;

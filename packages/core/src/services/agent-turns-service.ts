@@ -599,10 +599,12 @@ export class AgentTurnsService {
   /**
    * Claim the next turn this host may run (ADR 0192): a turn whose workspace
    * is on no node, on a remote node whose executor's lease is live (any host
-   * runs those), or on this host's own local node. A turn on another host's
-   * local node, on a released workspace, or on a remote node while its
-   * executor is away stays queued. The session row is share-locked, so a
-   * workspace released while idle and a claim never overlap.
+   * runs those), or on this host's own local node. A turn stays queued on
+   * another host's local node, on a released workspace, on a remote node or
+   * a member's machine while its executor is away, and while a host holds
+   * the workspace's maintenance claim (an idle release in progress). The
+   * session row is share-locked; the maintenance claim locks it for update
+   * and checks for busy turns, so the two never overlap.
    */
   private async claim(input: {
     workerId: string;
@@ -636,37 +638,80 @@ export class AgentTurnsService {
                 )
                 .select("session.id")
                 .whereRef("session.id", "=", "turn.session_id")
-                .where("allocation.worker_node_id", "is not", null)
                 .where((blocked) =>
                   blocked.or([
-                    blocked("allocation.status", "!=", "active"),
-                    blocked.not(
-                      blocked.exists(
-                        blocked
-                          .selectFrom("worker_nodes as node")
-                          .select("node.id")
-                          .whereRef("node.id", "=", "allocation.worker_node_id")
-                          .where("node.enabled", "=", true)
-                          .where("node.lease_expires_at", ">", sql<Date>`now()`)
-                          .where((node) =>
-                            node.or([
-                              node("node.remote", "is not", null),
-                              ...(input.localNode
-                                ? [
-                                    node.and([
-                                      node("node.id", "=", input.localNode.id),
-                                      node(
-                                        "node.lease_token",
-                                        "=",
-                                        input.localNode.token,
-                                      ),
-                                    ]),
-                                  ]
-                                : []),
-                            ]),
-                          ),
-                      ),
+                    // A host is saving or releasing the idle workspace.
+                    blocked(
+                      "allocation.maintenance_claimed_until",
+                      ">",
+                      sql<Date>`now()`,
                     ),
+                    // On a node: active, and a node this host may drive.
+                    blocked.and([
+                      blocked("allocation.worker_node_id", "is not", null),
+                      blocked.or([
+                        blocked("allocation.status", "!=", "active"),
+                        blocked.not(
+                          blocked.exists(
+                            blocked
+                              .selectFrom("worker_nodes as node")
+                              .select("node.id")
+                              .whereRef(
+                                "node.id",
+                                "=",
+                                "allocation.worker_node_id",
+                              )
+                              .where("node.enabled", "=", true)
+                              .where(
+                                "node.lease_expires_at",
+                                ">",
+                                sql<Date>`now()`,
+                              )
+                              .where((node) =>
+                                node.or([
+                                  node("node.remote", "is not", null),
+                                  ...(input.localNode
+                                    ? [
+                                        node.and([
+                                          node(
+                                            "node.id",
+                                            "=",
+                                            input.localNode.id,
+                                          ),
+                                          node(
+                                            "node.lease_token",
+                                            "=",
+                                            input.localNode.token,
+                                          ),
+                                        ]),
+                                      ]
+                                    : []),
+                                ]),
+                              ),
+                          ),
+                        ),
+                      ]),
+                    ]),
+                    // A member's own machine while its runner is away.
+                    blocked.and([
+                      blocked("allocation.worker_node_id", "is", null),
+                      blocked("allocation.binding_id", "like", "client:%"),
+                      blocked.not(
+                        blocked.exists(
+                          blocked
+                            .selectFrom("client_runners as runner")
+                            .select("runner.id")
+                            .where(
+                              sql<boolean>`runner.id::text = split_part(allocation.binding_id, ':', 2)`,
+                            )
+                            .where(
+                              "runner.lease_expires_at",
+                              ">",
+                              sql<Date>`now()`,
+                            ),
+                        ),
+                      ),
+                    ]),
                   ]),
                 ),
             ),

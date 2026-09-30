@@ -6,9 +6,8 @@
 -- host's local node, whose sandboxes only that host process can reach.
 ALTER TABLE worker_nodes ADD COLUMN remote jsonb;
 
--- Liveness is the node lease itself; the worker row no longer tracks it.
-ALTER TABLE work_workers DROP COLUMN last_seen_at;
-
--- Any replica saves an idle workspace or destroys a released one. A replica
--- claims the Allocation until this time first, so two never do it at once.
+-- Any replica saves an idle workspace or destroys a released one. It claims
+-- the Allocation first under its own token until a time it renews while it
+-- works, so two never do it at once, and a turn waits while it holds it.
+ALTER TABLE execution_allocations ADD COLUMN maintenance_claim uuid;
 ALTER TABLE execution_allocations ADD COLUMN maintenance_claimed_until timestamp with time zone;

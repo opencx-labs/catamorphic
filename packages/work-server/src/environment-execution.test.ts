@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Identity } from "@catamorphic/core";
+import { AgentTurnQueuedError, type Identity } from "@catamorphic/core";
 import { type DB, DEFAULT_SCHEMA } from "@catamorphic/db";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import {
@@ -396,13 +396,16 @@ it("an authenticated member executes on this machine and loses execution immedia
     ).rejects.toThrow();
     await runner.stop();
     runner = undefined;
-    const offline = await sessions.sendMessage(
-      identity,
-      project.id,
-      session.id,
-      "Do not replay",
-    );
-    expect(offline.metadata?.status).toBe("failed");
+    // With the runner away its chat's turn waits in the queue (ADR 0192);
+    // nothing runs it elsewhere.
+    await expect(
+      sessions.sendMessage(identity, project.id, session.id, "Do not replay"),
+    ).rejects.toBeInstanceOf(AgentTurnQueuedError);
+    expect(
+      (await sessions.turns.listPending({ sessionId: session.id })).map(
+        (turn) => turn.status,
+      ),
+    ).toEqual(["queued"]);
     await service.register({
       identity,
       projectId: project.id,
