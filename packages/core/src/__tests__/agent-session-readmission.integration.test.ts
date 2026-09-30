@@ -398,7 +398,7 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
       mode: "next_turn",
     });
     // A replica serving other machines picks it up on its poll.
-    const replica = service({ id: "worker.here", token: "token" });
+    const replica = service({ id: "worker.here", token: crypto.randomUUID() });
     const worker = replica.startWorker({
       resolveIdentity,
       pollIntervalMs: 50,
