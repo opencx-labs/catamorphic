@@ -193,6 +193,17 @@ export interface EnvironmentDiscovery {
   defaultEnvironment?: string;
 }
 
+/**
+ * The project's committed Environment policy (`.work/project.json`) is
+ * invalid: the project must fix it before work can be placed.
+ */
+export class EnvironmentPolicyInvalidError extends Error {
+  constructor(reason: string) {
+    super(`Invalid ${PROJECT_MANIFEST_PATH}: ${reason}`);
+    this.name = "EnvironmentPolicyInvalidError";
+  }
+}
+
 export class EnvironmentNotFoundError extends Error {
   constructor(readonly environment: string) {
     super(`Environment '${environment}' is not declared by this project`);
@@ -316,7 +327,8 @@ export class ExecutionEnvironmentsService {
           throw new AccessDeniedError();
         }
         const policy = await this.projects.list(args);
-        if (policy.invalid) throw new Error(policy.invalid.error);
+        if (policy.invalid)
+          throw new EnvironmentPolicyInvalidError(policy.invalid.error);
         const includeDenied = hasProjectPermission(
           args.identity,
           args.projectId,
@@ -421,7 +433,7 @@ export class ExecutionEnvironmentsService {
   }): Promise<EnvironmentAdmission[]> {
     const policy = await this.projects.list(args);
     if (policy.invalid) {
-      throw new Error(policy.invalid.error);
+      throw new EnvironmentPolicyInvalidError(policy.invalid.error);
     }
     const admissions: EnvironmentAdmission[] = [];
     for (const name of Object.keys(policy.environments).sort()) {
@@ -459,7 +471,8 @@ export class ExecutionEnvironmentsService {
       },
       async () => {
         const policy = await this.projects.list(args);
-        if (policy.invalid) throw new Error(policy.invalid.error);
+        if (policy.invalid)
+          throw new EnvironmentPolicyInvalidError(policy.invalid.error);
         if (args.environment) {
           const definition = policy.environments[args.environment];
           if (!definition) throw new EnvironmentNotFoundError(args.environment);

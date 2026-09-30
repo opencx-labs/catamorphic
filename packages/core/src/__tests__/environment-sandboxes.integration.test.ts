@@ -20,6 +20,7 @@ import { allocationSandboxProvider } from "../services/allocation-sandbox-provid
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import {
   EnvironmentIncompatibleError,
+  EnvironmentPolicyInvalidError,
   ExecutionEnvironmentsService,
 } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
@@ -221,5 +222,35 @@ describe("Environment sandboxes from admission to creation (ADR 0176)", () => {
           ".work/images/missing.Dockerfile does not exist",
         ),
     );
+  });
+
+  it("refuses work in a project whose policy names an undeclared default, as the project's error", async () => {
+    const projects = new ProjectsService(db, projectManager, [], {
+      seedFiles: {},
+    });
+    const broken = (await projects.create(identity, { name: "Broken" })).id;
+    const repo = await projectManager.open(identity.tenantId, broken);
+    try {
+      await repo.writeFile(
+        PROJECT_MANIFEST_PATH,
+        JSON.stringify({
+          environments: { laptop: { device: "member", workloads: ["agent"] } },
+          defaultEnvironment: "default",
+        }),
+      );
+      await repo.commit("Name a missing default", {
+        name: "Test",
+        email: "test@example.com",
+      });
+    } finally {
+      await repo.dispose();
+    }
+    await expect(
+      environments([machine([]).binding]).admit({
+        identity,
+        projectId: broken,
+        requirements: { workload: "agent", topology: "controller" },
+      }),
+    ).rejects.toBeInstanceOf(EnvironmentPolicyInvalidError);
   });
 });

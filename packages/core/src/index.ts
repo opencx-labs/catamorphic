@@ -360,6 +360,7 @@ export {
   EnvironmentBindingUnavailableError,
   EnvironmentIncompatibleError,
   EnvironmentNotFoundError,
+  EnvironmentPolicyInvalidError,
   ExecutionEnvironmentsService,
   NoCompatibleEnvironmentError,
   type PlacementReason,

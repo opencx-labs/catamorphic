@@ -1,4 +1,8 @@
-import { AccessDeniedError, AgentNotConfiguredError } from "@catamorphic/core";
+import {
+  AccessDeniedError,
+  AgentNotConfiguredError,
+  EnvironmentPolicyInvalidError,
+} from "@catamorphic/core";
 import { describe, expect, it, vi } from "vitest";
 import { createTestApp } from "./test-app.js";
 
@@ -24,6 +28,33 @@ describe("agent routes", () => {
       });
       expect(res.statusCode).toBe(503);
       expect(res.json()).toEqual({ error: "Coding agent not configured" });
+      await app.close();
+    });
+
+    it("answers 422 when the project's Environment policy is invalid", async () => {
+      const app = createTestApp({
+        core: {
+          agentSessions: {
+            create: vi.fn(async () => {
+              throw new EnvironmentPolicyInvalidError(
+                "defaultEnvironment must name a valid declared Environment",
+              );
+            }),
+          },
+        } as never,
+      });
+      await app.ready();
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions`,
+        payload: {},
+      });
+      expect(res.statusCode).toBe(422);
+      expect(res.json()).toEqual({
+        error:
+          "Invalid .work/project.json: defaultEnvironment must name a valid declared Environment",
+        code: "environment_policy_invalid",
+      });
       await app.close();
     });
 
