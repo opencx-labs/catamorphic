@@ -15,6 +15,8 @@ import { dropTestDatabase, testServerOptions } from "../test-support.js";
 import type { MachineProvisioner } from "./machine-rules.js";
 import { WorkWorkerRegistry } from "./worker-registry.js";
 
+const OPERATOR_SECRET = "operator-secret-shared-by-every-test-replica";
+
 /**
  * Machine rules on two control-plane replicas (issue #154): however their
  * passes overlap, each person gets one machine.
@@ -63,6 +65,8 @@ it.skipIf(!process.env.DATABASE_URL)(
                 DATABASE_URL: databaseUrl.toString(),
                 WORK_SECRET: "reconciler-test-secret-with-at-least-32-chars",
                 WORK_VAULT_KEY: Buffer.alloc(32, 3).toString("base64"),
+                // Every replica of a deployment shares it.
+                WORK_OPERATOR_SECRET: OPERATOR_SECRET,
                 WORK_MACHINE_NAME: replica,
                 WORK_CONTROL_PLANE_WORKLOADS: "workflow",
                 WORK_FAKE_AGENT: "1",
@@ -76,19 +80,14 @@ it.skipIf(!process.env.DATABASE_URL)(
       const [a, b] = servers;
       if (!a || !b) throw new Error("Both replicas must boot");
       const db = a.catamorphic.core.db;
-      const operatorOf = async (server: WorkServer, replica: string) => {
-        const secret = (
-          await fs.readFile(path.join(dir, replica, "operator-secret"), "utf8")
-        ).trim();
-        return (url: string) =>
-          server.operatorApp.inject({
-            method: "POST",
-            url,
-            headers: { authorization: `Bearer ${secret}` },
-          });
-      };
-      const onA = await operatorOf(a, "a");
-      const onB = await operatorOf(b, "b");
+      const operatorOf = (server: WorkServer) => (url: string) =>
+        server.operatorApp.inject({
+          method: "POST",
+          url,
+          headers: { authorization: `Bearer ${OPERATOR_SECRET}` },
+        });
+      const onA = operatorOf(a);
+      const onB = operatorOf(b);
       const addMembers = async (names: string[]) => {
         for (const username of names) {
           const user = await a.workAuth.createLocalUser({

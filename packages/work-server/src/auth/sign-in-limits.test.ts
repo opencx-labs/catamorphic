@@ -8,6 +8,8 @@ import { describe, expect, it } from "vitest";
 import { createWorkServer, type WorkServer } from "../server.js";
 import { dropTestDatabase, testServerOptions } from "../test-support.js";
 
+const OPERATOR_SECRET = "operator-secret-shared-by-every-test-replica";
+
 /**
  * Sign-in limits (issue #150): Better Auth's 3 sign-ins per 10 seconds per
  * client address, on whatever NODE_ENV says, counted in the database, with
@@ -281,6 +283,8 @@ it.skipIf(!process.env.DATABASE_URL)(
                 DATABASE_URL: databaseUrl.toString(),
                 WORK_SECRET: "limits-test-secret-with-at-least-32-characters",
                 WORK_VAULT_KEY: Buffer.alloc(32, 5).toString("base64"),
+                // Every replica of a deployment shares it.
+                WORK_OPERATOR_SECRET: OPERATOR_SECRET,
                 WORK_MACHINE_NAME: name,
                 WORK_CONTROL_PLANE_WORKLOADS: "workflow",
                 WORK_TRUSTED_PROXIES: "10.0.0.0/8",
