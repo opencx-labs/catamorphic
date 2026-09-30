@@ -78,6 +78,7 @@ import {
   dbModelGatewayStore,
   ModelGatewayService,
 } from "./services/model-gateway.js";
+import { NodeRecoveryService } from "./services/node-recovery-service.js";
 import { PersonalEnvironmentService } from "./services/personal-environment-service.js";
 import { PluginsService } from "./services/plugins-service.js";
 import { ProjectEnvironmentsService } from "./services/project-environments-service.js";
@@ -400,6 +401,8 @@ export class CatamorphicCore {
   readonly executionEnvironments: ExecutionEnvironmentsService;
   readonly agentCapabilities: AgentCapabilitiesService;
   readonly executionAllocations: ExecutionAllocationsService;
+  /** Moves the work of lost disposable machines (ADR 0190). */
+  readonly nodeRecovery: NodeRecoveryService;
   readonly connections?: ConnectionsService;
   readonly connectionAdmission?: ConnectionAdmissionService;
   readonly connectionBroker?: ConnectionBroker;
@@ -969,6 +972,12 @@ export class CatamorphicCore {
     }
 
     const coordinator = new RunCoordinator(this.db, executionJobs);
+    this.nodeRecovery = new NodeRecoveryService({
+      db: this.db,
+      environments: this.executionEnvironments,
+      allocations: this.executionAllocations,
+      coordinator,
+    });
     executionWorker.registerExhaustedHandler((args) =>
       coordinator.handleExhaustedJob(args),
     );

@@ -98,10 +98,10 @@ configure authentication, projects, ordinary roles, and the first user.
 `);
 
 let stopping = false;
-async function stop(signal: string) {
+async function stop(reason: string, exitCode: number) {
   if (stopping) return;
   stopping = true;
-  console.log(`${signal}: shutting down…`);
+  console.log(`${reason}: shutting down…`);
   mdns?.close();
   try {
     await server.shutdown();
@@ -109,7 +109,13 @@ async function stop(signal: string) {
     emitLog({ scope: "work-server", body: "Server stopped" });
     await telemetry.shutdown();
   }
-  process.exit(0);
+  process.exit(exitCode);
 }
-process.on("SIGTERM", () => void stop("SIGTERM"));
-process.on("SIGINT", () => void stop("SIGINT"));
+process.on("SIGTERM", () => void stop("SIGTERM", 0));
+process.on("SIGINT", () => void stop("SIGINT", 0));
+// A machine lease that lapsed never renews (ADR 0190): exit so the
+// supervisor (a restart policy, a Kubernetes Deployment) starts a fresh
+// process, which registers a new lease.
+void server.lost.then(() =>
+  stop("This machine's lease lapsed and cannot be renewed", 1),
+);

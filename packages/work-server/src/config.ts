@@ -37,7 +37,11 @@ export interface WorkAgentSettings {
  * `hooks`.
  */
 export interface WorkServerConfig {
-  /** Owner-only directory for local state (PGlite, origins, credentials). */
+  /**
+   * Owner-only directory for local state (PGlite, origins, credentials).
+   * With `databaseUrl` it holds only working copies and sandboxes (ADR
+   * 0190).
+   */
   dataDir: string;
   /**
    * Origins without a trailing slash. The first names the server in OAuth
@@ -81,7 +85,10 @@ export interface WorkServerConfig {
    */
   connectionGuardTimeoutMs?: number;
   webPushSubject?: string;
-  /** Loopback operator credential. Generated under `dataDir` when absent. */
+  /**
+   * Loopback operator credential, the same on every replica. Required with
+   * `databaseUrl`; a single PGlite server generates one under `dataDir`.
+   */
   operatorSecret?: string;
   /** Built PWA served at the root. */
   pwaDist?: string;

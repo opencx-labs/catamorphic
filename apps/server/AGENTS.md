@@ -23,7 +23,10 @@ Better Auth, OAuth, admission, and agent-driven setup path are the only remote
 identity model. Do not reintroduce token files or privileged product users.
 
 Beyond one machine (ADR 0164): control-plane replicas share network Postgres,
-object storage, `WORK_SECRET`, and `WORK_VAULT_KEY` for availability.
+object storage, `WORK_SECRET`, `WORK_VAULT_KEY`, and `WORK_OPERATOR_SECRET`
+for availability. A replica is disposable (ADR 0190): its node lives one
+process, keeps nothing durable on disk, and any replica recovers the work of
+one that is gone; the image exits when its lease lapsed.
 Execution capacity comes from enrolled workers (`bun apps/server/src/worker.ts`)
 that hold only a machine credential and dial out to the control plane; the
 replica a worker connects to holds its node lease and forwards sandbox

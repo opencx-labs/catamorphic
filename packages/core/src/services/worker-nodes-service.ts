@@ -76,6 +76,12 @@ export class WorkerNodesService {
     descriptor: EnvironmentBinding;
     capacity?: WorkerCapacity;
     defaults?: { cpuMillis?: number; memoryMb?: number };
+    /**
+     * The node's identity lasts this one process (ADR 0190): it never
+     * registers again, so once its lease is gone any host may recover its
+     * work with {@link NodeRecoveryService}.
+     */
+    disposable?: boolean;
   }): Promise<WorkerNodeLease> {
     const descriptor = descriptorSchema.parse(args.descriptor);
     const capacity = args.capacity
@@ -124,6 +130,7 @@ export class WorkerNodesService {
               default_resources: toJson(defaults),
               lease_token: token,
               lease_expires_at: sql`now() + interval '45 seconds'`,
+              disposable: args.disposable ?? false,
             })
             .onConflict((oc) =>
               oc
@@ -134,6 +141,7 @@ export class WorkerNodesService {
                   default_resources: toJson(defaults),
                   lease_token: token,
                   lease_expires_at: sql`now() + interval '45 seconds'`,
+                  disposable: args.disposable ?? false,
                   updated_at: sql`now()`,
                 })
                 .where("worker_nodes.tenant_id", "=", args.tenantId)
@@ -166,10 +174,17 @@ export class WorkerNodesService {
     return Boolean(row);
   }
 
+  /**
+   * Give the lease back. A disposable node also stops taking work for good,
+   * so its work is recovered at once rather than after the grace period.
+   */
   async release(args: { lease: WorkerNodeLease }): Promise<void> {
     await this.db
       .updateTable("worker_nodes")
-      .set({ lease_expires_at: sql`now()` })
+      .set({
+        lease_expires_at: sql`now()`,
+        enabled: sql<boolean>`enabled AND NOT disposable`,
+      })
       .where("id", "=", args.lease.id)
       .where("lease_token", "=", args.lease.token)
       .execute();

@@ -16,7 +16,7 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "./server.js";
-import { testServerOptions } from "./test-support.js";
+import { createTestDatabase, testServerOptions } from "./test-support.js";
 
 it.skipIf(!process.env.DATABASE_URL)(
   "two Work server instances share state and execute only on the selected machine",
@@ -25,11 +25,13 @@ it.skipIf(!process.env.DATABASE_URL)(
       path.join(os.tmpdir(), "catamorphic-cluster-"),
     );
     const servers: WorkServer[] = [];
+    const database = await createTestDatabase("work_cluster");
     const common = {
       publicBases: ["https://cluster.example.test"],
       env: {
-        DATABASE_URL: process.env.DATABASE_URL,
+        DATABASE_URL: database.url,
         WORK_SECRET: "cluster-test-secret-with-at-least-32-characters",
+        WORK_OPERATOR_SECRET: "cluster-test-operator-secret-with-32-characters",
         WORK_VAULT_KEY: Buffer.alloc(32, 7).toString("base64"),
         // Trusted test replicas run agents as subprocesses (ADR 0164).
         WORK_TRUST_CONTROL_PLANE_AGENTS: "1",
@@ -256,6 +258,7 @@ it.skipIf(!process.env.DATABASE_URL)(
     } finally {
       await Promise.allSettled(servers.map((server) => server.shutdown()));
       await fs.rm(dir, { recursive: true, force: true });
+      await database.drop();
     }
   },
   60000,
@@ -336,53 +339,116 @@ async function crossInstanceToken(
 }
 
 it.skipIf(!process.env.DATABASE_URL)(
-  "a server restarting into its own lapsed lease waits for it instead of failing to boot",
+  "a replica is a new machine at every start, gives it back on stop, and fails its health check once its lease lapsed",
   async () => {
     const dir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "catamorphic-restart-"),
+      path.join(os.tmpdir(), "catamorphic-replica-"),
     );
+    const database = await createTestDatabase("work_replica");
     const options = testServerOptions({
-      // One deployment per database: the same origin and secrets as above.
-      publicBases: ["https://cluster.example.test"],
+      publicBases: ["https://replica.example.test"],
       dataDir: dir,
       env: {
-        DATABASE_URL: process.env.DATABASE_URL,
-        WORK_SECRET: "cluster-test-secret-with-at-least-32-characters",
+        DATABASE_URL: database.url,
+        WORK_SECRET: "replica-test-secret-with-at-least-32-characters",
+        WORK_OPERATOR_SECRET: "replica-test-operator-secret-with-32-characters",
         WORK_VAULT_KEY: Buffer.alloc(32, 7).toString("base64"),
-        WORK_MACHINE_NAME: `restart-${randomUUID().slice(0, 8)}`,
-        WORK_TRUST_CONTROL_PLANE_AGENTS: "1",
+        WORK_CONTROL_PLANE_WORKLOADS: "workflow",
         WORK_FAKE_AGENT: "1",
         PATH: process.env.PATH,
       },
     });
-    const first = await createWorkServer(options);
-    let second: WorkServer | undefined;
+    const servers: WorkServer[] = [];
     try {
-      const { machine } = (
-        await first.app.inject({ method: "GET", url: "/healthz" })
-      ).json();
-      // The first process "dies": its lease is still live for two seconds
-      // under a token its shutdown can no longer release.
-      await first.catamorphic.core.db
-        .updateTable("worker_nodes")
-        .set({
-          lease_token: randomUUID(),
-          lease_expires_at: new Date(Date.now() + 2_000),
-        })
-        .where("id", "=", machine.id)
-        .execute();
+      // A sandbox a previous process left behind belongs to no live node.
+      await fs.mkdir(path.join(dir, "sandboxes", "orphan"), {
+        recursive: true,
+      });
+      const first = await createWorkServer(options);
+      servers.push(first);
+      const health = await first.app.inject({ method: "GET", url: "/healthz" });
+      expect(health.statusCode).toBe(200);
+      const firstNode: string = health.json().machine.id;
+      expect(firstNode).toMatch(/^node\.[0-9a-f-]{36}$/);
+      // Nothing durable on disk: no machine identity, database, or origins.
+      expect((await fs.readdir(dir)).sort()).toEqual(["projects", "sandboxes"]);
+      expect(await fs.readdir(path.join(dir, "sandboxes"))).toEqual([]);
+      const node = (id: string) =>
+        (servers.at(-1) ?? first).catamorphic.core.db
+          .selectFrom("worker_nodes")
+          .select(["id", "disposable", "enabled"])
+          .where("id", "=", id)
+          .executeTakeFirst();
+      expect(await node(firstNode)).toEqual({
+        id: firstNode,
+        disposable: true,
+        enabled: true,
+      });
+
+      // Stopping gives the machine back for good; with no work on it, it
+      // is gone at once.
       await first.shutdown();
-      const started = Date.now();
-      second = await createWorkServer(options);
-      expect(Date.now() - started).toBeGreaterThanOrEqual(1_000);
-      expect(
-        (await second.app.inject({ method: "GET", url: "/healthz" })).json()
-          .machine.id,
-      ).toBe(machine.id);
+      servers.pop();
+      const second = await createWorkServer(options);
+      servers.push(second);
+      const secondNode: string = (
+        await second.app.inject({ method: "GET", url: "/healthz" })
+      ).json().machine.id;
+      expect(secondNode).not.toBe(firstNode);
+      expect(await node(firstNode)).toBeUndefined();
+
+      // Its lease lapses (the database was unreachable for too long, or an
+      // operator disabled it): the lease can never be renewed.
+      let lost = false;
+      void second.lost.then(() => {
+        lost = true;
+      });
+      await second.catamorphic.core.db
+        .updateTable("worker_nodes")
+        .set({ lease_expires_at: new Date(Date.now() - 1_000) })
+        .where("id", "=", secondNode)
+        .execute();
+      await expect
+        .poll(() => lost, { timeout: 20_000, interval: 500 })
+        .toBe(true);
+      const unhealthy = await second.app.inject({
+        method: "GET",
+        url: "/healthz",
+      });
+      expect(unhealthy.statusCode).toBe(503);
+      expect(unhealthy.json()).toMatchObject({
+        ok: false,
+        machine: { id: secondNode },
+      });
     } finally {
-      await second?.shutdown();
+      for (const server of servers) await server.shutdown();
       await fs.rm(dir, { recursive: true, force: true });
+      await database.drop();
     }
   },
-  30_000,
+  60_000,
 );
+
+it("a Postgres deployment requires the operator credential every replica shares", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "work-operator-"));
+  try {
+    await expect(
+      createWorkServer(
+        testServerOptions({
+          dataDir,
+          env: {
+            // Never contacted: configuration is checked first.
+            DATABASE_URL: "postgres://127.0.0.1:1/unreachable",
+            WORK_SECRET: "operator-guard-secret-with-at-least-32-chars",
+            WORK_VAULT_KEY: Buffer.alloc(32, 3).toString("base64"),
+            PATH: process.env.PATH,
+          },
+        }),
+      ),
+    ).rejects.toThrow(/WORK_OPERATOR_SECRET/);
+    // Nothing was written into the replica's data directory.
+    expect(await fs.readdir(dataDir)).toEqual([]);
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});

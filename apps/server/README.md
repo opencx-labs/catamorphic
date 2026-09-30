@@ -39,7 +39,10 @@ credential exchanged once for an operator's single-use enrollment code. Workers
 dial out to the control plane over HTTPS and run agent sandboxes; workflow runs
 and every credential stay on the control plane. For availability, run
 control-plane replicas on shared Postgres with the same `WORK_SECRET`,
-`WORK_VAULT_KEY`, public origin, and sign-in and gateway configuration.
+`WORK_VAULT_KEY`, `WORK_OPERATOR_SECRET`, public origin, and sign-in and
+gateway configuration. Replicas are disposable (ADR 0190): each start is a new
+machine, a stopped or lost replica's workflow runs and chats move to the
+others, and `/healthz` answers 503 once its lease lapsed.
 `WORK_CONTROL_PLANE_WORKLOADS=workflow` keeps agent code off the control plane.
 Each worker takes work for everyone or for named people and directory groups,
 so a person's agents run on their own machine first; machine rules and a

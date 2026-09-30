@@ -919,6 +919,12 @@ as **This machine** and does not require database credentials (ADR 0098).
 The stock Postgres host implements shared objects, machine leases, auth, and
 durable approvals. Custom hosts register `WorkerNodesService` leases, inject
 `workerNode: { id, token }`, and renew/release them with their host lifecycle.
+A host whose instances keep nothing durable on disk registers each process as
+a new `disposable: true` node and calls `core.nodeRecovery.recoverLostNodes({
+authorityId })` periodically: a disposable node that released its lease, or
+whose lease lapsed past `LOST_NODE_GRACE_MS`, has its workflow runs moved to a
+live node and its chats released for readmission
+([ADR 0190](docs/decisions/0190-disposable-control-plane-replicas.md)).
 Enable `clientExecution: true` to accept authenticated member sandbox runners;
 `startClientRunner` supplies the transport-independent client loop. See the
 [cluster setup reference](skills/setup-work-server/references/cluster-deployment.md)

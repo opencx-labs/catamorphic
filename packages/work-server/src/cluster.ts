@@ -34,6 +34,12 @@ export async function registerWorkMachine(args: {
   tenantId: string;
   authorityId: string;
   nodeId: string;
+  /**
+   * The node lives as long as this process (ADR 0190): a replica on
+   * network Postgres. Stopping releases it for good, and any replica
+   * recovers its work once it is gone.
+   */
+  disposable: boolean;
   label: string;
   sandboxProvider: SandboxProvider;
   capacity?: WorkerCapacity;
@@ -86,8 +92,9 @@ export async function registerWorkMachine(args: {
     resourceLimits: args.sandboxProvider.resourceLimits,
     labels: { ...args.labels, node: args.nodeId, plane: "control" },
   };
-  // A server that died without releasing its lease restarts into that
-  // lease: wait for it to lapse rather than refuse to boot.
+  // A single server that died without releasing its lease restarts into
+  // that lease: wait for it to lapse rather than refuse to boot. A
+  // disposable node is new at every start, so nothing holds it.
   const deadline = Date.now() + WORKER_NODE_LEASE_MS + 5_000;
   const register = async (): Promise<{ id: string; token: string }> => {
     try {
@@ -97,6 +104,7 @@ export async function registerWorkMachine(args: {
         descriptor,
         capacity: args.capacity,
         defaults: args.defaults,
+        disposable: args.disposable,
       });
     } catch (error) {
       if (!(error instanceof WorkerNodeLeaseHeldError) || Date.now() > deadline)
@@ -219,15 +227,33 @@ export async function registerWorkMachine(args: {
   };
   let heartbeat: Promise<boolean> | undefined;
   let healthy = true;
+  // A lapsed lease never renews: the node is lost for good, and the
+  // process should stop so its orchestrator starts a fresh one.
+  let markLost = () => {};
+  const lost = new Promise<void>((resolve) => {
+    markLost = resolve;
+  });
+  let isLost = false;
   const timer = setInterval(() => {
-    if (heartbeat) return;
+    if (isLost) return;
+    if (heartbeat) {
+      // The last renewal has not answered in a whole interval: the database
+      // is unreachable or hung, so this machine may be losing its lease.
+      healthy = false;
+      return;
+    }
     heartbeat = nodes
       .renew({ lease })
       .then((owned) => {
         healthy = owned;
+        if (!owned) {
+          isLost = true;
+          markLost();
+        }
         return owned;
       })
       .catch(() => {
+        // The database did not answer: unhealthy until a renewal lands.
         healthy = false;
         return false;
       })
@@ -252,17 +278,23 @@ export async function registerWorkMachine(args: {
       });
   }, 5_000);
   cleanupTimer.unref();
+  let stopping: Promise<void> | undefined;
   return {
     lease,
     nodes,
     environmentProvider,
+    /** False while the lease is not renewing, and for good once it is lost. */
     healthy: () => healthy,
-    stop: async () => {
-      clearInterval(timer);
-      clearInterval(cleanupTimer);
-      await Promise.all([heartbeat, cleanup]);
-      await nodes.release({ lease });
-    },
+    /** Resolves when the node's lease lapsed and can never be renewed. */
+    lost,
+    /** Stop renewing and give the lease back; later calls share the first. */
+    stop: () =>
+      (stopping ??= (async () => {
+        clearInterval(timer);
+        clearInterval(cleanupTimer);
+        await Promise.all([heartbeat, cleanup]);
+        await nodes.release({ lease });
+      })()),
   };
 }
 
