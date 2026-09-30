@@ -45,6 +45,17 @@ dist/
 .DS_Store
 `;
 
+/** Stands in a copy while it is seeded; a copy still holding it is unfinished. */
+const SEEDING_MARKER = ".git/work-seeding";
+
+/**
+ * The identity core reads the published program as when no member reads
+ * it (roles, documents, tool rosters). It contains a NUL, which no stored
+ * user id can hold, so it never names a member's draft; `openDraft` opens
+ * the published program for it.
+ */
+export const PROGRAM_READER_ID = "\u0000program-reader";
+
 const SYSTEM_AUTHOR = {
   name: "Work",
   email: "system@work.software",
@@ -54,6 +65,8 @@ export class ProjectManager {
   /** Origin objects this process has read; safe to lose. */
   private readonly objects = new GitObjectCache();
   private draftCheck: Promise<DraftSupport> | undefined;
+  /** First-time copy preparations in flight, by tenant, project, and copy. */
+  private readonly preparing = new Map<string, Promise<void>>();
 
   constructor(
     private readonly storage: StorageBackend,
@@ -89,6 +102,8 @@ export class ProjectManager {
     projectId: string;
     externalUserId: string;
   }): Promise<ProjectDraft> {
+    if (input.externalUserId === PROGRAM_READER_ID)
+      return this.openPublished(input);
     if (await this.localPath(input))
       return this.open(input.tenantId, input.projectId, input.externalUserId);
     if (this.remote) {
@@ -109,10 +124,36 @@ export class ProjectManager {
    * {@link openDraft} refuses drafts on an origin that cannot keep them.
    */
   draftSupport(): Promise<DraftSupport> {
-    this.draftCheck ??= this.remote?.draftSupport
-      ? this.remote.draftSupport()
-      : Promise.resolve({ supported: true });
+    // A check that could not run (a transient store error) is not an
+    // answer: the next call asks again.
+    this.draftCheck ??= (
+      this.remote?.draftSupport
+        ? this.remote.draftSupport()
+        : Promise.resolve<DraftSupport>({ supported: true })
+    ).catch((error: unknown) => {
+      this.draftCheck = undefined;
+      throw error;
+    });
     return this.draftCheck;
+  }
+
+  /**
+   * The published program, read by no member: a project's local folder, or
+   * a read-only view of its origin's `main` (no draft is ever read or
+   * created), or this machine's copy on a host without an origin.
+   */
+  async openPublished(input: {
+    tenantId: string;
+    projectId: string;
+  }): Promise<ProjectDraft> {
+    if (this.remote && !(await this.localPath(input)))
+      return new OriginDraftRepo({
+        ...input,
+        externalUserId: null,
+        remote: this.remote,
+        cache: this.objects,
+      });
+    return this.open(input.tenantId, input.projectId);
   }
 
   /**
@@ -170,35 +211,78 @@ export class ProjectManager {
     projectId: string,
     externalUserId: string,
   ): Promise<ProjectRepo> {
-    const existed = await this.storage.exists(
-      tenantId,
-      projectId,
-      externalUserId,
-    );
-    if (existed) {
-      return this.open(tenantId, projectId, externalUserId);
+    // Two first opens of one copy in this process share one preparation,
+    // so neither reads objects the other has not finished writing.
+    const key = JSON.stringify([tenantId, projectId, externalUserId]);
+    let pending = this.preparing.get(key);
+    if (!pending) {
+      pending = this.prepareCopy({
+        tenantId,
+        projectId,
+        externalUserId,
+      }).finally(() => this.preparing.delete(key));
+      this.preparing.set(key, pending);
     }
+    await pending;
+    return this.open(tenantId, projectId, externalUserId);
+  }
 
+  /**
+   * Create a copy seeded from the origin's `main` unless a complete one
+   * exists. A marker stands in the copy while it is seeded: a seeding that
+   * failed, or a process that stopped part way, leaves a copy the next open
+   * starts over instead of treating as ready.
+   */
+  private async prepareCopy(args: {
+    tenantId: string;
+    projectId: string;
+    externalUserId: string;
+  }): Promise<void> {
+    const { tenantId, projectId, externalUserId } = args;
+    if (await this.storage.exists(tenantId, projectId, externalUserId)) {
+      const { repoPath, release } = await this.storage.acquireProject(
+        tenantId,
+        projectId,
+        externalUserId,
+      );
+      await release();
+      const unfinished = await fs
+        .access(path.join(repoPath, SEEDING_MARKER))
+        .then(
+          () => true,
+          () => false,
+        );
+      if (!unfinished) return;
+      await this.storage.deleteCopy(tenantId, projectId, externalUserId);
+    }
     const repoPath = await this.storage.initProject(tenantId, projectId, {
       externalUserId,
     });
+    if (!this.remote) return;
+    const marker = path.join(repoPath, SEEDING_MARKER);
+    await fs.writeFile(marker, "");
     const { release } = await this.storage.acquireProject(
       tenantId,
       projectId,
       externalUserId,
     );
     const repo = new ProjectRepoImpl(projectId, repoPath, release);
-
-    if (this.remote) {
+    try {
       await seedFromOrigin({
         remote: this.remote,
         tenantId,
         projectId,
         dev: repo,
       });
+      await fs.rm(marker, { force: true });
+    } catch (error) {
+      await repo.dispose();
+      await this.storage
+        .deleteCopy(tenantId, projectId, externalUserId)
+        .catch(() => {});
+      throw error;
     }
-
-    return repo;
+    await repo.dispose();
   }
 
   /** An isolated origin snapshot, removed on disposal even with host-mapped projects. */

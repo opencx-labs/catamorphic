@@ -44,21 +44,31 @@ export {
   DraftBusyError,
   type DraftChange,
   DraftContentChangedError,
-  DraftIgnoredPathError,
   type DraftPublishResult,
   DraftRefNotAllowedError,
   DraftsUnsupportedError,
   DraftUnresolvedError,
+  InvalidBaseError,
+  NoDraftError,
   OriginDraftRepo,
   type ProjectDraft,
   refreshPublished,
 } from "./origin-draft.js";
-export { DraftPathError, GitObjectCache } from "./origin-objects.js";
+export {
+  DraftBinaryResolutionError,
+  DraftIgnoredPathError,
+  DraftPathError,
+  GitObjectCache,
+} from "./origin-objects.js";
 export {
   ensurePersonalFilesExcluded,
   isPersonalFile,
 } from "./personal-files.js";
-export { PROJECT_GITIGNORE, ProjectManager } from "./project-manager.js";
+export {
+  PROGRAM_READER_ID,
+  PROJECT_GITIGNORE,
+  ProjectManager,
+} from "./project-manager.js";
 export { ProjectRepoImpl } from "./project-repo.js";
 export { RefMovedError } from "./ref-moved-error.js";
 export {

@@ -952,6 +952,7 @@ export interface paths {
                                 base: string | null;
                                 ours: string | null;
                                 theirs: string | null;
+                                binary?: boolean;
                             }[];
                         };
                     };
@@ -1029,6 +1030,7 @@ export interface paths {
                                 base: string | null;
                                 ours: string | null;
                                 theirs: string | null;
+                                binary?: boolean;
                             }[];
                         };
                     };

@@ -102,7 +102,7 @@ describe("FsBackend", () => {
     const copy = await backend.initProject(TENANT, PROJECT, {
       externalUserId: "catamorphic:project",
     });
-    expect(path.basename(copy)).toBe("catamorphic%3Aproject");
+    expect(path.basename(copy)).toBe("catamorphic%3aproject");
     expect(await backend.exists(TENANT, PROJECT, "catamorphic:project")).toBe(
       true,
     );
@@ -110,7 +110,7 @@ describe("FsBackend", () => {
       externalUserId: "user-1.dev",
     });
     expect(path.basename(plain)).toBe("user-1.dev");
-    for (const unsafe of ["..", ".", "a'b"]) {
+    for (const unsafe of ["..", "."]) {
       await expect(
         backend.initProject(TENANT, PROJECT, { externalUserId: unsafe }),
       ).rejects.toThrow("Invalid externalUserId");
@@ -121,7 +121,16 @@ describe("FsBackend", () => {
           externalUserId: "../escape",
         }),
       ),
-    ).toBe("..%2Fescape");
+    ).toBe("..%2fescape");
+    // Every other byte, upper case included, is escaped one to one, so ids
+    // that differ only by case never share a folder.
+    const [upper, quoted] = await Promise.all(
+      ["User-1.dev", "a'b"].map((externalUserId) =>
+        backend.initProject(TENANT, PROJECT, { externalUserId }),
+      ),
+    );
+    expect(path.basename(upper ?? "")).toBe("%55ser-1.dev");
+    expect(path.basename(quoted ?? "")).toBe("a%27b");
   });
 
   it("rejects invalid UUIDs", async () => {

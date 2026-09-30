@@ -105,9 +105,12 @@ export interface MergeResult {
 
 export interface ConflictEntry {
   path: string;
+  /** Text of each side; null when absent there, or when the file is binary. */
   base: string | null;
   ours: string | null;
   theirs: string | null;
+  /** A file that is not text: resolved by keeping a side, not by text. */
+  binary?: boolean;
 }
 
 export interface ProjectRepo {

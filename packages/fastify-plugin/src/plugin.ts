@@ -10,13 +10,17 @@ import {
   SessionArtifactValidationError,
 } from "@catamorphic/core";
 import {
+  DraftBinaryResolutionError,
   DraftBusyError,
   DraftIgnoredPathError,
   DraftPathError,
   DraftRefNotAllowedError,
   DraftsUnsupportedError,
   DraftUnresolvedError,
+  InvalidBaseError,
   InvalidRefNameError,
+  NoDraftError,
+  RefMovedError,
 } from "@catamorphic/git";
 import type { FastifyPluginAsync } from "fastify";
 import {
@@ -212,10 +216,21 @@ export const catamorphicPlugin: FastifyPluginAsync<
     ) {
       return reply.status(409).send({ error: err.message });
     }
-    // A malformed ref, or a path the program never holds.
+    // A publish that lost its race to another change of the project.
+    if (err instanceof RefMovedError) {
+      return reply.status(409).send({
+        error:
+          "The project changed on the server while publishing. Download its changes, then publish again.",
+      });
+    }
+    // A malformed ref or base, a path the program never holds, a text
+    // resolution for a binary file, or a change to a read-only view.
     if (
       err instanceof InvalidRefNameError ||
-      err instanceof DraftIgnoredPathError
+      err instanceof InvalidBaseError ||
+      err instanceof DraftIgnoredPathError ||
+      err instanceof DraftBinaryResolutionError ||
+      err instanceof NoDraftError
     ) {
       return reply.status(400).send({ error: err.message });
     }

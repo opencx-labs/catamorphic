@@ -50,6 +50,11 @@ describe("project layout", () => {
       "refs/work/drafts/bob_40example_2ecom",
     );
     expect(draftRef("a_b")).not.toBe(draftRef("a/b"));
+    // Ids that differ only by case never share a ref on a case-insensitive disk.
+    expect(draftRef("Alice")).toBe("refs/work/drafts/_41lice");
+    expect(draftRef("Alice").toLowerCase()).not.toBe(
+      draftRef("alice").toLowerCase(),
+    );
     expect(draftRef("../../heads/main")).toMatch(
       /^refs\/work\/drafts\/[A-Za-z0-9_-]+$/,
     );

@@ -1694,6 +1694,9 @@
                           "theirs": {
                             "nullable": true,
                             "type": "string"
+                          },
+                          "binary": {
+                            "type": "boolean"
                           }
                         },
                         "required": ["path", "base", "ours", "theirs"],
@@ -1811,6 +1814,9 @@
                           "theirs": {
                             "nullable": true,
                             "type": "string"
+                          },
+                          "binary": {
+                            "type": "boolean"
                           }
                         },
                         "required": ["path", "base", "ours", "theirs"],

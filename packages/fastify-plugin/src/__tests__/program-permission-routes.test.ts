@@ -1,4 +1,5 @@
 import { DeploymentBlockedError, type Identity } from "@catamorphic/core";
+import { InvalidBaseError, RefMovedError } from "@catamorphic/git";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 
@@ -128,6 +129,34 @@ describe("program permissions on project routes (ADR 0158)", () => {
     }
     expect(core.deployment.deploy).not.toHaveBeenCalled();
     expect(core.deployment.discardDraft).not.toHaveBeenCalled();
+  });
+
+  it("answers a lost publish race with 409 and a bad base with 400", async () => {
+    const core = fakeCore();
+    const app = appFor(member("program:publish"), core);
+    core.deployment.deploy.mockRejectedValueOnce(
+      new RefMovedError({
+        ref: "refs/heads/main",
+        expected: null,
+        actual: null,
+      }),
+    );
+    const raced = await app.inject({
+      method: "POST",
+      url: `/api/projects/${PROJECT_ID}/deploy`,
+      payload: {},
+    });
+    expect(raced.statusCode).toBe(409);
+    expect(raced.json().error).toContain("Download its changes");
+    core.deployment.deploy.mockRejectedValueOnce(
+      new InvalidBaseError("a".repeat(40)),
+    );
+    const bad = await app.inject({
+      method: "POST",
+      url: `/api/projects/${PROJECT_ID}/deploy`,
+      payload: { files: { "a.md": "x" }, base: "a".repeat(40) },
+    });
+    expect(bad.statusCode).toBe(400);
   });
 
   it("drafts have no server-side branches to list or check out (ADR 0191)", async () => {

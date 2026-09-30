@@ -121,16 +121,17 @@ export function publishedRef(branch = "main"): string {
 export const DRAFT_REF_PREFIX = "refs/work/drafts";
 
 /**
- * The draft ref of one member. The id is escaped to letters, digits, and
- * `-`, with every other byte written as `_xx` (hex), so any external user
- * id names exactly one valid ref.
+ * The draft ref of one member. The id is escaped to lower-case letters,
+ * digits, and `-`, with every other byte (upper-case letters included)
+ * written as `_xx` (hex), so any external user id names exactly one valid
+ * ref, and no two ids collide on a case-insensitive disk.
  */
 export function draftRef(externalUserId: string): string {
   if (!externalUserId) throw new Error("A draft belongs to a member");
   let name = "";
   for (const byte of new TextEncoder().encode(externalUserId)) {
     const char = String.fromCharCode(byte);
-    name += /[A-Za-z0-9-]/.test(char)
+    name += /[a-z0-9-]/.test(char)
       ? char
       : `_${byte.toString(16).padStart(2, "0")}`;
   }

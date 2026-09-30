@@ -71,6 +71,30 @@ export class DraftPathError extends Error {
   }
 }
 
+/** Paths the project's ignore rules keep out of its history. */
+export class DraftIgnoredPathError extends Error {
+  readonly paths: readonly string[];
+  constructor(paths: readonly string[]) {
+    super(
+      `${paths.join(", ")} ${paths.length === 1 ? "is" : "are"} ignored by the project's .gitignore and never become part of the program.`,
+    );
+    this.name = "DraftIgnoredPathError";
+    this.paths = paths;
+  }
+}
+
+/** A text resolution offered for a file that is not text. */
+export class DraftBinaryResolutionError extends Error {
+  readonly paths: readonly string[];
+  constructor(paths: readonly string[]) {
+    super(
+      `${paths.join(", ")} ${paths.length === 1 ? "is not a text file" : "are not text files"}, so text cannot resolve ${paths.length === 1 ? "it" : "them"}. Discard your draft's change or publish it again after taking the published version.`,
+    );
+    this.name = "DraftBinaryResolutionError";
+    this.paths = paths;
+  }
+}
+
 /**
  * Immutable objects read from origins, bounded by bytes and evicted least
  * recently used. One per process is plenty; losing it only costs re-reads.
@@ -148,6 +172,11 @@ export function parseTree(data: Uint8Array): TreeEntry[] {
     i = nul + 21;
   }
   return entries;
+}
+
+/** A map key for a stored name: its bytes, not their UTF-8 reading. */
+function nameKey(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("hex");
 }
 
 /** A new entry named by text. */
@@ -390,12 +419,15 @@ export class OriginObjects {
     base: string,
     skipMissingDeletes = false,
   ): Promise<string | null> {
+    // Keyed by the stored bytes, so names that are not UTF-8 (and would
+    // decode alike) stay distinct entries.
     const entries = new Map(
       (treeOid ? await this.tree(treeOid) : []).map((entry) => [
-        entry.name,
+        nameKey(entry.nameBytes),
         entry,
       ]),
     );
+    const keyed = (name: string) => nameKey(new TextEncoder().encode(name));
     const nested = new Map<string, Map<string, TreeChange>>();
     for (const [filePath, change] of changes) {
       const slash = filePath.indexOf("/");
@@ -406,7 +438,7 @@ export class OriginObjects {
         nested.set(directory, inner);
         continue;
       }
-      const existing = entries.get(filePath);
+      const existing = entries.get(keyed(filePath));
       const fullPath = `${base}${filePath}`;
       if (existing && isTreeMode(existing.mode))
         throw new DraftPathError({ code: "EISDIR", path: fullPath });
@@ -417,11 +449,11 @@ export class OriginObjects {
           if (skipMissingDeletes) continue;
           throw new DraftPathError({ code: "ENOENT", path: fullPath });
         }
-        entries.delete(filePath);
+        entries.delete(keyed(filePath));
         continue;
       }
       entries.set(
-        filePath,
+        keyed(filePath),
         existing
           ? { ...existing, oid: change.oid, mode: change.mode ?? existing.mode }
           : entryNamed(filePath, change.mode ?? FILE_MODE, change.oid),
@@ -429,7 +461,7 @@ export class OriginObjects {
     }
     const children = await Promise.all(
       [...nested].map(async ([directory, inner]) => {
-        const existing = entries.get(directory);
+        const existing = entries.get(keyed(directory));
         const fullPath = `${base}${directory}`;
         if (existing?.mode === SYMLINK_MODE)
           throw new DraftPathError({ code: "ELOOP", path: fullPath });
@@ -455,11 +487,11 @@ export class OriginObjects {
     );
     for (const child of children) {
       if (child.keep) continue;
-      const existing = entries.get(child.directory);
-      if (child.oid === null) entries.delete(child.directory);
+      const existing = entries.get(keyed(child.directory));
+      if (child.oid === null) entries.delete(keyed(child.directory));
       else
         entries.set(
-          child.directory,
+          keyed(child.directory),
           existing
             ? { ...existing, mode: "40000", oid: child.oid }
             : entryNamed(child.directory, "40000", child.oid),
@@ -599,6 +631,43 @@ export class OriginObjects {
   }
 
   /** Commits reachable from `tip`, newest first. */
+  /**
+   * Whether commit `sha` is one of `tips` or reachable from them. Walks
+   * newest first and stops at commits clearly older than `sha` (a day of
+   * clock skew allowed) or after `limit` commits, so a lookup costs the
+   * history since that commit, not the project's age. Anything it cannot
+   * prove reachable answers false.
+   */
+  async isReachable(input: {
+    sha: string;
+    tips: readonly string[];
+    limit?: number;
+  }): Promise<boolean> {
+    const object = await this.read(input.sha).catch(() => null);
+    if (object?.type !== "commit") return false;
+    const floor = parseCommit(object.data).author.timestamp - 86_400;
+    const limit = input.limit ?? 20_000;
+    const seen = new Set<string>();
+    const queue: Array<{ sha: string; time: number }> = [];
+    const enqueue = async (sha: string) => {
+      if (seen.has(sha)) return;
+      seen.add(sha);
+      const commit = await this.commit(sha).catch(() => null);
+      if (commit) queue.push({ sha, time: commit.author.timestamp });
+    };
+    for (const tip of input.tips) await enqueue(tip);
+    while (queue.length > 0 && seen.size <= limit) {
+      queue.sort((a, b) => a.time - b.time);
+      const next = queue.pop();
+      if (!next) break;
+      if (next.sha === input.sha) return true;
+      if (next.time < floor) continue;
+      for (const parent of (await this.commit(next.sha)).parents)
+        await enqueue(parent);
+    }
+    return false;
+  }
+
   async log(
     tip: string,
     maxCount: number,
@@ -671,13 +740,54 @@ export async function mergeTrees(input: {
   const theirsByPath = new Map(
     theirsChanges.map((change) => [change.path, change]),
   );
-  const text = async (file: TreeFile | null) =>
-    file ? new TextDecoder().decode(await objects.blob(file.oid)) : null;
+  const blobOf = async (file: TreeFile | null) =>
+    file ? objects.blob(file.oid) : null;
   const changes = new Map<string, TreeChange>();
   const conflicts: ConflictEntry[] = [];
+  /** Modes a resolution keeps: from the side each conflicted file came from. */
+  const modes = new Map<string, string>();
+  const conflict = async (entry: {
+    path: string;
+    base: TreeFile | null;
+    ours: TreeFile | null;
+    theirs: TreeFile | null;
+  }) => {
+    const [base, ours, theirs] = await Promise.all([
+      blobOf(entry.base),
+      blobOf(entry.ours),
+      blobOf(entry.theirs),
+    ]);
+    const mode = entry.ours?.mode ?? entry.theirs?.mode ?? entry.base?.mode;
+    if (mode) modes.set(entry.path, mode);
+    // Binary contents are never decoded as text: the member sees which
+    // file clashed, not a corrupted rendering of it.
+    const binary = [base, ours, theirs].some((bytes) => bytes?.includes(0));
+    const text = (bytes: Uint8Array | null) =>
+      bytes && !binary ? new TextDecoder().decode(bytes) : null;
+    conflicts.push({
+      path: entry.path,
+      base: text(base),
+      ours: text(ours),
+      theirs: text(theirs),
+      ...(binary ? { binary: true } : {}),
+    });
+  };
   for (const ours of oursChanges) {
     const theirs = theirsByPath.get(ours.path);
     if (!theirs) {
+      // A file on one side where the other made a folder, or the reverse.
+      if (
+        ours.after &&
+        (await clashesWithTree(objects, input.theirs, ours.path))
+      ) {
+        await conflict({
+          path: ours.path,
+          base: ours.before,
+          ours: ours.after,
+          theirs: null,
+        });
+        continue;
+      }
       changes.set(
         ours.path,
         ours.after ? { oid: ours.after.oid, mode: ours.after.mode } : null,
@@ -700,21 +810,37 @@ export async function mergeTrees(input: {
       if (oid) changes.set(ours.path, { oid, mode: ours.after.mode });
       continue;
     }
-    conflicts.push({
+    await conflict({
       path: ours.path,
-      base: await text(ours.before),
-      ours: await text(ours.after),
-      theirs: await text(theirs.after),
+      base: ours.before,
+      ours: ours.after,
+      theirs: theirs.after,
     });
   }
   const resolved = Object.entries(input.resolutions ?? {});
   if (resolved.length > 0) {
+    const binary = resolved
+      .map(([file]) => file)
+      .filter((file) =>
+        conflicts.some((entry) => entry.path === file && entry.binary),
+      );
+    if (binary.length > 0) throw new DraftBinaryResolutionError(binary);
+    const rules: IgnoreRules = new Map();
+    const ignored: string[] = [];
+    for (const [file] of resolved)
+      if (
+        !modes.has(file) &&
+        (await objects.isIgnored(input.theirs, file, rules))
+      )
+        ignored.push(file);
+    if (ignored.length > 0) throw new DraftIgnoredPathError(ignored);
     const oids = await objects.writeBlobs(
       resolved.map(([, content]) => new TextEncoder().encode(content)),
     );
     resolved.forEach(([file], index) => {
       const oid = oids[index];
-      if (oid) changes.set(file, { oid });
+      const mode = modes.get(file);
+      if (oid) changes.set(file, mode ? { oid, mode } : { oid });
     });
   }
   const unresolved = conflicts.filter(
@@ -724,8 +850,32 @@ export async function mergeTrees(input: {
     return { status: "conflict", conflicts: unresolved };
   return {
     status: "merged",
-    tree: await objects.writeTree(input.theirs, changes),
+    tree: await objects.writeTree(input.theirs, changes, {
+      skipMissingDeletes: true,
+    }),
   };
+}
+
+/**
+ * Whether writing a file at `filePath` would clash with `treeOid`: the
+ * path is a folder there, or one of its parents is a file.
+ */
+async function clashesWithTree(
+  objects: OriginObjects,
+  treeOid: string,
+  filePath: string,
+): Promise<boolean> {
+  const at = await objects.entry(treeOid, filePath).catch(() => null);
+  if (at && isTreeMode(at.mode)) return true;
+  const segments = filePath.split("/");
+  for (let depth = 1; depth < segments.length; depth++) {
+    const parent = await objects
+      .entry(treeOid, segments.slice(0, depth).join("/"))
+      .catch(() => null);
+    if (!parent) return false;
+    if (!isTreeMode(parent.mode)) return true;
+  }
+  return false;
 }
 
 /** Both sides' edits to one text file, merged line by line, or null. */

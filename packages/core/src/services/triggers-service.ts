@@ -29,7 +29,6 @@ import {
 } from "../identity.js";
 import { PROJECT_CHECK_SCRIPT } from "../seeds.js";
 import { assertProjectPermission, resolveScope } from "./artifact-scope.js";
-import { PROGRAM_READER } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
 import type {
   EnrollmentConflictPolicy,
@@ -817,10 +816,9 @@ export class TriggersService {
     }
     // The scanner never writes: it reads the published branch where the
     // host keeps it (the origin, or the project folder).
-    const repo = await this.deps.projectManager.openDraft({
+    const repo = await this.deps.projectManager.openPublished({
       tenantId: args.identity.tenantId,
       projectId: args.projectId,
-      externalUserId: PROGRAM_READER,
     });
     let files: Record<string, string>;
     try {

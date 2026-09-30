@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   NativeProjectRepo,
+  PROGRAM_READER_ID,
   type ProjectDraft,
   type ProjectManager,
   refreshPublished,
@@ -17,11 +18,12 @@ import { publishedRef } from "@catamorphic/workflow/project-layout";
  * collaborator with a working copy — role files, the documents surface —
  * so viewers never get a clone of their own.
  *
- * The reader never writes, so on a host with an origin it reads the
- * published `main` straight from the origin (ADR 0191); on `pathResolver`
- * backends (the desktop) it is the project folder itself.
+ * The reader is no member (a reserved id no user can hold): on a host
+ * with an origin it reads the published `main` straight from the origin,
+ * never a draft (ADR 0191); on `pathResolver` backends (the desktop) it is
+ * the project folder itself.
  */
-export const PROGRAM_READER = "catamorphic-reader";
+export const PROGRAM_READER = PROGRAM_READER_ID;
 
 /**
  * How long a fetched origin sha is trusted before re-fetching. Reads of the
@@ -68,11 +70,7 @@ export async function withProgram<T>(
   }
   const remote = projectManager.remoteBackend;
   const repo = remote
-    ? await projectManager.openDraft({
-        tenantId,
-        projectId,
-        externalUserId: PROGRAM_READER,
-      })
+    ? await projectManager.openPublished({ tenantId, projectId })
     : await projectManager.open(tenantId, projectId);
   try {
     if (!remote) return await fn(repo, null);

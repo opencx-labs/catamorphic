@@ -158,6 +158,12 @@ export class ObjectRemoteBackend implements RemoteBackend {
     }).then(
       (failure): DraftSupport =>
         failure ? { supported: false, reason: failure } : { supported: true },
+      (error: unknown) => {
+        // A probe that could not run (a transient store error) is not an
+        // answer: the next call probes again.
+        this.draftCheck = undefined;
+        throw error;
+      },
     );
     return this.draftCheck;
   }

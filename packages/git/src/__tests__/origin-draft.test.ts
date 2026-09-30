@@ -9,14 +9,18 @@ import { wrapObject } from "../git-object-codec.js";
 import { push } from "../git-sync.js";
 import { InMemoryObjectStore } from "../in-memory-object-store.js";
 import {
+  DraftBinaryResolutionError,
   DraftIgnoredPathError,
   DraftRefNotAllowedError,
   DraftsUnsupportedError,
   FsBackend,
   FsRemoteBackend,
+  InvalidBaseError,
   InvalidRefNameError,
   isValidRefName,
+  NoDraftError,
   OriginDraftRepo,
+  PROGRAM_READER_ID,
   PreconditionFailedError,
   ProjectManager,
   RefMovedError,
@@ -151,6 +155,28 @@ describe("store conformance probe", () => {
         externalUserId: "alice",
       }),
     ).rejects.toBeInstanceOf(DraftsUnsupportedError);
+  });
+
+  it("probes again after a probe that could not run", async () => {
+    const inner = new InMemoryObjectStore();
+    let failures = 1;
+    const flaky: ObjectStore = {
+      get: (key) => inner.get(key),
+      has: (key) => inner.has(key),
+      put: async (key, data, opts) => {
+        if (failures-- > 0) throw new Error("store unreachable");
+        return inner.put(key, data, opts);
+      },
+      list: (prefix) => inner.list(prefix),
+      delete: (key, opts) => inner.delete(key, opts),
+      deletePrefix: (prefix) => inner.deletePrefix(prefix),
+    };
+    const manager = new ProjectManager(
+      new FsBackend(await fs.mkdtemp(path.join(os.tmpdir(), "flaky-"))),
+      new ObjectRemoteBackend({ store: flaky }),
+    );
+    await expect(manager.draftSupport()).rejects.toThrow("store unreachable");
+    expect(await manager.draftSupport()).toEqual({ supported: true });
   });
 
   it("the in-memory store refuses a stale conditional delete", async () => {
@@ -347,6 +373,10 @@ for (const [label, makeOrigin] of [
         "sessions/s1",
         "refs/heads/sessions/s1",
         "refs/work/published/sessions/s1",
+        // A case-insensitive disk opens these as the private refs.
+        "Sessions/s1",
+        "refs/heads/SESSIONS/s1",
+        "refs/work/Drafts/bob",
         "main@{1}",
         ".hidden",
         "refs/tags/v1",
@@ -516,9 +546,9 @@ for (const [label, makeOrigin] of [
       await alice.writeFile("two.md", "2");
       await origin.withOrigin(TENANT, PROJECT, async (repo) => {
         await expect(
-          repo.deleteRef({ ref: alice.ref, expected: read }),
+          repo.deleteRef({ ref: draftRef("alice"), expected: read }),
         ).rejects.toBeInstanceOf(RefMovedError);
-        expect(await repo.resolveRef(alice.ref)).not.toBe(read);
+        expect(await repo.resolveRef(draftRef("alice"))).not.toBe(read);
       });
     });
 
@@ -538,6 +568,217 @@ for (const [label, makeOrigin] of [
       ]);
     });
 
+    it("reads only commit ids reachable from main or the member's own draft", async () => {
+      const bob = await draft("bob");
+      await bob.writeFile("secret.md", "bob's");
+      const bobTip = await bob.resolveRef("HEAD");
+      const alice = await draft("alice");
+      await alice.writeFile("mine.md", "alice's");
+      const aliceTip = await alice.resolveRef("HEAD");
+      const main = await alice.resolveRef("main");
+      const reader = await draft("alice");
+      await expect(reader.resolveRef(bobTip)).rejects.toThrow("Unknown ref");
+      expect(await reader.readAllFilesAtRef(bobTip)).toEqual({});
+      expect(await reader.readBlobAtRef(bobTip, "secret.md")).toBeNull();
+      expect(await reader.log({ ref: bobTip })).toEqual([]);
+      expect(await reader.resolveRef(aliceTip)).toBe(aliceTip);
+      expect(await reader.resolveRef(main)).toBe(main);
+      // A tree or blob id is not a commit anyone may read.
+      const tree = await origin.withOrigin(
+        TENANT,
+        PROJECT,
+        async (repo) =>
+          (await new OriginObjects(repo, new GitObjectCache()).commit(main))
+            .tree,
+      );
+      await expect(reader.resolveRef(tree)).rejects.toThrow("Unknown ref");
+    });
+
+    it("accepts a publish base only from the published history", async () => {
+      const bob = await draft("bob");
+      await bob.writeFile("secret.md", "bob's");
+      const bobTip = await bob.resolveRef("HEAD");
+      await (await draft("carol")).writeFile("carol.md", "c");
+      await publish("carol", "Carol");
+      const main = await (await draft("reader")).resolveRef("main");
+      const tree = await origin.withOrigin(
+        TENANT,
+        PROJECT,
+        async (repo) =>
+          (await new OriginObjects(repo, new GitObjectCache()).commit(main))
+            .tree,
+      );
+      for (const base of [bobTip, tree, "f".repeat(40)])
+        await expect(
+          manager.publishFiles({
+            tenantId: TENANT,
+            projectId: PROJECT,
+            base,
+            files: { "docs/a.md": "x" },
+            message: "Desktop",
+            author: { name: "d", email: "d@test.dev" },
+          }),
+          base,
+        ).rejects.toBeInstanceOf(InvalidBaseError);
+      await expect(
+        manager.publishFiles({
+          tenantId: TENANT,
+          projectId: PROJECT,
+          files: { ".work/app-data/store/x.md": "x" },
+          message: "Desktop",
+          author: { name: "d", email: "d@test.dev" },
+        }),
+      ).rejects.toBeInstanceOf(DraftIgnoredPathError);
+    });
+
+    it("reports a file against a folder, and binary files, as conflicts", async () => {
+      await (await draft("alice")).write({
+        changes: [
+          { path: "shape", content: "a file" },
+          { path: "bin.dat", content: new Uint8Array([0, 1, 2]) },
+        ],
+      });
+      await (await draft("bob")).write({
+        changes: [
+          { path: "shape/inside.md", content: "a folder" },
+          { path: "bin.dat", content: new Uint8Array([0, 9, 9]) },
+        ],
+      });
+      await publish("bob", "Bob");
+      const result = await publish("alice", "Alice");
+      expect(result.status).toBe("conflict");
+      expect(result.conflicts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: "shape" }),
+          {
+            path: "bin.dat",
+            base: null,
+            ours: null,
+            theirs: null,
+            binary: true,
+          },
+        ]),
+      );
+      await expect(
+        (await draft("alice")).resolveConflicts({
+          resolutions: { "bin.dat": "text", shape: "kept" },
+          message: "Resolve",
+        }),
+      ).rejects.toBeInstanceOf(DraftBinaryResolutionError);
+      await expect(
+        (await draft("alice")).resolveConflicts({
+          resolutions: { ".work/app-data/store/x.md": "x" },
+          message: "Resolve",
+        }),
+      ).rejects.toBeInstanceOf(DraftIgnoredPathError);
+    });
+
+    it("keeps a resolved file's mode", async () => {
+      const seed = await manager.openEphemeral({
+        tenantId: TENANT,
+        projectId: PROJECT,
+      });
+      try {
+        await fs.chmod(path.join(seed.repoPath, "bin/run.sh"), 0o755);
+        await seed.commit("Executable", { name: "t", email: "t@test.dev" });
+        await push({
+          dev: seed,
+          remote: origin,
+          tenantId: TENANT,
+          projectId: PROJECT,
+        });
+      } finally {
+        await seed.dispose();
+      }
+      await (await draft("alice")).writeFile("bin/run.sh", "alice\n");
+      await (await draft("bob")).writeFile("bin/run.sh", "bob\n");
+      await publish("bob", "Bob");
+      const alice = await draft("alice");
+      const resolved = await alice.resolveConflicts({
+        resolutions: { "bin/run.sh": "both\n" },
+        message: "Resolve",
+      });
+      const mode = await origin.withOrigin(TENANT, PROJECT, async (repo) => {
+        const objects = new OriginObjects(repo, new GitObjectCache());
+        return (
+          await objects.entry(
+            (
+              await objects.commit(resolved)
+            ).tree,
+            "bin/run.sh",
+          )
+        )?.mode;
+      });
+      expect(mode).toBe("100755");
+    });
+
+    it("reads the published program for the program reader, never a draft", async () => {
+      await (await draft("program-reader")).writeFile("draft-only.md", "x");
+      const reader = await manager.openDraft({
+        tenantId: TENANT,
+        projectId: PROJECT,
+        externalUserId: PROGRAM_READER_ID,
+      });
+      if (!(reader instanceof OriginDraftRepo)) throw new Error("Not a view");
+      expect(reader.ref).toBeNull();
+      await expect(reader.readFile("draft-only.md")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(reader.writeFile("x.md", "x")).rejects.toBeInstanceOf(
+        NoDraftError,
+      );
+    });
+
+    it("prepares a session copy once for concurrent first opens", async () => {
+      const opens = await Promise.all(
+        Array.from({ length: 4 }, () =>
+          manager.openSession({
+            tenantId: TENANT,
+            projectId: PROJECT,
+            sessionId: "s-concurrent",
+          }),
+        ),
+      );
+      for (const copy of opens) {
+        expect(await copy.readFile("docs/a.md")).toBe("a");
+        await copy.dispose();
+      }
+    });
+
+    it("starts a copy over when its seeding failed", async () => {
+      let failures = 1;
+      const flaky: RemoteBackend = {
+        initRemote: (t, p) => origin.initRemote(t, p),
+        deleteRemote: (t, p) => origin.deleteRemote(t, p),
+        exists: (t, p) => origin.exists(t, p),
+        withOrigin: (t, p, fn) => {
+          if (failures-- > 0) throw new Error("origin unavailable");
+          return origin.withOrigin(t, p, fn);
+        },
+      };
+      const flakyManager = new ProjectManager(
+        new FsBackend(path.join(dir, "flaky")),
+        flaky,
+      );
+      await expect(
+        flakyManager.openSession({
+          tenantId: TENANT,
+          projectId: PROJECT,
+          sessionId: "s-flaky",
+        }),
+      ).rejects.toThrow("origin unavailable");
+      const copy = await flakyManager.openSession({
+        tenantId: TENANT,
+        projectId: PROJECT,
+        sessionId: "s-flaky",
+      });
+      try {
+        expect(await copy.readFile("docs/a.md")).toBe("a");
+      } finally {
+        await copy.dispose();
+      }
+    });
+
     it("keeps a member's store folder outside any draft", async () => {
       const folder = await manager.draftStoreFolder({
         tenantId: TENANT,
@@ -546,6 +787,17 @@ for (const [label, makeOrigin] of [
       });
       expect(folder).toContain(path.join(dir, "copies"));
       expect(nodeFs.existsSync(folder ?? "")).toBe(true);
+      // Ids differing only by case keep apart on a case-insensitive disk.
+      const [upper, lower] = await Promise.all(
+        ["Alice", "alice"].map((externalUserId) =>
+          manager.draftStoreFolder({
+            tenantId: TENANT,
+            projectId: PROJECT,
+            externalUserId,
+          }),
+        ),
+      );
+      expect(upper?.toLowerCase()).not.toBe(lower?.toLowerCase());
     });
   });
 }

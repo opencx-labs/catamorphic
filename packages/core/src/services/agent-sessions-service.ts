@@ -7772,14 +7772,10 @@ export class AgentSessionsService {
   }
 
   /**
-   * Commit the dev tree as this turn's checkpoint (ADR 0044). Returns the
-   * commit sha (stamped on the assistant message), null when the tree was
-   * clean or the commit failed — a checkpoint must never break a turn.
-   */
-  /**
-   * The folder whose `.work/app-data/store/` mirrors the caller's store view: the caller's
-   * own draft folder, which sandbox agents' edits sync back into (none for
-   * a server draft, which lives in the origin). Host-execution
+   * The folder whose `.work/app-data/store/` mirrors the caller's store
+   * view: the session's copy, the caller's local folder, or for a server
+   * draft (which has no folder) a disposable folder the host keeps for the
+   * caller (ADR 0191). Host-execution
    * agents work in ONE folder per project shared by every caller, so their
    * store/ is never synced (one member's pulled files would be readable by
    * the next member's agent, and ships would carry the wrong author) —
@@ -7819,6 +7815,12 @@ export class AgentSessionsService {
     }
   }
 
+  /**
+   * This turn's checkpoint (ADR 0044): the session copy's commit, a local
+   * folder's commit, or a server draft's tip (ADR 0191). Returns the commit
+   * sha (stamped on the assistant message), null when nothing changed or
+   * the checkpoint failed; a checkpoint must never break a turn.
+   */
   private async checkpointTurn(
     identity: Identity,
     projectId: string,

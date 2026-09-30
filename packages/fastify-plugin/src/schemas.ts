@@ -928,6 +928,8 @@ export const ConflictEntrySchema = z.object({
   base: z.string().nullable(),
   ours: z.string().nullable(),
   theirs: z.string().nullable(),
+  /** A file that is not text: its sides are not rendered as text. */
+  binary: z.boolean().optional(),
 });
 
 export const DeployRequestSchema = z.object({

@@ -9,6 +9,7 @@ import {
 import { type FileReadOptions, readFileSnapshot } from "./file-reads.js";
 import { fetchRemote } from "./git-sync.js";
 import {
+  DraftIgnoredPathError,
   DraftPathError,
   type GitObjectCache,
   type IgnoreRules,
@@ -94,15 +95,19 @@ export class DraftRefNotAllowedError extends Error {
   }
 }
 
-/** Paths the project's ignore rules keep out of its history. */
-export class DraftIgnoredPathError extends Error {
-  readonly paths: readonly string[];
-  constructor(paths: readonly string[]) {
-    super(
-      `${paths.join(", ")} ${paths.length === 1 ? "is" : "are"} ignored by the project's .gitignore and never become part of the program.`,
-    );
-    this.name = "DraftIgnoredPathError";
-    this.paths = paths;
+/** A `base` that is not a commit of the published program. */
+export class InvalidBaseError extends Error {
+  constructor(base: string) {
+    super(`${base} is not a commit of the published program`);
+    this.name = "InvalidBaseError";
+  }
+}
+
+/** A read-only view (no member) asked to change a draft. */
+export class NoDraftError extends Error {
+  constructor() {
+    super("This view of the program has no draft to change");
+    this.name = "NoDraftError";
   }
 }
 
@@ -146,24 +151,30 @@ type MergePlan =
  * Reads of `HEAD` within one open see one commit (the one the first read
  * found, or the latest write through this instance), so several files read
  * together always come from the same snapshot. Reads accept `HEAD`, `main`
- * and published refs, other published branches, and commit ids; never
- * another member's draft or a session branch.
+ * and published refs, other published branches, and commit ids reachable
+ * from those or from the member's own draft; never another member's draft
+ * or a session branch, by any spelling or case.
+ *
+ * Without a member (`externalUserId: null`) it is a read-only view of the
+ * published program.
  */
 export class OriginDraftRepo {
   readonly projectId: string;
-  /** The draft's ref in the origin. */
-  readonly ref: string;
+  /** The draft's ref in the origin, or null for a read-only view. */
+  readonly ref: string | null;
   private readonly tenantId: string;
   private readonly remote: RemoteBackend;
   private readonly cache: GitObjectCache;
   private readonly author: { name: string; email: string };
   /** The commit `HEAD` reads see; resolved on first use. */
   private head: { sha: string | null } | undefined;
+  /** Commit ids this instance proved readable. */
+  private readonly readable = new Set<string>();
 
   constructor(args: {
     tenantId: string;
     projectId: string;
-    externalUserId: string;
+    externalUserId: string | null;
     remote: RemoteBackend;
     cache: GitObjectCache;
     /** Author of draft commits; publishing records the publisher. */
@@ -171,7 +182,8 @@ export class OriginDraftRepo {
   }) {
     this.tenantId = args.tenantId;
     this.projectId = args.projectId;
-    this.ref = draftRef(args.externalUserId);
+    this.ref =
+      args.externalUserId === null ? null : draftRef(args.externalUserId);
     this.remote = args.remote;
     this.cache = args.cache;
     this.author = args.author ?? SYSTEM_COMMIT_AUTHOR;
@@ -209,10 +221,41 @@ export class OriginDraftRepo {
     objects: OriginObjects,
   ): Promise<{ draft: string | null; main: string | null }> {
     const [draft, main] = await Promise.all([
-      objects.origin.resolveRef(this.ref),
+      this.ref ? objects.origin.resolveRef(this.ref) : null,
       objects.origin.resolveRef(MAIN),
     ]);
     return { draft, main };
+  }
+
+  /** This member's draft ref; a read-only view has none to change. */
+  private draftRefOrThrow(): string {
+    if (!this.ref) throw new NoDraftError();
+    return this.ref;
+  }
+
+  /**
+   * Whether a commit id may be read here: reachable from `main`, from this
+   * member's draft, or from a published branch this member may name. Ids
+   * of other members' drafts or of sessions are not capabilities.
+   */
+  private async mayReadCommit(
+    objects: OriginObjects,
+    sha: string,
+  ): Promise<boolean> {
+    if (this.readable.has(sha)) return true;
+    const { draft, main } = await this.tips(objects);
+    const own = [draft, main].filter((tip): tip is string => tip !== null);
+    let reachable = await objects.isReachable({ sha, tips: own });
+    if (!reachable) {
+      const branches = (await objects.origin.listRefs(BRANCHES))
+        .filter((entry) => !isPrivateRef(entry.ref) && entry.ref !== MAIN)
+        .map((entry) => entry.sha);
+      reachable =
+        branches.length > 0 &&
+        (await objects.isReachable({ sha, tips: branches }));
+    }
+    if (reachable) this.readable.add(sha);
+    return reachable;
   }
 
   /**
@@ -233,7 +276,7 @@ export class OriginDraftRepo {
       return this.head.sha;
     }
     if (SHA_RE.test(ref))
-      return (await objects.origin.hasObject(ref)) ? ref : null;
+      return (await this.mayReadCommit(objects, ref)) ? ref : null;
     assertValidRefName(ref);
     const full = ref.startsWith(`${PUBLISHED_REF_PREFIX}/`)
       ? `${BRANCHES}${ref.slice(PUBLISHED_REF_PREFIX.length + 1)}`
@@ -241,11 +284,7 @@ export class OriginDraftRepo {
         ? ref
         : `${BRANCHES}${ref}`;
     assertValidRefName(full);
-    if (
-      !full.startsWith(BRANCHES) ||
-      full.startsWith(SESSION_BRANCHES) ||
-      full.startsWith(`${DRAFT_REF_PREFIX}/`)
-    )
+    if (!full.startsWith(BRANCHES) || isPrivateRef(full))
       throw new DraftRefNotAllowedError(ref);
     return objects.origin.resolveRef(full);
   }
@@ -450,6 +489,7 @@ export class OriginDraftRepo {
             ? new TextEncoder().encode(change.content)
             : change.content,
       );
+    const draftRefName = this.draftRefOrThrow();
     if (pending.size === 0) return null;
     const message =
       input.message ??
@@ -502,7 +542,7 @@ export class OriginDraftRepo {
           message,
         });
         await objects.origin.updateRef({
-          ref: this.ref,
+          ref: draftRefName,
           sha,
           expected: draft,
         });
@@ -588,10 +628,11 @@ export class OriginDraftRepo {
 
   /** Delete the draft: the member's view follows `main` again. */
   async discard(): Promise<boolean> {
+    const ref = this.draftRefOrThrow();
     this.head = undefined;
     return this.withObjects(async (objects) => {
-      if (!(await objects.origin.resolveRef(this.ref))) return false;
-      await objects.origin.deleteRef({ ref: this.ref });
+      if (!(await objects.origin.resolveRef(ref))) return false;
+      await objects.origin.deleteRef({ ref });
       return true;
     });
   }
@@ -608,13 +649,14 @@ export class OriginDraftRepo {
     author: { name: string; email: string };
     guard?: (paths: readonly string[]) => void;
   }): Promise<DraftPublishResult> {
+    const ref = this.draftRefOrThrow();
     this.head = undefined;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const plan = await this.withObjects(
         async (objects): Promise<PublishPlan> => {
           const { draft, main } = await this.tips(objects);
           const nothing = async (): Promise<PublishPlan> => {
-            if (draft) await clearDraft(objects, this.ref, draft);
+            if (draft) await clearDraft(objects, ref, draft);
             return {
               kind: "done",
               done: {
@@ -671,7 +713,7 @@ export class OriginDraftRepo {
           message: input.message,
         });
         await objects.origin.updateRef({ ref: MAIN, sha, expected: plan.main });
-        await clearDraft(objects, this.ref, plan.draft);
+        await clearDraft(objects, ref, plan.draft);
         return sha;
       });
       if (published)
@@ -723,6 +765,7 @@ export class OriginDraftRepo {
     resolutions?: Record<string, string>;
     message?: string;
   }): Promise<MergeResult> {
+    const ref = this.draftRefOrThrow();
     this.head = undefined;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const plan = await this.withObjects(
@@ -739,7 +782,7 @@ export class OriginDraftRepo {
           const changed =
             (await objects.diffTrees(baseTree, draftTree)).length > 0;
           if (!changed && !input.resolutions) {
-            await clearDraft(objects, this.ref, draft);
+            await clearDraft(objects, ref, draft);
             return upToDate(main);
           }
           if (base === main && !input.resolutions) return upToDate(draft);
@@ -771,7 +814,7 @@ export class OriginDraftRepo {
           message: input.message ?? "Merge published changes into draft",
         });
         await objects.origin.updateRef({
-          ref: this.ref,
+          ref,
           sha: commit,
           expected: plan.draft,
         });
@@ -825,13 +868,22 @@ export async function publishFilesToOrigin(input: {
       async (objects): Promise<DraftPublishResult | null> => {
         const main = await objects.origin.resolveRef(MAIN);
         const mainTree = main ? (await objects.commit(main)).tree : null;
+        // Published files follow the project's ignore rules like any write.
+        const rules: IgnoreRules = new Map();
+        const ignored: string[] = [];
+        for (const [file] of changes)
+          if (await objects.isIgnored(mainTree, file, rules))
+            ignored.push(file);
+        if (ignored.length > 0) throw new DraftIgnoredPathError(ignored);
         let tree: string;
         if (input.base && main && input.base !== main) {
+          // A base is a commit of the published program, never an id that
+          // would let the caller read anything else.
           if (
             !SHA_RE.test(input.base) ||
-            !(await objects.origin.hasObject(input.base))
+            !(await objects.isReachable({ sha: input.base, tips: [main] }))
           )
-            throw new Error(`Unknown base commit: ${input.base}`);
+            throw new InvalidBaseError(input.base);
           const baseTree = (await objects.commit(input.base)).tree;
           const merged = await mergeTrees({
             objects,
@@ -918,6 +970,18 @@ export async function refreshPublished(input: {
   return fetched.sha
     ? input.repo.resolveRef(publishedRef(branch)).catch(() => null)
     : null;
+}
+
+/**
+ * A ref in a private namespace: a session's branch or any member's draft.
+ * Compared without case, as a case-insensitive disk would open it.
+ */
+function isPrivateRef(ref: string): boolean {
+  const lower = ref.toLowerCase();
+  return (
+    lower.startsWith(SESSION_BRANCHES) ||
+    lower.startsWith(`${DRAFT_REF_PREFIX}/`)
+  );
 }
 
 async function clearDraft(

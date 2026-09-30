@@ -48,14 +48,30 @@ ref the draft is the published `main`.
   one commit on top of `main` that never touches a draft; given the `base`
   commit the files came from, it merges with what was published since and
   reports conflicts instead of overwriting.
-- **Privacy:** drafts are private to their member. Every ref a caller names
-  is checked against git's ref-name rules, then the full ref it maps to must
-  be a branch outside `sessions/`; other members' drafts are unreachable by
-  any spelling. Administrators do not list drafts. Drafts never expire.
+- **Privacy:** what is guaranteed is that no read through the server's
+  APIs (a draft, the published view, the file and diff routes) returns
+  another member's draft or a session branch. Every ref a caller names is
+  checked against git's ref-name rules, and the full ref it maps to must be
+  a branch outside `sessions/`, compared without case (a case-insensitive
+  disk opens `Sessions/` as `sessions/`). A commit id is read only when it
+  is reachable from `main`, the member's own draft, or a branch the member
+  may name (a bounded walk; anything unproven is refused), and a publish
+  `base` must be an ancestor of `main`. Draft ref names and host folders
+  escape upper-case letters, so ids differing only by case never collide.
+  The program reader is a reserved id no user can hold and opens the
+  published view, never a draft. Not covered: anyone with direct access
+  to the origin's storage, and content a member published. Administrators
+  do not list drafts. Drafts never expire.
 - **Server branches are gone:** `/branches` and `/checkout`, and the
   `work/*` branch a deploy used to create, are removed.
 - **Agents without their own session copy** checkpoint at the draft's tip,
-  and their `store/` view is mirrored in a disposable host folder.
+  and their `store/` view is mirrored in a disposable host folder. Machine
+  copies (session copies, members' copies on hosts without an origin) are
+  prepared once per key in a process, and a copy whose seeding did not
+  finish is started over instead of used.
+- **Merges** report a file against a folder as a conflict, never render
+  binary files as text or accept text resolutions for them, keep a
+  resolved file's mode, and refuse ignored paths.
 - Only code-host fetch and push, ADR 0178 mirrors, and proposals use real
   filesystems, and only ephemeral ones. A project in a local folder (the
   desktop) is still its own draft, unchanged.
@@ -64,7 +80,8 @@ ref the draft is the published `main`.
 whether an origin can: ref updates and deletes atomic across every process
 using it, and draft refs no sandbox credential can read.
 `ProjectManager.draftSupport()` checks once per process (the Work server at
-boot) and `openDraft` refuses drafts otherwise. Object stores (Postgres,
+boot; a check that errors runs again next time) and `openDraft` refuses
+drafts otherwise. Object stores (Postgres,
 S3) qualify when a probe shows the store enforces `If-None-Match` and
 `If-Match` on writes and deletes; some S3-compatible stores ignore
 conditional deletes and fail it. Bare repositories serialize their
