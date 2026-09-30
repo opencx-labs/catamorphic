@@ -190,10 +190,12 @@ fresh one with an empty disk at any time.
    its agents. Set the balancer's idle timeout above 30 seconds (a poll waits
    up to 20) and allow 64 MiB request bodies. A worker owns its lease (ADR
    0192): its own calls renew it, and any replica runs its agents. Stopping a
-   replica interrupts only the turns that replica was running; another
-   replica settles them as interrupted about a minute later and runs the
-   chats' next turns. A worker that is away for more than 45 seconds loses
-   its lease, and its chats' turns wait for it.
+   replica affects only the turns that replica was running: a stopping
+   replica lets them finish or interrupts them (see below), and a crashed
+   one's are settled as interrupted by another replica once their turn lease
+   lapses, about a minute later. The chats' next turns run on any replica. A
+   worker that is away for more than 45 seconds loses its lease, and its
+   chats' turns wait for it.
 
 A restarted worker process connects under a new epoch. The operations it had
 in flight fail as uncertain and are never replayed; its sandboxes and chats

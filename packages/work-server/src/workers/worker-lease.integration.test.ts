@@ -1,7 +1,9 @@
+import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import {
   EXECUTOR_RESTARTED_ERROR,
   type Identity,
@@ -45,9 +47,9 @@ const MEMBER_ROLE = {
  * answers some with a 502, and one worker.
  *
  * - Stopping the replica that is not running a turn leaves it running.
- * - Stopping the replica running a turn loses only that turn: the other
- *   replica settles it through turn-lease recovery, never replays it, and
- *   runs the chat's next turns.
+ * - A replica crashing (SIGKILL) while it runs a turn loses only that turn:
+ *   the other replica settles it through turn-lease recovery, never replays
+ *   it, and runs the chat's next turns.
  * - The worker connecting again under its epoch keeps a running turn.
  * - A restarted worker (a new epoch) fails only the operation in flight,
  *   as uncertain; its chats keep their workspaces and continue.
@@ -62,6 +64,7 @@ it.skipIf(!process.env.DATABASE_URL)(
     const replicas = new Map<string, string>();
     const workers: Array<Awaited<ReturnType<typeof startWorkWorker>>> = [];
     let runner: ReturnType<typeof startClientRunner> | undefined;
+    let crashable: ChildProcess | undefined;
     const env = {
       DATABASE_URL: database.url,
       WORK_SECRET: "lease-test-secret-with-at-least-32-characters-ok",
@@ -317,36 +320,59 @@ it.skipIf(!process.env.DATABASE_URL)(
       expect(count(reply.content)).toBe("exit=0\n2");
       await startReplica(runs === "a" ? "b" : "a");
 
-      // 2. The replica running the turn stops mid-turn. Only that turn is
-      // lost: once its lease lapses, the other replica settles it as
-      // interrupted and never runs it again.
-      since = new Date();
-      turnId = await enqueue(
-        chat.id,
-        "run printf . >> ../ops ;; run sleep 20 ;; run printf . >> ../ops",
-      );
-      await sleeping(since);
-      const victim = await runningOn(chat.id);
-      if (!victim) throw new Error("No replica runs the turn");
-      const stoppedAt = Date.now();
-      await stopReplica(victim);
-      // Stopping gives nothing back: the replica is gone before the turn
-      // could have finished.
-      expect(Date.now() - stoppedAt).toBeLessThan(15_000);
-      reply = await settled(turnId, 120_000);
+      // 2. The replica running the turn crashes mid-turn (SIGKILL). Only
+      // that turn is lost: once its lease lapses, the other replica settles
+      // it as interrupted and never runs it again. The crashing replica is
+      // a process of its own; until it claims a turn, replica a runs them.
+      await stopReplica("b");
+      let appended = 2;
+      crashable = await startReplicaProcess({
+        env: {
+          ...env,
+          WORK_PUBLIC_URL: "https://lease.example.test",
+          WORK_DATA_DIR: path.join(root, "crashable"),
+          WORK_MACHINE_NAME: "crashable",
+        },
+      });
+      let crashed: string | undefined;
+      for (let attempt = 0; attempt < 10 && !crashed; attempt++) {
+        since = new Date();
+        // Queued without a local drain, so either replica's poller claims it.
+        const queued =
+          await anyReplica().catamorphic.core.agentSessions?.turns.deliver({
+            sessionId: chat.id,
+            content: SLOW_TURN,
+            author: { kind: "user", externalUserId: owner.externalUserId },
+            mode: "next_turn",
+          });
+        if (!queued?.turnId) throw new Error("No turn");
+        turnId = queued.turnId;
+        await sleeping(since);
+        if (await runningOn(chat.id)) {
+          reply = await settled(turnId);
+          expect(reply.status, reply.content).toBe("completed");
+          appended += 2;
+          continue;
+        }
+        crashable.kill("SIGKILL");
+        crashed = turnId;
+        appended += 1;
+      }
+      if (!crashed) throw new Error("The crashable replica never ran a turn");
+      reply = await settled(crashed, 120_000);
       expect(reply.status, reply.content).toBe("failed");
       expect(reply.metadata).toMatchObject({
         status: "failed",
         unexpectedStop: true,
       });
-      await startReplica(victim);
+      await startReplica("b");
       turnId = await enqueue(chat.id, "run wc -c < ../ops");
       reply = await settled(turnId);
-      // Two from the first turn, one before the interrupted turn's sleep.
-      expect(count(reply.content)).toBe("exit=0\n3");
-      expect((await turns(chat.id)).map((turn) => turn.attempt)).toEqual([
-        1, 1, 1,
-      ]);
+      // The interrupted turn's first append ran once; nothing after it ran.
+      expect(count(reply.content)).toBe(`exit=0\n${appended}`);
+      expect((await turns(chat.id)).every((turn) => turn.attempt === 1)).toBe(
+        true,
+      );
 
       // 3. The worker connects again under its epoch mid-turn: nothing is
       // interrupted.
@@ -392,7 +418,8 @@ it.skipIf(!process.env.DATABASE_URL)(
       expect(reconnect.statusCode).toBe(200);
       reply = await settled(turnId);
       expect(reply.status, reply.content).toBe("completed");
-      expect(count(reply.content)).toBe("exit=0\n5");
+      appended += 2;
+      expect(count(reply.content)).toBe(`exit=0\n${appended}`);
 
       // 4. The worker restarts (a new process, a new epoch) mid-turn. The
       // operation in flight fails as uncertain and is never replayed; the
@@ -432,7 +459,7 @@ it.skipIf(!process.env.DATABASE_URL)(
       reply = await settled(await enqueue(chat.id, "run wc -c < ../ops"));
       // The restart cut the turn after its first append; the sleep and the
       // second append never ran again.
-      expect(count(reply.content)).toBe("exit=0\n6");
+      expect(count(reply.content)).toBe(`exit=0\n${appended + 1}`);
 
       // 5. A This machine chat continues when the replica that admitted it
       // stops: it is no replica's work.
@@ -524,6 +551,7 @@ it.skipIf(!process.env.DATABASE_URL)(
       ).toEqual([]);
       workerCalls = { connects: 0, badGateways: 0 };
     } finally {
+      crashable?.kill("SIGKILL");
       await runner?.stop();
       for (const worker of workers.reverse()) await worker.stop();
       for (const server of servers.values()) await server.shutdown();
@@ -533,3 +561,31 @@ it.skipIf(!process.env.DATABASE_URL)(
   },
   600_000,
 );
+
+/** A replica in its own process, to crash with SIGKILL (ADR 0190). */
+async function startReplicaProcess(args: {
+  env: Record<string, string | undefined>;
+}): Promise<ChildProcess> {
+  const child = spawn(
+    "bun",
+    [path.join(import.meta.dirname, "..", "replica-process.fixture.ts")],
+    { env: args.env, stdio: ["ignore", "pipe", "inherit"] },
+  );
+  const lines = createInterface({ input: child.stdout ?? process.stdin });
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("The replica process did not start")),
+      60_000,
+    );
+    child.once("exit", (code) =>
+      reject(new Error(`The replica process exited with ${code}`)),
+    );
+    lines.on("line", (line) => {
+      // Its request log shares stdout: only the ready line names a node.
+      if (!line.startsWith('{"node"')) return;
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+  return child;
+}

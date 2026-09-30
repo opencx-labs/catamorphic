@@ -39,7 +39,8 @@ remote node that is enabled with a live lease, or on the claiming process's
 own local node. So turns wait while a worker is away, and a replica's own
 node stays its own. A running turn is fenced by its own turn lease; the
 epoch fences operations, not turns, so a worker restart fails the operation
-in flight and never the turn wholesale. A turn whose replica stopped is
+in flight and never the turn wholesale. A replica that stops lets its own
+turns finish or interrupts them (0190); a turn whose replica crashed is
 settled by another after its lease lapses, through ordinary turn-lease
 recovery: interrupted, never replayed.
 
