@@ -168,6 +168,16 @@ import {
 import { notifyDesktop, playChime } from "./lib/notify.js";
 import { sessionLabel } from "./lib/session-label.js";
 import { skillInvocation } from "./lib/skills.js";
+import {
+  EMPTY_SURFACE_HISTORY,
+  restoreSurface,
+  type SurfaceHistory,
+  settleSurface,
+  stepSurface,
+  surfaceChanges,
+  surfaceLocation,
+  visitSurface,
+} from "./lib/surface-history.js";
 import { useSidebarReveal } from "./lib/use-sidebar-reveal.js";
 import {
   fileNameFromPath,
@@ -1987,6 +1997,9 @@ export function App({
                 url: state.url || browser.url,
                 title: state.title || browser.title,
                 faviconUrl: state.faviconUrl ?? browser.faviconUrl,
+                ...(state.history !== undefined
+                  ? { history: state.history ?? undefined }
+                  : {}),
               }
             : browser,
         ),
@@ -3835,6 +3848,99 @@ export function App({
   workspaceConfigRef.current = visibleWorkspace;
   const activeProfileRef = useRef(activeProfile);
   activeProfileRef.current = activeProfile;
+
+  // Back and forward between surfaces (ADR 0188): each project remembers
+  // the places its workspace was at, and the mouse's side buttons walk
+  // them, except on a browser, which walks its own pages.
+  const surfaceHistoriesRef = useRef(new Map<string, SurfaceHistory>());
+  // Set while back or forward moves the workspace, so arriving there
+  // settles the entry instead of counting as a new visit.
+  const surfaceSteppingRef = useRef(false);
+  useEffect(() => {
+    if (!projectId) return;
+    const histories = surfaceHistoriesRef.current;
+    const history = histories.get(projectId) ?? EMPTY_SURFACE_HISTORY;
+    const location = surfaceLocation(workspace);
+    histories.set(
+      projectId,
+      surfaceSteppingRef.current
+        ? settleSurface(history, location)
+        : visitSurface(history, location),
+    );
+    surfaceSteppingRef.current = false;
+  }, [projectId, workspace]);
+  const navigateBackForwardRef = useRef(
+    (_direction: "back" | "forward", _at: Element | null) => {},
+  );
+  navigateBackForwardRef.current = (direction, at) => {
+    // A dialog takes the press; nothing behind it moves.
+    if (at?.closest('[aria-modal="true"]')) return;
+    // A press on a browser's page or toolbar walks that browser's pages;
+    // anywhere else (a chat, the sidebar, the tab strip) walks surfaces.
+    const surface = at?.closest("[data-chat-local-id]")
+      ? undefined
+      : at?.closest<HTMLElement>("[data-surface-key]")?.dataset.surfaceKey;
+    if (surface?.startsWith("browser:")) {
+      browserHistoryNavigatorsRef.current.get(
+        surface.slice("browser:".length),
+      )?.(direction);
+      return;
+    }
+    const id = projectIdRef.current;
+    if (!id) return;
+    const ws = workspaceRef.current;
+    const next = stepSurface(
+      surfaceHistoriesRef.current.get(id) ?? EMPTY_SURFACE_HISTORY,
+      direction === "back" ? -1 : 1,
+      (location) => surfaceChanges(ws, location),
+    );
+    const target = next?.entries[next.index];
+    if (!next || !target) return;
+    surfaceHistoriesRef.current.set(id, next);
+    surfaceSteppingRef.current = true;
+    updateWorkspace((current) => {
+      const restored = restoreSurface(current, target);
+      // Nothing moved, so no visit follows for the flag to settle.
+      if (restored === current) surfaceSteppingRef.current = false;
+      return restored;
+    });
+  };
+  useEffect(() => {
+    // Windows and Linux report the buttons as app commands (main forwards
+    // those); macOS delivers them to the page under the pointer. A web
+    // page's own presses stay in its browser tab (the guest preload).
+    const onMouseUp = (event: globalThis.MouseEvent) => {
+      const direction =
+        event.button === 3 ? "back" : event.button === 4 ? "forward" : null;
+      if (!direction) return;
+      event.preventDefault();
+      navigateBackForwardRef.current(
+        direction,
+        event.target instanceof Element ? event.target : null,
+      );
+    };
+    const mac = /Mac/.test(navigator.platform);
+    if (mac) window.addEventListener("mouseup", onMouseUp, true);
+    const stop = desktopApi.onBrowserNavigate((command) => {
+      // A focused page's own tab takes it (browser-screen).
+      if (command.webContentsId !== null) return;
+      if (command.gesture === "swipe") {
+        // Swiping turns the front browser's pages, as it always has.
+        const ws = workspaceRef.current;
+        const front = ws.floatingKey ?? ws.activeTabKey;
+        if (front?.startsWith("browser:"))
+          browserHistoryNavigatorsRef.current.get(
+            front.slice("browser:".length),
+          )?.(command.direction);
+        return;
+      }
+      navigateBackForwardRef.current(command.direction, document.activeElement);
+    });
+    return () => {
+      if (mac) window.removeEventListener("mouseup", onMouseUp, true);
+      stop();
+    };
+  }, []);
   useEffect(() => {
     /** The chat an agent-spawned surface belongs to: exact session match
         first (the tools carry their chat's session id), then the mid-turn
@@ -4632,8 +4738,11 @@ export function App({
     .filter((chat) => chat.mode === "tab")
     .map((chat) => {
       const memberKeys = attachedTabKeys(workspace, chat.localId);
-      for (const key of memberKeys) groupOfKey.set(key, chat.localId);
-      groupOfKey.set(chatTabKey(chat.localId), chat.localId);
+      // A chat with nothing attached is a tab, not a group.
+      if (memberKeys.length > 0) {
+        for (const key of memberKeys) groupOfKey.set(key, chat.localId);
+        groupOfKey.set(chatTabKey(chat.localId), chat.localId);
+      }
       return {
         parentKey: chatTabKey(chat.localId),
         memberKeys,
@@ -4708,6 +4817,7 @@ export function App({
     viewSlots[key] === "left" || viewSlots[key] === "right";
   const paneFocusProps = (key: string) => ({
     "data-workspace-slot": viewSlots[key],
+    "data-surface-key": key,
     "data-floating-surface": viewSlots[key] === "floating" ? key : undefined,
     "data-floating-state":
       viewSlots[key] === "floating"
@@ -5899,6 +6009,8 @@ export function App({
                         // Remounts (project/profile switches) resume at the
                         // last known URL, not the tab's original one.
                         initialUrl={browser.url || browser.initialUrl}
+                        history={browser.history}
+                        surfaceKey={browserTabKey(browser.localId)}
                         active={
                           runtime.visible &&
                           browser.localId === activeBrowserTabId
@@ -6455,6 +6567,8 @@ export function App({
                       projectId={null}
                       floatingDismissShortcut={keybindings["dismiss-floating"]}
                       initialUrl={browser.url || browser.initialUrl}
+                      history={browser.history}
+                      surfaceKey={browserTabKey(browser.localId)}
                       active={
                         runtime.visible &&
                         browser.localId === activeBrowserTabId

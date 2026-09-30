@@ -48,10 +48,6 @@
   caret-color: var(--color-accent);
 }
 
-.cat-mdedit .ProseMirror ::selection {
-  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
-}
-
 /* Content is never a drag source — dragging starts only from the handle
    (paired with the dragstart guard in editorProps). */
 .cat-mdedit .ProseMirror,

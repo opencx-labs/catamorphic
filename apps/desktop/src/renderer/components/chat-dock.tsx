@@ -17,13 +17,14 @@ import {
   Box,
   Columns2,
   Ghost,
-  Globe,
+  Laptop,
   LoaderCircle,
   Maximize2,
   Minus,
   Paperclip,
   PictureInPicture2,
   Radio,
+  Server,
   X,
 } from "lucide-react";
 import {
@@ -47,6 +48,7 @@ import type {
 import { modifiersForMode } from "../../shared/open-mode.js";
 import {
   defaultModelLabel,
+  modelId,
   sameModel,
   useAgentDefaultModel,
 } from "../lib/agent-default-model.js";
@@ -584,6 +586,10 @@ function ChatDockContent({
     authority && !activeEnvironmentItem?.clientRequired
       ? `Company server (${activeEnvironmentItem?.label ?? activeEnvironment ?? "default"})`
       : (activeEnvironmentItem?.label ?? activeEnvironment ?? "This device");
+  // Where the work runs, for its icon: this computer (the desktop's own
+  // environments, or a member's machine) or a company server.
+  const onThisMachine =
+    !authority || activeEnvironmentItem?.clientRequired === true;
   const isIncognito = Boolean(entry.incognito);
   const [remoteCheckNonce, setRemoteCheckNonce] = useState(0);
   const wasSendingRef = useRef(chat.isSending);
@@ -2216,7 +2222,11 @@ function ChatDockContent({
                       className="flex min-w-0 items-center gap-1.5 text-fg"
                       data-testid="chat-environment-badge"
                     >
-                      <Globe className="size-3" />
+                      {onThisMachine ? (
+                        <Laptop className="size-3" />
+                      ) : (
+                        <Server className="size-3" />
+                      )}
                       <span className="truncate">{activeEnvironmentLabel}</span>
                     </span>
                   ) : authority || compatibleEnvironments.length > 1 ? (
@@ -2263,7 +2273,8 @@ function ChatDockContent({
                     : (activeAgent?.name ?? "Default agent")
                 }
                 model={
-                  selectedModel ||
+                  (selectedModel &&
+                    modelId(selectedModel, modelCatalog.data?.models)) ||
                   (harnessDefault.data?.model
                     ? defaultModelLabel(activeAgent, harnessDefault.data.model)
                     : reportedModel ||

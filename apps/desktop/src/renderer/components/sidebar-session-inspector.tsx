@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import {
   defaultModelLabel,
+  modelId,
   useAgentDefaultModel,
 } from "../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
@@ -79,9 +80,9 @@ export function SidebarSessionInspector({
     sessionId: session.id,
     enabled: !pinnedModel,
   });
-  const modelId = pinnedModel || harnessDefault.data?.model?.id;
+  const runningModel = pinnedModel || harnessDefault.data?.model?.id;
   const effortModel = catalog.data?.models.find(
-    (entry) => entry.id === modelId || entry.resolvedId === modelId,
+    (entry) => entry.id === runningModel || entry.resolvedId === runningModel,
   );
   const permissions = agentPermissionView({ agent });
   const reason = session.running
@@ -102,7 +103,9 @@ export function SidebarSessionInspector({
         checkout={checkout}
         incognito={privacy.data ?? false}
         model={
-          pinnedModel || defaultModelLabel(agent, harnessDefault.data?.model)
+          pinnedModel
+            ? modelId(pinnedModel, catalog.data?.models)
+            : defaultModelLabel(agent, harnessDefault.data?.model)
         }
         modelIsDefault={!pinnedModel && Boolean(harnessDefault.data?.model)}
         effort={

@@ -21,6 +21,7 @@ import {
   type DockRegion,
   type DockSize,
   dockPosition,
+  fitDockSize,
 } from "../shared/dock-position.js";
 import type { WindowProfileRegistry } from "./index.js";
 import type { ProfileConfigManager } from "./profile-config.js";
@@ -369,14 +370,7 @@ export class DesktopWorkspaces {
       )
         return;
       const area = this.dockArea(profileId, window);
-      const nextHeight = Math.max(
-        64,
-        Math.min(Math.round(size.height), area.height),
-      );
-      const nextWidth = Math.max(
-        100,
-        Math.min(Math.round(size.width), area.width),
-      );
+      const { width: nextWidth, height: nextHeight } = fitDockSize(size, area);
       this.dockExpanded.set(profileId, size.expanded === true);
       const prefs = options.config.forProfile(profileId).prefs.load();
       window.setBounds({
@@ -432,6 +426,14 @@ export class DesktopWorkspaces {
         return;
       }
       if (input.phase !== "end" && input.phase !== "cancel") return;
+      const landing =
+        input.size &&
+        Number.isFinite(input.size.width) &&
+        Number.isFinite(input.size.height)
+          ? { ...fitDockSize(input.size, area), expanded: input.size.expanded }
+          : null;
+      if (landing) this.dockExpanded.set(profileId, landing.expanded === true);
+      const { width, height } = landing ?? bounds;
       // Collapsed drags pick a corner; expanded drags pick where open chats
       // sit: left, center or right thirds of the display.
       const expanded = this.dockExpanded.get(profileId) === true;
@@ -452,7 +454,8 @@ export class DesktopWorkspaces {
               : "center";
       const position = dockPosition({
         area,
-        ...bounds,
+        width,
+        height,
         side: expanded && placement !== "center" ? placement : side,
         centered: expanded && placement === "center",
       });
@@ -463,7 +466,7 @@ export class DesktopWorkspaces {
         } else if (current.dockSide !== side) prefs.save({ dockSide: side });
       } finally {
         this.dockDrags.delete(profileId);
-        window.setPosition(position.x, position.y, !input.reducedMotion);
+        window.setBounds({ ...position, width, height }, !input.reducedMotion);
       }
     });
   }

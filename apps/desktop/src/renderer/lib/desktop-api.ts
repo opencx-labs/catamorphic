@@ -16,6 +16,7 @@ import type {
   BookmarkMove,
   BookmarkPlacement,
 } from "../../shared/bookmark-target.js";
+import type { BrowserHistory } from "../../shared/browser-history.js";
 import type {
   BrowserImportRequest,
   BrowserImportResult,
@@ -1395,6 +1396,10 @@ export interface CatamorphicDesktopApi {
   onSiteSettingsChanged: (
     listener: (change: { profileId: string; origin: string | null }) => void,
   ) => () => void;
+  /** A browser tab's back and forward list (null: nothing to go back to). */
+  browserNavigationHistory: (input: {
+    guestId: number;
+  }) => Promise<BrowserHistory | null>;
   browserRecordHistory: (input: {
     url: string;
     title: string;
@@ -1439,6 +1444,8 @@ export interface CatamorphicDesktopApi {
     listener: (command: {
       webContentsId: number | null;
       direction: "back" | "forward";
+      /** A mouse side button (or app command), or a three-finger swipe. */
+      gesture: "button" | "swipe";
     }) => void,
   ) => () => void;
   onBrowserCredentialSaveOffer: (

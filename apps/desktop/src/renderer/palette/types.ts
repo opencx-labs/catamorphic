@@ -34,6 +34,11 @@ export interface PaletteItem {
   /** What the row is, for ranking (ADR 0186). Defaults to command. */
   category?: PaletteCategory;
   /**
+   * The row is an item of a sidebar section (a pinned bookmark, a project
+   * chat, a custom section's link): it ranks with commands.
+   */
+  sidebar?: boolean;
+  /**
    * Usage key: frecency and learned picks. History identities for pages
    * and project resources, `surface:<kind>` for surfaces, else the row's
    * own stable key. Rows without one never learn.

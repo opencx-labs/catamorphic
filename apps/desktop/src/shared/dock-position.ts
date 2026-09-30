@@ -20,6 +20,23 @@ export interface DockDrag {
   phase: "start" | "move" | "end" | "cancel";
   screenX: number;
   reducedMotion: boolean;
+  /**
+   * The window's size once the drag lands. The window keeps its size while
+   * dragging (the open chat collapses as the drag starts), so the landing
+   * moves and resizes it in one step.
+   */
+  size?: DockSize;
+}
+
+/** A requested dock size, kept to the display's work area. */
+export function fitDockSize(
+  size: Pick<DockSize, "width" | "height">,
+  area: { width: number; height: number },
+) {
+  return {
+    width: Math.max(100, Math.min(Math.round(size.width), area.width)),
+    height: Math.max(64, Math.min(Math.round(size.height), area.height)),
+  };
 }
 
 /** Resting positions are relative to the display, never saved coordinates. */

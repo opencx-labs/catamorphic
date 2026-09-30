@@ -253,16 +253,22 @@ export function ChatTimeline({
 }
 
 /**
- * Content-position identity instead of message.id: when an optimistic user
- * message is replaced by its persisted twin, the id flips (uuid → db id) but
- * the rendered content is identical. A content-based key keeps the same DOM
- * node, so the settle is invisible instead of a remount (fade-in replay).
+ * User messages key by content position instead of message.id: when an
+ * optimistic user message is replaced by its persisted twin, the id flips
+ * (uuid → db id) but the rendered content is identical. A content-based key
+ * keeps the same DOM node, so the settle is invisible instead of a remount
+ * (fade-in replay).
+ *
+ * Everything else keys by id. Only the server writes those rows, and a
+ * running turn's row rewrites its content on every event: a content key
+ * would remount it, and replay its steps, each time the agent does anything.
  */
 function timelineKey(
   message: ChatTimelineMessage,
   index: number,
   messages: ChatTimelineMessage[],
 ): string {
+  if (message.role !== "user") return `id:${message.id}`;
   let occurrence = 0;
   for (let i = 0; i < index; i += 1) {
     const other = messages[i];

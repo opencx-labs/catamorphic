@@ -158,12 +158,15 @@ export function sourcePaletteRow({
   item,
   sources,
   projectId,
+  listed = false,
   onError,
 }: {
   source: WorkspaceSourceName;
   item: AppCollectionItem;
   sources: WorkspaceSources;
   projectId: string | undefined;
+  /** A sidebar section lists this source: its rows rank with commands. */
+  listed?: boolean;
   /** Opening failed after the palette closed (the chat was deleted, ...). */
   onError: (message: string) => void;
 }): PaletteItem {
@@ -194,6 +197,8 @@ export function sourcePaletteRow({
     detail: view.detail(item),
     keywords: [label, ...view.keywords(item)],
     category: view.category,
+    // Archived chats are found here, not kept in a sidebar.
+    sidebar: listed && item.data?.visibility !== "archived",
     usage: url
       ? webUsageKey(url)
       : view.history && projectId
@@ -231,6 +236,7 @@ export async function loadSourceRows({
   archived = false,
   children = true,
   keep,
+  listed = false,
 }: {
   sources: WorkspaceSources;
   source: WorkspaceSourceName;
@@ -243,6 +249,8 @@ export async function loadSourceRows({
   children?: boolean;
   /** Rows a section hides (itemOverrides.hide) stay out of its search. */
   keep?: (item: AppCollectionItem) => boolean;
+  /** A sidebar section lists this source (see sourcePaletteRow). */
+  listed?: boolean;
 }): Promise<PaletteItem[]> {
   const read = (includeArchived: boolean) =>
     sources.readAll({ source, signal, archived: includeArchived, children });
@@ -257,7 +265,7 @@ export async function loadSourceRows({
         item.actions?.some((action) => action.id === "open"),
     )
     .map((item) =>
-      sourcePaletteRow({ source, item, sources, projectId, onError }),
+      sourcePaletteRow({ source, item, sources, projectId, listed, onError }),
     );
 }
 
@@ -271,17 +279,22 @@ export async function loadSourceRows({
  */
 export function useSourceRows({
   names,
+  listed = [],
   active,
   projectId,
   onError,
 }: {
   names: readonly WorkspaceSourceName[];
+  /** The names a sidebar section lists; their rows rank with commands. */
+  listed?: readonly WorkspaceSourceName[];
   active: boolean;
   projectId: string | undefined;
   onError: (message: string) => void;
 }): PaletteItem[] {
   const sources = useWorkspaceSourcesContext();
-  const key = `${projectId}:${names.join(",")}`;
+  const key = `${projectId}:${names.join(",")}:${listed.join(",")}`;
+  const listedRef = useRef(listed);
+  listedRef.current = listed;
   const [state, setState] = useState<{
     key: string;
     lists: ReadonlyMap<string, { rows: PaletteItem[]; signature: string }>;
@@ -306,6 +319,7 @@ export function useSourceRows({
         onError: (message) => errorRef.current(message),
         archived: true,
         children: false,
+        listed: listedRef.current.includes(source),
         keep: (item) =>
           source !== "bookmarks" ||
           item.data?.scope === "pinned" ||

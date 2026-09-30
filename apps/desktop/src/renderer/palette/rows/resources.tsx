@@ -36,8 +36,15 @@ export function useResourceRows({ active }: { active: boolean }) {
     onError,
     canCreateWorkflows = false,
   } = usePaletteHost();
+  // Sources some sidebar section lists: the user's own shortlist.
+  const listed = RESOURCE_SOURCES.filter((name) =>
+    sidebarSections(workspaceConfig).some(
+      (section) => (section.source?.type ?? section.type) === name,
+    ),
+  );
   const sourceRows = useSourceRows({
     names: RESOURCE_SOURCES,
+    listed,
     active,
     projectId,
     onError: (message) => onError?.(message),
@@ -80,6 +87,7 @@ export function useResourceRows({ active }: { active: boolean }) {
             ],
             kind: "navigate",
             category: "bookmark",
+            sidebar: true,
             usage: webUsageKey(url),
             run: (mode) => onOpenUrl(url, mode),
           });

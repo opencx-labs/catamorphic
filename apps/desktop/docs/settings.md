@@ -108,7 +108,9 @@ again.
 `dockPlacement` chooses `left`, `center` (default) or `right` for open chats and
 their bubble strip; `dockSide` chooses the bottom corner the collapsed bubble
 rests in. Dragging the collapsed bubble changes the corner; dragging the
-arrows of an expanded strip changes the placement.
+arrows of an expanded strip changes the placement, and an open chat collapses as
+the drag starts. The detached window keeps its size while dragged and lands
+with its final size in one move.
 
 ## Workspace frame
 

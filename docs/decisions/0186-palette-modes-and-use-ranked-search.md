@@ -45,6 +45,10 @@ continuous: label above keywords above detail, word starts above substrings,
 fuzzy as a scarce fallback. Each row carries a category prior (commands and
 surfaces 1, project resources 0.9, settings and bookmarks 0.8, pages 0.6), so
 a page beats a command only with a clearly better match or much heavier use.
+A row that is an item of a sidebar section (a pinned or project bookmark, a
+chat, workflow or app the sidebar lists, a custom section's link) is the
+user's own shortlist and ranks with commands (1) whatever its kind; archived
+chats, found only through the palette, keep the resource prior.
 Frecency (Firefox-style visit count weighted by sampled recency) multiplies
 the score, with a small boost for use in the current project. A pick records
 the typed query; rows picked for a related query rise strongly next time.

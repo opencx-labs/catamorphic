@@ -194,6 +194,13 @@ textarea,
   user-select: text;
 }
 
+/* Selected text takes the theme's accent, not the OS highlight. Monaco
+   and the terminal tint their own selection from the same token; web
+   pages are their own documents and keep theirs. */
+::selection {
+  background-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
+}
+
 code,
 pre,
 kbd {
@@ -683,6 +690,31 @@ kbd {
 }
 
 .animate-fold-away > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The mirror of fold-away for a step joining a running turn's list: the
+   row opens its own height while it fades in, so the list grows at its
+   end instead of jumping. The class is dropped once it has played, so a
+   settled row never clips its focus ring. */
+@keyframes step-in {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+  to {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+}
+
+.animate-step-in {
+  display: grid;
+  animation: step-in 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.animate-step-in > * {
   min-height: 0;
   overflow: hidden;
 }

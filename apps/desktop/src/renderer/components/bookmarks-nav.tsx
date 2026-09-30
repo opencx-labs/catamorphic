@@ -723,6 +723,24 @@ export function BookmarksNav({
   };
 
   const hasPinned = pinnedCount > 0;
+  // A pin shown above leaves the lists below (a saved bookmark keeps its
+  // place there, and returns when unpinned). A pin the section hides stays
+  // reachable in them.
+  const pinnedKeys = new Set(
+    data?.pinned.bookmarks
+      .filter(
+        (bookmark) => !contribution?.section.itemOverrides?.[bookmark.id]?.hide,
+      )
+      .flatMap((bookmark) => [bookmark.id, bookmark.url]),
+  );
+  const unpinned = (scope: ProjectBookmarks): ProjectBookmarks => ({
+    ...scope,
+    bookmarks: scope.bookmarks.filter(
+      (bookmark) =>
+        !pinnedKeys.has(bookmark.id) && !pinnedKeys.has(bookmark.url),
+    ),
+  });
+  const library = data?.library ? unpinned(data.library) : undefined;
   const pinnedTiles = data
     ? projectSidebarItems(data.pinned.bookmarks, contribution?.section)
         .filter(
@@ -773,16 +791,15 @@ export function BookmarksNav({
       </Collapsible>
       <Collapsible
         open={Boolean(
-          data?.library &&
-            (data.library.bookmarks.length > 0 ||
-              data.library.folders.length > 0),
+          library &&
+            (library.bookmarks.length > 0 || library.folders.length > 0),
         )}
       >
         <div className="pb-2">
           <SidebarSubsection>
             <section aria-label="Bookmark library">
               <ul role="list" className="flex flex-col gap-0.5">
-                {data?.library && renderTree(data.library, false, true)}
+                {library && renderTree(library, false, true)}
               </ul>
             </section>
           </SidebarSubsection>
@@ -790,7 +807,7 @@ export function BookmarksNav({
       </Collapsible>
       <SidebarSubsection label="This project" collapsible>
         <ul role="list" className="flex flex-col gap-0.5">
-          {data && renderTree(data.project, false)}
+          {data && renderTree(unpinned(data.project), false)}
         </ul>
         <div className="flex items-center gap-1 px-1">
           <button

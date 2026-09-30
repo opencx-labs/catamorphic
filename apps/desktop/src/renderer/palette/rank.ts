@@ -34,6 +34,11 @@ const PRIOR: Record<PaletteCategory, number> = {
   bookmark: 0.8,
   page: 0.6,
 };
+/**
+ * A row the user keeps in a sidebar section is their own shortlist: it
+ * ranks with commands, whatever kind of row it is.
+ */
+const SIDEBAR_PRIOR = 1;
 
 export interface Rankable {
   label: string;
@@ -41,6 +46,8 @@ export interface Rankable {
   /** Matched weakly: where a row lives, not what it is. */
   detail?: string;
   category?: PaletteCategory;
+  /** Shown in a sidebar section: ranks with commands (`SIDEBAR_PRIOR`). */
+  sidebar?: boolean;
   /** Usage key for frecency and learned picks. */
   usage?: string;
 }
@@ -152,7 +159,7 @@ export function createPaletteIndex<T extends Rankable>(items: readonly T[]) {
     keywords: item.keywords.map((word) => normalizeCommandQuery(word)),
     detail: item.detail ? normalizeCommandQuery(item.detail) : "",
     command: prepareCommand(item.label, item.keywords),
-    prior: PRIOR[item.category ?? "command"],
+    prior: item.sidebar ? SIDEBAR_PRIOR : PRIOR[item.category ?? "command"],
   }));
   return (
     query: string,

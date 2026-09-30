@@ -38,6 +38,7 @@ type Row = {
   keywords: string[];
   detail?: string;
   category?: import("./rank.js").PaletteCategory;
+  sidebar?: boolean;
   usage?: string;
   disabled?: boolean;
 };
@@ -65,6 +66,21 @@ it("ranks a system command above a page with a similar match", () => {
     row("action", "New terminal tab", { category: "command" }),
   ]);
   expect(search("new t").map((item) => item.id)).toEqual(["action", "page"]);
+});
+
+it("ranks what a sidebar keeps with commands, above other rows of its kind", () => {
+  const search = createPaletteIndex([
+    row("page", "Linear · Issues", { category: "page" }),
+    row("setting", "Linear sidebar layout", { category: "setting" }),
+    row("pinned", "Linear", { category: "bookmark", sidebar: true }),
+  ]);
+  expect(search("linear")[0]?.id).toBe("pinned");
+  // The same match: the chat a sidebar keeps comes before an archived one.
+  const chats = createPaletteIndex([
+    row("archived", "Release checklist", { category: "resource" }),
+    row("chat", "Release notes", { category: "resource", sidebar: true }),
+  ]);
+  expect(chats("release").map((item) => item.id)).toEqual(["chat", "archived"]);
 });
 
 it("lets a much better match or heavy use lift a page", () => {

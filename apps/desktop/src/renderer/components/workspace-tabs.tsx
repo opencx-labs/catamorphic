@@ -203,6 +203,9 @@ function CloseButton({
  * Tab strip only — the host owns the surrounding top bar (drag region,
  * sidebar toggle) so tabs and window chrome share one row.
  */
+/** Where a tab's stretch of its group's eyebrow ends. */
+type EyebrowEnd = "bridge" | "chevron" | "tab";
+
 export interface TabGroup {
   /** The owning chat's tab key. */
   parentKey: string;
@@ -523,6 +526,9 @@ function TabStrip({
       .map((group) => [group.memberKeys.at(-1) as string, group]),
   );
 
+  // Tabs whose entrance has played. They drop its class, and the clip it
+  // needs while the width grows, so a group's eyebrow can sit above them.
+  const [entered, setEntered] = useState<ReadonlySet<string>>(() => new Set());
   const removeExited = (key: string) =>
     setRendered((previous) =>
       previous.filter((entry) => !(entry.exiting && tabKey(entry.tab) === key)),
@@ -538,6 +544,12 @@ function TabStrip({
     const keys: string[] = JSON.parse(exitingKeys);
     if (keys.length === 0) return;
     const exiting = new Set(keys);
+    // A tab that comes back plays its entrance again.
+    setEntered((previous) =>
+      keys.some((key) => previous.has(key))
+        ? new Set([...previous].filter((key) => !exiting.has(key)))
+        : previous,
+    );
     const timer = window.setTimeout(
       () =>
         setRendered((previous) =>
@@ -597,6 +609,25 @@ function TabStrip({
           !vertical && inPair && neighborInPair(rendered[index + 1]);
         const mergeLeft =
           !vertical && inPair && neighborInPair(rendered[index - 1]);
+        // A group wears one eyebrow across all its tabs: each tab draws its
+        // stretch of the line, bridging the gap to the next member (and the
+        // fold chevron after the last), so the run reads as one.
+        const sameGroup = (neighbor?: RenderedTab) =>
+          Boolean(
+            neighbor &&
+              !neighbor.exiting &&
+              neighbor.tab.groupId === tab.groupId,
+          );
+        const eyebrowEnd: EyebrowEnd =
+          closesGroup && onToggleGroup
+            ? "chevron"
+            : sameGroup(rendered[index + 1])
+              ? "bridge"
+              : "tab";
+        const eyebrow =
+          !vertical && !exiting && tab.groupId
+            ? { starts: !sameGroup(rendered[index - 1]), end: eyebrowEnd }
+            : undefined;
         return (
           <Fragment key={key}>
             <div
@@ -648,20 +679,21 @@ function TabStrip({
                 onDragStateChange?.(null);
               }}
               onAnimationEnd={(event) => {
+                if (event.target !== event.currentTarget) return;
                 if (
                   event.animationName === "tab-out" ||
                   event.animationName === "sidebar-tab-out"
                 )
                   removeExited(key);
+                if (event.animationName === "tab-in")
+                  setEntered((previous) =>
+                    previous.has(key) ? previous : new Set(previous).add(key),
+                  );
               }}
-              className={`group flex h-8 shrink-0 items-center border px-1 text-xs transition-[margin,border-radius,color,background-color,border-color] duration-150 ${vertical ? "min-w-0 rounded-lg" : "rounded-lg"} ${
+              className={`group relative flex h-8 shrink-0 items-center border px-1 text-xs transition-[margin,border-radius,color,background-color,border-color] duration-150 ${vertical ? "min-w-0 rounded-lg" : "rounded-lg"} ${
                 mergeRight ? "rounded-r-none border-r-0 " : ""
               }${mergeLeft ? "-ml-1 rounded-l-none border-l-0 " : ""}${
-                tab.groupId
-                  ? vertical
-                    ? "border-l-2 border-l-accent/40 "
-                    : "border-t-2 border-t-accent/40 "
-                  : ""
+                tab.groupId && vertical ? "border-l-2 border-l-accent/40 " : ""
               }${dragKey === key ? "opacity-50 " : ""}${
                 dropBeforeKey === key
                   ? vertical
@@ -675,7 +707,9 @@ function TabStrip({
                     : "animate-tab-out pointer-events-none"
                   : vertical
                     ? "animate-sidebar-tab-in"
-                    : "animate-tab-in"
+                    : entered.has(key)
+                      ? ""
+                      : "animate-tab-in"
               } ${
                 vertical
                   ? `${highlighted ? "border-accent" : active || secondary ? "border-border" : "border-transparent"} ${active ? "bg-bg-raised text-fg" : secondary ? "bg-bg-raised text-fg-muted" : "text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"}`
@@ -691,6 +725,30 @@ function TabStrip({
               }`}
               aria-hidden={exiting || undefined}
             >
+              {eyebrow && (
+                <span
+                  aria-hidden="true"
+                  data-tab-group-eyebrow={eyebrow.starts ? "start" : "rest"}
+                  className={`pointer-events-none absolute -top-[4px] h-0.5 bg-accent/50 ${
+                    eyebrow.starts
+                      ? "left-1.5 rounded-l-full"
+                      : mergeLeft
+                        ? "left-0"
+                        : "-left-px"
+                  } ${
+                    // Past this tab's border: gap-1 to the next member (none
+                    // across a merged split pair), or gap-1 and the size-6
+                    // fold chevron after the last.
+                    eyebrow.end === "bridge"
+                      ? mergeRight
+                        ? "right-0"
+                        : "-right-[5px]"
+                      : eyebrow.end === "chevron"
+                        ? "-right-[29px] rounded-r-full"
+                        : "right-1.5 rounded-r-full"
+                  }`}
+                />
+              )}
               <OpenResourceButton
                 type="button"
                 onOpen={(mode) => {

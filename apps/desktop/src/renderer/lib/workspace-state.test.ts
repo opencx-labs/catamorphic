@@ -116,3 +116,41 @@ it("closing and reopening a split pane restores its partner and resource identit
     "chat:restored": "right",
   });
 });
+
+it("keeps a browser tab's way back through close, reopen and persistence", () => {
+  const history = {
+    entries: [
+      { url: "https://example.com/one", title: "One" },
+      { url: "https://example.com/two", title: "Two" },
+    ],
+    index: 1,
+  };
+  const ws: Workspace = {
+    ...initial(),
+    browsers: [
+      {
+        localId: "b",
+        profileId: "p",
+        initialUrl: "https://example.com/one",
+        url: "https://example.com/two",
+        title: "Two",
+        faviconUrl: null,
+        history,
+      },
+    ],
+    activeTabKey: "browser:b",
+  };
+  expect(serializeWorkspace(ws).browsers[0]?.history).toEqual(history);
+  const closed = transitionWorkspace(ws, { type: "close", key: "browser:b" });
+  expect(closed.closedTabs.at(-1)).toMatchObject({ kind: "browser", history });
+  expect(serializeWorkspace(closed).closedTabs.at(-1)).toMatchObject({
+    history,
+  });
+  const reopened = transitionWorkspace(closed, {
+    type: "reopen",
+    localId: "again",
+  });
+  expect(
+    reopened.browsers.find((browser) => browser.localId === "again"),
+  ).toMatchObject({ url: "https://example.com/two", history });
+});

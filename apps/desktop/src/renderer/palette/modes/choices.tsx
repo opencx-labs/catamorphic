@@ -13,6 +13,7 @@ import { permissionModeLabel } from "../../../shared/agent-permissions.js";
 import { BUILTIN_PALETTE_TRIGGERS } from "../../../shared/palette.js";
 import {
   defaultModelLabel,
+  modelId,
   useAgentDefaultModel,
 } from "../../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../../lib/agent-effort.js";
@@ -375,7 +376,12 @@ export function useChoiceModes({
           label: focusedChat ? "Agent default" : defaultModelLabel(agent, null),
           detail:
             focusedChat && agent.model
-              ? agent.model
+              ? modelId(
+                  agent.model,
+                  harnessModels?.agentId === agent.id
+                    ? harnessModels.models
+                    : undefined,
+                )
               : harnessDefault.data?.model
                 ? defaultModelLabel(agent, harnessDefault.data.model)
                 : undefined,
@@ -418,7 +424,7 @@ export function useChoiceModes({
           icon: Cpu,
           label: model.name,
           // Aliases ("sonnet") show the versioned id they resolve to.
-          detail: model.resolvedId ?? model.id,
+          detail: modelId(model.id, supported),
           keywords: [],
           kind: "action",
           ...(model.id === current ? { current: true } : {}),

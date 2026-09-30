@@ -1,3 +1,4 @@
+import type { BrowserHistory } from "../../shared/browser-history.js";
 import { resolveWorkspaceLayout, type SplitView } from "./workspace-layout.js";
 import type { ChatDockEntry } from "./workspace-types.js";
 import { tabKey, type WorkspaceTab } from "./workspace-types.js";
@@ -16,6 +17,8 @@ export interface BrowserEntry {
   agentControlled?: boolean;
   /** Attached surface kept alive as a chip without occupying a tab. */
   background?: boolean;
+  /** Back and forward list, so a reopened or restored tab can go back. */
+  history?: BrowserHistory;
 }
 
 export interface TerminalEntry {
@@ -76,6 +79,7 @@ export type ClosedTab = (
       faviconUrl: string | null;
       profileId: string;
       chatLocalId?: string;
+      history?: BrowserHistory;
     }
   | {
       kind: "terminal";
@@ -194,6 +198,7 @@ export const serializeWorkspace = (ws: Workspace): Workspace => {
     faviconUrl: browser.faviconUrl,
     ...chatRef(browser.chatLocalId),
     ...(browser.background ? { background: true } : {}),
+    ...(browser.history ? { history: browser.history } : {}),
   }));
   const editors = ws.editors.map((editor) => ({
     localId: editor.localId,
@@ -536,6 +541,7 @@ function applyWorkspaceEvent(
                   faviconUrl: closing.faviconUrl,
                   profileId: closing.profileId,
                   chatLocalId: closing.chatLocalId,
+                  ...(closing.history ? { history: closing.history } : {}),
                   ...splitContext,
                 }
               : null,
@@ -708,6 +714,7 @@ function applyWorkspaceEvent(
             title: record.title,
             faviconUrl: record.faviconUrl,
             chatLocalId: record.chatLocalId,
+            ...(record.history ? { history: record.history } : {}),
           };
           key = browserTabKey(entry.localId);
           patch = { browsers: [...ws.browsers, entry] };

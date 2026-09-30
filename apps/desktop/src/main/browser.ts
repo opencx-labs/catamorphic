@@ -25,6 +25,11 @@ import type {
   BookmarkMove,
   BookmarkPlacement,
 } from "../shared/bookmark-target.js";
+import {
+  type BrowserHistory,
+  boundedBrowserHistory,
+  historyFromSource,
+} from "../shared/browser-history.js";
 import { browserImportRequestSchema } from "../shared/browser-import.js";
 import {
   type HistoryProject,
@@ -452,6 +457,8 @@ export function registerBrowserSupport(
     (event: Electron.Event, command: string) => void
   >();
 
+  let historyForNextGuest: BrowserHistory | null = null;
+  const historyForGuest = new WeakMap<WebContents, BrowserHistory>();
   const attachBrowserCommands = (
     _event: Electron.Event | null,
     window: BrowserWindow,
@@ -473,6 +480,7 @@ export function registerBrowserSupport(
       window.webContents.send("catamorphic:browser-navigate", {
         webContentsId: guestId,
         direction,
+        gesture: "button",
       });
     };
     appCommandListeners.set(window, listener);
@@ -497,8 +505,36 @@ export function registerBrowserSupport(
       window.webContents.send("catamorphic:browser-navigate", {
         webContentsId: guestId,
         direction,
+        gesture: "swipe",
       });
     };
+    // A reopened tab's webview carries its history as its source (see
+    // browserHistorySource). The guest must load nothing before the history
+    // goes in, since Chromium restores only into an empty guest: the source
+    // is cleared as it attaches, and the history goes to the guest created
+    // right after, in the same turn.
+    const takeHistory = (
+      _attach: Electron.Event,
+      _preferences: Electron.WebPreferences,
+      params: Record<string, string>,
+    ) => {
+      const history = historyFromSource(params.src ?? "");
+      if (history === undefined) return;
+      params.src = "";
+      historyForNextGuest = history;
+    };
+    const restoreHistory = (_attach: Electron.Event, guest: WebContents) => {
+      const history = historyForGuest.get(guest);
+      if (!history) return;
+      historyForGuest.delete(guest);
+      void guest.navigationHistory.restore(history).catch(() => {
+        // Restored or not, the tab shows its page.
+        const page = history.entries[history.index];
+        if (page && !guest.isDestroyed()) void guest.loadURL(page.url);
+      });
+    };
+    window.webContents.on("will-attach-webview", takeHistory);
+    window.webContents.on("did-attach-webview", restoreHistory);
     window.on("swipe", onSwipe);
     window.once("closed", () => {
       appCommandListeners.delete(window);
@@ -850,6 +886,8 @@ export function registerBrowserSupport(
   // bindings as the renderer, including Ctrl/Option combinations inside pages.
   app.on("web-contents-created", (_event, contents: WebContents) => {
     if (contents.getType() !== "webview") return;
+    if (historyForNextGuest) historyForGuest.set(contents, historyForNextGuest);
+    historyForNextGuest = null;
     // Pages that set no background render on white, as in Chrome. The
     // guest is otherwise transparent, which a tab share captures as black.
     // User-origin CSS: any rule of the page's own wins over it.
@@ -1992,6 +2030,32 @@ export function registerBrowserSupport(
         input.fieldId,
       );
       return true;
+    },
+  );
+  // A tab's back and forward list rides on its workspace entry, so a
+  // reopened or restored tab can go back. Only the window hosting a guest
+  // reads its history.
+  const hostedGuest = (host: WebContents, guestId: unknown) => {
+    if (typeof guestId !== "number") return null;
+    const guest = webContents.fromId(guestId);
+    return guest &&
+      !guest.isDestroyed() &&
+      guest.getType() === "webview" &&
+      guest.hostWebContents === host
+      ? guest
+      : null;
+  };
+  ipcMain.handle(
+    "catamorphic:browser-navigation-history",
+    (event, input: { guestId: number }) => {
+      const guest = hostedGuest(event.sender, input?.guestId);
+      if (!guest) return null;
+      return boundedBrowserHistory({
+        entries: guest.navigationHistory
+          .getAllEntries()
+          .map(({ url, title }) => ({ url, title })),
+        index: guest.navigationHistory.getActiveIndex(),
+      });
     },
   );
   ipcMain.handle(

@@ -594,10 +594,16 @@ function JumpToPreviousUserMessage({
 }
 
 /**
- * Content-position identity instead of message.id: when an optimistic user
- * message is replaced by its persisted twin, the id flips (uuid → db id) but
- * the rendered content is identical. A content-based key keeps the same DOM
- * node, so the settle is invisible instead of a remount (fade-in replay).
+ * User messages key by content position instead of message.id: when an
+ * optimistic user message is replaced by its persisted twin, the id flips
+ * (uuid → db id) but the rendered content is identical. A content-based key
+ * keeps the same DOM node, so the settle is invisible instead of a remount
+ * (fade-in replay).
+ *
+ * Everything else keys by id. Only the server writes those rows, and a
+ * running turn's row rewrites its content on every event (the activity
+ * line, then the note it becomes): a content key would remount it, and
+ * replay every step it holds, each time the agent does anything.
  *
  * The content is HASHED (cached per message object): using the raw text
  * as the React key made key comparison itself scale with transcript
@@ -619,9 +625,10 @@ function contentHash(message: ChatTimelineMessage): string {
 }
 
 /** One pass over the list; duplicate contents get occurrence suffixes. */
-function timelineKeys(messages: ChatTimelineMessage[]): string[] {
+export function timelineKeys(messages: ChatTimelineMessage[]): string[] {
   const seen = new Map<string, number>();
   return messages.map((message) => {
+    if (message.role !== "user") return `id:${message.id}`;
     const base = `${message.role}:${contentHash(message)}`;
     const occurrence = seen.get(base) ?? 0;
     seen.set(base, occurrence + 1);
@@ -983,6 +990,11 @@ function CopyMessageButton({ content }: { content: string }) {
 
 /** One row of a turn's expandable event log. */
 interface TurnStep {
+  /**
+   * Its message and place in that message's log: stays with the step when
+   * earlier work folds in above it, so its row is never relabeled.
+   */
+  key: string;
   kind: "command" | "file_edit" | "tool" | "subagent" | "background" | "note";
   /** A folded note's message id, so focus and deep links still find it. */
   messageId?: string;
@@ -1334,6 +1346,7 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
       // The agent's own words lead; the command itself is one click away.
       steps.push({
         ...timing,
+        key: `${message.id}:${index}`,
         kind: "command",
         label: description || `$ ${firstLine || "(command)"}`,
         mono: !description,
@@ -1351,6 +1364,7 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
       const path = typeof event.filePath === "string" ? event.filePath : "";
       steps.push({
         ...timing,
+        key: `${message.id}:${index}`,
         finished: true,
         kind: "file_edit",
         label: `Edited ${path || "a file"}`,
@@ -1365,6 +1379,7 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
       if (started) {
         steps.push({
           ...timing,
+          key: `${message.id}:${index}`,
           finished: true,
           kind: "background",
           label: started.description,
@@ -1377,6 +1392,7 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
       const pretty = toolStepLabel(toolName, event.toolInput);
       steps.push({
         ...timing,
+        key: `${message.id}:${index}`,
         kind: "tool",
         label: pretty.label,
         mono: pretty.mono,
@@ -1387,6 +1403,7 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
     } else if (event.type === "subagent" && event.status !== "ended") {
       steps.push({
         ...timing,
+        key: `${message.id}:${index}`,
         kind: "subagent",
         label: `Subagent: ${firstLine || "delegated work"}`,
       });
@@ -1622,6 +1639,7 @@ function noteStep(message: ChatTimelineMessage): TurnStep {
       .map((line) => plainLine(line.replace(/^[#>*\-\s]+/, "")))
       .find(Boolean) ?? "Note";
   return {
+    key: `${message.id}:note`,
     kind: "note",
     label: firstLine,
     messageId: message.id,
@@ -1666,6 +1684,15 @@ function TurnSteps({
   useEffect(() => {
     if (defaultExpanded) setChosen(true);
   }, [defaultExpanded]);
+  // The rows the list first shows are already there. A row that arrives
+  // later plays its own entrance while the rows already shown keep their
+  // nodes: a new step at the end, earlier work folding in above, or a
+  // background command that ended moving from the running rows into the
+  // list.
+  const shown = useRef(false);
+  useEffect(() => {
+    shown.current = true;
+  }, []);
   const expanded = chosen ?? live;
   if (steps.length === 0) return null;
   // A lone step is its own row. It keeps the list's structure, so a second
@@ -1714,6 +1741,7 @@ function TurnSteps({
             <StepRow
               key={step.background?.ref}
               step={step}
+              enter={shown.current}
               onFileClick={onFileClick}
             />
           ))}
@@ -1730,12 +1758,11 @@ function TurnSteps({
           <div
             className={`flex flex-col gap-0.5 border-l transition-[border-color,padding,margin] duration-200 ${lone ? "border-transparent pl-0" : "mt-1 border-border pl-2.5"}`}
           >
-            {folded.map((step, index) => (
+            {folded.map((step) => (
               <StepRow
-                // Steps are append-only within a message; index is stable.
-                // biome-ignore lint/suspicious/noArrayIndexKey: static list
-                key={index}
+                key={step.key}
                 step={step}
+                enter={shown.current}
                 iconUrl={
                   step.toolName ? resolveToolIcon?.(step.toolName) : undefined
                 }
@@ -1751,10 +1778,13 @@ function TurnSteps({
 
 function StepRow({
   step,
+  enter = false,
   iconUrl,
   onFileClick,
 }: {
   step: TurnStep;
+  /** Joined a list already on screen: plays its entrance once. */
+  enter?: boolean;
   iconUrl?: string;
   onFileClick?: (
     path: string,
@@ -1767,6 +1797,8 @@ function StepRow({
   ) => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Read once: a row that was already there never gains the entrance.
+  const [entering, setEntering] = useState(enter);
   const backgroundStates = useContext(BackgroundStates);
   const background = step.background
     ? backgroundStates.get(step.background.ref)
@@ -1784,94 +1816,104 @@ function StepRow({
       data-step-kind={step.kind}
       data-running={pulsing || undefined}
       data-file-path={step.filePath}
-      className={note ? "my-0.5" : undefined}
+      className={`${note ? "my-0.5" : ""} ${entering ? "animate-step-in" : ""}`}
       data-message-id={step.messageId}
+      onAnimationEnd={(event) => {
+        if (event.target === event.currentTarget) setEntering(false);
+      }}
     >
-      <button
-        type="button"
-        onClick={
-          opensFile
-            ? (event) =>
-                onFileClick?.(step.filePath as string, {
-                  metaKey: event.metaKey,
-                  ctrlKey: event.ctrlKey,
-                  shiftKey: event.shiftKey,
-                  altKey: event.altKey,
-                })
-            : expandable
-              ? () => setOpen((value) => !value)
-              : undefined
-        }
-        className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left ${
-          // A note is the agent talking, not a tool row: it reads as prose.
-          note ? "text-xs text-fg" : "text-[11px] text-fg-muted"
-        } ${
-          interactive
-            ? "cursor-pointer transition-colors duration-100 hover:bg-bg-inset hover:text-fg"
-            : "cursor-default"
-        }`}
-        aria-expanded={expandable ? open : undefined}
-      >
-        {iconUrl ? (
-          <img src={iconUrl} alt="" className="size-3.5 shrink-0 rounded-sm" />
-        ) : (
-          <Icon
-            className={`size-3.5 shrink-0 transition-colors duration-200 ${pulsing ? "animate-pulse text-accent" : "text-fg-faint"}`}
-          />
-        )}
-        {step.background ? (
-          <span className="flex min-w-0 flex-1 items-baseline gap-1.5 truncate">
-            <span
-              className={pulsing ? "animate-pulse text-fg" : undefined}
-              data-testid="chat-background-status"
-            >
-              {backgroundLabel(step.background.kind, background)}
-            </span>
-            <span className="truncate text-fg-faint">{step.label}</span>
-          </span>
-        ) : (
-          <span
-            className={`min-w-0 flex-1 truncate transition-colors duration-200 ${step.mono ? "font-mono" : ""} ${step.running ? "text-fg" : ""}`}
-          >
-            {step.label}
-          </span>
-        )}
-        <StepDuration step={step} />
-        {expandable && (
-          <ChevronRight
-            className={`size-3 shrink-0 text-fg-faint transition-transform duration-150 ${open ? "rotate-90" : ""}`}
-          />
-        )}
-      </button>
-      {/* Same grid-rows tween as the step list: payloads animate open and
-          closed instead of popping in and out. */}
-      {step.detail && (
-        <div
-          className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-            open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+      {/* One child: the entrance grows this box from nothing. */}
+      <div>
+        <button
+          type="button"
+          onClick={
+            opensFile
+              ? (event) =>
+                  onFileClick?.(step.filePath as string, {
+                    metaKey: event.metaKey,
+                    ctrlKey: event.ctrlKey,
+                    shiftKey: event.shiftKey,
+                    altKey: event.altKey,
+                  })
+              : expandable
+                ? () => setOpen((value) => !value)
+                : undefined
+          }
+          className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left ${
+            // A note is the agent talking, not a tool row: it reads as prose.
+            note ? "text-xs text-fg" : "text-[11px] text-fg-muted"
+          } ${
+            interactive
+              ? "cursor-pointer transition-colors duration-100 hover:bg-bg-inset hover:text-fg"
+              : "cursor-default"
           }`}
+          aria-expanded={expandable ? open : undefined}
         >
-          <div className="overflow-hidden" inert={!open}>
-            {step.markdown ? (
-              <div
-                className="cat-markdown mb-1 ml-6 mt-0.5 min-w-0 select-text break-words text-xs leading-5 text-fg-muted"
-                data-testid="chat-step-detail"
+          {iconUrl ? (
+            <img
+              src={iconUrl}
+              alt=""
+              className="size-3.5 shrink-0 rounded-sm"
+            />
+          ) : (
+            <Icon
+              className={`size-3.5 shrink-0 transition-colors duration-200 ${pulsing ? "animate-pulse text-accent" : "text-fg-faint"}`}
+            />
+          )}
+          {step.background ? (
+            <span className="flex min-w-0 flex-1 items-baseline gap-1.5 truncate">
+              <span
+                className={pulsing ? "animate-pulse text-fg" : undefined}
+                data-testid="chat-background-status"
               >
-                <Markdown remarkPlugins={REMARK_PLUGINS}>
+                {backgroundLabel(step.background.kind, background)}
+              </span>
+              <span className="truncate text-fg-faint">{step.label}</span>
+            </span>
+          ) : (
+            <span
+              className={`min-w-0 flex-1 truncate transition-colors duration-200 ${step.mono ? "font-mono" : ""} ${step.running ? "text-fg" : ""}`}
+            >
+              {step.label}
+            </span>
+          )}
+          <StepDuration step={step} />
+          {expandable && (
+            <ChevronRight
+              className={`size-3 shrink-0 text-fg-faint transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+            />
+          )}
+        </button>
+        {/* Same grid-rows tween as the step list: payloads animate open and
+          closed instead of popping in and out. */}
+        {step.detail && (
+          <div
+            className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+              open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+            }`}
+          >
+            <div className="overflow-hidden" inert={!open}>
+              {step.markdown ? (
+                <div
+                  className="cat-markdown mb-1 ml-6 mt-0.5 min-w-0 select-text break-words text-xs leading-5 text-fg-muted"
+                  data-testid="chat-step-detail"
+                >
+                  <Markdown remarkPlugins={REMARK_PLUGINS}>
+                    {step.detail}
+                  </Markdown>
+                </div>
+              ) : (
+                <pre
+                  className={`mb-1 ml-6 mt-0.5 max-h-56 select-text overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 text-[11px] leading-4 text-fg-muted ${step.detailMono ? "font-mono" : "font-sans"}`}
+                  data-testid="chat-step-detail"
+                >
                   {step.detail}
-                </Markdown>
-              </div>
-            ) : (
-              <pre
-                className={`mb-1 ml-6 mt-0.5 max-h-56 select-text overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 text-[11px] leading-4 text-fg-muted ${step.detailMono ? "font-mono" : "font-sans"}`}
-                data-testid="chat-step-detail"
-              >
-                {step.detail}
-              </pre>
-            )}
+                </pre>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
