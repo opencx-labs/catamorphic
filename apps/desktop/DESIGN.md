@@ -437,6 +437,11 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   transition height and position, so a section that loads after the popover
   opens expands it smoothly. A popover that shifts its layout on load is a
   defect.
+- **Pointer and focus hold an inspector independently.** A hover inspector
+  stays open while the pointer or keyboard focus rests on its trigger or its
+  panel, so the pointer passing over and away never closes what focus holds.
+  Focus from a click, or returning to the trigger after Escape, leaves the
+  inspector to the pointer.
 - **Primitives, not presets.** Anything a built-in section can do, a `workspace.js`
   section can do with the same fields: `empty`, `headerActions`, `itemDefaults`,
   `itemOverrides`, `height`, `rowHeight`, and a source that exports `load`,
