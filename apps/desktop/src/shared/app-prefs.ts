@@ -13,6 +13,12 @@ export const CODE_THEMES = [
 ] as const;
 export type CodeTheme = (typeof CODE_THEMES)[number];
 
+/** How long a browser tab is out of sight before it sleeps (ADR 0194). */
+export const BROWSER_TAB_SLEEP = ["15m", "30m", "1h", "2h", "never"] as const;
+export type BrowserTabSleep = (typeof BROWSER_TAB_SLEEP)[number];
+export const BROWSER_TAB_SLEEP_MINUTES: Record<BrowserTabSleep, number | null> =
+  { "15m": 15, "30m": 30, "1h": 60, "2h": 120, never: null };
+
 /**
  * Per-profile app preferences, stored as plain JSON at
  * `profiles/<id>/prefs.json` — same philosophy as keybindings.json: user-
@@ -57,6 +63,8 @@ export interface AppPrefs {
   pinnedBookmarks: "tiles" | "list";
   linkOpenMode: "tab" | "floating";
   previewLinksWithAlt: boolean;
+  /** How long a browser tab stays out of sight before it sleeps. */
+  browserTabSleep: BrowserTabSleep;
   terminalMacros: TerminalMacro[];
   terminalAppearance: "app" | "ghostty";
   codeTheme: CodeTheme;
@@ -100,6 +108,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   pinnedBookmarks: "tiles",
   linkOpenMode: "tab",
   previewLinksWithAlt: true,
+  browserTabSleep: "1h",
   terminalMacros: [],
   terminalAppearance: "app",
   codeTheme: "github",
@@ -199,6 +208,9 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       typeof record.previewLinksWithAlt === "boolean"
         ? record.previewLinksWithAlt
         : true,
+    browserTabSleep:
+      BROWSER_TAB_SLEEP.find((value) => value === record.browserTabSleep) ??
+      DEFAULT_PREFS.browserTabSleep,
     terminalMacros: normalizeTerminalMacros(record.terminalMacros),
     ...(typeof record.lastProjectId === "string"
       ? { lastProjectId: record.lastProjectId }

@@ -24,7 +24,10 @@ import type {
   BookmarkMove,
   BookmarkPlacement,
 } from "../shared/bookmark-target.js";
-import type { BrowserHistory } from "../shared/browser-history.js";
+import type {
+  BrowserHistory,
+  BrowserSleepBlocker,
+} from "../shared/browser-history.js";
 import type { DefaultBrowserState } from "../shared/default-browser.js";
 import type {
   ChatDraft,
@@ -795,6 +798,16 @@ const api = {
     guestId: number;
   }): Promise<BrowserHistory | null> =>
     invoke("catamorphic:browser-navigation-history", input),
+  browserSleepBlocker: (input: {
+    guestId: number;
+  }): Promise<BrowserSleepBlocker | null> =>
+    invoke("catamorphic:browser-sleep-blocker", input),
+  browserSleep: (input: { guestId: number }): Promise<string | null> =>
+    invoke("catamorphic:browser-sleep", input),
+  browserSleepMinute: (): Promise<number> =>
+    invoke("catamorphic:browser-sleep-minute"),
+  browserSleepRelease: (input: { snapshotId: string }): Promise<void> =>
+    invoke("catamorphic:browser-sleep-release", input),
   browserRecordHistory: (input: unknown): Promise<void> =>
     invoke("catamorphic:browser-history-record", input),
   browserRetitleHistory: (input: {

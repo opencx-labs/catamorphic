@@ -26,6 +26,31 @@ an overnight leak is fixed from a brief flat trace. Keep long runs outside the
 normal merge gate. `e2e/runtime-idle.e2e.ts` remains the fast lifecycle regression
 suite for hidden loops, browser visibility and guest cleanup.
 
+## Web page loading and sleeping tabs
+
+ADR 0194 records the measurements. Three rules keep pages loading as they
+do in Chrome:
+
+- **Keep requests off the main process.** An Electron `webRequest`
+  listener runs every request it matches through the main event loop,
+  which the embedded server shares; a busy main thread then delays the
+  page. Filter listeners by resource type (`types`), which Chromium applies
+  before the hop. A URL filter does not avoid it. The `Sec-CH-UA` rewrite
+  matches documents and fetch/XHR only.
+- **No global V8 flags.** `js-flags` set at runtime reach every renderer,
+  including every web page, and not the main process.
+- **Unused tabs sleep.** `renderer/lib/tab-sleep.ts` unloads browser tabs
+  out of sight for the profile's `browserTabSleep` time and mounts a
+  restored workspace's hidden tabs asleep; `main/browser-sleep.ts` keeps
+  their page state and decides what keeps a page awake. Test runs shorten
+  the minute with `CATAMORPHIC_E2E_TAB_SLEEP_MINUTE_MS`
+  (`e2e/browser-sleep.e2e.ts`).
+
+To compare page loads, serve a page with many subresources from a local
+server with fixed latency and load it in a plain Electron window with and
+without the change, cold (a new partition) and warm, while blocking the
+main thread on a schedule. Internet sites vary too much between runs.
+
 ## Layout transitions over heavy content
 
 A sidebar opening or closing, or the workspace frame insetting, changes the

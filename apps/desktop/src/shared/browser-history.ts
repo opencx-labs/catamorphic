@@ -89,3 +89,44 @@ export function historyFromSource(
     return null;
   }
 }
+
+/**
+ * A sleeping tab's webview wakes from the page state main kept when it
+ * slept (scroll position and form values, as Chrome restores a discarded
+ * tab). The fallback, a URL or a history source, loads instead when main
+ * no longer holds that state.
+ */
+const WAKE_SOURCE = "work-wake:";
+
+export const browserWakeSource = (snapshotId: string, fallback: string) =>
+  `${WAKE_SOURCE}${snapshotId}#${encodeURIComponent(fallback)}`;
+
+/** The snapshot and fallback a wake source names; undefined otherwise. */
+export function wakeFromSource(
+  source: string,
+): { snapshotId: string; fallback: string } | undefined {
+  if (!source.startsWith(WAKE_SOURCE)) return undefined;
+  const hash = source.indexOf("#");
+  if (hash < 0) return undefined;
+  try {
+    return {
+      snapshotId: source.slice(WAKE_SOURCE.length, hash),
+      fallback: decodeURIComponent(source.slice(hash + 1)),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * What keeps a hidden tab's page awake: sound playing or just played, the
+ * camera, microphone or a screen share in use, the page being shown
+ * elsewhere (a tab share), its DevTools open, or text typed into a field
+ * and not yet sent.
+ */
+export type BrowserSleepBlocker =
+  | "audio"
+  | "media"
+  | "shared"
+  | "devtools"
+  | "typing";

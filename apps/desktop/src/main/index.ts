@@ -81,17 +81,6 @@ if (
   app.commandLine.appendSwitch("use-mock-keychain");
 }
 
-// macOS 26.x + Apple Silicon: V8's background compiler threads race the
-// OS's MAP_JIT write-protection and SIGTRAP in ThreadIsolation::
-// RegisterInstructionStreamAllocation (electron/electron#51351 family).
-// Keep JIT compilation on the main thread until Electron ships a fix.
-if (process.platform === "darwin") {
-  app.commandLine.appendSwitch(
-    "js-flags",
-    "--no-concurrent-sparkplug --no-concurrent-recompilation",
-  );
-}
-
 // A window driven over the debugging port (dev runs, films, e2e) keeps
 // rendering while another window covers it. Chromium otherwise pauses an
 // occluded window's compositor: screencast frames stop, the browser

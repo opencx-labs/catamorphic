@@ -485,6 +485,23 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-01: Pages load like Chrome's; unused tabs sleep
+
+Pages loaded slower than in Chrome, and Meet sometimes showed its icon
+names ("mic", "videocam") in place of icons. The caches worked; the app was
+in the way. The Chrome-brand header rewrite put every request through the
+main process, which the embedded server keeps busy, and a JIT workaround
+slowed JavaScript in every page. The rewrite now covers documents and
+fetch requests only, and the workaround is gone (ADR 0194).
+
+Browser tabs out of sight for an hour (Settings > Workspace > Browser:
+15 minutes to 2 hours, or never) sleep, as with Chrome's Memory Saver. The
+page unloads and comes back where it was, scroll position and form values
+included. Sound, the camera or microphone, a tab share, unsent typed text
+and agent work keep a page awake. A sleeping tab's icon fades behind a
+dashed ring in the tab strip and the sidebar, and its hover card says it is
+asleep. A reopened workspace loads only the tabs on screen.
+
 ### 2026-09-30: On Linux the detached dock takes the shape of what it draws
 
 Electron forwards pointer moves to a click-through window only on macOS and

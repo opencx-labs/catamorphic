@@ -16,7 +16,10 @@ import type {
   BookmarkMove,
   BookmarkPlacement,
 } from "../../shared/bookmark-target.js";
-import type { BrowserHistory } from "../../shared/browser-history.js";
+import type {
+  BrowserHistory,
+  BrowserSleepBlocker,
+} from "../../shared/browser-history.js";
 import type {
   BrowserImportRequest,
   BrowserImportResult,
@@ -1413,6 +1416,16 @@ export interface CatamorphicDesktopApi {
   browserNavigationHistory: (input: {
     guestId: number;
   }) => Promise<BrowserHistory | null>;
+  /** What keeps a hidden tab's page awake, or null when it may sleep. */
+  browserSleepBlocker: (input: {
+    guestId: number;
+  }) => Promise<BrowserSleepBlocker | null>;
+  /** Keeps the page's state for its wake; the snapshot id, if any. */
+  browserSleep: (input: { guestId: number }) => Promise<string | null>;
+  /** A minute of tab-sleep time in ms (shortened only in test runs). */
+  browserSleepMinute: () => Promise<number>;
+  /** Drops a sleep snapshot the tab will not wake into. */
+  browserSleepRelease: (input: { snapshotId: string }) => Promise<void>;
   browserRecordHistory: (input: {
     url: string;
     title: string;

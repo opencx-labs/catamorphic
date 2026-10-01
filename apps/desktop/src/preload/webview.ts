@@ -1080,3 +1080,90 @@ window.addEventListener("keydown", (event) => {
   event.preventDefault();
   ipcRenderer.sendToHost("catamorphic:dismiss-floating");
 });
+
+/**
+ * Sleeping tabs (ADR 0194): text typed into a field and not yet sent keeps
+ * the page awake, as in Chrome. A field's text is remembered as it was
+ * before the person first typed into it (React and similar libraries keep
+ * `defaultValue` equal to the current value, so it cannot tell); main's
+ * probe asks whether any field holds other text now. Sending its form,
+ * emptying a composer or removing the field ends that. Search boxes do not
+ * count: a query stays in the box after it ran.
+ */
+type TypedField = HTMLInputElement | HTMLTextAreaElement | HTMLElement;
+const typedFields = new Set<WeakRef<TypedField>>();
+let typedFrom = new WeakMap<TypedField, string>();
+const TEXT_INPUT_TYPES = new Set([
+  "text",
+  "email",
+  "url",
+  "tel",
+  "password",
+  "number",
+]);
+const SEARCH_ROLES = new Set(["searchbox", "combobox"]);
+const fieldText = (field: TypedField) =>
+  field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement
+    ? field.value
+    : (field.textContent ?? "");
+const typedField = (target: EventTarget | undefined): TypedField | null => {
+  if (target instanceof HTMLTextAreaElement) return target;
+  if (target instanceof HTMLInputElement)
+    return TEXT_INPUT_TYPES.has(target.type) &&
+      !SEARCH_ROLES.has(target.getAttribute("role") ?? "")
+      ? target
+      : null;
+  return target instanceof HTMLElement && target.isContentEditable
+    ? target
+    : null;
+};
+window.addEventListener(
+  "beforeinput",
+  (event) => {
+    if (!event.isTrusted) return;
+    const field = typedField(event.composedPath()[0]);
+    if (!field || typedFrom.has(field)) return;
+    typedFrom.set(field, fieldText(field));
+    typedFields.add(new WeakRef(field));
+  },
+  true,
+);
+window.addEventListener(
+  "submit",
+  (event) => {
+    const form = event.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    for (const ref of typedFields) {
+      const field = ref.deref();
+      if (field && form.contains(field)) {
+        typedFields.delete(ref);
+        typedFrom.delete(field);
+      }
+    }
+  },
+  true,
+);
+// A new document in the same page (history navigation keeps the preload).
+window.addEventListener("pagehide", () => {
+  typedFields.clear();
+  typedFrom = new WeakMap();
+});
+const holdsTypedText = (): boolean => {
+  for (const ref of typedFields) {
+    const field = ref.deref();
+    if (!field?.isConnected) {
+      typedFields.delete(ref);
+      if (field) typedFrom.delete(field);
+      continue;
+    }
+    const text = fieldText(field);
+    if (text.trim() !== "" && text !== typedFrom.get(field)) return true;
+  }
+  return false;
+};
+ipcRenderer.on("catamorphic:browser-sleep-probe", (_event, probe: unknown) => {
+  ipcRenderer.send("catamorphic:browser-sleep-probe", {
+    probe,
+    typing: holdsTypedText(),
+  });
+});
