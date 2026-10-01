@@ -13,6 +13,9 @@ import { themeStyle, useTheme } from "../lib/theme.js";
 
 export const RESOURCE_INSPECTOR_DELAY_MS = 400;
 const CLOSE_GRACE_MS = 120;
+
+type InspectorInput = "pointer" | "focus";
+type InspectorHold = `${"trigger" | "panel"}-${InspectorInput}`;
 const VIEWPORT_MARGIN = 8;
 const GAP = 8;
 
@@ -130,8 +133,10 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
-  const triggerInterested = useRef(false);
-  const panelInterested = useRef(false);
+  // What holds the inspector open. The pointer and keyboard focus hold it
+  // independently, on the trigger and on the panel: the pointer leaving must
+  // not close what focus holds, nor focus leaving what the pointer holds.
+  const holds = useRef(new Set<InspectorHold>());
   const pointerFocus = useRef(false);
   const pinned = useRef(false);
   const dragging = useRef(false);
@@ -170,8 +175,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
       clearTimeout(openTimer.current);
       clearTimeout(closeTimer.current);
       pinned.current = false;
-      triggerInterested.current = false;
-      panelInterested.current = false;
+      holds.current.clear();
       setOpen(false);
       setMounted(false);
     };
@@ -197,12 +201,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
     clearTimeout(openTimer.current);
     clearTimeout(closeTimer.current);
     closeTimer.current = setTimeout(() => {
-      if (
-        !pinned.current &&
-        !triggerInterested.current &&
-        !panelInterested.current
-      )
-        setOpen(false);
+      if (!pinned.current && holds.current.size === 0) setOpen(false);
     }, CLOSE_GRACE_MS);
   };
 
@@ -213,8 +212,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
       event.preventDefault();
       event.stopPropagation();
       pinned.current = false;
-      triggerInterested.current = false;
-      panelInterested.current = false;
+      holds.current.clear();
       setOpen(false);
       pointerFocus.current = true;
       triggerRef.current?.focus();
@@ -243,8 +241,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
         return;
       }
       pinned.current = false;
-      triggerInterested.current = false;
-      panelInterested.current = false;
+      holds.current.clear();
       setOpen(false);
     };
     const dismissForPointer = (event: PointerEvent) => {
@@ -257,8 +254,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
         return;
       }
       pinned.current = false;
-      triggerInterested.current = false;
-      panelInterested.current = false;
+      holds.current.clear();
       setOpen(false);
     };
     window.addEventListener("keydown", dismiss, true);
@@ -290,16 +286,18 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
       {children({
         ref: triggerRef,
         onPointerEnter: () => {
-          triggerInterested.current = true;
+          holds.current.add("trigger-pointer");
           scheduleOpen();
         },
         onPointerLeave: () => {
-          triggerInterested.current = false;
+          holds.current.delete("trigger-pointer");
           scheduleClose();
         },
         onPointerDown: () => {
+          // The focus a press causes lands later in this same input task,
+          // after any microtask, so the mark lasts until the next task.
           pointerFocus.current = true;
-          queueMicrotask(() => {
+          setTimeout(() => {
             pointerFocus.current = false;
           });
         },
@@ -315,8 +313,11 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
           else setOpen(false);
         },
         onFocus: () => {
-          triggerInterested.current = true;
-          if (!pointerFocus.current) scheduleOpen(true);
+          // Focus from a click or from Escape returning to the trigger leaves
+          // the preview to the pointer.
+          if (pointerFocus.current) return;
+          holds.current.add("trigger-focus");
+          scheduleOpen(true);
         },
         onBlur: (event) => {
           if (
@@ -324,7 +325,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
             triggerRef.current?.contains(event.relatedTarget)
           )
             return;
-          triggerInterested.current = false;
+          holds.current.delete("trigger-focus");
           scheduleClose();
         },
         "aria-details": open ? id : undefined,
@@ -337,12 +338,12 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
           anchor={anchor}
           placement={placement}
           open={open}
-          onEnter={() => {
-            panelInterested.current = true;
+          onEnter={(input) => {
+            holds.current.add(`panel-${input}`);
             clearTimeout(closeTimer.current);
           }}
-          onLeave={() => {
-            panelInterested.current = false;
+          onLeave={(input) => {
+            holds.current.delete(`panel-${input}`);
             scheduleClose();
           }}
           onExited={() => setMounted(false)}
@@ -352,8 +353,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
                 clearTimeout(openTimer.current);
                 clearTimeout(closeTimer.current);
                 pinned.current = false;
-                triggerInterested.current = false;
-                panelInterested.current = false;
+                holds.current.clear();
                 setOpen(false);
               })
             : content}
@@ -381,8 +381,9 @@ export function InspectorPortal({
   anchor: InspectorAnchor;
   placement?: "side" | "above";
   open: boolean;
-  onEnter: () => void;
-  onLeave: () => void;
+  /** The pointer or focus entered the panel. */
+  onEnter: (input: InspectorInput) => void;
+  onLeave: (input: InspectorInput) => void;
   onExited: () => void;
   children: ReactNode;
 }) {
@@ -489,9 +490,9 @@ export function InspectorPortal({
         height: height ?? undefined,
       }}
       data-settled={settled || undefined}
-      onPointerEnter={onEnter}
-      onPointerLeave={onLeave}
-      onFocusCapture={onEnter}
+      onPointerEnter={() => onEnter("pointer")}
+      onPointerLeave={() => onLeave("pointer")}
+      onFocusCapture={() => onEnter("focus")}
       onBlurCapture={(event) => {
         if (
           event.relatedTarget instanceof Node &&
@@ -499,7 +500,7 @@ export function InspectorPortal({
         ) {
           return;
         }
-        onLeave();
+        onLeave("focus");
       }}
       onAnimationEnd={(event) => {
         if (
