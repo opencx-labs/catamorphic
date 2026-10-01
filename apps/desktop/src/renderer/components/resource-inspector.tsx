@@ -314,8 +314,8 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
         },
         onFocus: () => {
           // Focus from a click or from Escape returning to the trigger leaves
-          // the preview to the pointer.
-          if (pointerFocus.current) return;
+          // the preview to the pointer, and a disabled inspector ignores focus.
+          if (pointerFocus.current || disabled) return;
           holds.current.add("trigger-focus");
           scheduleOpen(true);
         },

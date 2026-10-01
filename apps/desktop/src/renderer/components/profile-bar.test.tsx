@@ -76,4 +76,48 @@ describe("ProfileBar", () => {
     ).not.toBeNull();
     expect(container.querySelector('svg[class*="text-accent"]')).not.toBeNull();
   });
+
+  it("previews the active profile on focus, and gives way to its menu", async () => {
+    await act(async () => {
+      root.render(
+        <ProfileBar
+          data={{
+            defaultProfileId: "profile-1",
+            profiles: [
+              {
+                id: "profile-1",
+                name: "Default Profile",
+                color: "#8b5cf6",
+                projectIds: ["project-1"],
+                defaultProjectId: "project-1",
+              },
+            ],
+          }}
+          projects={projects}
+          activeProfileId="profile-1"
+          onSwitch={() => undefined}
+          onOpenSettings={() => undefined}
+        />,
+      );
+    });
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[aria-label^="Switch profile"]',
+    );
+    const preview = () =>
+      document.querySelector(
+        '[aria-label="Default Profile profile details"][data-open="true"]',
+      );
+    await act(async () => trigger?.focus());
+    expect(preview()).not.toBeNull();
+    expect(trigger?.getAttribute("aria-details")).toBe(preview()?.id);
+
+    await act(async () => trigger?.click());
+    expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+    expect(preview()).toBeNull();
+    await act(async () => {
+      trigger?.blur();
+      trigger?.focus();
+    });
+    expect(preview()).toBeNull();
+  });
 });
