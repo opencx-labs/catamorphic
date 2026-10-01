@@ -261,7 +261,8 @@ export interface WindowProfileRegistry {
   profileFor(sender: WebContents): string;
   windowsFor(profileId: string): BrowserWindow[];
   assign(sender: WebContents, profileId: string): void;
-  openWindow(profileId: string): void;
+  /** Brings up the profile's window, on `projectId` when given. */
+  openWindow(profileId: string, projectId?: string): void;
 }
 
 const windows: WindowProfileRegistry = {
@@ -291,7 +292,9 @@ const windows: WindowProfileRegistry = {
     );
     applyMenuForFocusedWindow();
   },
-  openWindow(profileId) {
+  openWindow(profileId, projectId) {
+    if (projectId && desktopWorkspaces?.openProject(profileId, projectId))
+      return;
     if (desktopWorkspaces?.activateProfile(profileId)) return;
     const window = createWindow(profileId);
     window.focus();

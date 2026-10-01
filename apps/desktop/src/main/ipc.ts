@@ -47,6 +47,7 @@ import {
   prCommentInputSchema,
   prDecisionInputSchema,
 } from "../shared/pr-details.js";
+import type { ProfileSummary } from "../shared/profile-summary.js";
 import { writesProgram } from "../shared/project-experience.js";
 import type { SettingsPatch, SettingsScope } from "../shared/settings.js";
 import type { UsageSummary, UsageWindowDays } from "../shared/usage.js";
@@ -455,11 +456,12 @@ export function registerIpcHandlers(
     },
   );
 
-  // Occupied workspace: the profile opens in its own window instead.
+  // Occupied workspace: the profile opens in its own window instead, on
+  // the given project when there is one.
   ipcMain.handle(
     "catamorphic:open-profile-window",
-    (_event, profileId: string) => {
-      windows.openWindow(profileId);
+    (_event, profileId: string, projectId?: string) => {
+      windows.openWindow(profileId, projectId);
     },
   );
 
@@ -916,6 +918,14 @@ export function registerIpcHandlers(
 
   ipcMain.handle("catamorphic:connections-list", (event) =>
     storesFor(event).connections.list().map(toPublicConnection),
+  );
+
+  // What sets a profile apart, for its preview card: read for any profile,
+  // not only the calling window's (ProfileConfigManager.summary).
+  ipcMain.handle(
+    "catamorphic:profile-summary",
+    (_event, profileId: string): ProfileSummary =>
+      profileConfig.summary(profileId),
   );
 
   ipcMain.handle(

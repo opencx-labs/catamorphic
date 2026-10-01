@@ -171,6 +171,23 @@ export class ConnectionsStore {
     this.migratePlaintext();
   }
 
+  /**
+   * Connection names from a profile's file, without decrypting, migrating
+   * or watching it: a preview card reads profiles that are not open.
+   */
+  static names(file: string): string[] {
+    try {
+      const raw: { connections?: { name?: unknown }[] } = JSON.parse(
+        fs.readFileSync(file, "utf-8"),
+      );
+      return (raw.connections ?? []).flatMap((connection) =>
+        typeof connection.name === "string" ? [connection.name] : [],
+      );
+    } catch {
+      return [];
+    }
+  }
+
   private load(): ConnectionsFile {
     try {
       const raw = JSON.parse(fs.readFileSync(this.file, "utf-8"));

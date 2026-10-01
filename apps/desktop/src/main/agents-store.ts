@@ -287,6 +287,21 @@ export class AgentsStore {
     return this.data.agents.map((agent) => this.decrypt(agent));
   }
 
+  /** The default agent's name and harness, without decrypting its key. */
+  defaultAgent():
+    | Pick<AgentConfig, "name" | "harness" | "provider">
+    | undefined {
+    const id = this.defaultAgentId();
+    const agent = this.data.agents.find((candidate) => candidate.id === id);
+    return agent
+      ? {
+          name: agent.name,
+          harness: agent.harness,
+          ...(agent.provider ? { provider: agent.provider } : {}),
+        }
+      : undefined;
+  }
+
   get(id: string): AgentConfig | undefined {
     const stored = this.data.agents.find((agent) => agent.id === id);
     return stored ? this.decrypt(stored) : undefined;

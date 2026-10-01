@@ -347,3 +347,56 @@ it("opens a different project in its own window without moving the original work
     other.close();
   }
 });
+
+it("opens another profile's project in that profile's window from its preview card", async () => {
+  const profile = await app.eval<{ id: string }>(
+    "window.catamorphicDesktop.profilesCreate('Elsewhere')",
+  );
+  const elsewhere = await app.eval<{ id: string }>(
+    `window.catamorphicDesktop.createProject(${JSON.stringify({ name: "Elsewhere project", rootPath: path.join(app.userDataDir, "elsewhere") })})`,
+  );
+  await app.eval(
+    `window.catamorphicDesktop.profilesClaimProject(${JSON.stringify(profile.id)}, ${JSON.stringify(elsewhere.id)})`,
+  );
+  // Projects made through IPC reach this window's list on its next load.
+  await app.eval("location.reload()");
+  await app.waitFor(
+    `!!document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime`,
+  );
+  const ownProject = await activeProject();
+  const trigger = `document.querySelector('[aria-label^="Switch profile"]')`;
+  await app.waitFor(`!!${trigger}`);
+  const ownLabel = await app.eval<string>(
+    `${trigger}.getAttribute('aria-label')`,
+  );
+  // Open the menu, then the card of the other profile's row.
+  await app.eval(`${trigger}.click()`);
+  await app.waitFor(`${trigger}.getAttribute('aria-expanded') === 'true'`);
+  await app.eval(
+    `[...document.querySelectorAll('button')].find(button => button.textContent.trim().endsWith('Elsewhere') && !button.getAttribute('aria-label')).dispatchEvent(new PointerEvent('pointerover', { bubbles: true, relatedTarget: document.body }))`,
+  );
+  const card = `document.querySelector('[data-resource-inspector][data-open="true"] [data-testid="profile-inspector"]')`;
+  // The card reads the other profile's summary without switching to it.
+  await app.waitFor(
+    `${card}?.textContent.includes('Elsewhere project') && !${card}.querySelector('.animate-pulse')`,
+  );
+  await app.eval(
+    `[...${card}.querySelectorAll('li button')].find(button => button.textContent.includes('Elsewhere project')).click()`,
+  );
+  const other = await app.connectToFrame(`project=${elsewhere.id}`);
+  try {
+    await other.waitFor(
+      `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(elsewhere.id)}`,
+    );
+    await other.waitFor(
+      `!!document.querySelector('[aria-label="Switch profile: Elsewhere"]')`,
+    );
+    // The original window keeps its profile and its project.
+    expect(await activeProject()).toBe(ownProject);
+    expect(await app.eval(`${trigger}.getAttribute('aria-label')`)).toBe(
+      ownLabel,
+    );
+  } finally {
+    other.close();
+  }
+});

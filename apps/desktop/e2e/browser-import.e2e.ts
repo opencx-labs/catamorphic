@@ -242,8 +242,9 @@ describe("shared browser import and personal history", () => {
       "window.catamorphicDesktop.profilesCreate('Fresh import profile')",
     );
     await click('[aria-label="Switch profile: Default Profile"]');
+    // A menu row reads as its avatar's initial, then the profile's name.
     await app.eval(
-      `[...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Fresh import profile' && !button.getAttribute('aria-label')).click()`,
+      `[...document.querySelectorAll('button')].find(button => button.textContent.trim().endsWith('Fresh import profile') && !button.getAttribute('aria-label')).click()`,
     );
     await app.waitFor(
       `!!document.querySelector('[aria-label="Switch profile: Fresh import profile"]')`,
@@ -266,7 +267,7 @@ describe("shared browser import and personal history", () => {
     );
     await click('[aria-label="Switch profile: Fresh import profile"]');
     await app.eval(
-      `[...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Default Profile' && !button.getAttribute('aria-label')).click()`,
+      `[...document.querySelectorAll('button')].find(button => button.textContent.trim().endsWith('Default Profile') && !button.getAttribute('aria-label')).click()`,
     );
     await app.waitFor(
       `document.querySelector('[data-testid="onboarding-browser-import"]')?.dataset.actionState === 'done'`,

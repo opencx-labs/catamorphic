@@ -358,7 +358,7 @@ describe("tabbed sidebars", () => {
       `document.querySelector('[aria-label="Switch profile: Empty profile"]').click()`,
     );
     await app.eval(
-      `Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Default Profile' && !b.getAttribute('aria-label')).click()`,
+      `Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim().endsWith('Default Profile') && !b.getAttribute('aria-label')).click()`,
     );
     await app.waitFor(
       `!!document.querySelector('[aria-label="Switch profile: Default Profile"]')`,

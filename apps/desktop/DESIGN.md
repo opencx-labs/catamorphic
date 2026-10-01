@@ -1447,3 +1447,18 @@ collapsed group keeps it over its chat, which still holds the folded tabs.
 Opening a page showed white until it painted. Its frame now waits on the
 theme's background, as Chrome does; a page with no background of its own
 still paints its white canvas once it arrives.
+
+### 2026-10-01: A profile card says what the profile holds
+
+The profile preview listed facts a person cannot act on: the profile's id,
+"App opens with: Another profile", and a project count beside the same
+projects as chips. It now carries the profile's avatar and name (with a
+Default tag when the app opens with it), its projects as rows that open
+(the default first, marked "Opens first", five before a count), and what
+sets it apart: its default agent and its connections. Main reads that
+summary for any profile straight from its files: it decrypts nothing,
+starts no watchers and needs no unlocking, so the card shows no saved
+passwords. Opening another profile's project brings up that profile's
+window on it, focusing the window that already has it open; switching in
+place could not claim a project another window holds. The menu rows and
+the button wear the same avatar as the card.
