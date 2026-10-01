@@ -188,6 +188,77 @@ describe("ResourceInspector", () => {
     expect(dialog()?.className).toContain("animate-inspector-out-");
   });
 
+  it("leaves a clicked trigger's preview to the pointer", async () => {
+    await act(async () => {
+      root.render(
+        <ResourceInspector label="File preview" content={<p>Linked notes</p>}>
+          {(props) => (
+            <button type="button" {...props}>
+              Notes
+            </button>
+          )}
+        </ResourceInspector>,
+      );
+    });
+    const trigger = container.querySelector("button");
+    const dialog = () => document.querySelector('[role="dialog"]');
+    const pointer = (type: string) =>
+      trigger?.dispatchEvent(
+        new MouseEvent(type, { bubbles: true, relatedTarget: document.body }),
+      );
+    // A press focuses its target later in the same task, after microtasks.
+    await act(async () => {
+      pointer("pointerdown");
+      await Promise.resolve();
+      trigger?.focus();
+      vi.advanceTimersByTime(0);
+    });
+    expect(dialog()).toBeNull();
+    await act(async () => {
+      pointer("pointerover");
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(dialog()?.getAttribute("data-open")).toBe("true");
+    await act(async () => {
+      pointer("pointerout");
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(dialog()?.className).toContain("animate-inspector-out-");
+  });
+
+  it("stays open for focus in its panel when the pointer crosses it", async () => {
+    await act(async () => {
+      root.render(
+        <ResourceInspector
+          label="Project details"
+          content={<button type="button">Action</button>}
+        >
+          {(props) => (
+            <button type="button" {...props}>
+              Project
+            </button>
+          )}
+        </ResourceInspector>,
+      );
+    });
+    const trigger = container.querySelector("button");
+    const dialog = () => document.querySelector('[role="dialog"]');
+    await act(async () => trigger?.focus());
+    await act(async () => {
+      dialog()?.querySelector("button")?.focus();
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(dialog()?.getAttribute("data-open")).toBe("true");
+    await act(async () => {
+      for (const type of ["pointerover", "pointerout"])
+        dialog()?.dispatchEvent(
+          new MouseEvent(type, { bubbles: true, relatedTarget: document.body }),
+        );
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(dialog()?.getAttribute("data-open")).toBe("true");
+  });
+
   it("pins on click and dismisses on an outside pointer", async () => {
     await act(async () => {
       root.render(
