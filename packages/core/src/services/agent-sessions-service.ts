@@ -9243,7 +9243,6 @@ export function liveStatusLine(value: string | undefined): string | undefined {
   return line.length > 80 ? `${line.slice(0, 79).trimEnd()}…` : line;
 }
 
-
 function hostOf(serverUrl: string): string {
   try {
     return new URL(serverUrl).host;
@@ -9554,7 +9553,6 @@ function agentTodos(value: unknown): AgentTodo[] {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
 
 export function modelVisibleDelivery(
   content: string,

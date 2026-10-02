@@ -5,9 +5,9 @@ import path from "node:path";
 import {
   applySessionEvents,
   itemsOfTurn,
-  type SessionEvent,
   orderedTurns,
   pendingRequests,
+  type SessionEvent,
   type SessionStreamMessage,
   sessionStateFromSnapshot,
 } from "@catamorphic/agent-protocol";
@@ -22,12 +22,12 @@ import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
-import { readFullSnapshot } from "../services/sessions/session-reads.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
+import { readFullSnapshot } from "../services/sessions/session-reads.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /*
@@ -636,11 +636,18 @@ describe("session log", () => {
   it("folds its log into exactly the rows it projected", async () => {
     const { projectId, sessionId } = await chat("Fold");
     await sessions.sendMessage(identity, projectId, sessionId, "one");
-    const asked = sessions.sendMessage(identity, projectId, sessionId, "[[ask Which?]]");
+    const asked = sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "[[ask Which?]]",
+    );
     const request = await vi.waitFor(
       async () => {
         const detail = await sessions.get(identity, projectId, sessionId);
-        const [pending] = pendingRequests(sessionStateFromSnapshot(detail.snapshot));
+        const [pending] = pendingRequests(
+          sessionStateFromSnapshot(detail.snapshot),
+        );
         if (!pending) throw new Error("No question yet");
         return pending;
       },
@@ -653,7 +660,12 @@ describe("session log", () => {
       response: { kind: "question", answers: ["This"] },
     });
     await asked;
-    await sessions.sendMessage(identity, projectId, sessionId, "[[fail on purpose]]");
+    await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "[[fail on purpose]]",
+    );
     const full = await readFullSnapshot({ db, sessionId });
     const rows = await db
       .selectFrom("agent_session_events")
