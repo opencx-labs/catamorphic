@@ -71,8 +71,8 @@ it("applies font edits to body and utility text, preserves them across presets, 
     `getComputedStyle(document.body).fontFamily === 'Georgia, serif'`,
   );
   // A pointer press on a preset blurs the focused font field first, so the
-  // font save and the preset save leave back to back. The preset names only
-  // the selection and cannot undo the font edit still in flight.
+  // font save and the preset save leave back to back. The preset save starts
+  // from the font edit still in flight and must keep it (#177).
   await app.eval(`(() => {
     const input = [...document.querySelectorAll('label')].find(
       el => el.textContent.includes('Monospace font')).querySelector('input');
