@@ -33,8 +33,8 @@ workspace layers (sidebars, palette modes), project starting actions, and capabi
 Codex platform executable on first use; never import downloaded JavaScript
 into Electron or float those release pins. A person's own native Claude Code
 at or above `CLAUDE_CODE_MIN_VERSION` runs instead (`installed-claude-code.ts`,
-ADR 0196); `scripts/claude-code-bump.ts` and its scheduled workflow move the
-pins. `mobile-pairing.ts` is "Continue on
+ADR 0196); `scripts/harness-bump.ts` and its scheduled workflow move both
+harnesses' pins. `mobile-pairing.ts` is "Continue on
 mobile" (ADR 0060) — the QR palette action's LAN listener that serves
 the built `apps/pwa` bundle, exchanges single-use codes for device
 tokens (SHA-256 hashes + persisted port in

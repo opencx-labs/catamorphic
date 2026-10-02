@@ -96,3 +96,16 @@ it("explains Work's copy when nothing is installed", async () => {
     "Runs Work's Claude Code 2.1.287. Install Claude Code to use your own.",
   );
 });
+
+it("says when an update lands but is still too old", async () => {
+  status.mockResolvedValue(old);
+  update.mockResolvedValue({
+    output: "Successfully updated to 2.1.250",
+    status: { ...old, installed: installed("2.1.250") },
+  });
+  await act(async () => root.render(<ClaudeCodeInstall />));
+  await act(async () => updateButton()?.click());
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+    "Claude Code updated to 2.1.250, which is still older than the 2.1.287 Work needs.",
+  );
+});

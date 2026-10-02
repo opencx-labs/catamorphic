@@ -32,14 +32,18 @@ export function ClaudeCodeInstall() {
     setUpdating(true);
     setFailure(undefined);
     try {
+      const before = status?.installed?.version;
       const result = await desktopApi.claudeCodeUpdate();
       setStatus(result.status);
+      const after = result.status.installed?.version;
       if (result.status.using !== "installed") {
         const lastLine = result.output.trim().split("\n").at(-1);
         setFailure(
-          lastLine
-            ? `Claude Code did not update: ${lastLine}`
-            : "Claude Code did not update.",
+          after && after !== before
+            ? `Claude Code updated to ${after}, which is still older than the ${result.status.minVersion} Work needs.`
+            : lastLine
+              ? `Claude Code did not update: ${lastLine}`
+              : "Claude Code did not update.",
         );
       }
     } catch (error) {

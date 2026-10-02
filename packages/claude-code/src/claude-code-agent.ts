@@ -86,6 +86,13 @@ export interface ClaudeCodeAgentOpts {
   /** Override the path to the Claude Code executable itself. */
   pathToClaudeCodeExecutable?: string;
   /**
+   * Resolve the executable for each turn, overriding
+   * `pathToClaudeCodeExecutable`: a host that may switch executables while
+   * running (the person's own install appearing or being updated) picks
+   * the current one per turn instead of the one known at construction.
+   */
+  resolveClaudeCodeExecutable?: () => Promise<string>;
+  /**
    * Host-supplied tools offered to Claude Code as an in-process MCP server
    * named "workspace" (tool ids `mcp__workspace__<name>`), pre-approved in
    * the allowlist. This is how the desktop app hands Claude Code its
@@ -332,6 +339,8 @@ interface LiveTurn {
   lastMainUsage?: Record<string, unknown>;
   abort: AbortController;
   state?: SessionState;
+  /** This turn's Claude Code executable, when the host resolves it per turn. */
+  executablePath?: string;
   /** The parked AskUserQuestion call: its input and its answer resolver. */
   ask?: {
     input: Record<string, unknown>;
@@ -573,6 +582,18 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     }
 
     const live = createLiveTurn(state);
+    if (!sandboxRun && this.opts.resolveClaudeCodeExecutable) {
+      try {
+        live.executablePath = await this.opts.resolveClaudeCodeExecutable();
+      } catch (error) {
+        yield {
+          type: "error",
+          content: error instanceof Error ? error.message : String(error),
+        };
+        yield { type: "done" };
+        return;
+      }
+    }
     live.turnContext = renderTurnContext(opts?.context) || undefined;
     live.acknowledgeMessages = opts?.acknowledgeMessages;
     if (opts?.readPendingMessages) {
@@ -998,7 +1019,8 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         : {
             executable: this.opts.executable,
             executableArgs: this.opts.executableArgs,
-            pathToClaudeCodeExecutable: this.opts.pathToClaudeCodeExecutable,
+            pathToClaudeCodeExecutable:
+              live.executablePath ?? this.opts.pathToClaudeCodeExecutable,
           }),
       model: turn?.model ?? this.opts.model,
       effort: turn?.effort ?? this.opts.effort,

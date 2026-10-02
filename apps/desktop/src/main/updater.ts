@@ -57,8 +57,13 @@ export function registerDesktopUpdater(options: {
     updater: Object.assign(autoUpdater, {
       // electron-updater returns its in-flight check to every caller until
       // it settles; a stuck one would block all later checks.
-      abandonCheck: () =>
-        Reflect.set(autoUpdater, "checkForUpdatesPromise", null),
+      abandonCheck: () => {
+        if (!Reflect.has(autoUpdater, "checkForUpdatesPromise"))
+          logger.warn(
+            "[desktop] electron-updater no longer has checkForUpdatesPromise; a stuck check may block later ones",
+          );
+        Reflect.set(autoUpdater, "checkForUpdatesPromise", null);
+      },
     }),
     broadcast: (state) =>
       options.broadcast("catamorphic:update-state-changed", state),

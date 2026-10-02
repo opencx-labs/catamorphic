@@ -1,4 +1,4 @@
-# 0196: The person's own Claude Code runs first; pins move by pull request
+# 0196: The person's own Claude Code runs first; harness pins move by pull request
 
 - **Status:** Accepted
 - **Date:** 2026-10-02
@@ -30,10 +30,17 @@ with an Update action that runs that install's own `claude update`, only when
 the person presses it. Work never updates it unasked.
 
 Pins still never float. A scheduled workflow
-(`.github/workflows/claude-code-bump.yml`) runs `scripts/claude-code-bump.ts`
-daily; when a new SDK is published it opens a pull request moving the SDK, the
-minimum version and every platform integrity together, and dispatches CI on it.
-A test fails if the three drift apart. Merging stays a human decision.
+(`.github/workflows/harness-bump.yml`) runs `scripts/harness-bump.ts` daily
+for Claude Code and for Codex; when a new SDK is published it opens a pull
+request moving the SDK, its CLI version and every platform integrity together,
+and dispatches CI on it. A test fails if they drift apart. Merging stays a
+human decision.
+
+Codex keeps running Work's pinned copy, never an installed one. Its client
+uses Codex's experimental app-server API, which changes between releases, so
+an installed Codex newer than the pin is not known to work. Most Codex
+installs are also npm launchers that need Node, which a Dock-launched app
+does not have. Scheduled bumps keep Work's copy close to current instead.
 
 Considered: downloading the newest Claude Code at runtime. That drops the
 integrity pin, and the SDK bundled in the app only changes with a release, so a

@@ -40,7 +40,7 @@ import {
   type HarnessExecutable,
   harnessPathEnvironment,
 } from "../harness-components.js";
-import { InstalledClaudeCodeFinder } from "../installed-claude-code.js";
+import type { InstalledClaudeCodeFinder } from "../installed-claude-code.js";
 import { bestFreeModelId, fetchOpenRouterModels } from "../openrouter.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
@@ -75,6 +75,11 @@ export interface DesktopAgentRegistryDeps {
   agentHomesDir: string;
   /** App-owned cache for integrity-pinned native harness components. */
   harnessComponentsDir: string;
+  /**
+   * The person's own Claude Code, run instead of Work's copy when new
+   * enough (ADR 0196). Absent in tests, which never use the host's install.
+   */
+  installedClaudeCode?: Pick<InstalledClaudeCodeFinder, "find" | "update">;
   /**
    * Files pasted into chats (`<attachmentsDir>/<projectId>/`), which the
    * built-in agent may read though they sit outside the project.
@@ -218,14 +223,14 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     this.harnessComponents = new HarnessComponentStore({
       rootDir: deps.harnessComponentsDir,
       // The person's own Claude Code runs when new enough (ADR 0196).
-      // Tests stay on the pinned copy, whatever the host has installed.
-      ...(deps.e2eFake
-        ? {}
-        : { installedClaudeCode: new InstalledClaudeCodeFinder() }),
+      ...(deps.installedClaudeCode
+        ? { installedClaudeCode: deps.installedClaudeCode }
+        : {}),
     });
     // The first look reads the login shell's PATH (about a second); do it
     // now rather than in the first chat's turn.
-    if (!deps.e2eFake) void this.harnessComponents.claudeCodeStatus();
+    if (deps.installedClaudeCode)
+      void this.harnessComponents.claudeCodeStatus();
     this.workspaceToolkit = deps.workspaceBridge
       ? buildWorkspaceToolkit(deps.workspaceBridge, {
           desktopSettings: (projectId) => this.settingsContext(projectId),
@@ -1174,6 +1179,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                   memory: config.memory === true,
                   env: { ...environment, ...env },
                   pathToClaudeCodeExecutable: component.executablePath,
+                  // An install that appears or is updated while Work runs
+                  // takes over at the next turn (ADR 0196).
+                  resolveClaudeCodeExecutable: async () =>
+                    (await this.harnessComponents.ensure("claude-code"))
+                      .executablePath,
                   extraTools: this.workspaceTools(config, "native"),
                   disableNativeMonitors: true,
                   hostOwnsTodos: true,

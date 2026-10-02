@@ -42,6 +42,7 @@ import {
   imageBuilderEnvironment,
 } from "../image-builder-command.js";
 import type { IncognitoSessionsStore } from "../incognito-sessions.js";
+import { InstalledClaudeCodeFinder } from "../installed-claude-code.js";
 import { localPerson } from "../local-person.js";
 import {
   type McpAppsService,
@@ -390,6 +391,9 @@ export async function startEmbeddedServer(
     agentHomesDir: paths.agentHomesDir,
     harnessComponentsDir: paths.harnessComponentsDir,
     attachmentsDir: paths.attachmentsDir,
+    ...(e2eFakeAgent
+      ? {}
+      : { installedClaudeCode: new InstalledClaudeCodeFinder() }),
     e2eFake: e2eFakeAgent,
     workspaceBridge,
     toolPermissions,
