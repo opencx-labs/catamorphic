@@ -12,7 +12,7 @@ import { WORKSPACE_AUTHORING_GUIDE } from "../workspace-authoring.js";
 export const DESKTOP_SETTINGS_SKILL = `---
 name: configuring-catamorphic-desktop
 title: Configure desktop settings
-description: Edit Work desktop configuration files to customize theme, fonts, shortcuts, sidebar sections and command palette modes (workspace.js), tabs, notifications or terminal macros, including project overrides and reset.
+description: Edit Work desktop configuration files to customize theme, fonts, shortcuts, sidebar sections and command palette modes (workspace.js), tabs, notifications, terminal macros or browser bookmarks, including project overrides and reset.
 ---
 
 # Configure the desktop
@@ -109,6 +109,22 @@ Insert, Home, End, PageUp, PageDown, ArrowUp/Down/Left/Right, Plus, or F1 throug
 An empty string disables an action; delete its key to restore the default. Keep
 bindings unique. Defaults and supported action ids:
 ${KEYBINDING_ACTIONS.map((action) => `- ${action}: ${JSON.stringify(DEFAULT_KEYBINDINGS[action])}`).join("\n")}
+
+## Bookmarks: one JSON file
+
+files.bookmarks from desktop_settings holds every bookmark. byProject[projectId]
+is this project's tree (the sidebar's This project section) and
+pinnedByProfile[profileId] the bookmarks that follow the profile across projects
+(Pin across projects); use the projectId and profileId desktop_settings returns.
+libraryByProfile holds imported browser bookmarks: leave it to the import flow.
+Each tree is { "folders": [...], "bookmarks": [...] }. A bookmark is
+{ "id", "label", "url", "folderId"? }, a folder { "id", "label", "parentId"? };
+ids are any unique string and folderId/parentId name a folder of the same tree.
+To bookmark the page the person is looking at, take its URL and title from the
+turn context or read_tab and append it; omit position to place it last. Keep
+every other key and tree as it is, write the whole file to a temporary sibling
+and rename it over the original. Valid edits show in the sidebar at once; text
+that is not valid JSON is ignored until fixed.
 
 ${WORKSPACE_AUTHORING_GUIDE}
 

@@ -1,6 +1,6 @@
 # 0193 — No cross-replica state in replica memory
 
-- **Status:** Accepted (amended by [0195](0195-agent-sessions-are-an-event-log-of-turns.md))
+- **Status:** Accepted (amended by [0196](0196-agent-sessions-are-an-event-log-of-turns.md))
 - **Date:** 2026-09-30
 - **Refines:** 0099, 0173, 0190, 0192
 

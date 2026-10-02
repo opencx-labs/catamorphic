@@ -1,6 +1,6 @@
 # ADR 0067: Long-lived agent runtimes and a unified capability gateway
 
-- **Status:** Superseded by [0196](0196-agent-runners-run-harnesses-beside-their-workspace.md): harnesses run in an attempt runner beside their workspace
+- **Status:** Superseded by [0197](0197-agent-runners-run-harnesses-beside-their-workspace.md): harnesses run in an attempt runner beside their workspace
 - **Date:** 2026-08-24
 - **Supersedes in part:** 0038, 0054, 0064
 

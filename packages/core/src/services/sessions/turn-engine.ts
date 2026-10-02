@@ -190,7 +190,7 @@ function unanswered(local: LocalTurn, attemptId: string, runner: RunnerState): R
   return { ...runner, calls };
 }
 
-/** The text a continuation turn gives the agent (ADR 0196). */
+/** The text a continuation turn gives the agent (ADR 0197). */
 export const CONTINUATION_PROMPT =
   "Your previous turn was interrupted because the machine running it stopped. Continue where you left off. First check what was already done (files, commands, messages) so you do not repeat anything that had side effects.";
 
@@ -199,7 +199,7 @@ const MAX_TRANSIENT_RETRIES = 5;
 const INTERRUPT_GRACE_MS = 30_000;
 
 /**
- * Drives claimed turns (ADR 0196): prepares an attempt, starts its runner
+ * Drives claimed turns (ADR 0197): prepares an attempt, starts its runner
  * (or finds it again after a takeover), ingests its frames, answers its
  * host calls, delivers commands, and settles the turn. Every step that
  * matters to another replica is in Postgres; this process's memory holds
@@ -699,7 +699,7 @@ export class TurnEngine {
   }
 
   /**
-   * The native thread this attempt runs on (ADR 0196): the session's
+   * The native thread this attempt runs on (ADR 0197): the session's
    * thread for this harness, resumed (or restored from stored state); a
    * fork of a source thread for a forked session's first turn; else a fresh
    * one, told what it missed by a recorded handoff.
@@ -1056,6 +1056,12 @@ export class TurnEngine {
         if (command.attemptId && command.attemptId !== attemptId) return null;
         return { id, command: { kind: "respond", requestKey, response } };
       }
+      case "release": {
+        const requestKey = typeof command.payload.requestKey === "string" ? command.payload.requestKey : "";
+        const reason = typeof command.payload.reason === "string" ? command.payload.reason : "";
+        if (!requestKey || (command.attemptId && command.attemptId !== attemptId)) return null;
+        return { id, command: { kind: "release", requestKey, reason } };
+      }
     }
   }
 
@@ -1227,7 +1233,7 @@ export class TurnEngine {
    * Answer host calls. Native state is Postgres-only, so it is answered in
    * one transaction with forgetting the call: never applied twice. A host
    * tool runs outside it; one found taken after a takeover is answered
-   * with the uncertainty, never run twice (ADR 0196).
+   * with the uncertainty, never run twice (ADR 0197).
    */
   private async answerCalls(
     local: LocalTurn,
@@ -1482,7 +1488,7 @@ export class TurnEngine {
   }
 
   /**
-   * An attempt whose runner is gone (ADR 0196): it is lost, its turn is
+   * An attempt whose runner is gone (ADR 0197): it is lost, its turn is
    * interrupted with the reason, open requests can no longer be answered,
    * and a continuation is queued once when the agent recovers by
    * continuing and its native thread can be resumed exactly.
@@ -1775,6 +1781,7 @@ const QUEUED_COMMAND_KINDS: ReadonlySet<string> = new Set<TurnCommandKind>([
   "steer",
   "interrupt",
   "respond",
+  "release",
   "stop",
 ]);
 

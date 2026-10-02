@@ -1,6 +1,6 @@
 # 0187 — Remote executors ride out transient failures on one operation queue
 
-- **Status:** Accepted (sessions are worker epochs by 0192; agent runners by [0196](0196-agent-runners-run-harnesses-beside-their-workspace.md))
+- **Status:** Accepted (sessions are worker epochs by 0192; agent runners by [0197](0197-agent-runners-run-harnesses-beside-their-workspace.md))
 - **Date:** 2026-09-29
 - **Refines:** 0098 (This machine runners), 0164 (enrolled workers)
 

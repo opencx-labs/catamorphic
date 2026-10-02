@@ -226,7 +226,7 @@ export interface QueryOptionInputs {
   stderr: (data: string) => void;
 }
 
-/** Which native thread the query runs on (ADR 0196). */
+/** Which native thread the query runs on (ADR 0197). */
 function threadOptions(attempt: AttemptStart): Partial<Options> {
   const thread = attempt.thread;
   switch (thread.mode) {
@@ -317,7 +317,7 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
           CLAUDE_CODE_API_KEY_HELPER_TTL_MS: String(API_KEY_HELPER_TTL_MS),
         }
       : {}),
-    // The member's own sign-in, in the harness's own home (ADR 0197).
+    // The member's own sign-in, in the harness's own home (ADR 0198).
     ...(access.kind === "sign_in" ? { CLAUDE_CONFIG_DIR: access.home } : {}),
   };
   const command = options.command ?? (host ? undefined : "claude");

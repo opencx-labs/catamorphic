@@ -75,14 +75,14 @@ export interface CreateSandboxOpts {
   labels?: Record<string, string>;
   /**
    * Members' own harness sign-ins to make available inside the sandbox
-   * (ADR 0197), from the machine's own disk: mounted (or linked) at
+   * (ADR 0198), from the machine's own disk: mounted (or linked) at
    * {@link signInHomePath}. The machine never sends them anywhere; a
    * provider without the `sign-ins` capability refuses.
    */
   signIns?: ReadonlyArray<{ harness: SignInHarness; member: string }>;
 }
 
-/** A harness a member signs in to with its own flow (ADR 0197). */
+/** A harness a member signs in to with its own flow (ADR 0198). */
 export type SignInHarness = "claude-code" | "codex";
 
 export const SIGN_IN_HARNESSES: readonly SignInHarness[] = [
@@ -90,7 +90,7 @@ export const SIGN_IN_HARNESSES: readonly SignInHarness[] = [
   "codex",
 ];
 
-/** Where a sandbox sees its owner's sign-in for a harness (ADR 0197). */
+/** Where a sandbox sees its owner's sign-in for a harness (ADR 0198). */
 export function signInHomePath(input: {
   workspaceRoot: string;
   harness: SignInHarness;
@@ -100,7 +100,7 @@ export function signInHomePath(input: {
 
 /**
  * The machine capability saying a member is signed in to a harness on it
- * (ADR 0197). Machines report only this fact, never a credential.
+ * (ADR 0198). Machines report only this fact, never a credential.
  */
 export function signInCapability(input: {
   harness: SignInHarness;

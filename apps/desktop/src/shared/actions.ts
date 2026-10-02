@@ -417,6 +417,15 @@ export const BUILTIN_ACTIONS = [
     ],
   },
   {
+    id: "archive-chat",
+    label: "Archive chat",
+    icon: "Archive",
+    description:
+      "archive the focused chat; it leaves the sidebar and stays findable in the command palette",
+    defaultBinding: null,
+    keywords: ["archive", "chat", "conversation", "done", "hide", "session"],
+  },
+  {
     id: "switch-agent",
     label: "Switch agent for this chat…",
     icon: "Bot",

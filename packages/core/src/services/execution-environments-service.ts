@@ -310,7 +310,7 @@ export class ExecutionEnvironmentsService {
     requirements: EnvironmentRequirements;
     allowed?: readonly string[];
     preferred?: readonly string[];
-    /** The agent runs on the owner's own sign-in on the machine (ADR 0197). */
+    /** The agent runs on the owner's own sign-in on the machine (ADR 0198). */
     signIn?: SignInHarness;
   }): Promise<EnvironmentDiscovery> {
     return withSpan(
@@ -457,7 +457,7 @@ export class ExecutionEnvironmentsService {
     allowed?: readonly string[];
     preferred?: readonly string[];
     requirements: EnvironmentRequirements;
-    /** The agent runs on the owner's own sign-in on the machine (ADR 0197). */
+    /** The agent runs on the owner's own sign-in on the machine (ADR 0198). */
     signIn?: SignInHarness;
   }): Promise<EnvironmentAdmission> {
     return withSpan(
@@ -605,7 +605,7 @@ export class ExecutionEnvironmentsService {
       capabilities: [
         ...(definition.requirements?.capabilities ?? []),
         ...sandboxCapabilitiesFor(definition),
-        // A subscription runs only where its owner signed in (ADR 0197):
+        // A subscription runs only where its owner signed in (ADR 0198):
         // placement takes a machine that reports that sign-in.
         ...(args.signIn && owner
           ? [signInCapability({ harness: args.signIn, member: owner })]

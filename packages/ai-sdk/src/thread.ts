@@ -3,7 +3,7 @@ import { type ModelMessage, modelMessageSchema } from "ai";
 import { z } from "zod";
 
 /**
- * The built-in agent's native thread (ADR 0196) is its AI SDK message
+ * The built-in agent's native thread (ADR 0197) is its AI SDK message
  * history, stored with Work as append-only entries: one `turn` entry with
  * the turn's input, one `step` entry per finished model step, and a
  * `turn_end` boundary a fork or a retry cuts at. Any replica, or a new

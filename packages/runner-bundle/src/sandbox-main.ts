@@ -1,5 +1,5 @@
 /**
- * The entry point of the runner bundle a sandbox runs (ADR 0196):
+ * The entry point of the runner bundle a sandbox runs (ADR 0197):
  * `bun runner.mjs` or `node runner.mjs`. Every harness that runs beside its
  * workspace is here.
  */

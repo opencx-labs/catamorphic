@@ -40,6 +40,8 @@ export interface DataPaths {
    * the project folder or its Git history.
    */
   attachmentsDir: string;
+  /** Browser bookmarks, every profile and project (`bookmarks.ts`). */
+  bookmarksFile: string;
 }
 
 export function resolveDataPaths(): DataPaths {
@@ -57,5 +59,6 @@ export function resolveDataPaths(): DataPaths {
     harnessComponentsDir: path.join(userData, "harness-components"),
     hostSkillsDir: path.join(userData, "host-skills"),
     attachmentsDir: path.join(userData, "attachments"),
+    bookmarksFile: path.join(userData, "bookmarks.json"),
   };
 }

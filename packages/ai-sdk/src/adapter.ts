@@ -165,7 +165,7 @@ export type AiSdkLocal = {
 };
 
 /**
- * The built-in agent as a harness adapter (ADR 0196): the Vercel AI SDK
+ * The built-in agent as a harness adapter (ADR 0197): the Vercel AI SDK
  * tool loop, run in the host's own process (the desktop, the control
  * plane), never in a sandbox bundle. Model calls run in the host; project
  * IO runs on the session's sandbox (`local.sandbox`).
@@ -991,7 +991,7 @@ class AiSdkAttempt {
       questions: args.questions,
     };
     if (!args.blocking) {
-      // The answer arrives as a message (ADR 0196); nothing waits here.
+      // The answer arrives as a message (ADR 0197); nothing waits here.
       this.host.request(key, draft).catch(() => {});
       return "Asked. The answer arrives as a message when the person replies; keep working on what does not depend on it.";
     }

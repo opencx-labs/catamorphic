@@ -1,5 +1,5 @@
--- Agent sessions are an event log of turns (ADR 0195); runners run
--- harnesses beside their workspace (ADR 0196).
+-- Agent sessions are an event log of turns (ADR 0196); runners run
+-- harnesses beside their workspace (ADR 0197).
 --
 -- Existing chats are converted in place: messages become items, the old
 -- queue rows become turns, a session's provider anchor becomes its provider
@@ -331,7 +331,7 @@ CREATE TABLE agent_turn_commands (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     turn_id uuid NOT NULL REFERENCES agent_turns(id) ON DELETE CASCADE,
     attempt_id uuid REFERENCES agent_turn_attempts(id) ON DELETE CASCADE,
-    kind text NOT NULL CHECK (kind IN ('steer', 'interrupt', 'respond', 'stop')),
+    kind text NOT NULL CHECK (kind IN ('steer', 'interrupt', 'respond', 'release', 'stop')),
     payload jsonb NOT NULL DEFAULT '{}',
     status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'acknowledged', 'dropped')),
     created_at timestamp with time zone NOT NULL DEFAULT now(),
@@ -370,7 +370,7 @@ ALTER TABLE session_mailbox_items ADD CONSTRAINT chk_session_mailbox_delivery_mo
     CHECK (delivery_mode IN ('message_only', 'queue', 'steer', 'interrupt'));
 ALTER TABLE session_mailbox_items RENAME COLUMN message_id TO item_id;
 
--- Mirrors replicate the log (ADR 0195): watermarks are sequences.
+-- Mirrors replicate the log (ADR 0196): watermarks are sequences.
 ALTER TABLE session_sync_intents RENAME COLUMN desired_message_count TO desired_sequence;
 ALTER TABLE session_sync_intents RENAME COLUMN acknowledged_message_count TO acknowledged_sequence;
 ALTER TABLE session_sync_intents ALTER COLUMN desired_sequence TYPE bigint;
