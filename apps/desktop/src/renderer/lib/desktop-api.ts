@@ -763,10 +763,10 @@ export type {
 } from "../../shared/sidebar.js";
 export type { WorkspaceConfig } from "../../shared/workspace-config.js";
 
-import type { ProfileSummary } from "../../shared/profile-summary.js";
+import type { ProfileConnection } from "../../shared/profile-connections.js";
 import type { WorkspaceConfig } from "../../shared/workspace-config.js";
 
-export type { ProfileSummary };
+export type { ProfileConnection };
 
 /**
  * Which layer of the layered resolution produced the config: this user's
@@ -1099,9 +1099,9 @@ export interface CatamorphicDesktopApi {
   onWorkspaceEvent: (listener: (event: WorkspaceEvent) => void) => () => void;
   windowProfile: () => Promise<string>;
   windowSetProfile: (profileId: string) => Promise<string>;
-  /** Opens the profile's window, on `projectId` when given. */
-  openProfileWindow: (profileId: string, projectId?: string) => Promise<void>;
-  profileSummary: (profileId: string) => Promise<ProfileSummary>;
+  openProfileWindow: (profileId: string) => Promise<void>;
+  /** Any profile's connections, for its preview card. */
+  profileConnections: (profileId: string) => Promise<ProfileConnection[]>;
 
   agentsList: () => Promise<AgentsData>;
   agentsCreate: (input: CreateAgentInput) => Promise<AgentInfo>;

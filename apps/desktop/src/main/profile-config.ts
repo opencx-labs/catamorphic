@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { PROJECT_SETTINGS_PATH } from "@catamorphic/workflow/project-layout";
 import type { AppPrefs } from "../shared/app-prefs.js";
-import type { ProfileSummary } from "../shared/profile-summary.js";
+import type { ProfileConnection } from "../shared/profile-connections.js";
 import type { SettingsPatch, SettingsScope } from "../shared/settings.js";
 import { AgentBindingsStore } from "./agent-bindings-store.js";
 import { AgentsStore } from "./agents-store.js";
@@ -95,21 +95,16 @@ export class ProfileConfigManager {
   }
 
   /**
-   * A profile's default agent and connection names, for its preview card.
-   * Unlike `forProfile`, it starts no watchers, creates nothing and decrypts
-   * nothing, so hovering a profile that is not open leaves no trace.
+   * A profile's connections for its preview card. Unlike `forProfile`, it
+   * starts no watchers, creates nothing and decrypts nothing, so hovering a
+   * profile that is not open leaves no trace.
    */
-  summary(profileId: string): ProfileSummary {
+  connectionPreviews(profileId: string): ProfileConnection[] {
     if (!this.profiles.get(profileId))
       throw new Error(`Profile no longer exists: ${profileId}`);
-    const dir = path.join(this.paths.profilesDir, profileId);
-    const agents =
-      this.stores.get(profileId)?.agents ??
-      new AgentsStore(path.join(dir, "agents.json"));
-    return {
-      agent: agents.defaultAgent() ?? null,
-      connections: ConnectionsStore.names(path.join(dir, "connections.json")),
-    };
+    return ConnectionsStore.previews(
+      path.join(this.paths.profilesDir, profileId, "connections.json"),
+    );
   }
 
   forProfile(profileId: string): ProfileStores {

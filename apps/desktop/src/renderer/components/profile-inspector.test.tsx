@@ -3,56 +3,34 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { desktopApi, type ProfileSummary } from "../lib/desktop-api.js";
-import { connectionsLabel, ProfileInspector } from "./profile-inspector";
+import { desktopApi, type ProfileConnection } from "../lib/desktop-api.js";
+import { ProfileInspector } from "./profile-inspector";
 
 vi.mock("../lib/desktop-api.js", () => ({
-  desktopApi: { profileSummary: vi.fn() },
+  desktopApi: { profileConnections: vi.fn() },
 }));
 
-const project = (id: string, name: string) => ({
-  id,
-  name,
-  storageType: "managed" as const,
-  remoteUrl: null,
-  remoteOwnership: null,
-  remoteDivergedAt: null,
-  defaultBranch: "main",
-  createdAt: "2026-09-01T00:00:00.000Z",
-  updatedAt: "2026-09-01T00:00:00.000Z",
-});
-const projects = [
-  project("p1", "Alpha"),
-  project("p2", "Beta"),
-  project("p3", "Gamma"),
-  project("p4", "Delta"),
-  project("p5", "Epsilon"),
-  project("p6", "Zeta"),
-  project("p7", "Eta"),
-  project("other", "Not mine"),
-];
 const profile = {
   id: "8b2f4c1e-0000-4000-8000-000000000001",
   name: "Work",
   color: "#e5484d",
-  projectIds: ["p1", "p2", "p3", "p4", "p5", "p6", "p7"],
-  defaultProjectId: "p3",
+  projectIds: ["p1"],
 };
 
 describe("ProfileInspector", () => {
   let container: HTMLDivElement;
   let root: Root;
-  let summary: {
-    resolve: (value: ProfileSummary) => void;
+  let loaded: {
+    resolve: (value: ProfileConnection[]) => void;
     reject: (error: Error) => void;
   };
 
   beforeEach(() => {
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
-    vi.mocked(desktopApi.profileSummary).mockImplementation(
+    vi.mocked(desktopApi.profileConnections).mockImplementation(
       () =>
         new Promise((resolve, reject) => {
-          summary = { resolve, reject };
+          loaded = { resolve, reject };
         }),
     );
     container = document.createElement("div");
@@ -66,54 +44,35 @@ describe("ProfileInspector", () => {
   });
 
   const render = async (
-    overrides: { defaultProfileId?: string } = {},
-    handlers = { onOpenProject: vi.fn(), onOpenSettings: vi.fn() },
+    defaultProfileId = profile.id,
+    onOpenSettings = vi.fn(),
   ) => {
     await act(async () => {
       root.render(
         <ProfileInspector
           profile={profile}
-          data={{
-            profiles: [profile],
-            defaultProfileId: overrides.defaultProfileId ?? profile.id,
-          }}
-          projects={projects}
-          {...handlers}
+          data={{ profiles: [profile], defaultProfileId }}
+          onOpenSettings={onOpenSettings}
         />,
       );
     });
-    return handlers;
+    return onOpenSettings;
   };
   const text = () => container.textContent ?? "";
 
-  it("names the profile without its id, and marks the default", async () => {
+  it("shows who the profile is and nothing it holds", async () => {
     await render();
     expect(text()).toContain("Work");
     expect(text()).toContain("Default");
     expect(text()).not.toContain(profile.id);
-    expect(text()).not.toContain("App opens with");
-    await render({ defaultProfileId: "another" });
+    expect(text()).not.toContain("Projects");
+    expect(text()).not.toContain("Agent");
+    await render("another");
     expect(text()).not.toContain("Default");
   });
 
-  it("lists its projects with the default first, and opens one on click", async () => {
-    const { onOpenProject } = await render();
-    const rows = [...container.querySelectorAll("li button")];
-    expect(rows.map((row) => row.textContent)).toEqual([
-      "GammaOpens first",
-      "Alpha",
-      "Beta",
-      "Delta",
-      "Epsilon",
-    ]);
-    expect(text()).toContain("2 more");
-    expect(text()).not.toContain("Not mine");
-    await act(async () => (rows[1] as HTMLButtonElement).click());
-    expect(onOpenProject).toHaveBeenCalledWith("p1");
-  });
-
   it("opens settings from the gear", async () => {
-    const { onOpenSettings } = await render();
+    const onOpenSettings = await render();
     await act(async () =>
       container
         .querySelector<HTMLButtonElement>(
@@ -124,36 +83,73 @@ describe("ProfileInspector", () => {
     expect(onOpenSettings).toHaveBeenCalled();
   });
 
-  it("shows the default agent and connections once loaded", async () => {
+  it("lists connections with their icon, favicon or glyph", async () => {
     await render();
-    expect(desktopApi.profileSummary).toHaveBeenCalledWith(profile.id);
-    expect(container.querySelectorAll(".animate-pulse")).toHaveLength(2);
+    expect(desktopApi.profileConnections).toHaveBeenCalledWith(profile.id);
+    expect(container.querySelector("[aria-busy]")).not.toBeNull();
     await act(async () =>
-      summary.resolve({
-        agent: { name: "Reviewer", harness: "claude-code" },
-        connections: ["Linear", "Slack", "Sentry", "Notion"],
-      }),
+      loaded.resolve([
+        { name: "Linear", iconUrl: "https://registry.example/linear.svg" },
+        { name: "Docs", url: "https://docs.example.com/mcp" },
+        { name: "Local files" },
+      ]),
     );
-    expect(container.querySelector(".animate-pulse")).toBeNull();
-    expect(text()).toContain("Reviewer");
-    expect(text()).toContain("Linear, Slack, Sentry and 1 more");
+    expect(container.querySelector("[aria-busy]")).toBeNull();
+    const rows = [...container.querySelectorAll("li")];
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "Linear",
+      "Docs",
+      "Local files",
+    ]);
+    expect(rows[0]?.querySelector("img")?.getAttribute("src")).toBe(
+      "https://registry.example/linear.svg",
+    );
+    expect(rows[1]?.querySelector("img")?.getAttribute("src")).toBe(
+      "https://docs.example.com/favicon.ico",
+    );
+    expect(rows[2]?.querySelector("img")).toBeNull();
+    expect(rows[2]?.querySelector('[aria-label="Local files"]')).not.toBeNull();
   });
 
-  it("says so when the summary has nothing, or cannot load", async () => {
+  it("falls back to the glyph when every image fails", async () => {
     await render();
-    await act(async () => summary.resolve({ agent: null, connections: [] }));
-    expect(text().match(/None/g)).toHaveLength(2);
+    await act(async () =>
+      loaded.resolve([
+        {
+          name: "Linear",
+          iconUrl: "https://registry.example/broken.svg",
+          url: "https://mcp.linear.example/sse",
+        },
+      ]),
+    );
+    const image = () => container.querySelector("li img");
+    expect(image()?.getAttribute("src")).toBe(
+      "https://registry.example/broken.svg",
+    );
+    await act(async () => image()?.dispatchEvent(new Event("error")));
+    expect(image()?.getAttribute("src")).toBe(
+      "https://mcp.linear.example/favicon.ico",
+    );
+    await act(async () => image()?.dispatchEvent(new Event("error")));
+    expect(image()).toBeNull();
+  });
+
+  it("collapses a long list, and says when there are none or they cannot load", async () => {
+    await render();
+    await act(async () =>
+      loaded.resolve(
+        Array.from({ length: 8 }, (_, index) => ({ name: `C${index}` })),
+      ),
+    );
+    expect(container.querySelectorAll("li")).toHaveLength(6);
+    expect(text()).toContain("2 more");
     await act(async () => root.render(<div />));
     await render();
-    await act(async () => summary.reject(new Error("gone")));
+    await act(async () => loaded.resolve([]));
+    expect(text()).toContain("None yet");
+    await act(async () => root.render(<div />));
+    await render();
+    await act(async () => loaded.reject(new Error("gone")));
     expect(text()).toContain("Unavailable");
   });
-});
-
-it("names up to three connections", () => {
-  expect(connectionsLabel(["Linear"])).toBe("Linear");
-  expect(connectionsLabel(["A", "B", "C"])).toBe("A, B, C");
-  expect(connectionsLabel(["A", "B", "C", "D", "E"])).toBe(
-    "A, B, C and 2 more",
-  );
 });

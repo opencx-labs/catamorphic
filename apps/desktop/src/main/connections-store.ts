@@ -13,6 +13,7 @@ import {
   serverKeyOf,
 } from "@catamorphic/sandbox";
 import { safeStorage } from "electron";
+import type { ProfileConnection } from "../shared/profile-connections.js";
 
 /**
  * Per-profile MCP connections: `<userData>/profiles/<id>/connections.json`.
@@ -172,16 +173,27 @@ export class ConnectionsStore {
   }
 
   /**
-   * Connection names from a profile's file, without decrypting, migrating
-   * or watching it: a preview card reads profiles that are not open.
+   * A profile's connections as its preview card shows them, read from its
+   * file without decrypting, migrating or watching it: the card reads
+   * profiles that are not open.
    */
-  static names(file: string): string[] {
+  static previews(file: string): ProfileConnection[] {
     try {
-      const raw: { connections?: { name?: unknown }[] } = JSON.parse(
+      const raw: { connections?: Partial<StoredConnection>[] } = JSON.parse(
         fs.readFileSync(file, "utf-8"),
       );
       return (raw.connections ?? []).flatMap((connection) =>
-        typeof connection.name === "string" ? [connection.name] : [],
+        typeof connection.name === "string"
+          ? [
+              {
+                name: connection.name,
+                ...(connection.iconUrl ? { iconUrl: connection.iconUrl } : {}),
+                ...(connection.transport !== "stdio" && connection.url
+                  ? { url: connection.url }
+                  : {}),
+              },
+            ]
+          : [],
       );
     } catch {
       return [];

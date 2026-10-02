@@ -1,4 +1,3 @@
-import type { ProjectSummary } from "@catamorphic/react/types";
 import { Check, ChevronDown, Plus, Star } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Profile, ProfilesData } from "../lib/desktop-api.js";
@@ -15,18 +14,13 @@ import { ResourceInspector } from "./resource-inspector";
  */
 export function ProfileBar({
   data,
-  projects,
   activeProfileId,
   onSwitch,
-  onOpenProject,
   onOpenSettings,
 }: {
   data: ProfilesData;
-  projects: ProjectSummary[];
   activeProfileId: string;
   onSwitch: (profile: Profile) => void;
-  /** Opens one of a profile's projects, switching profile when needed. */
-  onOpenProject: (profile: Profile, projectId: string) => void;
   onOpenSettings: (profileId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -121,12 +115,6 @@ export function ProfileBar({
                 <ProfileInspector
                   profile={profile}
                   data={data}
-                  projects={projects}
-                  onOpenProject={(projectId) => {
-                    dismiss();
-                    setOpen(false);
-                    onOpenProject(profile, projectId);
-                  }}
                   onOpenSettings={() => {
                     dismiss();
                     setOpen(false);
@@ -200,11 +188,6 @@ export function ProfileBar({
           <ProfileInspector
             profile={active}
             data={data}
-            projects={projects}
-            onOpenProject={(projectId) => {
-              dismiss();
-              onOpenProject(active, projectId);
-            }}
             onOpenSettings={() => {
               dismiss();
               onOpenSettings(active.id);

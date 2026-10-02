@@ -1,47 +1,31 @@
-import type { ProjectSummary } from "@catamorphic/react/types";
-import { Folder, Plug, Settings } from "lucide-react";
+import { Settings } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   desktopApi,
   type Profile,
-  type ProfileSummary,
+  type ProfileConnection,
   type ProfilesData,
 } from "../lib/desktop-api";
-import { HarnessIcon } from "./harness-icon";
+import { ConnectorIcon } from "./connector-icon";
 import { ProfileAvatar } from "./profile-avatar";
 
-/** Projects listed before the rest collapse into a count. */
-const PROJECTS_SHOWN = 5;
-/** Connections named before the rest collapse into a count. */
-const CONNECTIONS_NAMED = 3;
+/** Connections listed before the rest collapse into a count. */
+const CONNECTIONS_SHOWN = 6;
 
 /**
- * A profile's preview card: what it holds (projects) and what sets it apart
- * (its default agent and connections), with a way into its settings.
+ * A profile's preview card: who it is (avatar, name, whether the app opens
+ * with it) and what it connects to, with a way into its settings.
  */
 export function ProfileInspector({
   profile,
   data,
-  projects,
-  onOpenProject,
   onOpenSettings,
 }: {
   profile: Profile;
   data: ProfilesData;
-  projects: ProjectSummary[];
-  onOpenProject: (projectId: string) => void;
   onOpenSettings: () => void;
 }) {
-  const summary = useProfileSummary(profile.id);
-  // The default project leads; the rest keep the profile's own order.
-  const owned = projects
-    .filter((project) => profile.projectIds.includes(project.id))
-    .sort(
-      (a, b) =>
-        Number(b.id === profile.defaultProjectId) -
-        Number(a.id === profile.defaultProjectId),
-    );
-  const shown = owned.slice(0, PROJECTS_SHOWN);
+  const connections = useProfileConnections(profile.id);
   const isDefault = profile.id === data.defaultProfileId;
   return (
     <div className="text-[12px] text-fg-muted" data-testid="profile-inspector">
@@ -68,123 +52,75 @@ export function ProfileInspector({
       </header>
 
       <section className="border-t border-border pt-2">
-        <h3 className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-fg-faint">
-          Projects
+        <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-fg-faint">
+          Connections
         </h3>
-        {shown.length === 0 ? (
-          <p className="px-1 pb-1 text-fg-faint">No projects yet</p>
-        ) : (
-          <ul>
-            {shown.map((project) => (
-              <li key={project.id}>
-                <button
-                  type="button"
-                  onClick={() => onOpenProject(project.id)}
-                  className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-1 text-left text-fg-muted transition-colors duration-150 hover:bg-bg-raised hover:text-fg"
-                >
-                  <Folder className="size-3.5 shrink-0 text-fg-faint" />
-                  <span className="min-w-0 flex-1 truncate">
-                    {project.name}
-                  </span>
-                  {project.id === profile.defaultProjectId && (
-                    <span className="shrink-0 text-[10px] text-fg-faint">
-                      Opens first
-                    </span>
-                  )}
-                </button>
-              </li>
-            ))}
+        {connections === "loading" ? (
+          <ul aria-busy>
+            <li className="flex h-7 items-center gap-2">
+              <span className="size-5 animate-pulse rounded bg-bg-raised" />
+              <span className="h-3 w-24 animate-pulse rounded bg-bg-raised">
+                <span className="sr-only">Loading</span>
+              </span>
+            </li>
           </ul>
-        )}
-        {owned.length > shown.length && (
-          <p className="px-1 pt-0.5 text-[11px] text-fg-faint">
-            {owned.length - shown.length} more
-          </p>
+        ) : connections === "failed" ? (
+          <p className="text-fg-faint">Unavailable</p>
+        ) : connections.length === 0 ? (
+          <p className="text-fg-faint">None yet</p>
+        ) : (
+          <>
+            <ul>
+              {connections.slice(0, CONNECTIONS_SHOWN).map((connection) => (
+                <li
+                  key={connection.name}
+                  className="flex h-7 items-center gap-2 text-fg"
+                >
+                  <ConnectorIcon
+                    iconUrl={connection.iconUrl}
+                    url={connection.url}
+                    name={connection.name}
+                    size="sm"
+                  />
+                  <span className="min-w-0 flex-1 truncate">
+                    {connection.name}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {connections.length > CONNECTIONS_SHOWN && (
+              <p className="pt-0.5 text-[11px] text-fg-faint">
+                {connections.length - CONNECTIONS_SHOWN} more
+              </p>
+            )}
+          </>
         )}
       </section>
-
-      <dl className="mt-2 space-y-1.5 border-t border-border px-1 pt-2.5">
-        <div className="flex items-center gap-2">
-          <dt className="w-20 shrink-0 text-fg-faint">Agent</dt>
-          <dd className="flex min-w-0 flex-1 items-center gap-1.5 text-fg">
-            {summary === "loading" ? (
-              <Pending />
-            ) : summary === "failed" ? (
-              <span className="text-fg-faint">Unavailable</span>
-            ) : summary.agent ? (
-              <>
-                <HarnessIcon
-                  harness={summary.agent.harness}
-                  provider={summary.agent.provider}
-                  className="size-3.5 shrink-0"
-                />
-                <span className="truncate">{summary.agent.name}</span>
-              </>
-            ) : (
-              <span className="text-fg-faint">None</span>
-            )}
-          </dd>
-        </div>
-        <div className="flex items-center gap-2">
-          <dt className="w-20 shrink-0 text-fg-faint">Connections</dt>
-          <dd className="flex min-w-0 flex-1 items-center gap-1.5 text-fg">
-            {summary === "loading" ? (
-              <Pending />
-            ) : summary === "failed" ? (
-              <span className="text-fg-faint">Unavailable</span>
-            ) : summary.connections.length > 0 ? (
-              <>
-                <Plug className="size-3.5 shrink-0 text-fg-faint" />
-                <span className="truncate">
-                  {connectionsLabel(summary.connections)}
-                </span>
-              </>
-            ) : (
-              <span className="text-fg-faint">None</span>
-            )}
-          </dd>
-        </div>
-      </dl>
     </div>
   );
 }
 
-/** Holds a value's line while the summary loads, so the card never jumps. */
-function Pending() {
-  return (
-    <span className="h-3 w-24 animate-pulse rounded bg-bg-raised">
-      <span className="sr-only">Loading</span>
-    </span>
-  );
-}
-
-export function connectionsLabel(names: string[]): string {
-  const named = names.slice(0, CONNECTIONS_NAMED).join(", ");
-  const rest = names.length - CONNECTIONS_NAMED;
-  return rest > 0 ? `${named} and ${rest} more` : named;
-}
-
 /** Loads on inspection: the card mounts only when it opens. */
-function useProfileSummary(
+function useProfileConnections(
   profileId: string,
-): ProfileSummary | "loading" | "failed" {
-  const [summary, setSummary] = useState<ProfileSummary | "loading" | "failed">(
-    "loading",
-  );
+): ProfileConnection[] | "loading" | "failed" {
+  const [connections, setConnections] = useState<
+    ProfileConnection[] | "loading" | "failed"
+  >("loading");
   useEffect(() => {
     let current = true;
-    setSummary("loading");
-    desktopApi.profileSummary(profileId).then(
+    setConnections("loading");
+    desktopApi.profileConnections(profileId).then(
       (loaded) => {
-        if (current) setSummary(loaded);
+        if (current) setConnections(loaded);
       },
       () => {
-        if (current) setSummary("failed");
+        if (current) setConnections("failed");
       },
     );
     return () => {
       current = false;
     };
   }, [profileId]);
-  return summary;
+  return connections;
 }

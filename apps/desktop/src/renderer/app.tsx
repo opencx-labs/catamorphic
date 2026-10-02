@@ -5658,20 +5658,8 @@ export function App({
                 {profilesData && activeProfile && (
                   <ProfileBar
                     data={profilesData}
-                    projects={allProjects}
                     activeProfileId={activeProfile.id}
                     onSwitch={switchProfile}
-                    onOpenProject={(profile, projectId) => {
-                      if (profile.id === activeProfile.id)
-                        selectProject(projectId);
-                      // Another profile's project opens in that profile's
-                      // window, focusing the one that already has it open.
-                      else
-                        void desktopApi.openProfileWindow(
-                          profile.id,
-                          projectId,
-                        );
-                    }}
                     onOpenSettings={(profileId) =>
                       openTab({
                         kind: "profile-settings",

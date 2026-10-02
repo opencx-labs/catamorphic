@@ -622,31 +622,14 @@ export class DesktopWorkspaces {
     );
   }
 
-  /**
-   * Opens one of the profile's projects from outside its windows (another
-   * profile's preview card): in the window that owns it, else the profile's
-   * last window, else a new one. False when the project is not the profile's.
-   */
-  openProject(profileId: string, projectId: string): boolean {
-    if (this.options.profileForProject(projectId) !== profileId) return false;
-    this.open(profileId, { projectId });
-    return true;
-  }
-
   private navigate(input: WorkspaceNavigation & { sender: WebContents }) {
     const profileId = this.options.windows.profileFor(input.sender);
     if (this.options.profileForProject(input.projectId) !== profileId) return;
-    this.open(profileId, input, BrowserWindow.fromWebContents(input.sender));
-  }
-
-  private open(
-    profileId: string,
-    input: WorkspaceNavigation,
-    from?: BrowserWindow | null,
-  ) {
     const owner = this.owner(input.projectId);
-    if (owner && this.options.windows.profileFor(owner) !== profileId) return;
-    const source = this.lastWindows.get(profileId) ?? from;
+    if (owner && !this.sameProfile(input.sender, owner)) return;
+    const source =
+      this.lastWindows.get(profileId) ??
+      BrowserWindow.fromWebContents(input.sender);
     const target = owner
       ? BrowserWindow.fromWebContents(owner)
       : input.newWindow || !source
