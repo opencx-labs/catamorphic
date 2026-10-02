@@ -7,8 +7,10 @@ import { migrateToLatest } from "../migrate.js";
 /*
  * Migration 045 turns existing chats into the session log (ADR 0196):
  * messages become items in order, step logs become work items, turns keep
- * their outcome, a turn caught running reads as interrupted, and the log
- * continues after the converted history.
+ * their outcome, a turn caught running reads as interrupted, a queued turn
+ * has made no attempt, messages outside a turn belong to none, native
+ * threads are unavailable (the next turn is handed the history), and the
+ * log continues after the converted history.
  */
 
 const schema = "session_log_migration";
@@ -22,13 +24,21 @@ afterAll(async () => {
 const tenantId = "11111111-1111-4111-8111-111111111111";
 const projectId = "22222222-2222-4222-8222-222222222222";
 const sessionId = "33333333-3333-4333-8333-333333333333";
+const builtInSessionId = "33333333-3333-4333-8333-333333333334";
 const ids = {
   ask: "44444444-4444-4444-8444-444444444441",
   reply: "44444444-4444-4444-8444-444444444442",
   second: "44444444-4444-4444-8444-444444444443",
   partial: "44444444-4444-4444-8444-444444444444",
+  aside: "44444444-4444-4444-8444-444444444445",
+  system: "44444444-4444-4444-8444-444444444446",
+  queued: "44444444-4444-4444-8444-444444444447",
+  builtInAsk: "44444444-4444-4444-8444-444444444448",
+  builtInReply: "44444444-4444-4444-8444-444444444449",
   turnOne: "55555555-5555-4555-8555-555555555551",
   turnTwo: "55555555-5555-4555-8555-555555555552",
+  turnThree: "55555555-5555-4555-8555-555555555553",
+  builtInTurn: "55555555-5555-4555-8555-555555555554",
 };
 
 describe("migration 045", () => {
@@ -51,17 +61,25 @@ describe("migration 045", () => {
       `INSERT INTO projects (id, tenant_id, name) VALUES ('${projectId}', '${tenantId}', 'P')`,
     );
     await run(`INSERT INTO agent_sessions (id, project_id, external_user_id, provider, provider_session_id)
-               VALUES ('${sessionId}', '${projectId}', 'ada', 'claude-code', 'native-1')`);
+               VALUES ('${sessionId}', '${projectId}', 'ada', 'claude-code', 'native-1'),
+                      ('${builtInSessionId}', '${projectId}', 'ada', 'ai-sdk', 'native-2')`);
     await run(`INSERT INTO agent_messages (id, session_id, role, content, author_kind, author_payload, delivery_mode, metadata) VALUES
       ('${ids.ask}', '${sessionId}', 'user', 'Fix the bug', 'user', '{"externalUserId":"ada"}', 'next_turn', '{}'),
       ('${ids.reply}', '${sessionId}', 'assistant', 'Fixed it', 'agent', '{"sessionId":"${sessionId}","agentId":null}', 'next_turn',
         '{"status":"completed","changedFiles":[{"path":"src/a.ts","kind":"modified"}],"events":[{"type":"command","content":"bun test"},{"type":"file_edit","filePath":"src/a.ts"},{"type":"text","content":"Fixed it"}]}'),
+      ('${ids.aside}', '${sessionId}', 'user', 'For the record', 'user', '{"externalUserId":"ada"}', 'message_only', '{}'),
+      ('${ids.system}', '${sessionId}', 'system', 'Grace joined', 'system', '{}', 'message_only', '{}'),
       ('${ids.second}', '${sessionId}', 'user', 'Now the docs', 'user', '{"externalUserId":"ada"}', 'next_turn', '{"attention":"required"}'),
       ('${ids.partial}', '${sessionId}', 'assistant', 'Thinking...', 'agent', '{"sessionId":"${sessionId}","agentId":null}', 'next_turn',
-        '{"status":"in_progress","partialContent":"Started on the docs"}')`);
-    await run(`INSERT INTO agent_turns (id, session_id, message_id, result_message_id, status, delivery_mode, created_at) VALUES
-      ('${ids.turnOne}', '${sessionId}', '${ids.ask}', '${ids.reply}', 'completed', 'next_turn', now() - interval '1 minute'),
-      ('${ids.turnTwo}', '${sessionId}', '${ids.second}', '${ids.partial}', 'running', 'next_turn', now())`);
+        '{"status":"in_progress","partialContent":"Started on the docs"}'),
+      ('${ids.queued}', '${sessionId}', 'user', 'Then the tests', 'user', '{"externalUserId":"ada"}', 'next_turn', '{}'),
+      ('${ids.builtInAsk}', '${builtInSessionId}', 'user', 'Hello', 'user', '{"externalUserId":"ada"}', 'next_turn', '{}'),
+      ('${ids.builtInReply}', '${builtInSessionId}', 'assistant', 'Hi', 'agent', '{"sessionId":"${builtInSessionId}","agentId":null}', 'next_turn', '{"status":"completed"}')`);
+    await run(`INSERT INTO agent_turns (id, session_id, message_id, result_message_id, status, delivery_mode, attempt, created_at) VALUES
+      ('${ids.turnOne}', '${sessionId}', '${ids.ask}', '${ids.reply}', 'completed', 'next_turn', 1, now() - interval '1 minute'),
+      ('${ids.turnTwo}', '${sessionId}', '${ids.second}', '${ids.partial}', 'running', 'next_turn', 1, now()),
+      ('${ids.turnThree}', '${sessionId}', '${ids.queued}', NULL, 'queued', 'next_turn', 0, now() + interval '1 second'),
+      ('${ids.builtInTurn}', '${builtInSessionId}', '${ids.builtInAsk}', '${ids.builtInReply}', 'completed', 'next_turn', 1, now())`);
 
     // Now 045.
     await run(
@@ -87,17 +105,24 @@ describe("migration 045", () => {
       ["command", "completed", "bun test"],
       ["file_change", "completed", ""],
       ["assistant_message", "completed", "Fixed it"],
+      ["user_message", "completed", "For the record"],
+      ["user_message", "completed", "Grace joined"],
       ["user_message", "completed", "Now the docs"],
       ["assistant_message", "failed", "Started on the docs"],
+      ["user_message", "completed", "Then the tests"],
     ]);
-    // Each item belongs to the turn its input started; payloads are whole items.
+    // A turn holds its input and the agent's output for it; messages sent
+    // outside a turn belong to none, so they never read as steers.
     expect(rows.map((row) => row.turn_id)).toEqual([
       ids.turnOne,
       ids.turnOne,
       ids.turnOne,
       ids.turnOne,
+      null,
+      null,
       ids.turnTwo,
       ids.turnTwo,
+      ids.turnThree,
     ]);
     for (const row of rows)
       expect(row.payload).toMatchObject({
@@ -106,14 +131,18 @@ describe("migration 045", () => {
         kind: row.kind,
         position: Number(row.position),
       });
-    expect(rows[4]?.payload).toMatchObject({
+    expect(rows[6]?.payload).toMatchObject({
       author: { kind: "user", externalUserId: "ada" },
       dispatch: "queue",
       attention: "required",
     });
 
     const turns = await run(
-      `SELECT id, ordinal, status, error, outcome, completed_at FROM agent_turns WHERE session_id = '${sessionId}' ORDER BY ordinal`,
+      `SELECT turn.id, turn.ordinal, turn.status, turn.error, turn.outcome, turn.completed_at,
+              turn.attempt_count, thread.harness AS thread_harness
+         FROM agent_turns turn
+         LEFT JOIN agent_provider_threads thread ON thread.id = turn.provider_thread_id
+        WHERE turn.session_id = '${sessionId}' ORDER BY turn.ordinal`,
     );
     expect(turns.rows).toMatchObject([
       {
@@ -121,6 +150,8 @@ describe("migration 045", () => {
         ordinal: 1,
         status: "completed",
         outcome: { changedFiles: [{ path: "src/a.ts", kind: "modified" }] },
+        attempt_count: 1,
+        thread_harness: "claude-code",
       },
       {
         id: ids.turnTwo,
@@ -130,25 +161,60 @@ describe("migration 045", () => {
           message:
             "This turn stopped before it finished, when Work was updated.",
         },
+        attempt_count: 1,
+        thread_harness: "claude-code",
+      },
+      // Never run: no attempt, so an interrupt leaves it queued; no thread yet.
+      {
+        id: ids.turnThree,
+        ordinal: 3,
+        status: "queued",
+        completed_at: null,
+        attempt_count: 0,
+        thread_harness: null,
       },
     ]);
-
-    // The native conversation carries over, and the log continues after the history.
-    const thread = await run(
-      `SELECT harness, native_ref FROM agent_provider_threads WHERE session_id = '${sessionId}'`,
+    const attempts = await run(
+      `SELECT count(*)::int AS count FROM agent_turn_attempts`,
     );
-    expect(thread.rows).toEqual([
+    expect(attempts.rows).toEqual([{ count: 0 }]);
+
+    // A native conversation from before the log was never stored, the
+    // built-in agent's included: its thread is unavailable, so the next
+    // turn starts a fresh thread handed every converted turn (ADR 0197).
+    const threads = await run(
+      `SELECT session_id, harness, native_ref, status, last_turn_ordinal
+         FROM agent_provider_threads ORDER BY harness`,
+    );
+    expect(threads.rows).toEqual([
       {
-        harness: "claude-code",
-        native_ref: { id: "native-1", strength: "strong" },
+        session_id: builtInSessionId,
+        harness: "ai-sdk",
+        native_ref: null,
+        status: "unavailable",
+        last_turn_ordinal: 1,
       },
+      {
+        session_id: sessionId,
+        harness: "claude-code",
+        native_ref: null,
+        status: "unavailable",
+        last_turn_ordinal: 2,
+      },
+    ]);
+    const builtIn = await run(
+      `SELECT kind, turn_id FROM agent_items WHERE session_id = '${builtInSessionId}' ORDER BY position`,
+    );
+    expect(builtIn.rows).toEqual([
+      { kind: "user_message", turn_id: ids.builtInTurn },
+      { kind: "assistant_message", turn_id: ids.builtInTurn },
     ]);
     const session = await run(
       `SELECT event_sequence FROM agent_sessions WHERE id = '${sessionId}'`,
     );
     expect(
       Number((session.rows[0] as { event_sequence: string }).event_sequence),
-    ).toBe(6);
+    ).toBe(9);
     const old = await run(
       `SELECT to_regclass('agent_messages') AS messages, to_regclass('agent_runtime_events') AS events`,
     );

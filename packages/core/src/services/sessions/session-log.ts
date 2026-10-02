@@ -219,6 +219,62 @@ export class SessionLog {
       .execute();
   }
 
+  /**
+   * Whether this copy of a session logged any event. One that did not
+   * holds only what a snapshot gave it, or what it had before the log (a
+   * chat converted by migration 045).
+   */
+  async hasLogged(db: Executor, sessionId: string): Promise<boolean> {
+    const row = await db
+      .selectFrom("agent_session_events")
+      .select("sequence")
+      .where("session_id", "=", sessionId)
+      .limit(1)
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * Empty a copy that logged nothing, so a snapshot replaces it whole (a
+   * mirror's base over a converted or stale copy, ADR 0196). A copy with a
+   * log of its own is refused: its turns are not another copy's to replace.
+   */
+  async clearUnlogged(
+    trx: Transaction<DB>,
+    input: { sessionId: string },
+  ): Promise<void> {
+    if (await this.hasLogged(trx, input.sessionId))
+      throw new Error(
+        `Session ${input.sessionId} has a log of its own; a snapshot cannot replace it`,
+      );
+    // Attempts and turn commands go with their turns, entries with threads.
+    await trx
+      .deleteFrom("agent_runtime_requests")
+      .where("session_id", "=", input.sessionId)
+      .execute();
+    await trx
+      .deleteFrom("agent_turns")
+      .where("session_id", "=", input.sessionId)
+      .execute();
+    await trx
+      .deleteFrom("agent_items")
+      .where("session_id", "=", input.sessionId)
+      .execute();
+    await trx
+      .deleteFrom("agent_provider_threads")
+      .where("session_id", "=", input.sessionId)
+      .execute();
+    await trx
+      .deleteFrom("agent_session_commands")
+      .where("session_id", "=", input.sessionId)
+      .execute();
+    await trx
+      .updateTable("agent_sessions")
+      .set({ event_sequence: 0 })
+      .where("id", "=", input.sessionId)
+      .execute();
+  }
+
   private async persist(
     trx: Transaction<DB>,
     stored: readonly StoredSessionEvent[],

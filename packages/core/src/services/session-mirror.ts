@@ -125,6 +125,14 @@ export async function writeSessionMirror({
       throw new SessionMirrorDivergedError(sessionId);
     if (!current && !input.base)
       throw new SessionMirrorBehindError(sessionId, 0);
+    // A mirror that logged nothing holds only a base, or the history it
+    // had before the log (a chat converted by migration 045, whose
+    // sequence means nothing to the source). Its source's base replaces it
+    // whole; a copy with a log of its own never is (that is `diverged`).
+    const unlogged =
+      current !== undefined &&
+      Number(current.mirror_sequence) > 0 &&
+      !(await log.hasLogged(trx, sessionId));
     const allocation =
       !current && mirrorAdmission
         ? await executionAllocations.create({
@@ -177,7 +185,11 @@ export async function writeSessionMirror({
       ...thread,
       status: "unavailable",
     });
-    if (input.base && (!current || Number(current.event_sequence) === 0)) {
+    if (
+      input.base &&
+      (!current || Number(current.event_sequence) === 0 || unlogged)
+    ) {
+      if (unlogged) await log.clearUnlogged(trx, { sessionId });
       await log.importSnapshot(trx, {
         sessionId,
         snapshot: {

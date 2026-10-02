@@ -2,9 +2,9 @@
 -- harnesses beside their workspace (ADR 0197).
 --
 -- Existing chats are converted in place: messages become items, the old
--- queue rows become turns, a session's provider anchor becomes its provider
--- thread. Converted sessions start their log at sequence 0; their history
--- is the projection the log continues from.
+-- queue rows become turns, a session's provider anchor becomes an
+-- unavailable provider thread. Converted sessions log no events: their
+-- history is the projection the log continues from, after its last position.
 
 SELECT set_config('catamorphic.suppress_session_events', 'true', true);
 
@@ -73,10 +73,13 @@ CREATE UNIQUE INDEX agent_provider_thread_entries_uuid
     ON agent_provider_thread_entries (thread_id, subpath, entry_uuid)
     WHERE entry_uuid IS NOT NULL;
 
+-- A converted conversation's native state was never kept in Work's store,
+-- so its thread cannot be resumed, restored or forked: it stays, for the
+-- turns that ran on it, as unavailable and without a native ref. The next
+-- turn starts a thread of its own and is handed the converted history
+-- (ADR 0197).
 INSERT INTO agent_provider_threads (session_id, harness, native_ref, status, portable)
-SELECT id, provider,
-       jsonb_build_object('id', provider_session_id, 'strength', 'strong'),
-       'active', false
+SELECT id, provider, NULL, 'unavailable', false
   FROM agent_sessions
  WHERE provider_session_id IS NOT NULL;
 
@@ -292,17 +295,36 @@ SELECT legacy.id, legacy.session_id,
        legacy.created_at, legacy.started_at,
        CASE WHEN legacy.status IN ('queued', 'held') THEN NULL
             ELSE COALESCE(legacy.completed_at, legacy.updated_at) END,
-       legacy.updated_at, GREATEST(legacy.attempt, 1)
+       legacy.updated_at,
+       -- A turn that never ran has made no attempt (or only the ones it retried after).
+       CASE WHEN legacy.status IN ('queued', 'held', 'cancelled') THEN legacy.attempt
+            ELSE GREATEST(legacy.attempt, 1) END
   FROM agent_turns_legacy legacy
   LEFT JOIN agent_messages result ON result.id = legacy.result_message_id;
 
--- Each converted item belongs to the latest turn whose input came before it.
+-- A turn holds its input and the agent's output for it: its reply and the
+-- work logged before that reply. Every other message (one sent message-only,
+-- a system line) belongs to no turn, so it never reads as a steer.
+UPDATE agent_items item SET turn_id = turn.id
+  FROM agent_turns turn
+ WHERE turn.input_item_id = item.id;
+UPDATE agent_items item SET turn_id = legacy.id
+  FROM agent_turns_legacy legacy
+ WHERE legacy.result_message_id = item.id AND item.kind = 'assistant_message';
+-- A reply no turn named belongs to the latest turn whose input came before it.
 UPDATE agent_items item SET turn_id = (
     SELECT turn.id FROM agent_turns turn
       JOIN agent_items input ON input.id = turn.input_item_id
-     WHERE turn.session_id = item.session_id AND input.position <= item.position
+     WHERE turn.session_id = item.session_id AND input.position < item.position
      ORDER BY input.position DESC LIMIT 1)
- WHERE item.kind <> 'notice';
+ WHERE item.kind = 'assistant_message' AND item.turn_id IS NULL;
+-- A step log was converted into the items just before its reply.
+UPDATE agent_items item SET turn_id = (
+    SELECT reply.turn_id FROM agent_items reply
+     WHERE reply.session_id = item.session_id AND reply.kind = 'assistant_message'
+       AND reply.position > item.position
+     ORDER BY reply.position LIMIT 1)
+ WHERE item.kind IN ('tool_call', 'command', 'file_change', 'subagent');
 
 UPDATE agent_items SET payload = payload || jsonb_build_object(
     'id', id, 'sessionId', session_id, 'turnId', turn_id, 'attemptId', NULL,
@@ -312,7 +334,12 @@ UPDATE agent_items SET payload = payload || jsonb_build_object(
     'startedAt', NULL, 'endedAt', NULL);
 
 UPDATE agent_turns turn SET provider_thread_id = thread.id
-  FROM agent_provider_threads thread WHERE thread.session_id = turn.session_id;
+  FROM agent_provider_threads thread
+ WHERE thread.session_id = turn.session_id AND turn.attempt_count > 0;
+UPDATE agent_provider_threads thread SET last_turn_ordinal = ran.last
+  FROM (SELECT provider_thread_id, max(ordinal) AS last FROM agent_turns
+         WHERE provider_thread_id IS NOT NULL GROUP BY provider_thread_id) ran
+ WHERE ran.provider_thread_id = thread.id;
 
 -- A converted session's log continues after its history: new items sort
 -- after the converted ones.
@@ -434,8 +461,11 @@ BEGIN
     IF NOT FOUND THEN RETURN NEW; END IF;
     IF TG_TABLE_NAME = 'agent_items' THEN
       IF NEW.kind = 'assistant_message' THEN
-        -- Emit once, when a streamed reply settles; copied history arrives settled.
-        IF TG_OP = 'INSERT' OR OLD.status <> 'in_progress' OR NEW.status = 'in_progress' THEN RETURN NEW; END IF;
+        -- Emit once per reply, when it settles: added settled, or a streamed
+        -- one leaving in_progress. Copied history is written with events suppressed.
+        IF NEW.status = 'in_progress' OR (TG_OP = 'UPDATE' AND OLD.status <> 'in_progress') THEN
+          RETURN NEW;
+        END IF;
         event_kind := 'session.message-sent';
         SELECT input.* INTO input_row FROM agent_turns turn JOIN agent_items input ON input.id = turn.input_item_id
          WHERE turn.id = NEW.turn_id;
