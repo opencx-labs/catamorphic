@@ -575,9 +575,11 @@
       "name": "@catamorphic/runner-bundle",
       "version": "0.0.1",
       "dependencies": {
+        "@catamorphic/agent-protocol": "workspace:*",
         "@catamorphic/agent-runner": "workspace:*",
         "@catamorphic/claude-code": "workspace:*",
         "@catamorphic/codex": "workspace:*",
+        "@catamorphic/sandbox": "workspace:*",
       },
       "devDependencies": {
         "@types/node": "^26.1.1",
@@ -682,10 +684,10 @@
       "dependencies": {
         "@ai-sdk/anthropic": "^4.0.52",
         "@ai-sdk/openai": "^4.0.65",
+        "@catamorphic/agent-protocol": "workspace:*",
+        "@catamorphic/agent-runner": "workspace:*",
         "@catamorphic/ai-sdk": "workspace:*",
         "@catamorphic/app": "workspace:*",
-        "@catamorphic/claude-code": "workspace:*",
-        "@catamorphic/codex": "workspace:*",
         "@catamorphic/core": "workspace:*",
         "@catamorphic/db": "workspace:*",
         "@catamorphic/fastify-plugin": "workspace:*",

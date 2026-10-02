@@ -1,5 +1,6 @@
 import {
   assertSandboxResources,
+  refuseSignIns,
   CommandDeploymentRuntimeProvider,
   type CreateSandboxOpts,
   type DeploymentRuntimeProvider,
@@ -47,6 +48,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
   async createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle> {
     assertSandboxResources(opts.resources, []);
+    refuseSignIns({ signIns: opts.signIns, provider: "Daytona" });
     const sandbox = await this.client.create({
       language: opts.language ?? "typescript",
       snapshot: opts.snapshotName,

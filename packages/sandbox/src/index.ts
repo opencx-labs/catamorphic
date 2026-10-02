@@ -262,6 +262,17 @@ export {
   RuntimeEventReportingError,
   RuntimeInfrastructureError,
 } from "./types.js";
+export {
+  machineSignInHome,
+  parseSandboxPaths,
+  parseSignInCapability,
+  refuseSignIns,
+  remapPaths,
+  SANDBOX_PATHS_ENV,
+  type SandboxPathMap,
+  signInMemberDirectory,
+  signInMemberOf,
+} from "./sign-ins.js";
 export type { WorkflowPackagePayload } from "./workflow-package.js";
 export {
   APP_PACKAGE_NAME,

@@ -54,6 +54,7 @@ import {
   type SandboxProvider,
   type SignInHarness,
   serverKeyOf,
+  signInCapability,
   signInHomePath,
   stagedPluginFiles,
   stagePluginDocs,
@@ -7218,18 +7219,38 @@ export class AgentSessionsService {
       throw new Error("The selected Environment has no execution provider");
     const commandTimeoutSeconds =
       allocation.policy.requirements.resources?.commandTimeoutSeconds;
+    // The owner's own sign-in, when the placed machine reports it (ADR
+    // 0197): the sandbox mounts that one home from the machine's disk.
+    const owner = placementOwner(session.external_user_id);
+    const signIn =
+      agent.signIn &&
+      owner &&
+      admitted.binding.capabilities.includes(
+        signInCapability({ harness: agent.signIn, member: owner }),
+      )
+        ? { harness: agent.signIn, member: owner }
+        : undefined;
     return {
       provider,
       bindingId: allocation.bindingId,
       environmentName: allocation.environmentName,
       ...(commandTimeoutSeconds ? { commandTimeoutSeconds } : {}),
       personalCredentials: admitted.personalCredentials,
+      ...(signIn
+        ? {
+            signInHome: signInHomePath({
+              workspaceRoot: provider.workspaceRoot,
+              harness: signIn.harness,
+            }),
+          }
+        : {}),
       devSandboxes: new DevSandboxService({
         projectManager: this.projectManager,
         provider,
         store: new DbSandboxStore(this.db, allocation.id),
         resources: allocation.policy.requirements.resources,
         ...(this.usesSessionCopy(session) ? { sessionId: session.id } : {}),
+        ...(signIn ? { signIns: [signIn] } : {}),
       }),
     };
   }

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type {
   CreateSandboxOpts,
   DeploymentRuntimeProvider,
@@ -13,8 +14,10 @@ import type {
 import {
   assertSandboxResources,
   dockerfileImageReference,
+  machineSignInHome,
   SANDBOX_CAPABILITIES,
   shellSandboxProcesses,
+  signInHomePath,
 } from "@catamorphic/sandbox";
 import {
   APP_DATA_ENV,
@@ -95,14 +98,29 @@ export interface MicrosandboxProviderConfig {
   containers?: boolean;
   /** Size of each container sandbox's Docker disk. Default 8 GiB. */
   containerDiskMib?: number;
+  /**
+   * Where this machine keeps members' own harness sign-ins (ADR 0197),
+   * one home per harness and member (`machineSignInHome`). A sandbox
+   * created with `signIns` bind-mounts exactly those homes, read-write so
+   * the CLI's own token refresh keeps working. Without it the provider
+   * refuses `signIns`.
+   */
+  signInRoot?: string;
 }
 
-/** Runs once per new sandbox; ~20s on first use, no-op when both exist. */
+/**
+ * Runs once per new sandbox; ~20s on first use, no-op when everything
+ * exists. Agent sessions need git and bash, and the agent runner needs Bun
+ * or Node (ADR 0196); an image without them gets them from its package
+ * manager (Node, the smaller of the two).
+ */
 const DEFAULT_SETUP_COMMAND =
-  "{ command -v git && command -v bash; } >/dev/null 2>&1 || " +
+  "{ command -v git && command -v bash && { command -v bun || command -v node; }; } >/dev/null 2>&1 || " +
   "if command -v apt-get >/dev/null 2>&1; then " +
-  "apt-get update -qq && apt-get install -y -qq git bash; " +
-  "elif command -v apk >/dev/null 2>&1; then apk add --no-cache -q git bash; " +
+  "apt-get update -qq && apt-get install -y -qq git bash && " +
+  "{ command -v bun >/dev/null 2>&1 || command -v node >/dev/null 2>&1 || apt-get install -y -qq nodejs; }; " +
+  "elif command -v apk >/dev/null 2>&1; then apk add --no-cache -q git bash && " +
+  "{ command -v bun >/dev/null 2>&1 || command -v node >/dev/null 2>&1 || apk add --no-cache -q nodejs; }; " +
   "else echo 'The image has neither git nor a known package manager' >&2; exit 1; fi";
 
 /** Start the image's Docker daemon unless it already answers. */
@@ -132,12 +150,12 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
   private readonly config: Required<
     Omit<
       MicrosandboxProviderConfig,
-      "projectDataDirectory" | "networkProfiles" | "imageBuilder"
+      "projectDataDirectory" | "networkProfiles" | "imageBuilder" | "signInRoot"
     >
   > &
     Pick<
       MicrosandboxProviderConfig,
-      "projectDataDirectory" | "networkProfiles" | "imageBuilder"
+      "projectDataDirectory" | "networkProfiles" | "imageBuilder" | "signInRoot"
     >;
   private readonly connections = new Map<string, Sandbox>();
 
@@ -156,6 +174,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
         : undefined,
       containers: config?.containers ?? true,
       containerDiskMib: config?.containerDiskMib ?? DEFAULT_CONTAINER_DISK_MIB,
+      signInRoot: config?.signInRoot,
     };
     this.capabilities = [
       SANDBOX_CAPABILITIES.images,
@@ -179,6 +198,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       );
     if (opts.containers && !this.config.containers)
       throw new Error("This machine does not run containers in sandboxes");
+    const signIns = this.signInMounts(opts);
     const image = await this.imageFor(opts);
     const name = `${this.config.namePrefix}-${crypto.randomUUID().slice(0, 12)}`;
     let builder = Sandbox.builder(name)
@@ -219,6 +239,8 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
         .volume(APP_DATA_MOUNT, (mount) => mount.bind(dataDirectory))
         .env(APP_DATA_ENV, APP_DATA_MOUNT);
     }
+    for (const signIn of signIns)
+      builder = builder.volume(signIn.guest, (mount) => mount.bind(signIn.host));
     const sandbox = await builder.create();
     this.connections.set(name, sandbox);
     const prepare = async (command: string, what: string) => {
@@ -252,6 +274,36 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     const handle = await Sandbox.get(sandboxId);
     if (handle.status === "running") return;
     this.connections.set(sandboxId, await booted(await bringUp(handle)));
+  }
+
+  /**
+   * The sign-in homes a sandbox mounts (ADR 0197): each one this machine
+   * keeps for the member named, nothing else of the sign-in root.
+   */
+  private signInMounts(
+    opts: CreateSandboxOpts,
+  ): Array<{ host: string; guest: string }> {
+    const requested = opts.signIns ?? [];
+    if (requested.length === 0) return [];
+    const root = this.config.signInRoot;
+    if (!root)
+      throw new Error(
+        "This machine keeps no members' sign-ins, so its sandboxes cannot run on one",
+      );
+    return requested.map((signIn) => {
+      const host = machineSignInHome({ root, ...signIn });
+      if (!fs.statSync(host, { throwIfNoEntry: false })?.isDirectory())
+        throw new Error(
+          `This machine has no ${signIn.harness} sign-in for ${signIn.member}. Sign in on it with: work worker sign-in ${signIn.harness} --member ${signIn.member}`,
+        );
+      return {
+        host,
+        guest: signInHomePath({
+          workspaceRoot: this.workspaceRoot,
+          harness: signIn.harness,
+        }),
+      };
+    });
   }
 
   /** The image reference to boot, building a Dockerfile image when needed. */

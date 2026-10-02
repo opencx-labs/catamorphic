@@ -20,6 +20,7 @@ import type {
   ProjectEventSourceProvider,
   ProjectLifecycleHooks,
   PushNotificationTransport,
+  RegisteredCodingAgent,
   RetentionConfig,
   TriggerKindRuntime,
 } from "@catamorphic/core";
@@ -42,7 +43,6 @@ import {
 } from "@catamorphic/git";
 import type { PluginResolver } from "@catamorphic/plugins";
 import type {
-  CodingAgentProvider,
   EnvironmentProvider,
   SandboxProvider,
 } from "@catamorphic/sandbox";
@@ -105,12 +105,13 @@ export type CreateCatamorphicConfig = CatamorphicHostConfig &
   (
     | {
         /**
-         * Pluggable coding agent(s) for AI-assisted editing: a single provider
-         * (e.g. `AiSdkCodingAgent` from `@catamorphic/ai-sdk`) or a
+         * Pluggable coding agent(s) for AI-assisted editing: one
+         * `RegisteredCodingAgent` (a host adapter such as
+         * `createAiSdkAdapter`, or a sandboxed harness by id, ADR 0196) or a
          * `CodingAgentRegistry` when the host offers several agents. Requires
          * `sandboxProvider`; enables the agent-session APIs.
          */
-        codingAgent: CodingAgentProvider | CodingAgentRegistry;
+        codingAgent: RegisteredCodingAgent | CodingAgentRegistry;
         /** Stable host identity the agent sessions belong to. */
         hostId: string;
       }
@@ -281,13 +282,6 @@ export interface CatamorphicHostConfig {
   documentBlobStore?: CatamorphicCoreConfig["documentBlobStore"];
   storeSyncAroundTurns?: boolean;
   /**
-   * The HTTP answer surface for tool-permission asks (ADR 0054): harnesses
-   * park asks here and remote clients list/answer them over the plugin's
-   * permissions routes. Hosts with their own consent UI can omit it — or
-   * register one anyway and race the two.
-   */
-  toolPermissions?: CatamorphicCoreConfig["toolPermissions"];
-  /**
    * Hosts and ports (`work.acme.com:443`) sandboxes reach this control plane
    * at; restricted egress always allows them (ADR 0176).
    */
@@ -410,7 +404,6 @@ export class Catamorphic {
       standingAgentPrompt: config.standingAgentPrompt,
       documentBlobStore: config.documentBlobStore,
       storeSyncAroundTurns: config.storeSyncAroundTurns,
-      toolPermissions: config.toolPermissions,
       gatewayHosts: config.gatewayHosts,
     });
   }
@@ -557,7 +550,7 @@ export class Catamorphic {
     // database goes; lease renewals stop (ADR 0193). A host that wants to
     // let turns finish calls stopLocalTurns with a grace period first.
     await this.core.agentSessions
-      ?.stopLocalTurns({ timeoutMs: 0, settleMs: 3_000 })
+      ?.stopLocalTurns({ timeoutMs: 0 })
       .catch((error: unknown) =>
         console.warn("[catamorphic] Could not stop local turns", error),
       );

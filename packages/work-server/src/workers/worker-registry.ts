@@ -42,17 +42,24 @@ export const WorkerOfferSchema = z.strictObject({
    */
   capabilities: z
     .array(
-      z.enum([
-        "images",
-        "images.build",
-        "containers",
-        "network.policy",
-        // What the machine offers beside its provider (ADR 0184).
-        "credentials.personal",
-        "harness.claude-code",
-        "harness.codex",
+      z.union([
+        z.enum([
+          "images",
+          "images.build",
+          "containers",
+          "network.policy",
+          // What the machine offers beside its provider (ADR 0184).
+          "credentials.personal",
+          "harness.claude-code",
+          "harness.codex",
+          // Its sandboxes mount members' own sign-ins (ADR 0197).
+          "sign-ins",
+        ]),
+        // A member signed in to a harness on it: the fact, never the value.
+        z.string().regex(/^sign-in:(claude-code|codex):\S{1,255}$/),
       ]),
     )
+    .max(10_000)
     .default([]),
   capacity: z.strictObject({
     workspaces: z.number().int().positive().max(1_000),

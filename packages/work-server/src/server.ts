@@ -5,7 +5,6 @@ import type { AgentCapabilityOptions } from "@catamorphic/core";
 import {
   type ConnectionActionGuard,
   type ConnectionProvider,
-  DurableToolPermissionBroker,
   type Identity,
   startEventDispatcher,
   WorkerNodesService,
@@ -55,6 +54,7 @@ import { WorkAdmissionService } from "./admission/admission-service.js";
 import { registerWorkAdmissionRoutes } from "./admission/routes.js";
 import { workAgentCapabilities } from "./agent-capabilities.js";
 import { buildAgentRegistry } from "./agents.js";
+import { signInCapabilities } from "./workers/sign-ins.js";
 import { parseWorkAuthConfig } from "./auth/auth-config.js";
 import { openWorkAuthDatabase } from "./auth/auth-database.js";
 import { trustedProxies } from "./auth/client-address.js";
@@ -451,6 +451,7 @@ async function createWorkServerInner(
     isolation: execution.isolation,
     workloads: config.execution.workloads,
     capabilities: execution.machineCapabilities,
+    signIns: () => signInCapabilities(execution.signInRoot),
     sandboxProvider,
     placement: {
       workers: () => workers.placements(),
@@ -480,12 +481,7 @@ async function createWorkServerInner(
     await workers.settle();
   });
   const environmentProvider = machine.environmentProvider;
-  const toolPermissions = new DurableToolPermissionBroker(ownDb);
-  const agents = buildAgentRegistry({
-    sandboxProvider,
-    toolPermissions,
-    settings: config.agent,
-  });
+  const agents = buildAgentRegistry({ settings: config.agent });
   // GitHub is an ordinary connection (ADR 0177): built in, always offered,
   // backed by the `github` service connection an administrator connects.
   const github = defineGithubConnectionProvider(hooks.github);
@@ -561,7 +557,6 @@ async function createWorkServerInner(
       objectStore ?? new FsBundleStore(path.join(data, "app-bundles")),
     documentBlobStore:
       objectStore ?? new FsBundleStore(path.join(data, "document-blobs")),
-    toolPermissions,
     triggerKinds: [aiToolCall, schedule, webhook, ...SESSION_TRIGGER_KINDS],
     // Workflows bound to `ai.tool-call` are tools on the project MCP, for
     // project agents and members' own MCP clients alike.

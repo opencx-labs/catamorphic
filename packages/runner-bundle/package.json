@@ -16,9 +16,11 @@
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
+    "@catamorphic/agent-protocol": "workspace:*",
     "@catamorphic/agent-runner": "workspace:*",
     "@catamorphic/claude-code": "workspace:*",
-    "@catamorphic/codex": "workspace:*"
+    "@catamorphic/codex": "workspace:*",
+    "@catamorphic/sandbox": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.1.1"

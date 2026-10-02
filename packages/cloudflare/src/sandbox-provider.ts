@@ -1,5 +1,6 @@
 import {
   assertSandboxResources,
+  refuseSignIns,
   CommandDeploymentRuntimeProvider,
   type CreateSandboxOpts,
   type DeploymentRuntimeProvider,
@@ -70,6 +71,7 @@ export class CloudflareSandboxProvider implements SandboxProvider {
 
   async createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle> {
     assertSandboxResources(opts.resources, []);
+    refuseSignIns({ signIns: opts.signIns, provider: "Cloudflare" });
     const response = await this.request("POST", "/v1/sandbox");
     const body = (await response.json()) as { id: string };
     return {

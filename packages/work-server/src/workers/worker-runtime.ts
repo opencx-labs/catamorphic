@@ -14,6 +14,12 @@ import {
   type WorkExecutionSettings,
   workExecution,
 } from "../execution-config.js";
+import { signInCapabilities } from "./sign-ins.js";
+import {
+  upgradeMessage,
+  WORKER_PROTOCOL,
+  WORKER_PROTOCOL_HEADER,
+} from "./worker-protocol.js";
 import type { WorkerOffer } from "./worker-registry.js";
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -27,9 +33,19 @@ export interface WorkWorkerOptions {
   enrollmentCode?: string;
   execution: WorkExecutionSettings;
   version?: string;
+  /**
+   * The protocol this worker states on every call (ADR 0196); the one it
+   * speaks by default. Tests state another to see the control plane refuse.
+   */
+  protocol?: number;
   fetch?: Fetch;
   log?: (line: string) => void;
 }
+
+/** How often the worker looks for sign-ins made or removed on it. */
+const SIGN_IN_SCAN_MS = 5_000;
+/** How long a worker the control plane cannot drive waits to ask again. */
+const UPGRADE_RETRY_MS = 5 * 60_000;
 
 /**
  * How long each call may take. A poll waits up to 20 seconds on the control
@@ -59,7 +75,17 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   if (!isSecurePublicUrl(base)) {
     throw new Error("WORK_CONTROL_PLANE_URL must use HTTPS except on loopback");
   }
-  const doFetch = options.fetch ?? ((input, init) => fetch(input, init));
+  const protocol = options.protocol ?? WORKER_PROTOCOL.server;
+  const baseFetch = options.fetch ?? ((input, init) => fetch(input, init));
+  // Every call states the protocol this worker speaks.
+  const doFetch: Fetch = (input, init) =>
+    baseFetch(input, {
+      ...init,
+      headers: {
+        ...Object.fromEntries(new Headers(init?.headers).entries()),
+        [WORKER_PROTOCOL_HEADER]: String(protocol),
+      },
+    });
   const log = options.log ?? (() => {});
   fs.mkdirSync(options.dataDir, { recursive: true, mode: 0o700 });
   const credential = await loadOrEnroll({
@@ -67,6 +93,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     dataDir: options.dataDir,
     ...(options.enrollmentCode ? { code: options.enrollmentCode } : {}),
     fetch: doFetch,
+    protocol,
   });
   const nodeId = credential.split(":")[0] ?? "";
   const execution = workExecution({
@@ -74,7 +101,12 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     dataDir: options.dataDir,
   });
   const provider: SandboxProvider = execution.provider;
-  const offer: WorkerOffer = {
+  /**
+   * What this worker offers, read again for every connect: members'
+   * sign-ins come and go on the machine (ADR 0197), and only the fact that
+   * one exists is reported.
+   */
+  const currentOffer = (): WorkerOffer => ({
     isolation: execution.isolation,
     resourceLimits: [...(provider.resourceLimits ?? [])],
     workspaceRoot: provider.workspaceRoot ?? "/workspace",
@@ -82,11 +114,12 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     capabilities: [
       ...(provider.capabilities ?? []),
       ...execution.machineCapabilities,
+      ...signInCapabilities(execution.signInRoot),
     ],
     capacity: execution.capacity,
     defaults: execution.defaults,
     ...(options.version ? { version: options.version } : {}),
-  };
+  });
   // This process's epoch: the node's lease token while it runs. A restart
   // chooses a later one, and the control plane fails what the old one was
   // sent as uncertain.
@@ -129,6 +162,8 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         ? answer.error
         : `Control plane answered ${response.status} on ${route}`;
     if (response.status === 401) throw new WorkerRevokedError();
+    if (response.status === 426)
+      throw new WorkerUpgradeRequiredError(upgradeAnswer({ answer, protocol }));
     if (response.status === 403) throw new WorkerRefusedError(reason);
     if (
       response.status === 409 &&
@@ -175,6 +210,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
    * it. Connecting again with the same epoch keeps everything running.
    */
   const session = async (): Promise<void> => {
+    let offer = currentOffer();
     await call({
       route: "connect",
       body: { session: epoch, offer },
@@ -249,7 +285,26 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         endSession();
       },
     });
+    // A sign-in made or removed on this machine reaches placement within
+    // seconds: connecting again under the same epoch refreshes the offer
+    // and keeps everything running.
+    const scan = setInterval(() => {
+      const next = currentOffer();
+      if (
+        JSON.stringify(next.capabilities) === JSON.stringify(offer.capabilities)
+      )
+        return;
+      void call({ route: "connect", body: { session: token, offer: next } })
+        .then(() => {
+          offer = next;
+          log("Sign-ins on this machine changed; the control plane knows");
+        })
+        .catch(() => {
+          /* Tried again on the next scan. */
+        });
+    }, SIGN_IN_SCAN_MS);
     await ended;
+    clearInterval(scan);
     await runner.stop();
     if (failure) throw failure;
   };
@@ -266,6 +321,13 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         ) {
           log(error.message);
           break;
+        }
+        if (error instanceof WorkerUpgradeRequiredError) {
+          // The control plane cannot drive this worker; asking every few
+          // seconds would not change that.
+          log(error.message);
+          await pause(UPGRADE_RETRY_MS);
+          continue;
         }
         if (error instanceof WorkerSupersededError) {
           log(
@@ -321,6 +383,7 @@ async function loadOrEnroll(args: {
   dataDir: string;
   code?: string;
   fetch: Fetch;
+  protocol: number;
 }): Promise<string> {
   const file = path.join(args.dataDir, "worker-credential");
   try {
@@ -341,6 +404,10 @@ async function loadOrEnroll(args: {
     body: JSON.stringify({ code: args.code }),
   });
   const body: unknown = await response.json().catch(() => ({}));
+  if (response.status === 426)
+    throw new WorkerUpgradeRequiredError(
+      upgradeAnswer({ answer: body, protocol: args.protocol }),
+    );
   const credential =
     typeof body === "object" &&
     body !== null &&
@@ -360,6 +427,34 @@ async function loadOrEnroll(args: {
   }
   fs.writeFileSync(file, `${credential}\n`, { mode: 0o600, flag: "wx" });
   return credential;
+}
+
+/** The control plane's 426: which side to update, in words. */
+function upgradeAnswer(input: { answer: unknown; protocol: number }): string {
+  const { answer } = input;
+  const number = (key: string): number | undefined =>
+    typeof answer === "object" &&
+    answer !== null &&
+    key in answer &&
+    typeof Reflect.get(answer, key) === "number"
+      ? Number(Reflect.get(answer, key))
+      : undefined;
+  const serverProtocol = number("serverProtocol");
+  const minimum = number("minimum");
+  if (serverProtocol === undefined || minimum === undefined)
+    return "The control plane cannot drive this worker's protocol: update the worker or the control plane so they match.";
+  return upgradeMessage({ own: input.protocol, serverProtocol, minimum });
+}
+
+/**
+ * The control plane cannot drive this worker's protocol (426, ADR 0196):
+ * one of them must be updated.
+ */
+export class WorkerUpgradeRequiredError extends RunnerSessionEndedError {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkerUpgradeRequiredError";
+  }
 }
 
 /** The operator's placement forbids this worker as it runs. */

@@ -3,7 +3,11 @@ import type {
   ProjectDraft,
   ProjectManager,
 } from "@catamorphic/git";
-import type { SandboxProvider, SandboxResources } from "@catamorphic/sandbox";
+import type {
+  SandboxProvider,
+  SandboxResources,
+  SignInHarness,
+} from "@catamorphic/sandbox";
 import {
   resolveWorkflowPackageFallback,
   SandboxManagerImpl,
@@ -40,6 +44,8 @@ export class DevSandboxService {
       store: DbSandboxStore;
       sessionId?: string;
       resources?: SandboxResources;
+      /** The owner's sign-ins a new sandbox mounts (ADR 0197). */
+      signIns?: ReadonlyArray<{ harness: SignInHarness; member: string }>;
     },
   ) {
     this.manager = new SandboxManagerImpl({
@@ -51,6 +57,7 @@ export class DevSandboxService {
         storageMb: deps.resources?.storageMb,
         gpu: deps.resources?.gpu,
       },
+      ...(deps.signIns ? { signIns: deps.signIns } : {}),
     });
   }
 
