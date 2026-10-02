@@ -188,6 +188,8 @@ export function ProfileBar({
 
       <ResourceInspector
         label={`${active.name} profile details`}
+        // The open menu already shows every profile; its preview would cover it.
+        disabled={open}
         content={
           <ProfileInspector
             profile={active}
@@ -201,14 +203,20 @@ export function ProfileBar({
         {(inspectorProps) => (
           <button
             {...inspectorProps}
+            ref={(node) => {
+              inspectorProps.ref.current = node;
+              triggerRef.current = node;
+            }}
             type="button"
-            onClick={() => setOpen((value) => !value)}
+            onClick={() => {
+              inspectorProps.onClick();
+              setOpen((value) => !value);
+            }}
             className={`flex h-8 w-full min-w-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[13px] transition-colors duration-150 ${
               open
                 ? "bg-bg-overlay text-fg"
                 : "text-fg-muted hover:bg-bg-overlay hover:text-fg"
             }`}
-            ref={triggerRef}
             aria-label={`Switch profile: ${active.name}`}
             aria-haspopup="menu"
             aria-expanded={open}
