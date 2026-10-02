@@ -166,6 +166,27 @@
         "@types/node": "^26.1.1",
       },
     },
+    "packages/agent-protocol": {
+      "name": "@catamorphic/agent-protocol",
+      "version": "0.0.1",
+      "dependencies": {
+        "zod": "^4.4.3",
+      },
+      "devDependencies": {
+        "@types/node": "^26.1.1",
+      },
+    },
+    "packages/agent-runner": {
+      "name": "@catamorphic/agent-runner",
+      "version": "0.0.1",
+      "dependencies": {
+        "@catamorphic/agent-protocol": "workspace:*",
+        "@catamorphic/sandbox": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^26.1.1",
+      },
+    },
     "packages/ai-sdk": {
       "name": "@catamorphic/ai-sdk",
       "version": "0.0.1",
@@ -841,6 +862,10 @@
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.7", "", { "os": "win32", "cpu": "x64" }, "sha512-V+0wu/nrj2S+MhP4EQ0uHNolP0IALEsz45pg0WoKkHfDeh0+ItHwP/p7bX5RPoMOl9NkpHYWdYPhIcy2mACHvQ=="],
 
     "@bramus/specificity": ["@bramus/specificity@2.4.2", "", { "dependencies": { "css-tree": "^3.0.0" }, "bin": { "specificity": "bin/cli.js" } }, "sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw=="],
+
+    "@catamorphic/agent-protocol": ["@catamorphic/agent-protocol@workspace:packages/agent-protocol"],
+
+    "@catamorphic/agent-runner": ["@catamorphic/agent-runner@workspace:packages/agent-runner"],
 
     "@catamorphic/ai-sdk": ["@catamorphic/ai-sdk@workspace:packages/ai-sdk"],
 

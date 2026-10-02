@@ -1,0 +1,32 @@
+{
+  "name": "@catamorphic/agent-protocol",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./runner": {
+      "bun": "./src/runner.ts",
+      "import": "./dist/runner.js",
+      "types": "./dist/runner.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "dev": "tsup --watch --no-clean",
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/agent-protocol --config ../../vitest.config.ts",
+    "typecheck": "tsgo --project ./tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1"
+  }
+}
