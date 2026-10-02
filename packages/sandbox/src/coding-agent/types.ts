@@ -14,10 +14,10 @@ export interface SessionCaller {
 }
 
 /**
- * Lightweight description of a plugin package attached to a project. Passed
- * into {@link CodingAgentProvider.startSession} so the agent can (1) stage
- * the plugin's docs inside the working directory for filesystem discovery,
- * and (2) prepend an "attached packages" preamble to the system prompt.
+ * Lightweight description of a plugin package attached to a project, so an
+ * attempt can (1) stage the plugin's docs inside the working directory for
+ * filesystem discovery, and (2) prepend an "attached packages" preamble to
+ * the system prompt.
  *
  * `files` is a map of paths relative to the plugin package root. Only docs
  * (README, `dist/index.d.ts`) are expected — not the full package contents.
@@ -182,11 +182,11 @@ export interface SandboxModelGateway {
 /** What a host-supplied tool knows about the session it runs in. */
 export interface ExtraToolContext {
   projectId: string;
-  /** Host-side chat session id (see {@link StartSessionOpts.sessionId}). */
+  /** The chat session the tool's turn belongs to. */
   sessionId?: string;
   /** Checkout or sandbox directory selected by the host for this turn. */
   workingDirectory?: string;
-  /** Who the session serves (see {@link StartSessionOpts.caller}). */
+  /** Who the session serves. */
   caller?: SessionCaller;
 }
 

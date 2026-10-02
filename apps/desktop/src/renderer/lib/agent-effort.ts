@@ -22,7 +22,7 @@ export function supportedEfforts(
   return ["low", "medium", "high", "xhigh", "max"];
 }
 
-/** Match CodexAgent.threadOptions and AiSdkCodingAgent's provider mapping. */
+/** Match the Codex adapter's thread options and the built-in agent's provider mapping. */
 export function effectiveEffort(
   agent: Agent | undefined,
   effort: AgentEffort | null | undefined,
