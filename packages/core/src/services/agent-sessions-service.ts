@@ -1,46 +1,69 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import {
+  ACTIVE_TURN_STATUSES,
+  type Attempt,
+  type CommandReceipt,
+  type DispatchMode,
+  isActiveTurnStatus,
+  isSettledTurnStatus,
+  type Item,
+  type JsonValue,
+  type NativeRef,
+  type JsonObject as ProtocolJsonObject,
+  type RuntimeRequest,
+  type RuntimeRequestResponse,
+  type SessionCommand,
+  type SessionEvent,
+  type SessionMessageAuthor,
+  type SessionSnapshot,
+  type SessionStreamMessage,
+  type Turn,
+  type TurnError,
+} from "@catamorphic/agent-protocol";
+import type {
+  AttemptStart,
+  HostToolDescriptor,
+  HostToolResult,
+  McpServerSpec,
+  PolicyLayer,
+} from "@catamorphic/agent-protocol/runner";
 import type { DB, Json, JsonObject } from "@catamorphic/db";
 import { moveCheckoutBase, type ProjectManager } from "@catamorphic/git";
-import {
-  getTracer,
-  markSpanError,
-  withSpan,
-  withTelemetryContext,
-} from "@catamorphic/otel";
+import { getTracer, markSpanError, withSpan } from "@catamorphic/otel";
 import type { PluginResolver } from "@catamorphic/plugins";
 import {
   type AgentAttachment,
   type AgentEffort,
-  type AgentEvent,
   type AgentMcpServerConfig,
-  type AgentQuestionRequest,
-  type AgentRuntimeRequestResponse,
   type AgentTurnUsage,
   type AttachedPluginForAgent,
-  capabilityEventPresenter,
-  type HarnessPermissions,
+  agentCapabilityTools,
+  buildPluginsPreamble,
+  type ExtraTool,
+  extraToolResult,
   type McpToolPolicyLayers,
-  messageWithAttachmentNames,
+  mergePolicyLayers,
   narrowingLayer,
-  PERSONAL_LOGIN_KINDS,
-  type PersonalLoginKind,
   PROJECT_TOOLS_SERVER_KEY,
-  type ProviderSession,
+  renderTurnContext,
   SANDBOXING_LEVELS,
   type Sandboxing,
   type SandboxModelGateway,
-  type SandboxPersonalLogin,
   type SandboxProvider,
+  type SignInHarness,
   serverKeyOf,
+  signInHomePath,
+  stagedPluginFiles,
+  stagePluginDocs,
   type ToolPermission,
-  type TurnOptions,
+  type TurnContextFragment,
 } from "@catamorphic/sandbox";
 import {
   AGENT_COMMIT_AUTHOR,
   PROJECT_MANIFEST_PATH,
 } from "@catamorphic/workflow/project-layout";
-import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
+import { type Kysely, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import {
   type AgentRef,
@@ -59,27 +82,7 @@ import {
   formatProjectAgentId,
   parseProjectAgentId,
 } from "./agent-definitions-service.js";
-import { sameCanonicalRuntimeJson } from "./agent-runtime-json.js";
-import {
-  AgentRequestAlreadyResolvedError,
-  AgentRuntimeRequestNotFoundError,
-  AgentRuntimeRequestsService,
-} from "./agent-runtime-requests-service.js";
 import { assertAgentSessionAccess } from "./agent-session-access.js";
-import {
-  type HeldTurnLease,
-  type RenewedTurnLease,
-  startTurnLeaseRenewal,
-} from "./agent-turn-leases.js";
-import {
-  type AgentExecution,
-  type AgentTurn,
-  AgentTurnsService,
-  type PendingSessionTurn,
-  type SessionDeliveryMode,
-  type SessionDeliveryReceipt,
-  type SessionMessageAuthor,
-} from "./agent-turns-service.js";
 import {
   type AllocationMaintenanceClaim,
   AllocationMaintenanceLostError,
@@ -91,9 +94,11 @@ import {
 import type { AppPoliciesService } from "./app-policies-service.js";
 import { AccessDeniedError, resolveScope } from "./artifact-scope.js";
 import { projectChatIdentity } from "./chat-delivery.js";
-import type {
-  CodingAgentRegistry,
-  RegisteredCodingAgent,
+import {
+  type AgentTurnContext,
+  type CodingAgentRegistry,
+  harnessIdOf,
+  type RegisteredCodingAgent,
 } from "./coding-agent-registry.js";
 import type { ConnectionAdmissionService } from "./connection-admission.js";
 import type { ConnectionCapabilityGrantsService } from "./connection-capability-grants.js";
@@ -114,17 +119,13 @@ import type {
 import {
   admissionPolicy,
   type EnvironmentAdmission,
-  EnvironmentIncompatibleError,
   type ExecutionEnvironmentsService,
-  NoCompatibleEnvironmentError,
   type PlacementReason,
   placementOwner,
 } from "./execution-environments-service.js";
 import {
   deliverPersonalEnvironment,
-  personalLoginHome,
   removePersonalEnvironment,
-  writePersonalLogins,
 } from "./personal-environment-delivery.js";
 import type { PersonalEnvironmentService } from "./personal-environment-service.js";
 import type { PluginsService } from "./plugins-service.js";
@@ -176,11 +177,57 @@ import {
   workspaceMoveRefusedNote,
 } from "./session-workspaces.js";
 import {
+  sandboxChannel,
+  startInProcessRunner,
+  startSandboxRunner,
+  type RunnerChannel,
+  type RunnerLocation,
+} from "./sessions/runner-channels.js";
+import {
+  SessionCommandRejectedError,
+  SessionLog,
+} from "./sessions/session-log.js";
+import { SessionFeed } from "./sessions/session-feed.js";
+import {
+  readFullSnapshot,
+  readItemsBefore,
+  readReply,
+  readSnapshot,
+  readTranscript,
+  type TranscriptMessage,
+} from "./sessions/session-reads.js";
+import {
+  itemFromRow,
+  providerThreadFromRow,
+  requestFromRow,
+  type SessionRow,
+  turnFromRow,
+} from "./sessions/session-rows.js";
+import {
+  type FinalizedTurn,
+  type PreparedAttempt,
+  TurnEngine,
+  type TurnEngineHost,
+} from "./sessions/turn-engine.js";
+import { TurnQueue } from "./sessions/turn-queue.js";
+import {
   documentsClientFor,
   shipRemoteProject,
   syncRemoteProject,
 } from "./store-sync.js";
+import { UserNotificationsService } from "./user-notifications-service.js";
 import { EnvironmentCapacityError } from "./worker-capacity.js";
+
+export type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
+
+/** How a delivered input was taken: the protocol's dispatch, or `message_only`. */
+export interface SessionDeliveryReceipt {
+  /** The user item the input became. */
+  messageId: string;
+  turnId: string | null;
+  mode: DispatchMode;
+  created: boolean;
+}
 
 interface AgentExecutionRuntime {
   bindingId: string;
@@ -189,12 +236,12 @@ interface AgentExecutionRuntime {
   devSandboxes?: DevSandboxService;
   /** The Allocation's budget for one foreground command (ADR 0174). */
   commandTimeoutSeconds?: number;
-  /** This turn's placement may hold the owner's personal credentials (ADR 0184). */
+  /** The placement may run the owner's own sign-ins (ADR 0197). */
   personalCredentials?: boolean;
+  /** Where the sandbox sees the owner's sign-in for the agent's harness. */
+  signInHome?: string;
 }
 
-type SessionRow = Selectable<DB["agent_sessions"]>;
-type MessageRow = Selectable<DB["agent_messages"]>;
 export interface SessionOperationOrigin {
   author: SessionMessageAuthor;
   causation?: string[];
@@ -232,10 +279,8 @@ export interface AgentSession {
    * everyone whose role reaches its agent. `member`: one person's chat.
    */
   owner: "member" | "project";
-  provider: string;
   /** Surface that first created this conversation; informational, not auth. */
   source: AgentSessionSource;
-  providerSessionId: string | null;
   sandboxId: string | null;
   environment: string | null;
   allocationId: string | null;
@@ -268,8 +313,8 @@ export interface AgentSession {
   authorityRevision: number;
   /** Last time this host observed the current authority's stable snapshot. */
   authoritySeenAt: string;
-  /** Number of transcript messages imported with the current mirror. */
-  mirrorMessageCount: number;
+  /** The last event sequence a mirror pushed here (ADR 0195). */
+  mirrorSequence: number;
   /** A coordinated move blocks local sends while remote authority is claimed. */
   handoffStatus: "none" | "pending";
   handoffDestinationHostId: string | null;
@@ -346,24 +391,13 @@ export interface AgentTodoInput {
   activeForm?: string;
 }
 
-export interface AgentMessage {
-  id: string;
-  sessionId: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  commitSha: string | null;
-  metadata: Record<string, unknown> | null;
-  author: SessionMessageAuthor;
-  deliveryMode: SessionDeliveryMode;
-  idempotencyKey: string | null;
-  createdAt: string;
-}
-
+/**
+ * A session for one viewer, with its snapshot (ADR 0195): the per-person
+ * fields of {@link AgentSession} and a bounded view of its turns, items and
+ * requests at one sequence, which later events keep current.
+ */
 export interface AgentSessionDetail extends AgentSession {
-  questions?: AgentQuestionRequest[];
-  execution: AgentExecution | null;
-  messages: AgentMessage[];
-  pendingTurns: PendingSessionTurn[];
+  snapshot: SessionSnapshot;
 }
 
 export interface AgentSessionPeer {
@@ -647,6 +681,21 @@ export interface NativeAgentCheckout {
     workingDirectory: string;
     message: string;
   }): Promise<string | null>;
+  /** The checkout's current commit, which a rollback of the next turn restores. */
+  head?(input: { workingDirectory: string }): Promise<string | null>;
+  /**
+   * Put the checkout back at `commit` for a rollback (ADR 0195), or say
+   * why not. A checkout the chat owns is reset; a person's own folder only
+   * when its commit is still `expectedHead` and it holds no other changes.
+   */
+  restore?(input: {
+    projectId: string;
+    sessionId: string;
+    workingDirectory: string;
+    commit: string;
+    expectedHead: string | null;
+    owned: boolean;
+  }): Promise<"restored" | string>;
 }
 
 interface AgentSessionsDeps {
@@ -1160,17 +1209,17 @@ export class AgentSessionsService {
       rows.map((row) => row.id),
     );
     const messages = await this.db
-      .selectFrom("agent_messages")
-      .select(["id", "session_id", "content"])
+      .selectFrom("agent_items")
+      .select(["id", "session_id", "text as content"])
       .where(
         "session_id",
         "in",
         rows.map((row) => row.id),
       )
-      .where(sql<string>`metadata ->> 'attention'`, "=", "required")
+      .where("attention", "=", true)
       .distinctOn("session_id")
       .orderBy("session_id")
-      .orderBy("created_at", "desc")
+      .orderBy("position", "desc")
       .execute();
     const bySession = new Map(
       messages.map((message) => [
@@ -1340,17 +1389,17 @@ export class AgentSessionsService {
 
     const attentionMessages = rows.length
       ? await this.db
-          .selectFrom("agent_messages")
-          .select(["id", "session_id", "content"])
+          .selectFrom("agent_items")
+          .select(["id", "session_id", "text as content"])
           .where(
             "session_id",
             "in",
             rows.map((row) => row.id),
           )
-          .where(sql<string>`metadata ->> 'attention'`, "=", "required")
+          .where("attention", "=", true)
           .distinctOn("session_id")
           .orderBy("session_id")
-          .orderBy("created_at", "desc")
+          .orderBy("position", "desc")
           .execute()
       : [];
     const attentionBySession = new Map(
@@ -1448,17 +1497,17 @@ export class AgentSessionsService {
     );
 
     const latestRequests = await this.db
-      .selectFrom("agent_messages")
+      .selectFrom("agent_items")
       .where(
         "session_id",
         "in",
         rows.map((row) => row.id),
       )
-      .where("role", "=", "user")
-      .select(["session_id", "content", "seq"])
+      .where("kind", "=", "user_message")
+      .select(["session_id", "text as content", "position"])
       .distinctOn("session_id")
       .orderBy("session_id")
-      .orderBy("seq", "desc")
+      .orderBy("position", "desc")
       .execute();
     const taskBySession = new Map<string, string | null>();
     const running = await this.runningSessionIds(rows.map((row) => row.id));
@@ -1498,11 +1547,12 @@ export class AgentSessionsService {
     if (normalized && normalized.length > 500) {
       throw new Error("Session activity must be 500 characters or fewer");
     }
-    await this.db
-      .updateTable("agent_sessions")
-      .set({ activity: normalized, updated_at: new Date() })
-      .where("id", "=", sessionId)
-      .execute();
+    await this.db.transaction().execute((trx) =>
+      this.log.append(trx, {
+        sessionId,
+        events: [{ type: "session.changed", session: { activity: normalized } }],
+      }),
+    );
   }
 
   /**
@@ -1557,26 +1607,31 @@ export class AgentSessionsService {
         ...(activeForm ? { activeForm } : {}),
       };
     });
-    await this.db
-      .updateTable("agent_sessions")
-      .set({
-        todos: agentTodosJson(todos),
-        updated_at: new Date(),
-      })
-      .where("id", "=", sessionId)
-      .execute();
     // The in-progress item is the agent's live line, shown at once even when
     // the next harness event is a long command away.
     const current = todos.find((item) => item.status === "in_progress");
-    if (current?.activeForm) {
-      this.liveStatus.set(sessionId, current.activeForm);
-      await this.db
-        .updateTable("agent_turns")
-        .set({ activity: current.activeForm, activity_at: sql`now()` })
-        .where("session_id", "=", sessionId)
-        .where("status", "=", "running")
-        .execute();
-    }
+    await this.db.transaction().execute(async (trx) => {
+      const events: SessionEvent[] = [{ type: "session.changed", session: { todos } }];
+      if (current?.activeForm) {
+        const running = await trx
+          .selectFrom("agent_turns")
+          .selectAll()
+          .where("session_id", "=", sessionId)
+          .where("status", "=", "running")
+          .executeTakeFirst();
+        if (running)
+          events.push({
+            type: "turn.changed",
+            turn: {
+              ...turnFromRow(running),
+              activity: current.activeForm,
+              activityAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+          });
+      }
+      await this.log.append(trx, { sessionId, events });
+    });
     return todos;
   }
 
@@ -2934,7 +2989,7 @@ export class AgentSessionsService {
     const tools = await this.hostToolsFor({ identity, session, agent, turnId: turn.id, workingDirectory });
     const ownPolicies = agent.harness.placement === "host" ? agent.harness.toolPolicies?.() : undefined;
     const callerLayers = withAgentLayers(await this.callerToolPolicies(identity, projectId, session.agent_id), agent);
-    const toolPolicies = mergePolicyLayers(ownPolicies, callerLayers) ?? {};
+    const toolPolicies = mergePolicyLayers(ownPolicies, callerLayers ? { ...callerLayers } : undefined) ?? {};
     const mcpServers: Record<string, AgentMcpServerConfig> = {
       ...(agent.harness.placement === "host" ? agent.harness.mcpServers?.(context) : {}),
       ...(await this.connectionMcpServers(identity, session)),
@@ -2943,9 +2998,7 @@ export class AgentSessionsService {
     const stateDirectory = runtime.provider
       ? `${runtime.provider.workspaceRoot}/${SESSION_DIRECTORY}`
       : workingDirectory;
-    const permissions = {
-      ...agent.defaults?.harnessPermissions,
-    } as JsonObject;
+    const permissions = protocolJson(agent.defaults?.harnessPermissions ?? {});
     const start: PreparedAttempt["start"] = {
       harness: harnessIdOf(agent),
       workingDirectory,
@@ -2964,7 +3017,7 @@ export class AgentSessionsService {
       hostTools: tools.map(hostToolDescriptor),
       plugins: agent.harness.placement === "host" ? [...(agent.harness.plugins ?? [])] : [],
       env: agent.harness.placement === "host" ? { ...agent.harness.env } : {},
-      options: { ...agent.options },
+      options: protocolJson(agent.options ?? {}),
     };
     const harness = agent.harness;
     const provider = runtime.provider;
@@ -3082,7 +3135,7 @@ export class AgentSessionsService {
     let storeSync: JsonObject | undefined;
     const storeDir =
       sandboxProviderId && !parseWorkspaceBase(session.workspace)
-        ? await this.storeSyncDir(identity, projectId, { workingDirectory, sandboxProviderId }, sessionId, this.usesSessionCopy(session))
+        ? await this.storeSyncDir(identity, projectId, { sandboxProviderId }, sessionId, this.usesSessionCopy(session))
         : null;
     if (storeDir && !keepsChangesInSandbox) {
       try {
@@ -3094,7 +3147,7 @@ export class AgentSessionsService {
           report.shipped.length + report.deleted.length + report.conflicts.length + report.notShippable.length + report.failed.length >
           0
         )
-          storeSync = protocolJson(report);
+          storeSync = protocolJson(report) as JsonObject;
       } catch (error) {
         storeSync = { error: error instanceof Error ? error.message : String(error) };
       }
@@ -3128,7 +3181,7 @@ export class AgentSessionsService {
       outcome: {
         changedFiles: changedFiles.map((change) => ({ path: change.path, kind: change.kind })),
         ...(usage ? { usage } : {}),
-        ...(storeSync ? { storeSync } : {}),
+        ...(storeSync ? { storeSync: protocolJson(storeSync) } : {}),
         ...(workspaceSyncError ? { workspaceSync: { error: workspaceSyncError } } : {}),
         ...(notification ? { notification } : {}),
       },
@@ -3170,7 +3223,7 @@ export class AgentSessionsService {
         identity: input.identity,
         projectId: input.session.project_id,
         sessionId: input.session.id,
-        resultMessageId: input.reply?.id ?? null,
+        resultMessageId: input.reply?.id ?? input.turn.inputItemId ?? input.turn.id,
         status: turn.status === "completed" ? "completed" : "failed",
         content:
           input.reply?.kind === "assistant_message" && input.reply.text
@@ -3380,7 +3433,7 @@ export class AgentSessionsService {
         workload: "agent",
         topology: agent.topology,
       },
-      ...(agent.personalLogin ? { personalLogin: agent.personalLogin } : {}),
+      ...(agent.signIn ? { signIn: agent.signIn } : {}),
     });
     const requirements = agent.connectionRequirements ?? [];
     if (requirements.length > 0 && !this.connectionAdmission) {
@@ -3440,9 +3493,7 @@ export class AgentSessionsService {
             source_action_id: input.sourceActionId ?? null,
             project_id: projectId,
             external_user_id: identity.externalUserId,
-            provider: agent.provider.name,
             source: input.source ?? "api",
-            provider_session_id: null,
             agent_id: selectedAgentId ?? null,
             model: input.model || null,
             model_effort: input.effort ?? null,
@@ -3814,13 +3865,9 @@ export class AgentSessionsService {
     );
   }
 
-  /**
-   * Keep a running turn's sandbox grants fresh (ADRs 0175, 0180), and the
-   * owner's login it runs with, which their desktop refreshes (ADR 0184).
-   */
+  /** Keep a running turn's sandbox grants fresh (ADRs 0175, 0180). */
   private startGrantRenewal(
     input: Parameters<AgentSessionsService["configureSandboxGateway"]>[0],
-    personal?: { kind: PersonalLoginKind; owner: string },
   ): void {
     const previous = this.grantRenewals.get(input.sessionId);
     if (previous) clearInterval(previous);
@@ -3832,35 +3879,6 @@ export class AgentSessionsService {
             error,
           ),
       );
-      if (!personal || !this.personalEnvironments) return;
-      const write: Promise<void> = this.personalEnvironments
-        .unseal({
-          tenantId: input.identity.tenantId,
-          projectId: input.projectId,
-          owner: personal.owner,
-          logins: [personal.kind],
-        })
-        .then((environment) =>
-          // Stopped meanwhile: the login may already have left.
-          this.grantRenewals.get(input.sessionId) === timer
-            ? writePersonalLogins({
-                provider: input.provider,
-                sandboxId: input.sandboxProviderId,
-                logins: environment.logins,
-              })
-            : undefined,
-        )
-        .catch((error: unknown) =>
-          console.warn(
-            `[catamorphic] Could not renew the personal login of session ${input.sessionId}`,
-            error,
-          ),
-        )
-        .finally(() => {
-          if (this.loginRenewals.get(input.sessionId) === write)
-            this.loginRenewals.delete(input.sessionId);
-        });
-      this.loginRenewals.set(input.sessionId, write);
     }, GRANT_RENEWAL_MS);
     timer.unref?.();
     this.grantRenewals.set(input.sessionId, timer);
@@ -3899,12 +3917,6 @@ export class AgentSessionsService {
     const timer = setInterval(() => void extend(), GRANT_RENEWAL_MS);
     timer.unref?.();
     this.mcpGrantRenewals.set(sessionId, timer);
-  }
-
-  /** Stop renewals and wait out a login write already under way. */
-  private async settleGrantRenewal(sessionId: string): Promise<void> {
-    this.stopGrantRenewal(sessionId);
-    await this.loginRenewals.get(sessionId);
   }
 
   /**
@@ -4103,7 +4115,7 @@ export class AgentSessionsService {
       if (!row || !sandboxProviderId) return;
       if (isProjectPrincipal(row.external_user_id)) return;
       // A renewal tick must not write the login back after it leaves.
-      await this.settleGrantRenewal(input.sessionId);
+      this.stopGrantRenewal(input.sessionId);
       const allocation =
         input.allocation ??
         (row.allocation_id
@@ -4318,22 +4330,20 @@ export class AgentSessionsService {
 
   /**
    * Mirror a session from another backend (a desktop pushing its local
-   * transcript to the server it's linked to, ADR 0061): upsert the
-   * session under the CALLER's identity with THIS registry's default
-   * agent, and append the messages this side doesn't have yet.
-   * Idempotent by message id. The provider anchor stays null, so a later
-   * sendMessage here re-anchors with the mirrored transcript as history —
-   * that IS the "continue on the server" path. If this side already holds
-   * messages the payload doesn't (someone continued here), the mirror is
-   * refused with {@link SessionMirrorDivergedError}: the fork's owner is
-   * now this backend.
+   * session to the server it's linked to, ADR 0195): its log continues
+   * here from this copy's sequence, or a new copy starts from the
+   * source's snapshot. The copy runs this registry's agent for the
+   * source's project-agent slug, else the default. Authority stays with
+   * the source until an explicit handoff (ADR 0077), so a mirror never
+   * dispatches; a copy whose authority moved here refuses with
+   * {@link SessionMirrorDivergedError}.
    */
   async mirror(
     identity: Identity,
     projectId: string,
     sessionId: string,
     input: SessionMirrorInput,
-  ): Promise<AgentSession & { agentNotice?: string }> {
+  ): Promise<AgentSession & { agentNotice?: string; sequence: number }> {
     return withSpan(
       {
         tracer,
@@ -4345,11 +4355,6 @@ export class AgentSessionsService {
       },
       async () => {
         await this.requireProject(identity, projectId);
-        const choice = await this.mirrorAgentChoice(identity, projectId, input);
-        let agentId = choice.agentId;
-        let agentNotice = choice.notice;
-        this.assertAgentAccess(identity, projectId, agentId);
-
         const existing = await this.db
           .selectFrom("agent_sessions")
           .selectAll()
@@ -4359,115 +4364,113 @@ export class AgentSessionsService {
           existing &&
           (existing.project_id !== projectId ||
             existing.external_user_id !== identity.externalUserId)
-        ) {
+        )
           throw new AccessDeniedError();
-        }
         if (existing) await this.assertNoRunningTurn({ sessionId });
-        if (
-          existing &&
-          existing.authority_host_id !== "unassigned" &&
-          (existing.authority_host_id !== input.authority.hostId ||
-            Number(existing.authority_revision) > input.authority.revision)
-        ) {
-          throw new SessionMirrorDivergedError(sessionId);
-        }
-        if (existing && !existing.allocation_id) {
-          throw new Error("Agent session has no Environment Allocation");
-        }
-        let mirrorAgent = existing
-          ? undefined
-          : await this.resolveAgent(agentId, projectId);
-        const admitMirror = (agent: RegisteredCodingAgent) =>
-          this.executionEnvironments.admit({
-            identity,
-            projectId,
-            allowed: agent.environment?.allowed,
-            preferred: agent.environment?.preferred,
-            requirements: {
-              ...agent.environment?.requirements,
-              workload: "agent",
-              topology: agent.topology,
-            },
-            ...(agent.personalLogin
-              ? { personalLogin: agent.personalLogin }
-              : {}),
-          });
-        let mirrorAdmission: EnvironmentAdmission | undefined;
-        if (mirrorAgent) {
-          try {
-            mirrorAdmission = await admitMirror(mirrorAgent);
-          } catch (error) {
-            // A chat moved from a harness on the user's own login falls
-            // back to the default agent where no Environment allows
-            // personal credentials, and says why (ADR 0184).
-            if (
-              !mirrorAgent.personalLogin ||
-              !(
-                error instanceof NoCompatibleEnvironmentError ||
-                error instanceof EnvironmentIncompatibleError
-              )
-            )
-              throw error;
-            const reasons =
-              error instanceof NoCompatibleEnvironmentError
-                ? Object.values(error.reasons).flat()
-                : [...error.reasons];
-            const refusal = `${PERSONAL_HARNESS_NAMES[mirrorAgent.personalLogin]} with your own login cannot run here (${[...new Set(reasons)].join("; ")})`;
-            const fallback =
-              this.codingAgents.defaultAgentId(projectId) ?? null;
-            const fallbackAgent = await this.resolveAgent(fallback, projectId);
-            // The default is itself a harness on a personal login (a server
-            // without an organization model): nothing else can continue it.
-            if (fallbackAgent.personalLogin) {
-              error.message = `${refusal}, and this server has no other agent to continue the chat.`;
-              throw error;
-            }
-            this.assertAgentAccess(identity, projectId, fallback);
-            agentNotice = `This chat continues with the server's default agent: ${refusal}.`;
-            agentId = fallback;
-            mirrorAgent = fallbackAgent;
-            mirrorAdmission = await admitMirror(mirrorAgent);
-          }
-        }
-        const mirrorRequirements = mirrorAgent?.connectionRequirements ?? [];
-        if (mirrorRequirements.length > 0 && !this.connectionAdmission) {
+        const fallback = this.codingAgents.defaultAgentId(projectId) ?? null;
+        const preferred = input.agentSlug ? formatProjectAgentId(projectId, input.agentSlug) : null;
+        const usable =
+          preferred !== null &&
+          this.codingAgents.get(preferred) !== undefined &&
+          this.coveringAgentRef(identity, projectId, preferred) !== undefined;
+        const agentId = existing ? existing.agent_id : usable ? preferred : fallback;
+        const agentNotice =
+          !existing && input.agentSlug && !usable
+            ? "This chat continues with the server's default agent: this server has no agent for it that your role can use."
+            : undefined;
+        this.assertAgentAccess(identity, projectId, agentId);
+        const mirrorAgent = existing ? undefined : await this.resolveAgent(agentId, projectId);
+        const mirrorAdmission = mirrorAgent
+          ? await this.executionEnvironments.admit({
+              identity,
+              projectId,
+              allowed: mirrorAgent.environment?.allowed,
+              preferred: mirrorAgent.environment?.preferred,
+              requirements: {
+                ...mirrorAgent.environment?.requirements,
+                workload: "agent",
+                topology: mirrorAgent.topology,
+              },
+              ...(mirrorAgent.signIn ? { signIn: mirrorAgent.signIn } : {}),
+            })
+          : undefined;
+        const requirements = mirrorAgent?.connectionRequirements ?? [];
+        if (requirements.length > 0 && !this.connectionAdmission)
           throw new Error("Connection providers are not configured");
-        }
-        const mirrorConnections = mirrorAdmission
-          ? mirrorRequirements.length > 0
+        const mirrorConnections =
+          mirrorAdmission && requirements.length > 0
             ? await this.connectionAdmission!.admit({
                 identity,
                 projectId,
                 environment: mirrorAdmission.environmentName,
-                requirements: mirrorRequirements,
+                requirements,
               })
-            : []
-          : undefined;
-
-        const row = await writeSessionMirror({
+            : mirrorAdmission
+              ? []
+              : undefined;
+        const written = await writeSessionMirror({
           db: this.db,
+          log: this.log,
           executionAllocations: this.executionAllocations,
           identity,
           projectId,
           sessionId,
           input,
           agentId,
-          mirrorAdmission,
-          mirrorConnections,
+          ...(mirrorAdmission ? { mirrorAdmission } : {}),
+          ...(mirrorConnections ? { mirrorConnections } : {}),
         });
         return {
-          ...mapSession(row, false, this.hostId, this.authorityLeaseMs),
-          ...(agentNotice && !existing ? { agentNotice } : {}),
+          ...mapSession(written.session, false, this.hostId, this.authorityLeaseMs),
+          sequence: written.sequence,
+          ...(agentNotice ? { agentNotice } : {}),
         };
       },
     );
   }
 
   /**
+   * What a mirror pushes (ADR 0195): the log after the remote's sequence,
+   * or the whole session to start a copy, with its workflow-facing events.
+   */
+  async mirrorExport(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    after: number | null;
+  }): Promise<Pick<SessionMirrorInput, "base" | "events" | "projectEvents">> {
+    await this.requireSession(input.identity, input.projectId, input.sessionId, "read");
+    const projectEvents = await this.db
+      .selectFrom("project_events")
+      .select(["id", "kind", "occurred_at", "payload"])
+      .where("project_id", "=", input.projectId)
+      .where("source", "=", "session")
+      .where(sql`payload->>'sessionId'`, "=", input.sessionId)
+      .orderBy("sequence")
+      .execute();
+    const exported = projectEvents.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      occurredAt: row.occurred_at.toISOString(),
+      payload: row.payload as JsonObject,
+    }));
+    if (input.after !== null) {
+      const gap = await this.log.eventsAfter({
+        sessionId: input.sessionId,
+        after: input.after,
+        maxEvents: 5_000,
+        maxBytes: 64 * 1024 * 1024,
+      });
+      if (!gap.reset) return { events: gap.events, projectEvents: exported };
+    }
+    const base = await readFullSnapshot({ db: this.db, sessionId: input.sessionId });
+    return { base, events: [], projectEvents: exported };
+  }
+
+  /**
    * The mirror source's side of a fork (ADR 0062): once the remote
-   * reported divergence, stamp the LOCAL copy with a visible system
-   * marker naming where the conversation went. Idempotent — one marker
-   * per session, however many times the 409 is re-learned.
+   * reported divergence, the LOCAL copy says where the conversation went.
+   * Idempotent: one notice per session, however often the 409 is re-learned.
    */
   async recordMirrorFork(
     identity: Identity,
@@ -4476,38 +4479,58 @@ export class AgentSessionsService {
     fork: { serverUrl: string; remoteProjectId: string },
   ): Promise<void> {
     await this.requireSession(identity, projectId, sessionId);
-    const existing = await this.db
-      .selectFrom("agent_messages")
-      .select(["metadata"])
-      .where("session_id", "=", sessionId)
-      .where("role", "=", "system")
-      .execute();
-    const already = existing.some((row) => {
-      const marker = (row.metadata as { marker?: { kind?: string } } | null)
-        ?.marker;
-      return marker?.kind === "mirror_fork";
-    });
-    if (already) return;
-    const host = hostOf(fork.serverUrl);
-    await this.db
-      .insertInto("agent_messages")
-      .values({
-        session_id: sessionId,
-        role: "system",
-        content: `Continued on ${host}. This copy is history now.`,
-        author_kind: "system",
-        author_payload: { kind: "system", code: "mirror_fork" },
-        delivery_mode: "message_only",
-        metadata: {
-          marker: {
-            kind: "mirror_fork",
-            serverUrl: fork.serverUrl,
-            remoteProjectId: fork.remoteProjectId,
-            sessionId,
+    await this.db.transaction().execute((trx) =>
+      this.appendNotice(trx, {
+        sessionId,
+        id: derivedNoticeId(sessionId, "mirror_fork"),
+        code: "mirror_fork",
+        text: `Continued on ${hostOf(fork.serverUrl)}. This copy is history now.`,
+        data: { serverUrl: fork.serverUrl, remoteProjectId: fork.remoteProjectId, sessionId },
+      }),
+    );
+  }
+
+  /**
+   * A line Work writes into a session's transcript (an agent switch, a
+   * fork, a move), through the log. A notice with an id already there is
+   * left alone.
+   */
+  private async appendNotice(
+    trx: Transaction<DB>,
+    input: { sessionId: string; id?: string; code: string; text: string; data?: JsonObject },
+  ): Promise<void> {
+    const id = input.id ?? randomUUID();
+    if (input.id) {
+      const existing = await trx.selectFrom("agent_items").select("id").where("id", "=", id).executeTakeFirst();
+      if (existing) return;
+    }
+    const now = new Date().toISOString();
+    await this.log.append(trx, {
+      sessionId: input.sessionId,
+      events: [
+        {
+          type: "item.added",
+          item: {
+            id,
+            sessionId: input.sessionId,
+            turnId: null,
+            attemptId: null,
+            parentItemId: null,
+            position: 0,
+            status: "completed",
+            nativeRef: null,
+            createdAt: now,
+            updatedAt: now,
+            startedAt: now,
+            endedAt: now,
+            kind: "notice",
+            code: input.code,
+            text: input.text,
+            data: protocolJson(input.data ?? {}),
           },
         },
-      })
-      .execute();
+      ],
+    });
   }
 
   /**
@@ -4539,8 +4562,6 @@ export class AgentSessionsService {
 
     const updates: Partial<{
       agent_id: string;
-      provider: string;
-      provider_session_id: null;
       model: string | null;
       model_effort: string | null;
       allocation_id: string;
@@ -4554,25 +4575,9 @@ export class AgentSessionsService {
       this.assertAgentAccess(identity, projectId, patch.agentId);
       const agent = await this.resolveAgent(patch.agentId, projectId);
       if (!agent) throw new AgentNotConfiguredError(patch.agentId);
-      // Let the outgoing provider release its in-memory state.
-      if (session.provider_session_id) {
-        const previous = await this.resolveAgent(
-          session.agent_id,
-          projectId,
-        ).catch(() => undefined);
-        await previous?.provider
-          .dispose({
-            providerSessionId: session.provider_session_id,
-            sessionId: session.id,
-            projectId,
-            sandboxId: "",
-            workingDirectory: "",
-          })
-          .catch(() => {});
-      }
+      // The next turn binds the new agent's harness thread (ADR 0196): a
+      // harness it ran on before resumes, told only what it missed.
       updates.agent_id = patch.agentId;
-      updates.provider = agent.provider.name;
-      updates.provider_session_id = null;
       updates.model = null;
     }
     if (patch.model !== undefined) {
@@ -4602,9 +4607,7 @@ export class AgentSessionsService {
           workload: "agent",
           topology: nextAgent.topology,
         },
-        ...(nextAgent.personalLogin
-          ? { personalLogin: nextAgent.personalLogin }
-          : {}),
+        ...(nextAgent.signIn ? { signIn: nextAgent.signIn } : {}),
       });
       const requirements = nextAgent.connectionRequirements ?? [];
       if (requirements.length > 0 && !this.connectionAdmission) {
@@ -4645,7 +4648,6 @@ export class AgentSessionsService {
           updates.allocation_id = allocation.id;
           updates.environment_name = admission.environmentName;
           updates.placement = toPlacementJson(placementOf(admission));
-          updates.provider_session_id = null;
           updates.sandbox_id = null;
           return transaction
             .updateTable("agent_sessions")
@@ -4674,42 +4676,47 @@ export class AgentSessionsService {
           .executeTakeFirstOrThrow();
       }));
 
-    // Leave a marker in the transcript so the conversation shows where the
-    // agent or effort changed. System rows with `metadata.marker` render as
-    // dividers, not messages.
-    const markers: Array<{ content: string; marker: JsonObject }> = [];
-    if (updates.agent_id !== undefined) {
-      markers.push({
-        content: "Agent changed",
-        marker: { kind: "agent_change", agentId: updates.agent_id },
+    // The change reaches every viewer through the log, with a notice in the
+    // transcript where the agent, model or effort changed.
+    await this.db.transaction().execute(async (trx) => {
+      await this.log.append(trx, {
+        sessionId,
+        events: [
+          {
+            type: "session.changed",
+            session: {
+              ...(updates.agent_id !== undefined ? { agentId: updates.agent_id } : {}),
+              ...(updates.model !== undefined ? { model: updates.model } : {}),
+              ...(updates.model_effort !== undefined
+                ? { modelEffort: (updates.model_effort as AgentEffort | null) ?? null }
+                : {}),
+              ...(updates.environment_name !== undefined ? { environment: updates.environment_name } : {}),
+            },
+          },
+        ],
       });
-    }
-    if (updates.model_effort !== undefined && updates.agent_id === undefined) {
-      markers.push({
-        content: `Effort set to ${updates.model_effort ?? "default"}`,
-        marker: { kind: "effort_change", effort: updates.model_effort },
-      });
-    }
-    if (updates.model !== undefined && updates.agent_id === undefined) {
-      markers.push({
-        content: `Model set to ${updates.model ?? "default"}`,
-        marker: { kind: "model_change", model: updates.model },
-      });
-    }
-    for (const entry of markers) {
-      await this.db
-        .insertInto("agent_messages")
-        .values({
-          session_id: sessionId,
-          role: "system",
-          content: entry.content,
-          author_kind: "system",
-          author_payload: { kind: "system", code: "session_configuration" },
-          delivery_mode: "message_only",
-          metadata: { marker: entry.marker },
-        })
-        .execute();
-    }
+      if (updates.agent_id !== undefined)
+        await this.appendNotice(trx, {
+          sessionId,
+          code: "agent_changed",
+          text: "Agent changed",
+          data: { agentId: updates.agent_id },
+        });
+      if (updates.model_effort !== undefined && updates.agent_id === undefined)
+        await this.appendNotice(trx, {
+          sessionId,
+          code: "effort_changed",
+          text: `Effort set to ${updates.model_effort ?? "default"}`,
+          data: { effort: updates.model_effort },
+        });
+      if (updates.model !== undefined && updates.agent_id === undefined)
+        await this.appendNotice(trx, {
+          sessionId,
+          code: "model_changed",
+          text: `Model set to ${updates.model ?? "default"}`,
+          data: { model: updates.model },
+        });
+    });
     return mapSession(row, false, this.hostId, this.authorityLeaseMs);
   }
 
@@ -4818,7 +4825,6 @@ export class AgentSessionsService {
               external_user_id: identity.externalUserId,
               provider: session.provider,
               source: session.source,
-              provider_session_id: null,
               agent_id: session.agent_id,
               model: session.model,
               model_effort: session.model_effort,
@@ -5575,7 +5581,7 @@ export class AgentSessionsService {
       if (!done) return false;
       await trx
         .updateTable("agent_sessions")
-        .set({ provider_session_id: null, sandbox_id: null })
+        .set({ sandbox_id: null })
         .where("id", "=", session.id)
         .execute();
       return true;
@@ -5618,7 +5624,7 @@ export class AgentSessionsService {
         workload: "agent",
         topology: agent.topology,
       },
-      ...(agent.personalLogin ? { personalLogin: agent.personalLogin } : {}),
+      ...(agent.signIn ? { signIn: agent.signIn } : {}),
     });
     const requirements = agent.connectionRequirements ?? [];
     const connectionAdmission = this.connectionAdmission;
@@ -5664,7 +5670,6 @@ export class AgentSessionsService {
           allocation_id: allocation.id,
           environment_name: admission.environmentName,
           sandbox_id: null,
-          provider_session_id: null,
           placement: toPlacementJson({
             ...placementOf(admission),
             reason: previous?.reason ?? admission.reason,
@@ -5709,7 +5714,6 @@ export class AgentSessionsService {
         "session.project_id",
         "session.environment_name",
         "session.agent_id",
-        "session.provider_session_id",
         "session.external_user_id",
         "projects.tenant_id",
         "allocation.id as allocation_id",
@@ -5794,7 +5798,6 @@ export class AgentSessionsService {
                 projectId: row.project_id,
                 sessionId: row.id,
                 agentId: row.agent_id,
-                providerSessionId: row.provider_session_id,
                 allocationId: row.allocation_id,
                 sandboxProviderId: row.sandbox_provider_id,
                 owner: placementOwner(row.external_user_id),
@@ -5822,7 +5825,6 @@ export class AgentSessionsService {
     projectId: string;
     sessionId: string;
     agentId: string | null;
-    providerSessionId: string | null;
     allocationId: string;
     sandboxProviderId: string | null;
     /** The session's owner, whose machine may be open only to them. */
@@ -5930,23 +5932,12 @@ export class AgentSessionsService {
       });
       await trx
         .updateTable("agent_sessions")
-        .set({ provider_session_id: null, sandbox_id: null })
+        .set({ sandbox_id: null })
         .where("id", "=", sessionId)
         .execute();
       return true;
     });
     if (!released) return false;
-    if (input.providerSessionId) {
-      await agent?.provider
-        .dispose({
-          providerSessionId: input.providerSessionId,
-          sessionId,
-          projectId,
-          sandboxId: input.sandboxProviderId ?? "",
-          workingDirectory: "",
-        })
-        .catch(() => {});
-    }
     await this.connectionGrants
       ?.revokeAllocation({ allocationId: allocation.id })
       .catch(() => {});
@@ -5984,28 +5975,9 @@ export class AgentSessionsService {
           projectId,
           sessionId,
         );
-        const cancelOpenTurns = (executor: Kysely<DB> | Transaction<DB>) =>
-          executor
-            .updateTable("agent_turns")
-            .set({
-              status: "cancelled",
-              error: "Chat closed",
-              completed_at: new Date(),
-              lease_owner: null,
-              lease_token: null,
-              lease_expires_at: null,
-              updated_at: new Date(),
-            })
-            .where("session_id", "in", sessionIds)
-            .where("status", "in", ["queued", "held"])
-            .execute();
-        await cancelOpenTurns(this.db);
-        for (const id of sessionIds) {
-          await this.cancelAutoRetry(id);
-          await this.interrupt(identity, projectId, id, {
-            notifyParent: false,
-          }).catch(() => {});
-        }
+        const cancelOpenTurns = (trx: Transaction<DB>) =>
+          this.stopSessionTurns(trx, { sessionIds, reason: "Chat closed" });
+        await this.db.transaction().execute(cancelOpenTurns);
         await this.archiveResources?.stop({
           identity,
           projectId,
@@ -6028,17 +6000,16 @@ export class AgentSessionsService {
             await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
               trx,
             );
-          await trx
-            .updateTable("agent_sessions")
-            .set({ status: "closed", activity: null, updated_at: new Date() })
-            .where("id", "in", sessionIds)
-            .execute();
+          for (const id of sessionIds)
+            await this.log.append(trx, {
+              sessionId: id,
+              events: [{ type: "session.changed", session: { status: "closed", activity: null } }],
+            });
           // Work delivered while the running turns stopped would wait on a
           // closed chat forever: cancel it with the closing, under the lock.
           await cancelOpenTurns(trx);
           return this.sessionsWithRunningTurns({
             sessionIds,
-            includeParked: true,
             executor: trx,
           });
         });
@@ -6066,6 +6037,42 @@ export class AgentSessionsService {
         return mapSession(root, false, this.hostId, this.authorityLeaseMs);
       },
     );
+  }
+
+  /**
+   * Withdraw queued work and ask running turns to stop, in sessions that
+   * are closing or being archived (through the log and the turns' command
+   * inbox, so the replica running each turn hears it).
+   */
+  private async stopSessionTurns(
+    trx: Transaction<DB>,
+    input: { sessionIds: readonly string[]; reason: string },
+  ): Promise<void> {
+    if (input.sessionIds.length === 0) return;
+    const rows = await trx
+      .selectFrom("agent_turns")
+      .selectAll()
+      .where("session_id", "in", [...input.sessionIds])
+      .where("status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES])
+      .execute();
+    const now = new Date().toISOString();
+    const bySession = new Map<string, SessionEvent[]>();
+    for (const row of rows) {
+      const turn = turnFromRow(row);
+      const events = bySession.get(turn.sessionId) ?? [];
+      if (isActiveTurnStatus(turn.status)) {
+        events.push({ type: "turn.changed", turn: { ...turn, cancellationRequested: true, updatedAt: now } });
+        await this.queue.enqueueCommand(trx, { turnId: turn.id, attemptId: turn.activeAttemptId, kind: "interrupt" });
+      } else {
+        events.push({
+          type: "turn.changed",
+          turn: { ...turn, status: "cancelled", error: { message: input.reason }, completedAt: now, updatedAt: now },
+        });
+      }
+      bySession.set(turn.sessionId, events);
+    }
+    for (const [sessionId, events] of bySession)
+      await this.log.append(trx, { sessionId, events });
   }
 
   /**
@@ -6108,7 +6115,6 @@ export class AgentSessionsService {
     const { identity, projectId, sessionId, signal } = input;
     const running = await this.sessionsWithRunningTurns({
       sessionIds: [sessionId],
-      includeParked: true,
     });
     if (running.size > 0) return;
     await this.withdrawFromSessionSandbox({ identity, projectId, sessionId });
@@ -6124,7 +6130,6 @@ export class AgentSessionsService {
       if (!session) return undefined;
       const busy = await this.sessionsWithRunningTurns({
         sessionIds: [sessionId],
-        includeParked: true,
         executor: trx,
       });
       if (busy.size > 0) return undefined;
@@ -6143,21 +6148,7 @@ export class AgentSessionsService {
     });
     if (!row) return;
     signal.throwIfAborted();
-    // The provider session stays recorded until it is disposed, so a close
-    // retried after a crash still finds it.
-    await this.releaseClosedResources({
-      identity,
-      projectId,
-      session: row,
-      providerSessionId: row.provider_session_id,
-    });
-    if (row.provider_session_id)
-      await this.db
-        .updateTable("agent_sessions")
-        .set({ provider_session_id: null })
-        .where("id", "=", row.id)
-        .where("provider_session_id", "=", row.provider_session_id)
-        .execute();
+    await this.releaseClosedResources({ identity, projectId, session: row });
   }
 
   /**
@@ -6242,8 +6233,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * What a closed chat still holds outside its row: its provider session,
-   * connection grants, and on hosts that keep session workspaces, the
+   * What a closed chat still holds outside its row: its connection grants, and on hosts that keep session workspaces, the
    * `sessions/<id>` branch and `session-<id>` copy. Safe to repeat.
    */
   private async releaseClosedResources(input: {
@@ -6253,24 +6243,8 @@ export class AgentSessionsService {
       SessionRow,
       "id" | "agent_id" | "allocation_id" | "workspace"
     >;
-    providerSessionId?: string | null;
   }): Promise<void> {
     const { session } = input;
-    if (input.providerSessionId) {
-      const agent = await this.resolveAgent(
-        session.agent_id,
-        input.projectId,
-      ).catch(() => undefined);
-      await agent?.provider
-        .dispose({
-          providerSessionId: input.providerSessionId,
-          sessionId: session.id,
-          projectId: input.projectId,
-          sandboxId: "",
-          workingDirectory: "",
-        })
-        .catch(() => {});
-    }
     if (session.allocation_id)
       await this.connectionGrants
         ?.revokeAllocation({ allocationId: session.allocation_id })
@@ -6378,24 +6352,9 @@ export class AgentSessionsService {
 
     // Cancel waiting work before interrupting the current turns so a drainer
     // cannot claim another queued turn during shutdown.
-    await this.db
-      .updateTable("agent_turns")
-      .set({
-        status: "cancelled",
-        error: "Session archived",
-        completed_at: new Date(),
-        lease_owner: null,
-        lease_token: null,
-        lease_expires_at: null,
-        updated_at: new Date(),
-      })
-      .where("session_id", "in", impact.sessionIds)
-      .where("status", "in", ["queued", "held"])
-      .execute();
-    for (const id of impact.sessionIds) {
-      await this.cancelAutoRetry(id);
-      await this.interrupt(identity, projectId, id, { notifyParent: false });
-    }
+    await this.db.transaction().execute((trx) =>
+      this.stopSessionTurns(trx, { sessionIds: impact.sessionIds, reason: "Session archived" }),
+    );
     await this.archiveResources?.stop({
       identity,
       projectId,
@@ -6429,7 +6388,6 @@ export class AgentSessionsService {
         // back once the chat rests (ADR 0193).
         const busy = await this.sessionsWithRunningTurns({
           sessionIds: impact.sessionIds,
-          includeParked: true,
           executor: transaction,
         });
         const idle = impact.sessionIds.filter((id) => !busy.has(id));
@@ -6438,7 +6396,6 @@ export class AgentSessionsService {
             ? await transaction
                 .updateTable("agent_sessions")
                 .set({
-                  provider_session_id: null,
                   sandbox_id: null,
                   activity: null,
                   updated_at: new Date(),
@@ -6509,20 +6466,6 @@ export class AgentSessionsService {
     });
 
     for (const row of resourceRows) {
-      if (row.provider_session_id) {
-        const agent = await this.resolveAgent(row.agent_id, projectId).catch(
-          () => undefined,
-        );
-        await agent?.provider
-          .dispose({
-            providerSessionId: row.provider_session_id,
-            sessionId: row.id,
-            projectId,
-            sandboxId: row.sandbox_id ?? "",
-            workingDirectory: "",
-          })
-          .catch(() => {});
-      }
       if (row.allocation_id) {
         await this.connectionGrants
           ?.revokeAllocation({ allocationId: row.allocation_id })
@@ -6572,7 +6515,6 @@ export class AgentSessionsService {
       (
         await this.sessionsWithRunningTurns({
           sessionIds,
-          includeParked: true,
         })
       ).size > 0
     )
@@ -6760,9 +6702,7 @@ export class AgentSessionsService {
             workload: "agent",
             topology: agent.topology,
           },
-          ...(agent.personalLogin
-            ? { personalLogin: agent.personalLogin }
-            : {}),
+          ...(agent.signIn ? { signIn: agent.signIn } : {}),
           allowed: agent.environment?.allowed,
           preferred: agent.environment?.preferred,
         });
@@ -7011,7 +6951,7 @@ export class AgentSessionsService {
         workload: "agent",
         topology: agent.topology,
       },
-      ...(agent.personalLogin ? { personalLogin: agent.personalLogin } : {}),
+      ...(agent.signIn ? { signIn: agent.signIn } : {}),
     });
     for (const key of ["cpuMillis", "memoryMb", "storageMb", "gpu"] as const) {
       const required = admitted.effectiveRequirements.resources?.[key];
@@ -7311,12 +7251,12 @@ export class AgentSessionsService {
   private async storeSyncDir(
     identity: Identity,
     projectId: string,
-    anchor: { providerSession: ProviderSession; sandboxProviderId?: string },
+    workspace: { sandboxProviderId?: string },
     sessionId: string,
     sessionCopy: boolean,
   ): Promise<string | null> {
     if (!this.storeSync) return null;
-    if (!anchor.sandboxProviderId) return null;
+    if (!workspace.sandboxProviderId) return null;
     const repo = sessionCopy
       ? await this.projectManager.openSession({
           tenantId: identity.tenantId,
@@ -8165,16 +8105,14 @@ function mapSession(
     row.handoff_status === "none" &&
     row.authority_host_id !== "unassigned" &&
     row.authority_host_id !== hostId &&
-    row.mirror_message_count > 0 &&
+    Number(row.mirror_sequence) > 0 &&
     leaseExpiresAt.getTime() <= Date.now();
   return {
     id: row.id,
     projectId: row.project_id,
     externalUserId: row.external_user_id,
     owner: isProjectPrincipal(row.external_user_id) ? "project" : "member",
-    provider: row.provider,
     source: parseSessionSource(row.source),
-    providerSessionId: row.provider_session_id,
     sandboxId: row.sandbox_id,
     environment: row.environment_name,
     allocationId: row.allocation_id,
@@ -8194,7 +8132,7 @@ function mapSession(
     authorityHostId: row.authority_host_id,
     authorityRevision: Number(row.authority_revision),
     authoritySeenAt: row.authority_seen_at.toISOString(),
-    mirrorMessageCount: row.mirror_message_count,
+    mirrorSequence: Number(row.mirror_sequence),
     handoffStatus: parseHandoffStatus(row.handoff_status),
     handoffDestinationHostId: row.handoff_destination_host_id,
     resumable,
@@ -8476,19 +8414,95 @@ export function modelVisibleDelivery(
   }
 }
 
-const PERSONAL_HARNESS_NAMES: Record<PersonalLoginKind, string> = {
+/** A protocol JSON object from any JSON-able value (database rows, reports). */
+export function protocolJson(value: unknown): ProtocolJsonObject {
+  const parsed: unknown = JSON.parse(JSON.stringify(value ?? {}));
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (parsed as ProtocolJsonObject)
+    : {};
+}
+
+function parseDispatch(value: string | null): DispatchMode {
+  return value === "steer" || value === "interrupt" || value === "message_only"
+    ? value
+    : "queue";
+}
+
+/** A host tool for the runner: its JSON Schema, from the tool's zod shape. */
+function hostToolDescriptor(tool: ExtraTool): HostToolDescriptor {
+  const shape = z.object(tool.parameters as z.ZodRawShape);
+  return {
+    name: tool.name,
+    description: tool.description,
+    inputSchema: protocolJson(z.toJSONSchema(shape)),
+  };
+}
+
+/** MCP content from what a host tool returned. */
+function hostToolResult(value: ReturnType<typeof extraToolResult>): HostToolResult {
+  const content = (value.content ?? []).flatMap(
+    (part): HostToolResult["content"] =>
+      part.type === "text"
+        ? [{ type: "text", text: part.text }]
+        : part.type === "image"
+          ? [{ type: "image", data: part.data, mimeType: part.mimeType }]
+          : [],
+  );
+  return {
+    content,
+    ...(value.structuredContent !== undefined
+      ? { structured: protocolJson({ value: value.structuredContent }).value }
+      : {}),
+    ...(value.isError ? { isError: true } : {}),
+  };
+}
+
+function protocolPolicies(
+  policies: Record<string, McpToolPolicyLayers>,
+): Record<string, PolicyLayer[]> {
+  return Object.fromEntries(
+    Object.entries(policies).map(([server, layers]) => [
+      server,
+      layers.map((layer) => ({
+        ...(layer.default ? { default: layer.default } : {}),
+        ...(layer.tools ? { tools: { ...layer.tools } } : {}),
+      })),
+    ]),
+  );
+}
+
+function protocolMcpServers(
+  servers: Record<string, AgentMcpServerConfig>,
+): Record<string, McpServerSpec> {
+  return Object.fromEntries(
+    Object.entries(servers).map(([name, server]): [string, McpServerSpec] => [
+      name,
+      server.transport === "stdio"
+        ? {
+            transport: "stdio",
+            command: server.command,
+            ...(server.args ? { args: [...server.args] } : {}),
+            ...(server.env ? { env: { ...server.env } } : {}),
+          }
+        : {
+            transport: server.transport,
+            url: server.url,
+            ...(server.headers ? { headers: { ...server.headers } } : {}),
+            ...(server.defaultToolsApprovalMode
+              ? { defaultToolsApprovalMode: server.defaultToolsApprovalMode }
+              : {}),
+          },
+    ]),
+  );
+}
+
+const SIGN_IN_HARNESS_NAMES: Record<SignInHarness, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
 };
 
-/**
- * An agent that runs with its owner's own harness login cannot have it this
- * turn (ADR 0184): missing, expired, or not allowed here. The message says
- * what to do.
- */
-export class PersonalLoginUnavailableError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "PersonalLoginUnavailableError";
-  }
+/** A deterministic id for a notice Work writes at most once per session. */
+function derivedNoticeId(sessionId: string, code: string): string {
+  const hex = createHash("sha256").update(`notice ${sessionId} ${code}`).digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }

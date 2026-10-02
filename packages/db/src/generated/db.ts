@@ -91,6 +91,7 @@ export interface AgentProviderThreadEntries {
 
 export interface AgentProviderThreads {
   created_at: Generated<Timestamp>;
+  fork_source: Json | null;
   harness: string;
   id: Generated<string>;
   last_turn_ordinal: number | null;

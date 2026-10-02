@@ -4,6 +4,7 @@ import type {
   JsonObject,
   SessionEvent,
   SessionFields,
+  SessionSnapshot,
   StoredSessionEvent,
 } from "@catamorphic/agent-protocol";
 import type { DB, Json } from "@catamorphic/db";
@@ -146,6 +147,48 @@ export class SessionLog {
     return sequence;
   }
 
+  /**
+   * Start a copy of a session from another copy's snapshot (a mirror's
+   * first push, ADR 0195): its entities are projected as they stand, and
+   * the copy's log continues from the snapshot's sequence.
+   */
+  async importSnapshot(
+    trx: Transaction<DB>,
+    input: { sessionId: string; snapshot: SessionSnapshot },
+  ): Promise<void> {
+    const at = new Date().toISOString();
+    const events: SessionEvent[] = [
+      ...input.snapshot.providerThreads.map(
+        (thread): SessionEvent => ({ type: "provider_thread.changed", thread }),
+      ),
+      ...input.snapshot.items.map(
+        (item): SessionEvent => ({ type: "item.added", item }),
+      ),
+      ...input.snapshot.turns.map(
+        (turn): SessionEvent => ({ type: "turn.changed", turn }),
+      ),
+      ...input.snapshot.attempts.map(
+        (attempt): SessionEvent => ({ type: "attempt.changed", attempt }),
+      ),
+      ...input.snapshot.requests.map(
+        (request): SessionEvent => ({ type: "request.changed", request }),
+      ),
+    ];
+    for (const event of events)
+      await project(trx, {
+        sessionId: input.sessionId,
+        sequence: input.snapshot.sequence,
+        at,
+        commandId: null,
+        event,
+      });
+    await trx
+      .updateTable("agent_sessions")
+      .set({ event_sequence: input.snapshot.sequence })
+      .where("id", "=", input.sessionId)
+      .execute();
+  }
+
   private async persist(
     trx: Transaction<DB>,
     stored: readonly StoredSessionEvent[],
@@ -178,7 +221,8 @@ export class SessionLog {
     commandId: string;
     type: string;
     externalUserId?: string;
-    run: (trx: Transaction<DB>) => Promise<JsonObject | null | undefined>;
+    /** Returns the command's result (JSON-able), recorded on its receipt. */
+    run: (trx: Transaction<DB>) => Promise<object | null | undefined>;
   }): Promise<CommandReceipt> {
     const existing = await this.receipt(this.db, input);
     if (existing) return existing;
@@ -195,7 +239,8 @@ export class SessionLog {
           .executeTakeFirstOrThrow();
         const raced = await this.receipt(trx, input);
         if (raced) return raced;
-        const result = (await input.run(trx)) ?? null;
+        const ran = await input.run(trx);
+        const result = ran ? (JSON.parse(JSON.stringify(ran)) as JsonObject) : null;
         const sequence = await this.latestSequence(trx, input.sessionId);
         await trx
           .insertInto("agent_session_commands")

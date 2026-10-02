@@ -2,7 +2,7 @@ import type {
   AgentCapabilityGateway,
   TurnContextFragment,
 } from "../agent-capabilities.js";
-import type { PersonalLoginKind } from "../execution-environment.js";
+import type { SignInHarness } from "../types.js";
 import type { AgentEvent, AgentQuestion, SandboxProvider } from "../types.js";
 import type { HarnessPermissions } from "./harness-permissions.js";
 import type { McpToolPolicyLayers } from "./tool-policy.js";
@@ -270,7 +270,7 @@ export interface TurnSandbox {
  * directly with that login instead of through the gateway.
  */
 export interface SandboxPersonalLogin {
-  harness: PersonalLoginKind;
+  harness: SignInHarness;
   /**
    * Absolute sandbox directory holding the login: Claude Code's
    * `CLAUDE_CONFIG_DIR` (with `.credentials.json`) or Codex's `CODEX_HOME`

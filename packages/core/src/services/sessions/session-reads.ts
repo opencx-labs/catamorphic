@@ -161,6 +161,41 @@ async function firstPosition(
     : Number(row.position);
 }
 
+/**
+ * Every turn, item, request and thread of a session at one sequence: what a
+ * mirror sends to start a copy elsewhere (ADR 0195).
+ */
+export async function readFullSnapshot(input: {
+  db: Kysely<DB>;
+  sessionId: string;
+}): Promise<SessionSnapshot> {
+  return input.db
+    .transaction()
+    .setIsolationLevel("repeatable read")
+    .execute(async (trx) => {
+      const session = await trx
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", input.sessionId)
+        .executeTakeFirstOrThrow();
+      const turns = await trx.selectFrom("agent_turns").selectAll().where("session_id", "=", input.sessionId).orderBy("ordinal").execute();
+      const items = await trx.selectFrom("agent_items").select("payload").where("session_id", "=", input.sessionId).orderBy("position").execute();
+      const attempts = await trx.selectFrom("agent_turn_attempts").selectAll().where("session_id", "=", input.sessionId).execute();
+      const requests = await trx.selectFrom("agent_runtime_requests").selectAll().where("session_id", "=", input.sessionId).execute();
+      const threads = await trx.selectFrom("agent_provider_threads").selectAll().where("session_id", "=", input.sessionId).execute();
+      return {
+        sequence: Number(session.event_sequence),
+        session: sessionFieldsFromRow(session),
+        turns: turns.map(turnFromRow),
+        attempts: attempts.map(attemptFromRow),
+        items: items.map(itemFromRow),
+        requests: requests.map(requestFromRow),
+        providerThreads: threads.map(providerThreadFromRow),
+        olderBefore: null,
+      };
+    });
+}
+
 /** Items before `before`, newest page first, with the next cursor. */
 export async function readItemsBefore(input: {
   db: Executor;

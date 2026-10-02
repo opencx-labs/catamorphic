@@ -151,7 +151,9 @@ export type AllocationReleaseReason =
   | "idle"
   | "node_lost"
   | "connection_ended"
-  | "retired";
+  | "retired"
+  /** A rollback gave the workspace back, to be rebuilt at an earlier commit (ADR 0195). */
+  | "rollback";
 
 export class ExecutionAllocationConflictError extends Error {
   constructor(readonly rootWorkloadId: string) {

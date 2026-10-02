@@ -1,14 +1,12 @@
+import type {
+  AgentTodo,
+  SessionSnapshot,
+  StoredSessionEvent,
+} from "@catamorphic/agent-protocol";
 import type { DB, Json, JsonObject } from "@catamorphic/db";
 import { type Kysely, type Selectable, sql } from "kysely";
 import type { Identity } from "../identity.js";
-import type {
-  AgentSessionSource,
-  AgentTodo,
-} from "./agent-sessions-service.js";
-import type {
-  SessionDeliveryMode,
-  SessionMessageAuthor,
-} from "./agent-turns-service.js";
+import type { AgentSessionSource } from "./agent-sessions-service.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ConnectionAdmissionService } from "./connection-admission.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
@@ -16,11 +14,12 @@ import {
   admissionPolicy,
   type ExecutionEnvironmentsService,
 } from "./execution-environments-service.js";
+import { SessionLogGapError, type SessionLog } from "./sessions/session-log.js";
 
 /**
- * A mirror push found messages here the mirroring side doesn't know —
- * the session was continued on THIS backend, so the mirror source must
- * stop pushing (the conversation forked; this side owns it now).
+ * The session was continued on THIS backend: its authority moved here, so
+ * the mirror source must stop pushing (the conversation forked; this side
+ * owns it now).
  */
 export class SessionMirrorDivergedError extends Error {
   constructor(readonly sessionId: string) {
@@ -31,43 +30,55 @@ export class SessionMirrorDivergedError extends Error {
   }
 }
 
+/**
+ * The mirror's copy ends at `sequence`, not where the push began: the
+ * source resends from there (or a base when this side has no copy).
+ */
+export class SessionMirrorBehindError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly sequence: number,
+  ) {
+    super(`The mirror of session '${sessionId}' is at event ${sequence}`);
+    this.name = "SessionMirrorBehindError";
+  }
+}
+
+/**
+ * One mirror push (ADR 0195): the source's log after this copy's last
+ * sequence, or, for a copy that does not exist yet, a full snapshot to
+ * start from and the events after it.
+ */
 export type SessionMirrorInput = {
-  workStatus?: "open" | "completed";
-  stateRevision?: number;
-  events?: Array<{
-    id: string;
-    kind: string;
-    occurredAt: string;
-    payload: JsonObject;
-  }>;
+  authority: { hostId: string; revision: number };
   title?: string | null;
   icon?: string | null;
-  provider?: string;
   source?: AgentSessionSource;
   /**
    * The source session's PROJECT-agent slug, when it ran one: project
    * agent definitions are committed files that sync between backends,
    * so when this side has the same slug (and the caller's scope covers
-   * it), the fork continues on the SAME agent instead of the default.
+   * it), the copy continues on the SAME agent instead of the default.
    */
   agentSlug?: string;
-  todos: AgentTodo[];
-  authority: { hostId: string; revision: number };
-  messages: Array<{
+  todos?: AgentTodo[];
+  workStatus?: "open" | "completed";
+  /** Every turn, item, request and thread at `base.sequence`, for a new copy. */
+  base?: SessionSnapshot;
+  events: StoredSessionEvent[];
+  /** The source's workflow-facing session events, so automations here see them. */
+  projectEvents?: Array<{
     id: string;
-    role: "user" | "assistant" | "system";
-    content: string;
-    metadata: Record<string, unknown> | null;
-    author: SessionMessageAuthor;
-    deliveryMode: SessionDeliveryMode;
-    idempotencyKey: string | null;
-    createdAt: string;
+    kind: string;
+    occurredAt: string;
+    payload: JsonObject;
   }>;
 };
 
-/** Persist an admitted mirror atomically against local authority and transcript order. */
+/** Persist a mirror push atomically against local authority and the log. */
 export async function writeSessionMirror({
   db,
+  log,
   executionAllocations,
   identity,
   projectId,
@@ -78,6 +89,7 @@ export async function writeSessionMirror({
   mirrorConnections,
 }: {
   db: Kysely<DB>;
+  log: SessionLog;
   executionAllocations: ExecutionAllocationsService;
   identity: Identity;
   projectId: string;
@@ -86,11 +98,9 @@ export async function writeSessionMirror({
   agentId: string | null;
   mirrorAdmission?: Awaited<ReturnType<ExecutionEnvironmentsService["admit"]>>;
   mirrorConnections?: Awaited<ReturnType<ConnectionAdmissionService["admit"]>>;
-}): Promise<Selectable<DB["agent_sessions"]>> {
-  // One transaction: the divergence check, the session upsert, and
-  // the appends must not interleave with a turn starting here (the
-  // append order IS the transcript order, via `seq`).
+}): Promise<{ session: Selectable<DB["agent_sessions"]>; sequence: number }> {
   return db.transaction().execute(async (trx) => {
+    // The source's history is not new activity here: no workflow fires on it.
     await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
       trx,
     );
@@ -104,31 +114,17 @@ export async function writeSessionMirror({
       current &&
       (current.project_id !== projectId ||
         current.external_user_id !== identity.externalUserId)
-    ) {
+    )
       throw new AccessDeniedError();
-    }
     if (
       current &&
       current.authority_host_id !== "unassigned" &&
       (current.authority_host_id !== input.authority.hostId ||
         Number(current.authority_revision) > input.authority.revision)
-    ) {
+    )
       throw new SessionMirrorDivergedError(sessionId);
-    }
-    if (current && !current.allocation_id) {
-      throw new Error("Agent session has no Environment Allocation");
-    }
-    const held = await trx
-      .selectFrom("agent_messages")
-      .select(["id"])
-      .where("session_id", "=", sessionId)
-      .forUpdate()
-      .execute();
-    const incomingIds = new Set(input.messages.map((m) => m.id));
-    if (held.some((entry) => !incomingIds.has(entry.id))) {
-      throw new SessionMirrorDivergedError(sessionId);
-    }
-
+    if (!current && !input.base)
+      throw new SessionMirrorBehindError(sessionId, 0);
     const allocation =
       !current && mirrorAdmission
         ? await executionAllocations.create({
@@ -145,81 +141,69 @@ export async function writeSessionMirror({
             transaction: trx,
           })
         : undefined;
-    const session = current
-      ? await trx
-          .updateTable("agent_sessions")
-          .set({
-            title: input.title ?? current.title,
-            icon: input.icon ?? current.icon,
-            work_status: input.workStatus,
-            state_revision: input.stateRevision,
-            todos: sql<Json>`${JSON.stringify(input.todos)}::jsonb`,
-            updated_at: new Date(),
-            authority_host_id: input.authority.hostId,
-            authority_revision: input.authority.revision,
-            authority_seen_at: new Date(),
-            mirror_message_count: input.messages.length,
-          })
-          .where("id", "=", sessionId)
-          .returningAll()
-          .executeTakeFirstOrThrow()
-      : await trx
-          .insertInto("agent_sessions")
-          .values({
-            id: sessionId,
-            project_id: projectId,
-            external_user_id: identity.externalUserId,
-            provider: input.provider ?? "mirror",
-            source: input.source ?? "api",
-            provider_session_id: null,
-            agent_id: agentId,
-            model: null,
-            model_effort: null,
-            system_prompt: null,
-            sandbox_id: null,
-            allocation_id: allocation!.id,
-            environment_name: mirrorAdmission!.environmentName,
-            status: "active",
-            base_commit_sha: null,
-            title: input.title ?? null,
-            icon: input.icon ?? null,
-            work_status: input.workStatus,
-            state_revision: input.stateRevision,
-            todos: sql<Json>`${JSON.stringify(input.todos)}::jsonb`,
-            authority_host_id: input.authority.hostId,
-            authority_revision: input.authority.revision,
-            authority_seen_at: new Date(),
-            mirror_message_count: input.messages.length,
-          })
-          .returningAll()
-          .executeTakeFirstOrThrow();
-
-    // `seq` is an identity column: transcript order IS insertion
-    // order, so append the unseen messages in payload order, in one
-    // statement (a mirror can carry hundreds of messages).
-    const heldIds = new Set(held.map((entry) => entry.id));
-    const fresh = input.messages
-      .filter((message) => !heldIds.has(message.id))
-      .map((message) => ({
-        id: message.id,
-        session_id: sessionId,
-        role: message.role,
-        content: message.content,
-        metadata:
-          message.metadata === null
-            ? null
-            : sql<JsonObject>`${JSON.stringify(message.metadata)}::jsonb`,
-        author_kind: message.author.kind,
-        author_payload: JSON.parse(JSON.stringify(message.author)),
-        delivery_mode: message.deliveryMode,
-        idempotency_key: message.idempotencyKey,
-        commit_sha: null,
-        created_at: new Date(message.createdAt),
-      }));
-    if (fresh.length > 0) {
-      await trx.insertInto("agent_messages").values(fresh).execute();
+    if (!current) {
+      if (!allocation || !mirrorAdmission)
+        throw new Error("A new mirror needs an admitted Environment");
+      await trx
+        .insertInto("agent_sessions")
+        .values({
+          id: sessionId,
+          project_id: projectId,
+          external_user_id: identity.externalUserId,
+          source: input.source ?? "api",
+          agent_id: agentId,
+          model: null,
+          model_effort: null,
+          system_prompt: null,
+          sandbox_id: null,
+          allocation_id: allocation.id,
+          environment_name: mirrorAdmission.environmentName,
+          status: "active",
+          base_commit_sha: null,
+          title: input.title ?? null,
+          icon: input.icon ?? null,
+          work_status: input.workStatus ?? "open",
+          todos: sql<Json>`${JSON.stringify(input.todos ?? [])}::jsonb`,
+          authority_host_id: input.authority.hostId,
+          authority_revision: input.authority.revision,
+          authority_seen_at: new Date(),
+        })
+        .execute();
     }
-    for (const event of input.events ?? []) {
+    if (input.base && (!current || Number(current.event_sequence) === 0)) {
+      await log.importSnapshot(trx, {
+        sessionId,
+        // The copy runs this side's agent, not the source's harness threads.
+        snapshot: { ...input.base, providerThreads: [] },
+      });
+    }
+    let sequence: number;
+    try {
+      sequence = await log.replicate(trx, { sessionId, events: input.events });
+    } catch (error) {
+      if (error instanceof SessionLogGapError)
+        throw new SessionMirrorBehindError(sessionId, error.expected - 1);
+      throw error;
+    }
+    const session = await trx
+      .updateTable("agent_sessions")
+      .set({
+        title: input.title ?? current?.title ?? null,
+        icon: input.icon ?? current?.icon ?? null,
+        ...(input.workStatus ? { work_status: input.workStatus } : {}),
+        ...(input.todos
+          ? { todos: sql<Json>`${JSON.stringify(input.todos)}::jsonb` }
+          : {}),
+        updated_at: new Date(),
+        authority_host_id: input.authority.hostId,
+        authority_revision: input.authority.revision,
+        authority_seen_at: new Date(),
+        mirror_sequence: sequence,
+      })
+      .where("id", "=", sessionId)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    for (const event of input.projectEvents ?? []) {
       if (
         event.payload.sessionId !== sessionId ||
         !event.kind.startsWith("session.")
@@ -241,9 +225,7 @@ export async function writeSessionMirror({
             externalUserId: identity.externalUserId,
             agentId: session.agent_id,
             session:
-              snapshot &&
-              typeof snapshot === "object" &&
-              !Array.isArray(snapshot)
+              snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
                 ? { ...snapshot, id: sessionId }
                 : {},
           },
@@ -251,6 +233,6 @@ export async function writeSessionMirror({
         .onConflict((conflict) => conflict.doNothing())
         .execute();
     }
-    return session;
+    return { session, sequence };
   });
 }

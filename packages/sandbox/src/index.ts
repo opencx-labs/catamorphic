@@ -144,8 +144,6 @@ export {
   MACHINE_CAPABILITIES,
   type MachineCapability,
   type NodeAccess,
-  PERSONAL_LOGIN_KINDS,
-  type PersonalLoginKind,
   placementOrder,
   poolMatches,
   type WorkloadKind,
@@ -257,6 +255,10 @@ export type {
 export {
   assertSandboxResources,
   positiveTokenCount,
+  SIGN_IN_HARNESSES,
+  type SignInHarness,
+  signInCapability,
+  signInHomePath,
   RuntimeEventReportingError,
   RuntimeInfrastructureError,
 } from "./types.js";

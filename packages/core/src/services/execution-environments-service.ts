@@ -7,7 +7,8 @@ import type {
   EnvironmentResourcePolicy,
   EnvironmentRuntimeBinding,
   EnvironmentTrust,
-  PersonalLoginKind,
+  type SignInHarness,
+  signInCapability,
   SandboxCapability,
 } from "@catamorphic/sandbox";
 import {
@@ -95,7 +96,7 @@ export function personalCredentialsDecision(input: {
     return {
       allowed: false,
       reason:
-        "Personal credentials reach only a member's own chats, and this is the project's own work. Use an agent with a model connection instead",
+        "A member's own sign-in runs only their own chats, and this is the project's own work. Use an agent with a model connection instead",
     };
   const { descriptor } = input.runtime;
   if (
@@ -107,11 +108,11 @@ export function personalCredentialsDecision(input: {
     return { allowed: true };
   return {
     allowed: false,
-    reason: `The machine for Environment '${input.environment}' runs other people's work as plain processes, so it may not hold your credentials. Use microsandbox, a machine only you use, or set WORK_PERSONAL_CREDENTIALS=accept on that machine`,
+    reason: `The machine for Environment '${input.environment}' runs other people's work as plain processes, so your own sign-in may not run there. Use microsandbox, a machine only you use, or set WORK_PERSONAL_CREDENTIALS=accept on that machine`,
   };
 }
 
-const HARNESS_NAMES: Record<PersonalLoginKind, string> = {
+const HARNESS_NAMES: Record<SignInHarness, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
 };
@@ -309,8 +310,8 @@ export class ExecutionEnvironmentsService {
     requirements: EnvironmentRequirements;
     allowed?: readonly string[];
     preferred?: readonly string[];
-    /** The agent runs with the owner's own harness login (ADR 0184). */
-    personalLogin?: PersonalLoginKind;
+    /** The agent runs on the owner's own sign-in on the machine (ADR 0197). */
+    signIn?: SignInHarness;
   }): Promise<EnvironmentDiscovery> {
     return withSpan(
       {
@@ -456,8 +457,8 @@ export class ExecutionEnvironmentsService {
     allowed?: readonly string[];
     preferred?: readonly string[];
     requirements: EnvironmentRequirements;
-    /** The agent runs with the owner's own harness login (ADR 0184). */
-    personalLogin?: PersonalLoginKind;
+    /** The agent runs on the owner's own sign-in on the machine (ADR 0197). */
+    signIn?: SignInHarness;
   }): Promise<EnvironmentAdmission> {
     return withSpan(
       {
@@ -578,7 +579,7 @@ export class ExecutionEnvironmentsService {
     workerNodeId?: string;
     allocationBindingId?: string;
     requirements: EnvironmentRequirements;
-    personalLogin?: PersonalLoginKind;
+    signIn?: SignInHarness;
   }): Promise<
     | { admission: EnvironmentAdmission }
     | { bindingUnavailable: true; reasons: [] }
@@ -593,19 +594,24 @@ export class ExecutionEnvironmentsService {
         reasons: [`Workload '${args.requirements.workload}' is not declared`],
       };
     }
-    const effectiveRequirements = mergeRequirements(args.requirements, {
-      ...definition.requirements,
-      capabilities: [
-        ...(definition.requirements?.capabilities ?? []),
-        ...sandboxCapabilitiesFor(definition),
-      ],
-    });
     const source =
       definition.device === "member" ? this.memberDevices : this.provider;
     const owner =
       args.owner === undefined
         ? placementOwner(args.identity.externalUserId)
         : args.owner;
+    const effectiveRequirements = mergeRequirements(args.requirements, {
+      ...definition.requirements,
+      capabilities: [
+        ...(definition.requirements?.capabilities ?? []),
+        ...sandboxCapabilitiesFor(definition),
+        // A subscription runs only where its owner signed in (ADR 0197):
+        // placement takes a machine that reports that sign-in.
+        ...(args.signIn && owner
+          ? [signInCapability({ harness: args.signIn, member: owner })]
+          : []),
+      ],
+    });
     const runtime = await source?.get({
       tenantId: args.identity.tenantId,
       pool: definition.pool ?? {},
@@ -631,20 +637,20 @@ export class ExecutionEnvironmentsService {
       owner,
       runtime,
     });
-    if (args.personalLogin) {
+    if (args.signIn) {
       if (!personal.allowed)
         return { bindingUnavailable: false, reasons: [personal.reason] };
       // An Environment image supplies the CLI; otherwise the machine must.
       if (
         !definition.image &&
         !runtime.descriptor.capabilities.includes(
-          harnessCapability(args.personalLogin),
+          harnessCapability(args.signIn),
         )
       )
         return {
           bindingUnavailable: false,
           reasons: [
-            `${HARNESS_NAMES[args.personalLogin]} is not installed on this Environment's machine. Name an image that has it, or install it on the machine's PATH`,
+            `${HARNESS_NAMES[args.signIn]} is not installed on this Environment's machine. Name an image that has it, or install it on the machine's PATH`,
           ],
         };
     }

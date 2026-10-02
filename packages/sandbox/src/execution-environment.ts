@@ -1,4 +1,4 @@
-import type { SandboxProvider } from "./types.js";
+import type { SandboxProvider, SignInHarness } from "./types.js";
 
 export type WorkloadKind = "agent" | "workflow";
 export type EnvironmentTrust = "local" | "managed";
@@ -60,11 +60,12 @@ export interface EnvironmentRuntimeBinding {
  */
 export const MACHINE_CAPABILITIES = {
   /**
-   * The operator accepts members' personal credentials on this machine
-   * although it runs several people's work as processes
-   * (`WORK_PERSONAL_CREDENTIALS=accept`).
+   * The operator lets members' own sign-ins run on this machine although
+   * it runs several people's work as processes (ADR 0197).
    */
   personalCredentials: "credentials.personal",
+  /** The machine's sandboxes can mount members' own sign-ins (ADR 0197). */
+  signIns: "sign-ins",
   /** The Claude Code CLI is on the machine's path. */
   claudeCode: "harness.claude-code",
   /** The Codex CLI is on the machine's path. */
@@ -74,17 +75,9 @@ export const MACHINE_CAPABILITIES = {
 export type MachineCapability =
   (typeof MACHINE_CAPABILITIES)[keyof typeof MACHINE_CAPABILITIES];
 
-/** A harness whose own account login a member may bring (ADR 0184). */
-export type PersonalLoginKind = "claude-code" | "codex";
-
-export const PERSONAL_LOGIN_KINDS: readonly PersonalLoginKind[] = [
-  "claude-code",
-  "codex",
-];
-
 /** The machine capability saying a harness's CLI is installed. */
-export function harnessCapability(kind: PersonalLoginKind): string {
-  return kind === "codex"
+export function harnessCapability(harness: SignInHarness): string {
+  return harness === "codex"
     ? MACHINE_CAPABILITIES.codex
     : MACHINE_CAPABILITIES.claudeCode;
 }
