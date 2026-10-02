@@ -2228,10 +2228,18 @@ export class AgentSessionsService {
         ...(input.idempotencyKey
           ? { idempotencyKey: input.idempotencyKey }
           : {}),
-        // The authority applies the attention when it imports the item.
+        // The authority applies the attention when it imports the item,
+        // and runs a turn only for what the owner wrote: it runs on the
+        // owner's own machine and credentials (ADR 0199).
         metadata: {
           ...metadata,
           ...(input.attention ? { attention: input.attention } : {}),
+          ownerAuthored: await this.authoredByOwner({
+            projectId,
+            owner: session.external_user_id,
+            author: input.author,
+            metadata,
+          }),
         },
       });
     await this.claimLocalAuthority(session);
@@ -2322,6 +2330,10 @@ export class AgentSessionsService {
         created: true,
       };
     }
+    // This host runs the chat on its owner's own machine and credentials:
+    // only what the owner wrote starts a turn; anything else is delivered
+    // to read, attributed, and runs nothing (ADR 0199).
+    const { ownerAuthored, ...metadata } = item.metadata ?? {};
     const receipt = await this.db.transaction().execute(async (trx) => {
       const locked = await trx
         .selectFrom("agent_sessions")
@@ -2333,10 +2345,10 @@ export class AgentSessionsService {
         session: locked,
         text: item.content,
         author: item.author,
-        dispatch: item.mode,
+        dispatch: ownerAuthored === true ? item.mode : "message_only",
         itemId: item.messageId,
         idempotencyKey: `mailbox:${item.sourceHostId}:${item.id}`,
-        ...(item.metadata ? { metadata: item.metadata } : {}),
+        metadata,
       });
     });
     if (receipt.turnId) this.kick(item.sessionId);

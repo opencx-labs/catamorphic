@@ -947,7 +947,7 @@ describe("agent session coordination", () => {
               author: { kind: "user", externalUserId: identity.externalUserId },
               mode: "interrupt",
               idempotencyKey: key,
-              metadata: null,
+              metadata: { ownerAuthored: true },
               createdAt: new Date().toISOString(),
             });
       const interruptsBefore = provider.interrupts;
@@ -2229,6 +2229,49 @@ describe("agent session coordination", () => {
         (message) => message.content === "Remote result",
       ),
     ).toHaveLength(1);
+  });
+
+  it("runs only what the owner wrote from another host's mailbox; the rest is delivered to read", async () => {
+    const project = await projects.create(identity, { name: "Mailbox owner" });
+    const session = await sessions.create(identity, project.id);
+    const base = {
+      projectId: project.id,
+      sessionId: session.id,
+      sourceHostId: "remote",
+      destinationHostId: sessions.hostId,
+      authorityRevision: session.authorityRevision,
+      idempotencyKey: null,
+      createdAt: new Date().toISOString(),
+    };
+    const other = await sessions.importMailbox(identity, project.id, {
+      ...base,
+      id: randomUUID(),
+      messageId: randomUUID(),
+      content: "From someone else",
+      author: { kind: "user", externalUserId: "someone-else" },
+      mode: "queue",
+      metadata: { ownerAuthored: false, deliveredBy: "someone-else" },
+    });
+    expect(other).toMatchObject({ mode: "message_only", turnId: null });
+    const own = await sessions.importMailbox(identity, project.id, {
+      ...base,
+      id: randomUUID(),
+      messageId: randomUUID(),
+      content: "From the owner",
+      author: { kind: "user", externalUserId: identity.externalUserId },
+      mode: "queue",
+      metadata: { ownerAuthored: true },
+    });
+    expect(own.mode).toBe("queue");
+    expect(own.turnId).not.toBeNull();
+    // The flag is the server's word for the item, never kept on it.
+    const items = (await snapshot(session.id, project.id)).items;
+    expect(
+      items.some(
+        (item) =>
+          item.kind === "user_message" && "ownerAuthored" in item.metadata,
+      ),
+    ).toBe(false);
   });
 
   it("a retried interrupt action never interrupts a later turn", async () => {

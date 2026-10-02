@@ -47,7 +47,10 @@ every turn:
 - the owner wrote everything the turn answers: its input, every message
   steered into it, and for a continuation the turn it continues. Anyone
   else's message to such a turn waits for a turn of its own, and a queued
-  message can be edited only by its author (0184's rule, made whole).
+  message can be edited only by its author (0184's rule, made whole). A
+  chat held by another host (a member's desktop) runs only on that host's
+  owner's credentials, so of the messages delivered to it through the
+  server's mailbox only the owner's start turns; the rest arrive to read.
 
 The sandbox mounts that member's harness home from the machine's own disk
 (`CreateSandboxOpts.signIns`; a read-write bind mount, so the CLI's own

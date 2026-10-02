@@ -1,6 +1,6 @@
 import type { JsonValue } from "@catamorphic/agent-protocol";
 import type { DB, Json } from "@catamorphic/db";
-import { type Kysely, sql, type Transaction } from "kysely";
+import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 
 type Executor = Kysely<DB> | Transaction<DB>;
 
@@ -18,8 +18,8 @@ export class NativeStateStore {
     subpath?: string;
     entries: readonly JsonValue[];
     executor?: Executor;
-  }): Promise<void> {
-    if (input.entries.length === 0) return;
+  }): Promise<Selectable<DB["agent_provider_threads"]> | null> {
+    if (input.entries.length === 0) return null;
     const db = input.executor ?? this.db;
     const subpath = input.subpath ?? "";
     const last = await db
@@ -57,12 +57,17 @@ export class NativeStateStore {
           .doNothing(),
       )
       .execute();
-    await db
-      .updateTable("agent_provider_threads")
-      .set({ portable: true, updated_at: sql`now()` })
-      .where("id", "=", input.threadId)
-      .where("portable", "=", false)
-      .execute();
+    // The thread's state now lives with Work: the row that turned portable,
+    // for the caller to log (ADR 0197), or null when it already was.
+    return (
+      (await db
+        .updateTable("agent_provider_threads")
+        .set({ portable: true, updated_at: sql`now()` })
+        .where("id", "=", input.threadId)
+        .where("portable", "=", false)
+        .returningAll()
+        .executeTakeFirst()) ?? null
+    );
   }
 
   /** The entries in order, or null when the thread has none at that subpath. */

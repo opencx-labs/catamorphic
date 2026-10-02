@@ -1656,12 +1656,23 @@ export class TurnEngine {
               .executeTakeFirst();
             const recorded = row?.runner as unknown as RunnerState | null;
             if (recorded?.applied?.[callId]) return;
-            await this.native.append({
+            const turnedPortable = await this.native.append({
               threadId,
               ...(call.subpath ? { subpath: call.subpath } : {}),
               entries: call.entries,
               executor: trx,
             });
+            // The projection changes only through the log (ADR 0197).
+            if (turnedPortable)
+              await this.deps.log.append(trx, {
+                sessionId: ctx.turn.sessionId,
+                events: [
+                  {
+                    type: "provider_thread.changed",
+                    thread: providerThreadFromRow(turnedPortable),
+                  },
+                ],
+              });
             await trx
               .updateTable("agent_turn_attempts")
               .set({
