@@ -175,6 +175,37 @@ describe.skipIf(!chromeBinary())("pwa PWA", () => {
     );
   });
 
+  it("keeps following the newest message after a panel below the chat closes", async () => {
+    const atBottom =
+      "(() => { const el = document.querySelector('[role=log] > div'); return el.scrollHeight > el.clientHeight && el.scrollHeight - el.clientHeight - el.scrollTop < 8; })()";
+    await app.waitFor(
+      "!document.querySelector('[data-testid=chat-interrupt]')",
+      { timeoutMs: 20_000, label: "settled" },
+    );
+    await app.waitFor(atBottom, { label: "following before the panel" });
+    // A question or approval panel opens and closes under the chat: the
+    // scroller shrinks, then grows back and pulls its position up.
+    await app.eval(`(async () => {
+      const panel = document.createElement('div');
+      panel.style.height = '300px';
+      document.querySelector('[role=log]').after(panel);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      panel.remove();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return true;
+    })()`);
+    await app.eval(TYPE("[data-testid=chat-input]", "after the panel"));
+    await app.eval(CLICK("[data-testid=chat-send]"));
+    await app.waitFor(
+      "document.body.innerText.includes('You said: after the panel') && !document.querySelector('[data-testid=chat-interrupt]')",
+      { timeoutMs: 20_000, label: "reply after the panel" },
+    );
+    await app.waitFor(atBottom, {
+      timeoutMs: 5_000,
+      label: "chat follows the newest message",
+    });
+  });
+
   it("navigates back through the stack to projects", async () => {
     await app.eval(CLICK("[data-testid=screen-back]"));
     await app.waitFor("!!document.querySelector('[data-testid=new-chat]')", {
