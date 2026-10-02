@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -6,7 +6,6 @@ import {
   projectDataDirectory,
   startEventDispatcher,
   startProjectEventMonitorWorker,
-  ToolPermissionBroker,
 } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
 import { DEFAULT_SCHEMA } from "@catamorphic/db";
@@ -84,15 +83,9 @@ import {
   DesktopTriggers,
 } from "./triggers.js";
 import {
-  effectiveSessionAgentId,
   isolationConflictPeerSessionIds,
   type ProjectSessionContext,
 } from "./workspace-context-agent.js";
-import {
-  registerWorkspaceMcpRoute,
-  workspaceMcpAuthorizationMatches,
-  workspaceMcpCapability,
-} from "./workspace-mcp.js";
 import { DESKTOP_WORKSPACE_SKILL } from "./workspace-skill.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
 
@@ -246,10 +239,6 @@ export async function startEmbeddedServer(
   // Known only after listen(); the resolver reads it lazily, and sessions
   // can only start once the server is up.
   let apiBaseUrl: string | undefined;
-  // Derive a distinct capability for each spawned Codex task. The loopback
-  // server also serves browser-visible HTTP, and an exposed task token must
-  // not authorize another task's terminal or checkout tools.
-  const workspaceMcpSecret = randomBytes(32);
   // Core's SecretsService only exists once createCatamorphic returns; the
   // registry reads it through this late-bound seam (same pattern as
   // apiBaseUrl above) for secret-credentialed project agents (ADR 0050).
@@ -277,10 +266,6 @@ export async function startEmbeddedServer(
   let syncWorkflowConnections: (profileId?: string) => Promise<void> =
     async () => {};
   let workflowConnectionSync = Promise.resolve();
-  // Tool-permission asks (ADR 0054) park on this broker so REMOTE clients
-  // (the companion app) can list and answer them over HTTP; the registry
-  // races it against the desktop's own consent modal — first answer wins.
-  const toolPermissions = new ToolPermissionBroker();
   // Session mirroring to ADR 0055 remote links (late-bound: reads core
   // through the closure after createCatamorphic returns).
   const sessionMirror = new RemoteSessionMirror({
@@ -295,15 +280,19 @@ export async function startEmbeddedServer(
     // Desktop-local privacy flag (ADR 0062): never crosses core.
     isIncognito: (sessionId) => incognitoSessions?.has(sessionId) ?? false,
     markIncognito: (sessionId) => incognitoSessions?.set(sessionId, true),
-    sessionEvents: (projectId, sessionId) =>
-      catamorphic.core.agentSessions?.exportEvents({
-        identity: {
-          tenantId: DESKTOP_TENANT_ID,
-          externalUserId: DESKTOP_USER_ID,
-        },
-        projectId,
-        sessionId,
-      }) ?? Promise.resolve([]),
+    // The log after the remote's watermark (ADR 0196), or a base snapshot.
+    exportMirror: ({ projectId, sessionId, after }) =>
+      catamorphic.core.agentSessions
+        ? catamorphic.core.agentSessions.mirrorExport({
+            identity: {
+              tenantId: DESKTOP_TENANT_ID,
+              externalUserId: DESKTOP_USER_ID,
+            },
+            projectId,
+            sessionId,
+            after,
+          })
+        : Promise.reject(new Error("agent sessions unavailable")),
     sessionDetail: (projectId, sessionId) =>
       catamorphic.core.agentSessions
         ? catamorphic.core.agentSessions.get(
@@ -386,34 +375,12 @@ export async function startEmbeddedServer(
   const agentRegistry = new DesktopAgentRegistry({
     profiles,
     profileConfig,
-    sandboxProvider,
     agentHomesDir: paths.agentHomesDir,
     harnessComponentsDir: paths.harnessComponentsDir,
     attachmentsDir: paths.attachmentsDir,
     e2eFake: e2eFakeAgent,
     workspaceBridge,
-    toolPermissions,
     connectors,
-    workspaceMcpServer: (projectId, sessionId, agentId) =>
-      apiBaseUrl
-        ? {
-            transport: "http",
-            url: `${apiBaseUrl}/desktop/workspace-mcp/${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}/${encodeURIComponent(agentId)}`,
-            // This endpoint is already capability-bound to the exact
-            // agent, project, and session. Codex has no interactive MCP
-            // approval bridge, so authorize these host-owned tools at the
-            // server boundary instead of letting the CLI cancel them.
-            defaultToolsApprovalMode: "approve",
-            headers: {
-              Authorization: `Bearer ${workspaceMcpCapability({
-                secret: workspaceMcpSecret,
-                projectId,
-                sessionId,
-                agentId,
-              })}`,
-            },
-          }
-        : undefined,
     // Project agents (`project:<id>:<slug>`, ADR 0050): definitions are
     // read from the project's folder; secrets resolve through core.
     projectRootPath: (projectId) => projectRoots.getSync(projectId),
@@ -445,7 +412,6 @@ export async function startEmbeddedServer(
       "remote-environment/SKILL.md": REMOTE_ENVIRONMENT_SKILL,
     }),
     hostId,
-    toolPermissions,
     database: { db },
     storage: {
       localCheckouts: true,
@@ -504,6 +470,10 @@ export async function startEmbeddedServer(
           return null;
         return sessionCheckouts.checkpoint(input);
       },
+      // Rollback (ADR 0196): each turn records the commit it started from;
+      // only a checkout the chat owns, or one nothing else changed, moves.
+      head: (input) => sessionCheckouts.head(input),
+      restore: (input) => sessionCheckouts.restore(input),
     },
     appBundleStore: new FsBundleStore(paths.appBundles),
     pushNotifications: createPushTransport({ dataDir: paths.root }),
@@ -723,25 +693,26 @@ export async function startEmbeddedServer(
     );
   };
 
+  /** A chat as people read it (ADR 0196), for read_tab and peer reads. */
+  const readTranscript = async (projectId: string, sessionId: string) => {
+    const service = catamorphic.core.agentSessions;
+    if (!service) return null;
+    const [detail, messages] = await Promise.all([
+      service.get(desktopIdentity, projectId, sessionId),
+      service.transcript(desktopIdentity, projectId, sessionId),
+    ]);
+    return {
+      title: detail.title,
+      messages: messages.map(({ role, content }) => ({ role, content })),
+    };
+  };
   agentRegistry.workspaceToolkit?.setSessionCoordinationBridge({
     list: (projectId, sessionId) =>
       sessionPeersResolver?.(projectId, sessionId) ?? Promise.resolve([]),
     read: async (projectId, ownSessionId, peerSessionId) => {
       const peers = await sessionPeersResolver?.(projectId, ownSessionId);
       if (!peers?.some((peer) => peer.id === peerSessionId)) return null;
-      const detail = await catamorphic.core.agentSessions?.get(
-        desktopIdentity,
-        projectId,
-        peerSessionId,
-      );
-      if (!detail) return null;
-      return {
-        title: detail.title,
-        messages: detail.messages.map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
-      };
+      return readTranscript(projectId, peerSessionId);
     },
     send: async (projectId, ownSessionId, peerSessionId, content, mode) => {
       const service = catamorphic.core.agentSessions;
@@ -900,19 +871,7 @@ export async function startEmbeddedServer(
   agentRegistry.workspaceToolkit?.setChatTranscriptReader(
     async (projectId, sessionId) => {
       if (incognitoSessions?.has(sessionId)) return null;
-      const detail = await catamorphic.core.agentSessions?.get(
-        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
-        projectId,
-        sessionId,
-      );
-      if (!detail) return null;
-      return {
-        title: detail.title ?? null,
-        messages: detail.messages.map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
-      };
+      return readTranscript(projectId, sessionId);
     },
   );
 
@@ -1112,52 +1071,6 @@ export async function startEmbeddedServer(
     } else done(null, payload);
   });
   instrumentHttpServer(app);
-  registerWorkspaceMcpRoute(
-    app,
-    async ({ projectId, sessionId, agentId, authorization }) => {
-      if (
-        !workspaceMcpAuthorizationMatches({
-          secret: workspaceMcpSecret,
-          projectId,
-          sessionId,
-          agentId,
-          authorization,
-        })
-      ) {
-        return null;
-      }
-      const detail = await catamorphic.core.agentSessions?.get(
-        desktopIdentity,
-        projectId,
-        sessionId,
-      );
-      if (
-        !detail ||
-        effectiveSessionAgentId({
-          projectId,
-          agentId: detail.agentId,
-          defaultAgentId: (id) => agentRegistry.defaultAgentId(id),
-        }) !== agentId
-      ) {
-        return null;
-      }
-      const tools = agentRegistry.workspaceToolsForAgent(agentId);
-      if (!tools) return null;
-      const workingDirectory = await sessionCheckouts.resolve({
-        projectId,
-        sessionId,
-      });
-      return {
-        tools,
-        context: {
-          projectId,
-          sessionId,
-          ...(workingDirectory ? { workingDirectory } : {}),
-          caller: desktopIdentity,
-        },
-      };
-    },
-  );
   await app.register(cors, {
     origin: true,
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -1314,15 +1227,13 @@ export async function startEmbeddedServer(
     () => sessionMirror.syncMailboxesInBackground(),
     5_000,
   );
-  // Remote environments (ADR 0184): the member's own sign-ins and chosen
-  // files, sent to each linked server whose Environments allow them.
+  // Remote environments (ADR 0184): the member's chosen files, sent to each
+  // linked server whose Environments allow them. Sign-ins stay on the
+  // machine they were made on (ADR 0198).
   const personalEnvironment = desktopPersonalEnvironment({
     profiles,
     profileConfig,
     projectRoot: (projectId) => projectRoots.get(projectId),
-    ensureHarnessExecutable: (harness) =>
-      agentRegistry.ensureHarnessExecutable(harness),
-    isolated: e2eFakeAgent || Boolean(process.env.CATAMORPHIC_E2E_DATA_DIR),
   });
   personalEnvironment.start();
   sessionMirror.syncMirrorsInBackground();
@@ -1357,7 +1268,6 @@ export async function startEmbeddedServer(
           { name: "workflow execution", dispose: suspendExecution },
           { name: "HTTP server", dispose: () => app.close() },
           { name: "framework services", dispose: () => catamorphic.close() },
-          { name: "agent clients", dispose: () => agentRegistry.dispose() },
           // The host owns Kysely. Always attempt its WAL flush last and report
           // a failure instead of silently treating an unsafe shutdown as clean.
           { name: "database", dispose: () => db.destroy() },

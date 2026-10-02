@@ -2,14 +2,10 @@ import { type FSWatcher, watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ensurePersonalFilesExcluded } from "@catamorphic/git";
-import {
-  PERSONAL_HARNESS_LABELS,
-  PERSONAL_HARNESSES,
-  type PersonalEnvironmentServerState,
-  type PersonalEnvironmentView,
-  type PersonalHarness,
+import type {
+  PersonalEnvironmentServerState,
+  PersonalEnvironmentView,
 } from "../shared/personal-environment.js";
-import { CLAUDE_REFRESH_WINDOW_MS, type LocalLogin } from "./harness-logins.js";
 import {
   type ListedFile,
   PERSONAL_ENVIRONMENT_PATH,
@@ -17,7 +13,6 @@ import {
   type PersonalEnvironmentConfig,
   readListedFiles,
   readPersonalEnvironmentConfig,
-  requestedLogins,
   sha256,
 } from "./personal-environment-config.js";
 import {
@@ -29,18 +24,15 @@ import {
 
 /**
  * Keeps each linked project's remote environment (ADR 0184) current: the
- * member's own sign-ins and listed files, sent to the Work server when they
- * change, checked on a timer and on focus, and refreshed locally when the
- * server says a copy in use is about to expire. Only this desktop's CLIs
- * ever refresh a login; the server's copy carries no refresh token.
+ * member's listed files, sent to the Work server when they change and
+ * checked on a timer and on focus. Sign-ins are never sent: they stay on
+ * the machine they were made on (ADR 0198).
  */
 
 /** How often each linked server is asked about the environment. */
 export const REMOTE_CHECK_MS = 2 * 60_000;
-/** How often local sign-ins and listed files are compared with what was sent. */
+/** How often listed files are compared with what was sent. */
 export const LOCAL_CHECK_MS = 30_000;
-/** At most one local refresh attempt per harness in this interval. */
-export const REFRESH_RETRY_MS = 4 * 60_000;
 
 export interface PersonalEnvironmentLink {
   profileId: string;
@@ -56,18 +48,15 @@ export interface PersonalEnvironmentLink {
 }
 
 export interface PersonalEnvironmentSnapshot {
-  logins: LocalLogin[];
   files: ListedFile[];
   fingerprint: string;
 }
 
 export function snapshotFingerprint(args: {
-  logins: readonly LocalLogin[];
   files: readonly ListedFile[];
 }): string {
   return sha256(
     JSON.stringify({
-      logins: args.logins.map((login) => [login.harness, login.fingerprint]),
       files: args.files.flatMap((file) =>
         file.fingerprint ? [[file.path, file.fingerprint]] : [],
       ),
@@ -78,49 +67,13 @@ export function snapshotFingerprint(args: {
 export function uploadFromSnapshot(
   snapshot: PersonalEnvironmentSnapshot,
 ): RemotePersonalEnvironmentUpload {
-  const logins: RemotePersonalEnvironmentUpload["logins"] = {};
-  for (const login of snapshot.logins) {
-    const expiresAt = login.expiresAt ? { expiresAt: login.expiresAt } : {};
-    if (login.harness === "claude-code")
-      logins["claude-code"] = { credentials: login.payload, ...expiresAt };
-    else logins.codex = { auth: login.payload, ...expiresAt };
-  }
   return {
-    logins,
     files: snapshot.files.flatMap((file) =>
       file.content
         ? [{ path: file.path, content: file.content.toString("base64") }]
         : [],
     ),
   };
-}
-
-export type LoginRefreshDecision =
-  /** The server does not need a fresher copy. */
-  | "none"
-  /** The local login is already fresher than the server's copy. */
-  | "send"
-  /** Ask the local CLI to refresh, then send. */
-  | "refresh"
-  /** Claude Code will not refresh yet; check again later. */
-  | "wait";
-
-/** What to do about one login the server asked to have refreshed. */
-export function loginRefreshDecision(args: {
-  harness: PersonalHarness;
-  local: Pick<LocalLogin, "expiresAt"> | null;
-  remote: RemotePersonalEnvironment["logins"][PersonalHarness];
-  now: number;
-}): LoginRefreshDecision {
-  if (!args.remote?.needsRefresh || !args.local) return "none";
-  const localMs = args.local.expiresAt ? Date.parse(args.local.expiresAt) : NaN;
-  const remoteMs = args.remote.expiresAt
-    ? Date.parse(args.remote.expiresAt)
-    : NaN;
-  if (Number.isFinite(localMs) && !(localMs <= remoteMs)) return "send";
-  if (args.harness === "codex") return "refresh";
-  if (!Number.isFinite(localMs)) return "refresh";
-  return localMs - args.now <= CLAUDE_REFRESH_WINDOW_MS ? "refresh" : "wait";
 }
 
 /** Whether this desktop should (re)send the member's environment. */
@@ -133,22 +86,6 @@ export function shouldUpload(args: {
   if (args.lastSentFingerprint !== args.snapshot.fingerprint) return true;
   // The server's copy drifted from what was sent (restored, cleared, or
   // replaced by another of the member's computers): send it again.
-  const remoteLogins = PERSONAL_HARNESSES.filter(
-    (harness) => args.remote.logins[harness],
-  );
-  const localLogins = PERSONAL_HARNESSES.filter((harness) =>
-    args.snapshot.logins.some((login) => login.harness === harness),
-  );
-  if (remoteLogins.join() !== localLogins.join()) return true;
-  for (const login of args.snapshot.logins) {
-    const remote = args.remote.logins[login.harness];
-    if (
-      login.expiresAt &&
-      remote?.expiresAt &&
-      Date.parse(login.expiresAt) !== Date.parse(remote.expiresAt)
-    )
-      return true;
-  }
   const remoteFiles = args.remote.files.map((file) => file.path).sort();
   const localFiles = args.snapshot.files
     .filter((file) => file.content)
@@ -168,7 +105,6 @@ interface LinkState {
     error: string | null;
     config: PersonalEnvironmentConfig | null;
   };
-  available: Partial<Record<PersonalHarness, LocalLogin>>;
   files: ListedFile[];
   error: string | null;
   running: Promise<void> | null;
@@ -185,8 +121,6 @@ interface LinkState {
 export interface PersonalEnvironmentSyncDeps {
   links(): PersonalEnvironmentLink[];
   projectRoot(projectId: string): Promise<string | null>;
-  readLogin(harness: PersonalHarness): Promise<LocalLogin | null>;
-  refreshLogin(harness: PersonalHarness): Promise<void>;
   now?: () => number;
   /** Watch the config and listed files for immediate changes. */
   watchFiles?: boolean;
@@ -199,8 +133,6 @@ export class PersonalEnvironmentSync {
   private readonly listeners = new Set<
     (change: { profileId: string; projectId: string }) => void
   >();
-  private readonly refreshAttempts = new Map<PersonalHarness, number>();
-  private readonly refreshes = new Map<PersonalHarness, Promise<void>>();
   private timers: NodeJS.Timeout[] = [];
   private lastFullCheck = 0;
   private stopped = false;
@@ -357,47 +289,28 @@ export class PersonalEnvironmentSync {
     config: PersonalEnvironmentConfig | null;
     exists: boolean;
     error: string | null;
-    available: Partial<Record<PersonalHarness, LocalLogin>>;
     files: ListedFile[];
     snapshot: PersonalEnvironmentSnapshot | null;
   }> {
     const file = await readPersonalEnvironmentConfig({ root });
-    const available: Partial<Record<PersonalHarness, LocalLogin>> = {};
-    for (const harness of PERSONAL_HARNESSES) {
-      const login = await this.deps.readLogin(harness);
-      if (login) available[harness] = login;
-    }
     if (!file.parsed.ok)
       return {
         configFingerprint: file.fingerprint,
         config: null,
         exists: file.exists,
         error: file.parsed.error,
-        available,
         files: [],
         snapshot: null,
       };
     const config = file.parsed.config;
-    const logins = requestedLogins({
-      config,
-      available: PERSONAL_HARNESSES.filter((harness) => available[harness]),
-    }).flatMap((harness) => {
-      const login = available[harness];
-      return login ? [login] : [];
-    });
     const files = await readListedFiles({ root, files: config.files });
     return {
       configFingerprint: file.fingerprint,
       config,
       exists: file.exists,
       error: null,
-      available,
       files,
-      snapshot: {
-        logins,
-        files,
-        fingerprint: snapshotFingerprint({ logins, files }),
-      },
+      snapshot: { files, fingerprint: snapshotFingerprint({ files }) },
     };
   }
 
@@ -410,7 +323,7 @@ export class PersonalEnvironmentSync {
       state.error = "The project folder is unavailable";
       return;
     }
-    let local = await this.collect(root);
+    const local = await this.collect(root);
     state.configFingerprint = local.configFingerprint;
     state.localFingerprint = local.snapshot?.fingerprint ?? null;
     state.config = {
@@ -418,7 +331,6 @@ export class PersonalEnvironmentSync {
       error: local.error,
       config: local.config,
     };
-    state.available = local.available;
     state.files = local.files;
     state.error = null;
     this.reconcileWatchers(link, state, root);
@@ -445,7 +357,7 @@ export class PersonalEnvironmentSync {
     try {
       if (!remote.allowed) {
         // Nothing may use it: take back what an earlier Environment allowed.
-        if (Object.keys(remote.logins).length > 0 || remote.files.length > 0) {
+        if (remote.files.length > 0) {
           await link.client.deletePersonalEnvironment();
           state.remote = await link.client.personalEnvironment();
           state.lastSentFingerprint = null;
@@ -453,14 +365,6 @@ export class PersonalEnvironmentSync {
         return;
       }
       if (!local.snapshot) return;
-      const refreshed = await this.refreshWhereNeeded(local.snapshot, remote);
-      if (refreshed) {
-        local = await this.collect(root);
-        state.available = local.available;
-        state.files = local.files;
-        state.localFingerprint = local.snapshot?.fingerprint ?? null;
-        if (!local.snapshot) return;
-      }
       if (
         shouldUpload({
           snapshot: local.snapshot,
@@ -478,43 +382,6 @@ export class PersonalEnvironmentSync {
     } catch (cause) {
       this.fail(state, cause);
     }
-  }
-
-  /** Refreshes logins the server needs fresher; true when any changed. */
-  private async refreshWhereNeeded(
-    snapshot: PersonalEnvironmentSnapshot,
-    remote: RemotePersonalEnvironment,
-  ): Promise<boolean> {
-    let changed = false;
-    for (const login of snapshot.logins) {
-      const decision = loginRefreshDecision({
-        harness: login.harness,
-        local: login,
-        remote: remote.logins[login.harness],
-        now: this.now(),
-      });
-      if (decision !== "refresh") continue;
-      const last = this.refreshAttempts.get(login.harness) ?? 0;
-      if (this.now() - last < REFRESH_RETRY_MS) continue;
-      this.refreshAttempts.set(login.harness, this.now());
-      const pending =
-        this.refreshes.get(login.harness) ??
-        this.deps.refreshLogin(login.harness).finally(() => {
-          this.refreshes.delete(login.harness);
-        });
-      this.refreshes.set(login.harness, pending);
-      try {
-        await pending;
-        const after = await this.deps.readLogin(login.harness);
-        if (after && after.fingerprint !== login.fingerprint) changed = true;
-      } catch (cause) {
-        console.warn(
-          `[desktop] could not refresh the ${PERSONAL_HARNESS_LABELS[login.harness]} sign-in:`,
-          cause instanceof Error ? cause.message : "unknown error",
-        );
-      }
-    }
-    return changed;
   }
 
   private fail(state: LinkState, cause: unknown): void {
@@ -542,7 +409,6 @@ export class PersonalEnvironmentSync {
         server: "unknown",
         remote: null,
         config: { exists: false, error: null, config: null },
-        available: {},
         files: [],
         error: null,
         running: null,
@@ -564,7 +430,6 @@ export class PersonalEnvironmentSync {
     syncing: boolean,
   ): PersonalEnvironmentView {
     const config = state?.config.config ?? null;
-    const wanted = config?.logins ?? PERSONAL_HARNESSES;
     const remoteFiles = new Map(
       (state?.remote?.files ?? []).map((file) => [file.path, file]),
     );
@@ -577,24 +442,6 @@ export class PersonalEnvironmentSync {
       configExists: state?.config.exists ?? false,
       configError: state?.config.error ?? null,
       server: state?.server ?? "unknown",
-      logins: PERSONAL_HARNESSES.map((harness) => {
-        const local = state?.available[harness];
-        const remote = state?.remote?.logins[harness];
-        return {
-          harness,
-          label: PERSONAL_HARNESS_LABELS[harness],
-          included: wanted.includes(harness),
-          available: Boolean(local),
-          expiresAt: local?.expiresAt ?? null,
-          server: remote
-            ? {
-                expiresAt: remote.expiresAt ?? null,
-                updatedAt: remote.updatedAt,
-                needsRefresh: remote.needsRefresh,
-              }
-            : null,
-        };
-      }),
       files: (config?.files ?? []).map((filePath) => {
         const local = localFiles.get(filePath);
         const remote = remoteFiles.get(filePath);
@@ -614,7 +461,7 @@ export class PersonalEnvironmentSync {
     };
   }
 
-  /** What agents read to check status: never contents or credentials. */
+  /** What agents read to check status: never contents. */
   private async writeStatus(root: string, state: LinkState): Promise<void> {
     if (this.deps.writeStatusFile === false) return;
     const view = this.render("", state, false);
@@ -623,14 +470,6 @@ export class PersonalEnvironmentSync {
       lastSyncAt: view.lastSyncAt,
       error: view.error,
       configError: view.configError,
-      logins: view.logins.map((login) => ({
-        login: login.harness,
-        included: login.included,
-        signedInHere: login.available,
-        expiresAt: login.expiresAt,
-        onServer: login.server !== null,
-        needsRefresh: login.server?.needsRefresh ?? false,
-      })),
       files: view.files.map((file) => ({
         path: file.path,
         bytes: file.bytes,

@@ -2,11 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import type { ElicitRequest, ElicitResult } from "@catamorphic/mcp";
-import {
-  agentToolResult,
-  type ToolPermissionDecision,
-  type ToolPermissionRequest,
-} from "@catamorphic/sandbox";
+import { agentToolResult } from "@catamorphic/sandbox";
 import { BrowserWindow, ipcMain, webContents } from "electron";
 import {
   capOutput,
@@ -212,18 +208,6 @@ export interface WorkspaceBridge {
     request: ElicitRequest,
     signal?: AbortSignal,
   ): Promise<ElicitResult>;
-  /**
-   * An agent wants to use an MCP tool whose policy says "ask": the front
-   * window shows the consent card (tool, server, arguments); resolves
-   * with allow (once / always) or deny. Null when no window can show it,
-   * or when `signal` aborts (another surface answered first — the modal
-   * is withdrawn); callers without another surface treat null as deny.
-   */
-  toolPermission(
-    label: string | undefined,
-    request: ToolPermissionRequest,
-    signal?: AbortSignal,
-  ): Promise<ToolPermissionDecision | null>;
   /**
    * An agent asks for a connector: the front window opens the connectors
    * modal pre-filled with the agent's search query; the user decides what
@@ -719,25 +703,6 @@ export function registerAgentBridge(
       // No window, or the user closed it without answering → decline; a
       // pending tool call must never hang forever on a missing UI.
       return result ?? { action: "decline" };
-    },
-
-    async toolPermission(label, request, signal) {
-      const result = await rpcToFront<unknown>(
-        "toolPermission",
-        { label, request },
-        ELICIT_TIMEOUT_MS,
-        signal,
-      );
-      if (result === null || result === undefined) return null;
-      // Anything but a well-formed "allow" is a deny — a renderer error
-      // reply ({ error }) must never read as consent.
-      const decision = result as { decision?: unknown; remember?: unknown };
-      if (decision.decision === "allow") {
-        return decision.remember === "always"
-          ? { decision: "allow", remember: "always" }
-          : { decision: "allow" };
-      }
-      return { decision: "deny" };
     },
 
     async requestConnection(projectId, sessionId, query, reason) {
