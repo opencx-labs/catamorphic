@@ -2707,8 +2707,22 @@ export class AgentSessionsService {
           attemptId: turn.activeAttemptId,
           kind: "interrupt",
         });
-      } else if (input.turnId !== undefined || turn.attemptCount > 0) {
-        // Interrupting a named queued turn, or one waiting to retry, cancels it.
+      } else if (turn.attemptCount > 0) {
+        // A turn waiting to retry already ran: stopping it interrupts it,
+        // so it reads as stopped and can be retried by hand.
+        events.push({
+          type: "turn.changed",
+          turn: {
+            ...turn,
+            status: "interrupted",
+            error: null,
+            retryAt: null,
+            completedAt: now,
+            updatedAt: now,
+          },
+        });
+      } else if (input.turnId !== undefined) {
+        // Interrupting a named queued turn cancels it.
         events.push({
           type: "turn.changed",
           turn: {
@@ -3467,7 +3481,12 @@ export class AgentSessionsService {
         identity: input.identity,
         session: input.session,
         commit: restore,
-        expectedHead: last?.checkpoint_after?.trim() ?? null,
+        // A last turn that changed nothing recorded no checkpoint: the
+        // workspace is still where that turn started.
+        expectedHead:
+          last?.checkpoint_after?.trim() ||
+          last?.checkpoint_before?.trim() ||
+          null,
       });
       if (restored !== "restored")
         throw new SessionCommandRejectedError(

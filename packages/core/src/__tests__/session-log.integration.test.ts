@@ -63,6 +63,8 @@ describe("session log", () => {
   let sessions: AgentSessionsService;
   let projects: ProjectsService;
   let makeService: () => AgentSessionsService;
+  /** Each checkout's commit, as the host reports it. */
+  const heads = new Map<string, string>();
 
   beforeAll(async () => {
     await migrateToLatest({ db, schema });
@@ -99,6 +101,37 @@ describe("session log", () => {
       id: "stubborn",
       harness: { placement: "host", adapter: stubbornAdapter },
     };
+    // Rate-limited on its first attempt: the turn waits to retry itself.
+    let flakyStarts = 0;
+    const flakyAdapter: HarnessAdapter = {
+      id: "echo",
+      capabilities: () => inner.capabilities(),
+      start: (attempt, host) => {
+        flakyStarts += 1;
+        if (flakyStarts > 1) return inner.start(attempt, host);
+        const limited: typeof host = Object.create(host);
+        limited.emit = (event) =>
+          host.emit(
+            event.type === "turn.completed"
+              ? {
+                  type: "turn.completed",
+                  status: "failed",
+                  error: {
+                    message: "429 rate limit exceeded",
+                    kind: "rate_limit",
+                    retrySafe: true,
+                  },
+                }
+              : event,
+          );
+        return inner.start(attempt, limited);
+      },
+    };
+    const flaky: RegisteredCodingAgent = {
+      ...echo,
+      id: "flaky",
+      harness: { placement: "host", adapter: flakyAdapter },
+    };
     // Its tools on `prod` ask the person first (ADR 0054).
     const guarded: RegisteredCodingAgent = {
       ...echo,
@@ -123,8 +156,10 @@ describe("session log", () => {
                 ? guarded
                 : id === "stubborn"
                   ? stubborn
-                  : undefined,
-          list: () => [echo, guarded, stubborn],
+                  : id === "flaky"
+                    ? flaky
+                    : undefined,
+          list: () => [echo, guarded, stubborn, flaky],
         },
         nativeAgentCheckout: {
           resolve: async ({ projectId }) => {
@@ -132,7 +167,22 @@ describe("session log", () => {
             await fs.mkdir(checkout, { recursive: true });
             return { path: checkout, owned: false };
           },
-          checkpoint: () => Promise.resolve(null),
+          // A person's folder: only a turn asked to "change files" commits.
+          checkpoint: ({ workingDirectory, message }) => {
+            if (!message.includes("change files")) return Promise.resolve(null);
+            const commit = randomUUID();
+            heads.set(workingDirectory, commit);
+            return Promise.resolve(commit);
+          },
+          head: ({ workingDirectory }) =>
+            Promise.resolve(heads.get(workingDirectory) ?? "initial"),
+          restore: ({ workingDirectory, commit, expectedHead }) => {
+            const head = heads.get(workingDirectory) ?? "initial";
+            if (head !== (expectedHead ?? commit))
+              return Promise.resolve("This folder changed.");
+            heads.set(workingDirectory, commit);
+            return Promise.resolve("restored");
+          },
         },
       });
     sessions = makeService();
@@ -621,6 +671,72 @@ describe("session log", () => {
     );
     expect(reply?.kind === "assistant_message" && reply.text).toContain(
       "Echo: four",
+    );
+  });
+
+  it("stops a turn waiting to retry as interrupted, and retries it by hand", async () => {
+    const project = await projects.create(identity, { name: "Stop retrying" });
+    const session = await sessions.create(identity, project.id, {
+      agentId: "flaky",
+    });
+    await sessions.command(identity, project.id, session.id, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "hello",
+    });
+    const waiting = await vi.waitFor(
+      async () => {
+        const detail = await sessions.get(identity, project.id, session.id);
+        const [turn] = orderedTurns(sessionStateFromSnapshot(detail.snapshot));
+        expect(turn?.status).toBe("queued");
+        expect(turn?.retryAt).not.toBeNull();
+        return turn;
+      },
+      { timeout: 10_000 },
+    );
+    await sessions.command(identity, project.id, session.id, {
+      type: "interrupt",
+      commandId: randomUUID(),
+    });
+    const stopped = await sessions.get(identity, project.id, session.id);
+    const [turn] = orderedTurns(sessionStateFromSnapshot(stopped.snapshot));
+    expect(turn).toMatchObject({
+      id: waiting?.id,
+      status: "interrupted",
+      retryAt: null,
+    });
+    const retried = await sessions.command(identity, project.id, session.id, {
+      type: "retry",
+      commandId: randomUUID(),
+      turnId: turn?.id ?? "",
+    });
+    expect(retried.status).toBe("accepted");
+    await vi.waitFor(
+      async () => {
+        const detail = await sessions.get(identity, project.id, session.id);
+        const [again] = orderedTurns(sessionStateFromSnapshot(detail.snapshot));
+        expect(again?.status).toBe("completed");
+      },
+      { timeout: 10_000 },
+    );
+  });
+
+  it("rolls back files past a later turn that changed none", async () => {
+    const { projectId, sessionId } = await chat("Rollback files");
+    await sessions.sendMessage(identity, projectId, sessionId, "change files");
+    await sessions.sendMessage(identity, projectId, sessionId, "just talk");
+    const before = await sessions.get(identity, projectId, sessionId);
+    const [first] = orderedTurns(sessionStateFromSnapshot(before.snapshot));
+    expect(first?.checkpoint.before).toBe("initial");
+    const receipt = await sessions.command(identity, projectId, sessionId, {
+      type: "rollback",
+      commandId: randomUUID(),
+      turnId: first?.id ?? "",
+    });
+    expect(receipt.error).toBeNull();
+    expect(receipt.status).toBe("accepted");
+    expect(heads.get(path.join(tmpDir, "checkouts", projectId))).toBe(
+      "initial",
     );
   });
 

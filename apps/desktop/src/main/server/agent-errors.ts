@@ -75,7 +75,7 @@ export function rewriteAgentError(
       return (
         `${providerLabel} rejected the credentials of the "${agentName}" agent ` +
         `${said}. The session or key has likely expired or been revoked. ` +
-        `Reconnect below or update it in Settings → Agents — your message ` +
+        `Reconnect below or update it in Settings → Agents, and your message ` +
         `retries by itself once you're back. Or switch this chat to another agent.`
       );
     case "rate_limit":

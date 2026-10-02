@@ -38,6 +38,7 @@ import {
   type ReactNode,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import Markdown, { defaultUrlTransform } from "react-markdown";
@@ -292,6 +293,7 @@ export function ChatTimeline({
         )}
       />
       <ScrollToLatest />
+      <FollowScrollerResize />
     </StickToBottom>
   );
 }
@@ -1649,6 +1651,52 @@ function ScrollToLatest() {
       <ArrowDown className="size-4" />
     </button>
   );
+}
+
+/**
+ * Keep following when the scroller itself resizes, as when a question or
+ * approval panel below it opens or closes. A taller scroller pulls its
+ * scroll position back, which use-stick-to-bottom reads as the person
+ * scrolling up, and the chat would stop following new messages.
+ */
+function FollowScrollerResize() {
+  const { scrollRef, scrollToBottom, isAtBottom } = useStickToBottomContext();
+  const following = useRef(isAtBottom);
+  following.current = isAtBottom;
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    let height = scroller.clientHeight;
+    let resized = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const follow = (delay: number) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        resized = false;
+        void scrollToBottom("instant");
+      }, delay);
+    };
+    const observer = new ResizeObserver(() => {
+      if (scroller.clientHeight === height) return;
+      height = scroller.clientHeight;
+      if (!following.current) return;
+      resized = true;
+      // A shrink fires no scroll event; a taller scroller's does next frame.
+      follow(100);
+    });
+    // Runs after the library's own listener, so this undoes its escape.
+    const onScroll = () => {
+      if (resized) follow(1);
+    };
+    observer.observe(scroller);
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      observer.disconnect();
+      scroller.removeEventListener("scroll", onScroll);
+      clearTimeout(timer);
+    };
+  }, [scrollRef, scrollToBottom]);
+  return null;
 }
 
 /** Stop following new output when opening a notification's exact message. */
