@@ -135,6 +135,10 @@ export class SessionLog {
       sequence = event.sequence;
     }
     if (fresh.length === 0) return sequence;
+    const own = await ownEvents(trx, {
+      sessionId: input.sessionId,
+      events: fresh.map((event) => event.event),
+    });
     await trx
       .updateTable("agent_sessions")
       .set({ event_sequence: sequence })
@@ -142,7 +146,11 @@ export class SessionLog {
       .execute();
     await this.persist(
       trx,
-      fresh.map((event) => ({ ...event, sessionId: input.sessionId })),
+      fresh.map((event, index) => ({
+        ...event,
+        sessionId: input.sessionId,
+        event: own[index] ?? event.event,
+      })),
     );
     return sequence;
   }
@@ -174,7 +182,10 @@ export class SessionLog {
         (request): SessionEvent => ({ type: "request.changed", request }),
       ),
     ];
-    for (const event of events)
+    for (const event of await ownEvents(trx, {
+      sessionId: input.sessionId,
+      events,
+    }))
       await project(trx, {
         sessionId: input.sessionId,
         sequence: input.snapshot.sequence,
@@ -451,7 +462,7 @@ async function project(
         .insertInto("agent_turns")
         .values({
           id: turn.id,
-          session_id: turn.sessionId,
+          session_id: stored.sessionId,
           ordinal: turn.ordinal,
           created_at: new Date(turn.createdAt),
           ...(turn.retryAt ? { available_at: new Date(turn.retryAt) } : {}),
@@ -461,12 +472,15 @@ async function project(
           ...values,
         })
         .onConflict((conflict) =>
-          conflict.column("id").doUpdateSet((eb) => ({
-            ...values,
-            cancellation_requested_at: turn.cancellationRequested
-              ? sql`coalesce(${eb.ref("agent_turns.cancellation_requested_at")}, ${new Date(stored.at)})`
-              : null,
-          })),
+          conflict
+            .column("id")
+            .doUpdateSet((eb) => ({
+              ...values,
+              cancellation_requested_at: turn.cancellationRequested
+                ? sql`coalesce(${eb.ref("agent_turns.cancellation_requested_at")}, ${new Date(stored.at)})`
+                : null,
+            }))
+            .where("agent_turns.session_id", "=", stored.sessionId),
         )
         .execute();
       return;
@@ -490,19 +504,24 @@ async function project(
         .values({
           id: attempt.id,
           turn_id: attempt.turnId,
-          session_id: attempt.sessionId,
+          session_id: stored.sessionId,
           ordinal: attempt.ordinal,
           reason: attempt.reason,
           created_at: new Date(attempt.createdAt),
           ...values,
         })
-        .onConflict((conflict) => conflict.column("id").doUpdateSet(values))
+        .onConflict((conflict) =>
+          conflict
+            .column("id")
+            .doUpdateSet(values)
+            .where("agent_turn_attempts.session_id", "=", stored.sessionId),
+        )
         .execute();
       return;
     }
     case "item.added":
     case "item.changed":
-      await projectItem(trx, event.item);
+      await projectItem(trx, stored.sessionId, event.item);
       return;
     case "item.text_appended": {
       const path = event.field === "output" ? "{output}" : "{text}";
@@ -517,6 +536,7 @@ async function project(
           updated_at: new Date(event.at),
         }))
         .where("id", "=", event.itemId)
+        .where("session_id", "=", stored.sessionId)
         .execute();
       return;
     }
@@ -541,7 +561,7 @@ async function project(
       await trx
         .insertInto("agent_runtime_requests")
         .values({
-          session_id: request.sessionId,
+          session_id: stored.sessionId,
           request_id: request.id,
           created_at: new Date(request.createdAt),
           ...values,
@@ -569,18 +589,27 @@ async function project(
         .insertInto("agent_provider_threads")
         .values({
           id: thread.id,
-          session_id: thread.sessionId,
+          session_id: stored.sessionId,
           created_at: new Date(thread.createdAt),
           ...values,
         })
-        .onConflict((conflict) => conflict.column("id").doUpdateSet(values))
+        .onConflict((conflict) =>
+          conflict
+            .column("id")
+            .doUpdateSet(values)
+            .where("agent_provider_threads.session_id", "=", stored.sessionId),
+        )
         .execute();
       return;
     }
   }
 }
 
-async function projectItem(trx: Transaction<DB>, item: Item): Promise<void> {
+async function projectItem(
+  trx: Transaction<DB>,
+  sessionId: string,
+  item: Item,
+): Promise<void> {
   const user = item.kind === "user_message" ? item : undefined;
   const values = {
     turn_id: item.turnId,
@@ -615,17 +644,20 @@ async function projectItem(trx: Transaction<DB>, item: Item): Promise<void> {
     .insertInto("agent_items")
     .values({
       id: item.id,
-      session_id: item.sessionId,
+      session_id: sessionId,
       position: item.position,
       created_at: new Date(item.createdAt),
       ...values,
     })
     // Positions never change: the stored one wins, and so does its payload copy.
     .onConflict((conflict) =>
-      conflict.column("id").doUpdateSet((eb) => ({
-        ...values,
-        payload: sql`jsonb_set(${json(item)}::jsonb, '{position}', to_jsonb(${eb.ref("agent_items.position")}))`,
-      })),
+      conflict
+        .column("id")
+        .doUpdateSet((eb) => ({
+          ...values,
+          payload: sql`jsonb_set(${json(item)}::jsonb, '{position}', to_jsonb(${eb.ref("agent_items.position")}))`,
+        }))
+        .where("agent_items.session_id", "=", sessionId),
     )
     .execute();
 }
@@ -735,4 +767,106 @@ function protocolEvent(event: SessionEvent): SessionEvent {
     default:
       return event;
   }
+}
+
+/** A copy's events named something outside the session they were sent for. */
+export class ForeignSessionEventError extends Error {
+  constructor(readonly sessionId: string) {
+    super(`A copy of session '${sessionId}' named records of another session`);
+    this.name = "ForeignSessionEventError";
+  }
+}
+
+/** Session fields another copy may set: what it shows, never who runs it. */
+const COPIED_SESSION_FIELDS = new Set([
+  "title",
+  "icon",
+  "todos",
+  "workStatus",
+  "activity",
+  "updatedAt",
+]);
+
+/**
+ * Events another copy sent (a mirror's push or base, ADR 0196), checked
+ * before anything is projected: every record they carry belongs to this
+ * session and to no other, every turn they name is this session's, and a
+ * session change keeps only presentation fields. Agent, Environment,
+ * authority and hierarchy change only through this side's own operations.
+ */
+async function ownEvents(
+  trx: Transaction<DB>,
+  input: { sessionId: string; events: readonly SessionEvent[] },
+): Promise<SessionEvent[]> {
+  const ids = {
+    turns: new Set<string>(),
+    attempts: new Set<string>(),
+    items: new Set<string>(),
+    threads: new Set<string>(),
+  };
+  const turnRefs = new Set<string>();
+  const foreign = () => new ForeignSessionEventError(input.sessionId);
+  const own = input.events.map((event): SessionEvent => {
+    switch (event.type) {
+      case "session.changed":
+        return {
+          type: "session.changed",
+          session: Object.fromEntries(
+            Object.entries(event.session).filter(([key]) =>
+              COPIED_SESSION_FIELDS.has(key),
+            ),
+          ),
+        };
+      case "turn.changed":
+        if (event.turn.sessionId !== input.sessionId) throw foreign();
+        ids.turns.add(event.turn.id);
+        return event;
+      case "attempt.changed":
+        if (event.attempt.sessionId !== input.sessionId) throw foreign();
+        ids.attempts.add(event.attempt.id);
+        turnRefs.add(event.attempt.turnId);
+        return event;
+      case "item.added":
+      case "item.changed":
+        if (event.item.sessionId !== input.sessionId) throw foreign();
+        ids.items.add(event.item.id);
+        if (event.item.turnId) turnRefs.add(event.item.turnId);
+        return event;
+      case "item.text_appended":
+        ids.items.add(event.itemId);
+        return event;
+      case "request.changed":
+        if (event.request.sessionId !== input.sessionId) throw foreign();
+        if (event.request.turnId) turnRefs.add(event.request.turnId);
+        return event;
+      case "provider_thread.changed":
+        if (event.thread.sessionId !== input.sessionId) throw foreign();
+        ids.threads.add(event.thread.id);
+        return event;
+    }
+  });
+  const elsewhere = async (
+    table:
+      | "agent_turns"
+      | "agent_turn_attempts"
+      | "agent_items"
+      | "agent_provider_threads",
+    values: Set<string>,
+  ) =>
+    values.size > 0 &&
+    (await trx
+      .selectFrom(table)
+      .select("id")
+      .where("id", "in", [...values])
+      .where("session_id", "!=", input.sessionId)
+      .executeTakeFirst()) !== undefined;
+  for (const turnId of turnRefs) ids.turns.add(turnId);
+  if (
+    (await elsewhere("agent_turns", ids.turns)) ||
+    (await elsewhere("agent_turn_attempts", ids.attempts)) ||
+    (await elsewhere("agent_items", ids.items)) ||
+    (await elsewhere("agent_provider_threads", ids.threads))
+  )
+    throw foreign();
+  return own;
 }

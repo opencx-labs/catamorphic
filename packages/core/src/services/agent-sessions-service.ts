@@ -633,6 +633,9 @@ export function buildAgentSystemPrompt({
     .join("\n\n");
 }
 
+/** How often an open session stream checks its reader's access again. */
+const STREAM_ACCESS_RECHECK_MS = 60_000;
+
 /** A person's "Always allow" for one tool of one server. */
 export interface ToolAlwaysAllowedEvent {
   identity: Identity;
@@ -1780,7 +1783,31 @@ export class AgentSessionsService {
     },
   ): Promise<() => void> {
     await this.requireSession(identity, projectId, sessionId, "read");
-    return this.feed.subscribe({ sessionId, ...input });
+    // Access is checked again while the stream lasts: a member whose role
+    // no longer reaches the chat stops receiving it within a minute.
+    let unsubscribe = () => {};
+    const recheck = setInterval(() => {
+      void this.requireSession(identity, projectId, sessionId, "read").catch(
+        () => {
+          stop();
+          input.onClose("ended");
+        },
+      );
+    }, STREAM_ACCESS_RECHECK_MS);
+    recheck.unref?.();
+    const stop = () => {
+      clearInterval(recheck);
+      unsubscribe();
+    };
+    unsubscribe = await this.feed.subscribe({
+      sessionId,
+      ...input,
+      onClose: (reason) => {
+        clearInterval(recheck);
+        input.onClose(reason);
+      },
+    });
+    return stop;
   }
 
   /** The latest message that asked the owner to look, for attention lists. */
@@ -2325,6 +2352,13 @@ export class AgentSessionsService {
       command.type === "respond"
         ? await this.sessionInTenant(identity, projectId, sessionId)
         : await this.requireSession(identity, projectId, sessionId);
+    // Who may answer is settled before anything moves, authority included.
+    if (command.type === "respond")
+      await this.assertMayRespond({
+        identity,
+        session,
+        requestId: command.requestId,
+      });
     if (command.type === "send") this.assertAcceptsInput(session);
     else if (
       session.authority_host_id !== "unassigned" &&
@@ -2477,12 +2511,81 @@ export class AgentSessionsService {
     this.kick(sessionId);
   }
 
+  /**
+   * An unattended chat's approvers answer its approvals (ADR 0176), and
+   * need no other access to it; otherwise whoever may change the chat does.
+   */
+  private assertRequestAudience(input: {
+    identity: Identity;
+    session: SessionRow;
+    request: RuntimeRequest;
+  }): void {
+    if (input.request.approvers.length > 0) {
+      if (!input.request.approvers.includes(input.identity.externalUserId))
+        throw new SessionCommandRejectedError(
+          "not_an_approver",
+          "Only this chat's approvers can answer this request.",
+          403,
+        );
+      return;
+    }
+    assertAgentSessionAccess({
+      identity: input.identity,
+      projectId: input.session.project_id,
+      externalUserId: input.session.external_user_id,
+      agentId: input.session.agent_id,
+      intent: "change",
+    });
+  }
+
+  /**
+   * Before a `respond` command runs: the caller may answer that request,
+   * or, for a request this chat does not have, may change the chat.
+   */
+  private async assertMayRespond(input: {
+    identity: Identity;
+    session: SessionRow;
+    requestId: string;
+  }): Promise<void> {
+    const row = await this.db
+      .selectFrom("agent_runtime_requests")
+      .selectAll()
+      .where("session_id", "=", input.session.id)
+      .where("request_id", "=", input.requestId)
+      .executeTakeFirst();
+    const request = row ? requestFromRow(row) : undefined;
+    if (request?.approvers.length) {
+      if (request.approvers.includes(input.identity.externalUserId)) return;
+      throw new AccessDeniedError();
+    }
+    assertAgentSessionAccess({
+      identity: input.identity,
+      projectId: input.session.project_id,
+      externalUserId: input.session.external_user_id,
+      agentId: input.session.agent_id,
+      intent: "change",
+    });
+  }
+
   private async rememberAlwaysAllowed(input: {
     identity: Identity;
     session: SessionRow;
     requestId: string;
   }): Promise<void> {
     if (!this.onToolAlwaysAllowed) return;
+    // A one-time approver answers once; only who may change the chat may
+    // widen what its agent may do.
+    try {
+      assertAgentSessionAccess({
+        identity: input.identity,
+        projectId: input.session.project_id,
+        externalUserId: input.session.external_user_id,
+        agentId: input.session.agent_id,
+        intent: "change",
+      });
+    } catch {
+      return;
+    }
     const row = await this.db
       .selectFrom("agent_runtime_requests")
       .selectAll()
@@ -3102,23 +3205,11 @@ export class AgentSessionsService {
         404,
       );
     const request = requestFromRow(row);
-    // An unattended chat's approvers answer its approvals (ADR 0176);
-    // otherwise whoever may change the chat does.
-    if (request.approvers.length > 0) {
-      if (!request.approvers.includes(input.identity.externalUserId))
-        throw new SessionCommandRejectedError(
-          "not_an_approver",
-          "Only this chat's approvers can answer this request.",
-          403,
-        );
-    } else
-      assertAgentSessionAccess({
-        identity: input.identity,
-        projectId: input.session.project_id,
-        externalUserId: input.session.external_user_id,
-        agentId: input.session.agent_id,
-        intent: "change",
-      });
+    this.assertRequestAudience({
+      identity: input.identity,
+      session: input.session,
+      request,
+    });
     if (request.status !== "pending")
       throw new SessionCommandRejectedError(
         "already_answered",

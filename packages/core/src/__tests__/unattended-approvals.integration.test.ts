@@ -6,6 +6,7 @@ import type { SandboxProvider } from "@catamorphic/sandbox";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { type Identity, PROJECT_PRINCIPAL_ID } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
+import { AccessDeniedError } from "../services/artifact-scope.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
@@ -218,28 +219,24 @@ describeIf("unattended approvals (ADR 0176)", () => {
       ]);
     });
 
-    // Holding the chat is not enough once approvers are named.
-    expect(
-      (
-        await answer({
-          identity: { tenantId, externalUserId: "dave" },
-          sessionId,
-          request: pending,
-          decision: "approved",
-        })
-      ).status,
-    ).toBe("rejected");
-    // Someone who is not an approver cannot answer it.
-    expect(
-      (
-        await answer({
-          identity: member("carol"),
-          sessionId,
-          request: pending,
-          decision: "approved",
-        })
-      ).status,
-    ).toBe("rejected");
+    // Holding the chat is not enough once approvers are named, and someone
+    // who is not an approver cannot answer it.
+    await expect(
+      answer({
+        identity: { tenantId, externalUserId: "dave" },
+        sessionId,
+        request: pending,
+        decision: "approved",
+      }),
+    ).rejects.toBeInstanceOf(AccessDeniedError);
+    await expect(
+      answer({
+        identity: member("carol"),
+        sessionId,
+        request: pending,
+        decision: "approved",
+      }),
+    ).rejects.toBeInstanceOf(AccessDeniedError);
     expect(
       (
         await answer({

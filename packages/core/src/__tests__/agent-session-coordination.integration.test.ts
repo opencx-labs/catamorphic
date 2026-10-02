@@ -2443,4 +2443,79 @@ describe("agent session coordination", () => {
       ),
     ).toBe(true);
   });
+
+  it("keeps a mirror inside its own session: no foreign records, no settings beyond presentation", async () => {
+    const project = await projects.create(identity, { name: "Mirror fence" });
+    const victim = await sessions.create(identity, project.id);
+    await sessions.sendMessage(identity, project.id, victim.id, "Private work");
+    const victimItem = (await snapshot(victim.id, project.id)).items[0];
+    if (!victimItem) throw new Error("Expected an item");
+    const sessionId = randomUUID();
+    const source = await sessions.create(identity, project.id);
+    await sessions.sendMessage(identity, project.id, source.id, "Mine");
+    const copy = copySettledHistory({
+      snapshot: await readFullSnapshot({ db, sessionId: source.id }),
+      sessionId,
+    });
+    if (!copy) throw new Error("Expected a copy");
+    const push = {
+      authority: { hostId: "desktop-origin", revision: 1 },
+      todos: [],
+      base: copy.snapshot,
+      events: [],
+    };
+    // An item of another session, under its own id or carried in the base.
+    const injected = { ...victimItem, text: "Rewritten" };
+    await expect(
+      sessions.mirror(identity, project.id, sessionId, {
+        ...push,
+        base: {
+          ...copy.snapshot,
+          items: [...copy.snapshot.items, { ...injected, sessionId }],
+        },
+      }),
+    ).rejects.toThrow("another session");
+    await expect(
+      sessions.mirror(identity, project.id, sessionId, {
+        ...push,
+        base: { ...copy.snapshot, items: [...copy.snapshot.items, injected] },
+      }),
+    ).rejects.toThrow("another session");
+    expect((await snapshot(victim.id, project.id)).items[0]).toMatchObject({
+      text: victimItem.kind === "user_message" ? victimItem.text : "",
+    });
+    // A clean copy, then a session change naming another agent and host.
+    const first = await sessions.mirror(identity, project.id, sessionId, push);
+    await sessions.mirror(identity, project.id, sessionId, {
+      authority: push.authority,
+      events: [
+        {
+          sessionId,
+          sequence: first.sequence + 1,
+          at: new Date().toISOString(),
+          commandId: null,
+          event: {
+            type: "session.changed",
+            session: {
+              title: "Renamed",
+              agentId: "builder",
+              authorityHostId: sessions.hostId,
+              parentSessionId: victim.id,
+            },
+          },
+        },
+      ],
+    });
+    const row = await db
+      .selectFrom("agent_sessions")
+      .select(["title", "agent_id", "authority_host_id", "parent_session_id"])
+      .where("id", "=", sessionId)
+      .executeTakeFirstOrThrow();
+    expect(row).toMatchObject({
+      title: "Renamed",
+      authority_host_id: "desktop-origin",
+      parent_session_id: null,
+    });
+    expect(row.agent_id).not.toBe("builder");
+  });
 });

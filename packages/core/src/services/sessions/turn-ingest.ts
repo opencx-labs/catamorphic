@@ -207,9 +207,12 @@ export async function ingestHarnessEvents(input: {
         const id = derivedId(attemptId, event.key);
         const current = items.get(id);
         if (!current) break;
+        // A harness changes an item's content, never what Work owns of it.
+        const content: Record<string, unknown> = { ...event.item };
+        for (const field of WORK_OWNED_ITEM_FIELDS) delete content[field];
         const merged = {
           ...current,
-          ...(event.item ?? {}),
+          ...content,
           ...(event.type === "item.completed"
             ? { status: event.status, endedAt: at }
             : {}),
@@ -328,6 +331,19 @@ export async function ingestHarnessEvents(input: {
     emitTurn({ ...turn, activity: line, activityAt: at });
   return { ...result, events: out, turn, attempt, thread };
 }
+
+/** What Work owns of an item, which a harness's update never changes. */
+const WORK_OWNED_ITEM_FIELDS = [
+  "id",
+  "sessionId",
+  "turnId",
+  "attemptId",
+  "parentItemId",
+  "position",
+  "kind",
+  "author",
+  "createdAt",
+] as const;
 
 function waitingLine(kind: "question" | "approval" | "elicitation"): string {
   return kind === "approval"

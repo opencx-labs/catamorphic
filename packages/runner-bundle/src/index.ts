@@ -8,14 +8,15 @@ import { readFile } from "node:fs/promises";
  */
 export async function loadRunnerBundle(): Promise<{
   source: string;
+  /** Short name for the file: the digest's first 16 hex characters. */
   hash: string;
+  /** The full SHA-256 of the source, which a sandbox's copy must match. */
+  digest: string;
 }> {
   const source = await readFile(
     new URL("./runner.mjs", import.meta.url),
     "utf8",
   );
-  return {
-    source,
-    hash: createHash("sha256").update(source).digest("hex").slice(0, 16),
-  };
+  const digest = createHash("sha256").update(source).digest("hex");
+  return { source, hash: digest.slice(0, 16), digest };
 }

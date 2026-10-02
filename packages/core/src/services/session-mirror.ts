@@ -205,8 +205,8 @@ export async function writeSessionMirror({
     const session = await trx
       .updateTable("agent_sessions")
       .set({
-        title: input.title ?? current?.title ?? null,
-        icon: input.icon ?? current?.icon ?? null,
+        ...(input.title !== undefined ? { title: input.title } : {}),
+        ...(input.icon !== undefined ? { icon: input.icon } : {}),
         ...(input.workStatus ? { work_status: input.workStatus } : {}),
         ...(input.todos
           ? { todos: sql<Json>`${JSON.stringify(input.todos)}::jsonb` }

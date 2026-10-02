@@ -659,6 +659,7 @@ export {
   STREAM_MAX_PENDING_EVENTS,
 } from "./services/sessions/session-feed.js";
 export {
+  ForeignSessionEventError,
   REPLAY_MAX_BYTES,
   REPLAY_MAX_EVENTS,
   SessionCommandRejectedError,

@@ -1541,7 +1541,13 @@ export class TurnEngine {
   ): Promise<string> {
     const own = attempt.providerThreadId;
     if (!own) throw new Error("The attempt has no provider thread");
-    if (call.kind === "tool" || !call.thread) return own;
+    // A fork reads its source, never writes it: appends go to its own thread.
+    if (
+      call.kind === "tool" ||
+      call.kind === "native_state.append" ||
+      !call.thread
+    )
+      return own;
     const rows = await this.deps.db
       .selectFrom("agent_provider_threads")
       .select(["id", "native_ref", "fork_source"])

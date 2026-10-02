@@ -15,6 +15,7 @@ import {
   EnvironmentCapacityError,
   EnvironmentIncompatibleError,
   EnvironmentNotFoundError,
+  ForeignSessionEventError,
   keyedChatOwnerId,
   NoCompatibleEnvironmentError,
   ProjectNotFoundError,
@@ -571,6 +572,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
       body: MirrorAgentSessionSchema,
       response: {
         200: MirrorAgentSessionResultSchema,
+        400: ErrorSchema,
         403: EnvironmentAccessErrorSchema,
         404: ErrorSchema,
         409: z.union([MirrorConflictSchema, EnvironmentErrorSchema]),
@@ -599,6 +601,8 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
       } catch (err) {
         if (err instanceof ProjectNotFoundError)
           return reply.status(404).send({ error: "Project not found" });
+        if (err instanceof ForeignSessionEventError)
+          return reply.status(400).send({ error: err.message });
         if (err instanceof SessionMirrorDivergedError)
           return reply
             .status(409)

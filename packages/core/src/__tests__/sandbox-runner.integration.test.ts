@@ -174,4 +174,43 @@ describe("sandbox runner", () => {
     expect(listing.result.trim().split("\n")).toHaveLength(1);
     await again.kill();
   }, 60_000);
+
+  it("replaces a bundle someone changed in the sandbox before it runs", async () => {
+    const sandbox = await provider.createSandbox({});
+    const stateDirectory = "/workspace/.work-session";
+    const first = await startSandboxRunner({
+      provider,
+      allocationId: "allocation",
+      sandboxId: sandbox.id,
+      stateDirectory,
+    });
+    await first.kill();
+    const listed = await provider.executeCommand(sandbox.id, "ls runner", {
+      cwd: stateDirectory,
+    });
+    const file = listed.result.trim();
+    await provider.executeCommand(
+      sandbox.id,
+      `printf 'console.log("not the runner")' > runner/${file}`,
+      {
+        cwd: stateDirectory,
+      },
+    );
+    const channel = await startSandboxRunner({
+      provider,
+      allocationId: "allocation",
+      sandboxId: sandbox.id,
+      stateDirectory,
+    });
+    await channel.send([
+      {
+        id: "start",
+        command: { kind: "start", attempt: attempt("still mine") },
+      },
+    ]);
+    const frames: RunnerFrame[] = [];
+    await readUntil({ channel, cursor: 0, frames, done: completed });
+    expect(replyText(frames)).toContain("Echo: still mine");
+    await channel.kill();
+  }, 60_000);
 });

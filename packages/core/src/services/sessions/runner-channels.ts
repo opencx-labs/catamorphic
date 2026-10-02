@@ -109,7 +109,7 @@ export function reattachInProcessRunner(
   return runner ? inProcessChannel(location.runnerId, runner) : undefined;
 }
 
-let bundle: Promise<{ source: string; hash: string }> | undefined;
+let bundle: ReturnType<typeof loadRunnerBundle> | undefined;
 
 /**
  * Start the runner in a sandbox as a process with standard input (ADR
@@ -130,16 +130,19 @@ export async function startSandboxRunner(input: {
       "This Environment's sandboxes cannot run processes, so they cannot run this agent's harness.",
     );
   bundle ??= loadRunnerBundle();
-  const { source, hash } = await bundle;
+  const { source, hash, digest } = await bundle;
   const directory = `${input.stateDirectory}/runner`;
+  // Its contents are checked, not its name: anything in the sandbox could
+  // have replaced the file since it was uploaded.
+  const relative = `runner/${hash}.mjs`;
   const present = await input.provider
     .executeCommand(
       input.sandboxId,
-      `test -f ${shellQuote(`runner/${hash}.mjs`)} && echo present`,
+      `(sha256sum ${shellQuote(relative)} 2>/dev/null || shasum -a 256 ${shellQuote(relative)}) | cut -d ' ' -f 1`,
       { cwd: input.stateDirectory },
     )
     .then(
-      (result) => result.result.includes("present"),
+      (result) => result.exitCode === 0 && result.result.trim() === digest,
       () => false,
     );
   if (!present)
