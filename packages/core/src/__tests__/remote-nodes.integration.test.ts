@@ -93,7 +93,6 @@ async function chatOn(
       id: sessionId,
       project_id: projectId,
       external_user_id: "member",
-      provider: "test",
     })
     .execute();
   const allocation = await db

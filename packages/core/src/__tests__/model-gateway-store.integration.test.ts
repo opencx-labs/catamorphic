@@ -68,7 +68,6 @@ describeIf("the model gateway's store (ADR 0180)", () => {
         id: sessionId,
         project_id: projectId,
         external_user_id: "member-1",
-        provider: "claude-code",
         allocation_id: allocationId,
       })
       .execute();

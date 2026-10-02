@@ -188,6 +188,10 @@ import {
   SessionCommandRejectedError,
   SessionLog,
 } from "./sessions/session-log.js";
+import {
+  approvalPolicy,
+  expiredApprovalReason,
+} from "./sessions/request-policy.js";
 import { copySettledHistory } from "./sessions/session-copy.js";
 import { SessionFeed } from "./sessions/session-feed.js";
 import {
@@ -1066,7 +1070,7 @@ export class AgentSessionsService {
               requestKey: request.runnerKey,
               response:
                 request.kind === "approval"
-                  ? { kind: "approval", decision: "denied" }
+                  ? { kind: "approval", decision: "denied", reason: expiredApprovalReason(request) }
                   : request.kind === "elicitation"
                     ? { kind: "elicitation", action: "cancel" }
                     : { kind: "question", answers: ["(No answer in time.)"] },
@@ -2195,7 +2199,13 @@ export class AgentSessionsService {
     sessionId: string,
     command: SessionCommand,
   ): Promise<CommandReceipt> {
-    const session = await this.requireSession(identity, projectId, sessionId);
+    // An answer checks its own audience (an unattended chat's approvers,
+    // who may hold no other access to it); every other command changes the
+    // chat.
+    const session =
+      command.type === "respond"
+        ? await this.sessionInTenant(identity, projectId, sessionId)
+        : await this.requireSession(identity, projectId, sessionId);
     if (command.type === "send") this.assertAcceptsInput(session);
     else if (
       session.authority_host_id !== "unassigned" &&
@@ -2453,6 +2463,49 @@ export class AgentSessionsService {
    * it; an answer to a non-blocking question whose turn ended becomes a
    * message. A request whose agent stopped can no longer be answered.
    */
+  /** Each approver hears about an approval and finds the chat waiting for them. */
+  private async notifyApprovers(input: { session: SessionRow; requests: RuntimeRequest[] }): Promise<void> {
+    const project = await this.db
+      .selectFrom("projects")
+      .select("tenant_id")
+      .where("id", "=", input.session.project_id)
+      .executeTakeFirstOrThrow();
+    const notifications = new UserNotificationsService(this.db);
+    const agent = await this.resolveAgent(input.session.agent_id, input.session.project_id).catch(() => undefined);
+    const label = agent?.name ?? "An agent";
+    for (const request of input.requests)
+      for (const approver of request.approvers) {
+        await this.db
+          .insertInto("agent_session_views")
+          .values({
+            session_id: input.session.id,
+            tenant_id: project.tenant_id,
+            external_user_id: approver,
+            visibility: "promoted",
+            previous_visibility: "promoted",
+          })
+          .onConflict((conflict) =>
+            conflict
+              .columns(["session_id", "tenant_id", "external_user_id"])
+              .doUpdateSet({ visibility: "promoted", updated_at: new Date() }),
+          )
+          .execute();
+        const tool = request.approval?.tool;
+        await notifications.publish({
+          identity: { tenantId: project.tenant_id, externalUserId: approver },
+          projectId: input.session.project_id,
+          sessionId: input.session.id,
+          kind: "approval_requested",
+          title: `${label} needs your approval`,
+          body: `${tool ? `${tool.name} on ${tool.server ?? "this agent"}` : request.title}${
+            input.session.title ? ` in "${input.session.title}"` : ""
+          }`,
+          route: `/?project=${encodeURIComponent(input.session.project_id)}&session=${encodeURIComponent(input.session.id)}`,
+          collapseKey: `approval:${request.id}`,
+        });
+      }
+  }
+
   /**
    * Ask a session's person to approve something the host itself guards
    * (ADR 0162: a brokered connection action), as a request on the turn
@@ -2469,7 +2522,9 @@ export class AgentSessionsService {
     timeoutMs?: number;
     signal?: AbortSignal;
   }): Promise<"allow" | "deny"> {
-    const timeoutMs = input.timeoutMs ?? 5 * 60_000;
+    const policy = await approvalPolicy(this.db, input.sessionId);
+    if (policy.unattended && policy.approvers.length === 0) return "deny";
+    const timeoutMs = input.timeoutMs ?? policy.waitMs;
     const opened = await this.db.transaction().execute(async (trx) => {
       const row = await trx
         .selectFrom("agent_turns")
@@ -2499,7 +2554,7 @@ export class AgentSessionsService {
         questions: null,
         approval: input.approval,
         elicitation: null,
-        approvers: [],
+        approvers: policy.approvers,
         expiresAt: new Date(Date.now() + timeoutMs).toISOString(),
         response: null,
         resolvedBy: null,
@@ -2538,6 +2593,16 @@ export class AgentSessionsService {
       return request;
     });
     if (!opened) return "deny";
+    if (opened.approvers.length > 0) {
+      const session = await this.db
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", input.sessionId)
+        .executeTakeFirstOrThrow();
+      await this.notifyApprovers({ session, requests: [opened] }).catch((error) =>
+        console.warn("[catamorphic] Could not tell approvers", error),
+      );
+    }
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline && !input.signal?.aborted) {
       const row = await this.db
@@ -2620,6 +2685,19 @@ export class AgentSessionsService {
       .executeTakeFirst();
     if (!row) throw new SessionCommandRejectedError("not_found", "That request does not exist.", 404);
     const request = requestFromRow(row);
+    // An unattended chat's approvers answer its approvals (ADR 0176);
+    // otherwise whoever may change the chat does.
+    if (request.approvers.length > 0) {
+      if (!request.approvers.includes(input.identity.externalUserId))
+        throw new SessionCommandRejectedError("not_an_approver", "Only this chat's approvers can answer this request.", 403);
+    } else
+      assertAgentSessionAccess({
+        identity: input.identity,
+        projectId: input.session.project_id,
+        externalUserId: input.session.external_user_id,
+        agentId: input.session.agent_id,
+        intent: "change",
+      });
     if (request.status !== "pending")
       throw new SessionCommandRejectedError("already_answered", "That request was already answered or withdrawn.");
     if (!request.answerable && request.blocking)
@@ -2964,6 +3042,7 @@ export class AgentSessionsService {
       hostTool: (input) => this.runHostTool(input),
       finalize: (input) => this.finalizeTurn(input),
       settled: (input) => this.afterTurn(input),
+      approvalsOpened: (input) => this.notifyApprovers(input),
     };
   }
 
@@ -3256,7 +3335,7 @@ export class AgentSessionsService {
                       provider,
                       sandboxId: sandboxProviderId,
                       workingDirectory,
-                      ...(runtime.commandTimeoutSeconds ? { commandTimeoutSeconds: runtime.commandTimeoutSeconds } : {}),
+                      ...(runtime.commandTimeoutSeconds ? { commandBudgetSeconds: runtime.commandTimeoutSeconds } : {}),
                     },
                   }
                 : {}),
@@ -8143,6 +8222,24 @@ export class AgentSessionsService {
    * goes through the default `change` intent; only readers pass `read`, so
    * an app's sessions ref (ADR 0148) can never reach a mutation by omission.
    */
+  /** A session of the caller's tenant, without checking their access to it. */
+  private async sessionInTenant(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<SessionRow> {
+    const row = await this.db
+      .selectFrom("agent_sessions")
+      .innerJoin("projects", "projects.id", "agent_sessions.project_id")
+      .selectAll("agent_sessions")
+      .where("agent_sessions.id", "=", sessionId)
+      .where("agent_sessions.project_id", "=", projectId)
+      .where("projects.tenant_id", "=", identity.tenantId)
+      .executeTakeFirst();
+    if (!row) throw new AgentSessionNotFoundError(sessionId);
+    return row;
+  }
+
   private async requireSession(
     identity: Identity,
     projectId: string,

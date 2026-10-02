@@ -51,6 +51,11 @@ import {
   turnFromRow,
 } from "./session-rows.js";
 import { derivedId, ingestHarnessEvents } from "./turn-ingest.js";
+import {
+  type ApprovalPolicy,
+  approvalPolicy,
+  governApproval,
+} from "./request-policy.js";
 import type { ClaimedTurn, TurnCommandKind, TurnQueue } from "./turn-queue.js";
 
 const tracer = getTracer("@catamorphic/core");
@@ -151,6 +156,8 @@ export interface TurnEngineHost {
     reply: Item | null;
     retrying: boolean;
   }): Promise<void>;
+  /** Approvals that opened and wait on approvers, after they committed. */
+  approvalsOpened?(input: { session: SessionRow; requests: RuntimeRequest[] }): Promise<void>;
 }
 
 /** The model-facing text of an input item (a delivery's provenance included). */
@@ -1054,7 +1061,10 @@ export class TurnEngine {
     completion?: { status: "completed" | "failed" | "interrupted"; error?: TurnError; ref?: NativeRef };
   }> {
     const { db, log, queue } = this.deps;
-    return db.transaction().execute(async (trx) => {
+    let policy: ApprovalPolicy | undefined;
+    let refused = false;
+    const opened: RuntimeRequest[] = [];
+    const applied = await db.transaction().execute(async (trx) => {
       await this.assertOwned(local, trx);
       let runner: RunnerState = { ...input.runner, cursor: input.cursor };
       const events = input.frames.flatMap((frame) => (frame.type === "event" ? [frame.event] : []));
@@ -1119,7 +1129,36 @@ export class TurnEngine {
         };
         extra.push({ type: "attempt.changed", attempt });
       }
-      await log.append(trx, { sessionId: input.turn.sessionId, events: [...ingested.events, ...extra] });
+      // Approvals open under their chat's policy (ADR 0176): its approvers
+      // and wait, or a refusal at once when no one can answer.
+      const governed: SessionEvent[] = [];
+      for (const event of ingested.events) {
+        if (
+          event.type !== "request.changed" ||
+          event.request.kind !== "approval" ||
+          event.request.status !== "pending" ||
+          event.request.expiresAt !== null
+        ) {
+          governed.push(event);
+          continue;
+        }
+        policy ??= await approvalPolicy(trx, input.turn.sessionId);
+        const outcome = governApproval({ request: event.request, policy, now: Date.now() });
+        governed.push({ type: "request.changed", request: outcome.request });
+        if (outcome.refusal && event.request.runnerKey) {
+          refused = true;
+          await queue.enqueueCommand(trx, {
+            turnId: input.turn.id,
+            attemptId: input.attempt.id,
+            kind: "respond",
+            payload: {
+              requestKey: event.request.runnerKey,
+              response: { kind: "approval", decision: "denied", reason: outcome.refusal },
+            },
+          });
+        } else if (outcome.request.approvers.length > 0) opened.push(outcome.request);
+      }
+      await log.append(trx, { sessionId: input.turn.sessionId, events: [...governed, ...extra] });
       if (ingested.statePath)
         await trx
           .updateTable("agent_provider_threads")
@@ -1144,6 +1183,12 @@ export class TurnEngine {
         ...(ingested.completed ? { completion: ingested.completed } : {}),
       };
     });
+    if (refused) local.wake();
+    if (opened.length > 0)
+      await this.deps.host
+        .approvalsOpened?.({ session: input.session, requests: opened })
+        .catch((error) => console.warn("[catamorphic] Could not tell approvers", error));
+    return applied;
   }
 
   private async saveRunner(local: LocalTurn, attemptId: string, runner: RunnerState): Promise<void> {

@@ -40,7 +40,6 @@ describe("session mailboxes", () => {
         id: sessionId,
         project_id: projectId,
         external_user_id: identity.externalUserId,
-        provider: "test",
         authority_host_id: "desktop-host",
         authority_revision: 3,
       })
@@ -111,7 +110,7 @@ describe("session mailboxes", () => {
     const item = await db
       .selectFrom("session_mailbox_items")
       .select("id")
-      .where("message_id", "=", receipt.messageId)
+      .where("item_id", "=", receipt.messageId)
       .executeTakeFirstOrThrow();
     await mailboxes.acknowledge(identity, projectId, item.id, {
       destinationHostId: "desktop-host",

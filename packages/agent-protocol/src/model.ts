@@ -471,7 +471,13 @@ export interface RuntimeRequestOrigin {
 }
 
 export type RuntimeRequestResponse =
-  | { kind: "approval"; decision: "approved" | "denied"; remember?: "always" }
+  | {
+      kind: "approval";
+      decision: "approved" | "denied";
+      remember?: "always";
+      /** Why Work denied it when no person did: told to the agent. */
+      reason?: string;
+    }
   | { kind: "question"; answers: string[] }
   | {
       kind: "elicitation";

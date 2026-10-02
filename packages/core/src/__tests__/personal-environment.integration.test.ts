@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
-import type { PersonalLoginKind } from "@catamorphic/sandbox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type Identity, PROJECT_PRINCIPAL_ID } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
@@ -33,12 +32,9 @@ const db = connectionString
 const tenantId = crypto.randomUUID();
 const ada: Identity = { tenantId, externalUserId: "ada" };
 const bob: Identity = { tenantId, externalUserId: "bob" };
-const TOKEN = `sk-ant-oat01-${crypto.randomUUID()}`;
 const SECRET = `API_TOKEN=${crypto.randomUUID()}\n`;
 
 const base64 = (text: string) => Buffer.from(text).toString("base64");
-const claude = (expiresAt: number) =>
-  JSON.stringify({ claudeAiOauth: { accessToken: TOKEN, expiresAt } });
 
 describeIf("personal environments (ADR 0184)", () => {
   let tmpDir: string;
@@ -46,7 +42,6 @@ describeIf("personal environments (ADR 0184)", () => {
   let otherProjectId: string;
   let vault: MemoryCredentialVault;
   let service: PersonalEnvironmentService;
-  const inUse = new Set<PersonalLoginKind>();
 
   beforeAll(async () => {
     if (!db) throw new Error("unreachable");
@@ -80,7 +75,6 @@ describeIf("personal environments (ADR 0184)", () => {
       db,
       vault,
       environments: new ProjectEnvironmentsService(db, projectManager),
-      loginsInUse: async () => inUse,
     });
   });
 
@@ -96,9 +90,6 @@ describeIf("personal environments (ADR 0184)", () => {
       identity: ada,
       projectId,
       input: {
-        logins: {
-          "claude-code": { credentials: claude(Date.now() + 8 * 3_600_000) },
-        },
         files: [
           { path: ".env", content: base64(SECRET) },
           { path: "apps/api/.env.local", content: base64("LOCAL=1\n") },
@@ -106,27 +97,23 @@ describeIf("personal environments (ADR 0184)", () => {
       },
     });
     expect(status.allowed).toBe(true);
-    expect(status.logins["claude-code"]?.needsRefresh).toBe(false);
     expect(status.files.map((file) => [file.path, file.bytes])).toEqual([
       [".env", SECRET.length],
       ["apps/api/.env.local", 8],
     ]);
-    expect(JSON.stringify(status)).not.toContain(TOKEN);
+    expect(JSON.stringify(status)).not.toContain(SECRET.trim());
     const rows = await db!
       .selectFrom("personal_environment_entries")
       .selectAll()
       .execute();
-    expect(rows).toHaveLength(3);
-    expect(JSON.stringify(rows)).not.toContain(TOKEN);
+    expect(rows).toHaveLength(2);
     expect(JSON.stringify(rows)).not.toContain(SECRET.trim());
     // The host alone unseals, for delivery.
     const unsealed = await service.unseal({
       tenantId,
       projectId,
       owner: "ada",
-      logins: ["claude-code"],
     });
-    expect(unsealed.logins.get("claude-code")?.content).toContain(TOKEN);
     expect(unsealed.files[0]?.content.toString()).toBe(SECRET);
     // A project without the flag does not allow them.
     expect(
@@ -137,14 +124,12 @@ describeIf("personal environments (ADR 0184)", () => {
 
   it("keeps each member to their own set", async () => {
     expect(await service.status({ identity: bob, projectId })).toMatchObject({
-      logins: {},
       files: [],
     });
     await service.replace({
       identity: bob,
       projectId,
       input: {
-        logins: {},
         files: [{ path: ".env", content: base64("B=1\n") }],
       },
     });
@@ -152,7 +137,7 @@ describeIf("personal environments (ADR 0184)", () => {
     expect(adas.files).toHaveLength(2);
     expect(
       (
-        await service.unseal({ tenantId, projectId, owner: "ada", logins: [] })
+        await service.unseal({ tenantId, projectId, owner: "ada" })
       ).files[0]?.content.toString(),
     ).toBe(SECRET);
     await service.remove({ identity: bob, projectId });
@@ -187,9 +172,6 @@ describeIf("personal environments (ADR 0184)", () => {
       identity: ada,
       projectId,
       input: {
-        logins: {
-          "claude-code": { credentials: claude(Date.now() + 8 * 3_600_000) },
-        },
         files: [{ path: ".env", content: base64(SECRET) }],
       },
     });
@@ -217,43 +199,13 @@ describeIf("personal environments (ADR 0184)", () => {
         identity: ada,
         projectId,
         input: {
-          logins: {
-            "claude-code": {
-              credentials: JSON.stringify({
-                claudeAiOauth: { accessToken: TOKEN, refreshToken: "rt" },
-              }),
-            },
-          },
-          files: [],
+          files: [{ path: "../outside", content: base64("x") }],
         },
       }),
     ).rejects.toBeInstanceOf(PersonalEnvironmentInvalidError);
     expect(
       (await service.status({ identity: ada, projectId })).files,
     ).toHaveLength(1);
-  });
-
-  it("asks for a fresh login only while one that expires soon is in use", async () => {
-    await service.replace({
-      identity: ada,
-      projectId,
-      input: {
-        logins: {
-          "claude-code": { credentials: claude(Date.now() + 10 * 60_000) },
-        },
-        files: [],
-      },
-    });
-    expect(
-      (await service.status({ identity: ada, projectId })).logins["claude-code"]
-        ?.needsRefresh,
-    ).toBe(false);
-    inUse.add("claude-code");
-    expect(
-      (await service.status({ identity: ada, projectId })).logins["claude-code"]
-        ?.needsRefresh,
-    ).toBe(true);
-    inUse.clear();
   });
 
   it("audits names and fingerprints, never values", async () => {
@@ -269,7 +221,6 @@ describeIf("personal environments (ADR 0184)", () => {
       ]),
     );
     expect(JSON.stringify(audits)).toContain("sha256:");
-    expect(JSON.stringify(audits)).not.toContain(TOKEN);
     expect(JSON.stringify(audits)).not.toContain(SECRET.trim());
   });
 
@@ -305,8 +256,7 @@ describeIf("personal environments (ADR 0184)", () => {
           identity: cara,
           projectId,
           input: {
-            logins: {},
-            files: [
+                files: [
               { path: ".env", content: base64(`N=${index}\n`) },
               { path: `only-${index}.env`, content: base64("x") },
             ],
@@ -337,7 +287,7 @@ describeIf("personal environments (ADR 0184)", () => {
       unsealed.replace({
         identity: ada,
         projectId,
-        input: { logins: {}, files: [] },
+        input: { files: [] },
       }),
     ).rejects.toBeInstanceOf(PersonalEnvironmentUnavailableError);
   });

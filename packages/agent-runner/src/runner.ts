@@ -323,7 +323,10 @@ export class AttemptRunner {
             decision: "allow",
             ...(response.remember ? { remember: response.remember } : {}),
           }
-        : { decision: "deny" };
+        : {
+            decision: "deny",
+            ...(response.reason ? { reason: response.reason } : {}),
+          };
     });
     return {
       emit: (event) => this.emitEvent(event),

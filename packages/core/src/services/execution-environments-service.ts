@@ -96,7 +96,7 @@ export function personalCredentialsDecision(input: {
     return {
       allowed: false,
       reason:
-        "A member's own sign-in runs only their own chats, and this is the project's own work. Use an agent with a model connection instead",
+        "Personal credentials reach only a member's own chats, and this is the project's own work. Use an agent with a model connection instead",
     };
   const { descriptor } = input.runtime;
   if (
