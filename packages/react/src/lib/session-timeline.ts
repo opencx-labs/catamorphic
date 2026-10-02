@@ -74,12 +74,21 @@ export interface QueuedMessage {
   item: UserMessageItem | undefined;
 }
 
-/** Turns that never show in the conversation: queued ones show in the queue. */
+/**
+ * A turn that has not run yet: it waits in the queue, editable. A turn
+ * that ran and waits to retry (`retryAt`) stays in the conversation.
+ */
+export function waitsToRun(turn: Turn): boolean {
+  return (
+    (turn.status === "queued" || turn.status === "held") &&
+    turn.attemptCount === 0
+  );
+}
+
+/** Turns the conversation leaves out: waiting ones, and ones withdrawn before they ran. */
 function hiddenTurn(turn: Turn): boolean {
   return (
-    turn.status === "queued" ||
-    turn.status === "held" ||
-    turn.status === "cancelled"
+    waitsToRun(turn) || (turn.status === "cancelled" && turn.attemptCount === 0)
   );
 }
 
@@ -141,15 +150,17 @@ export function sessionTimeline(state: SessionState): TimelineTurn[] {
 
 /** Queued turns in the order they will run, with their messages. */
 export function sessionQueue(state: SessionState): QueuedMessage[] {
-  return queuedTurns(state).map((turn) => {
-    const found = turn.inputItemId
-      ? state.items.find((item) => item.id === turn.inputItemId)
-      : undefined;
-    return {
-      turn,
-      item: found?.kind === "user_message" ? found : undefined,
-    };
-  });
+  return queuedTurns(state)
+    .filter(waitsToRun)
+    .map((turn) => {
+      const found = turn.inputItemId
+        ? state.items.find((item) => item.id === turn.inputItemId)
+        : undefined;
+      return {
+        turn,
+        item: found?.kind === "user_message" ? found : undefined,
+      };
+    });
 }
 
 /** The request id an answer message answers, when it is one. */

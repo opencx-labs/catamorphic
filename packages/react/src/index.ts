@@ -18,6 +18,8 @@ export type {
   Item,
   ItemKind,
   ItemStatus,
+  JsonObject,
+  JsonValue,
   NoticeItem,
   PlanItem,
   ReasoningItem,
@@ -331,6 +333,7 @@ export {
   type TimelineEntry,
   type TimelineTurn,
   type WorkItem,
+  waitsToRun,
 } from "./lib/session-timeline.js";
 export {
   buildUntitledWorkflowName,

@@ -1,25 +1,25 @@
+import type {
+  AssistantMessageItem,
+  TimelineEntry,
+  TimelineTurn,
+  WorkItem,
+} from "@catamorphic/react";
+
 /**
- * An agent turn reaches the timeline as a run of assistant messages: one
- * per note the agent wrote between tool calls, each carrying the steps
- * that led to it, and last the answer. Two independent display choices
- * decide how that work reads (see `chatWorkLive` / `chatWorkSettled`):
+ * A turn reads as its input, then its work, then its answer (ADR 0196).
+ * The agent may write notes along the way: each reply in a turn carries
+ * the steps that led to it, and the last one is the answer. Two
+ * independent display choices decide how that work reads (see
+ * `chatWorkLive` / `chatWorkSettled`):
  *
  * - while the turn runs: every note, or only the latest one;
  * - once it has answered: notes kept in place, or folded into the steps.
  *
- * Whatever is not shown in place is `folded`: the host renders it, in
- * order, under one steps disclosure. Nothing is ever dropped.
- *
- * The steps taken since the latest note travel on the turn's in-progress
- * message. It closes the turn's run while that runs, never folds, and
- * shows only those steps.
+ * Whatever is not shown in place is folded: it reads, in order, under the
+ * next shown reply's steps disclosure. Nothing is ever dropped. Work after
+ * the latest note (the turn is still on it, or was cut short) is a block
+ * of its own that never folds.
  */
-export interface TurnGroupMessage {
-  id: string;
-  role: string;
-  metadata?: unknown;
-}
-
 export interface WorkDisplay {
   live: "all" | "latest";
   settled: "keep" | "collapse";
@@ -30,95 +30,91 @@ export const DEFAULT_WORK_DISPLAY: WorkDisplay = {
   settled: "collapse",
 };
 
-export type TimelineItem<T> =
+/** One row of a turn's steps disclosure: a piece of work, or a folded note. */
+export type StepSource =
+  | { kind: "work"; item: WorkItem }
+  | { kind: "note"; item: AssistantMessageItem };
+
+export type TurnRow =
+  /** Inputs, answers, notices and handoffs: shown as they are. */
   | {
-      kind: "message";
-      message: T;
-      /** An assistant message of the turn that is still running. */
-      working?: boolean;
+      kind: "entry";
+      entry: Exclude<TimelineEntry, { kind: "reply" } | { kind: "steps" }>;
     }
   | {
-      kind: "turn";
-      /** Notes folded under the turn's steps disclosure, in order. */
-      folded: T[];
-      /** Messages still shown in place, in order; the last is the answer
-       * once the turn has settled. */
-      shown: T[];
-      working: boolean;
-    };
+      kind: "reply";
+      item: AssistantMessageItem;
+      /** Folded notes and their work first, then this reply's own work. */
+      steps: StepSource[];
+      /** Notes folded into these steps, in order. */
+      folded: AssistantMessageItem[];
+      /** The settled turn's answer: the last thing it wrote. */
+      answer: boolean;
+    }
+  /** Work after the latest reply. */
+  | { kind: "steps"; steps: StepSource[] };
+
+const work = (items: readonly WorkItem[]): StepSource[] =>
+  items.map((item) => ({ kind: "work", item }));
 
 /**
- * The message a turn settles on. Notes are flushed mid-turn with only
- * `status` and `events`; settling stamps the turn's outcome (`changedFiles`
- * among it) on the last message. Turns can follow each other with no user
- * message between them (retries, triggers, other agents), and the answer of
- * one must never fold into the steps of the next.
+ * The rows a turn renders as. `live` is whether the turn is still
+ * running. Folding stays within a run of the agent's own writing: a
+ * message steered in between, or an answered question, splits the run.
  */
-function endsTurn(message: TurnGroupMessage): boolean {
-  const metadata = message.metadata;
-  return (
-    typeof metadata === "object" &&
-    metadata !== null &&
-    Array.isArray((metadata as { changedFiles?: unknown }).changedFiles)
-  );
-}
-
-function hasStatus(message: TurnGroupMessage, status: string): boolean {
-  const metadata = message.metadata;
-  return (
-    typeof metadata === "object" &&
-    metadata !== null &&
-    (metadata as { status?: unknown }).status === status
-  );
-}
-
-export function groupTurns<T extends TurnGroupMessage>(
-  messages: readonly T[],
-  options: { working: boolean; display: WorkDisplay },
-): TimelineItem<T>[] {
-  const { working, display } = options;
-  const items: TimelineItem<T>[] = [];
-  let index = 0;
-  while (index < messages.length) {
-    const message = messages[index] as T;
-    if (message.role !== "assistant") {
-      items.push({ kind: "message", message });
-      index += 1;
+export function turnRows(
+  group: TimelineTurn,
+  options: { live: boolean; display: WorkDisplay },
+): TurnRow[] {
+  const { live, display } = options;
+  const fold = live
+    ? display.live === "latest"
+    : display.settled === "collapse";
+  const rows: TurnRow[] = [];
+  let run: Array<Extract<TimelineEntry, { kind: "reply" | "steps" }>> = [];
+  const lastReplyId = [...group.entries]
+    .reverse()
+    .find(
+      (entry): entry is Extract<TimelineEntry, { kind: "reply" }> =>
+        entry.kind === "reply",
+    )?.item.id;
+  const flush = () => {
+    const replies = run.filter((entry) => entry.kind === "reply");
+    const last = replies.at(-1);
+    let buffer: StepSource[] = [];
+    let folded: AssistantMessageItem[] = [];
+    for (const entry of run) {
+      if (entry.kind === "steps") {
+        if (fold && last && entry !== run.at(-1))
+          buffer.push(...work(entry.steps));
+        else rows.push({ kind: "steps", steps: work(entry.steps) });
+        continue;
+      }
+      if (fold && replies.length > 1 && entry !== last) {
+        buffer.push(...work(entry.steps), { kind: "note", item: entry.item });
+        folded.push(entry.item);
+        continue;
+      }
+      rows.push({
+        kind: "reply",
+        item: entry.item,
+        steps: [...buffer, ...work(entry.steps)],
+        folded,
+        answer: !live && entry.item.id === lastReplyId,
+      });
+      buffer = [];
+      folded = [];
+    }
+    run = [];
+  };
+  for (const entry of group.entries) {
+    if (entry.kind === "reply" || entry.kind === "steps") {
+      run.push(entry);
       continue;
     }
-    let end = index;
-    while (end < messages.length && messages[end]?.role === "assistant") {
-      end += 1;
-      if (endsTurn(messages[end - 1] as T)) break;
-    }
-    const run = messages.slice(index, end);
-    // Only an unsettled run at the very end of the log can still be running.
-    const live =
-      working && end === messages.length && !endsTurn(run.at(-1) as T);
-    index = end;
-    const placeholder = hasStatus(run.at(-1) as T, "in_progress")
-      ? run.pop()
-      : undefined;
-    const fold = live
-      ? display.live === "latest"
-      : display.settled === "collapse";
-    if (!fold || run.length <= 1) {
-      for (const each of run)
-        items.push({ kind: "message", message: each, working: live });
-    } else {
-      // A failed message is an error card with its own recovery actions:
-      // it always stays in place, as does whatever came right before it.
-      const last = run.at(-1) as T;
-      const keep = hasStatus(last, "failed") && run.length > 1 ? 2 : 1;
-      items.push({
-        kind: "turn",
-        folded: run.slice(0, -keep),
-        shown: run.slice(-keep),
-        working: live,
-      });
-    }
-    if (placeholder)
-      items.push({ kind: "message", message: placeholder, working: live });
+    flush();
+    rows.push({ kind: "entry", entry });
   }
-  return items;
+  flush();
+  return rows;
 }

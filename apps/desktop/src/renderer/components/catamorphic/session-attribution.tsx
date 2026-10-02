@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@catamorphic/react";
+import type { SessionMessageAuthor } from "@catamorphic/react";
 import type { MouseEvent } from "react";
 
 type OpenLink = (url: string, event: MouseEvent<HTMLAnchorElement>) => void;
@@ -8,7 +8,7 @@ export function SessionAttribution({
   metadata,
   onOpen,
 }: {
-  author?: AgentMessage["author"];
+  author?: SessionMessageAuthor;
   metadata?: unknown;
   onOpen?: OpenLink;
 }) {

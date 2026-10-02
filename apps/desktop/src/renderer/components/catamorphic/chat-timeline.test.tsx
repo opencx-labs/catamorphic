@@ -4,6 +4,13 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatTimeline, plainLine } from "./chat-timeline.js";
+import {
+  input,
+  reply,
+  timelineOf,
+  toolCall,
+  turn,
+} from "./timeline-fixtures.js";
 
 describe("ChatTimeline queue editing", () => {
   let container: HTMLDivElement;
@@ -42,13 +49,12 @@ describe("ChatTimeline queue editing", () => {
     await act(async () => {
       root.render(
         <ChatTimeline
-          messages={[]}
+          turns={[]}
           activity="Working"
           queue={[
             {
-              id: "queued-1",
-              content: "wrong words",
-              attachments: [],
+              turn: turn("queued-1", 2, { status: "queued", attemptCount: 0 }),
+              item: input("queued-1", "wrong words"),
             },
           ]}
           onHoldQueued={(id) => {
@@ -82,80 +88,37 @@ describe("ChatTimeline queue editing", () => {
     expect(holds).toEqual(["queued-1"]);
   });
 
-  it("keeps partial prose separate from a failed turn's recovery card", async () => {
-    await act(async () => {
-      root.render(
-        <ChatTimeline
-          messages={[
-            {
-              id: "user-1",
-              role: "user",
-              content: "Finish the task.",
-            },
-            {
-              id: "failed-1",
-              role: "assistant",
-              content: "Provider connection closed",
-              metadata: {
-                status: "failed",
-                partialContent: "I finished the useful part.",
-              },
-            },
-          ]}
-          activity=""
-          onRetry={() => undefined}
-        />,
-      );
-    });
-
-    expect(
-      container.querySelector('[data-testid="chat-partial-response"]')
-        ?.textContent,
-    ).toContain("I finished the useful part.");
-    const errorCard = container.querySelector(
-      '[data-testid="chat-error-card"]',
-    );
-    expect(errorCard?.textContent).toContain("Provider connection closed");
-    expect(errorCard?.textContent).not.toContain("I finished the useful part.");
-    expect(
-      container.querySelector('[data-testid="chat-retry"]'),
-    ).not.toBeNull();
-  });
-
   it("renders desktop todo tools as readable progress instead of JSON", async () => {
     await act(async () => {
       root.render(
         <ChatTimeline
-          messages={[
-            {
-              id: "assistant-1",
-              role: "assistant",
-              content: "I updated the plan.",
-              metadata: {
-                events: [
-                  {
-                    type: "tool_call",
-                    toolName: "update_todo_list",
-                    toolInput: {
-                      items: [
-                        {
-                          title: "Inspect the project",
-                          description: "Find the right extension points.",
-                          status: "completed",
-                        },
-                        {
-                          title: "Verify the result",
-                          description: "Run the focused checks.",
-                          status: "in_progress",
-                        },
-                      ],
+          turns={timelineOf({
+            turns: [turn("t1", 1)],
+            items: [
+              input("t1", "Plan it"),
+              toolCall("todo", "t1", {
+                tool: "mcp__workspace__update_todo_list",
+                server: "workspace",
+                input: {
+                  items: [
+                    {
+                      title: "Inspect the project",
+                      description: "Find the right extension points.",
+                      status: "completed",
                     },
-                    toolResult: { completed: 1, total: 2 },
-                  },
-                ],
-              },
-            },
-          ]}
+                    {
+                      title: "Verify the result",
+                      description: "Run the focused checks.",
+                      status: "in_progress",
+                    },
+                  ],
+                },
+                result: { completed: 1, total: 2 },
+              }),
+              toolCall("other", "t1"),
+              reply("a1", "t1", "I updated the plan."),
+            ],
+          })}
         />,
       );
     });
@@ -184,13 +147,13 @@ describe("ChatTimeline queue editing", () => {
     const render = (revision: number) =>
       root.render(
         <ChatTimeline
-          messages={[
-            {
-              id: "reply",
-              role: "assistant",
-              content: "[Source](file:source.ts)",
-            },
-          ]}
+          turns={timelineOf({
+            turns: [turn("t1", 1)],
+            items: [
+              input("t1", "Where is it?"),
+              reply("reply", "t1", "[Source](file:source.ts)"),
+            ],
+          })}
           onLinkClick={(url) => opens(revision, url)}
           renderLink={({ href, children, onOpen }) => (
             <a

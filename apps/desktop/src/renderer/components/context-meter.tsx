@@ -1,17 +1,13 @@
 /**
  * The composer's context ring (ADR 0057): how full the session's context
- * window is, read from the last settled reply's metadata.usage. Renders
- * nothing until a harness has reported both occupancy and window size
- * (Claude Code does; Codex's stream reports neither). Danger red past
- * 90%, quiet otherwise.
+ * window is, read from the last settled turn's usage. Renders nothing
+ * until a harness has reported both occupancy and window size (Claude
+ * Code does; Codex's stream reports neither). Danger red past 90%, quiet
+ * otherwise.
  */
+import type { TimelineTurn } from "@catamorphic/react";
 import { formatTokenCount } from "../../shared/usage.js";
 import { ShortcutHint } from "./shortcut-hint.js";
-
-interface MessageLike {
-  role: string;
-  metadata?: Record<string, unknown> | null;
-}
 
 interface ContextSnapshot {
   usedTokens: number;
@@ -19,14 +15,10 @@ interface ContextSnapshot {
 }
 
 export function latestContextSnapshot(
-  messages: MessageLike[],
+  turns: readonly TimelineTurn[],
 ): ContextSnapshot | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role !== "assistant") continue;
-    const usage = message.metadata?.usage as
-      | { contextTokens?: unknown; contextWindow?: unknown }
-      | undefined;
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const usage = turns[index]?.turn?.outcome?.usage;
     const used = usage?.contextTokens;
     const window = usage?.contextWindow;
     if (
@@ -41,36 +33,32 @@ export function latestContextSnapshot(
   return null;
 }
 
+/** Notices after which earlier replies belong to a different model. */
+const SELECTION_CHANGES = new Set(["agent_changed", "model_changed"]);
+
 /** Last model id a harness reported as actually serving this conversation. */
-export function latestReportedModel(messages: MessageLike[]): string | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
+export function latestReportedModel(
+  turns: readonly TimelineTurn[],
+): string | null {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const group = turns[index];
+    if (!group) continue;
     // Replies preceding a selection change belong to a different model.
-    const marker = message?.metadata?.marker;
     if (
-      marker &&
-      typeof marker === "object" &&
-      "kind" in marker &&
-      (marker.kind === "agent_change" || marker.kind === "model_change")
+      group.entries.some(
+        (entry) =>
+          entry.kind === "notice" && SELECTION_CHANGES.has(entry.item.code),
+      )
     )
       return null;
-    if (message?.role !== "assistant") continue;
-    const usage = message.metadata?.usage;
-    if (
-      usage &&
-      typeof usage === "object" &&
-      "model" in usage &&
-      typeof usage.model === "string" &&
-      usage.model.length > 0
-    ) {
-      return usage.model;
-    }
+    const model = group.turn?.outcome?.usage?.model;
+    if (typeof model === "string" && model.length > 0) return model;
   }
   return null;
 }
 
-export function ContextMeter({ messages }: { messages: MessageLike[] }) {
-  const snapshot = latestContextSnapshot(messages);
+export function ContextMeter({ turns }: { turns: readonly TimelineTurn[] }) {
+  const snapshot = latestContextSnapshot(turns);
   if (!snapshot) return null;
   const fraction = Math.min(1, snapshot.usedTokens / snapshot.windowTokens);
   const percent = Math.round(fraction * 100);

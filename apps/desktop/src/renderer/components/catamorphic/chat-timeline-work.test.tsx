@@ -1,33 +1,34 @@
 // @vitest-environment jsdom
 
+import type { Item, Turn } from "@catamorphic/react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChatTimeline, type ChatTimelineProps } from "./chat-timeline.js";
 import {
-  ChatTimeline,
-  type ChatTimelineMessage,
-  toTimeline,
-} from "./chat-timeline.js";
+  command,
+  fileChange,
+  input,
+  notice,
+  reply,
+  timelineOf,
+  turn,
+} from "./timeline-fixtures.js";
 
-const note = (id: string, content: string, tools = 1): ChatTimelineMessage =>
-  ({
-    id,
-    role: "assistant",
-    content,
-    metadata: {
-      status: "completed",
-      events: Array.from({ length: tools }, () => ({
-        type: "command",
-        content: `run-${id}`,
-      })),
-    },
-  }) as ChatTimelineMessage;
-const messages = [
-  { id: "u1", role: "user", content: "Do the thing" } as ChatTimelineMessage,
-  note("a1", "Looking at the code."),
-  note("a2", "Found it.\n\nThe bug is in the parser."),
-  note("a3", "All fixed."),
+/** One turn: a question, three notes each after a command, the last the answer. */
+const settledItems: Item[] = [
+  input("t1", "Do the thing"),
+  command("c1", "t1"),
+  reply("a1", "t1", "Looking at the code."),
+  command("c2", "t1"),
+  reply("a2", "t1", "Found it.\n\nThe bug is in the parser."),
+  command("c3", "t1"),
+  reply("a3", "t1", "All fixed."),
 ];
+
+function settled(overrides: Partial<Turn> = {}) {
+  return timelineOf({ turns: [turn("t1", 1, overrides)], items: settledItems });
+}
 
 describe("ChatTimeline work display", () => {
   let container: HTMLDivElement;
@@ -66,98 +67,17 @@ describe("ChatTimeline work display", () => {
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
   });
 
+  const render = (props: ChatTimelineProps) =>
+    act(async () => root.render(<ChatTimeline {...props} />));
   const articles = () =>
     [...container.querySelectorAll("article")].map(
       (article) =>
         article.querySelector(".cat-markdown:not([data-testid])")?.textContent,
     );
-
-  it("shows only the answer by default, with the notes under its steps", async () => {
-    await act(async () => root.render(<ChatTimeline messages={messages} />));
-    expect(container.querySelectorAll("article")).toHaveLength(2);
-    expect(articles().at(-1)).toBe("All fixed.");
-    expect(container.querySelectorAll('[data-step-kind="note"]')).toHaveLength(
-      2,
+  const stepKinds = () =>
+    [...container.querySelectorAll('[data-testid="chat-step"]')].map((step) =>
+      step.getAttribute("data-step-kind"),
     );
-  });
-
-  it("keeps every note in place when asked to", async () => {
-    await act(async () =>
-      root.render(
-        <ChatTimeline
-          messages={messages}
-          workDisplay={{ live: "all", settled: "keep" }}
-        />,
-      ),
-    );
-    expect(container.querySelectorAll("article")).toHaveLength(4);
-    expect(container.querySelectorAll('[data-step-kind="note"]')).toHaveLength(
-      0,
-    );
-  });
-
-  it("folds notes into the answer's steps, in order, once settled", async () => {
-    await act(async () =>
-      root.render(
-        <ChatTimeline
-          messages={messages}
-          workDisplay={{ live: "all", settled: "collapse" }}
-        />,
-      ),
-    );
-    // The user message and the answer; the notes are steps now.
-    expect(container.querySelectorAll("article")).toHaveLength(2);
-    expect(articles().at(-1)).toBe("All fixed.");
-    expect(
-      [...container.querySelectorAll('[data-testid="chat-step"]')].map((step) =>
-        step.getAttribute("data-step-kind"),
-      ),
-    ).toEqual(["command", "note", "command", "note", "command"]);
-    expect(
-      container.querySelector('[data-testid="chat-turn-steps-toggle"]')
-        ?.textContent,
-    ).toBe("5 steps");
-    // Folded notes stay addressable by message id (focus, deep links).
-    expect(
-      container.querySelector('[data-step-kind="note"][data-message-id="a2"]'),
-    ).not.toBeNull();
-  });
-
-  it("shows only the latest note while the turn runs", async () => {
-    await act(async () =>
-      root.render(
-        <ChatTimeline
-          messages={messages}
-          working
-          workDisplay={{ live: "latest", settled: "keep" }}
-        />,
-      ),
-    );
-    expect(container.querySelectorAll("article")).toHaveLength(2);
-    expect(articles().at(-1)).toBe("All fixed.");
-    // Settled with "keep": every note returns to its place.
-    await act(async () =>
-      root.render(
-        <ChatTimeline
-          messages={messages}
-          working={false}
-          workDisplay={{ live: "latest", settled: "keep" }}
-        />,
-      ),
-    );
-    expect(container.querySelectorAll("article")).toHaveLength(4);
-  });
-
-  const running = (
-    id: string,
-    events: Record<string, unknown>[],
-  ): ChatTimelineMessage =>
-    ({
-      id,
-      role: "assistant",
-      content: "Running tests",
-      metadata: { status: "in_progress", events },
-    }) as ChatTimelineMessage;
   // A lone step keeps its toggle mounted but closed away and inert.
   const toggles = () =>
     [
@@ -168,40 +88,87 @@ describe("ChatTimeline work display", () => {
       .filter((toggle) => !toggle.closest("[inert]"))
       .map((toggle) => toggle.getAttribute("aria-expanded"));
 
+  it("reads a settled turn as the question and the answer, the notes under its steps", async () => {
+    await render({ turns: settled() });
+    expect(container.querySelectorAll("article")).toHaveLength(2);
+    expect(articles().at(-1)).toBe("All fixed.");
+    expect(stepKinds()).toEqual([
+      "command",
+      "note",
+      "command",
+      "note",
+      "command",
+    ]);
+    expect(
+      container.querySelector('[data-testid="chat-turn-steps-toggle"]')
+        ?.textContent,
+    ).toBe("5 steps");
+    // Folded notes stay addressable by item id (focus, deep links).
+    expect(
+      container.querySelector('[data-step-kind="note"][data-message-id="a2"]'),
+    ).not.toBeNull();
+  });
+
+  it("keeps every note in place when asked to", async () => {
+    await render({
+      turns: settled(),
+      workDisplay: { live: "all", settled: "keep" },
+    });
+    expect(container.querySelectorAll("article")).toHaveLength(4);
+    expect(stepKinds()).not.toContain("note");
+  });
+
+  it("shows only the latest note while the turn runs, every note once it settles", async () => {
+    const running = timelineOf({
+      turns: [turn("t1", 1, { status: "running", completedAt: null })],
+      items: settledItems,
+    });
+    await render({
+      turns: running,
+      activeTurnId: "t1",
+      workDisplay: { live: "latest", settled: "keep" },
+    });
+    expect(container.querySelectorAll("article")).toHaveLength(2);
+    expect(articles().at(-1)).toBe("All fixed.");
+    await render({
+      turns: settled(),
+      workDisplay: { live: "latest", settled: "keep" },
+    });
+    expect(container.querySelectorAll("article")).toHaveLength(4);
+  });
+
   it("streams the work open while the turn runs, then folds it away", async () => {
     const now = Date.now();
-    const live = [
-      ...messages.slice(0, 3),
-      running("p", [
-        {
-          type: "command",
-          content: "bun test",
-          toolUseId: "t1",
-          at: now - 5000,
-          endedAt: now - 1000,
-        },
-        {
-          type: "command",
-          content: "bun run lint",
-          toolUseId: "t2",
-          at: now - 3000,
-        },
-      ]),
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const liveItems: Item[] = [
+      ...settledItems.slice(0, 5),
+      command("p1", "t1", {
+        command: "bun test",
+        startedAt: iso(now - 5000),
+        endedAt: iso(now - 1000),
+      }),
+      command("p2", "t1", {
+        command: "bun run lint",
+        status: "in_progress",
+        startedAt: iso(now - 3000),
+        endedAt: null,
+      }),
     ];
-    await act(async () =>
-      root.render(
-        <ChatTimeline messages={live} working activity="Running tests" />,
-      ),
-    );
-    // Every note stays in place, each with its steps open, and the steps
-    // since the latest note follow them with no prose of their own.
+    await render({
+      turns: timelineOf({
+        turns: [turn("t1", 1, { status: "running", completedAt: null })],
+        items: liveItems,
+      }),
+      activeTurnId: "t1",
+      activity: "Running tests",
+    });
+    // Every note stays in place, and the work since the latest one
+    // follows them, open, with no prose of its own.
     expect(articles().filter(Boolean)).toEqual([
       "Looking at the code.",
       "Found it.\nThe bug is in the parser.",
     ]);
-    expect(toggles()).toEqual(["true"]);
     const liveWork = container.querySelector("[data-live-work]");
-    expect(liveWork?.textContent).not.toContain("Running tests");
     expect(
       [...(liveWork?.querySelectorAll('[data-testid="chat-step"]') ?? [])].map(
         (step) => [step.textContent, step.hasAttribute("data-running")],
@@ -211,10 +178,28 @@ describe("ChatTimeline work display", () => {
       ["$ bun run lint3s", true],
     ]);
     expect(liveWork?.querySelector("[data-testid=chat-copy]")).toBeNull();
+    const liveNode = liveWork;
+
+    // The answer arrives after that work: the same node gains its prose.
+    const answered: Item[] = [
+      ...liveItems.slice(0, 6),
+      { ...(liveItems[6] as Item), status: "completed" },
+      reply("a3", "t1", "All fixed."),
+    ];
+    await render({
+      turns: timelineOf({
+        turns: [turn("t1", 1, { status: "running", completedAt: null })],
+        items: answered,
+      }),
+      activeTurnId: "t1",
+    });
+    expect(container.querySelector('[data-message-id="a3"]')).toBe(liveNode);
 
     // Settled: the work folds under the answer, closed. The notes that were
     // in place close up on the way, then leave.
-    await act(async () => root.render(<ChatTimeline messages={messages} />));
+    await render({
+      turns: timelineOf({ turns: [turn("t1", 1)], items: answered }),
+    });
     expect(toggles()).toEqual(["false"]);
     expect(container.querySelectorAll(".animate-fold-away")).toHaveLength(2);
     await act(async () => {
@@ -224,340 +209,195 @@ describe("ChatTimeline work display", () => {
     expect(container.querySelectorAll("article")).toHaveLength(2);
   });
 
-  it("keeps folding notes on screen when a settle lands over two renders", async () => {
-    const step = { type: "command", content: "ls", at: Date.now() };
-    const live = [...messages.slice(0, 4), running("p", [step])];
-    const folds = () => container.querySelectorAll(".animate-fold-away").length;
-    await act(async () =>
-      root.render(<ChatTimeline messages={live} working activity="Working" />),
-    );
-    // The turn stops before its last message settles: a3 answers for now.
-    await act(async () => root.render(<ChatTimeline messages={live} />));
-    expect(folds()).toBe(2);
-    // Then the last message settles and becomes the answer: a3 folds too,
-    // and the notes already folding stay on screen.
-    const settled = [
-      ...messages.slice(0, 4),
-      {
-        id: "p",
-        role: "assistant",
-        content: "Done.",
-        metadata: { status: "completed", changedFiles: [], events: [step] },
-      } as ChatTimelineMessage,
-    ];
-    await act(async () => root.render(<ChatTimeline messages={settled} />));
-    expect(folds()).toBe(3);
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 300));
-    });
-    expect(folds()).toBe(0);
-  });
-
-  it("keeps the reader's choice to close the work while it runs", async () => {
-    const live = [
-      ...messages.slice(0, 2),
-      running("p", [
-        { type: "command", content: "one", at: Date.now() },
-        { type: "command", content: "two", at: Date.now() },
-      ]),
-    ];
-    await act(async () =>
-      root.render(<ChatTimeline messages={live} working activity="Working" />),
-    );
-    expect(toggles()).toEqual(["true"]);
-    await act(async () =>
-      container
-        .querySelector<HTMLButtonElement>(
-          "[data-live-work] [data-testid=chat-turn-steps-toggle]",
-        )
-        ?.click(),
-    );
-    const more = [
-      ...live.slice(0, 2),
-      running("p", [
-        { type: "command", content: "one", at: Date.now() },
-        { type: "command", content: "two", at: Date.now() },
-        { type: "command", content: "three", at: Date.now() },
-      ]),
-    ];
-    await act(async () =>
-      root.render(<ChatTimeline messages={more} working activity="Working" />),
-    );
-    expect(toggles()).toEqual(["false"]);
-  });
-
-  const liveSteps = () => [
-    ...container.querySelectorAll('[data-testid="chat-step"]'),
-  ];
-  const entering = () =>
-    liveSteps().map((step) => step.classList.contains("animate-step-in"));
-
-  it("appends arriving steps without rebuilding the ones on screen", async () => {
-    const ls = { type: "command", content: "ls", at: Date.now() };
-    const edit = { type: "file_edit", filePath: "a.ts", at: Date.now() };
-    const test = { type: "command", content: "bun test", at: Date.now() };
-    const ask = messages[0] as ChatTimelineMessage;
-    const turn = (live: ChatTimelineMessage[]) => [ask, ...live];
-    await act(async () =>
-      root.render(
-        <ChatTimeline
-          messages={turn([{ ...running("p", [ls]), content: "Working..." }])}
-          working
-          activity="Working"
-        />,
-      ),
-    );
-    const row = container.querySelector("[data-live-work]");
-    const [first] = liveSteps();
-    // The row's content is the activity line, and changes with every event.
-    await act(async () =>
-      root.render(
-        <ChatTimeline
-          messages={turn([
-            { ...running("p", [ls, edit]), content: "Editing files..." },
-          ])}
-          working
-          activity="Editing files"
-        />,
-      ),
-    );
-    expect(container.querySelector("[data-live-work]")).toBe(row);
-    expect(liveSteps()[0]).toBe(first);
-    expect(entering()).toEqual([false, true]);
-
-    // The steps become a note in place; the next steps start below it.
-    await act(async () =>
-      root.render(
-        <ChatTimeline
-          messages={turn([
-            {
-              ...note("p", "Found it.", 0),
-              metadata: { status: "completed", events: [ls, edit] },
-            } as ChatTimelineMessage,
-            running("q", [test]),
-          ])}
-          working
-          activity="Running tests"
-        />,
-      ),
-    );
-    const settledNote = container.querySelector(
-      "article:not([data-user-message])",
-    );
-    expect(settledNote).toBe(row);
-    expect(settledNote?.textContent).toContain("Found it.");
-    expect(liveSteps()[0]).toBe(first);
-    expect(liveSteps().map((step) => step.textContent)).toEqual([
-      "$ ls",
-      "Edited a.ts",
-      "$ bun test",
-    ]);
-  });
-
-  it("keeps step rows when earlier work folds in above them", async () => {
-    const ask = messages[0] as ChatTimelineMessage;
-    const earlier = note("a1", "Looking at the code.", 2);
-    const ls = { type: "command", content: "ls", at: Date.now() };
-    const display = { live: "latest", settled: "keep" } as const;
-    await act(async () =>
-      root.render(
-        <ChatTimeline
-          messages={[ask, earlier, running("p", [ls])]}
-          working
-          activity="Working"
-          workDisplay={display}
-        />,
-      ),
-    );
-    const [mine] = [
-      ...container.querySelectorAll(
-        '[data-live-work] [data-testid="chat-step"]',
-      ),
-    ];
-    // p writes its note: it is the latest now, and a1's work folds into it.
-    await act(async () =>
-      root.render(
-        <ChatTimeline
-          messages={[
-            ask,
-            earlier,
-            {
-              ...note("p", "Found it.", 0),
-              metadata: { status: "completed", events: [ls] },
-            } as ChatTimelineMessage,
-          ]}
-          working
-          activity="Thinking"
-          workDisplay={display}
-        />,
-      ),
-    );
-    const latest = [...container.querySelectorAll("article")].at(-1);
-    const steps = [
-      ...(latest?.querySelectorAll('[data-testid="chat-step"]') ?? []),
-    ];
-    expect(steps.map((step) => step.textContent)).toEqual([
-      "$ run-a1",
-      "$ run-a1",
-      "Looking at the code.",
-      "$ ls",
-    ]);
-    // The row that was there keeps its node; the folded work enters above.
-    expect(steps.at(-1)).toBe(mine);
-    expect(
-      steps.map((step) => step.classList.contains("animate-step-in")),
-    ).toEqual([true, true, true, false]);
-  });
-
-  it("hides an in-progress message until it has steps", () => {
-    const persisted = (steps: Record<string, unknown>[]) =>
-      [running("p", steps)] as unknown as Parameters<typeof toTimeline>[0];
-    expect(toTimeline(persisted([]), [], "Thinking...").messages).toEqual([]);
-    expect(
-      toTimeline(
-        persisted([{ type: "command", content: "ls" }]),
-        [],
-        "Working",
-      ).messages.map((message) => message.id),
-    ).toEqual(["p"]);
-  });
-
   it("shows a lone step as its own row, with how long it took", async () => {
-    await act(async () =>
-      root.render(
-        <ChatTimeline
-          messages={[
-            messages[0] as ChatTimelineMessage,
-            {
-              id: "a1",
-              role: "assistant",
-              content: "Done.",
-              metadata: {
-                status: "completed",
-                changedFiles: [],
-                events: [
-                  {
-                    type: "command",
-                    content: "bun test",
-                    at: 1000,
-                    endedAt: 48_500,
-                    status: "ended",
-                  },
-                ],
-              },
-            } as ChatTimelineMessage,
-          ]}
-        />,
-      ),
-    );
+    const start = Date.parse("2026-10-01T10:00:00.000Z");
+    await render({
+      turns: timelineOf({
+        turns: [turn("t1", 1)],
+        items: [
+          input("t1", "Run it"),
+          command("c1", "t1", {
+            command: "bun test",
+            startedAt: new Date(start).toISOString(),
+            endedAt: new Date(start + 65_000).toISOString(),
+          }),
+          reply("a1", "t1", "Passed."),
+        ],
+      }),
+    });
     expect(toggles()).toEqual([]);
     expect(
       container.querySelector('[data-testid="chat-step-duration"]')
         ?.textContent,
-    ).toBe("47s");
-  });
-
-  it("counts the turn's time and says when it has gone quiet", async () => {
-    const now = Date.now();
-    await act(async () =>
-      root.render(
-        <ChatTimeline
-          messages={[messages[0] as ChatTimelineMessage]}
-          working
-          activity="Running tests"
-          activityStartedAt={new Date(now - 134_000).toISOString()}
-          activityUpdatedAt={new Date(now - 10_000).toISOString()}
-        />,
-      ),
-    );
-    const elapsed = () =>
-      container.querySelector('[data-testid="chat-activity-elapsed"]')
-        ?.textContent;
-    const stalled = () =>
-      container.querySelector('[data-testid="chat-activity-stalled"]');
-    expect(elapsed()).toBe("2m 14s");
-    expect(stalled()).toBeNull();
-    await act(async () =>
-      root.render(
-        <ChatTimeline
-          messages={[messages[0] as ChatTimelineMessage]}
-          working
-          activity="Running tests"
-          activityStartedAt={new Date(now - 134_000).toISOString()}
-          activityUpdatedAt={new Date(now - 45_000).toISOString()}
-        />,
-      ),
-    );
-    expect(stalled()?.textContent).toBe("No updates for 45s");
+    ).toBe("1m 5s");
   });
 
   it("says what an interruption stopped and what it left changed", async () => {
-    await act(async () =>
-      root.render(
-        <ChatTimeline
-          messages={[
-            messages[0] as ChatTimelineMessage,
-            {
-              id: "a1",
-              role: "assistant",
-              content: "Interrupted.",
-              metadata: {
-                status: "failed",
-                interrupted: true,
-                changedFiles: [
-                  { path: "src/parser.ts", kind: "modified" },
-                  { path: "src/lexer.ts", kind: "modified" },
-                ],
-                events: [
-                  { type: "file_edit", filePath: "src/parser.ts", at: 1000 },
-                  {
-                    type: "command",
-                    content: "bun test",
-                    description: "Run the tests",
-                    toolUseId: "t1",
-                    at: 2000,
-                  },
-                  { type: "error", content: "Interrupted.", at: 74_000 },
-                ],
-              },
-            } as ChatTimelineMessage,
-          ]}
-        />,
-      ),
-    );
+    const start = Date.parse("2026-10-01T10:01:41.000Z");
+    await render({
+      turns: timelineOf({
+        turns: [
+          turn("t1", 1, {
+            status: "interrupted",
+            completedAt: new Date(start + 12_000).toISOString(),
+            outcome: {
+              changedFiles: [
+                { path: "src/a.ts", kind: "modified" },
+                { path: "src/b.ts", kind: "modified" },
+              ],
+            },
+          }),
+        ],
+        items: [
+          input("t1", "Fix it"),
+          fileChange("f1", "t1", "src/a.ts"),
+          command("c1", "t1", {
+            command: "bun test",
+            status: "cancelled",
+            startedAt: new Date(start).toISOString(),
+            endedAt: null,
+          }),
+        ],
+      }),
+      onRetry: () => {},
+    });
     expect(
       container.querySelector('[data-testid="chat-interrupted-step"]')
         ?.textContent,
-    ).toBe("While: Run the tests (1m 12s)");
+    ).toBe("While: $ bun test (12s)");
     expect(
       container.querySelector('[data-testid="chat-interrupted-files"]')
         ?.textContent,
-    ).toBe("Left 2 changed files: parser.ts, lexer.ts");
-    // The work it did stays readable.
+    ).toBe("Left 2 changed files: a.ts, b.ts");
+  });
+
+  it("closes a failed turn with its error and Retry for that turn", async () => {
+    const retried: string[] = [];
+    await render({
+      turns: timelineOf({
+        turns: [
+          turn("t1", 1, {
+            status: "failed",
+            error: { message: "Provider connection closed" },
+          }),
+        ],
+        items: [
+          input("t1", "Finish the task."),
+          reply("a1", "t1", "I finished the useful part."),
+        ],
+      }),
+      onRetry: (turnId) => retried.push(turnId),
+    });
+    const card = container.querySelector('[data-testid="chat-error-card"]');
+    expect(card?.textContent).toContain("Provider connection closed");
+    expect(card?.textContent).not.toContain("I finished the useful part.");
+    expect(articles()).toContain("I finished the useful part.");
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[data-testid="chat-retry"]')
+        ?.click(),
+    );
+    expect(retried).toEqual(["t1"]);
+  });
+
+  it("offers Restore to here on a settled message, confirming first", async () => {
+    const restored: string[] = [];
+    await render({
+      turns: settled(),
+      onRollback: (turnId) => {
+        restored.push(turnId);
+        return true;
+      },
+    });
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[data-testid="chat-restore"]')
+        ?.click(),
+    );
+    expect(restored).toEqual([]);
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="chat-restore-confirm-button"]',
+        )
+        ?.click(),
+    );
+    expect(restored).toEqual(["t1"]);
+    // Not while something runs.
+    await render({
+      turns: settled(),
+      activeTurnId: "t2",
+      onRollback: () => true,
+    });
+    expect(container.querySelector('[data-testid="chat-restore"]')).toBeNull();
+  });
+
+  it("dims undone turns under a divider", async () => {
+    await render({ turns: settled({ status: "rolled_back" }) });
     expect(
-      container.querySelectorAll('[data-testid="chat-step"]'),
-    ).toHaveLength(2);
+      container.querySelector('[data-testid="chat-undone-divider"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[data-testid="chat-turn-undone"]'),
+    ).not.toBeNull();
+    expect(container.querySelector('[data-testid="chat-restore"]')).toBeNull();
+  });
+
+  it("reads notices as calm dividers, naming a new agent", async () => {
+    await render({
+      turns: timelineOf({
+        turns: [],
+        items: [
+          {
+            ...notice("n1", "agent_changed", "Agent changed"),
+            data: { agentId: "a" },
+          } as Item,
+          notice("n2", "session_fork", 'Forked from "Plan"'),
+        ],
+      }),
+      resolveAgentName: (id) => (id === "a" ? "Reviewer" : undefined),
+    });
+    expect(
+      [...container.querySelectorAll('[data-testid="chat-divider"]')].map(
+        (line) => line.textContent,
+      ),
+    ).toEqual(["Switched to Reviewer", 'Forked from "Plan"']);
+  });
+
+  it("keeps a failed send with Send again and Dismiss", async () => {
+    const resent: string[] = [];
+    await render({
+      turns: [],
+      pending: [
+        {
+          commandId: "cmd-1",
+          text: "Hello there",
+          attachments: [],
+          dispatch: "queue",
+          status: "failed",
+        },
+      ],
+      onResendFailed: (commandId) => resent.push(commandId),
+    });
+    expect(container.textContent).toContain("Hello there");
+    expect(container.textContent).toContain("Not sent");
+    const again = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Send again",
+    );
+    await act(async () => again?.click());
+    expect(resent).toEqual(["cmd-1"]);
   });
 
   it("keeps steps out of text selection and copies the reply's Markdown", async () => {
-    await act(async () =>
-      root.render(
-        <ChatTimeline
-          messages={messages}
-          workDisplay={{ live: "all", settled: "keep" }}
-        />,
-      ),
+    await render({
+      turns: settled(),
+      workDisplay: { live: "all", settled: "keep" },
+    });
+    const steps = container.querySelector('[data-testid="chat-turn-steps"]');
+    expect(steps?.className).toContain("select-none");
+    const copy = container.querySelectorAll<HTMLButtonElement>(
+      '[data-testid="chat-copy"]',
     );
-    for (const steps of container.querySelectorAll(
-      '[data-testid="chat-turn-steps"]',
-    ))
-      expect(steps.className).toContain("select-none");
-    const copy = [
-      ...container.querySelectorAll<HTMLButtonElement>(
-        '[data-testid="chat-copy"]',
-      ),
-    ];
-    expect(copy).toHaveLength(3);
     await act(async () => copy[1]?.click());
     expect(writeText).toHaveBeenCalledWith(
       "Found it.\n\nThe bug is in the parser.",

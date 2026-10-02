@@ -64,7 +64,13 @@ export function turn(
     priority: 0,
     activity: null,
     activityAt: null,
-    attemptCount: 1,
+    // A turn waiting in the queue has not run yet.
+    attemptCount:
+      overrides.status === "queued" ||
+      overrides.status === "held" ||
+      overrides.status === "cancelled"
+        ? 0
+        : 1,
     activeAttemptId: null,
     providerThreadId: null,
     retryAt: null,
