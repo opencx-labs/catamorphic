@@ -16,6 +16,7 @@ export type {
   ContextHandoffItem,
   FileChangeItem,
   Item,
+  ItemCommon,
   ItemKind,
   ItemStatus,
   JsonObject,

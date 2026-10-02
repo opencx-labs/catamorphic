@@ -338,7 +338,7 @@ describe("ChatTimeline work display", () => {
       container.querySelector('[data-testid="chat-undone-divider"]'),
     ).not.toBeNull();
     expect(
-      container.querySelector('[data-testid="chat-turn-undone"]'),
+      container.querySelector("[data-turn-undone]"),
     ).not.toBeNull();
     expect(container.querySelector('[data-testid="chat-restore"]')).toBeNull();
   });
@@ -362,6 +362,35 @@ describe("ChatTimeline work display", () => {
         (line) => line.textContent,
       ),
     ).toEqual(["Switched to Reviewer", 'Forked from "Plan"']);
+  });
+
+  it("keeps a sent message's node when its item takes over", async () => {
+    await render({
+      turns: [],
+      pending: [
+        {
+          commandId: "cmd-7",
+          text: "Ship it",
+          attachments: [],
+          dispatch: "queue",
+          status: "sent",
+        },
+      ],
+    });
+    const bubble = container.querySelector("[data-pending-message]");
+    expect(bubble?.textContent).toContain("Ship it");
+    await render({
+      turns: timelineOf({
+        turns: [turn("t1", 1, { status: "running", completedAt: null })],
+        items: [
+          input("t1", "Ship it", { idempotencyKey: "user:me:cmd-7" }),
+        ],
+      }),
+      activeTurnId: "t1",
+    });
+    const article = container.querySelector("[data-user-message]");
+    expect(article).toBe(bubble);
+    expect(article?.hasAttribute("data-pending-message")).toBe(false);
   });
 
   it("keeps a failed send with Send again and Dismiss", async () => {

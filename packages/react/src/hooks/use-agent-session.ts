@@ -233,7 +233,12 @@ export function useAgentSession(
       controller.abort();
       if (timer) clearTimeout(timer);
       slot?.cancel();
-      slot?.release?.();
+      if (slot?.release) {
+        slot.release();
+        // Events may have landed since the last one applied: whoever
+        // reads next (a poll, another stream) starts from a fresh snapshot.
+        void queryClient.invalidateQueries({ queryKey: key, exact: true });
+      }
       setStreaming(false);
     };
   }, [live, loaded, projectId, sessionId, apiClient, queryClient]);

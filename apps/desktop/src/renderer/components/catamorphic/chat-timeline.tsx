@@ -38,7 +38,6 @@ import {
 } from "lucide-react";
 import {
   createContext,
-  Fragment,
   memo,
   type ReactNode,
   useCallback,
@@ -338,13 +337,7 @@ export function ChatTimeline({
     content: entry.item?.text ?? "",
     attachments: entry.item?.attachments ?? [],
   }));
-  const empty = turns.length === 0 && pending.length === 0 && !activity;
-  // Messages already on screen as pending: their items take over without
-  // playing the entrance again.
-  const seenSends = useRef(new Set<string>()).current;
-  for (const message of pending) seenSends.add(message.commandId);
   const context: RowContext = {
-    seenSends,
     requests: requests ?? {},
     resolveAgentName,
     onLinkClick,
@@ -354,6 +347,81 @@ export function ChatTimeline({
     onFork,
     focusMessageId,
   };
+  const empty = turns.length === 0 && pending.length === 0 && !activity;
+  // One keyed list for the whole conversation, so a message sent from here
+  // keeps its node when its item takes over from the pending bubble.
+  const conversation: ReactNode[] = [];
+  const shownSends = new Set<string>();
+  views.forEach((view, index) => {
+    const turn = view.group.turn;
+    const undone = turn?.status === "rolled_back";
+    if (undone && views[index - 1]?.group.turn?.status !== "rolled_back")
+      conversation.push(<UndoneDivider key={`undone:${view.group.key}`} />);
+    for (const row of view.rows) {
+      const key = rowKey(view.group, row);
+      if (key.startsWith("send:")) shownSends.add(key);
+      conversation.push(
+        <div
+          key={key}
+          className={undone ? "flex flex-col gap-3 opacity-50" : "contents"}
+          data-turn-undone={undone || undefined}
+        >
+          {row.kind === "entry" && row.entry.kind === "input" ? (
+            // Rendered here, not through the row view, so a pending
+            // message's node and its item's are the same element.
+            <UserMessage
+              item={row.entry.item}
+              context={context}
+              rollback={
+                onRollback &&
+                turn &&
+                !working &&
+                !undone &&
+                row.entry.item.id === turn.inputItemId
+                  ? rollbackOf(onRollback, turn.id, row.entry.item)
+                  : undefined
+              }
+            />
+          ) : (
+            <TurnRowView
+              row={row}
+              view={view}
+              context={context}
+              folding={folding}
+            />
+          )}
+        </div>,
+      );
+    }
+    if (turn)
+      conversation.push(
+        <TurnOutcome
+          key={`outcome:${turn.id}`}
+          turn={turn}
+          group={view.group}
+          latest={turn.id === latestTurnId}
+          onRetry={onRetry}
+          onStopRetrying={onStopRetrying}
+          onReauth={onReauth}
+          reauthLabel={reauthLabel}
+        />,
+      );
+  });
+  for (const message of pending) {
+    const key = `send:${message.commandId}`;
+    // Its item is already on screen: the item's row is this message now.
+    if (shownSends.has(key)) continue;
+    conversation.push(
+      <div key={key} className="contents">
+        <UserMessage
+          pending={message}
+          context={context}
+          onResend={onResendFailed}
+          onDismiss={onDismissFailed}
+        />
+      </div>,
+    );
+  }
   return (
     <BackgroundStates.Provider value={backgroundStates}>
       <StickToBottom
@@ -373,69 +441,7 @@ export function ChatTimeline({
               {emptyState}
             </div>
           )}
-          {views.map((view, index) => {
-            const turn = view.group.turn;
-            const undone = turn?.status === "rolled_back";
-            const firstUndone =
-              undone && views[index - 1]?.group.turn?.status !== "rolled_back";
-            const body = (
-              <>
-                {view.rows.map((row) => (
-                  <TurnRowView
-                    key={rowKey(view.group, row)}
-                    row={row}
-                    view={view}
-                    context={context}
-                    folding={folding}
-                    canRollback={
-                      Boolean(onRollback) &&
-                      !working &&
-                      !undone &&
-                      turn !== null &&
-                      row.kind === "entry" &&
-                      row.entry.kind === "input" &&
-                      row.entry.item.id === turn.inputItemId
-                    }
-                    onRollback={onRollback}
-                  />
-                ))}
-                {turn && (
-                  <TurnOutcome
-                    turn={turn}
-                    group={view.group}
-                    latest={turn.id === latestTurnId}
-                    onRetry={onRetry}
-                    onStopRetrying={onStopRetrying}
-                    onReauth={onReauth}
-                    reauthLabel={reauthLabel}
-                  />
-                )}
-              </>
-            );
-            return (
-              <Fragment key={view.group.key}>
-                {firstUndone && <UndoneDivider />}
-                {undone ? (
-                  <div
-                    className="flex flex-col gap-3 opacity-50"
-                    data-testid="chat-turn-undone"
-                  >
-                    {body}
-                  </div>
-                ) : (
-                  body
-                )}
-              </Fragment>
-            );
-          })}
-          {pending.map((message) => (
-            <PendingBubble
-              key={`send:${message.commandId}`}
-              message={message}
-              onResend={onResendFailed}
-              onDismiss={onDismissFailed}
-            />
-          ))}
+          {conversation}
           {activity && (
             <div
               className="flex animate-fade-in items-center gap-2 text-xs text-fg-muted"
@@ -510,8 +516,6 @@ interface RowContext {
   resolveToolIcon?: (toolName: string) => string | undefined;
   onFork?: (itemId: string) => void;
   focusMessageId?: string;
-  /** Command ids this timeline showed as pending messages. */
-  seenSends: ReadonlySet<string>;
 }
 
 /** The item id an entry reads at, for focus and deep links. */
@@ -602,20 +606,25 @@ function UndoneDivider() {
   );
 }
 
+/** Undo a turn from its message, bound for the button. */
+function rollbackOf(
+  onRollback: NonNullable<ChatTimelineProps["onRollback"]>,
+  turnId: string,
+  item: UserMessageItem,
+) {
+  return () => onRollback(turnId, item);
+}
+
 function TurnRowView({
   row,
   view,
   context,
   folding,
-  canRollback,
-  onRollback,
 }: {
   row: TurnRow;
   view: TurnView;
   context: RowContext;
   folding: Set<string>;
-  canRollback: boolean;
-  onRollback?: ChatTimelineProps["onRollback"];
 }) {
   // Live work and the reply it becomes render alike, so the node that
   // showed the steps gains the prose in place instead of remounting.
@@ -650,20 +659,9 @@ function TurnRowView({
     );
   }
   const entry = row.entry;
-  const turn = view.group.turn;
   switch (entry.kind) {
     case "input":
-      return (
-        <UserMessage
-          item={entry.item}
-          context={context}
-          rollback={
-            canRollback && turn && onRollback
-              ? () => onRollback(turn.id, entry.item)
-              : undefined
-          }
-        />
-      );
+      return <UserMessage item={entry.item} context={context} />;
     case "answer":
       return <AnswerCard entry={entry} />;
     case "notice":
@@ -822,23 +820,28 @@ function useEntered(already = false): string {
 const UserMessage = memo(
   function UserMessage({
     item,
+    pending,
     context,
     rollback,
+    onResend,
+    onDismiss,
   }: {
-    item: UserMessageItem;
+    /** The message as the session holds it. */
+    item?: UserMessageItem;
+    /** Sent from here and not in the session yet: shown at once. */
+    pending?: PendingAgentMessage;
     context: RowContext;
     /** Undo this message's turn and every later one. */
     rollback?: () => undefined | boolean | Promise<boolean>;
+    onResend?: (commandId: string) => void;
+    onDismiss?: (commandId: string) => void;
   }) {
-    const sent = sentWith(item);
-    const enterClasses = useEntered(
-      sent !== undefined && context.seenSends.has(sent),
-    );
+    const enterClasses = useEntered();
     const notice =
-      typeof item.metadata.notice === "string"
+      typeof item?.metadata.notice === "string"
         ? item.metadata.notice
         : undefined;
-    if (item.author.kind === "system" && notice)
+    if (item?.author.kind === "system" && notice)
       return (
         <div
           className="flex items-center justify-center gap-1.5 text-center text-xs text-fg-faint"
@@ -849,37 +852,75 @@ const UserMessage = memo(
           <span className="truncate">{notice}</span>
         </div>
       );
-    const own = isPersonsMessage(item);
-    const strip = item.attachments.slice(
-      inlineMarkerCount(item.text, item.attachments),
-    );
+    const text = item?.text ?? pending?.text ?? "";
+    const attachments = item?.attachments ?? pending?.attachments ?? [];
+    const own = item ? isPersonsMessage(item) : true;
+    const failed = pending?.status === "failed";
+    const strip = attachments.slice(inlineMarkerCount(text, attachments));
     return (
       <article
-        data-message-id={item.id}
+        data-message-id={item?.id}
         tabIndex={-1}
         data-user-message={own || undefined}
+        data-pending-message={pending?.status}
         className={`group/msg relative max-w-[85%] text-sm ${enterClasses} ${
-          own
-            ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2"
-            : "mr-auto rounded-xl rounded-bl-sm border border-border bg-bg-raised px-3 py-2"
-        } ${item.id === context.focusMessageId ? "outline outline-1 outline-accent/50" : ""}`}
+          failed
+            ? "ml-auto rounded-xl rounded-br-sm border border-danger/40 bg-danger/5 px-3 py-2"
+            : own
+              ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2"
+              : "mr-auto rounded-xl rounded-bl-sm border border-border bg-bg-raised px-3 py-2"
+        } ${item && item.id === context.focusMessageId ? "outline outline-1 outline-accent/50" : ""}`}
       >
-        <SessionAttribution
-          author={item.author}
-          metadata={item.metadata}
-          attention={item.attention}
-          onOpen={context.onLinkClick}
-        />
+        {item && (
+          <SessionAttribution
+            author={item.author}
+            metadata={item.metadata}
+            attention={item.attention}
+            onOpen={context.onLinkClick}
+          />
+        )}
         {strip.length > 0 && <AttachmentStrip attachments={strip} />}
         <div className="whitespace-pre-wrap break-words leading-6">
-          <InlineMessage content={item.text} attachments={item.attachments} />
+          <InlineMessage content={text} attachments={attachments} />
         </div>
+        {pending && failed && (
+          <div
+            className="mt-1.5 flex flex-wrap items-center gap-2 border-t border-danger/20 pt-1.5 text-[11px]"
+            data-failed-delivery={pending.commandId}
+            aria-live="polite"
+          >
+            <span className="min-w-0 flex-1 text-danger">
+              {pending.error?.message
+                ? `Not sent: ${pending.error.message}`
+                : "Not sent"}
+            </span>
+            {onResend && (
+              <button
+                type="button"
+                onClick={() => onResend(pending.commandId)}
+                className="cursor-pointer text-accent hover:underline"
+              >
+                Send again
+              </button>
+            )}
+            {onDismiss && (
+              <button
+                type="button"
+                onClick={() => onDismiss(pending.commandId)}
+                className="cursor-pointer text-fg-muted hover:text-fg"
+              >
+                Dismiss
+              </button>
+            )}
+          </div>
+        )}
         {rollback && <RestoreToHere onConfirm={rollback} />}
       </article>
     );
   },
   (previous, next) =>
     previous.item === next.item &&
+    previous.pending === next.pending &&
     Boolean(previous.rollback) === Boolean(next.rollback) &&
     previous.context.focusMessageId === next.context.focusMessageId,
 );
@@ -946,75 +987,6 @@ function RestoreToHere({
         </button>
       </ShortcutHint>
     </span>
-  );
-}
-
-/** A message this client sent that the session does not show yet. */
-function PendingBubble({
-  message,
-  onResend,
-  onDismiss,
-}: {
-  message: PendingAgentMessage;
-  onResend?: (commandId: string) => void;
-  onDismiss?: (commandId: string) => void;
-}) {
-  const enterClasses = useEntered();
-  const failed = message.status === "failed";
-  const strip = message.attachments.slice(
-    inlineMarkerCount(message.text, message.attachments),
-  );
-  return (
-    <div
-      className={`ml-auto flex max-w-[85%] flex-col items-end gap-1 ${enterClasses}`}
-    >
-      <article
-        data-user-message
-        data-pending-message={message.status}
-        className={`rounded-xl rounded-br-sm border px-3 py-2 text-sm transition-opacity duration-200 ${
-          failed ? "border-danger/40 bg-danger/5" : "border-info/30 bg-info/10"
-        }`}
-      >
-        {strip.length > 0 && <AttachmentStrip attachments={strip} />}
-        <div className="whitespace-pre-wrap break-words leading-6">
-          <InlineMessage
-            content={message.text}
-            attachments={message.attachments}
-          />
-        </div>
-      </article>
-      {failed && (
-        <div
-          className="flex items-center gap-2 text-[11px]"
-          data-failed-delivery={message.commandId}
-          aria-live="polite"
-        >
-          <span className="text-danger">
-            {message.error?.message
-              ? `Not sent: ${message.error.message}`
-              : "Not sent"}
-          </span>
-          {onResend && (
-            <button
-              type="button"
-              onClick={() => onResend(message.commandId)}
-              className="cursor-pointer text-accent hover:underline"
-            >
-              Send again
-            </button>
-          )}
-          {onDismiss && (
-            <button
-              type="button"
-              onClick={() => onDismiss(message.commandId)}
-              className="cursor-pointer text-fg-muted hover:text-fg"
-            >
-              Dismiss
-            </button>
-          )}
-        </div>
-      )}
-    </div>
   );
 }
 
