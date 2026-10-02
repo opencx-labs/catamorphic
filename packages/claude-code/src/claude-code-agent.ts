@@ -40,9 +40,13 @@ import {
   agentCapabilityTools,
   agentQuestionDescription,
   agentQuestionInputSchema,
+  askUserToolResult,
   buildPluginsPreamble,
+  closeQuestionsDescription,
+  closeQuestionsInputSchema,
   extraToolResult,
   isMediaAttachment,
+  isQuestionReply,
   mergePolicyLayers,
   positiveTokenCount,
   renderTurnContext,
@@ -599,6 +603,15 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
                 sessionId: providerSessionId,
                 live,
                 read: opts.readPendingMessages,
+                render: (content, attachments) =>
+                  sandboxRun
+                    ? withSandboxAttachments(
+                        content,
+                        attachments,
+                        providerSessionId,
+                        sandboxRun.sandbox,
+                      )
+                    : withAttachments(content, attachments, providerSessionId),
               })
             : prompt,
         options: {
@@ -845,12 +858,25 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
               parameters: agentQuestionInputSchema.shape,
               execute: async (input: Record<string, unknown>) => {
                 const parsed = agentQuestionInputSchema.parse(input);
-                return turn.askQuestion!({
-                  ...parsed,
-                  requestId: crypto.randomUUID(),
-                  signal: live.abort.signal,
-                });
+                return askUserToolResult(
+                  turn.askQuestion!({
+                    ...parsed,
+                    requestId: crypto.randomUUID(),
+                    signal: live.abort.signal,
+                  }),
+                );
               },
+            },
+          ]
+        : []),
+      ...(turn?.closeQuestions
+        ? [
+            {
+              name: "close_questions",
+              description: closeQuestionsDescription,
+              parameters: closeQuestionsInputSchema.shape,
+              execute: async (input: Record<string, unknown>) =>
+                turn.closeQuestions!(closeQuestionsInputSchema.parse(input)),
             },
           ]
         : []),
@@ -1026,16 +1052,24 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       canUseTool: async (toolName, input, options) => {
         if (toolName === "AskUserQuestion") {
           if (turn?.askQuestion) {
-            const answer = await turn.askQuestion({
-              requestId: crypto.randomUUID(),
-              questions: parseAskUserQuestions(input),
-              blocking: true,
-              signal: live.abort.signal,
-            });
-            return {
-              behavior: "allow",
-              updatedInput: askUserAnswerInput(input, answer),
-            };
+            try {
+              const answer = await turn.askQuestion({
+                requestId: crypto.randomUUID(),
+                questions: parseAskUserQuestions(input),
+                blocking: true,
+                signal: live.abort.signal,
+              });
+              return {
+                behavior: "allow",
+                updatedInput: askUserAnswerInput(input, answer),
+              };
+            } catch (error) {
+              // The person wrote in the chat instead (ADR 0195): the
+              // tool reports why it has no answer; their message follows.
+              if (isQuestionReply(error))
+                return { behavior: "deny", message: error.message };
+              throw error;
+            }
           }
           return await new Promise<PermissionResult>((resolve) => {
             live.ask = { input, resolve };
@@ -1702,11 +1736,17 @@ async function* streamUserMessages({
   sessionId,
   live,
   read,
+  render,
 }: {
   prompt: string;
   sessionId: string;
   live: LiveTurn;
   read: NonNullable<TurnOptions["readPendingMessages"]>;
+  /** A steered message with its attachments, as a turn's prompt renders. */
+  render: (
+    content: string,
+    attachments: TurnOptions["attachments"],
+  ) => Promise<string>;
 }): AsyncGenerator<SDKUserMessage> {
   const signal = AbortSignal.any([live.abort.signal, live.inputAbort!.signal]);
   yield {
@@ -1725,13 +1765,14 @@ async function* streamUserMessages({
         const uuid = crypto.randomUUID();
         live.pendingInputs?.set(uuid, entry.id);
         sent.add(entry.id);
+        const content = await render(entry.content, entry.attachments);
         yield {
           type: "user",
           priority: "now",
           uuid,
           session_id: sessionId,
           parent_tool_use_id: null,
-          message: { role: "user", content: entry.content },
+          message: { role: "user", content },
         };
       }
       await delay(100, undefined, { signal });

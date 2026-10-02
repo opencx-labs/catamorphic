@@ -94,6 +94,11 @@ export class ProfileConfigManager {
     );
   }
 
+  /** Browser bookmarks: one file for every profile and project. */
+  bookmarksFile(): string {
+    return this.paths.bookmarksFile;
+  }
+
   /**
    * A profile's connections for its preview card. Unlike `forProfile`, it
    * starts no watchers, creates nothing and decrypts nothing, so hovering a

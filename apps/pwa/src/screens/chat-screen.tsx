@@ -591,7 +591,12 @@ function Chat({
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
                   placeholder={
-                    chat.isWorking ? "Message (queues)…" : "Message…"
+                    // Open questions take free-text answers here (ADR 0195).
+                    chat.session?.questions?.length || questions
+                      ? "Answer in your own words…"
+                      : chat.isWorking
+                        ? "Message (queues)…"
+                        : "Message…"
                   }
                   rows={1}
                   enterKeyHint="send"

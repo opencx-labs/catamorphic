@@ -11,6 +11,11 @@ import {
   agentQuestionDescription,
   agentQuestionInputSchema,
   agentQuestionJsonSchema,
+  askUserToolResult,
+  closeQuestionsDescription,
+  closeQuestionsInputSchema,
+  closeQuestionsJsonSchema,
+  renderUserMessage,
   type TurnOptions,
 } from "@catamorphic/sandbox";
 import type {
@@ -20,6 +25,7 @@ import type {
   ThreadOptions,
   UserInput,
 } from "@openai/codex-sdk";
+import { appServerInput, stageTurnInput } from "./turn-input.js";
 
 export type CodexElicitation = {
   serverName: string;
@@ -237,11 +243,31 @@ export class CodexAppServer {
         this.turnOptions?.askQuestion
       ) {
         const input = agentQuestionInputSchema.parse(params.arguments);
-        const text = await this.turnOptions.askQuestion({
-          ...input,
-          requestId: String(params.callId ?? id),
-          signal: this.activeSignal,
+        const text = await askUserToolResult(
+          this.turnOptions.askQuestion({
+            ...input,
+            requestId: String(params.callId ?? id),
+            signal: this.activeSignal,
+          }),
+        );
+        this.send({
+          id,
+          result: {
+            contentItems: [{ type: "inputText", text }],
+            success: active(),
+          },
         });
+        return;
+      }
+      if (
+        active() &&
+        method === "item/tool/call" &&
+        params.tool === "close_questions" &&
+        this.turnOptions?.closeQuestions
+      ) {
+        const text = await this.turnOptions.closeQuestions(
+          closeQuestionsInputSchema.parse(params.arguments ?? {}),
+        );
         this.send({
           id,
           result: {
@@ -494,6 +520,7 @@ export class CodexAppServer {
       }
     };
     let inputPump: Promise<void> | undefined;
+    const steeredInputs: Array<() => Promise<void>> = [];
     let interruptTimer: ReturnType<typeof setTimeout> | undefined;
     const abort = () => {
       requestAbort.abort();
@@ -521,6 +548,15 @@ export class CodexAppServer {
                     description: agentQuestionDescription,
                     inputSchema: agentQuestionJsonSchema,
                   },
+                  ...(turnOptions.closeQuestions
+                    ? [
+                        {
+                          name: "close_questions",
+                          description: closeQuestionsDescription,
+                          inputSchema: closeQuestionsJsonSchema,
+                        },
+                      ]
+                    : []),
                 ],
               }
             : {}),
@@ -570,14 +606,7 @@ export class CodexAppServer {
               ),
             }
           : {}),
-        input:
-          typeof input === "string"
-            ? [{ type: "text", text: input, text_elements: [] }]
-            : input.map((part) =>
-                part.type === "local_image"
-                  ? { type: "localImage", path: part.path }
-                  : { type: "text", text: part.text, text_elements: [] },
-              ),
+        input: appServerInput(input),
       });
       if (
         !object(started) ||
@@ -595,13 +624,18 @@ export class CodexAppServer {
             const pending = (await turnOptions.readPendingMessages?.()) ?? [];
             for (const entry of pending) {
               if (done || requestAbort.signal.aborted) return;
+              // Steered input renders like a turn's own; media is staged
+              // on this host only when the app server runs here.
+              const text = renderUserMessage(entry.content, entry.attachments);
+              const staged = this.spawnElsewhere
+                ? { input: text, cleanup: async () => {} }
+                : await stageTurnInput(text, entry.attachments);
+              steeredInputs.push(staged.cleanup);
               try {
                 await this.request("turn/steer", {
                   threadId: targetThreadId,
                   expectedTurnId,
-                  input: [
-                    { type: "text", text: entry.content, text_elements: [] },
-                  ],
+                  input: appServerInput(staged.input),
                 });
               } catch (error) {
                 // Completion can race a steer. Unaccepted input remains in the durable inbox.
@@ -635,6 +669,7 @@ export class CodexAppServer {
       // Returning early or failing startup must not leave the native turn running.
       if (!done || this.failure) this.close();
       await inputPump;
+      await Promise.all(steeredInputs.map((cleanup) => cleanup()));
       this.turnOptions = undefined;
       this.requestAbort = undefined;
       this.notify = undefined;

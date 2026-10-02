@@ -27,6 +27,7 @@ import {
   type PersonalLoginKind,
   PROJECT_TOOLS_SERVER_KEY,
   type ProviderSession,
+  QuestionReplyError,
   SANDBOXING_LEVELS,
   type Sandboxing,
   type SandboxModelGateway,
@@ -1757,6 +1758,37 @@ export class AgentSessionsService {
     return this.sessionsWithRunningTurns({ sessionIds });
   }
 
+  /**
+   * The first message a person queued for this chat after `after`, other
+   * than a question's answer: a blocking question it arrives during gives
+   * way to it (ADR 0195).
+   */
+  private async chatReplyAfter(input: {
+    sessionId: string;
+    after: Date;
+  }): Promise<{ messageId: string } | undefined> {
+    const row = await this.db
+      .selectFrom("agent_turns")
+      .innerJoin(
+        "agent_messages",
+        "agent_messages.id",
+        "agent_turns.message_id",
+      )
+      .select("agent_messages.id")
+      .where("agent_turns.session_id", "=", input.sessionId)
+      .where("agent_turns.status", "=", "queued")
+      .where("agent_turns.delivery_mode", "=", "next_turn")
+      .where("agent_turns.created_at", ">=", input.after)
+      .where("agent_messages.author_kind", "=", "user")
+      .where(
+        sql<boolean>`agent_messages.metadata->>'questionRequestId' is null`,
+      )
+      .orderBy("agent_turns.created_at")
+      .limit(1)
+      .executeTakeFirst();
+    return row ? { messageId: row.id } : undefined;
+  }
+
   /** Resolve one question batch and durably deliver its answer to its session. */
   async answerQuestion(args: {
     identity: Identity;
@@ -1827,6 +1859,11 @@ export class AgentSessionsService {
         metadata: {
           questionRequestId: args.requestId,
           inTurn: request.blocking === false,
+          // The batch and the raw answer render the history entry.
+          question: {
+            questions: JSON.parse(JSON.stringify(request.questions ?? [])),
+            answer: args.answer,
+          },
         },
         transaction,
       });
@@ -6206,11 +6243,9 @@ export class AgentSessionsService {
                   turnId: extras.turnId,
                   createdAt: new Date().toISOString(),
                   blocking: input.blocking,
-                  origin: {
-                    kind: "tool",
-                    id: "ask_user",
-                    displayName: "Ask User",
-                  },
+                  origin: input.consent
+                    ? { kind: "host", id: "consent", displayName: "Permission" }
+                    : { kind: "tool", id: "ask_user", displayName: "Ask User" },
                   title: input.questions[0]?.header ?? "Question",
                   question: {
                     prompt: input.questions[0]?.question ?? "Question",
@@ -6222,6 +6257,11 @@ export class AgentSessionsService {
             if (!input.blocking)
               return `Question request ${requestId} is open. Continue independent work. The user's answer will arrive as a message when submitted.`;
             blockingQuestions.add(requestId);
+            // A chat message sent while this waits returns the call (ADR
+            // 0195): the agent's question stays open beside the
+            // conversation; a consent request is withdrawn.
+            let deferred = false;
+            const askedAt = new Date();
             try {
               await this.turns.progress({
                 turnId: extras.turnId,
@@ -6271,26 +6311,70 @@ export class AgentSessionsService {
                 }
                 if (row.status !== "pending")
                   throw new Error("Question is no longer pending");
+                const reply = await this.chatReplyAfter({
+                  sessionId,
+                  after: askedAt,
+                });
+                if (reply) {
+                  const moved = await writeOwned(async (trx) => {
+                    const updated = await trx
+                      .updateTable("agent_runtime_requests")
+                      .set({
+                        ...(input.consent
+                          ? { status: "cancelled", resolved_at: new Date() }
+                          : {
+                              payload: sql<Json>`payload || '{"blocking":false}'::jsonb`,
+                            }),
+                        updated_at: new Date(),
+                        revision: sql<number>`revision + 1`,
+                      })
+                      .where("session_id", "=", sessionId)
+                      .where("request_id", "=", requestId)
+                      .where("status", "=", "pending")
+                      .executeTakeFirst();
+                    if (!updated.numUpdatedRows) return false;
+                    // The reply joins this turn as steered input.
+                    await trx
+                      .updateTable("agent_messages")
+                      .set({
+                        metadata: sql<Json>`coalesce(metadata, '{}'::jsonb) || '{"inTurn":true}'::jsonb`,
+                      })
+                      .where("id", "=", reply.messageId)
+                      .execute();
+                    return true;
+                  });
+                  if (moved) {
+                    deferred = !input.consent;
+                    throw new QuestionReplyError(
+                      input.consent
+                        ? "The user wrote in the chat instead of answering this permission request, so it was withdrawn and nothing ran. Their message follows; respond to it."
+                        : `The user wrote in the chat before answering. Their message follows; respond to it. Question request ${requestId} stays open beside the chat and its answer arrives as a later message, so do not ask it again. If their message answers it or makes it moot, close it with close_questions.`,
+                    );
+                  }
+                  continue;
+                }
                 await delay(200, undefined, { signal: input.signal });
               }
             } finally {
               blockingQuestions.delete(requestId);
               // A waiting request cannot survive the native call that owned it.
-              // Answered requests are untouched; interruption withdraws pending UI.
-              await writeOwned((trx) =>
-                trx
-                  .updateTable("agent_runtime_requests")
-                  .set({
-                    status: "cancelled",
-                    resolved_at: new Date(),
-                    updated_at: new Date(),
-                    revision: sql<number>`revision + 1`,
-                  })
-                  .where("session_id", "=", sessionId)
-                  .where("request_id", "=", requestId)
-                  .where("status", "=", "pending")
-                  .execute(),
-              );
+              // Answered requests are untouched; interruption withdraws pending
+              // UI. A deferred question no longer belongs to the call.
+              if (!deferred)
+                await writeOwned((trx) =>
+                  trx
+                    .updateTable("agent_runtime_requests")
+                    .set({
+                      status: "cancelled",
+                      resolved_at: new Date(),
+                      updated_at: new Date(),
+                      revision: sql<number>`revision + 1`,
+                    })
+                    .where("session_id", "=", sessionId)
+                    .where("request_id", "=", requestId)
+                    .where("status", "=", "pending")
+                    .execute(),
+                );
               await this.turns.progress({
                 turnId: extras.turnId,
                 leaseToken: extras.leaseToken,
@@ -6301,14 +6385,75 @@ export class AgentSessionsService {
               });
             }
           };
+          turnOptions.closeQuestions = async ({ requestIds }) => {
+            if (requestIds?.length === 0) return "No open questions matched.";
+            const closed = await writeOwned((trx) =>
+              trx
+                .updateTable("agent_runtime_requests")
+                .set({
+                  status: "cancelled",
+                  resolved_at: new Date(),
+                  updated_at: new Date(),
+                  revision: sql<number>`revision + 1`,
+                })
+                .where("session_id", "=", sessionId)
+                .where("kind", "=", "question")
+                .where("status", "=", "pending")
+                .where(sql<string>`payload->'origin'->>'id'`, "=", "ask_user")
+                .$if(requestIds !== undefined, (query) =>
+                  query.where("request_id", "in", requestIds ?? []),
+                )
+                .returning("request_id")
+                .execute(),
+            );
+            return closed.length === 0
+              ? "No open questions matched."
+              : `Closed ${closed.map((row) => row.request_id).join(", ")}.`;
+          };
+          const takenInput = new Set<string>();
           turnOptions.readPendingMessages = async () => {
-            const pending = await this.turns.listPendingMessages({ sessionId });
-            return pending
-              .filter(
-                (entry) =>
-                  entry.status === "queued" && entry.metadata?.inTurn === true,
-              )
-              .map((entry) => ({ id: entry.id, content: entry.content }));
+            const pending = (
+              await this.turns.listPendingMessages({ sessionId })
+            ).filter(
+              (entry) =>
+                entry.status === "queued" && entry.metadata?.inTurn === true,
+            );
+            const fresh = pending.filter((entry) => !takenInput.has(entry.id));
+            if (fresh.length > 0) {
+              for (const entry of fresh) takenInput.add(entry.id);
+              // Input the agent takes now reads before what it says next:
+              // the in-progress reply moves after it in the transcript.
+              await writeOwned(
+                (trx) =>
+                  trx
+                    .updateTable("agent_messages")
+                    .set({ seq: sql<string>`DEFAULT` })
+                    .where("id", "=", assistantMessageId)
+                    .where("seq", "<", (eb) =>
+                      eb
+                        .selectFrom("agent_messages")
+                        .select((inner) => inner.fn.max("seq").as("seq"))
+                        .where(
+                          "id",
+                          "in",
+                          fresh.map((entry) => entry.messageId),
+                        ),
+                    )
+                    .execute(),
+                // Ordering is presentation; a lost lease surfaces on the
+                // turn's next write.
+              ).catch(() => {});
+            }
+            return pending.map((entry) => {
+              const attachments = entry.metadata?.attachments as
+                | AgentAttachment[]
+                | undefined;
+              return {
+                id: entry.id,
+                content: entry.content,
+                ...(attachments?.length ? { attachments } : {}),
+              };
+            });
           };
           turnOptions.acknowledgeMessages = async ({ ids }) => {
             if (ids.length === 0) return;

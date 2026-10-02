@@ -134,7 +134,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0119](0119-three-signal-observability.md) | Three-signal observability | Accepted |
 | [0120](0120-telemetry-correlation-context.md) | Telemetry correlation context | Accepted |
 | [0121](0121-project-workspaces-and-shared-chat-dock.md) | Persistent project workspaces and a shared chat dock | Accepted |
-| [0122](0122-blocking-and-nonblocking-agent-questions.md) | Blocking and non-blocking agent questions | Accepted |
+| [0122](0122-blocking-and-nonblocking-agent-questions.md) | Blocking and non-blocking agent questions | Accepted (chat replies and closing by 0195) |
 | [0123](0123-desktop-consent-search-and-resource-links.md) | Desktop consent, search and resource links | Accepted |
 | [0124](0124-session-artifacts.md) | Session artifacts share source ownership and retention | Accepted; review distribution superseded by 0126; publication refined by 0135 |
 | [0125](0125-canonical-app-icons.md) | Canonical semantic app icons | Accepted |
@@ -207,3 +207,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0192](0192-workers-own-their-lease.md) | Workers own their lease: any replica runs any worker's turns | Accepted (turn status and guards from Postgres by 0193) |
 | [0193](0193-no-cross-replica-state-in-replica-memory.md) | No cross-replica state in replica memory: turn status, singleton work, caches | Accepted |
 | [0194](0194-browser-tabs-load-like-chrome-and-sleep-when-unused.md) | Browser tabs load like Chrome's and sleep when unused | Accepted |
+| [0195](0195-conversation-continues-around-agent-questions.md) | The conversation continues around agent questions: replies defer, agents close, no "Other" row | Accepted |

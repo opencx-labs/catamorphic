@@ -22,6 +22,43 @@ afterEach(() => {
 });
 
 describe("BookmarksStore", () => {
+  it("loads outside edits live, including atomic renames, and ignores its own writes", async () => {
+    const { value, file } = store();
+    value.addBookmark("p", { label: "Docs", url: "https://docs.test/" });
+    const changes: unknown[] = [];
+    const unwatch = value.watch((change) => changes.push(change));
+    try {
+      // The app's own write is not an outside change.
+      value.addBookmark("p", { label: "Blog", url: "https://blog.test/" });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(changes).toEqual([]);
+      // An agent appends a bookmark and renames the file into place.
+      const edited = JSON.parse(fs.readFileSync(file, "utf-8"));
+      edited.byProject.p.bookmarks.push({
+        id: "agent-1",
+        label: "Agent added",
+        url: "https://agent.test/",
+      });
+      edited.pinnedByProfile = {
+        profile: { folders: [], bookmarks: [] },
+      };
+      fs.writeFileSync(`${file}.tmp`, JSON.stringify(edited));
+      fs.renameSync(`${file}.tmp`, file);
+      await expect
+        .poll(() => changes, { timeout: 3000 })
+        .toEqual([{ projectIds: ["p"], profileIds: ["profile"] }]);
+      expect(
+        value.forProject("p").bookmarks.map((entry) => entry.label),
+      ).toEqual(["Docs", "Blog", "Agent added"]);
+      // A broken edit keeps what is loaded.
+      fs.writeFileSync(file, "{ not json");
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(value.forProject("p").bookmarks).toHaveLength(3);
+    } finally {
+      unwatch();
+    }
+  });
+
   it("backfills icons from a visited page without overwriting other pages' icons", () => {
     const { value, file } = store();
     const imported = value.addBookmark("p", {

@@ -33,6 +33,12 @@ export {
   agentQuestionDescription,
   agentQuestionInputSchema,
   agentQuestionJsonSchema,
+  askUserToolResult,
+  closeQuestionsDescription,
+  closeQuestionsInputSchema,
+  closeQuestionsJsonSchema,
+  isQuestionReply,
+  QuestionReplyError,
 } from "./coding-agent/questions.js";
 export {
   type AgentRuntimeProvider,

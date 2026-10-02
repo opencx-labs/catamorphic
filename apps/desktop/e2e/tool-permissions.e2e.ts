@@ -31,6 +31,11 @@ const helpers = `
   const modal = () => $('section[aria-label="The agent has a question"]');
   const answer = label => { byText('section[aria-label="The agent has a question"] button', label).click(); };
   const submitAnswer = () => byText('section[aria-label="The agent has a question"] button', 'Submit').click();
+  // The expanded floating chat; minimized ones stay mounted but inert.
+  const hereChat = () => $$('[data-floating-chat]').find((el) => !el.closest('[inert]'));
+  const here = () => hereChat()?.querySelector('[data-composer-input]');
+  const hereLog = () => hereChat()?.querySelector('[role="log"]')?.textContent ?? '';
+  const sendHere = (text) => { const ta = here(); setReactValue(ta, text); ta.closest('form').requestSubmit(); };
 `;
 const run = <T>(body: string) =>
   app.eval<T>(`(() => { ${helpers}\n${body} })()`);
@@ -285,4 +290,143 @@ it("keeps working while questions are collapsed and consumes the answer in the s
     `return [...document.querySelectorAll('[role="log"] article')].some(m => m.textContent.includes('Answer received during the same turn') && m.textContent.includes('Orange')) && !modal();`,
     { timeoutMs: 30_000 },
   );
+});
+
+// ADR 0195: the chat keeps going around a question.
+describe("talking around questions", () => {
+  const settle = () =>
+    app.waitFor(
+      `!document.getAnimations().some(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity)`,
+    );
+
+  it("opens a fresh floating chat", async () => {
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!here() && !hereLog().includes('permission');`, {
+      label: "fresh floating chat",
+    });
+  });
+
+  it("a message during a blocking question gets a reply; the question stays open and still answers", async () => {
+    await run(`sendHere('blocking question about the layout'); return true;`);
+    await runWait(
+      `return !!modal() && modal().textContent.includes('Which layout should I use?');`,
+      { timeoutMs: 30_000, label: "blocking question" },
+    );
+    await settle();
+    // The waiting status sits in the header beside the title; no row
+    // above it, no "Other" row, and the composer takes free text.
+    expect(
+      await run(`
+        const m = modal();
+        return {
+          headerFirst: m.firstElementChild === m.querySelector('header'),
+          status: m.querySelector('header [role="status"]')?.textContent,
+          other: !!byText('section[aria-label="The agent has a question"] button', 'Other'),
+          placeholder: here().dataset.placeholder,
+        };
+      `),
+    ).toEqual({
+      headerFirst: true,
+      status: "Waiting for your answer",
+      other: false,
+      placeholder: "Answer in your own words…",
+    });
+    await app.screenshot("/tmp/catamorphic-blocking-question.png");
+    // A slow attachment shows its progress without moving the question.
+    const top = await run<number>(
+      `return modal().getBoundingClientRect().top;`,
+    );
+    await run(`
+      here().focus();
+      window.__originalFileRead = File.prototype.arrayBuffer;
+      File.prototype.arrayBuffer = function () {
+        return new Promise((resolve, reject) => {
+          window.__releasePaste = () => window.__originalFileRead.call(this).then(resolve, reject);
+        });
+      };
+      const data = new DataTransfer();
+      data.items.add(new File([new Uint8Array([7, 8])], 'notes.bin'));
+      here().dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+      return true;
+    `);
+    await runWait(
+      `return here().closest('form').textContent.includes('Preparing attachments');`,
+      { label: "attachment preparing" },
+    );
+    expect(
+      await run<number>(`return modal().getBoundingClientRect().top;`),
+    ).toBe(top);
+    await run(
+      `File.prototype.arrayBuffer = window.__originalFileRead; window.__releasePaste(); return true;`,
+    );
+    await runWait(
+      `return !!here().querySelector('[data-testid="composer-pill"]');`,
+      { label: "attachment pill" },
+    );
+    await run(`
+      const el = here(); el.focus();
+      const range = document.createRange(); range.selectNodeContents(el); range.collapse(false);
+      getSelection().removeAllRanges(); getSelection().addRange(range);
+      document.execCommand('insertText', false, ' what is the difference?');
+      el.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return hereLog().includes('Replying before you answer') && hereLog().includes('notes.bin') && modal()?.textContent.includes('Answer when ready');`,
+      { timeoutMs: 30_000, label: "reply while the question stays open" },
+    );
+    // The reply reads after the message it answers.
+    expect(
+      await run(`
+        const articles = [...hereChat().querySelectorAll('[role="log"] article')];
+        const sent = articles.findIndex((el) => el.textContent.includes('what is the difference?') && el.dataset.userMessage);
+        const reply = articles.findIndex((el) => el.textContent.includes('Replying before you answer'));
+        return sent >= 0 && sent < reply;
+      `),
+    ).toBe(true);
+    await run(`answer('Grid'); return true;`);
+    await runWait(
+      `const button = byText('section[aria-label="The agent has a question"] button', 'Submit'); if (!button || button.disabled) return false; button.click(); return true;`,
+    );
+    await runWait(
+      `const card = hereChat().querySelector('[data-testid="question-answer"]'); return !modal() && !!card && card.textContent.includes('Which layout should I use?') && card.textContent.includes('Grid') && !card.textContent.includes('User answer');`,
+      { timeoutMs: 30_000, label: "answer card in history" },
+    );
+  }, 90_000);
+
+  it("the agent closes a question the conversation settled", async () => {
+    await run(`sendHere('blocking question again'); return true;`);
+    await runWait(`return !!modal();`, { timeoutMs: 30_000 });
+    await run(`sendHere('never mind'); return true;`);
+    await runWait(
+      `return hereLog().includes('Replying before you answer: never mind') && modal()?.textContent.includes('Answer when ready');`,
+      { timeoutMs: 30_000, label: "deferred question" },
+    );
+    await run(`sendHere('close my questions'); return true;`);
+    await runWait(
+      `return !modal() && hereLog().includes('Questions: Closed');`,
+      { timeoutMs: 30_000, label: "question closed" },
+    );
+  }, 60_000);
+
+  it("a message during a permission request withdraws it and reaches the agent", async () => {
+    await run(`sendHere('permission: fake/archive_thread'); return true;`);
+    await runWait(
+      `return !!modal() && modal().textContent.includes('archive thread');`,
+      { timeoutMs: 30_000, label: "consent request" },
+    );
+    await run(`sendHere('do something else instead'); return true;`);
+    await runWait(
+      `return !modal() && hereLog().includes('permission decision: deny') && hereLog().includes('You said: do something else instead');`,
+      { timeoutMs: 30_000, label: "consent withdrawn, message answered" },
+    );
+  }, 60_000);
+
+  it("the agent can see Work's window instead of asking", async () => {
+    await run(`sendHere('look at my screen'); return true;`);
+    await runWait(`return hereLog().includes('Saw 1 window image');`, {
+      timeoutMs: 30_000,
+      label: "window screenshot",
+    });
+  }, 60_000);
 });
