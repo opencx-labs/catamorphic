@@ -92,6 +92,7 @@ function setup(
       | "moveToApplications"
       | "prepareInstall"
       | "canInstall"
+      | "checkTimeoutMs"
     >
   > = {},
 ) {
@@ -241,6 +242,21 @@ describe("DesktopUpdaterController", () => {
       manual: true,
       message: "still offline",
     });
+  });
+
+  it("reports whether the feed answered, and fails a check that never settles", async () => {
+    const { controller, updater } = setup({ checkTimeoutMs: 20 });
+    expect(await controller.check(false)).toBe(true);
+
+    updater.checkForUpdates.mockImplementationOnce(() => new Promise(() => {}));
+    const abandoned = vi.fn();
+    Object.assign(updater, { abandonCheck: abandoned });
+    expect(await controller.check(false)).toBe(false);
+    expect(abandoned).toHaveBeenCalledOnce();
+    expect(controller.current().phase).toBe("idle");
+    // The stuck request no longer holds later checks.
+    expect(await controller.check(true)).toBe(true);
+    expect(updater.checkForUpdates).toHaveBeenCalledTimes(3);
   });
 
   it("does not let manual checks replace a download or pending installation", async () => {
