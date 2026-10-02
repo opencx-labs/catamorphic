@@ -592,7 +592,9 @@ function Chat({
                   onChange={(event) => setDraft(event.target.value)}
                   placeholder={
                     // Open questions take free-text answers here (ADR 0195).
-                    chat.session?.questions?.length || questions
+                    chat.session?.questions?.some(
+                      (request) => !request.consent,
+                    ) || questions
                       ? "Answer in your own words…"
                       : chat.isWorking
                         ? "Message (queues)…"

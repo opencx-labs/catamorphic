@@ -415,6 +415,11 @@ describe("talking around questions", () => {
       `return !!modal() && modal().textContent.includes('archive thread');`,
       { timeoutMs: 30_000, label: "consent request" },
     );
+    // Typing declines a permission request; the composer does not offer it
+    // as an answer.
+    expect(await run(`return here().dataset.placeholder;`)).not.toBe(
+      "Answer in your own words…",
+    );
     await run(`sendHere('do something else instead'); return true;`);
     await runWait(
       `return !modal() && hereLog().includes('permission decision: deny') && hereLog().includes('You said: do something else instead');`,

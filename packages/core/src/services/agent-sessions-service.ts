@@ -5079,9 +5079,7 @@ export class AgentSessionsService {
       const nodeLease = this.localLease(allocation);
       if (!turn.leaseToken) throw new Error("Claimed turn has no lease token");
       const message = await this.turns.messageForTurn({ turnId: turn.id });
-      const attachments = message.metadata?.attachments as
-        | AgentAttachment[]
-        | undefined;
+      const attachments = metadataAttachments(message.metadata);
       const local: LocalTurn = {
         turnId: turn.id,
         session,
@@ -6243,6 +6241,7 @@ export class AgentSessionsService {
                   turnId: extras.turnId,
                   createdAt: new Date().toISOString(),
                   blocking: input.blocking,
+                  ...(input.consent ? { consent: true } : {}),
                   origin: input.consent
                     ? { kind: "host", id: "consent", displayName: "Permission" }
                     : { kind: "tool", id: "ask_user", displayName: "Ask User" },
@@ -6261,7 +6260,13 @@ export class AgentSessionsService {
             // 0195): the agent's question stays open beside the
             // conversation; a consent request is withdrawn.
             let deferred = false;
-            const askedAt = new Date();
+            // The database's clock, which stamps the messages it compares to.
+            const {
+              rows: [clock],
+            } = await sql<{
+              now: Date;
+            }>`select clock_timestamp() as now`.execute(this.db);
+            const askedAt = clock?.now ?? new Date();
             try {
               await this.turns.progress({
                 turnId: extras.turnId,
@@ -6445,9 +6450,7 @@ export class AgentSessionsService {
               ).catch(() => {});
             }
             return pending.map((entry) => {
-              const attachments = entry.metadata?.attachments as
-                | AgentAttachment[]
-                | undefined;
+              const attachments = metadataAttachments(entry.metadata);
               return {
                 id: entry.id,
                 content: entry.content,
@@ -10032,4 +10035,31 @@ export class PersonalLoginUnavailableError extends Error {
     super(message);
     this.name = "PersonalLoginUnavailableError";
   }
+}
+
+/** A message's persisted attachments, keeping only well-formed entries. */
+function metadataAttachments(
+  metadata: JsonObject | null | undefined,
+): AgentAttachment[] | undefined {
+  const raw = metadata?.attachments;
+  if (!Array.isArray(raw)) return undefined;
+  return raw.flatMap((entry: unknown) =>
+    isAgentAttachment(entry) ? [entry] : [],
+  );
+}
+
+function isAgentAttachment(value: unknown): value is AgentAttachment {
+  if (typeof value !== "object" || value === null || !("kind" in value))
+    return false;
+  const entry: { kind?: unknown; name?: unknown } = value;
+  if (typeof entry.name !== "string") return false;
+  if (entry.kind === "text")
+    return "text" in value && typeof value.text === "string";
+  return (
+    (entry.kind === "image" || entry.kind === "document") &&
+    "dataBase64" in value &&
+    typeof value.dataBase64 === "string" &&
+    "mediaType" in value &&
+    typeof value.mediaType === "string"
+  );
 }

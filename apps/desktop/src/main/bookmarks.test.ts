@@ -26,7 +26,9 @@ describe("BookmarksStore", () => {
     const { value, file } = store();
     value.addBookmark("p", { label: "Docs", url: "https://docs.test/" });
     const changes: unknown[] = [];
-    const unwatch = value.watch((change) => changes.push(change));
+    const unwatch = value.watch((change) => changes.push(change), {
+      intervalMs: 20,
+    });
     try {
       // The app's own write is not an outside change.
       value.addBookmark("p", { label: "Blog", url: "https://blog.test/" });

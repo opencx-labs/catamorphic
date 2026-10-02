@@ -122,8 +122,6 @@ export class BookmarksStore {
   private data: BookmarksFile;
   /** What this store last read or wrote, to tell its own writes apart. */
   private written = "";
-  private watcher?: fs.FSWatcher;
-  private reloadTimer?: ReturnType<typeof setTimeout>;
 
   constructor(private readonly file: string) {
     this.data = this.parse(this.read()) ?? {
@@ -171,14 +169,17 @@ export class BookmarksStore {
   }
 
   /**
-   * Load edits made outside the app. The directory is watched because an
-   * atomic save (write a temporary file, rename it over this one) replaces
-   * the file being watched. Text that is not a bookmarks file is ignored
-   * until it is fixed; the next in-app change rewrites it from memory.
+   * Load edits made outside the app. The file is polled by stat, not
+   * watched through its directory: that is userData, where Chromium's
+   * caches write constantly. Polling also follows an atomic save (write a
+   * temporary file, rename it over this one). Text that is not a bookmarks
+   * file is ignored until it is fixed; the next in-app change rewrites it
+   * from memory.
    */
-  watch(onChange: (change: BookmarksFileChange) => void): () => void {
-    fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    const name = path.basename(this.file);
+  watch(
+    onChange: (change: BookmarksFileChange) => void,
+    { intervalMs = 1000 }: { intervalMs?: number } = {},
+  ): () => void {
     const reload = () => {
       const text = this.read();
       if (text === undefined || text === this.written) return;
@@ -203,16 +204,12 @@ export class BookmarksStore {
         ],
       });
     };
-    this.watcher = fs.watch(path.dirname(this.file), (_event, changed) => {
-      if (changed !== null && changed !== name) return;
-      clearTimeout(this.reloadTimer);
-      this.reloadTimer = setTimeout(reload, 50);
-    });
-    return () => {
-      clearTimeout(this.reloadTimer);
-      this.watcher?.close();
-      this.watcher = undefined;
-    };
+    fs.watchFile(
+      this.file,
+      { interval: intervalMs, persistent: false },
+      reload,
+    );
+    return () => fs.unwatchFile(this.file, reload);
   }
 
   forProject(projectId: string): ProjectBookmarks {

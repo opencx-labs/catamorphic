@@ -3078,7 +3078,10 @@ function ChatDockContent({
                   placeholder={
                     // An open question takes free-text answers here: the
                     // panel has no "Other" row (ADR 0195).
-                    (chat.session?.questions?.length ?? 0) > 0 ||
+                    // A permission request is no question: typing declines it.
+                    chat.session?.questions?.some(
+                      (request) => !request.consent,
+                    ) ||
                     (questions && !chat.isSending)
                       ? "Answer in your own words…"
                       : accepts.length > 0

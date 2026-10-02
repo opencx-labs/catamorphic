@@ -738,6 +738,11 @@ describe("agent session coordination", () => {
         (await sessions.get(identity, project.id, session.id)).questions,
       ).toHaveLength(2),
     );
+    expect(
+      (await sessions.get(identity, project.id, session.id)).questions?.map(
+        (request) => request.consent === true,
+      ),
+    ).toEqual([false, true]);
     await sessions.enqueueMessage(
       identity,
       project.id,
