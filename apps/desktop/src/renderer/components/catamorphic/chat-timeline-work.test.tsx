@@ -337,9 +337,7 @@ describe("ChatTimeline work display", () => {
     expect(
       container.querySelector('[data-testid="chat-undone-divider"]'),
     ).not.toBeNull();
-    expect(
-      container.querySelector("[data-turn-undone]"),
-    ).not.toBeNull();
+    expect(container.querySelector("[data-turn-undone]")).not.toBeNull();
     expect(container.querySelector('[data-testid="chat-restore"]')).toBeNull();
   });
 
@@ -382,9 +380,7 @@ describe("ChatTimeline work display", () => {
     await render({
       turns: timelineOf({
         turns: [turn("t1", 1, { status: "running", completedAt: null })],
-        items: [
-          input("t1", "Ship it", { idempotencyKey: "user:me:cmd-7" }),
-        ],
+        items: [input("t1", "Ship it", { idempotencyKey: "user:me:cmd-7" })],
       }),
       activeTurnId: "t1",
     });
