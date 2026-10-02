@@ -1810,6 +1810,20 @@ async function closeOpenWork(
   input: { turn: Turn; attemptId: string; reason: string; now: string },
 ): Promise<SessionEvent[]> {
   const events: SessionEvent[] = [];
+  const requests = await trx
+    .selectFrom("agent_runtime_requests")
+    .selectAll()
+    .where("session_id", "=", input.turn.sessionId)
+    .where("turn_id", "=", input.turn.id)
+    .where("status", "=", "pending")
+    .execute();
+  // A non-blocking question outlives its turn: its answer becomes a message.
+  const outliving = new Set(
+    requests
+      .map(requestFromRow)
+      .filter((request) => !request.blocking && request.kind === "question")
+      .map((request) => request.id),
+  );
   const items = await trx
     .selectFrom("agent_items")
     .select("payload")
@@ -1818,22 +1832,15 @@ async function closeOpenWork(
     .execute();
   for (const row of items) {
     const item = itemFromRow(row);
+    if (item.kind === "request" && outliving.has(item.requestId)) continue;
     events.push({
       type: "item.changed",
       item: { ...item, status: "cancelled", endedAt: input.now, updatedAt: input.now } as Item,
     });
   }
-  const requests = await trx
-    .selectFrom("agent_runtime_requests")
-    .selectAll()
-    .where("session_id", "=", input.turn.sessionId)
-    .where("turn_id", "=", input.turn.id)
-    .where("status", "=", "pending")
-    .execute();
   for (const row of requests) {
     const request: RuntimeRequest = requestFromRow(row);
-    // A non-blocking question outlives its turn: its answer becomes a message.
-    if (!request.blocking && request.kind === "question") continue;
+    if (outliving.has(request.id)) continue;
     events.push({
       type: "request.changed",
       request: { ...request, status: "expired", answerable: false, reason: input.reason, resolvedAt: input.now },

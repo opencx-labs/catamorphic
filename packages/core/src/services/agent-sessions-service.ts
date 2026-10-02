@@ -2747,11 +2747,13 @@ export class AgentSessionsService {
     await this.log.append(trx, { sessionId: input.session.id, events, commandId: input.commandId });
     if (!live && response.kind === "question") {
       const questions = (request.questions ?? []).map((question) => question.question).join("\n");
+      // The agent learns a non-blocking answer as a message: within the
+      // turn still working, else as a turn of its own.
       await this.deliverIn(trx, {
         session: input.session,
         text: `${questions}\n\nUser answer:\n${response.answers.join("\n")}`,
         author: { kind: "user", externalUserId: input.identity.externalUserId },
-        dispatch: "queue",
+        dispatch: turn && isActiveTurnStatus(turn.status) ? "steer" : "queue",
         idempotencyKey: `question-answer:${request.id}`,
         metadata: { questionRequestId: request.id, deliveredBy: input.identity.externalUserId },
       });
