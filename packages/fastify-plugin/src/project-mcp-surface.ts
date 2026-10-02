@@ -579,7 +579,7 @@ export function surfaceTools(
       definition: {
         name: "send_agent_message",
         description:
-          "Deliver an attributed message from your current session to this or another agent session. message_only records it without waking the agent; next_turn wakes an idle session or queues behind its active turn; interrupt stops the active turn and runs this next. Set attention to required to alert the user to this message, independently of whether the agent should run. Use interrupt only when delay would make the work wrong.",
+          "Deliver an attributed message from your current session to this or another agent session. message_only records it without waking the agent; queue wakes an idle session or queues behind its active turn; interrupt stops the active turn and runs this next. Set attention to required to alert the user to this message, independently of whether the agent should run. Use interrupt only when delay would make the work wrong.",
         inputSchema: {
           type: "object",
           properties: {
@@ -588,7 +588,7 @@ export function surfaceTools(
             message: { type: "string" },
             mode: {
               type: "string",
-              enum: ["message_only", "next_turn", "interrupt"],
+              enum: ["message_only", "queue", "interrupt"],
             },
             attention: { type: "string", enum: ["none", "required"] },
             idempotencyKey: { type: "string" },
@@ -617,7 +617,7 @@ export function surfaceTools(
           !toSessionId ||
           !message ||
           (mode !== "message_only" &&
-            mode !== "next_turn" &&
+            mode !== "queue" &&
             mode !== "interrupt")
         ) {
           throw new Error(

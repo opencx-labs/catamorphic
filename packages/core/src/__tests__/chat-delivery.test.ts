@@ -64,7 +64,7 @@ describe("parseChatDelivery", () => {
       audience: "project",
       agentSlug: "reviewer",
       content: "Review PR 7",
-      mode: "next_turn",
+      mode: "queue",
       notification: { title: "Review ready" },
     });
     expect(() =>

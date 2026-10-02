@@ -276,7 +276,7 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
     const late = await sessions.deliver(alice, projectId, chat.id, {
       content: "Late",
       author: { kind: "user", externalUserId: "alice" },
-      mode: "next_turn",
+      mode: "queue",
     });
     await sessions.updateQueuedTurn(
       alice,
@@ -402,7 +402,7 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
       sessionId,
       content: "Continue",
       author: { kind: "user", externalUserId: "alice" },
-      mode: "next_turn",
+      mode: "queue",
     });
     // A replica serving other machines picks it up on its poll.
     const replica = service({ id: "worker.here", token: crypto.randomUUID() });

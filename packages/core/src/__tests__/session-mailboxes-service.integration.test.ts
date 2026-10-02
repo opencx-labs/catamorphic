@@ -61,7 +61,7 @@ describe("session mailboxes", () => {
       destination: { hostId: "desktop-host", revision: 3 },
       content: "PR checks passed",
       author: { kind: "watcher" as const, watcherId: crypto.randomUUID() },
-      mode: "next_turn" as const,
+      mode: "queue" as const,
       idempotencyKey: "github:delivery-1",
     };
     const first = await mailboxes.enqueue(
@@ -87,7 +87,7 @@ describe("session mailboxes", () => {
         messageId: first.messageId,
         authorityRevision: 3,
         content: "PR checks passed",
-        mode: "next_turn",
+        mode: "queue",
       }),
     ]);
   });

@@ -1,16 +1,11 @@
 import { shellQuote } from "@catamorphic/git";
-import {
-  PERSONAL_LOGIN_KINDS,
-  type PersonalLoginKind,
-  type SandboxProvider,
-} from "@catamorphic/sandbox";
+import type { SandboxProvider } from "@catamorphic/sandbox";
 import type { UnsealedPersonalEnvironment } from "./personal-environment-service.js";
 import { SESSION_DIRECTORY } from "./sandbox-git.js";
 
 /*
  * A member's personal environment inside one of their own chats' sandboxes
- * (ADR 0184). Logins live beside the project, under the session's own
- * directory, where only the harness is pointed at them. Files land at
+ * (ADR 0184). Files land at
  * their repository paths after the sandbox's Git baseline and are listed
  * in the repository's `.git/info/exclude`, so sync-back, checkpoints,
  * proposals and pushes never carry them. A path the repository tracks is
@@ -18,33 +13,8 @@ import { SESSION_DIRECTORY } from "./sandbox-git.js";
  * through a symbolic link.
  */
 
-/** Where one harness's login lives in a sandbox. */
-export function personalLoginHome(input: {
-  provider: Pick<SandboxProvider, "workspaceRoot">;
-  kind: PersonalLoginKind;
-}): string {
-  return `${input.provider.workspaceRoot}/${SESSION_DIRECTORY}/home/${LOGIN_HOMES[input.kind]}`;
-}
-
-/** Each harness's home, under the session directory's `home/`. */
-const LOGIN_HOMES: Record<PersonalLoginKind, string> = {
-  "claude-code": "claude",
-  codex: "codex",
-};
-
-/** The file each harness reads its login from, inside its home. */
-const LOGIN_FILES: Record<PersonalLoginKind, string> = {
-  "claude-code": ".credentials.json",
-  codex: "auth.json",
-};
-
 /** From the project folder (a command's cwd), the session's own directory. */
 const SESSION_FROM_PROJECT = `../${SESSION_DIRECTORY}`;
-
-/** From the project folder, where a harness's login lies. */
-function loginFileFromProject(kind: PersonalLoginKind): string {
-  return `${SESSION_FROM_PROJECT}/home/${LOGIN_HOMES[kind]}/${LOGIN_FILES[kind]}`;
-}
 
 const PERSONAL = `${SESSION_FROM_PROJECT}/personal`;
 const INCOMING = `${PERSONAL}/incoming`;
@@ -104,7 +74,6 @@ export function personalExcludeBlock(paths: readonly string[]): string {
 
 interface Manifest {
   files: Record<string, string>;
-  logins: Record<string, string>;
 }
 
 function parseManifest(text: string): Manifest {
@@ -112,7 +81,6 @@ function parseManifest(text: string): Manifest {
     const value: unknown = JSON.parse(text);
     if (typeof value !== "object" || value === null) throw new Error();
     const files = "files" in value ? value.files : undefined;
-    const logins = "logins" in value ? value.logins : undefined;
     const strings = (entry: unknown): Record<string, string> =>
       typeof entry === "object" && entry !== null
         ? Object.fromEntries(
@@ -121,9 +89,9 @@ function parseManifest(text: string): Manifest {
             ),
           )
         : {};
-    return { files: strings(files), logins: strings(logins) };
+    return { files: strings(files) };
   } catch {
-    return { files: {}, logins: {} };
+    return { files: {} };
   }
 }
 
@@ -145,72 +113,9 @@ async function run(input: {
 }
 
 /**
- * A login as its harness reads it in the sandbox. Codex requires a
- * `tokens.refresh_token` field in `auth.json`; the member's copy never
- * holds one (only their computer renews it), so an empty one stands in and
- * the sandbox's Codex can never renew it.
- */
-export function sandboxLoginDocument(input: {
-  kind: PersonalLoginKind;
-  content: string;
-}): string {
-  if (input.kind !== "codex") return input.content;
-  try {
-    const document: unknown = JSON.parse(input.content);
-    if (typeof document !== "object" || document === null) return input.content;
-    const tokens = "tokens" in document ? document.tokens : undefined;
-    if (
-      typeof tokens !== "object" ||
-      tokens === null ||
-      "refresh_token" in tokens
-    )
-      return input.content;
-    return JSON.stringify({
-      ...document,
-      tokens: { ...tokens, refresh_token: "" },
-    });
-  } catch {
-    return input.content;
-  }
-}
-
-/** Write the logins into their homes, readable by the sandbox user only. */
-export async function writePersonalLogins(input: {
-  provider: SandboxProvider;
-  sandboxId: string;
-  logins: UnsealedPersonalEnvironment["logins"];
-}): Promise<void> {
-  if (input.logins.size === 0) return;
-  for (const [kind, login] of input.logins)
-    await input.provider.uploadFiles(
-      input.sandboxId,
-      {
-        [LOGIN_FILES[kind]]: sandboxLoginDocument({
-          kind,
-          content: login.content,
-        }),
-      },
-      personalLoginHome({ provider: input.provider, kind }),
-    );
-  const root = `${input.provider.workspaceRoot}/${SESSION_DIRECTORY}`;
-  await run({
-    provider: input.provider,
-    sandboxId: input.sandboxId,
-    cwd: root,
-    what: "protect your login in the sandbox",
-    command: [...input.logins.keys()]
-      .map(
-        (kind) =>
-          `chmod 600 ${shellQuote(`home/${LOGIN_HOMES[kind]}/${LOGIN_FILES[kind]}`)}`,
-      )
-      .join(" && "),
-  });
-}
-
-/**
- * Deliver the member's logins and files into the sandbox. Files already
- * there with the same content are left alone (the agent may have edited
- * its copy); files and logins dropped from the member's set are removed.
+ * Deliver the member's files into the sandbox. Files already there with
+ * the same content are left alone (the agent may have edited its copy);
+ * files dropped from the member's set are removed.
  * Returns what changed (for the audit), the paths refused because the
  * repository tracks them, and those refused because writing them could
  * land anywhere but their own place in the project.
@@ -223,7 +128,7 @@ export async function deliverPersonalEnvironment(input: {
   environment: UnsealedPersonalEnvironment;
 }): Promise<{
   delivered: Array<{
-    kind: "login" | "file";
+    kind: "file";
     name: string;
     fingerprint: string;
   }>;
@@ -269,22 +174,11 @@ export async function deliverPersonalEnvironment(input: {
   const stale = Object.keys(previous.files).filter(
     (path) => !placed.has(path) && !tracked.has(path) && !unsafe.has(path),
   );
-  const staleLogins = PERSONAL_LOGIN_KINDS.filter(
-    (kind) => kind in previous.logins && !environment.logins.has(kind),
-  );
   const manifest: Manifest = {
     files: Object.fromEntries(
       files.map((file) => [file.path, file.fingerprint]),
     ),
-    logins: Object.fromEntries(
-      [...environment.logins].map(([kind, login]) => [kind, login.fingerprint]),
-    ),
   };
-  await writePersonalLogins({
-    provider,
-    sandboxId,
-    logins: environment.logins,
-  });
   await provider.uploadFiles(
     sandboxId,
     {
@@ -308,9 +202,6 @@ export async function deliverPersonalEnvironment(input: {
     command: [
       "set -e",
       PATH_CHECKS,
-      ...staleLogins.map(
-        (kind) => `rm -f -- ${shellQuote(loginFileFromProject(kind))}`,
-      ),
       ...stale.map(
         (path) =>
           `if ! work_tracked ${shellQuote(path)} && ! work_unsafe ${shellQuote(path)}; then rm -f -- ${shellQuote(path)}; fi`,
@@ -332,25 +223,16 @@ export async function deliverPersonalEnvironment(input: {
       `rm -rf ${INCOMING}`,
     ].join("\n"),
   });
-  const delivered = [
-    ...[...environment.logins]
-      .filter(([kind, login]) => previous.logins[kind] !== login.fingerprint)
-      .map(([kind, login]) => ({
-        kind: "login" as const,
-        name: kind,
-        fingerprint: login.fingerprint,
-      })),
-    ...changed.map((file) => ({
-      kind: "file" as const,
-      name: file.path,
-      fingerprint: file.fingerprint,
-    })),
-  ];
+  const delivered = changed.map((file) => ({
+    kind: "file" as const,
+    name: file.path,
+    fingerprint: file.fingerprint,
+  }));
   return { delivered, refused: [...tracked], unsafe: [...unsafe] };
 }
 
 /**
- * Take the member's logins and files back out of the sandbox: on close,
+ * Take the member's files back out of the sandbox: on close,
  * idle release, and moves, and before a turn that may not have them (ADR
  * 0184). Safe to repeat, and a no-op where nothing was delivered.
  */
@@ -366,14 +248,13 @@ export async function removePersonalEnvironment(input: {
     what: "remove your personal files from the sandbox",
     command: [
       // Most sandboxes never received anything.
-      `if [ ! -d ${PERSONAL} ]${PERSONAL_LOGIN_KINDS.map((kind) => ` && [ ! -e ${loginFileFromProject(kind)} ]`).join("")}; then exit 0; fi`,
+      `if [ ! -d ${PERSONAL} ]; then exit 0; fi`,
       PATH_CHECKS,
       // Never a path the repository tracks by now, or one leading elsewhere.
       `if [ -f ${PERSONAL}/files ]; then while IFS= read -r p; do if [ -n "$p" ] && ! work_tracked "$p" && ! work_unsafe "$p"; then rm -f -- "$p"; fi; done < ${PERSONAL}/files; fi`,
       // Git sees those paths again, should the agent make its own.
       `if ex=$(git rev-parse --git-path info/exclude 2>/dev/null) && [ -f "$ex" ]; then awk -v begin=${shellQuote(EXCLUDE_BEGIN)} -v end=${shellQuote(EXCLUDE_END)} '$0 == begin { skip = 1; next } $0 == end { skip = 0; next } !skip' "$ex" > "$ex.work" && mv "$ex.work" "$ex"; fi`,
       `rm -rf ${PERSONAL}`,
-      `rm -f ${PERSONAL_LOGIN_KINDS.map(loginFileFromProject).join(" ")}`,
     ].join("\n"),
   });
 }

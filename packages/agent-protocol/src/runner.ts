@@ -456,9 +456,19 @@ export interface AttemptHost {
     /** What the server says about the tool, for `auto` policies. */
     annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
     description?: string;
+    /** Aborting withdraws an approval still waiting for its person. */
+    signal?: AbortSignal;
   }): Promise<AuthorizeResult>;
-  /** Open a question, approval or elicitation and wait for its answer. */
-  request(key: string, request: RequestDraft): Promise<RuntimeRequestResponse>;
+  /**
+   * Open a question, approval or elicitation and wait for its answer.
+   * Aborting `signal`, or emitting `request.closed` for the key, withdraws
+   * it; the promise then rejects with a {@link RequestClosedError}.
+   */
+  request(
+    key: string,
+    request: RequestDraft,
+    options?: { signal?: AbortSignal },
+  ): Promise<RuntimeRequestResponse>;
   /** The native thread's state, stored with Work (capabilities.nativeState). */
   nativeState: {
     append(input: {

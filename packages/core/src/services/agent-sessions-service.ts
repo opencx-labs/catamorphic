@@ -42,6 +42,7 @@ import {
   buildPluginsPreamble,
   type ExtraTool,
   extraToolResult,
+  type HarnessPermissions,
   type McpToolPolicyLayers,
   mergePolicyLayers,
   narrowingLayer,
@@ -1949,6 +1950,40 @@ export class AgentSessionsService {
    * itself). A session whose authority is another host gets it through
    * that host's mailbox. Runs a turn unless `mode` is `message_only`.
    */
+  /**
+   * Record an attributed message inside a caller's transaction, so it
+   * commits with the caller's own change (a session action's result). The
+   * caller has already checked access; nothing runs until it commits.
+   */
+  async deliverWithin(
+    trx: Transaction<DB>,
+    input: {
+      sessionId: string;
+      content: string;
+      author: SessionMessageAuthor;
+      mode: DispatchMode;
+      idempotencyKey?: string;
+      metadata?: JsonObject;
+    },
+  ): Promise<SessionDeliveryReceipt> {
+    const session = await trx
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where("id", "=", input.sessionId)
+      .forUpdate()
+      .executeTakeFirstOrThrow();
+    const receipt = await this.deliverIn(trx, {
+      session,
+      text: input.content,
+      author: input.author,
+      dispatch: input.mode,
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      ...(input.metadata ? { metadata: input.metadata } : {}),
+    });
+    if (receipt.turnId) this.kick(input.sessionId);
+    return receipt;
+  }
+
   async deliver(
     identity: Identity,
     projectId: string,
@@ -2230,6 +2265,36 @@ export class AgentSessionsService {
     return receipt;
   }
 
+  /**
+   * Stop a session's work from the host side: a parent stopping its
+   * subsession, a session action, a workflow. A person's interrupt goes
+   * through {@link command} with their own command id.
+   */
+  async interrupt(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    options: { turnId?: string; notifyParent?: boolean } = {},
+  ): Promise<void> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    const commandId = `host:interrupt:${randomUUID()}`;
+    await this.log.command({
+      sessionId,
+      commandId,
+      type: "interrupt",
+      run: (trx) =>
+        this.interruptIn(trx, {
+          identity,
+          session,
+          ...(options.turnId ? { turnId: options.turnId } : {}),
+          commandId,
+        }),
+    });
+    if (options.notifyParent !== false)
+      await this.interruptDelegation(identity, projectId, sessionId);
+    this.kick(sessionId);
+  }
+
   private async interruptIn(
     trx: Transaction<DB>,
     input: { identity: Identity; session: SessionRow; turnId?: string; commandId: string },
@@ -2382,6 +2447,155 @@ export class AgentSessionsService {
    * it; an answer to a non-blocking question whose turn ended becomes a
    * message. A request whose agent stopped can no longer be answered.
    */
+  /**
+   * Ask a session's person to approve something the host itself guards
+   * (ADR 0162: a brokered connection action), as a request on the turn
+   * working now. Durable like any request: whichever replica answers, the
+   * asking replica sees the answer. Denies when no turn is working, and when
+   * nobody answers before `timeoutMs`.
+   */
+  async askApproval(input: {
+    sessionId: string;
+    title: string;
+    description?: string;
+    origin: RuntimeRequest["origin"];
+    approval: NonNullable<RuntimeRequest["approval"]>;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<"allow" | "deny"> {
+    const timeoutMs = input.timeoutMs ?? 5 * 60_000;
+    const opened = await this.db.transaction().execute(async (trx) => {
+      const row = await trx
+        .selectFrom("agent_turns")
+        .selectAll()
+        .where("session_id", "=", input.sessionId)
+        .where("status", "in", ["running", "waiting"])
+        .forUpdate()
+        .executeTakeFirst();
+      if (!row) return null;
+      const turn = turnFromRow(row);
+      const now = new Date().toISOString();
+      const id = randomUUID();
+      const itemId = randomUUID();
+      const request: RuntimeRequest = {
+        id,
+        sessionId: input.sessionId,
+        turnId: turn.id,
+        attemptId: turn.activeAttemptId,
+        itemId,
+        kind: "approval",
+        status: "pending",
+        answerable: true,
+        blocking: true,
+        title: input.title,
+        description: input.description ?? null,
+        origin: input.origin,
+        questions: null,
+        approval: input.approval,
+        elicitation: null,
+        approvers: [],
+        expiresAt: new Date(Date.now() + timeoutMs).toISOString(),
+        response: null,
+        resolvedBy: null,
+        reason: null,
+        createdAt: now,
+        resolvedAt: null,
+      };
+      const events: SessionEvent[] = [
+        { type: "request.changed", request },
+        {
+          type: "item.added",
+          item: {
+            id: itemId,
+            sessionId: input.sessionId,
+            turnId: turn.id,
+            attemptId: turn.activeAttemptId,
+            parentItemId: null,
+            position: 0,
+            status: "in_progress",
+            nativeRef: null,
+            createdAt: now,
+            updatedAt: now,
+            startedAt: now,
+            endedAt: null,
+            kind: "request",
+            requestId: id,
+          },
+        },
+      ];
+      if (turn.status === "running")
+        events.push({
+          type: "turn.changed",
+          turn: { ...turn, status: "waiting", activity: "Waiting for your approval", activityAt: now, updatedAt: now },
+        });
+      await this.log.append(trx, { sessionId: input.sessionId, events });
+      return request;
+    });
+    if (!opened) return "deny";
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline && !input.signal?.aborted) {
+      const row = await this.db
+        .selectFrom("agent_runtime_requests")
+        .selectAll()
+        .where("request_id", "=", opened.id)
+        .executeTakeFirst();
+      const request = row ? requestFromRow(row) : null;
+      if (!request || request.status !== "pending")
+        return request?.response?.kind === "approval" && request.response.decision === "approved"
+          ? "allow"
+          : "deny";
+      await delay(500);
+    }
+    // Nobody answered: the request closes and the turn works on.
+    await this.db.transaction().execute(async (trx) => {
+      const row = await trx
+        .selectFrom("agent_runtime_requests")
+        .selectAll()
+        .where("request_id", "=", opened.id)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!row) return;
+      const request = requestFromRow(row);
+      if (request.status !== "pending") return;
+      const now = new Date().toISOString();
+      const events: SessionEvent[] = [
+        {
+          type: "request.changed",
+          request: {
+            ...request,
+            status: input.signal?.aborted ? "cancelled" : "expired",
+            answerable: false,
+            reason: input.signal?.aborted ? "The action was withdrawn." : "Nobody answered in time.",
+            resolvedAt: now,
+          },
+        },
+        ...(await this.unblockedTurn(trx, request)),
+      ];
+      await this.log.append(trx, { sessionId: request.sessionId, events });
+    });
+    return "deny";
+  }
+
+  /** The turn back to running once none of its blocking requests is open. */
+  private async unblockedTurn(trx: Transaction<DB>, request: RuntimeRequest): Promise<SessionEvent[]> {
+    if (!request.turnId) return [];
+    const row = await trx.selectFrom("agent_turns").selectAll().where("id", "=", request.turnId).executeTakeFirst();
+    if (!row) return [];
+    const turn = turnFromRow(row);
+    if (turn.status !== "waiting") return [];
+    const others = await trx
+      .selectFrom("agent_runtime_requests")
+      .select("request_id")
+      .where("turn_id", "=", turn.id)
+      .where("status", "=", "pending")
+      .where("blocking", "=", true)
+      .where("request_id", "!=", request.id)
+      .executeTakeFirst();
+    if (others) return [];
+    const now = new Date().toISOString();
+    return [{ type: "turn.changed", turn: { ...turn, status: "running", activity: "Continuing", activityAt: now, updatedAt: now } }];
+  }
+
   private async respondIn(
     trx: Transaction<DB>,
     input: {
@@ -2428,23 +2642,16 @@ export class AgentSessionsService {
       isActiveTurnStatus(turn.status) &&
       turn.activeAttemptId === request.attemptId;
     if (live && turn) {
-      await this.queue.enqueueCommand(trx, {
-        turnId: turn.id,
-        attemptId: request.attemptId,
-        kind: "respond",
-        payload: { requestKey: request.runnerKey ?? "", response: protocolJson(response) },
-      });
-      const others = await trx
-        .selectFrom("agent_runtime_requests")
-        .select("request_id")
-        .where("session_id", "=", input.session.id)
-        .where("turn_id", "=", turn.id)
-        .where("status", "=", "pending")
-        .where("blocking", "=", true)
-        .where("request_id", "!=", request.id)
-        .executeTakeFirst();
-      if (turn.status === "waiting" && !others)
-        events.push({ type: "turn.changed", turn: { ...turn, status: "running", activity: "Continuing", activityAt: now, updatedAt: now } });
+      // A runner's request is answered through its runner; a host's own
+      // (askApproval) is read from its row by whoever waits on it.
+      if (request.runnerKey)
+        await this.queue.enqueueCommand(trx, {
+          turnId: turn.id,
+          attemptId: request.attemptId,
+          kind: "respond",
+          payload: { requestKey: request.runnerKey, response: protocolJson(response) },
+        });
+      events.push(...(await this.unblockedTurn(trx, request)));
     }
     if (request.itemId) {
       const itemRow = await trx.selectFrom("agent_items").select("payload").where("id", "=", request.itemId).executeTakeFirst();
@@ -4852,6 +5059,11 @@ export class AgentSessionsService {
           if (copy.forkPoint) {
             const now = new Date().toISOString();
             const threadId = randomUUID();
+            const source = await trx
+              .selectFrom("agent_provider_threads")
+              .select("state_path")
+              .where("id", "=", copy.forkPoint.threadId)
+              .executeTakeFirst();
             await this.log.append(trx, {
               sessionId: forkId,
               events: [
@@ -4880,6 +5092,7 @@ export class AgentSessionsService {
                   ...(copy.forkPoint.throughTurnRef
                     ? { throughTurnRef: copy.forkPoint.throughTurnRef }
                     : {}),
+                  ...(source?.state_path ? { statePath: source.state_path } : {}),
                 }),
               })
               .where("id", "=", threadId)
@@ -5103,11 +5316,9 @@ export class AgentSessionsService {
       return { child, delegation, receipt };
     });
     if (created.receipt.turnId) {
-      void this.scheduleDrain(identity, projectId, created.child.id).catch(
-        () => {
-          // The durable child turn remains inspectable if execution fails.
-        },
-      );
+      void this.scheduleDrain(created.child.id).catch(() => {
+        // The durable child turn remains inspectable if execution fails.
+      });
     }
     const { child, delegation } = created;
     return {
@@ -6478,7 +6689,7 @@ export class AgentSessionsService {
         {
           content: `Subsession ${sessionId} was archived by the user.`,
           author: { kind: "system", code: "subsession_archived" },
-          mode: "next_turn",
+          mode: "queue",
           idempotencyKey: `delegation:${sourceDelegation.id}:archived`,
         },
       );
@@ -6701,10 +6912,10 @@ export class AgentSessionsService {
           allowed: agent.environment?.allowed,
           preferred: agent.environment?.preferred,
         });
-        // A harness on its user's own login is offered only in projects
-        // with an Environment that allows personal credentials (ADR 0184).
+        // A harness on its member's own sign-in is offered only in projects
+        // with an Environment that allows personal credentials (ADR 0197).
         if (
-          agent.personalLogin &&
+          agent.signIn &&
           !environments.items.some(
             (item) => item.personalCredentials !== undefined,
           )
@@ -7746,47 +7957,47 @@ export class AgentSessionsService {
       ])
       .where("agent_delegations.status", "=", "running")
       .where("agent_sessions.authority_host_id", "=", this.hostId)
-      .where(({ not, exists, selectFrom }) =>
-        not(
-          exists(
-            selectFrom("agent_turns")
-              .select("id")
-              .whereRef("agent_turns.session_id", "=", "agent_sessions.id")
-              .where("status", "in", ["queued", "running", "held"]),
-          ),
-        ),
-      )
       .execute();
     for (const child of children) {
       try {
+        // A child's latest turn says where its work stands: still working,
+        // waiting on its person, or settled with a result.
+        const latest = await this.db
+          .selectFrom("agent_turns")
+          .selectAll()
+          .where("session_id", "=", child.id)
+          .orderBy("ordinal", "desc")
+          .limit(1)
+          .executeTakeFirst();
+        if (!latest) continue;
+        const turn = turnFromRow(latest);
+        const status: AgentTurnSettledEvent["status"] | null =
+          turn.status === "waiting"
+            ? "awaiting_input"
+            : turn.status === "completed"
+              ? "completed"
+              : isSettledTurnStatus(turn.status)
+                ? "failed"
+                : null;
+        if (!status) continue;
         const identity = await resolveIdentity({
           tenantId: child.tenant_id,
           projectId: child.project_id,
           externalUserId: child.external_user_id,
         });
         if (!identity) continue;
-        const message = await this.db
-          .selectFrom("agent_messages")
-          .selectAll()
-          .where("session_id", "=", child.id)
-          .where("role", "=", "assistant")
-          .orderBy("seq", "desc")
-          .executeTakeFirst();
-        const status = (message?.metadata as JsonObject | null)?.status;
-        if (
-          message &&
-          (status === "completed" ||
-            status === "failed" ||
-            status === "awaiting_input")
-        )
-          await this.settleDelegation({
-            identity,
-            projectId: child.project_id,
-            sessionId: child.id,
-            resultMessageId: message.id,
-            status,
-            content: message.content,
-          });
+        const reply = await readReply({ db: this.db, turn });
+        await this.settleDelegation({
+          identity,
+          projectId: child.project_id,
+          sessionId: child.id,
+          resultMessageId: reply?.id ?? turn.inputItemId ?? turn.id,
+          status,
+          content:
+            reply?.kind === "assistant_message" && reply.text
+              ? reply.text
+              : (turn.error?.message ?? ""),
+        });
       } catch (error) {
         console.warn(
           `[catamorphic] Subsession result delivery failed for ${child.id}`,
@@ -7834,7 +8045,7 @@ export class AgentSessionsService {
 
     if (input.status === "awaiting_input") {
       const delivered = await this.db
-        .selectFrom("agent_messages")
+        .selectFrom("agent_items")
         .select("id")
         .where("session_id", "=", delegation.source_session_id)
         .where(
@@ -7860,7 +8071,7 @@ export class AgentSessionsService {
             sessionId: input.sessionId,
             agentId: null,
           },
-          mode: "next_turn",
+          mode: "queue",
           idempotencyKey: `delegation:${delegation.id}:awaiting-input`,
         },
       );
@@ -7887,7 +8098,7 @@ export class AgentSessionsService {
           sessionId: input.sessionId,
           agentId: null,
         },
-        mode: "next_turn",
+        mode: "queue",
         idempotencyKey: `delegation:${delegation.id}:result`,
         metadata: {
           delegation: {
@@ -7902,7 +8113,7 @@ export class AgentSessionsService {
       .updateTable("agent_delegations")
       .set({
         status,
-        result_message_id: input.resultMessageId,
+        result_item_id: input.resultMessageId,
         completed_at: new Date(),
       })
       .where("id", "=", delegation.id)
@@ -7988,11 +8199,6 @@ export class AgentSessionsService {
   }
 }
 
-/**
- * Events serialized into a message's step log. Usage events are accounting
- * (ADR 0057) — stamped on the settled message as `metadata.usage`, never
- * rendered as activity rows — so they are filtered out here.
- */
 /** One calm line from an agent-written status: no newlines, no trailing period, bounded. */
 export function liveStatusLine(value: string | undefined): string | undefined {
   const line = value
@@ -8004,73 +8210,6 @@ export function liveStatusLine(value: string | undefined): string | undefined {
   return line.length > 80 ? `${line.slice(0, 79).trimEnd()}…` : line;
 }
 
-/**
- * Human labels for well-known shell commands. The live activity line never
- * shows a raw command (long, technical, sometimes noisy); a recognized
- * program gets a friendly verb and everything else is just "Working...".
- */
-const COMMAND_LABELS: Record<string, string> = {
-  sleep: "Waiting...",
-  find: "Searching files...",
-  grep: "Searching files...",
-  rg: "Searching files...",
-  ag: "Searching files...",
-  ls: "Looking around...",
-  tree: "Looking around...",
-  pwd: "Looking around...",
-  cat: "Reading files...",
-  head: "Reading files...",
-  tail: "Reading files...",
-  wc: "Reading files...",
-  mkdir: "Creating files...",
-  touch: "Creating files...",
-  cp: "Copying files...",
-  mv: "Moving files...",
-  git: "Working with git...",
-  curl: "Fetching a URL...",
-  wget: "Fetching a URL...",
-  make: "Building...",
-  cargo: "Building...",
-  tsc: "Building...",
-  npm: "Running scripts...",
-  npx: "Running scripts...",
-  pnpm: "Running scripts...",
-  yarn: "Running scripts...",
-  bun: "Running scripts...",
-  bunx: "Running scripts...",
-  node: "Running code...",
-  python: "Running code...",
-  python3: "Running code...",
-  vitest: "Running tests...",
-  jest: "Running tests...",
-  pytest: "Running tests...",
-};
-
-/**
- * Changed files for a host-execution turn: there is no sandbox baseline to
- * diff, so the provider's `file_edit` events are the record. Paths are
- * relativized to the working directory so chips read like repo paths.
- */
-export function hostChangedFiles(
-  events: AgentEvent[],
-  workingDirectory: string,
-): SyncedFileChange[] {
-  const root = workingDirectory.endsWith("/")
-    ? workingDirectory
-    : `${workingDirectory}/`;
-  const seen = new Set<string>();
-  const changes: SyncedFileChange[] = [];
-  for (const event of events) {
-    if (event.type !== "file_edit" || !event.filePath) continue;
-    const path = event.filePath.startsWith(root)
-      ? event.filePath.slice(root.length)
-      : event.filePath;
-    if (seen.has(path)) continue;
-    seen.add(path);
-    changes.push({ path, kind: "modified" });
-  }
-  return changes;
-}
 
 function truncate(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
@@ -8443,13 +8582,7 @@ function hostToolResult(value: ReturnType<typeof extraToolResult>): HostToolResu
           ? [{ type: "image", data: part.data, mimeType: part.mimeType }]
           : [],
   );
-  return {
-    content,
-    ...(value.structuredContent !== undefined
-      ? { structured: protocolJson({ value: value.structuredContent }).value }
-      : {}),
-    ...(value.isError ? { isError: true } : {}),
-  };
+  return { content, ...(value.isError ? { isError: true } : {}) };
 }
 
 function protocolPolicies(

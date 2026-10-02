@@ -65,7 +65,7 @@ export interface SendAgentMessageInput {
   sessionId: string;
   message: string;
   attachments?: AgentChatAttachment[];
-  deliveryMode?: "next_turn" | "interrupt";
+  deliveryMode?: "queue" | "interrupt";
   idempotencyKey?: string;
 }
 

@@ -127,7 +127,7 @@ export interface OptimisticAgentMessage {
   content: string;
   attachments?: AgentChatAttachment[];
   /** Preserve admission intent when retrying an uncertain delivery. */
-  deliveryMode?: "next_turn" | "interrupt";
+  deliveryMode?: "queue" | "interrupt";
 }
 
 /**
@@ -175,7 +175,7 @@ export function useAgentChat(
     id?: string;
     content: string;
     attachments: AgentChatAttachment[];
-    deliveryMode: "next_turn" | "interrupt";
+    deliveryMode: "queue" | "interrupt";
   } | null>(null);
   const sessionCreationRef = useRef<Promise<string | null> | null>(null);
   const heldTurnIdRef = useRef<string | null>(null);
@@ -337,7 +337,7 @@ export function useAgentChat(
   const performSend = async (input: {
     content: string;
     attachments: AgentChatAttachment[];
-    deliveryMode: "next_turn" | "interrupt";
+    deliveryMode: "queue" | "interrupt";
     id?: string;
   }) => {
     if (!projectId || delivery.scope !== operationScopeRef.current) return;
@@ -496,7 +496,7 @@ export function useAgentChat(
       // the delegated queue. Core records the takeover and notifies its
       // parent, which may have been waiting on the original assignment.
       deliveryMode:
-        session.data?.parentSessionId && isWorking ? "interrupt" : "next_turn",
+        session.data?.parentSessionId && isWorking ? "interrupt" : "queue",
     });
   };
 
@@ -551,7 +551,7 @@ export function useAgentChat(
           id: message.id,
           content: message.content,
           attachments: message.attachments ?? [],
-          deliveryMode: message.deliveryMode ?? "next_turn",
+          deliveryMode: message.deliveryMode ?? "queue",
         });
     },
     dismissFailed: (id) =>

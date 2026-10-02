@@ -7,11 +7,11 @@ import type {
   EnvironmentResourcePolicy,
   EnvironmentRuntimeBinding,
   EnvironmentTrust,
-  type SignInHarness,
-  signInCapability,
   SandboxCapability,
+  SignInHarness,
 } from "@catamorphic/sandbox";
 import {
+  signInCapability,
   dockerfileDigest,
   environmentSatisfies,
   harnessCapability,

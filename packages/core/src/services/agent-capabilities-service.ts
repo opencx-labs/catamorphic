@@ -24,7 +24,7 @@ import {
   intersectScope,
   isProjectPrincipal,
 } from "../identity.js";
-import { requireRuntimeSession } from "./agent-runtime-events-service.js";
+import { assertAgentSessionAccess } from "./agent-session-access.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
 import type { ExecutionEnvironmentsService } from "./execution-environments-service.js";
@@ -472,19 +472,29 @@ export class AgentCapabilitiesService {
     allocationId?: string;
   }): Promise<AgentCapabilityContext> {
     const check = async (identity: Identity) => {
-      const { projectId } = await requireRuntimeSession({
-        db: this.deps.db,
-        identity,
-        sessionId: args.sessionId,
-        lock: false,
-        intent: "read",
-      });
-      if (projectId !== args.projectId) throw new AccessDeniedError();
       const session = await this.deps.db
         .selectFrom("agent_sessions")
-        .select(["allocation_id", "status"])
-        .where("id", "=", args.sessionId)
-        .executeTakeFirstOrThrow();
+        .innerJoin("projects", "projects.id", "agent_sessions.project_id")
+        .select([
+          "agent_sessions.agent_id",
+          "agent_sessions.external_user_id",
+          "agent_sessions.project_id",
+          "agent_sessions.allocation_id",
+          "agent_sessions.status",
+        ])
+        .where("agent_sessions.id", "=", args.sessionId)
+        .where("projects.tenant_id", "=", identity.tenantId)
+        .executeTakeFirst();
+      if (!session || session.project_id !== args.projectId)
+        throw new AccessDeniedError();
+      assertAgentSessionAccess({
+        identity,
+        projectId: session.project_id,
+        externalUserId: session.external_user_id,
+        agentId: session.agent_id,
+        intent: "read",
+      });
+      const projectId = session.project_id;
       if (session.status !== "active" || !session.allocation_id)
         throw new AccessDeniedError();
       const allocation = await this.deps.allocations.get({

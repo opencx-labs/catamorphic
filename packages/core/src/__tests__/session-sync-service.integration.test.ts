@@ -69,7 +69,7 @@ describe("durable session sync", () => {
         content: "hello",
         author_kind: "user",
         author_payload: {},
-        delivery_mode: "next_turn",
+        delivery_mode: "queue",
       })
       .execute();
     await sync.enqueue({
@@ -102,7 +102,7 @@ describe("durable session sync", () => {
         content: "hello",
         author_kind: "user",
         author_payload: {},
-        delivery_mode: "next_turn",
+        delivery_mode: "queue",
       })
       .execute();
     await sync.enqueue({

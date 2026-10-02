@@ -569,7 +569,7 @@ describe("a member's personal environment (ADR 0184)", () => {
     await sessions().deliver(admin, projectId, sessionId, {
       content: "report",
       author: { kind: "user", externalUserId: admin.externalUserId },
-      mode: "next_turn",
+      mode: "queue",
     });
     expect(await answerAfter(before, "the administrator's turn")).toContain(
       "This chat runs on its owner's own Claude Code sign-in, so only they can send it messages.",
@@ -598,7 +598,7 @@ describe("a member's personal environment (ADR 0184)", () => {
       {
         sessionId,
         content: `run: ${hashes([".env"])}`,
-        mode: "next_turn",
+        mode: "queue",
         idempotencyKey: crypto.randomUUID(),
       },
     );
@@ -712,7 +712,7 @@ describe("a member's personal environment (ADR 0184)", () => {
               content: "Fix the flaky test",
               metadata: null,
               author: { kind: "user", externalUserId: users[who] },
-              deliveryMode: "next_turn",
+              deliveryMode: "queue",
               idempotencyKey: null,
               createdAt: new Date().toISOString(),
             },

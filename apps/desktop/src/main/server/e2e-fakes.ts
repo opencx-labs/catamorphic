@@ -1636,7 +1636,7 @@ function sessionWorkflowFixture({
           ? `return context.host["catamorphic.sessions"].deliver({ sessionId: ${JSON.stringify(sessionId)}, content: "Reminder: submit the application.", mode: "message_only", attention: "required", idempotencyKey: "reminder" });`
           : scenario === "monitor"
             ? `return context.host["catamorphic.sessions"].deliver({ mode: "message_only", attention: "required", sessionId: ${JSON.stringify(sessionId)}, content: "Work completion observed.", idempotencyKey: "completion-observed" });`
-            : `return context.host["catamorphic.sessions"].deliver({ sessionId: ${JSON.stringify(sessionId)}, content: "Scheduled follow-up received.", mode: "next_turn", idempotencyKey: "scheduled-wake" });`;
+            : `return context.host["catamorphic.sessions"].deliver({ sessionId: ${JSON.stringify(sessionId)}, content: "Scheduled follow-up received.", mode: "queue", idempotencyKey: "scheduled-wake" });`;
   return `import { defineWorkflow, trigger, type BoundaryContext } from "@catamorphic/workflow";
 /** @displayname Session ${scenario} */
 export const ${name} = defineWorkflow(({ defineBoundary }) => ({

@@ -68,7 +68,7 @@ describe("useAgentChat", () => {
                   messageId: "queued-message",
                   content: "Queued",
                   metadata: null,
-                  deliveryMode: "next_turn",
+                  deliveryMode: "queue",
                   status: "queued",
                   createdAt: new Date().toISOString(),
                 },
@@ -124,7 +124,7 @@ describe("useAgentChat", () => {
             {
               messageId: "accepted",
               turnId: "turn",
-              mode: "next_turn",
+              mode: "queue",
               created: true,
             },
             { status: 202 },
@@ -222,7 +222,7 @@ describe("useAgentChat", () => {
             {
               messageId: "accepted",
               turnId: "turn",
-              mode: "next_turn",
+              mode: "queue",
               created: true,
             },
             { status: 202 },
@@ -261,7 +261,7 @@ describe("useAgentChat", () => {
             {
               messageId: "accepted-message",
               turnId: "accepted-turn",
-              mode: "next_turn",
+              mode: "queue",
               created: false,
             },
             { status: 202 },
@@ -332,7 +332,7 @@ describe("useAgentChat", () => {
             {
               messageId: "accepted",
               turnId: "turn",
-              mode: "next_turn",
+              mode: "queue",
               created: true,
             },
             { status: 202 },
@@ -445,7 +445,7 @@ describe("useAgentChat", () => {
                 messageId: "00000000-0000-4000-8000-000000000011",
                 content: "Delegated work",
                 metadata: null,
-                deliveryMode: "next_turn",
+                deliveryMode: "queue",
                 status: "running",
                 createdAt: new Date().toISOString(),
               },
@@ -774,7 +774,7 @@ describe("useAgentChat", () => {
             {
               messageId: userMessageId,
               turnId: "00000000-0000-4000-8000-000000000006",
-              mode: "next_turn",
+              mode: "queue",
               created: true,
             },
             { status: 202 },
@@ -856,7 +856,7 @@ describe("useAgentChat", () => {
                 sends === 1
                   ? "00000000-0000-4000-8000-000000000009"
                   : "00000000-0000-4000-8000-00000000000b",
-              mode: "next_turn",
+              mode: "queue",
               created: true,
             },
             { status: 202 },
@@ -894,7 +894,7 @@ describe("useAgentChat", () => {
                 messageId: secondMessageId,
                 content: "Repeat",
                 metadata: null,
-                deliveryMode: "next_turn",
+                deliveryMode: "queue",
                 status: "queued",
                 createdAt: new Date().toISOString(),
               },
@@ -973,7 +973,7 @@ describe("useAgentChat", () => {
                 messageId: "00000000-0000-4000-8000-00000000000e",
                 content: queuedContent,
                 metadata: { attachments },
-                deliveryMode: "next_turn",
+                deliveryMode: "queue",
                 status: "queued",
                 createdAt: new Date().toISOString(),
               },
@@ -1224,7 +1224,7 @@ describe("useAgentChat", () => {
   });
 });
 
-it.each(["next_turn", "interrupt"] as const)(
+it.each(["queue", "interrupt"] as const)(
   "preserves failed %s delivery content and idempotency on resend",
   async (deliveryMode) => {
     const ids: string[] = [];
@@ -1250,7 +1250,7 @@ it.each(["next_turn", "interrupt"] as const)(
                 {
                   messageId: "recovered",
                   turnId: "turn",
-                  mode: "next_turn",
+                  mode: "queue",
                   created: true,
                 },
                 { status: 202 },

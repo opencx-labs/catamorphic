@@ -21,6 +21,35 @@ export const jsonValueSchema: z.ZodType<
   ]),
 );
 
+/** Who wrote an input; {@link SessionMessageAuthor} as a schema. */
+export const sessionMessageAuthorSchema = z.union([
+  z.object({ kind: z.literal("user"), externalUserId: z.string() }),
+  z.object({
+    kind: z.literal("agent"),
+    sessionId: z.string(),
+    agentId: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal("workflow"),
+    runId: z.string(),
+    workflowName: z.string(),
+    displayName: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("watcher"),
+    watcherId: z.string(),
+    runId: z.string().optional(),
+  }),
+  z.object({ kind: z.literal("system"), code: z.string() }),
+]);
+
+export const dispatchModeSchema = z.enum([
+  "queue",
+  "steer",
+  "interrupt",
+  "message_only",
+]);
+
 const textSource = z.union([
   z.object({ type: z.literal("paste") }),
   z.object({

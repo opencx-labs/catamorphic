@@ -1,11 +1,8 @@
 import { type DB, type Json, withJsonArrayParameters } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import type { PluginResolver } from "@catamorphic/plugins";
-import type {
-  CodingAgentProvider,
-  EnvironmentProvider,
-  SandboxProvider,
-} from "@catamorphic/sandbox";
+import type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
+import type { EnvironmentProvider, SandboxProvider } from "@catamorphic/sandbox";
 import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import { PROJECT_SKILLS_DIR } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
@@ -15,8 +12,6 @@ import type { AgentCapabilityOptions } from "./services/agent-capabilities-servi
 import { AgentCapabilitiesService } from "./services/agent-capabilities-service.js";
 import { AgentContextService } from "./services/agent-context-service.js";
 import { AgentDefinitionsService } from "./services/agent-definitions-service.js";
-import { AgentRuntimeEventsService } from "./services/agent-runtime-events-service.js";
-import { AgentRuntimeRequestsService } from "./services/agent-runtime-requests-service.js";
 import {
   AgentSessionsService,
   type AgentTurnSettledEvent,
@@ -44,6 +39,7 @@ import { CodeHostsService } from "./services/code-hosts-service.js";
 import {
   type CodingAgentRegistry,
   isCodingAgentRegistry,
+  type RegisteredCodingAgent,
   singleAgentRegistry,
 } from "./services/coding-agent-registry.js";
 import { ConnectionAdmissionService } from "./services/connection-admission.js";
@@ -115,7 +111,6 @@ import { SessionSyncService } from "./services/session-sync-service.js";
 import { SessionWorkspaces } from "./services/session-workspaces.js";
 import { SkillsService } from "./services/skills-service.js";
 import { TenantPoliciesService } from "./services/tenant-policies-service.js";
-import type { ToolPermissionChannel } from "./services/tool-permission-broker.js";
 import type {
   McpToolKindSpec,
   TriggerKindRuntime,
@@ -177,7 +172,7 @@ export interface CatamorphicCoreConfig {
   }) => Promise<Readonly<Record<string, EnvironmentConnectionBinding>>>;
   /**
    * Checks every brokered connection action from agents and workflows (ADR
-   * 0162). Escalations ask the agent session's person via `toolPermissions`.
+   * 0162). Escalations ask the agent session's person with a session request.
    * Guards are host code (ADR 0183).
    */
   connectionGuards?: readonly ConnectionActionGuard[];
@@ -219,21 +214,13 @@ export interface CatamorphicCoreConfig {
   }) => string | undefined;
   pluginResolver?: PluginResolver;
   /**
-   * Pluggable coding agent(s). Pass a single provider (e.g. `AiSdkCodingAgent`
-   * from `@catamorphic/ai-sdk`) for the classic one-agent setup, or a
-   * {@link CodingAgentRegistry} when the host offers several agents (the
-   * desktop app registers one per configured profile agent). Requires
-   * `sandboxProvider` — sandbox-execution agents operate on a per-(project,
-   * user) dev sandbox.
+   * Pluggable coding agent(s): one {@link RegisteredCodingAgent}, or a
+   * {@link CodingAgentRegistry} when the host offers several (the desktop
+   * registers one per profile agent). Each names a harness that runs in
+   * this process or beside its workspace (ADR 0196). Questions and
+   * approvals are session requests every client answers (ADR 0195).
    */
-  codingAgent?: CodingAgentProvider | CodingAgentRegistry;
-  /**
-   * Where tool-permission asks (ADR 0054) park for hosts that answer them
-   * over HTTP: hand its `handlerFor(agent)` to your providers'
-   * `onToolPermission`, and the plugin serves the pending list + answer
-   * routes. Hosts with their own consent UI (the desktop bridge) omit it.
-   */
-  toolPermissions?: ToolPermissionChannel;
+  codingAgent?: RegisteredCodingAgent | CodingAgentRegistry;
   /**
    * Resolve a project's directory on the host filesystem, required for
    * registry agents with `topology: "native"` (Claude Code, Codex).
@@ -439,11 +426,6 @@ export class CatamorphicCore {
   readonly sessionSync?: SessionSyncService;
   readonly watchers?: WatchersService;
   readonly sessionActions?: SessionActionsService;
-  /** Durable normalized provider events, independently replayable by cursor. */
-  readonly agentRuntimeEvents: AgentRuntimeEventsService;
-  /** Durable approval, question, and elicitation requests. */
-  readonly agentRuntimeRequests: AgentRuntimeRequestsService;
-  readonly toolPermissions?: ToolPermissionChannel;
   readonly apps?: AppsService;
   readonly sessionArtifacts: SessionArtifactsService;
   readonly appPolicies: AppPoliciesService;
@@ -462,7 +444,6 @@ export class CatamorphicCore {
   readonly hostSkillFiles: Record<string, string>;
 
   constructor(config: CatamorphicCoreConfig) {
-    this.toolPermissions = config.toolPermissions;
     // Array parameters reach jsonb as JSON on every host's database.
     this.db = withJsonArrayParameters(config.db);
     this.notifications = new UserNotificationsService(
@@ -717,8 +698,6 @@ export class CatamorphicCore {
     });
     this.projectEventMonitors = new ProjectEventMonitorsService(this.db);
     this.appStorage = new AppStorageService(this.db);
-    this.agentRuntimeEvents = new AgentRuntimeEventsService(this.db);
-    this.agentRuntimeRequests = new AgentRuntimeRequestsService(this.db);
     this.projectEventSources = config.projectEventSources ?? [];
     this.workflows = new WorkflowsService(this.projectManager, this.projects);
     this.projectEnvironments = new ProjectEnvironmentsService(
@@ -815,9 +794,26 @@ export class CatamorphicCore {
           ...(config.connectionGuardTimeoutMs
             ? { guardTimeoutMs: config.connectionGuardTimeoutMs }
             : {}),
-          ...(config.toolPermissions
-            ? { approvals: config.toolPermissions }
-            : {}),
+          approve: async (request) =>
+            (await this.agentSessions?.askApproval({
+              sessionId: request.sessionId,
+              title: request.title,
+              description: request.description,
+              origin: {
+                kind: "host",
+                id: request.server,
+                displayName: "Connection gateway",
+              },
+              approval: {
+                action: `${request.server} · ${request.tool}`,
+                details: request.description,
+                tool: {
+                  server: request.server,
+                  name: request.tool,
+                  input: JSON.parse(JSON.stringify(request.input)),
+                },
+              },
+            })) ?? "deny",
           sessionOwner: async (sessionId) =>
             (
               await this.db
@@ -943,9 +939,6 @@ export class CatamorphicCore {
       db: this.db,
       ...(config.credentialVault ? { vault: config.credentialVault } : {}),
       environments: this.projectEnvironments,
-      loginsInUse: (args) =>
-        this.agentSessions?.personalLoginsInUse(args) ??
-        Promise.resolve(new Set()),
     });
     this.runPluginsLoader = new RunPluginsLoader(
       this.secrets,
@@ -1299,7 +1292,7 @@ export class CatamorphicCore {
       ...previous,
       ...(run.workflow_enablement_id ? [run.workflow_enablement_id] : []),
     ];
-    const author: import("./services/agent-turns-service.js").SessionMessageAuthor =
+    const author: SessionMessageAuthor =
       {
         kind: "workflow",
         runId: context.runId,

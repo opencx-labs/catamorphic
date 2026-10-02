@@ -574,6 +574,7 @@ class ClaudeAttempt {
         tool: policed.tool,
         input: toJson(toolInput),
         itemKey: toolUseID,
+        signal,
       });
       return verdict.allowed
         ? { behavior: "allow", updatedInput: toolInput }

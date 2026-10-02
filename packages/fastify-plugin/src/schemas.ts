@@ -1264,7 +1264,7 @@ export const EnvironmentErrorSchema = z.object({
 
 export const SessionDeliveryModeSchema = z.enum([
   "message_only",
-  "next_turn",
+  "queue",
   "interrupt",
 ]);
 
@@ -1377,7 +1377,7 @@ export const PendingSessionTurnSchema = z.object({
   messageId: z.string().uuid(),
   content: z.string(),
   metadata: z.record(z.string(), z.unknown()).nullable(),
-  deliveryMode: z.enum(["next_turn", "interrupt"]),
+  deliveryMode: z.enum(["queue", "interrupt"]),
   status: z.enum(["queued", "held", "running"]),
   createdAt: z.string().datetime(),
 });
@@ -1559,7 +1559,7 @@ export const SendMessageSchema = z
     message: z.string().max(200_000),
     idempotencyKey: z.string().min(1).max(200).optional(),
     attachments: z.array(AgentAttachmentSchema).max(32).optional(),
-    deliveryMode: z.enum(["next_turn", "interrupt"]).optional(),
+    deliveryMode: z.enum(["queue", "interrupt"]).optional(),
     /** Move the chat's workspace to a ref before this turn (ADR 0178). */
     workspace: SessionWorkspaceRequestBodySchema.optional(),
   })

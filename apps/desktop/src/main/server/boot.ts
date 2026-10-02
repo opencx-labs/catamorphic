@@ -617,7 +617,7 @@ export async function startEmbeddedServer(
       {
         content: input.content,
         author: { kind: "system", code: "background_command" },
-        mode: input.mode ?? "next_turn",
+        mode: input.mode ?? "queue",
         idempotencyKey: input.idempotencyKey,
         metadata: { notice: input.notice },
       },

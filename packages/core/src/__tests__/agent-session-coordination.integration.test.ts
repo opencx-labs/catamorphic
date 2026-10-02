@@ -1030,7 +1030,7 @@ describe("agent session coordination", () => {
       sessionId: session.id,
       content: "Accepted before crash",
       author: { kind: "user", externalUserId: identity.externalUserId },
-      mode: "next_turn",
+      mode: "queue",
     });
     await sessions.turns.claimNextForSession({
       sessionId: session.id,
@@ -1070,7 +1070,7 @@ describe("agent session coordination", () => {
       sessionId: session.id,
       content: "Pending",
       author: { kind: "user", externalUserId: identity.externalUserId },
-      mode: "next_turn",
+      mode: "queue",
     });
     await sessions.turns.claimNextForSession({
       sessionId: session.id,
@@ -1611,7 +1611,7 @@ describe("agent session coordination", () => {
         {
           content: input.content,
           author: { kind: "workflow", runId, workflowName: "gmail-summary" },
-          mode: "next_turn",
+          mode: "queue",
           idempotencyKey: `workflow:${runId}:${chatKey}`,
           metadata: { workflowNotification: input.notification ?? {} },
         },
@@ -1802,7 +1802,7 @@ describe("agent session coordination", () => {
       sessions.deliver(identity, project.id, first.sessionId, {
         content: "Too late",
         author,
-        mode: "next_turn",
+        mode: "queue",
       }),
     ).rejects.toThrow();
 
@@ -1859,7 +1859,7 @@ describe("agent session coordination", () => {
           runId: crypto.randomUUID(),
           workflowName: "pageOnCall",
         },
-        mode: "next_turn",
+        mode: "queue",
       },
     );
     await vi.waitFor(async () => {
@@ -1878,7 +1878,7 @@ describe("agent session coordination", () => {
     const byId = await sessions.deliver(identity, project.id, chat.sessionId, {
       content: "Still firing",
       author: { kind: "system", code: "test" },
-      mode: "next_turn",
+      mode: "queue",
     });
     await vi.waitFor(async () => {
       const turn = await db
@@ -2037,7 +2037,7 @@ describe("agent session coordination", () => {
     ).toBe(false);
   });
 
-  it.each(["message_only", "next_turn", "interrupt"] as const)(
+  it.each(["message_only", "queue", "interrupt"] as const)(
     "attention is atomic with %s delivery and does not survive a rollback",
     async (mode) => {
       const project = await projects.create(identity, {

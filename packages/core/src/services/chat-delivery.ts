@@ -1,3 +1,4 @@
+import type { DispatchMode } from "@catamorphic/agent-protocol";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
@@ -68,7 +69,7 @@ export interface ChatApprovers {
 
 type DeliveryMessage = {
   content: string;
-  mode: "message_only" | "next_turn" | "interrupt";
+  mode: DispatchMode;
   attention?: "required" | "none";
   notification?: { title?: string; body?: string };
   idempotencyKey?: string;
@@ -113,9 +114,14 @@ export function parseChatDelivery(value: unknown): ChatDelivery {
   const content = input.content;
   if (typeof content !== "string" || !content.trim())
     throw new Error("content must be a non-empty string");
-  const mode = input.mode ?? "next_turn";
-  if (mode !== "message_only" && mode !== "next_turn" && mode !== "interrupt")
-    throw new Error("mode must be message_only, next_turn, or interrupt");
+  const mode = input.mode ?? "queue";
+  if (
+    mode !== "message_only" &&
+    mode !== "queue" &&
+    mode !== "steer" &&
+    mode !== "interrupt"
+  )
+    throw new Error("mode must be queue, steer, interrupt, or message_only");
   const attention = input.attention;
   if (
     attention !== undefined &&

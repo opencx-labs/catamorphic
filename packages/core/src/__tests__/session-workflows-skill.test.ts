@@ -46,7 +46,7 @@ it("the shipped self-wake recipe parses and returns executable host transitions"
           sessionId: "REPLACE_WITH_CURRENT_SESSION_ID",
           content:
             "Continue the requested follow-up. Inspect current state first.",
-          mode: "next_turn",
+          mode: "queue",
           idempotencyKey: "timer:date",
         },
       },

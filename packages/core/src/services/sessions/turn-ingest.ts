@@ -12,6 +12,7 @@ import type {
   Turn,
   TurnError,
 } from "@catamorphic/agent-protocol";
+import { itemActivity } from "@catamorphic/agent-protocol";
 import type { HarnessEvent, ItemDraft } from "@catamorphic/agent-protocol/runner";
 import type { DB } from "@catamorphic/db";
 import type { Transaction } from "kysely";
@@ -136,7 +137,9 @@ export async function ingestHarnessEvents(input: {
     if (item) items.set(item.id, appendLocal(item, pendingDelta, at));
     pendingDelta = undefined;
   };
+  // The agent's own status line wins over one derived from its work.
   let status: string | undefined;
+  let derived: string | undefined;
 
   const emitTurn = (next: Turn) => {
     turn = { ...next, updatedAt: at };
@@ -180,6 +183,7 @@ export async function ingestHarnessEvents(input: {
         });
         items.set(id, item);
         out.push({ type: "item.added", item });
+        derived = itemActivity(item) ?? derived;
         break;
       }
       case "item.delta": {
@@ -311,8 +315,9 @@ export async function ingestHarnessEvents(input: {
       .executeTakeFirst();
     if (!open) emitTurn({ ...turn, status: "running" });
   }
-  if (status && status !== turn.activity && turn.status === "running")
-    emitTurn({ ...turn, activity: status, activityAt: at });
+  const line = status ?? derived;
+  if (line && line !== turn.activity && turn.status === "running")
+    emitTurn({ ...turn, activity: line, activityAt: at });
   return { ...result, events: out, turn, attempt, thread };
 }
 

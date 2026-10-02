@@ -397,7 +397,7 @@ describe("RemoteSessionMirror", () => {
         messageId: "message-1",
         content: "PR checks passed",
         author: { kind: "watcher", watcherId: "watcher-1" },
-        mode: "next_turn",
+        mode: "queue",
         idempotencyKey: "delivery-1",
         metadata: null,
         createdAt: new Date().toISOString(),

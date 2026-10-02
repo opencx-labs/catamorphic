@@ -205,7 +205,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       sessionId: session.id,
       content: "Work",
       author: { kind: "user", externalUserId: root.externalUserId },
-      mode: "next_turn",
+      mode: "queue",
     });
     await sessions.turns.claimNextForSession({
       sessionId: session.id,
@@ -360,7 +360,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       sessions.deliver(appViewer, projectId, first.id, {
         content: "hello",
         author: { kind: "user", externalUserId: appViewer.externalUserId },
-        mode: "next_turn",
+        mode: "queue",
         idempotencyKey: "app-deliver",
       }),
     ).rejects.toThrow(AccessDeniedError);

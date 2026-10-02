@@ -343,7 +343,7 @@ it.skipIf(!process.env.DATABASE_URL)(
             sessionId: chat.id,
             content: SLOW_TURN,
             author: { kind: "user", externalUserId: owner.externalUserId },
-            mode: "next_turn",
+            mode: "queue",
           });
         if (!queued?.turnId) throw new Error("No turn");
         turnId = queued.turnId;

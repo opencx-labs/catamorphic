@@ -453,7 +453,7 @@ describe("Work server", () => {
         content: "hello from the desktop",
         metadata: null,
         author: { kind: "user", externalUserId: memberUserId },
-        deliveryMode: "next_turn",
+        deliveryMode: "queue",
         idempotencyKey: null,
         createdAt: new Date().toISOString(),
       },

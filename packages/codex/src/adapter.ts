@@ -118,6 +118,8 @@ class CodexAttempt {
   private readonly steered = new Set<string>();
   /** Open server requests by JSON-RPC id → the request key Work knows them by. */
   private readonly requestKeys = new Map<JsonRpcId, string>();
+  /** MCP approvals waiting on a person, withdrawn when Codex resolves them. */
+  private readonly approvals = new Map<JsonRpcId, AbortController>();
   private readonly fileChangePaths = new Map<string, string[]>();
   private readonly hostTools = new Map<string, HostToolDescriptor>();
   private readonly items: CodexItems;
@@ -810,6 +812,7 @@ class CodexAttempt {
   // Requests from Codex
 
   private onWithdrawn(id: JsonRpcId): void {
+    this.approvals.get(id)?.abort();
     const key = this.requestKeys.get(id);
     if (!key) return;
     this.requestKeys.delete(id);
@@ -1007,12 +1010,18 @@ class CodexAttempt {
       const call = this.items.mcpCall(codexServer);
       const tool =
         call?.tool ?? message.match(/run tool "([^"]+)"/)?.[1] ?? "tool";
-      const verdict = await this.host.authorize({
-        server,
-        tool,
-        input: call?.input ?? meta.tool_params ?? {},
-        ...(call ? { itemKey: call.key } : {}),
-      });
+      // Codex may withdraw the elicitation while its person decides.
+      const withdrawn = new AbortController();
+      this.approvals.set(id, withdrawn);
+      const verdict = await this.host
+        .authorize({
+          server,
+          tool,
+          input: call?.input ?? meta.tool_params ?? {},
+          ...(call ? { itemKey: call.key } : {}),
+          signal: withdrawn.signal,
+        })
+        .finally(() => this.approvals.delete(id));
       return verdict.allowed
         ? { action: "accept", content: {}, _meta: null }
         : { action: "decline", content: null, _meta: null };

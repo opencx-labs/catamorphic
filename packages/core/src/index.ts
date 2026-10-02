@@ -94,19 +94,7 @@ export {
   validateAgentDefinition,
 } from "./services/agent-definitions-service.js";
 export {
-  AgentRuntimeEventSequenceConflictError,
-  AgentRuntimeEventsService,
-  AgentRuntimeSessionNotFoundError,
-} from "./services/agent-runtime-events-service.js";
-export {
-  AgentRequestAlreadyResolvedError,
-  AgentRuntimeRequestConflictError,
-  AgentRuntimeRequestNotFoundError,
-  AgentRuntimeRequestsService,
-} from "./services/agent-runtime-requests-service.js";
-export {
   AgentDelegationDeniedError,
-  type AgentMessage,
   AgentNotConfiguredError,
   type AgentSession,
   AgentSessionArchiveConfirmationRequiredError,
@@ -128,22 +116,12 @@ export {
   AgentTurnUnsettledError,
   type ArchiveSessionResourcesHandler,
   type NativeAgentCheckout,
-  PersonalLoginUnavailableError,
+  type SessionDeliveryReceipt,
   type SessionPlacement,
   type SyncedFileChange,
   type UnsettledTurnState,
   UnsupportedAgentTopologyError,
 } from "./services/agent-sessions-service.js";
-export {
-  type AgentTurn,
-  type AgentTurnStatus,
-  AgentTurnsService,
-  type PendingSessionTurn,
-  parseSessionMessageAuthor,
-  type SessionDeliveryMode,
-  type SessionDeliveryReceipt,
-  type SessionMessageAuthor,
-} from "./services/agent-turns-service.js";
 export { cleanupWorkerAllocations } from "./services/allocation-sandbox-provider.js";
 export type { AppBundleStore } from "./services/app-bundle-store.js";
 export { appBundleKey, appVersionPrefix } from "./services/app-bundle-store.js";
@@ -221,11 +199,29 @@ export {
   ProjectNotDeployedError,
 } from "./services/code-hosts-service.js";
 export {
+  type AgentHarness,
+  type AgentTurnContext,
   type CodingAgentRegistry,
+  harnessIdOf,
   isCodingAgentRegistry,
   type RegisteredCodingAgent,
   singleAgentRegistry,
 } from "./services/coding-agent-registry.js";
+export {
+  REPLAY_MAX_BYTES,
+  REPLAY_MAX_EVENTS,
+  SessionCommandRejectedError,
+} from "./services/sessions/session-log.js";
+export {
+  STREAM_MAX_PENDING_BYTES,
+  STREAM_MAX_PENDING_EVENTS,
+} from "./services/sessions/session-feed.js";
+export {
+  HISTORY_PAGE_ITEMS,
+  SNAPSHOT_TURNS,
+  type TranscriptMessage,
+} from "./services/sessions/session-reads.js";
+export { CONTINUATION_PROMPT } from "./services/sessions/turn-engine.js";
 export { ConnectionAdmissionService } from "./services/connection-admission.js";
 export {
   ConnectionActionDeniedError,
@@ -345,7 +341,6 @@ export {
   normalizeDocumentPath,
   STORE_ROOT,
 } from "./services/documents-service.js";
-export { DurableToolPermissionBroker } from "./services/durable-tool-permission-broker.js";
 export {
   EncryptedCredentialVault,
   vaultKeyId,
@@ -432,22 +427,16 @@ export {
 export {
   gitignoreLiteral,
   personalExcludeBlock,
-  personalLoginHome,
-  sandboxLoginDocument,
 } from "./services/personal-environment-delivery.js";
 export {
-  holdsRefreshToken,
   PERSONAL_FILE_MAX_BYTES,
   PERSONAL_FILES_MAX,
-  PERSONAL_LOGIN_MAX_BYTES,
-  PERSONAL_LOGIN_REFRESH_WINDOW_MS,
   type PersonalEnvironmentInput,
   PersonalEnvironmentInvalidError,
   PersonalEnvironmentService,
   type PersonalEnvironmentStatus,
   PersonalEnvironmentUnavailableError,
   type PersonalFileStatus,
-  type PersonalLoginStatus,
   personalFilePathProblem,
   personalFingerprint,
   validatePersonalEnvironment,
@@ -703,11 +692,6 @@ export {
   type TenantRateLimitOverride,
   type UpsertTenantExecutionPolicyInput,
 } from "./services/tenant-policies-service.js";
-export {
-  type PendingToolPermission,
-  ToolPermissionBroker,
-  type ToolPermissionChannel,
-} from "./services/tool-permission-broker.js";
 export {
   renderTriggerTypesModule,
   TRIGGER_TYPES_SOURCE_PATH,

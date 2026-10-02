@@ -80,7 +80,7 @@ export async function readSnapshot(input: {
         .$if(from !== null, (query) =>
           query.where((eb) =>
             eb.or([
-              eb("position", ">=", from ?? 0),
+              eb("position", ">=", String(from ?? 0)),
               eb(
                 "turn_id",
                 "in",
@@ -97,7 +97,7 @@ export async function readSnapshot(input: {
               .selectFrom("agent_items")
               .select("position")
               .where("session_id", "=", input.sessionId)
-              .where("position", "<", from)
+              .where("position", "<", String(from))
               .limit(1)
               .executeTakeFirst()
           : undefined;
@@ -208,7 +208,7 @@ export async function readItemsBefore(input: {
     .selectFrom("agent_items")
     .select(["payload", "position"])
     .where("session_id", "=", input.sessionId)
-    .where("position", "<", input.before)
+    .where("position", "<", String(input.before))
     .orderBy("position", "desc")
     .limit(limit + 1)
     .execute();
@@ -258,7 +258,7 @@ export async function readTranscript(input: {
     .where("session_id", "=", input.sessionId)
     .where("kind", "in", ["user_message", "assistant_message", "notice"])
     .$if(throughPosition !== undefined, (query) =>
-      query.where("position", "<=", throughPosition ?? 0),
+      query.where("position", "<=", String(throughPosition ?? 0)),
     )
     .orderBy("position", "desc")
     .$if(input.limit !== undefined, (query) => query.limit(input.limit ?? 0))

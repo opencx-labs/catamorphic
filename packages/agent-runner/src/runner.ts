@@ -77,7 +77,20 @@ export class AttemptRunner {
   private emitEvent(event: HarnessEvent): void {
     if (this.completed) return;
     if (event.type === "turn.completed") this.completed = true;
+    // A harness that resolved a request itself withdraws it: whoever waits
+    // on it stops waiting.
+    if (event.type === "request.closed") {
+      const pending = this.requests.get(event.key);
+      this.requests.delete(event.key);
+      pending?.reject(new RequestClosedError(event.reason));
+    }
     this.emitFrame({ type: "event", event });
+  }
+
+  /** Close one open request, when it is still open. */
+  private withdrawRequest(key: string, reason: string): void {
+    if (this.requests.has(key))
+      this.emitEvent({ type: "request.closed", key, reason });
   }
 
   private ack(commandId: string, error?: string): void {
@@ -226,11 +239,8 @@ export class AttemptRunner {
   }
 
   private closeRequests(reason: string): void {
-    for (const [key, pending] of this.requests) {
-      this.requests.delete(key);
-      this.emitEvent({ type: "request.closed", key, reason });
-      pending.reject(new RequestClosedError(reason));
-    }
+    for (const key of [...this.requests.keys()])
+      this.withdrawRequest(key, reason);
   }
 
   private exit(): void {
@@ -264,13 +274,18 @@ export class AttemptRunner {
   private openRequest(
     key: string,
     request: RequestDraft,
+    signal?: AbortSignal,
   ): Promise<RuntimeRequestResponse> {
     if (this.abort.signal.aborted)
       return Promise.reject(new RequestClosedError("The turn stopped."));
-    return new Promise((resolve, reject) => {
+    if (signal?.aborted)
+      return Promise.reject(new RequestClosedError(WITHDRAWN));
+    const onAbort = () => this.withdrawRequest(key, WITHDRAWN);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    return new Promise<RuntimeRequestResponse>((resolve, reject) => {
       this.requests.set(key, { resolve, reject });
       this.emitEvent({ type: "request.opened", key, request });
-    });
+    }).finally(() => signal?.removeEventListener("abort", onAbort));
   }
 
   private host(attempt: AttemptStart): AttemptHost {
@@ -278,7 +293,9 @@ export class AttemptRunner {
     const gate = new ToolGate(async (request, signal) => {
       approvals += 1;
       const key = `approval:${approvals}`;
-      const answer = this.openRequest(key, {
+      const answer = this.openRequest(
+        key,
+        {
         kind: "approval",
         blocking: true,
         title: `Allow ${request.tool}?`,
@@ -296,31 +313,17 @@ export class AttemptRunner {
             input: toJson(request.input),
           },
         },
-      });
-      const onAbort = () => {
-        const pending = this.requests.get(key);
-        if (!pending) return;
-        this.requests.delete(key);
-        this.emitEvent({
-          type: "request.closed",
-          key,
-          reason: "The turn stopped.",
-        });
-        pending.reject(new RequestClosedError("The turn stopped."));
-      };
-      signal?.addEventListener("abort", onAbort, { once: true });
-      try {
-        const response = await answer;
-        if (response.kind !== "approval") return { decision: "deny" };
-        return response.decision === "approved"
-          ? {
-              decision: "allow",
-              ...(response.remember ? { remember: response.remember } : {}),
-            }
-          : { decision: "deny" };
-      } finally {
-        signal?.removeEventListener("abort", onAbort);
-      }
+        },
+        signal,
+      );
+      const response = await answer;
+      if (response.kind !== "approval") return { decision: "deny" };
+      return response.decision === "approved"
+        ? {
+            decision: "allow",
+            ...(response.remember ? { remember: response.remember } : {}),
+          }
+        : { decision: "deny" };
     });
     return {
       emit: (event) => this.emitEvent(event),
@@ -354,9 +357,12 @@ export class AttemptRunner {
             : {}),
           ...(input.description ? { description: input.description } : {}),
           sessionId: attempt.sessionId,
-          abortSignal: this.abort.signal,
+          abortSignal: input.signal
+            ? AbortSignal.any([this.abort.signal, input.signal])
+            : this.abort.signal,
         }),
-      request: (key, request) => this.openRequest(key, request),
+      request: (key, request, options) =>
+        this.openRequest(key, request, options?.signal),
       nativeState: {
         append: async ({ thread, subpath, entries }) => {
           await this.call({
@@ -390,6 +396,8 @@ export class AttemptRunner {
     };
   }
 }
+
+const WITHDRAWN = "The harness withdrew the request.";
 
 /** Largest frame, in characters: a host reads frames in 1 MiB chunks. */
 export const MAX_FRAME_CHARS = 512 * 1024;

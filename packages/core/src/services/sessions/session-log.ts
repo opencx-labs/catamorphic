@@ -350,7 +350,7 @@ export class SessionLog {
         sql<number>`octet_length(payload::text)`.as("bytes"),
       ])
       .where("session_id", "=", input.sessionId)
-      .where("sequence", ">", input.after)
+      .where("sequence", ">", String(input.after))
       .orderBy("sequence")
       .limit(maxEvents + 1)
       .execute();
@@ -376,9 +376,9 @@ export class SessionLog {
           ),
         )})`.as("cursor(session_id, after)"),
         (join) =>
-          join
-            .onRef("cursor.session_id", "=", "event.session_id")
-            .on(sql`event.sequence`, ">", sql`cursor.after`),
+          join.on(
+            sql<boolean>`cursor.session_id = event.session_id and event.sequence > cursor.after`,
+          ),
       )
       .select([
         "event.session_id",

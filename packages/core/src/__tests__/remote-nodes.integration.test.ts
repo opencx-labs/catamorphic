@@ -119,7 +119,7 @@ async function chatOn(
     sessionId,
     content: "Work",
     author: { kind: "user", externalUserId: "member" },
-    mode: "next_turn",
+    mode: "queue",
   });
   return { sessionId, allocationId: allocation.id };
 }
@@ -355,7 +355,7 @@ describe("remote nodes own their lease (ADR 0192)", () => {
       sessionId: chat.sessionId,
       content: "More work",
       author: { kind: "user", externalUserId: "member" },
-      mode: "next_turn",
+      mode: "queue",
     });
     expect(await claimTurn()).toBeNull();
 

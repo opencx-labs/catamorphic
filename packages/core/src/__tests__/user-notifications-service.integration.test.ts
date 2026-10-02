@@ -154,7 +154,7 @@ describe("durable user notifications", () => {
         message_id: request.id,
         result_message_id: response.id,
         status: "queued",
-        delivery_mode: "next_turn",
+        delivery_mode: "queue",
       })
       .returning("id")
       .executeTakeFirstOrThrow();

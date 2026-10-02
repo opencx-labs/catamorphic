@@ -165,11 +165,6 @@ export class UserNotificationsService {
     const rows = await this.db
       .selectFrom("agent_turns")
       .innerJoin(
-        "agent_messages",
-        "agent_messages.id",
-        "agent_turns.result_message_id",
-      )
-      .innerJoin(
         "agent_sessions",
         "agent_sessions.id",
         "agent_turns.session_id",
@@ -189,12 +184,15 @@ export class UserNotificationsService {
         ">",
         "agent_sessions.attention_seen_revision",
       )
-      .where("agent_turns.status", "in", ["queued", "failed"])
-      .where(sql`agent_messages.metadata ->> 'status'`, "=", "failed")
-      .where(
-        sql`coalesce(agent_messages.metadata ->> 'interrupted', 'false')`,
-        "!=",
-        "true",
+      // Failed turns, and turns waiting to retry after a transient failure.
+      .where((eb) =>
+        eb.or([
+          eb("agent_turns.status", "=", "failed"),
+          eb.and([
+            eb("agent_turns.status", "=", "queued"),
+            eb("agent_turns.attempt_count", ">", 0),
+          ]),
+        ]),
       )
       .execute();
     for (const row of rows) {
@@ -237,7 +235,7 @@ export class UserNotificationsService {
         "agent_sessions.authority_revision",
       ])
       .where("agent_sessions.status", "=", "active")
-      .where("agent_sessions.mirror_message_count", ">", 0)
+      .where("agent_sessions.mirror_sequence", ">", "0")
       .where("agent_sessions.handoff_status", "=", "none")
       .where("agent_sessions.authority_host_id", "!=", "unassigned")
       .where("agent_sessions.authority_host_id", "!=", args.authorityHostId)
