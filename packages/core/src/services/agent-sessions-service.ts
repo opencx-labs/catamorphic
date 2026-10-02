@@ -1629,7 +1629,7 @@ export class AgentSessionsService {
           .selectFrom("agent_turns")
           .selectAll()
           .where("session_id", "=", sessionId)
-          .where("status", "=", "running")
+          .where("status", "in", ["running", "waiting"])
           .executeTakeFirst();
         if (running)
           events.push({
@@ -3457,7 +3457,8 @@ export class AgentSessionsService {
           sessionId,
           workingDirectory,
           nativeExecution: agent.topology === "native",
-          sessionCopy: this.usesSessionCopy(session),
+          // A native agent's checkout is the host's: no session copy there.
+          sessionCopy: agent.topology !== "native" && this.usesSessionCopy(session),
         });
       } catch (error) {
         failure = { message: error instanceof Error ? error.message : String(error) };
@@ -5650,7 +5651,7 @@ export class AgentSessionsService {
             .selectFrom("agent_turns")
             .select("id")
             .where("session_id", "=", sessionId)
-            .where("status", "in", ["queued", "held", "running"])
+            .where("status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES])
             .executeTakeFirst();
           if (pending) throw new AgentTurnInProgressError(sessionId);
           return transaction
@@ -5871,7 +5872,7 @@ export class AgentSessionsService {
         .selectFrom("agent_turns")
         .select("id")
         .where("session_id", "=", session.id)
-        .where("status", "=", "running")
+        .where("status", "in", [...ACTIVE_TURN_STATUSES])
         .executeTakeFirst();
       if (running) return false;
       const done = await this.executionAllocations.release({
@@ -6043,7 +6044,7 @@ export class AgentSessionsService {
             selectFrom("agent_turns")
               .select("agent_turns.id")
               .whereRef("agent_turns.session_id", "=", "session.id")
-              .where("agent_turns.status", "in", ["queued", "held", "running"]),
+              .where("agent_turns.status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES]),
           ),
         ),
       )
@@ -6223,7 +6224,7 @@ export class AgentSessionsService {
         .selectFrom("agent_turns")
         .select("id")
         .where("session_id", "=", sessionId)
-        .where("status", "in", ["queued", "held", "running"])
+        .where("status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES])
         .executeTakeFirst();
       if (busy) return false;
       await this.executionAllocations.release({
@@ -6478,7 +6479,7 @@ export class AgentSessionsService {
             selectFrom("agent_turns")
               .select("agent_turns.id")
               .whereRef("agent_turns.session_id", "=", "session.id")
-              .where("agent_turns.status", "=", "running")
+              .where("agent_turns.status", "in", [...ACTIVE_TURN_STATUSES])
               .where("agent_turns.lease_expires_at", ">", sql<Date>`now()`),
           ),
         ),
@@ -6502,21 +6503,33 @@ export class AgentSessionsService {
       };
       try {
         // Its turn's process died: the turn settles as interrupted first.
-        await this.db
-          .updateTable("agent_turns")
-          .set({
-            status: "failed",
-            error: "The host stopped while this turn was running",
-            completed_at: new Date(),
-            lease_owner: null,
-            lease_token: null,
-            lease_expires_at: null,
-            updated_at: new Date(),
-          })
-          .where("session_id", "=", row.id)
-          .where("status", "=", "running")
-          .where("lease_expires_at", "<=", sql<Date>`now()`)
-          .execute();
+        await this.db.transaction().execute(async (trx) => {
+          const abandoned = await trx
+            .selectFrom("agent_turns")
+            .selectAll()
+            .where("session_id", "=", row.id)
+            .where("status", "in", [...ACTIVE_TURN_STATUSES])
+            .where("lease_expires_at", "<=", sql<Date>`now()`)
+            .execute();
+          const now = new Date().toISOString();
+          if (abandoned.length === 0) return;
+          await this.log.append(trx, {
+            sessionId: row.id,
+            events: abandoned.map((turnRow): SessionEvent => ({
+              type: "turn.changed",
+              turn: {
+                ...turnFromRow(turnRow),
+                status: "interrupted",
+                activity: null,
+                activityAt: null,
+                error: { message: "The host stopped while this turn was running." },
+                completedAt: now,
+                updatedAt: now,
+              },
+            })),
+          });
+          for (const turnRow of abandoned) await this.queue.release(trx, { turnId: turnRow.id });
+        });
         // A chat another process is finishing is left to it: the sweep
         // never waits.
         await this.finishClosing({
@@ -6586,7 +6599,7 @@ export class AgentSessionsService {
       .select("session_id")
       .distinct()
       .where("session_id", "in", sessionIds)
-      .where("status", "in", ["queued", "held", "running"])
+      .where("status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES])
       .execute();
     const runningSessionIds = [
       ...new Set(activeTurns.map((turn) => turn.session_id)),

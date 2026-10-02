@@ -6,12 +6,6 @@ import { promisify } from "node:util";
 import type { DB } from "@catamorphic/db";
 import { migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
-import type {
-  AgentEvent,
-  CodingAgentProvider,
-  ProviderSession,
-  StartSessionOpts,
-} from "@catamorphic/sandbox";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
@@ -26,6 +20,7 @@ import { ExecutionEnvironmentsService } from "../services/execution-environments
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
 import { SessionWorkspaces } from "../services/session-workspaces.js";
+import { RecordingAdapter } from "./recording-adapter.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 const execFileAsync = promisify(execFile);
@@ -41,30 +36,6 @@ const git = async (cwd: string, args: string[]) =>
       ...args,
     ])
   ).stdout.trim();
-
-/** A native agent that records what each turn was told. */
-class RecordingProvider implements CodingAgentProvider {
-  readonly name = "recording";
-  readonly told: string[] = [];
-  async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
-    return {
-      providerSessionId: crypto.randomUUID(),
-      sessionId: opts.sessionId,
-      projectId: opts.projectId,
-      sandboxId: opts.sandboxId,
-      workingDirectory: opts.workingDirectory,
-    };
-  }
-  async *sendMessage(
-    _session: ProviderSession,
-    message: string,
-  ): AsyncIterable<AgentEvent> {
-    this.told.push(message);
-    yield { type: "text", content: "done" };
-    yield { type: "done" };
-  }
-  async dispose(): Promise<void> {}
-}
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
 const schema = "catamorphic_workspace_moves";
@@ -84,7 +55,7 @@ describe("workspace moves in native checkouts (ADR 0178)", () => {
   let mainCommit: string;
   let sessions: AgentSessionsService;
   let projects: ProjectsService;
-  const provider = new RecordingProvider();
+  const adapter = new RecordingAdapter();
   /** What the host resolves for each session. */
   const checkouts = new Map<
     string,
@@ -117,7 +88,7 @@ describe("workspace moves in native checkouts (ADR 0178)", () => {
     projects = new ProjectsService(db, projectManager);
     const agent = {
       id: "worker",
-      provider,
+      harness: { placement: "host" as const, adapter },
       topology: "native" as const,
     };
     sessions = new AgentSessionsService(db, {
@@ -181,11 +152,8 @@ describe("workspace moves in native checkouts (ADR 0178)", () => {
           input.sessionId,
         );
         expect(
-          detail.messages.filter(
-            (message) =>
-              message.role === "assistant" && message.content === "done",
-          ),
-        ).toHaveLength(1);
+          detail.snapshot.turns.map((turn) => [turn.status, turn.error?.message]),
+        ).toEqual([["completed", undefined]]);
       },
       { timeout: 20_000 },
     );
@@ -195,7 +163,10 @@ describe("workspace moves in native checkouts (ADR 0178)", () => {
     const { projectId, sessionId } = await chat("Own folder");
     const folder = await personFolder("own-folder");
     checkouts.set(sessionId, async () => ({ path: folder, owned: false }));
-    await sessions.enqueueMessage(identity, projectId, sessionId, "Review", {
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: crypto.randomUUID(),
+      text: "Review",
       workspace: { ref: "feature", update: "reset" },
     });
     await settled({ projectId, sessionId });
@@ -207,7 +178,7 @@ describe("workspace moves in native checkouts (ADR 0178)", () => {
     expect(await fs.readFile(path.join(folder, "draft.md"), "utf8")).toBe(
       "not committed\n",
     );
-    expect(provider.told.at(-1)).toContain("does not own");
+    expect(adapter.lastInput()).toContain("does not own");
     const row = await db
       .selectFrom("agent_sessions")
       .select(["workspace", "workspace_move"])
@@ -233,7 +204,10 @@ describe("workspace moves in native checkouts (ADR 0178)", () => {
       }
       return { path: folder, owned: false };
     });
-    await sessions.enqueueMessage(identity, projectId, sessionId, "Review", {
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: crypto.randomUUID(),
+      text: "Review",
       workspace: { ref: "feature" },
     });
     await settled({ projectId, sessionId });
@@ -269,7 +243,10 @@ describe("workspace moves in native checkouts (ADR 0178)", () => {
         .execute();
       return { path: worktree, owned: true };
     });
-    await sessions.enqueueMessage(identity, projectId, sessionId, "Review", {
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: crypto.randomUUID(),
+      text: "Review",
       workspace: { ref: "feature" },
     });
     await settled({ projectId, sessionId });

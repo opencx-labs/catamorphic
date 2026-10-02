@@ -547,7 +547,7 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
           .selectFrom("agent_turns")
           .select("id")
           .where("session_id", "=", sessionId)
-          .where("status", "=", "running")
+          .where("status", "in", ["running", "waiting", "finalizing"])
           .executeTakeFirst()
       )?.id,
     openUsage: async ({ record }) =>

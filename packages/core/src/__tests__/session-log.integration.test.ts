@@ -73,6 +73,12 @@ describe("session log", () => {
       harness: { placement: "host", adapter: new EchoAdapter() },
       topology: "native",
     };
+    // Its tools on `prod` ask the person first (ADR 0054).
+    const guarded: RegisteredCodingAgent = {
+      ...echo,
+      id: "guarded",
+      toolPolicies: { prod: [{ default: "ask" }] },
+    };
     makeService = () => new AgentSessionsService(db, {
       hostId: "session-log-host",
       projectManager,
@@ -83,8 +89,8 @@ describe("session log", () => {
       executionAllocations: new ExecutionAllocationsService(db),
       codingAgents: {
         defaultAgentId: () => "echo",
-        get: (id) => (id === "echo" ? echo : undefined),
-        list: () => [echo],
+        get: (id) => (id === "echo" ? echo : id === "guarded" ? guarded : undefined),
+        list: () => [echo, guarded],
       },
       nativeAgentCheckout: {
         resolve: async ({ projectId }) => {
@@ -489,5 +495,37 @@ describe("session log", () => {
       type: "interrupt",
       commandId: randomUUID(),
     });
+  });
+
+  it("asks the chat's person before a guarded tool, and the harness goes on with the answer", async () => {
+    const project = await projects.create(identity, { name: "Guarded" });
+    const session = await sessions.create(identity, project.id, { agentId: "guarded" });
+    const running = sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "[[approve prod query]]",
+    );
+    const request = await vi.waitFor(
+      async () => {
+        const detail = await sessions.get(identity, project.id, session.id);
+        const [pending] = pendingRequests(sessionStateFromSnapshot(detail.snapshot));
+        expect(pending?.kind).toBe("approval");
+        return pending;
+      },
+      { timeout: 10_000 },
+    );
+    // A person's own chat: they answer, within minutes.
+    expect(request?.approvers).toEqual([]);
+    expect(request?.expiresAt).not.toBeNull();
+    await sessions.command(identity, project.id, session.id, {
+      type: "respond",
+      commandId: randomUUID(),
+      requestId: request?.id ?? "",
+      response: { kind: "approval", decision: "approved" },
+    });
+    await running;
+    const transcript = await sessions.transcript(identity, project.id, session.id);
+    expect(transcript.map((message) => message.content)).toContain("Allowed query.");
   });
 });

@@ -6,7 +6,6 @@ import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { AgentTurnsService } from "../services/agent-turns-service.js";
 import {
   AllocationMaintenanceLostError,
   claimAllocationMaintenance,
@@ -25,6 +24,7 @@ import {
   WorkerNodeLeaseHeldError,
   WorkerNodesService,
 } from "../services/worker-nodes-service.js";
+import { sessionLogFixture } from "./session-fixtures.js";
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
 const schema = "catamorphic_remote_nodes";
@@ -114,12 +114,7 @@ async function chatOn(
     .set({ allocation_id: allocation.id })
     .where("id", "=", sessionId)
     .execute();
-  await new AgentTurnsService(db).deliver({
-    sessionId,
-    content: "Work",
-    author: { kind: "user", externalUserId: "member" },
-    mode: "queue",
-  });
+  await sessionLogFixture(db).queueTurn({ sessionId, text: "Work" });
   return { sessionId, allocationId: allocation.id };
 }
 
@@ -245,7 +240,7 @@ describe("remote nodes own their lease (ADR 0192)", () => {
   });
 
   it("lets any host claim a remote node's turns only while its executor's lease is live", async () => {
-    const turns = new AgentTurnsService(db);
+    const turns = sessionLogFixture(db);
     const remote = `worker.${crypto.randomUUID().slice(0, 8)}`;
     await connect(remote, epochAt(Date.now()));
     const local = await nodes.register({
@@ -259,7 +254,7 @@ describe("remote nodes own their lease (ADR 0192)", () => {
       descriptor: descriptor(`node.${crypto.randomUUID()}`),
     });
     const claim = (sessionId: string) =>
-      turns.claimNextForSession({
+      turns.queue.claim({
         workerId: "this-host",
         sessionId,
         localNode: local,
@@ -283,7 +278,7 @@ describe("remote nodes own their lease (ADR 0192)", () => {
       .execute();
     // A host with no node of its own runs it as well as any other.
     expect(
-      await turns.claimNextForSession({
+      await turns.queue.claim({
         workerId: "another-host",
         sessionId: onRemote.sessionId,
       }),
@@ -318,12 +313,12 @@ describe("remote nodes own their lease (ADR 0192)", () => {
   });
 
   it("keeps a workspace's turns waiting while a host saves it, and never saves a busy one", async () => {
-    const turns = new AgentTurnsService(db);
+    const turns = sessionLogFixture(db);
     const remote = `worker.${crypto.randomUUID().slice(0, 8)}`;
     await connect(remote, epochAt(Date.now()));
     const chat = await chatOn(remote);
     const claimTurn = () =>
-      turns.claimNextForSession({
+      turns.queue.claim({
         workerId: "host",
         sessionId: chat.sessionId,
       });
@@ -340,22 +335,13 @@ describe("remote nodes own their lease (ADR 0192)", () => {
     const running = await claimTurn();
     if (!running?.leaseToken) throw new Error("Expected a turn");
     expect(await claimIdle()).toBeUndefined();
-    await turns.complete({
-      turnId: running.id,
-      leaseToken: running.leaseToken,
-      resultMessageId: running.messageId,
-    });
+    await turns.complete(running.turn);
 
     // Idle: one host takes the claim, and a turn arriving meanwhile waits.
     const claim = await claimIdle();
     if (!claim) throw new Error("Expected a claim");
     expect(await claimIdle()).toBeUndefined();
-    await turns.deliver({
-      sessionId: chat.sessionId,
-      content: "More work",
-      author: { kind: "user", externalUserId: "member" },
-      mode: "queue",
-    });
+    await turns.queueTurn({ sessionId: chat.sessionId, text: "More work" });
     expect(await claimTurn()).toBeNull();
 
     // Only its holder renews or gives it back.
@@ -445,7 +431,7 @@ describe("remote nodes own their lease (ADR 0192)", () => {
   });
 
   it("keeps a member's machine's turns queued while its runner is away", async () => {
-    const turns = new AgentTurnsService(db);
+    const turns = sessionLogFixture(db);
     const runnerId = crypto.randomUUID();
     const token = crypto.randomUUID();
     await db
@@ -464,7 +450,7 @@ describe("remote nodes own their lease (ADR 0192)", () => {
       .execute();
     const chat = await chatOn(null, `client:${runnerId}:${token}`);
     const claim = () =>
-      turns.claimNextForSession({
+      turns.queue.claim({
         workerId: "host",
         sessionId: chat.sessionId,
       });

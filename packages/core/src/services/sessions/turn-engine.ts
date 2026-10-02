@@ -26,7 +26,13 @@ import {
   type ThreadBinding,
 } from "@catamorphic/agent-protocol/runner";
 import type { DB, Json } from "@catamorphic/db";
-import { getTracer, withSpan } from "@catamorphic/otel";
+import {
+  getTracer,
+  setSpanCorrelation,
+  withSpan,
+  withTelemetryContext,
+} from "@catamorphic/otel";
+import type { Span } from "@opentelemetry/api";
 import { type Kysely, sql, type Transaction } from "kysely";
 import type { Identity } from "../../identity.js";
 import {
@@ -342,17 +348,21 @@ export class TurnEngine {
       onCommands: () => local.wake(),
     });
     try {
-      await withSpan(
-        {
-          tracer,
-          name: "agent.turn",
-          attributes: {
-            "catamorphic.agent.turn.id": claim.turn.id,
-            "catamorphic.agent.session.id": claim.turn.sessionId,
-            "catamorphic.agent.turn.recovered": claim.recovered,
+      // A turn is its own operation: nothing of the drainer's (a workflow
+      // run, a queue job) carries into it.
+      await withTelemetryContext({ attributes: {}, reset: true }, () =>
+        withSpan(
+          {
+            tracer,
+            name: "agent.turn",
+            attributes: {
+              "catamorphic.agent.turn.id": claim.turn.id,
+              "catamorphic.agent.session.id": claim.turn.sessionId,
+              "catamorphic.agent.turn.recovered": claim.recovered,
+            },
           },
-        },
-        () => this.drive(local, rearm),
+          (span) => this.drive(local, rearm, span),
+        ),
       );
     } catch (error) {
       // Losing the lease mid-step is losing the turn, not a failure of it.
@@ -381,7 +391,7 @@ export class TurnEngine {
 
   // -------------------------------------------------------------------------
 
-  private async drive(local: LocalTurn, rearm: () => void): Promise<void> {
+  private async drive(local: LocalTurn, rearm: () => void, span?: Span): Promise<void> {
     const { db } = this.deps;
     const turnId = local.claim.turn.id;
     const session = await db
@@ -398,6 +408,17 @@ export class TurnEngine {
       });
       return;
     }
+    if (span)
+      setSpanCorrelation({
+        span,
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": session.project_id,
+          "catamorphic.agent.session.id": session.id,
+          "catamorphic.agent.turn.id": turnId,
+        },
+      });
     let turn = await this.loadTurn(turnId);
     for (;;) {
       if (local.abort.signal.aborted) return;
