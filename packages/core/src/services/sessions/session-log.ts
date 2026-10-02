@@ -863,7 +863,10 @@ export class ForeignSessionEventError extends Error {
   }
 }
 
-/** Session fields another copy may set: what it shows, never who runs it. */
+/**
+ * Session fields another copy may set: what it shows, never who runs it.
+ * Replica memory (c): a constant, the same on every replica.
+ */
 const COPIED_SESSION_FIELDS = new Set([
   "title",
   "icon",

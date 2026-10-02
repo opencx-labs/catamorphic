@@ -6,11 +6,19 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export interface AgentQuestionPanelProps {
   questions: AgentQuestion[];
-  /** Sending the answers back: one per question, its picks joined. */
+  /**
+   * The answers, one per question (picked labels joined with ", "): send
+   * them as `respond(id, { kind: "question", answers })`.
+   */
   onSubmit: (answers: string[]) => void;
-  /** Dismissing the questions without answering (X button or Escape). */
+  /**
+   * Dismissing blocking questions without answering (X button or Escape):
+   * answer with `QUESTIONS_DISMISSED_MESSAGE`. A non-blocking panel only
+   * collapses to "Answer when ready" instead.
+   */
   onDismiss: () => void;
   disabled?: boolean;
+  /** `RuntimeRequest.blocking`: whether the agent waits on the answer. */
   blocking?: boolean;
   renderDismiss?: (button: React.ReactNode, label: string) => React.ReactNode;
 }
@@ -77,7 +85,7 @@ export function AgentQuestionPanel({
 
   const submit = () => {
     if (!allAnswered || disabled) return;
-    onSubmit(formatAnswers(answers));
+    onSubmit(formatAnswers(questions, answers));
   };
 
   const advanceTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -361,7 +369,12 @@ function OptionRow({
   );
 }
 
-/** Each question's picks as one answer, in question order. */
-function formatAnswers(answers: Answer[]): string[] {
-  return answers.map((answer) => answer.selected.join(", "));
+/** One answer per question: the picked labels, comma separated. */
+function formatAnswers(
+  questions: AgentQuestion[],
+  answers: Answer[],
+): string[] {
+  return questions.map((_question, index) =>
+    (answers[index] ?? emptyAnswer()).selected.join(", "),
+  );
 }

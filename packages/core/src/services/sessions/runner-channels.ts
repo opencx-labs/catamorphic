@@ -64,6 +64,7 @@ export interface RunnerChannel {
  * whose process died finds its runner missing and is recovered as lost.
  */
 const PROCESS_INSTANCE = randomUUID();
+// Replica memory (a): runners of turns this replica holds by lease; they stop with it, and another holder starts the attempt again.
 const inProcessRunners = new Map<string, InProcessRunner>();
 
 export function startInProcessRunner(input: {

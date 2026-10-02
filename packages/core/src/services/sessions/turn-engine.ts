@@ -2318,6 +2318,7 @@ export class TurnLeaseLostError extends Error {
   }
 }
 
+// Replica memory (c): a constant, the same on every replica.
 const QUEUED_COMMAND_KINDS: ReadonlySet<string> = new Set<TurnCommandKind>([
   "steer",
   "interrupt",

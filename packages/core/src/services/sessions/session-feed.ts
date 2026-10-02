@@ -26,6 +26,7 @@ interface Subscriber {
  * from its cursor. Replica memory (a): the streams this process serves.
  */
 export class SessionFeed {
+  // Replica memory (a): the streams this replica serves.
   private readonly subscribers = new Set<Subscriber>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private polling = false;

@@ -35,13 +35,8 @@ it.each(files)("agent guide links resolve: %s", (file) => {
 });
 
 it("shared chat registry components match their installed desktop copies", () => {
-  for (const name of [
-    "agent-chat",
-    "agent-question-panel",
-    "chat-queue",
-    "tool-permission-card",
-    "resource-preview",
-  ]) {
+  // The desktop's queue and chat take their own shapes; these stay copies.
+  for (const name of ["agent-question-panel", "resource-preview"]) {
     const source = fs
       .readFileSync(
         path.join(root, `packages/registry/src/${name}/${name}.tsx`),

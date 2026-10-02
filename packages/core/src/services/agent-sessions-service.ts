@@ -910,6 +910,8 @@ export class AgentSessionsService {
    * Owners recently seen acting on their own chats, so their turns run as
    * them without a resolver round trip. A cache (ADR 0193): another
    * replica resolves the owner through the host instead.
+   * Replica memory (single process): a host running several replicas
+   * resolves owners (`resolveIdentity`).
    */
   private readonly knownOwners = new Map<string, Identity>();
   /** The host's identity resolver, from {@link startWorker}. */
