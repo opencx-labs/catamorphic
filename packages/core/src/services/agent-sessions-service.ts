@@ -1091,8 +1091,17 @@ export class AgentSessionsService {
       .where("expires_at", "<=", sql<Date>`now()`)
       .limit(50)
       .execute();
-    for (const row of rows) {
+    for (const candidate of rows) {
       await this.db.transaction().execute(async (trx) => {
+        // Answered meanwhile: the answer stands.
+        await this.log.lock(trx, candidate.session_id);
+        const row = await trx
+          .selectFrom("agent_runtime_requests")
+          .selectAll()
+          .where("request_id", "=", candidate.request_id)
+          .where("status", "=", "pending")
+          .executeTakeFirst();
+        if (!row) return;
         const request = requestFromRow(row);
         const now = new Date().toISOString();
         const events: SessionEvent[] = [
@@ -1877,17 +1886,39 @@ export class AgentSessionsService {
       .where("session_id", "=", sessionId)
       .where("status", "in", [...ACTIVE_TURN_STATUSES])
       .executeTakeFirst();
+    // A turn on its owner's sign-in or files takes in only what the owner
+    // wrote (ADR 0198); anyone else's message waits for a turn of its own,
+    // which runs without them. Before its runner starts, that is unknown.
+    const joinable =
+      !active ||
+      (await this.authoredByOwner({
+        projectId: input.session.project_id,
+        owner: input.session.external_user_id,
+        author: input.author,
+        metadata: input.metadata ?? null,
+        executor: trx,
+      })) ||
+      (await trx
+        .selectFrom("agent_turn_attempts")
+        .select("runner")
+        .where("id", "=", active.active_attempt_id ?? "")
+        .executeTakeFirst()
+        .then((row) => {
+          const runner = row?.runner as { ownerOnly?: boolean } | null;
+          return runner !== null && runner !== undefined && !runner.ownerOnly;
+        }));
     // A person's message while the turn waits on a question joins that
     // turn (ADR 0195): the question stays open as a non-blocking one and
     // its answer arrives later; a permission request is withdrawn.
     const replyToWaiting =
+      joinable &&
       input.author.kind === "user" &&
       input.dispatch === "queue" &&
       active?.status === "waiting" &&
       input.metadata?.questionRequestId === undefined;
     const dispatch: DispatchMode = replyToWaiting
       ? "steer"
-      : input.dispatch === "steer" && !active
+      : input.dispatch === "steer" && (!active || !joinable)
         ? "queue"
         : input.dispatch;
     const now = new Date().toISOString();
@@ -2380,11 +2411,25 @@ export class AgentSessionsService {
         command.workspace,
       );
     const commandId = `user:${identity.externalUserId}:${command.commandId}`;
+    // A rollback rewinds the files before its transaction: restoring them
+    // reaches the host and the database on its own connections.
+    let rewound: { lastTurnId: string | null } | undefined;
     const receipt = await this.log.command({
       sessionId,
       commandId,
       type: command.type,
       externalUserId: identity.externalUserId,
+      ...(command.type === "rollback"
+        ? {
+            before: async () => {
+              rewound = await this.rewindFiles({
+                identity,
+                session,
+                turnId: command.turnId,
+              });
+            },
+          }
+        : {}),
       run: async (trx) => {
         const locked = await trx
           .selectFrom("agent_sessions")
@@ -2438,6 +2483,7 @@ export class AgentSessionsService {
           case "cancel_queued":
           case "send_now":
             return this.changeQueuedIn(trx, {
+              identity,
               session: locked,
               command,
               commandId,
@@ -2451,10 +2497,10 @@ export class AgentSessionsService {
             });
           case "rollback":
             return this.rollbackIn(trx, {
-              identity,
               session: locked,
               turnId: command.turnId,
               commandId,
+              lastTurnId: rewound?.lastTurnId ?? null,
             });
         }
       },
@@ -2841,6 +2887,7 @@ export class AgentSessionsService {
   private async changeQueuedIn(
     trx: Transaction<DB>,
     input: {
+      identity: Identity;
       session: SessionRow;
       command: Extract<
         SessionCommand,
@@ -2888,6 +2935,17 @@ export class AgentSessionsService {
           .where("id", "=", turn.inputItemId)
           .executeTakeFirst();
         const item = itemRow ? itemFromRow(itemRow) : null;
+        // Words stay their author's: nobody else rewrites them.
+        if (
+          item?.kind === "user_message" &&
+          (item.author.kind !== "user" ||
+            item.author.externalUserId !== input.identity.externalUserId)
+        )
+          throw new SessionCommandRejectedError(
+            "not_author",
+            "Only the person who wrote a queued message can edit it.",
+            403,
+          );
         if (item?.kind === "user_message")
           events.push({
             type: "item.changed",
@@ -3015,12 +3073,13 @@ export class AgentSessionsService {
     if (policy.unattended && policy.approvers.length === 0) return "deny";
     const timeoutMs = input.timeoutMs ?? policy.waitMs;
     const opened = await this.db.transaction().execute(async (trx) => {
+      // The session first, as everything that changes it locks it.
+      await this.log.lock(trx, input.sessionId);
       const row = await trx
         .selectFrom("agent_turns")
         .selectAll()
         .where("session_id", "=", input.sessionId)
         .where("status", "in", ["running", "waiting"])
-        .forUpdate()
         .executeTakeFirst();
       if (!row) return null;
       const turn = turnFromRow(row);
@@ -3116,6 +3175,7 @@ export class AgentSessionsService {
     }
     // Nobody answered: the request closes and the turn works on.
     await this.db.transaction().execute(async (trx) => {
+      await this.log.lock(trx, opened.sessionId);
       const row = await trx
         .selectFrom("agent_runtime_requests")
         .selectAll()
@@ -3328,17 +3388,13 @@ export class AgentSessionsService {
    * in a workspace the chat owns, or a project folder nothing else changed
    * since this chat's last turn.
    */
-  private async rollbackIn(
-    trx: Transaction<DB>,
-    input: {
-      identity: Identity;
-      session: SessionRow;
-      turnId: string;
-      commandId: string;
-    },
-  ): Promise<JsonObject> {
+  /** The turns a rollback to `turnId` undoes, or why it cannot. */
+  private async rollbackPlan(
+    executor: Kysely<DB> | Transaction<DB>,
+    input: { session: SessionRow; turnId: string },
+  ) {
     const { session } = input;
-    const busy = await trx
+    const busy = await executor
       .selectFrom("agent_turns")
       .select("id")
       .where("session_id", "=", session.id)
@@ -3349,7 +3405,7 @@ export class AgentSessionsService {
         "turn_in_progress",
         "Stop the running turn before rolling back.",
       );
-    const targetRow = await trx
+    const targetRow = await executor
       .selectFrom("agent_turns")
       .selectAll()
       .where("id", "=", input.turnId)
@@ -3367,7 +3423,7 @@ export class AgentSessionsService {
         "already_rolled_back",
         "That turn was already rolled back.",
       );
-    const later = await trx
+    const later = await executor
       .selectFrom("agent_turns")
       .selectAll()
       .where("session_id", "=", session.id)
@@ -3375,13 +3431,25 @@ export class AgentSessionsService {
       .where("status", "!=", "rolled_back")
       .orderBy("ordinal")
       .execute();
-    // Files first: a rollback that cannot restore them changes nothing.
+    return { target, later };
+  }
+
+  /**
+   * Files first: a rollback that cannot restore them changes nothing. The
+   * restore checks the workspace is where the last turn left it.
+   */
+  private async rewindFiles(input: {
+    identity: Identity;
+    session: SessionRow;
+    turnId: string;
+  }): Promise<{ lastTurnId: string | null }> {
+    const { target, later } = await this.rollbackPlan(this.db, input);
+    const last = later.at(-1);
     const restore = target.checkpoint.before;
     if (restore) {
-      const last = later.at(-1);
       const restored = await this.restoreWorkspace({
         identity: input.identity,
-        session,
+        session: input.session,
         commit: restore,
         expectedHead: last?.checkpoint_after?.trim() ?? null,
       });
@@ -3391,6 +3459,26 @@ export class AgentSessionsService {
           restored,
         );
     }
+    return { lastTurnId: last?.id ?? null };
+  }
+
+  private async rollbackIn(
+    trx: Transaction<DB>,
+    input: {
+      session: SessionRow;
+      turnId: string;
+      commandId: string;
+      /** The last turn when the files were rewound. */
+      lastTurnId: string | null;
+    },
+  ): Promise<JsonObject> {
+    const { session } = input;
+    const { target, later } = await this.rollbackPlan(trx, input);
+    if ((later.at(-1)?.id ?? null) !== input.lastTurnId)
+      throw new SessionCommandRejectedError(
+        "chat_moved_on",
+        "The chat moved on while its files were rewound. Roll back again.",
+      );
     const now = new Date().toISOString();
     const events: SessionEvent[] = later.map((row) => ({
       type: "turn.changed",
@@ -3670,6 +3758,10 @@ export class AgentSessionsService {
       finalize: (input) => this.finalizeTurn(input),
       settled: (input) => this.afterTurn(input),
       approvalsOpened: (input) => this.notifyApprovers(input),
+      released: ({ sessionId, turnId }) => {
+        this.stopGrantRenewal(sessionId);
+        this.workingDirectories.delete(turnId);
+      },
     };
   }
 
@@ -3860,20 +3952,12 @@ export class AgentSessionsService {
       agent,
     );
     const notes: string[] = [];
-    const inputItem = turn.inputItemId
-      ? await this.db
-          .selectFrom("agent_items")
-          .select("payload")
-          .where("id", "=", turn.inputItemId)
-          .executeTakeFirst()
-      : undefined;
-    const input_ = inputItem ? itemFromRow(inputItem) : null;
-    const author: SessionMessageAuthor =
-      input_?.kind === "user_message"
-        ? input_.author
-        : { kind: "system", code: "turn_continued" };
-    const requestMetadata =
-      input_?.kind === "user_message" ? input_.metadata : null;
+    const ownerAuthored = await this.ownerAuthoredTurn({
+      projectId,
+      owner: session.external_user_id,
+      turn,
+    });
+    let ownerOnly = false;
 
     // A base a delivery asked for moves before the agent runs (ADR 0178).
     const workspaceMove = parseWorkspaceMove(session.workspace_move);
@@ -3921,14 +4005,7 @@ export class AgentSessionsService {
       });
       if (agent.signIn) {
         // The owner's own sign-in, mounted from the machine's disk (ADR 0198).
-        if (
-          !(await this.authoredByOwner({
-            projectId,
-            owner: session.external_user_id,
-            author,
-            metadata: requestMetadata,
-          }))
-        )
+        if (!ownerAuthored)
           throw new Error(
             `This chat runs on its owner's own ${SIGN_IN_HARNESS_NAMES[agent.signIn]} sign-in, so only they can send it messages.`,
           );
@@ -3937,6 +4014,7 @@ export class AgentSessionsService {
             `This machine has no ${SIGN_IN_HARNESS_NAMES[agent.signIn]} sign-in for this chat's owner. Sign in on the machine (work worker sign-in ${agent.signIn}) or move the chat.`,
           );
         modelAccess = { kind: "sign_in", home: runtime.signInHome };
+        ownerOnly = true;
       } else if (agent.harness.placement === "sandbox") {
         const gateway = agent.modelConnection
           ? models.find((model) => model.alias === agent.modelConnection)
@@ -3959,10 +4037,10 @@ export class AgentSessionsService {
         allowed: runtime.personalCredentials === true,
         provider: runtime.provider,
         sandboxProviderId: workspace.sandboxProviderId,
-        author,
-        requestMetadata,
+        ownerAuthored,
       });
       if (files.note) notes.push(files.note);
+      if (files.delivered) ownerOnly = true;
       if (session.allocation_id)
         this.startGrantRenewal({
           identity,
@@ -4131,6 +4209,7 @@ export class AgentSessionsService {
       start,
       notes: notes.filter(Boolean),
       checkpointBefore,
+      ownerOnly,
       launch: async () => {
         if (harness.placement === "host")
           return startInProcessRunner({
@@ -5132,9 +5211,9 @@ export class AgentSessionsService {
     allowed: boolean;
     provider: SandboxProvider;
     sandboxProviderId: string;
-    author: SessionMessageAuthor;
-    requestMetadata?: JsonObject | null;
-  }): Promise<{ note?: string }> {
+    /** The owner wrote everything the turn answers. */
+    ownerAuthored: boolean;
+  }): Promise<{ note?: string; delivered: boolean }> {
     const { session, identity, projectId } = input;
     const service = this.personalEnvironments;
     const owner = session.external_user_id;
@@ -5144,18 +5223,10 @@ export class AgentSessionsService {
         sandboxId: input.sandboxProviderId,
         projectDir: this.projectDir(input.provider),
       });
-    if (!service || isProjectPrincipal(owner)) return {};
-    if (
-      !input.allowed ||
-      !(await this.authoredByOwner({
-        projectId,
-        owner,
-        author: input.author,
-        metadata: input.requestMetadata,
-      }))
-    ) {
+    if (!service || isProjectPrincipal(owner)) return { delivered: false };
+    if (!input.allowed || !input.ownerAuthored) {
       await withdraw();
-      return {};
+      return { delivered: false };
     }
     const environment = await service.unseal({
       tenantId: identity.tenantId,
@@ -5164,7 +5235,7 @@ export class AgentSessionsService {
     });
     if (environment.files.length === 0) {
       await withdraw();
-      return {};
+      return { delivered: false };
     }
     const result = await deliverPersonalEnvironment({
       provider: input.provider,
@@ -5197,7 +5268,10 @@ export class AgentSessionsService {
         `Work did not place the user's personal ${one ? "copy" : "copies"} of ${unsafe.join(", ")} in this workspace: ${one ? "that path goes" : "those paths go"} through a symbolic link or ${one ? "is not a plain file" : "are not plain files"}, and Work writes personal files only at their own place in the project. Tell the user, and suggest replacing the link with a folder or removing ${one ? "the path" : "those paths"} from .work/personal/environment.json.`,
       );
     }
-    return notes.length > 0 ? { note: notes.join("\n\n") } : {};
+    const delivered = result.delivered.length > 0;
+    return notes.length > 0
+      ? { note: notes.join("\n\n"), delivered }
+      : { delivered };
   }
 
   /**
@@ -5214,8 +5288,10 @@ export class AgentSessionsService {
     owner: string;
     author: SessionMessageAuthor;
     metadata?: JsonObject | null;
+    executor?: Kysely<DB> | Transaction<DB>;
   }): Promise<boolean> {
     const { author, owner, projectId } = input;
+    const db = input.executor ?? this.db;
     if (author.kind === "user") return author.externalUserId === owner;
     // Stamped by `deliver` with the identity whose call delivered it.
     if (input.metadata?.deliveredBy !== owner) return false;
@@ -5223,7 +5299,7 @@ export class AgentSessionsService {
       case "system":
         return true;
       case "agent": {
-        const source = await this.db
+        const source = await db
           .selectFrom("agent_sessions")
           .select("external_user_id")
           .where("id", "=", author.sessionId)
@@ -5232,7 +5308,7 @@ export class AgentSessionsService {
         return source?.external_user_id === owner;
       }
       case "watcher": {
-        const watcher = await this.db
+        const watcher = await db
           .selectFrom("watchers")
           .select("owner_external_user_id")
           .where("id", "=", author.watcherId)
@@ -5241,7 +5317,7 @@ export class AgentSessionsService {
         return watcher?.owner_external_user_id === owner;
       }
       case "workflow": {
-        const run = await this.db
+        const run = await db
           .selectFrom("workflow_runs")
           .leftJoin(
             "workflow_enablements",
@@ -5263,6 +5339,55 @@ export class AgentSessionsService {
           : run.external_user_id === owner;
       }
     }
+  }
+
+  /**
+   * Whether the owner wrote everything a turn answers: its input and every
+   * message steered into it, and for a continuation, the turn it continues.
+   * The condition for running on their sign-in and files (ADR 0198).
+   */
+  private async ownerAuthoredTurn(input: {
+    projectId: string;
+    owner: string;
+    turn: Turn;
+  }): Promise<boolean> {
+    const turnIds: string[] = [];
+    let turn: Turn | null = input.turn;
+    while (turn && turnIds.length < 20) {
+      turnIds.push(turn.id);
+      const previous: string | null = turn.continuationOf;
+      turn = previous
+        ? await this.db
+            .selectFrom("agent_turns")
+            .selectAll()
+            .where("id", "=", previous)
+            .where("session_id", "=", input.turn.sessionId)
+            .executeTakeFirst()
+            .then((row) => (row ? turnFromRow(row) : null))
+        : null;
+    }
+    const rows = await this.db
+      .selectFrom("agent_items")
+      .select("payload")
+      .where("session_id", "=", input.turn.sessionId)
+      .where("turn_id", "in", turnIds)
+      .where("kind", "=", "user_message")
+      .execute();
+    if (rows.length === 0) return false;
+    for (const row of rows) {
+      const item = itemFromRow(row);
+      if (
+        item.kind !== "user_message" ||
+        !(await this.authoredByOwner({
+          projectId: input.projectId,
+          owner: input.owner,
+          author: item.author,
+          metadata: item.metadata,
+        }))
+      )
+        return false;
+    }
+    return true;
   }
 
   /**

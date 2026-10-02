@@ -1,11 +1,13 @@
-import type {
-  CommandReceipt,
-  Item,
-  JsonObject,
-  SessionEvent,
-  SessionFields,
-  SessionSnapshot,
-  StoredSessionEvent,
+import {
+  ACTIVE_TURN_STATUSES,
+  type CommandReceipt,
+  type Item,
+  type JsonObject,
+  type SessionEvent,
+  type SessionFields,
+  type SessionSnapshot,
+  type StoredSessionEvent,
+  type TurnStatus,
 } from "@catamorphic/agent-protocol";
 import type { DB, Json } from "@catamorphic/db";
 import { type Kysely, sql, type Transaction } from "kysely";
@@ -60,6 +62,20 @@ export class SessionLog {
    * transaction so the events and the change that caused them commit
    * together. Locks the session row until that transaction ends.
    */
+  /**
+   * Take the session row's lock now, before reading what an append will be
+   * computed from: everything that changes a session locks it first, so
+   * what is read under the lock is current until the transaction ends.
+   */
+  async lock(trx: Transaction<DB>, sessionId: string): Promise<void> {
+    await trx
+      .selectFrom("agent_sessions")
+      .select("id")
+      .where("id", "=", sessionId)
+      .forUpdate()
+      .executeTakeFirstOrThrow();
+  }
+
   async append(
     trx: Transaction<DB>,
     input: {
@@ -237,10 +253,17 @@ export class SessionLog {
     externalUserId?: string;
     /** Returns the command's result (JSON-able), recorded on its receipt. */
     run: (trx: Transaction<DB>) => Promise<object | null | undefined>;
+    /**
+     * Work outside the database the command needs first (rewinding files),
+     * run once the command is known to be new; a rejection it throws is
+     * recorded like one from `run`.
+     */
+    before?: () => Promise<void>;
   }): Promise<CommandReceipt> {
     const existing = await this.receipt(this.db, input);
     if (existing) return existing;
     try {
+      await input.before?.();
       return await this.db.transaction().execute(async (trx) => {
         // The session row lock orders concurrent commands; the receipt
         // check inside it makes a duplicate that raced the first one wait
@@ -476,9 +499,16 @@ async function project(
             .column("id")
             .doUpdateSet((eb) => ({
               ...values,
+              // A request to stop stands until the turn leaves its run
+              // (queued again, restarting, settled): a turn written while
+              // it still runs never withdraws one made meanwhile.
               cancellation_requested_at: turn.cancellationRequested
                 ? sql`coalesce(${eb.ref("agent_turns.cancellation_requested_at")}, ${new Date(stored.at)})`
-                : null,
+                : (ACTIVE_TURN_STATUSES as readonly TurnStatus[]).includes(
+                      turn.status,
+                    )
+                  ? eb.ref("agent_turns.cancellation_requested_at")
+                  : null,
             }))
             .where("agent_turns.session_id", "=", stored.sessionId),
         )
@@ -843,6 +873,8 @@ async function ownEvents(
         if (event.thread.sessionId !== input.sessionId) throw foreign();
         ids.threads.add(event.thread.id);
         return event;
+      default:
+        throw foreign();
     }
   });
   const elsewhere = async (

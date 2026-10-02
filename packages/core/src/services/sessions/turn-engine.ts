@@ -73,8 +73,15 @@ export interface RunnerState {
   cursor: number;
   /** The harness, once its runner said hello: proof the start arrived. */
   hello: { harness: string; capabilities: HarnessCapabilities } | null;
-  /** Host calls taken and not answered yet, answered again after a takeover. */
+  /**
+   * Host calls taken whose result the runner has not acknowledged: answered
+   * again after a takeover. Written per call, never as a whole.
+   */
   calls: Record<string, HostCall>;
+  /** Native state appends already applied: answered again, never applied twice. */
+  applied?: Record<string, true>;
+  /** Runs on its owner's sign-in or personal files (see {@link PreparedAttempt}). */
+  ownerOnly?: boolean;
   /** Steered inputs the harness could not take; the attempt restarts with them. */
   restartWith: string[];
   /** Steered inputs the harness took in (an accepted one never taken is queued again). */
@@ -108,6 +115,11 @@ export interface PreparedAttempt {
   notes?: string[];
   /** The workspace's commit before the turn, which a rollback restores. */
   checkpointBefore?: string | null;
+  /**
+   * The attempt runs on its owner's sign-in or personal files: only input
+   * the owner wrote may join it (ADR 0198).
+   */
+  ownerOnly?: boolean;
 }
 
 /** What a settled turn's finalization produced. */
@@ -163,6 +175,8 @@ export interface TurnEngineHost {
     retrying: boolean;
   }): Promise<void>;
   /** Approvals that opened and wait on approvers, after they committed. */
+  /** This holder stopped working the turn, however it ended: let go of what it kept. */
+  released?(input: { sessionId: string; turnId: string }): void;
   approvalsOpened?(input: {
     session: SessionRow;
     requests: RuntimeRequest[];
@@ -181,22 +195,24 @@ interface LocalTurn {
   channel?: RunnerChannel;
   /** This process is stopping: hand reattachable work back instead. */
   handingBack: boolean;
-  /** Host calls answered here, as `<attemptId>:<callId>`: never saved back. */
-  answered: Set<string>;
+  /** Host call results sent and not acknowledged yet, by call: sent again. */
+  results: Map<string, RunnerCommandFrame>;
+  resultsSentAt: number;
 }
 
-/** The runner state to save: without calls this holder already answered. */
-function unanswered(
-  local: LocalTurn,
-  attemptId: string,
+/**
+ * The runner state to save. Calls are added and removed one at a time, so
+ * this keeps the recorded ones and adds only `added`: a whole-state write
+ * never brings back a call answered meanwhile.
+ */
+function runnerWrite(
   runner: RunnerState,
-): RunnerState {
-  const calls = Object.fromEntries(
-    Object.entries(runner.calls).filter(
-      ([callId]) => !local.answered.has(`${attemptId}:${callId}`),
-    ),
-  );
-  return { ...runner, calls };
+  added: ReadonlyArray<[string, HostCall]> = [],
+) {
+  const { calls: _calls, applied: _applied, ...rest } = runner;
+  return sql<Json>`${JSON.stringify(rest)}::jsonb || jsonb_build_object(
+    'calls', coalesce(runner -> 'calls', '{}'::jsonb) || ${JSON.stringify(Object.fromEntries(added))}::jsonb,
+    'applied', coalesce(runner -> 'applied', '{}'::jsonb))`;
 }
 
 /** The text a continuation turn gives the agent (ADR 0197). */
@@ -206,6 +222,10 @@ export const CONTINUATION_PROMPT =
 const BACKOFF_MS = [5_000, 15_000, 30_000, 60_000, 120_000];
 const MAX_TRANSIENT_RETRIES = 5;
 const INTERRUPT_GRACE_MS = 30_000;
+/** How long a reattached runner that never said hello has to show it got its start. */
+const START_GRACE_MS = 15_000;
+/** How long a host result waits for the runner's acknowledgement before it is sent again. */
+const RESULT_RESEND_MS = 2_000;
 
 /**
  * Drives claimed turns (ADR 0197): prepares an attempt, starts its runner
@@ -337,7 +357,8 @@ export class TurnEngine {
       abort: new AbortController(),
       wake: () => wake(),
       handingBack: false,
-      answered: new Set(),
+      results: new Map(),
+      resultsSentAt: 0,
     };
     const nextWake = () =>
       new Promise<void>((resolve) => {
@@ -397,6 +418,10 @@ export class TurnEngine {
         await local.channel.kill().catch(() => {});
       release();
       this.local.delete(claim.turn.id);
+      this.deps.host.released?.({
+        sessionId: claim.turn.sessionId,
+        turnId: claim.turn.id,
+      });
     }
   }
 
@@ -680,6 +705,7 @@ export class TurnEngine {
       consumed:
         reason === "steer_restart" ? await this.steeredItemIds(turn) : [],
       interruptSentAt: null,
+      ...(prepared.ownerOnly ? { ownerOnly: true } : {}),
     };
     const running: Turn = {
       ...turn,
@@ -966,6 +992,46 @@ export class TurnEngine {
           reason: "The machine running this turn stopped before it finished.",
         };
       local.channel = channel;
+      // A holder can stop between recording the runner and sending its
+      // start. A runner that never said hello never got it: stop it and
+      // prepare the same attempt again, as for a preparation that died.
+      if (runner.hello === null && runner.cursor === 0) {
+        const deadline = Date.now() + START_GRACE_MS;
+        let heard = false;
+        while (!heard && Date.now() < deadline) {
+          if (local.abort.signal.aborted) return { kind: "aborted", channel };
+          const peek = await channel.read({ cursor: 0, waitMs: 1_000 });
+          heard = peek.frames.length > 0 || peek.exited;
+        }
+        if (!heard) {
+          await channel.kill().catch(() => {});
+          local.channel = undefined;
+          const preparing: Turn = {
+            ...turn,
+            status: "preparing",
+            updatedAt: new Date().toISOString(),
+          };
+          await db.transaction().execute(async (trx) => {
+            await this.assertOwned(local, trx);
+            await trx
+              .updateTable("agent_turn_attempts")
+              .set({ runner: null, provider_started_at: null })
+              .where("id", "=", attempt.id)
+              .execute();
+            await log.append(trx, {
+              sessionId: turn.sessionId,
+              events: [
+                {
+                  type: "attempt.changed",
+                  attempt: { ...attempt, status: "preparing" },
+                },
+                { type: "turn.changed", turn: preparing },
+              ],
+            });
+          });
+          return { kind: "restart", turn: preparing };
+        }
+      }
       // Answer again what the previous holder took and did not answer.
       await this.answerCalls(
         local,
@@ -992,14 +1058,27 @@ export class TurnEngine {
       const commands = await queue.openCommands({ turnId: turn.id });
       if (commands.length === 0) return;
       const frames: RunnerCommandFrame[] = [];
+      const moot: string[] = [];
       for (const command of commands) {
-        const frame = await this.commandFrame(command, attempt.id);
+        const frame = await this.commandFrame(command, {
+          attemptId: attempt.id,
+          consumed: runner?.consumed ?? [],
+        });
         if (frame) frames.push(frame);
+        else moot.push(command.id);
       }
+      // A command with nobody left to reach (input this attempt already
+      // has, a request of an earlier attempt) is dropped, never resent.
+      if (moot.length > 0)
+        await queue.markCommands({ ids: moot, status: "dropped" });
+      if (frames.length === 0) return;
       await channel?.send(frames);
       await queue.markCommands({
         ids: commands
-          .filter((command) => command.status === "pending")
+          .filter(
+            (command) =>
+              command.status === "pending" && !moot.includes(command.id),
+          )
           .map((command) => command.id),
         status: "sent",
       });
@@ -1014,6 +1093,19 @@ export class TurnEngine {
     let commandsInFlight: Promise<void> | undefined;
     for (;;) {
       if (local.abort.signal.aborted) return { kind: "aborted", channel };
+      // A result the runner has not acknowledged is sent again: a send can
+      // fail, and the harness waits on every call.
+      if (
+        local.results.size > 0 &&
+        Date.now() - local.resultsSentAt > RESULT_RESEND_MS
+      ) {
+        local.resultsSentAt = Date.now();
+        await channel
+          .send([...local.results.values()])
+          .catch((error) =>
+            console.warn("[catamorphic] Could not send host results", error),
+          );
+      }
       if (!commandsInFlight)
         commandsInFlight = local.waiter?.then(async () => {
           rearm();
@@ -1089,11 +1181,16 @@ export class TurnEngine {
           };
           await db.transaction().execute(async (trx) => {
             await this.assertOwned(local, trx);
+            // The new attempt's prompt carries every steered message, so
+            // no steer is sent again, and the interrupt has done its work.
             await queue.markCommands({
               ids: (
                 await queue.openCommands({ turnId: turn.id, executor: trx })
               )
-                .filter((command) => command.kind === "interrupt")
+                .filter(
+                  (command) =>
+                    command.kind === "interrupt" || command.kind === "steer",
+                )
                 .map((command) => command.id),
               status: "dropped",
               executor: trx,
@@ -1108,6 +1205,12 @@ export class TurnEngine {
                 },
               ],
             });
+            // The interrupt that ended the attempt was the restart's own.
+            await trx
+              .updateTable("agent_turns")
+              .set({ cancellation_requested_at: null })
+              .where("id", "=", turn.id)
+              .execute();
           });
           await this.stopRunner(local, channel);
           local.channel = undefined;
@@ -1156,8 +1259,9 @@ export class TurnEngine {
 
   private async commandFrame(
     command: Awaited<ReturnType<TurnQueue["openCommands"]>>[number],
-    attemptId: string,
+    attempt: { attemptId: string; consumed: readonly string[] },
   ): Promise<RunnerCommandFrame | null> {
+    const { attemptId } = attempt;
     const id = `${command.kind}:${command.id}`;
     switch (command.kind) {
       case "interrupt":
@@ -1169,6 +1273,8 @@ export class TurnEngine {
           typeof command.payload.itemId === "string"
             ? command.payload.itemId
             : "";
+        // Input the attempt started with, after a restart, is already in.
+        if (attempt.consumed.includes(itemId)) return null;
         const row = await this.deps.db
           .selectFrom("agent_items")
           .select("payload")
@@ -1252,11 +1358,22 @@ export class TurnEngine {
     const opened: RuntimeRequest[] = [];
     const applied = await db.transaction().execute(async (trx) => {
       await this.assertOwned(local, trx);
+      // The turn as it stands, under the lock: another replica may have
+      // interrupted it, or a reply made it wait, since this holder read it.
+      await log.lock(trx, input.turn.sessionId);
+      const current = turnFromRow(
+        await trx
+          .selectFrom("agent_turns")
+          .selectAll()
+          .where("id", "=", input.turn.id)
+          .executeTakeFirstOrThrow(),
+      );
       let runner: RunnerState = { ...input.runner, cursor: input.cursor };
       const events = input.frames.flatMap((frame) =>
         frame.type === "event" ? [frame.event] : [],
       );
       const calls: Array<[string, HostCall]> = [];
+      const delivered: string[] = [];
       const acked: string[] = [];
       const refusedSteers: string[] = [];
       for (const frame of input.frames) {
@@ -1278,8 +1395,14 @@ export class TurnEngine {
           }
         } else if (frame.type === "ack") {
           // Only queued turn commands are acknowledged in Postgres; the
-          // engine's own (start, result, stop) are not rows.
+          // engine's own (start, stop) are not rows, and an acknowledged
+          // result lets its call go.
           const [kind, commandId] = splitCommandId(frame.commandId);
+          if (
+            kind === "result" &&
+            commandId?.startsWith(`${input.attempt.id}:`)
+          )
+            delivered.push(commandId.slice(input.attempt.id.length + 1));
           if (commandId && QUEUED_COMMAND_KINDS.has(kind)) {
             acked.push(commandId);
             if (kind === "steer" && frame.error) refusedSteers.push(commandId);
@@ -1290,7 +1413,7 @@ export class TurnEngine {
         trx,
         state: {
           sessionId: input.turn.sessionId,
-          turn: input.turn,
+          turn: current,
           attempt: input.attempt,
           thread: input.thread,
           agentId: input.agentId,
@@ -1396,11 +1519,15 @@ export class TurnEngine {
       });
       await trx
         .updateTable("agent_turn_attempts")
-        .set({
-          runner: unanswered(local, attempt.id, runner) as unknown as Json,
-        })
+        .set({ runner: runnerWrite(runner, calls) })
         .where("id", "=", attempt.id)
         .execute();
+      for (const callId of delivered) {
+        await this.forgetCall(trx, attempt.id, callId);
+        local.results.delete(callId);
+        const { [callId]: _done, ...rest } = runner.calls;
+        runner = { ...runner, calls: rest };
+      }
       return {
         turn,
         attempt,
@@ -1430,9 +1557,7 @@ export class TurnEngine {
       await this.assertOwned(local, trx);
       await trx
         .updateTable("agent_turn_attempts")
-        .set({
-          runner: unanswered(local, attemptId, runner) as unknown as Json,
-        })
+        .set({ runner: runnerWrite(runner) })
         .where("id", "=", attemptId)
         .execute();
     });
@@ -1466,15 +1591,28 @@ export class TurnEngine {
         if (call.kind === "native_state.append") {
           await this.deps.db.transaction().execute(async (trx) => {
             await this.assertOwned(local, trx);
+            const row = await trx
+              .selectFrom("agent_turn_attempts")
+              .select("runner")
+              .where("id", "=", ctx.attempt.id)
+              .forUpdate()
+              .executeTakeFirst();
+            const recorded = row?.runner as unknown as RunnerState | null;
+            if (recorded?.applied?.[callId]) return;
             await this.native.append({
               threadId,
               ...(call.subpath ? { subpath: call.subpath } : {}),
               entries: call.entries,
               executor: trx,
             });
-            await this.forgetCall(trx, ctx.attempt.id, callId);
+            await trx
+              .updateTable("agent_turn_attempts")
+              .set({
+                runner: sql`jsonb_set(runner, '{applied}', coalesce(runner -> 'applied', '{}'::jsonb) || jsonb_build_object(${callId}::text, true))`,
+              })
+              .where("id", "=", ctx.attempt.id)
+              .execute();
           });
-          local.answered.add(`${ctx.attempt.id}:${callId}`);
           result = null;
         } else if (call.kind === "native_state.load") {
           result =
@@ -1500,25 +1638,25 @@ export class TurnEngine {
       } catch (caught) {
         error = caught instanceof Error ? caught.message : String(caught);
       }
-      await channel.send([
-        {
-          id: `result:${ctx.attempt.id}:${callId}`,
-          command: {
-            kind: "host_result",
-            callId,
-            ...(error === undefined
-              ? { result: result ?? null }
-              : { error: { message: error } }),
-          },
+      // The call is forgotten once the runner acknowledges the result;
+      // until then it is sent again (and answered again after a takeover).
+      const frame: RunnerCommandFrame = {
+        id: `result:${ctx.attempt.id}:${callId}`,
+        command: {
+          kind: "host_result",
+          callId,
+          ...(error === undefined
+            ? { result: result ?? null }
+            : { error: { message: error } }),
         },
-      ]);
-      if (call.kind !== "native_state.append") {
-        await this.deps.db.transaction().execute(async (trx) => {
-          await this.assertOwned(local, trx);
-          await this.forgetCall(trx, ctx.attempt.id, callId);
-        });
-        local.answered.add(`${ctx.attempt.id}:${callId}`);
-      }
+      };
+      local.results.set(callId, frame);
+      local.resultsSentAt = Date.now();
+      await channel
+        .send([frame])
+        .catch((caught) =>
+          console.warn("[catamorphic] Could not send a host result", caught),
+        );
     }
   }
 
@@ -1529,7 +1667,9 @@ export class TurnEngine {
   ): Promise<void> {
     await trx
       .updateTable("agent_turn_attempts")
-      .set({ runner: sql`runner #- ${`{calls,${callId}}`}::text[]` })
+      .set({
+        runner: sql`runner #- ARRAY['calls', ${callId}::text] #- ARRAY['applied', ${callId}::text]`,
+      })
       .where("id", "=", attemptId)
       .execute();
   }
@@ -1550,7 +1690,7 @@ export class TurnEngine {
       return own;
     const rows = await this.deps.db
       .selectFrom("agent_provider_threads")
-      .select(["id", "native_ref", "fork_source"])
+      .select(["id", "native_ref", "fork_source", "last_turn_ordinal"])
       .where("session_id", "=", attempt.sessionId)
       .execute();
     const match = rows.find(
@@ -1558,14 +1698,19 @@ export class TurnEngine {
         (row.native_ref as unknown as NativeRef | null)?.id === call.thread,
     );
     if (match) return match.id;
-    // A fork reads its source thread, which belongs to the source session.
+    // A fork reads its source thread, which belongs to the source session,
+    // only to begin: once a turn of its own settled, never again.
     const ownRow = rows.find((row) => row.id === own);
     const source =
       (ownRow?.fork_source as unknown as {
         threadId?: string;
         source?: NativeRef;
       } | null) ?? null;
-    if (source?.threadId && source.source?.id === call.thread)
+    if (
+      ownRow?.last_turn_ordinal === null &&
+      source?.threadId &&
+      source.source?.id === call.thread
+    )
       return source.threadId;
     return own;
   }
@@ -1822,6 +1967,15 @@ export class TurnEngine {
     let continued = false;
     await db.transaction().execute(async (trx) => {
       await this.assertOwned(local, trx);
+      // Read under the lock: an interrupt made meanwhile means no continuation.
+      await log.lock(trx, ctx.turn.sessionId);
+      const turn = turnFromRow(
+        await trx
+          .selectFrom("agent_turns")
+          .selectAll()
+          .where("id", "=", ctx.turn.id)
+          .executeTakeFirstOrThrow(),
+      );
       const events: SessionEvent[] = [
         {
           type: "attempt.changed",
@@ -1833,7 +1987,7 @@ export class TurnEngine {
           },
         },
         ...(await closeOpenWork(trx, {
-          turn: ctx.turn,
+          turn,
           attemptId: ctx.attempt.id,
           reason: "The agent that asked stopped before it was answered.",
           now,
@@ -1841,7 +1995,7 @@ export class TurnEngine {
         {
           type: "turn.changed",
           turn: {
-            ...ctx.turn,
+            ...turn,
             status: "interrupted",
             activity: null,
             activityAt: null,
@@ -1854,7 +2008,7 @@ export class TurnEngine {
       ];
       // A person's steered messages run as turns of their own; then there
       // is newer work, and nothing to continue on its own.
-      const requeued = await this.requeueSteers(trx, ctx.turn, now);
+      const requeued = await this.requeueSteers(trx, turn, now);
       events.push(...requeued);
       const thread = ctx.attempt.providerThreadId
         ? await trx
@@ -1873,20 +2027,20 @@ export class TurnEngine {
           type: "provider_thread.changed",
           thread: {
             ...providerThreadFromRow(thread),
-            lastTurnOrdinal: ctx.turn.ordinal,
+            lastTurnOrdinal: turn.ordinal,
             updatedAt: now,
           },
         });
       const newer = await trx
         .selectFrom("agent_turns")
         .select("id")
-        .where("session_id", "=", ctx.turn.sessionId)
-        .where("ordinal", ">", ctx.turn.ordinal)
+        .where("session_id", "=", turn.sessionId)
+        .where("ordinal", ">", turn.ordinal)
         .executeTakeFirst();
       const alreadyContinued = await trx
         .selectFrom("agent_turns")
         .select("id")
-        .where("continuation_of", "=", ctx.turn.id)
+        .where("continuation_of", "=", turn.id)
         .executeTakeFirst();
       if (
         harness.recovery === "continue" &&
@@ -1894,18 +2048,18 @@ export class TurnEngine {
         !newer &&
         requeued.length === 0 &&
         !alreadyContinued &&
-        !ctx.turn.cancellationRequested &&
+        !turn.cancellationRequested &&
         ctx.session.status === "active"
       ) {
-        const noticeId = derivedId(ctx.turn.id, "continued");
-        const ordinal = ctx.turn.ordinal + 1;
-        const turnId = derivedId(ctx.turn.id, "continuation");
+        const noticeId = derivedId(turn.id, "continued");
+        const ordinal = turn.ordinal + 1;
+        const turnId = derivedId(turn.id, "continuation");
         events.push(
           {
             type: "item.added",
             item: {
               id: noticeId,
-              sessionId: ctx.turn.sessionId,
+              sessionId: turn.sessionId,
               turnId,
               attemptId: null,
               parentItemId: null,
@@ -1919,14 +2073,14 @@ export class TurnEngine {
               kind: "notice",
               code: "turn_continued",
               text: "The machine running the last turn stopped. The agent continues where it left off.",
-              data: { continuationOf: ctx.turn.id },
+              data: { continuationOf: turn.id },
             },
           },
           {
             type: "turn.changed",
             turn: {
               id: turnId,
-              sessionId: ctx.turn.sessionId,
+              sessionId: turn.sessionId,
               ordinal,
               status: "queued",
               inputItemId: noticeId,
@@ -1942,7 +2096,7 @@ export class TurnEngine {
               error: null,
               outcome: null,
               checkpoint: { before: null, after: null },
-              continuationOf: ctx.turn.id,
+              continuationOf: turn.id,
               createdAt: now,
               startedAt: null,
               completedAt: null,
@@ -1953,18 +2107,18 @@ export class TurnEngine {
         continued = true;
       }
       await log.append(trx, {
-        sessionId: ctx.turn.sessionId,
-        commandId: `continue:${ctx.turn.id}`,
+        sessionId: turn.sessionId,
+        commandId: `continue:${turn.id}`,
         events,
       });
       await queue.markCommands({
-        ids: (
-          await queue.openCommands({ turnId: ctx.turn.id, executor: trx })
-        ).map((command) => command.id),
+        ids: (await queue.openCommands({ turnId: turn.id, executor: trx })).map(
+          (command) => command.id,
+        ),
         status: "dropped",
         executor: trx,
       });
-      await queue.release(trx, { turnId: ctx.turn.id });
+      await queue.release(trx, { turnId: turn.id });
     });
     if (local.channel) await local.channel.kill().catch(() => {});
     await this.deps.host

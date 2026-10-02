@@ -189,6 +189,10 @@ Members then see the agents **Claude Code** and **Codex** (ids
 local-process: a link to it), so its own token refresh keeps working and
 nothing leaves the machine. It talks to the provider directly: no gateway,
 no organization key. Cloud sandboxes (Cloudflare, Daytona) refuse sign-ins.
+The mounted home holds the CLI's refresh token, which code the agent runs
+can read, as on the member's own computer: allow sign-ins only in projects
+whose code the member would run on their own machine, and restrict the
+Environment's egress (`network.egress: "allowlist"`).
 
 On macOS, Claude Code keeps its login in the Keychain rather than in
 `CLAUDE_CONFIG_DIR`: such a sign-in works for local-process chats on that

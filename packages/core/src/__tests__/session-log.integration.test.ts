@@ -11,6 +11,7 @@ import {
   type SessionStreamMessage,
   sessionStateFromSnapshot,
 } from "@catamorphic/agent-protocol";
+import type { HarnessAdapter } from "@catamorphic/agent-protocol/runner";
 import { EchoAdapter } from "@catamorphic/agent-runner";
 import type { DB } from "@catamorphic/db";
 import { migrateToLatest } from "@catamorphic/db";
@@ -18,7 +19,7 @@ import { FsBackend, ProjectManager } from "@catamorphic/git";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
-import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
+import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
@@ -75,6 +76,29 @@ describe("session log", () => {
       harness: { placement: "host", adapter: new EchoAdapter() },
       topology: "native",
     };
+    // Refuses a steer on its first attempt, as a harness that cannot take
+    // input mid-turn: the turn restarts with it.
+    const inner = new EchoAdapter();
+    let started = 0;
+    const stubbornAdapter: HarnessAdapter = {
+      id: "echo",
+      capabilities: () => inner.capabilities(),
+      start: (attempt, host) => {
+        started += 1;
+        const control = inner.start(attempt, host);
+        const first = started === 1;
+        return {
+          ...control,
+          steer: (input) =>
+            first ? Promise.resolve(false) : control.steer(input),
+        };
+      },
+    };
+    const stubborn: RegisteredCodingAgent = {
+      ...echo,
+      id: "stubborn",
+      harness: { placement: "host", adapter: stubbornAdapter },
+    };
     // Its tools on `prod` ask the person first (ADR 0054).
     const guarded: RegisteredCodingAgent = {
       ...echo,
@@ -93,8 +117,14 @@ describe("session log", () => {
         codingAgents: {
           defaultAgentId: () => "echo",
           get: (id) =>
-            id === "echo" ? echo : id === "guarded" ? guarded : undefined,
-          list: () => [echo, guarded],
+            id === "echo"
+              ? echo
+              : id === "guarded"
+                ? guarded
+                : id === "stubborn"
+                  ? stubborn
+                  : undefined,
+          list: () => [echo, guarded, stubborn],
         },
         nativeAgentCheckout: {
           resolve: async ({ projectId }) => {
@@ -297,6 +327,127 @@ describe("session log", () => {
       { timeout: 15_000 },
     );
   });
+
+  it("restarts once with a steer the harness refused, and the agent reads it once", async () => {
+    const project = await projects.create(identity, { name: "Stubborn" });
+    const session = await sessions.create(identity, project.id, {
+      agentId: "stubborn",
+    });
+    const projectId = project.id;
+    const sessionId = session.id;
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[wait 1500]]",
+    });
+    await vi.waitFor(
+      async () => {
+        const detail = await sessions.get(identity, projectId, sessionId);
+        expect(detail.snapshot.turns[0]?.status).toBe("running");
+      },
+      { timeout: 10_000 },
+    );
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "also this",
+      dispatch: "steer",
+    });
+    await vi.waitFor(
+      async () => {
+        const detail = await sessions.get(identity, projectId, sessionId);
+        expect(detail.snapshot.turns.map((turn) => turn.status)).toEqual([
+          "completed",
+        ]);
+      },
+      { timeout: 20_000 },
+    );
+    const attempts = await db
+      .selectFrom("agent_turn_attempts")
+      .select(["reason", "status"])
+      .where("session_id", "=", sessionId)
+      .orderBy("ordinal")
+      .execute();
+    expect(attempts).toEqual([
+      { reason: "initial", status: "superseded" },
+      { reason: "steer_restart", status: "completed" },
+    ]);
+    const detail = await sessions.get(identity, projectId, sessionId);
+    const replies = detail.snapshot.items.flatMap((item) =>
+      item.kind === "assistant_message" ? [item.text] : [],
+    );
+    expect(replies.join("\n").split("also this")).toHaveLength(2);
+    const open = await db
+      .selectFrom("agent_turn_commands")
+      .select("kind")
+      .where("turn_id", "=", detail.snapshot.turns[0]?.id ?? "")
+      .where("status", "in", ["pending", "sent"])
+      .execute();
+    expect(open).toEqual([]);
+  }, 40_000);
+
+  it("keeps a turn on its owner's sign-in to the owner's words (ADR 0198)", async () => {
+    const { projectId, sessionId } = await chat("OwnerOnly");
+    const admin: Identity = { ...identity, externalUserId: "admin" };
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[wait 2000]]",
+    });
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "then this",
+    });
+    await vi.waitFor(
+      async () => {
+        const detail = await sessions.get(identity, projectId, sessionId);
+        expect(detail.snapshot.turns[0]?.status).toBe("running");
+      },
+      { timeout: 10_000 },
+    );
+    // As preparation records it for a sign-in or personal files.
+    const running = (await sessions.get(identity, projectId, sessionId))
+      .snapshot.turns[0];
+    await db
+      .updateTable("agent_turn_attempts")
+      .set({ runner: sql`runner || '{"ownerOnly": true}'::jsonb` })
+      .where("id", "=", running?.activeAttemptId ?? "")
+      .execute();
+    // Someone else's steer waits for a turn of its own.
+    await sessions.command(admin, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "from the admin",
+      dispatch: "steer",
+    });
+    const detail = await sessions.get(identity, projectId, sessionId);
+    const adminItem = detail.snapshot.items.find(
+      (item) => item.kind === "user_message" && item.text === "from the admin",
+    );
+    expect(adminItem?.turnId).not.toBe(running?.id);
+    expect(adminItem?.kind === "user_message" && adminItem.dispatch).toBe(
+      "queue",
+    );
+    // Nor can they put words in the owner's queued message.
+    const queued = detail.snapshot.turns.find(
+      (turn) => turn.status === "queued",
+    );
+    const edit = await sessions.command(admin, projectId, sessionId, {
+      type: "edit_queued",
+      commandId: randomUUID(),
+      turnId: queued?.id ?? "",
+      text: "rewritten",
+    });
+    expect(edit).toMatchObject({
+      status: "rejected",
+      error: { code: "not_author" },
+    });
+    await sessions.command(identity, projectId, sessionId, {
+      type: "interrupt",
+      commandId: randomUUID(),
+    });
+  }, 30_000);
 
   it("streams the gap after a cursor, then live events, in order", async () => {
     const { projectId, sessionId } = await chat("Stream");

@@ -86,7 +86,8 @@ target thread has not seen, delta when returning to an earlier thread.
 
 **Versions are checked, not assumed.** A runner's hello states its protocol
 and an attempt of another protocol is refused. Workers state their protocol
-on connect; a mismatch answers 426 naming which side to update. Clients read
+on every call (a `work-protocol` header); a mismatch answers 426 naming
+which side to update, and the worker retries until it is. Clients read
 the server's `agentProtocol` from `GET /me` and refuse one they cannot
 speak.
 
