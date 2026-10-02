@@ -453,9 +453,11 @@ export function registerAgentBridge(
     );
     drivers.set(guest.id, { projectId, driver });
     const guestId = guest.id;
+    // A takeover outlives the page: a sleeping tab (ADR 0194) wakes into
+    // a new guest that is still the person's. Closing the tab or handing
+    // control back ends it.
     guest.once("destroyed", () => {
       drivers.delete(guestId);
-      takenOver.delete(key);
     });
     return driver;
   };

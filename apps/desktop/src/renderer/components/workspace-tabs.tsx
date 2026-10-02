@@ -57,8 +57,30 @@ function tabStatusLine(tab: WorkspaceTab): string | null {
       ? "Unsaved changes"
       : "Unsent draft";
   }
+  if (tab.kind === "browser" && tab.asleep)
+    return "Asleep to save memory. Opens where you left off";
   return null;
 }
+
+/**
+ * A sleeping tab (ADR 0194) reads as Chrome's: its icon fades behind a
+ * dashed ring. The ring sits in the icon's own box, so nothing shifts.
+ */
+function SleepRing({ tab }: { tab: WorkspaceTab }) {
+  if (tab.kind !== "browser" || !tab.asleep) return null;
+  return (
+    <span
+      aria-hidden="true"
+      data-tab-asleep=""
+      className="pointer-events-none absolute -inset-[3px] animate-fade-in rounded-full border border-dashed border-fg-muted"
+    />
+  );
+}
+
+const sleepingGlyph = (tab: WorkspaceTab) =>
+  `transition-[opacity,filter,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+    tab.kind === "browser" && tab.asleep ? "scale-80 opacity-50 grayscale" : ""
+  }`;
 
 const HOVER_CARD_DELAY_MS = 500;
 const TAB_EXIT_FALLBACK_MS = 280;
@@ -370,12 +392,19 @@ function SidebarWorkspaceTabs({
                         fork={tab.fork}
                         className="size-3.5"
                       />
-                    ) : tab.kind === "browser" && tab.faviconUrl ? (
-                      <img
-                        src={tab.faviconUrl}
-                        alt=""
-                        className="size-3.5 rounded"
-                      />
+                    ) : tab.kind === "browser" ? (
+                      <span className="relative grid size-3.5 place-items-center">
+                        {tab.faviconUrl ? (
+                          <img
+                            src={tab.faviconUrl}
+                            alt=""
+                            className={`size-3.5 rounded ${sleepingGlyph(tab)}`}
+                          />
+                        ) : (
+                          <Icon className={`size-3.5 ${sleepingGlyph(tab)}`} />
+                        )}
+                        <SleepRing tab={tab} />
+                      </span>
                     ) : (
                       <Icon className="size-3.5" />
                     )}
@@ -776,8 +805,10 @@ function TabStrip({
                       <img
                         src={tab.faviconUrl}
                         alt=""
-                        className="size-3.5 rounded-[3px]"
+                        className={`size-3.5 rounded-[3px] ${sleepingGlyph(tab)}`}
                       />
+                    ) : tab.kind === "browser" ? (
+                      <Icon className={`size-3.5 ${sleepingGlyph(tab)}`} />
                     ) : tab.kind === "app" ? (
                       <AppGlyph icon={tab.appIcon} className="size-3.5" />
                     ) : tab.kind === "chat" ? (
@@ -790,6 +821,7 @@ function TabStrip({
                       <Icon className="size-3.5" />
                     )}
                   </SignalGlyph>
+                  <SleepRing tab={tab} />
                   {/* A custom conversation icon still reads as a chat: a
                       tiny chat marker rides the glyph's corner. */}
                   {tab.kind === "chat" && hasCustomChatIcon(tab.chatIcon) && (

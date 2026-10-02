@@ -178,6 +178,7 @@ import {
   surfaceLocation,
   visitSurface,
 } from "./lib/surface-history.js";
+import { useTabSleep } from "./lib/tab-sleep.js";
 import { useSidebarReveal } from "./lib/use-sidebar-reveal.js";
 import {
   fileNameFromPath,
@@ -1478,6 +1479,7 @@ export function App({
         name: browser.localId,
         label: browser.title || "New Tab",
         faviconUrl: browser.faviconUrl,
+        asleep: tabSleep.asleep(browser.localId),
         // Hover card: the page's address under its full title.
         detail: browser.url || browser.initialUrl || undefined,
         bookmarkUrl: browser.url || browser.initialUrl || undefined,
@@ -2092,6 +2094,38 @@ export function App({
     setBusyBrowsers(new Set());
   }, [projectId]);
   const browserGuestIdsRef = useRef(new Map<string, number>());
+
+  // Browser tabs out of sight for a while sleep (ADR 0194); tabs the
+  // workspace mounts with start asleep, so only the shown ones load.
+  const sleepSlots = workspaceLayout(workspace).viewSlots;
+  const tabSleep = useTabSleep({
+    mountKey: projectId
+      ? workspaceReady
+        ? projectId
+        : null
+      : utilityWorkspaceKey,
+    // Only a project's workspace is restored; the profile's own browser
+    // holds just the pages opened this session.
+    startAsleep: Boolean(projectId),
+    candidates: workspace.browsers.map((browser) => ({
+      localId: browser.localId,
+      hasPage: Boolean(browser.url || browser.initialUrl),
+      awake:
+        (runtime.visible &&
+          Boolean(sleepSlots[browserTabKey(browser.localId)])) ||
+        busyBrowsers.has(browser.localId),
+      agentControlled: Boolean(browser.agentControlled),
+    })),
+    setting: prefs?.browserTabSleep,
+    // A page whose browser cannot answer stays awake.
+    blockerFor: async (localId) => {
+      const commands = browserCommandsRef.current.get(localId);
+      return commands ? commands.sleepBlocker() : "shared";
+    },
+  });
+  const wakeTab = tabSleep.wake;
+  const tabAsleepRef = useRef(tabSleep.asleep);
+  tabAsleepRef.current = tabSleep.asleep;
 
   /**
    * Bookmark/link click behavior: "replace" reuses the focused browser
@@ -4142,7 +4176,16 @@ export function App({
         case "browserGuest": {
           const key = String(params.key);
           const id = key.slice("browser:".length);
-          const guestId = browserGuestIdsRef.current.get(id);
+          let guestId = browserGuestIdsRef.current.get(id);
+          // A sleeping tab wakes for the agent and loads before it acts.
+          if (!guestId && tabAsleepRef.current(id)) {
+            wakeTab(id);
+            const deadline = Date.now() + 10_000;
+            while (!guestId && Date.now() < deadline) {
+              await new Promise((resolve) => setTimeout(resolve, 150));
+              guestId = browserGuestIdsRef.current.get(id);
+            }
+          }
           return guestId
             ? { guestId }
             : { error: `No live page for ${key} (tab closed or not loaded)` };
@@ -4597,7 +4640,7 @@ export function App({
         .catch((error: Error) => ({ error: error.message }))
         .then((result) => desktopApi.bridgeRespond({ id, result }));
     });
-  }, [updateWorkspace]);
+  }, [updateWorkspace, wakeTab]);
 
   // Foreground-command activity from main: chip spinners spin while a
   // command runs, not for the shell's whole lifetime.
@@ -6041,6 +6084,7 @@ export function App({
                           Boolean(viewSlots[browserTabKey(browser.localId)])
                         }
                         keepAwake={busyBrowsers.has(browser.localId)}
+                        asleep={tabSleep.asleep(browser.localId)}
                         onStateChange={(state) =>
                           onBrowserState(browser.localId, state)
                         }
@@ -6577,6 +6621,7 @@ export function App({
                         runtime.visible &&
                         Boolean(viewSlots[browserTabKey(browser.localId)])
                       }
+                      asleep={tabSleep.asleep(browser.localId)}
                       onStateChange={(state) =>
                         onBrowserState(browser.localId, state)
                       }
@@ -6585,6 +6630,14 @@ export function App({
                       }
                       onOpenSiteSettings={setSiteSettingsOrigin}
                       onOpenPasswords={() => openPasswords(browser.profileId)}
+                      registerCommands={(commands) => {
+                        if (commands)
+                          browserCommandsRef.current.set(
+                            browser.localId,
+                            commands,
+                          );
+                        else browserCommandsRef.current.delete(browser.localId);
+                      }}
                       registerNavigate={(navigate) =>
                         browserNavigatorsRef.current.set(
                           browser.localId,

@@ -231,7 +231,7 @@ export function SettingsScreen({
       id: "workspace",
       label: "Workspace",
       keywords:
-        "layout sidebar tabs header address bookmarks links preview floating border frame default browser http https chat responses steps reasoning notes collapse fold",
+        "layout sidebar tabs header address bookmarks links preview floating border frame default browser http https sleep memory chat responses steps reasoning notes collapse fold",
       content: (
         <>
           <section className="settings-card mt-4">
@@ -241,6 +241,7 @@ export function SettingsScreen({
             </p>
             <DefaultBrowserButton className="mt-3 max-w-xs" />
           </section>
+          <LayoutSection title="Browser" keys={["browserTabSleep"]} />
           <LayoutSection projectId={projectId} />
           <LayoutSection
             keys={[

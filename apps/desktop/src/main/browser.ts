@@ -29,6 +29,7 @@ import {
   type BrowserHistory,
   boundedBrowserHistory,
   historyFromSource,
+  wakeFromSource,
 } from "../shared/browser-history.js";
 import { browserImportRequestSchema } from "../shared/browser-import.js";
 import {
@@ -82,6 +83,12 @@ import {
   readBrowserKey,
 } from "./browser-import/password-native.js";
 import { guestWindowOpenAction } from "./browser-popups.js";
+import {
+  claimSnapshot,
+  noteCapture,
+  type PageSnapshot,
+  registerBrowserSleep,
+} from "./browser-sleep.js";
 import { PasswordVault } from "./browser-vault.js";
 import { DownloadsManager, DownloadsStore } from "./downloads.js";
 import type { WindowProfileRegistry } from "./index.js";
@@ -229,6 +236,11 @@ function chromeBrands(ua: string): { brands: string; fullVersionList: string } {
   };
 }
 
+const BRAND_HEADER_REQUESTS: Electron.WebRequestFilter = {
+  urls: ["<all_urls>"],
+  types: ["mainFrame", "subFrame", "xhr"],
+};
+
 export function partitionFor(profileId: string): string {
   return `persist:profile-${profileId}`;
 }
@@ -259,18 +271,26 @@ async function doPrepareProfileSession(
   const { brands, fullVersionList } = chromeBrands(ses.getUserAgent());
 
   // Header layer: Chromium sends Sec-CH-UA built from its own brand list,
-  // which no setUserAgent call covers.
-  ses.webRequest.onBeforeSendHeaders((details, callback) => {
-    const headers = details.requestHeaders;
-    for (const name of Object.keys(headers)) {
-      const lower = name.toLowerCase();
-      if (lower === "sec-ch-ua") headers[name] = brands;
-      else if (lower === "sec-ch-ua-full-version-list") {
-        headers[name] = fullVersionList;
+  // which no setUserAgent call covers. Only documents and page requests
+  // (fetch, XHR) are rewritten, where a site reads the brand. A listener
+  // puts every request it matches through this process's event loop,
+  // which the embedded server shares: matching subresources too made
+  // pages load slower whenever the app was busy, and Meet showed its
+  // icon names until its icon font arrived (ADR 0194).
+  ses.webRequest.onBeforeSendHeaders(
+    BRAND_HEADER_REQUESTS,
+    (details, callback) => {
+      const headers = details.requestHeaders;
+      for (const name of Object.keys(headers)) {
+        const lower = name.toLowerCase();
+        if (lower === "sec-ch-ua") headers[name] = brands;
+        else if (lower === "sec-ch-ua-full-version-list") {
+          headers[name] = fullVersionList;
+        }
       }
-    }
-    callback({ requestHeaders: headers });
-  });
+      callback({ requestHeaders: headers });
+    },
+  );
 
   // Chrome-like site permissions: the profile's stored choices answer
   // outright; anything undecided prompts in the site settings modal.
@@ -280,9 +300,14 @@ async function doPrepareProfileSession(
       callback(ALWAYS_GRANTED_PERMISSIONS.has(permission));
       return;
     }
-    void policy
-      .request(wc, profileId, permission, details)
-      .then(callback, () => callback(false));
+    void policy.request(wc, profileId, permission, details).then(
+      (granted) => {
+        // A page with a camera, microphone or share open stays awake.
+        if (granted && permission === "media") noteCapture(wc);
+        callback(granted);
+      },
+      () => callback(false),
+    );
   });
   // Synchronous checks (`Notification.permission`, device labels) only
   // deny what is explicitly blocked; "ask" reads as not-denied so the
@@ -457,8 +482,11 @@ export function registerBrowserSupport(
     (event: Electron.Event, command: string) => void
   >();
 
-  let historyForNextGuest: BrowserHistory | null = null;
-  const historyForGuest = new WeakMap<WebContents, BrowserHistory>();
+  let historyForNextGuest: BrowserHistory | PageSnapshot | null = null;
+  const historyForGuest = new WeakMap<
+    WebContents,
+    BrowserHistory | PageSnapshot
+  >();
   const attachBrowserCommands = (
     _event: Electron.Event | null,
     window: BrowserWindow,
@@ -515,9 +543,27 @@ export function registerBrowserSupport(
     // right after, in the same turn.
     const takeHistory = (
       _attach: Electron.Event,
-      _preferences: Electron.WebPreferences,
+      preferences: Electron.WebPreferences,
       params: Record<string, string>,
     ) => {
+      // A sleeping tab wakes into the page state it slept with, or, when
+      // main no longer holds it, into what its fallback names.
+      const wake = wakeFromSource(params.src ?? "");
+      if (wake) {
+        const snapshot = claimSnapshot({
+          id: wake.snapshotId,
+          host: window.webContents,
+          session: session.fromPartition(
+            preferences.partition ?? params.partition ?? "",
+          ),
+        });
+        if (snapshot) {
+          params.src = "";
+          historyForNextGuest = snapshot;
+          return;
+        }
+        params.src = wake.fallback;
+      }
       const history = historyFromSource(params.src ?? "");
       if (history === undefined) return;
       params.src = "";
@@ -1320,6 +1366,7 @@ export function registerBrowserSupport(
           callback({});
           return;
         }
+        noteCapture(guest);
         // A shared tab carries its audio when the page asked for audio
         // (Chrome's default); windows and screens have none to give.
         const frame =
@@ -2045,6 +2092,7 @@ export function registerBrowserSupport(
       ? guest
       : null;
   };
+  const disposeSleep = registerBrowserSleep({ hostedGuest });
   ipcMain.handle(
     "catamorphic:browser-navigation-history",
     (event, input: { guestId: number }) => {
@@ -2500,6 +2548,7 @@ export function registerBrowserSupport(
     dispose: () => {
       disposeSidebarSources();
       disposePasskeys();
+      disposeSleep();
       app.removeListener("browser-window-created", attachBrowserCommands);
       for (const [window, listener] of appCommandListeners) {
         if (!window.isDestroyed())

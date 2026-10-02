@@ -78,6 +78,8 @@ export type WorkspaceTab = (
       name: string;
       label?: string;
       faviconUrl?: string | null;
+      /** The page is unloaded to save memory until the tab is shown. */
+      asleep?: boolean;
     }
   | {
       kind: "settings";

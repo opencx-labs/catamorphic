@@ -14,8 +14,8 @@ For project-overridable settings, lowest to highest priority:
 4. Personal project: `profiles/<id>/settings-projects/<projectId>.json`.
 
 Layout, framed content, bookmarks presentation and link defaults support all three
-editable scopes. Notifications, terminal appearance and terminal macros are
-profile choices. `SETTINGS` is the executable scope allowlist. A shared project
+editable scopes. Notifications, terminal appearance, terminal macros and
+browser tab sleep (`browserTabSleep`, ADR 0194) are profile choices. `SETTINGS` is the executable scope allowlist. A shared project
 file is ordinary committed project configuration; a personal override never enters
 team git history. Without a local project root, shared-file editing is unavailable.
 

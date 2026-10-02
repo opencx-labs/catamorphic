@@ -1,4 +1,9 @@
-import { type AppPrefs, CODE_THEMES, normalizePrefs } from "./app-prefs.js";
+import {
+  type AppPrefs,
+  BROWSER_TAB_SLEEP,
+  CODE_THEMES,
+  normalizePrefs,
+} from "./app-prefs.js";
 import { normalizeTerminalMacros } from "./terminal-macros.js";
 
 export type SettingsScope = "profile" | "project" | "personal";
@@ -131,6 +136,20 @@ export const SETTINGS = {
     label: "Alt-click web links to preview",
     scopes: projectScopes,
     valid: boolean,
+  },
+  browserTabSleep: {
+    label: "Sleep unused tabs",
+    description:
+      "Pages you have not looked at for a while unload to free memory and load again when you return, keeping your place. Tabs playing sound, using the camera, microphone or screen, holding typed text, or being worked by an agent stay awake.",
+    scopes: profileScope,
+    valid: oneOf(...BROWSER_TAB_SLEEP),
+    options: {
+      "15m": "After 15 minutes",
+      "30m": "After 30 minutes",
+      "1h": "After 1 hour",
+      "2h": "After 2 hours",
+      never: "Never",
+    },
   },
   notificationSounds: {
     label: "Notification sounds",

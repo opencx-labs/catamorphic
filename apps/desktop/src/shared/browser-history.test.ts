@@ -2,7 +2,11 @@ import { expect, it } from "vitest";
 import {
   BROWSER_HISTORY_LIMIT,
   boundedBrowserHistory,
+  browserHistorySource,
+  browserWakeSource,
+  historyFromSource,
   parseBrowserHistory,
+  wakeFromSource,
 } from "./browser-history.js";
 
 const pages = (count: number) =>
@@ -45,4 +49,19 @@ it("accepts only a well-formed history from across the boundary", () => {
       index: 0,
     }),
   ).toEqual({ entries: pages(2), index: 0 });
+});
+
+it("wakes a sleeping tab from its snapshot, with a fallback that still loads", () => {
+  const history = { entries: pages(3), index: 1 };
+  const fallback = browserHistorySource(history);
+  const source = browserWakeSource("snap-1", fallback);
+  expect(historyFromSource(source)).toBeUndefined();
+  const wake = wakeFromSource(source);
+  expect(wake?.snapshotId).toBe("snap-1");
+  expect(wake && historyFromSource(wake.fallback)).toEqual(history);
+  const plain = wakeFromSource(
+    browserWakeSource("snap-2", "https://example.com/a#b?c"),
+  );
+  expect(plain?.fallback).toBe("https://example.com/a#b?c");
+  expect(wakeFromSource("https://example.com/")).toBeUndefined();
 });

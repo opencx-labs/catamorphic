@@ -49,6 +49,9 @@ export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
         ...(key === "tabPlacement"
           ? ["chrome", "horizontal", "vertical", "sidebar"]
           : []),
+        ...(key === "browserTabSleep"
+          ? ["memory", "saver", "inactive", "discard", "browser", "tabs"]
+          : []),
         ...(key === "contentFrame"
           ? ["border", "rounded", "inset", "window", "frame"]
           : []),

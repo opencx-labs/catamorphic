@@ -13,7 +13,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   type BrowserHistory,
+  type BrowserSleepBlocker,
   browserHistorySource,
+  browserWakeSource,
 } from "../../shared/browser-history.js";
 import type { HistoryProject } from "../../shared/history.js";
 import type { OpenMode } from "../../shared/open-mode.js";
@@ -68,6 +70,8 @@ export interface BrowserCommands {
   reloadIgnoringCache: () => void;
   back: () => void;
   forward: () => void;
+  /** What keeps the page awake, or null when it may sleep (ADR 0194). */
+  sleepBlocker: () => Promise<BrowserSleepBlocker | null>;
 }
 
 export interface BrowserPageState {
@@ -137,6 +141,7 @@ export function BrowserScreen({
   toolbarActive = active,
   visible = active,
   keepAwake = false,
+  asleep = false,
   integratedToolbar = false,
   toolbarHost,
   sidebarToolbar = false,
@@ -183,6 +188,12 @@ export function BrowserScreen({
    * the page regardless of what the user is looking at).
    */
   keepAwake?: boolean;
+  /**
+   * Unload the page to free its memory (ADR 0194); it loads again, at
+   * the same place, when this turns false. A tab that starts asleep loads
+   * only once woken.
+   */
+  asleep?: boolean;
   integratedToolbar?: boolean;
   toolbarHost?: HTMLElement | null;
   sidebarToolbar?: boolean;
@@ -391,6 +402,73 @@ export function BrowserScreen({
     setWebviewNonce((nonce) => nonce + 1);
   }, []);
   const attachWatchdogRef = useRef<number | undefined>(undefined);
+
+  // Asleep, the tab has no guest at all. Main keeps the page's state when
+  // it sleeps; the wake builds a fresh guest from it, or from the tab's
+  // saved history when there is none.
+  const [slept, setSlept] = useState(asleep);
+  const wakeSourceRef = useRef<string | null>(null);
+  const snapshotRef = useRef<string | null>(null);
+  // A tab closed in its sleep never claims what main kept for it.
+  useEffect(
+    () => () => {
+      const snapshotId = snapshotRef.current;
+      if (snapshotId) void desktopApi.browserSleepRelease({ snapshotId });
+    },
+    [],
+  );
+  useEffect(() => {
+    if (!asleep) {
+      if (!slept) return;
+      recoveriesRef.current = 0;
+      guestReadyRef.current = false;
+      setLoadError(null);
+      const saved = historyRef.current;
+      setHistorySource(
+        wakeSourceRef.current ?? (saved ? browserHistorySource(saved) : null),
+      );
+      wakeSourceRef.current = null;
+      snapshotRef.current = null;
+      if (pageUrlRef.current) setFirstUrl(pageUrlRef.current);
+      setWebviewNonce((nonce) => nonce + 1);
+      setSlept(false);
+      return;
+    }
+    if (slept) return;
+    let cancelled = false;
+    let guestId: number | null = null;
+    try {
+      guestId = guestReadyRef.current
+        ? (webviewRef.current?.getWebContentsId() ?? null)
+        : null;
+    } catch {
+      guestId = null;
+    }
+    void (
+      guestId === null
+        ? Promise.resolve(null)
+        : desktopApi.browserSleep({ guestId }).catch(() => null)
+    ).then((snapshot) => {
+      if (cancelled) {
+        if (snapshot)
+          void desktopApi.browserSleepRelease({ snapshotId: snapshot });
+        return;
+      }
+      snapshotRef.current = snapshot;
+      const saved = historyRef.current;
+      wakeSourceRef.current = snapshot
+        ? browserWakeSource(
+            snapshot,
+            saved ? browserHistorySource(saved) : pageUrlRef.current,
+          )
+        : null;
+      setLoading(false);
+      setSlept(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [asleep, slept]);
 
   const guestListenersRef = useRef<AbortController | null>(null);
   const attachWebview = useCallback(
@@ -833,6 +911,17 @@ export function BrowserScreen({
         const view = webviewRef.current;
         if (view?.canGoForward()) view.goForward();
       },
+      sleepBlocker: async () => {
+        const view = webviewRef.current;
+        if (!view || !guestReadyRef.current) return null;
+        try {
+          return await desktopApi.browserSleepBlocker({
+            guestId: view.getWebContentsId(),
+          });
+        } catch {
+          return null;
+        }
+      },
     });
     return () => registerCommandsRef.current?.(null);
   }, [focusAddress, reload]);
@@ -1228,7 +1317,7 @@ export function BrowserScreen({
       {/* The theme's background until the page paints its own, as Chrome
           does: a page loading (or a guest mounting) never flashes white. */}
       <div ref={pageAreaRef} className="relative min-h-0 flex-1 bg-bg">
-        {ready && firstUrl ? (
+        {ready && firstUrl && !slept ? (
           <webview
             key={webviewNonce}
             ref={attachWebview}
