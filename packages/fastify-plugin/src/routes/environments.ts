@@ -56,9 +56,7 @@ export function registerEnvironmentRoutes(
           },
           allowed: agent?.environment?.allowed,
           preferred: agent?.environment?.preferred,
-          ...(agent?.personalLogin
-            ? { personalLogin: agent.personalLogin }
-            : {}),
+          ...(agent?.signIn ? { signIn: agent.signIn } : {}),
         });
         return reply.send(EnvironmentListSchema.parse(result));
       } catch (error) {

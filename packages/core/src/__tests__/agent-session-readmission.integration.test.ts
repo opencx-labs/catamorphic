@@ -1,10 +1,10 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DB } from "@catamorphic/db";
 import { migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
-import { randomUUID } from "node:crypto";
 import type {
   EnvironmentProvider,
   EnvironmentRuntimeBinding,
@@ -203,10 +203,10 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
       provider.startedFor.length = 0;
       // Bob may write to everyone's chats; his message still runs as Alice.
       await sessions.command(bob, projectId, sessionId, {
-      type: "send",
-      commandId: randomUUID(),
-      text: "Continue",
-    });
+        type: "send",
+        commandId: randomUUID(),
+        text: "Continue",
+      });
       await vi.waitFor(
         async () => {
           const detail = await sessions.get(alice, projectId, sessionId);
@@ -237,10 +237,10 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
       members.delete("alice");
       provider.startedFor.length = 0;
       await sessions.command(bob, projectId, sessionId, {
-      type: "send",
-      commandId: randomUUID(),
-      text: "Continue",
-    });
+        type: "send",
+        commandId: randomUUID(),
+        text: "Continue",
+      });
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(provider.startedFor).toEqual([]);
       expect(await currentAllocation(sessionId)).toBe(allocationId);

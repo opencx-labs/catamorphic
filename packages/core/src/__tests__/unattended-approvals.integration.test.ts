@@ -1,11 +1,10 @@
-import crypto from "node:crypto";
-import { createDatabase, migrateToLatest } from "@catamorphic/db";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { type Identity, PROJECT_PRINCIPAL_ID } from "../identity.js";
-import { randomUUID } from "node:crypto";
+import crypto, { randomUUID } from "node:crypto";
 import type { RuntimeRequest } from "@catamorphic/agent-protocol";
+import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
 import type { SandboxProvider } from "@catamorphic/sandbox";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { type Identity, PROJECT_PRINCIPAL_ID } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
@@ -31,17 +30,24 @@ const ask = {
   origin: { kind: "host" as const, id: "connection_prod" },
   approval: {
     action: "connection_prod · query",
-    tool: { server: "connection_prod", name: "query", input: { sql: "select 1" } },
+    tool: {
+      server: "connection_prod",
+      name: "query",
+      input: { sql: "select 1" },
+    },
   },
 };
-const unusedSandbox = new Proxy({ workspaceRoot: "/unused" } as SandboxProvider, {
-  get(target, property) {
-    if (property in target) return target[property as keyof typeof target];
-    return () => {
-      throw new Error(`Unexpected sandbox call: ${String(property)}`);
-    };
+const unusedSandbox = new Proxy(
+  { workspaceRoot: "/unused" } as SandboxProvider,
+  {
+    get(target, property) {
+      if (property in target) return target[property as keyof typeof target];
+      return () => {
+        throw new Error(`Unexpected sandbox call: ${String(property)}`);
+      };
+    },
   },
-});
+);
 let sessions: AgentSessionsService;
 
 async function chat(input: {
@@ -162,7 +168,11 @@ describeIf("unattended approvals (ADR 0176)", () => {
         testEnvironmentProvider(unusedSandbox),
       ),
       executionAllocations: new ExecutionAllocationsService(db),
-      codingAgents: { defaultAgentId: () => undefined, get: () => undefined, list: () => [] },
+      codingAgents: {
+        defaultAgentId: () => undefined,
+        get: () => undefined,
+        list: () => [],
+      },
     });
   });
 
@@ -221,10 +231,24 @@ describeIf("unattended approvals (ADR 0176)", () => {
     ).toBe("rejected");
     // Someone who is not an approver cannot answer it.
     expect(
-      (await answer({ identity: member("carol"), sessionId, request: pending, decision: "approved" })).status,
+      (
+        await answer({
+          identity: member("carol"),
+          sessionId,
+          request: pending,
+          decision: "approved",
+        })
+      ).status,
     ).toBe("rejected");
     expect(
-      (await answer({ identity: member("bob"), sessionId, request: pending, decision: "approved" })).status,
+      (
+        await answer({
+          identity: member("bob"),
+          sessionId,
+          request: pending,
+          decision: "approved",
+        })
+      ).status,
     ).toBe("accepted");
     await expect(decision).resolves.toBe("allow");
     const answered = await db
@@ -237,7 +261,9 @@ describeIf("unattended approvals (ADR 0176)", () => {
 
   it("refuses at once, with a reason, when no one can approve", async () => {
     const sessionId = await chat({ owner: PROJECT_PRINCIPAL_ID });
-    await expect(sessions.askApproval({ ...ask, sessionId })).resolves.toBe("deny");
+    await expect(sessions.askApproval({ ...ask, sessionId })).resolves.toBe(
+      "deny",
+    );
     expect(
       await db
         .selectFrom("agent_runtime_requests")
@@ -260,7 +286,10 @@ describeIf("unattended approvals (ADR 0176)", () => {
       .select(["status", "reason"])
       .where("session_id", "=", sessionId)
       .executeTakeFirstOrThrow();
-    expect(expired).toEqual({ status: "expired", reason: "Nobody answered in time." });
+    expect(expired).toEqual({
+      status: "expired",
+      reason: "Nobody answered in time.",
+    });
   });
 
   it("waits as long as the Environment says", async () => {
@@ -277,7 +306,12 @@ describeIf("unattended approvals (ADR 0176)", () => {
           60_000,
       ),
     ).toBe(90);
-    await answer({ identity: member("alice"), sessionId, request: pending, decision: "denied" });
+    await answer({
+      identity: member("alice"),
+      sessionId,
+      request: pending,
+      decision: "denied",
+    });
     await expect(decision).resolves.toBe("deny");
   });
 

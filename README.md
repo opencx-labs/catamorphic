@@ -49,7 +49,10 @@ take over a surface at any moment, inspect diffs when a change deserves your
 eyes, or trust routine work to continue.
 
 Projects are ordinary folders and git repositories. Every agent turn that
-changes files creates a checkpoint commit. Local execution uses an embedded
+changes files creates a checkpoint commit, and any turn can be undone with
+its files. A session is a durable log of turns that every client folds the
+same way, so a turn whose machine stopped continues elsewhere on the agent's
+own conversation. Local execution uses an embedded
 database and local sandboxes, so the desktop does not depend on a hosted
 Catamorphic service.
 

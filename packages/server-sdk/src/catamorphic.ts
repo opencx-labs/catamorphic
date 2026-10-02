@@ -105,9 +105,8 @@ export type CreateCatamorphicConfig = CatamorphicHostConfig &
   (
     | {
         /**
-         * Pluggable coding agent(s) for AI-assisted editing: one
-         * `RegisteredCodingAgent` (a host adapter such as
-         * `createAiSdkAdapter`, or a sandboxed harness by id, ADR 0197) or a
+         * Pluggable coding agent(s) for AI-assisted editing: a single provider
+         * (e.g. `AiSdkCodingAgent` from `@catamorphic/ai-sdk`) or a
          * `CodingAgentRegistry` when the host offers several agents. Requires
          * `sandboxProvider`; enables the agent-session APIs.
          */
@@ -220,6 +219,8 @@ export interface CatamorphicHostConfig {
    * a chat trigger kind. Exceptions are swallowed and never delay the turn.
    */
   onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
+  /** A person chose "Always allow" for an agent's tool; the host keeps it (ADR 0054). */
+  onToolAlwaysAllowed?: CatamorphicCoreConfig["onToolAlwaysAllowed"];
   /** Optional host-owned delivery transport for durable user notifications. */
   pushNotifications?: PushNotificationTransport;
   /**
@@ -395,6 +396,9 @@ export class Catamorphic {
       mcpToolKinds: contributions.mcpToolKinds,
       ...(config.webhooks ? { webhooks: config.webhooks } : {}),
       onAgentTurnSettled: config.onAgentTurnSettled,
+      ...(config.onToolAlwaysAllowed
+        ? { onToolAlwaysAllowed: config.onToolAlwaysAllowed }
+        : {}),
       pushNotifications: config.pushNotifications,
       capabilityProviders: contributions.capabilityProviders,
       projectHooks: contributions.projectHooks,
@@ -547,10 +551,10 @@ export class Catamorphic {
       [...this.agentWorkerHandles].map((handle) => handle.stop()),
     );
     // Turns running here are interrupted at once and settle before the
-    // database goes; lease renewals stop (ADR 0193). A host that wants to
-    // let turns finish calls stopLocalTurns with a grace period first.
+    // database goes; a sandbox runner is handed back for another replica
+    // to reattach (ADR 0197).
     await this.core.agentSessions
-      ?.stopLocalTurns({ timeoutMs: 0 })
+      ?.stopLocalTurns({ timeoutMs: 3_000 })
       .catch((error: unknown) =>
         console.warn("[catamorphic] Could not stop local turns", error),
       );

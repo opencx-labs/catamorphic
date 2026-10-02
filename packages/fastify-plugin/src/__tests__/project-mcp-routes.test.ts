@@ -440,7 +440,7 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
       agentSessions: {
         create: record("sessions.create", { id: "session-1" }),
         sendMessage: record("sessions.sendMessage", {
-          content: "Here is your brief.",
+          reply: { kind: "assistant_message", text: "Here is your brief." },
         }),
       },
       ...overrides,

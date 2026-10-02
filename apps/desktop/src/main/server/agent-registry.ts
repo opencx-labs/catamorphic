@@ -1,12 +1,24 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { JsonObject } from "@catamorphic/agent-protocol";
+import type {
+  AttemptStart,
+  HarnessAdapter,
+} from "@catamorphic/agent-protocol/runner";
+import { AI_SDK_HARNESS, type ShellState } from "@catamorphic/ai-sdk";
+import {
+  CLAUDE_CODE_CAPABILITIES,
+  createClaudeCodeAdapter,
+} from "@catamorphic/claude-code";
+import { CODEX_CAPABILITIES, createCodexAdapter } from "@catamorphic/codex";
 import type {
   AgentCoordinationStrategy,
   AgentDefinition,
   AgentDelegationPolicy,
+  AgentTurnContext,
   CodingAgentRegistry,
   RegisteredCodingAgent,
-  ToolPermissionBroker,
+  AgentHarness as RegisteredHarness,
 } from "@catamorphic/core";
 import {
   connectionMcpServerName,
@@ -14,12 +26,6 @@ import {
   projectAgentId,
   validateAgentDefinition,
 } from "@catamorphic/core";
-import type {
-  AgentMcpServerConfig,
-  CodingAgentProvider,
-  ExtraTool,
-  SandboxProvider,
-} from "@catamorphic/sandbox";
 import { PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
 import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
@@ -44,31 +50,40 @@ import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
 import { projectDefaultAgentSlug } from "../project-manifest.js";
 import { shellBinShimDir } from "../shell-integration.js";
-import { FriendlyAgentErrors } from "./agent-errors.js";
-import { DesktopAgentMcp, type ResolvedMcp } from "./agent-mcp-policy.js";
-import { createCodexElicitation } from "./codex-elicitation.js";
+import { DesktopAgentMcp } from "./agent-mcp-policy.js";
+import { buildAiSdkAdapter } from "./coding-agent.js";
 import { desktopSettingsContext } from "./desktop-settings-context.js";
-import { E2eFakeCodingAgent } from "./e2e-fakes.js";
+import { E2eFakeAdapter } from "./e2e-fakes.js";
+import {
+  type AgentErrorLabels,
+  desktopAdapter,
+  unavailableAdapter,
+} from "./harness-adapters.js";
 import { composeSkillsNote, type HostSkillsRuntime } from "./host-skills.js";
 import { localAgentWorkspace } from "./local-agent-workspace.js";
+import { parseProjectAgentId } from "./project-agents.js";
 import {
-  AsyncInitCodingAgent,
-  FailFastCodingAgent,
-  PersonaCodingAgent,
-  parseProjectAgentId,
-} from "./project-agents.js";
-import type { ProjectSessionContext } from "./workspace-context-agent.js";
-import { WorkspaceContextAgent } from "./workspace-context-agent.js";
+  type ProjectSessionContext,
+  workspaceInstructions,
+  workspaceTurnContext,
+} from "./workspace-context-agent.js";
 import {
   buildWorkspaceToolkit,
   type WorkspaceTool,
   type WorkspaceToolkit,
 } from "./workspace-tools.js";
 
+/** A host-placed harness: what every desktop agent runs on. */
+type HostHarness = Extract<RegisteredHarness, { placement: "host" }>;
+
+/** What one agent config builds: its harness and per-attempt settings. */
+type BuiltAgent = Pick<RegisteredCodingAgent, "options" | "defaults"> & {
+  harness: HostHarness;
+};
+
 export interface DesktopAgentRegistryDeps {
   profiles: ProfilesStore;
   profileConfig: ProfileConfigManager;
-  sandboxProvider: SandboxProvider;
   /** `agent-homes/` root; each account-auth agent gets a private home. */
   agentHomesDir: string;
   /** App-owned cache for integrity-pinned native harness components. */
@@ -80,20 +95,8 @@ export interface DesktopAgentRegistryDeps {
   attachmentsDir?: string;
   /** Agents' window into the user's workspace (tabs, browser, terminals). */
   workspaceBridge?: WorkspaceBridge;
-  /**
-   * HTTP answer surface for tool-permission asks (ADR 0054): remote
-   * clients list/answer pending asks through the embedded server. Raced
-   * against the desktop consent modal — whichever answers first wins.
-   */
-  toolPermissions?: ToolPermissionBroker;
   /** Installed connector plugins (Claude Code loads them natively). */
   connectors?: ConnectorsService;
-  /** Codex's authenticated loopback access to filtered workspace tools. */
-  workspaceMcpServer?: (
-    projectId: string,
-    sessionId: string,
-    agentId: string,
-  ) => AgentMcpServerConfig | undefined;
   /**
    * Project folder lookup for PROJECT agents (`project:<id>:<slug>`), whose
    * committed `.work/agents/<slug>.json` definitions are read from disk here —
@@ -112,9 +115,8 @@ export interface DesktopAgentRegistryDeps {
   /**
    * Host-tier skills (ADR 0049), late-bound: materialized from core's
    * resolved set after the server boots. The plugin rides the MCP surface
-   * (so claude-code loads the skills natively and the provider cache key
-   * covers it); the note reaches every harness through the workspace
-   * decorator's system prompt.
+   * (so claude-code loads the skills natively); the note reaches every
+   * harness through the agent's instructions.
    */
   hostSkills?: () => HostSkillsRuntime | undefined;
   /**
@@ -163,37 +165,22 @@ function resolveProjectDelegation(
  */
 const DEFAULT_MODEL_TTL_MS = 60_000;
 
-/**
- * Workspace tools withheld from a read-only agent: anything that runs
- * commands, mutates the project, or acts on the user's behalf. What's left
- * is observation (overview, read_tab, read_terminal, snapshots) and
- * pointing — a read-only agent can still show, watch, and explain.
- */
 /** Server key of the per-project workflow-tools MCP server (session-scoped). */
 export const WORKFLOWS_SERVER_KEY = PROJECT_TOOLS_SERVER_KEY;
 
+/** The harness adapters themselves hold no agent settings: one each. */
+const claudeCode = createClaudeCodeAdapter();
+const codex = createCodexAdapter();
+
 /**
  * The desktop's dynamic {@link CodingAgentRegistry}: agents come from the
- * per-profile agents.json files, resolved live on every lookup — adding an
- * agent in Settings makes it usable without a server restart. Provider
- * instances are cached per config snapshot; editing an agent (model, key,
- * effort) drops the stale instance so the next turn runs the new config.
+ * per-profile agents.json files and committed project agents, resolved
+ * live on every lookup, so adding or editing an agent in Settings applies
+ * to the next turn without a restart. Every agent runs its harness on this
+ * machine, in the chat's checkout (`topology: "native"`, ADR 0197); its
+ * conversation lives in the session log, so nothing here holds a chat.
  */
 export class DesktopAgentRegistry implements CodingAgentRegistry {
-  private readonly cache = new Map<
-    string,
-    {
-      key: string;
-      profileId: string;
-      config: AgentConfig;
-      provider: RegisteredCodingAgent["provider"];
-      topology: RegisteredCodingAgent["topology"];
-      sandboxing: RegisteredCodingAgent["sandboxing"];
-    }
-  >();
-  /** Per-agent resource closers (ai-sdk MCP clients), run on eviction. */
-  private readonly closing = new Set<Promise<void>>();
-  private readonly closeables = new Map<string, () => Promise<void>>();
   /**
    * OpenRouter's current best free model, warmed from the live catalog —
    * the default for openrouter agents with no model pinned. Nothing is
@@ -205,6 +192,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     string,
     { signature: string; at: number; result: Promise<AgentDefaultModelResult> }
   >();
+  /**
+   * Each chat's shell for the built-in agent: where its next command
+   * starts. Kept across turns, like a terminal the chat keeps open.
+   */
+  private readonly shells = new Map<string, ShellState>();
 
   /** Workspace tools shared by every harness that can mount them. */
   readonly workspaceToolkit: WorkspaceToolkit | undefined;
@@ -547,107 +539,24 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
 
   get(id: string): RegisteredCodingAgent | undefined {
     const projectRef = parseProjectAgentId(id);
-    if (projectRef) {
+    if (projectRef)
       return this.getProjectAgent(id, projectRef.projectId, projectRef.slug);
-    }
     const found = this.findConfig(id);
-    if (!found) {
-      this.evict(id);
-      return undefined;
-    }
+    if (!found) return undefined;
     const { config, profileId } = found;
-    const mcp = this.mcp.resolve({ config, profileId });
-    // Providers are cached by credential identity plus their MCP surface:
-    // model and effort travel per turn (TurnOptions via fresh defaults
-    // below), so switching them must NOT rebuild the provider — a rebuild
-    // would drop the built-in agent's in-memory sessions mid-conversation.
-    // Connection/connector edits DO rebuild, so the next turn runs with
-    // the new server set — but header VALUES are not part of the key:
-    // the capability connection pool reads live credentials, so a rotated OAuth
-    // token or renewed header reaches the next call in place, never
-    // rebuilding the provider under a conversation.
-    // Policies are deliberately NOT part of the key either: harnesses
-    // read them live (see livePolicies), so a permission edit — or an
-    // "Always allow" mid-turn — never rebuilds the provider.
-    const key = JSON.stringify({
-      ...config,
-      toolPolicies: undefined,
-      model: "",
-      effort: "",
-      mcp: { servers: serverShapes(mcp.servers), plugins: mcp.plugins },
-    });
-    const defaults = this.freshDefaults(config);
-    const cached = this.cache.get(id);
-    if (cached && cached.key === key) {
-      return {
-        id,
-        provider: cached.provider,
-        topology: cached.topology,
-        sandboxing: config.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
-        ...(config.environment ? { environment: config.environment } : {}),
-        defaults,
-        delegation: config.delegation,
-      };
-    }
-
-    // Evict BEFORE building: build() registers the fresh provider's
-    // resource closer under this id, which an eviction after it would
-    // immediately tear down.
-    this.evict(id);
-    const built = this.build(config, mcp, profileId);
+    const built = this.build({ config, profileId });
     if (!built) return undefined;
-    // The agent's own instructions lead, exactly like a project agent's
-    // persona file — same wrapper, same position (outermost, so the host
-    // playbooks appended further in follow it).
-    const provider = config.instructions
-      ? new PersonaCodingAgent(built.provider, config.instructions)
-      : built.provider;
-    this.cache.set(id, {
-      key,
-      profileId,
-      config,
-      provider,
-      topology: built.topology,
-      sandboxing: config.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
-    });
     return {
       id,
-      provider,
-      topology: built.topology,
+      ...built,
+      topology: "native",
       sandboxing: config.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
       ...(config.environment ? { environment: config.environment } : {}),
-      defaults,
-      delegation: config.delegation,
+      // The agent's own instructions lead, exactly like a project agent's
+      // persona file; the host's playbook follows them.
+      ...(config.instructions ? { systemPrompt: config.instructions } : {}),
+      ...(config.delegation ? { delegation: config.delegation } : {}),
     };
-  }
-
-  releaseProfile(profileId: string): void {
-    for (const [id, cached] of this.cache)
-      if (cached.profileId === profileId) this.evict(id);
-  }
-
-  async dispose(): Promise<void> {
-    for (const id of new Set([...this.cache.keys(), ...this.closeables.keys()]))
-      this.evict(id);
-    await Promise.all(this.closing);
-  }
-
-  /** Drop a cached provider, closing resources it holds (MCP clients). */
-  private evict(id: string): void {
-    this.cache.delete(id);
-    const close = this.closeables.get(id);
-    this.closeables.delete(id);
-    if (close) {
-      const closing = close()
-        .catch(() => {})
-        .finally(() => this.closing.delete(closing));
-      this.closing.add(closing);
-    }
-  }
-
-  private freshDefaults(config: AgentConfig) {
-    const model = this.resolvedModel(config);
-    return { effort: config.effort, ...(model ? { model } : {}) };
   }
 
   list(): RegisteredCodingAgent[] {
@@ -854,148 +763,63 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     slug: string,
   ): RegisteredCodingAgent | undefined {
     const resolved = this.resolveProjectConfig(id, projectId, slug);
-    if ("error" in resolved) {
-      if (resolved.missing) {
-        this.evict(id);
-        return undefined;
-      }
-      return this.failFast(id, resolved.error);
-    }
-    const { config, profileId, def, persona, source, hash, rootPath } =
-      resolved;
-    const mcp = this.mcp.resolve({ config, profileId });
-
-    const defaults = {
-      effort: def.effort ?? ("medium" as const),
-      ...(def.model ? { model: def.model } : {}),
-    };
-    const key = JSON.stringify({
-      projectAgent: true,
-      hash,
-      auth: config.auth,
-      apiKey: config.apiKey,
-      source,
-      rootPath,
-      // Fields outside the consent hash (they only narrow, or touch
-      // nothing personal) that still shape the provider: key on them so
-      // an edit reaches the next turn.
-      toolPolicies: def.toolPolicies ?? null,
-      memory: def.memory ?? false,
-      coordination: def.coordination ?? "shared-first",
-      skills: def.skills ?? null,
-      connections: def.connections ?? null,
-      mcp: { servers: serverShapes(mcp.servers), plugins: mcp.plugins },
-    });
-    const cached = this.cache.get(id);
-    if (cached && cached.key === key) {
-      return {
-        id,
-        provider: cached.provider,
-        topology: cached.topology,
-        sandboxing: def.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
-        ...(def.environment ? { environment: def.environment } : {}),
-        ...(def.connections ? { connectionRequirements: def.connections } : {}),
-        defaults,
-        delegation: resolveProjectDelegation(def.delegation, projectId),
-      };
-    }
-
-    this.evict(id);
-    const registered =
+    if ("error" in resolved)
+      return resolved.missing ? undefined : this.failFast(id, resolved.error);
+    const { config, profileId, def, persona, source } = resolved;
+    // A secret-credentialed agent reads its key from the project's secrets
+    // at each attempt: the registry is synchronous, secrets are not, and a
+    // secret set after a failed turn is picked up by the next one.
+    const secretName = def.credentials?.secret;
+    const apiKey =
       source === "secret" && !this.deps.e2eFake
-        ? this.buildSecretProjectAgent(
-            id,
-            def,
-            config,
-            mcp,
-            projectId,
-            profileId,
-          )
-        : this.build(config, mcp, profileId);
-    if (!registered) {
+        ? async () => {
+            const value = secretName
+              ? await this.deps.projectSecret?.(projectId, secretName)
+              : undefined;
+            if (!value)
+              throw new Error(
+                `The project agent "${def.name}" authenticates with the project secret "${secretName ?? ""}", which has no value. Add it under the project's secrets and send your message again.`,
+              );
+            return value;
+          }
+        : undefined;
+    if (source === "secret" && !this.deps.e2eFake && !secretName)
       return this.failFast(
         id,
-        `The project agent "${def.name}" has no usable credentials or model — approve it again from the agent picker, or check its definition.`,
+        `The project agent "${def.name}" names no project secret for its credentials. Fix its definition in agents/ and try again.`,
       );
-    }
-    const provider = persona
-      ? new PersonaCodingAgent(registered.provider, persona)
-      : registered.provider;
-    this.cache.set(id, {
-      key,
-      profileId,
+    const built = this.build({
       config,
-      provider,
-      topology: registered.topology,
-      sandboxing: def.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
+      profileId,
+      ...(apiKey ? { apiKey } : {}),
     });
+    if (!built)
+      return this.failFast(
+        id,
+        `The project agent "${def.name}" has no usable credentials or model. Approve it again from the agent picker, or check its definition.`,
+      );
     return {
       id,
-      provider,
-      topology: registered.topology,
+      ...built,
+      topology: "native",
       sandboxing: def.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
       ...(def.environment ? { environment: def.environment } : {}),
       ...(def.connections ? { connectionRequirements: def.connections } : {}),
-      defaults,
+      defaults: {
+        ...built.defaults,
+        effort: def.effort ?? "medium",
+        ...(def.model ? { model: def.model } : {}),
+      },
+      ...(persona ? { systemPrompt: persona } : {}),
       delegation: resolveProjectDelegation(def.delegation, projectId),
-    };
-  }
-
-  /**
-   * A secret-credentialed project agent: the harness is constructed
-   * lazily, once core's SecretsService has produced the key — the
-   * registry contract is synchronous, secrets are not. A missing secret
-   * fails the turn with an error naming it, and is re-checked next turn.
-   */
-  private buildSecretProjectAgent(
-    id: string,
-    def: AgentDefinition,
-    config: AgentConfig,
-    mcp: ResolvedMcp,
-    projectId: string,
-    profileId: string,
-  ): RegisteredCodingAgent | undefined {
-    const secretName = def.credentials?.secret;
-    if (!secretName) return undefined;
-    const factory = async (): Promise<CodingAgentProvider> => {
-      const value = await this.deps.projectSecret?.(projectId, secretName);
-      if (!value) {
-        return new FailFastCodingAgent(
-          `The project agent "${def.name}" authenticates with the project secret "${secretName}", which has no value — add it under the project's secrets and send your message again.`,
-        );
-      }
-      const built = this.build({ ...config, apiKey: value }, mcp, profileId);
-      if (!built) {
-        return new FailFastCodingAgent(
-          `The project agent "${def.name}" could not be constructed — check its model configuration in agents/ and try again.`,
-        );
-      }
-      return built.provider;
-    };
-    // Optional methods come from the harness KIND, statically known —
-    // feature-detection must not see methods the harness lacks.
-    const provider = new AsyncInitCodingAgent(
-      config.harness,
-      factory,
-      def.kind === "builtin"
-        ? { interrupt: true, hasSession: true, retryTurn: true }
-        : def.kind === "claude-code"
-          ? { interrupt: true }
-          : {},
-    );
-    return {
-      id,
-      provider,
-      topology: "native",
     };
   }
 
   /** A registered-but-blocked agent: errors actionably, never hangs. */
   private failFast(id: string, message: string): RegisteredCodingAgent {
-    this.evict(id);
     return {
       id,
-      provider: new FailFastCodingAgent(message),
+      harness: { placement: "host", adapter: unavailableAdapter(message) },
       topology: "native",
       defaults: {},
     };
@@ -1013,29 +837,49 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     return undefined;
   }
 
-  private build(
-    config: AgentConfig,
-    mcp: ResolvedMcp,
-    profileId: string,
-  ): RegisteredCodingAgent | undefined {
-    // E2E: same registry mechanics, scripted provider — renderer flows
-    // (agent lists, switching, effort) exercise the real plumbing. The
-    // error decorator stays on so tests cover the auth-failure surfacing.
+  /**
+   * The harness one agent config runs on, with everything the host serves
+   * it read live at each attempt: workspace tools, tool policies, the
+   * workspace context and instructions. Undefined while the config cannot
+   * run yet (the built-in agent without a key or model).
+   */
+  private build({
+    config,
+    profileId,
+    apiKey,
+  }: {
+    config: AgentConfig;
+    profileId: string;
+    /** The model key, resolved at each attempt (a project secret). */
+    apiKey?: () => Promise<string>;
+  }): BuiltAgent | undefined {
+    const errors = this.errorLabels(config);
+    const live = () => this.mcp.live({ config, profileId });
+    const served = {
+      hostTools: this.workspaceTools(config, "native") ?? [],
+      toolPolicies: () => live().policies,
+      toolAnnotations: () => live().annotations,
+      ...this.workspaceHooks({ config, profileId }),
+    } satisfies Partial<HostHarness>;
+
+    // E2E: same registry mechanics, scripted harness, so renderer flows
+    // (agent lists, switching, effort) exercise the real plumbing. Friendly
+    // errors stay on so tests cover the auth-failure surfacing.
     if (this.deps.e2eFake) {
-      const topology = "native";
-      const fake = new E2eFakeCodingAgent(
-        this.deps.sandboxProvider,
-        this.workspaceTools(config, topology, true),
-        this.mcp.permissionHandler({ config, profileId }),
-        (projectId) => this.settingsContext(projectId, config),
-        this.deps.workspaceBridge?.elicit.bind(this.deps.workspaceBridge),
-        (sessionId, options) =>
-          this.mcp.bindSessionQuestions({ sessionId, options }),
-      );
+      const fake = new E2eFakeAdapter({
+        settingsContext: (projectId) => this.settingsContext(projectId, config),
+      });
       return {
-        id: config.id,
-        provider: this.wrapErrors(fake, config),
-        topology,
+        harness: {
+          placement: "host",
+          adapter: desktopAdapter({
+            id: fake.id,
+            capabilities: () => fake.capabilities(),
+            prepare: async (attempt) => ({ adapter: fake, attempt }),
+            errors,
+          }),
+          ...served,
+        },
         defaults: { effort: config.effort },
       };
     }
@@ -1043,237 +887,160 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     switch (config.harness) {
       case "ai-sdk": {
         const modelId = this.resolvedModel(config);
-        if (!config.apiKey || !modelId) {
+        if (!modelId || (!config.apiKey && !apiKey)) {
           // Only profiles that actually selected model-less OpenRouter need
           // its live catalog. Avoid a network request on every app launch.
-          if (config.provider === "openrouter" && !this.openrouterDefault) {
+          if (config.provider === "openrouter" && !this.openrouterDefault)
             void this.refreshOpenRouterDefault();
-          }
           return undefined;
         }
-        const bridge = this.deps.workspaceBridge;
-        let disposed = false;
-        let closeLoaded: (() => Promise<void>) | undefined;
-        // Own the lazy initializer before it starts. Eviction during import
-        // must not install a new closer or construct an orphaned provider.
-        this.closeables.set(config.id, async () => {
-          disposed = true;
-          await closeLoaded?.();
+        // Without a key yet (a project secret), the adapter is built per
+        // attempt; its capabilities never depend on the key.
+        const adapter = buildAiSdkAdapter({
+          config: { ...config, apiKey: config.apiKey ?? "unresolved" },
+          modelId,
         });
-        const provider = new AsyncInitCodingAgent(
-          config.harness,
-          async () => {
-            const { buildAiSdkAgent } = await import("./coding-agent.js");
-            if (disposed) throw new Error("Agent configuration was released");
-            const loaded = buildAiSdkAgent({
-              config,
-              sandboxProvider: localAgentWorkspace,
-              pluginDirectory: path.join(
-                this.agentHome(config.id),
-                "plugin-docs",
-              ),
-              modelId,
-              extraTools: this.workspaceTools(config, "native"),
-              mcpServers: {},
-              // Elicitation from this agent's connectors → the front window,
-              // labeled with the agent so the user knows who's asking.
-              onElicit: bridge
-                ? (request) => bridge.elicit(config.name, request)
-                : undefined,
-              mcpPolicies: () => this.mcp.live({ config, profileId }).policies,
-              onToolPermission: this.mcp.permissionHandler({
-                config,
-                profileId,
-              }),
-              ...(this.deps.attachmentsDir
+        if (!adapter) return undefined;
+        const readable = this.deps.attachmentsDir
+          ? readableAttachments({ attachmentsDir: this.deps.attachmentsDir })
+          : undefined;
+        return {
+          harness: {
+            placement: "host",
+            adapter: desktopAdapter({
+              id: AI_SDK_HARNESS,
+              capabilities: () => adapter.capabilities(),
+              prepare: async (attempt) => {
+                const key = apiKey ? await apiKey() : undefined;
+                const keyed = key
+                  ? buildAiSdkAdapter({
+                      config: { ...config, apiKey: key },
+                      modelId,
+                    })
+                  : adapter;
+                if (!keyed)
+                  throw new Error(
+                    `The agent "${config.name}" could not be constructed. Check its model and API key, then try again.`,
+                  );
+                return { adapter: keyed, attempt };
+              },
+              errors,
+            }),
+            ...served,
+            // Trusted local IO in the chat's own checkout, no copied sandbox.
+            local: (turn) => ({
+              ...(turn.workingDirectory
                 ? {
-                    readableRoots: readableAttachments({
-                      attachmentsDir: this.deps.attachmentsDir,
-                    }),
+                    sandbox: {
+                      provider: localAgentWorkspace,
+                      sandboxId: "local",
+                      workingDirectory: turn.workingDirectory,
+                    },
                   }
                 : {}),
-            });
-            if (!loaded) {
-              return new FailFastCodingAgent(
-                `The agent "${config.name}" could not be constructed. Check its model and API key, then try again.`,
-              );
-            }
-            // This harness owns real MCP client connections (stdio child
-            // processes); eviction must close them, not leak them.
-            closeLoaded = () => loaded.closeMcp();
-            return this.wrapErrors(
-              this.withWorkspace(loaded, {
-                hasTools: true,
-                config,
-                profileId,
-              }),
-              config,
-            );
+              ...(readable
+                ? { readableRoots: readable({ projectId: turn.projectId }) }
+                : {}),
+              ...(turn.sessionId ? { shell: this.shell(turn.sessionId) } : {}),
+            }),
           },
-          { interrupt: true, hasSession: true, retryTurn: true },
-        );
-        return {
-          id: config.id,
-          provider,
-          topology: "native",
           defaults: { model: modelId, effort: config.effort },
         };
       }
       case "claude-code": {
-        // `local` inherits the machine's existing Claude Code login: the
-        // SDK is spawned with no credential overrides at all.
-        const env = {
-          ...(config.auth === "account"
-            ? { CLAUDE_CONFIG_DIR: this.agentHome(config.id) }
-            : {}),
-          ...(config.auth === "api-key" && config.apiKey
-            ? { ANTHROPIC_API_KEY: config.apiKey }
-            : {}),
-        };
-        const provider = new AsyncInitCodingAgent(
-          config.harness,
-          async () => {
-            const { component, environment } =
-              await this.ensureNativeComponents("claude-code");
-            const { ClaudeCodeAgent } = await import(
-              "@catamorphic/claude-code"
-            );
-            return this.wrapErrors(
-              this.withWorkspace(
-                new ClaudeCodeAgent({
-                  pluginDirectory: path.join(
-                    this.agentHome(config.id),
-                    "plugin-docs",
-                  ),
-                  model: config.model || undefined,
-                  effort: config.effort,
-                  permissionMode: effectiveHarnessPermissions({
-                    harness: "claude-code",
-                    permissions: config.harnessPermissions,
-                  }).permissionMode,
-                  memory: config.memory === true,
-                  env: { ...environment, ...env },
-                  pathToClaudeCodeExecutable: component.executablePath,
-                  extraTools: this.workspaceTools(config, "native"),
-                  disableNativeMonitors: true,
-                  hostOwnsTodos: true,
-                  hostOwnsSubagents: true,
-                  mcpServers: {},
-                  plugins: mcp.plugins,
-                  mcpPolicies: () =>
-                    this.mcp.live({ config, profileId }).policies,
-                  mcpToolAnnotations: () =>
-                    this.mcp.live({ config, profileId }).annotations,
-                  onToolPermission: this.mcp.permissionHandler({
-                    config,
-                    profileId,
-                  }),
-                }),
-                { hasTools: true, config, profileId },
-              ),
-              config,
-            );
-          },
-          { interrupt: true },
-        );
+        const permissions = effectiveHarnessPermissions({
+          harness: "claude-code",
+          permissions: config.harnessPermissions,
+        });
         return {
-          id: config.id,
-          provider,
-          topology: "native",
+          harness: {
+            placement: "host",
+            adapter: desktopAdapter({
+              id: claudeCode.id,
+              capabilities: () => CLAUDE_CODE_CAPABILITIES,
+              prepare: (attempt) =>
+                this.nativeAttempt({
+                  harness: "claude-code",
+                  adapter: claudeCode,
+                  attempt,
+                  keyEnv: apiKey
+                    ? async () => ({ ANTHROPIC_API_KEY: await apiKey() })
+                    : undefined,
+                }),
+              errors,
+            }),
+            ...served,
+            // `local` inherits the machine's existing Claude Code login: the
+            // CLI runs with no credential overrides at all.
+            env: {
+              ...(config.auth === "account"
+                ? { CLAUDE_CONFIG_DIR: this.agentHome(config.id) }
+                : {}),
+              ...(config.auth === "api-key" && config.apiKey
+                ? { ANTHROPIC_API_KEY: config.apiKey }
+                : {}),
+            },
+            // Connector plugins and the host skills load natively.
+            plugins: this.mcp.resolve({ config, profileId }).plugins,
+          },
+          options: {
+            memory: config.memory === true,
+            // Host watches, todos and subsessions replace Claude Code's own.
+            disableNativeMonitors: true,
+            hostOwnsTodos: true,
+            hostOwnsSubagents: true,
+          },
           defaults: {
             effort: config.effort,
             ...(config.model ? { model: config.model } : {}),
+            harnessPermissions: permissions,
           },
         };
       }
       case "codex": {
-        const codexPermissions = effectiveHarnessPermissions({
+        const permissions = effectiveHarnessPermissions({
           harness: "codex",
           permissions: config.harnessPermissions,
         });
-        const provider = new AsyncInitCodingAgent(
-          config.harness,
-          async () => {
-            const { component, environment: componentEnv } =
-              await this.ensureNativeComponents("codex");
-            const { CodexAgent } = await import("@catamorphic/codex");
-            return this.wrapErrors(
-              this.withWorkspace(
-                new CodexAgent({
-                  pluginDirectory: path.join(
-                    this.agentHome(config.id),
-                    "plugin-docs",
-                  ),
-                  onToolPermission: this.mcp.permissionHandler({
-                    config,
-                    profileId,
-                  }),
-                  mcpElicitationForSession: ({ sessionId }) =>
-                    createCodexElicitation({
-                      allowAppAccess:
-                        (config.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING) ===
-                        "publish",
-                      askQuestion: () =>
-                        this.mcp.questionForSession({ sessionId }),
-                      elicit: this.deps.workspaceBridge?.elicit.bind(
-                        this.deps.workspaceBridge,
-                      ),
-                    }),
-                  model: config.model || undefined,
-                  effort: config.effort,
-                  disableNativeSubagents: true,
-                  disableNativeGoals: true,
-                  sandboxMode: codexPermissions.sandbox,
-                  approvalPolicy: codexPermissions.approvals,
-                  ...(config.auth === "api-key" && config.apiKey
-                    ? { apiKey: config.apiKey }
-                    : {}),
-                  ...(config.auth === "account"
-                    ? {
-                        env: {
-                          ...componentEnv,
-                          CODEX_HOME: this.agentHome(config.id),
-                        },
-                      }
-                    : Object.keys(componentEnv).length > 0
-                      ? { env: componentEnv }
-                      : {}),
-                  codexPathOverride: component.executablePath,
-                  mcpServers: {},
-                  mcpServersForSession: (context) => {
-                    const workspaceServer = context.sessionId
-                      ? this.deps.workspaceMcpServer?.(
-                          context.projectId,
-                          context.sessionId,
-                          config.id,
-                        )
-                      : undefined;
-                    return {
-                      ...this.mcp.live({ config, profileId }).nativeServers,
-                      ...(workspaceServer
-                        ? { workspace: workspaceServer }
-                        : {}),
-                    };
-                  },
-                  mcpPolicies: () =>
-                    this.mcp.live({ config, profileId }).policies,
-                  mcpToolAnnotations: () =>
-                    this.mcp.live({ config, profileId }).annotations,
-                }),
-                { hasTools: true, config, profileId },
-              ),
-              config,
-            );
-          },
-          { interrupt: true },
-        );
         return {
-          id: config.id,
-          provider,
-          topology: "native",
+          harness: {
+            placement: "host",
+            adapter: desktopAdapter({
+              id: codex.id,
+              capabilities: () => CODEX_CAPABILITIES,
+              prepare: (attempt) =>
+                this.nativeAttempt({
+                  harness: "codex",
+                  adapter: codex,
+                  attempt,
+                  keyEnv: apiKey
+                    ? async () => ({ CODEX_API_KEY: await apiKey() })
+                    : undefined,
+                }),
+              errors,
+            }),
+            ...served,
+            env: {
+              ...(config.auth === "account"
+                ? { CODEX_HOME: this.agentHome(config.id) }
+                : {}),
+              ...(config.auth === "api-key" && config.apiKey
+                ? { CODEX_API_KEY: config.apiKey }
+                : {}),
+            },
+            // Stateful native computer use belongs to the Codex process
+            // that started it, never the profile-wide tool pool.
+            mcpServers: () => live().nativeServers ?? {},
+          },
+          options: {
+            // Host subsessions and todos replace Codex's own.
+            disableNativeSubagents: true,
+            disableNativeGoals: true,
+          },
           defaults: {
             effort: config.effort,
             ...(config.model ? { model: config.model } : {}),
+            harnessPermissions: permissions,
           },
         };
       }
@@ -1281,65 +1048,119 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   }
 
   /**
-   * Auth failures arrive as raw provider bodies (OpenRouter's 401 is
-   * literally "User not found."); rewrite them into something the user
-   * can act on. Outermost wrapper so it sees every inner error.
+   * A native harness's attempt on this machine: the integrity-pinned
+   * executable (downloaded on first use), Bun and the shell shims on PATH,
+   * and a key resolved for this attempt when the agent has one.
    */
-  private wrapErrors(
-    provider: CodingAgentProvider,
-    config: AgentConfig,
-  ): CodingAgentProvider {
+  private async nativeAttempt(input: {
+    harness: DownloadableHarness;
+    adapter: HarnessAdapter;
+    attempt: AttemptStart;
+    keyEnv?: () => Promise<Record<string, string>>;
+  }): Promise<{ adapter: HarnessAdapter; attempt: AttemptStart }> {
+    const { component, environment } = await this.ensureNativeComponents(
+      input.harness,
+    );
+    const key = input.keyEnv ? await input.keyEnv() : {};
+    const options: JsonObject = {
+      ...input.attempt.options,
+      command: component.executablePath,
+    };
+    return {
+      adapter: input.adapter,
+      attempt: {
+        ...input.attempt,
+        env: { ...environment, ...input.attempt.env, ...key },
+        options,
+      },
+    };
+  }
+
+  /**
+   * Workspace awareness for every harness (ADR 0152): the Work section of
+   * the agent's instructions, and each turn's screen, desktop facts and
+   * peers. Nothing without a workspace bridge.
+   */
+  private workspaceHooks({
+    config,
+    profileId,
+  }: {
+    config: AgentConfig;
+    profileId: string;
+  }): Pick<HostHarness, "context" | "instructions"> {
+    const bridge = this.deps.workspaceBridge;
+    if (!bridge) return {};
+    const hasTools = this.workspaceToolkit !== undefined;
+    const strategy = config.coordination ?? "shared-first";
+    return {
+      instructions: workspaceInstructions({
+        hasTools,
+        strategy,
+        skillsNote: this.skillsNote(config, profileId, hasTools),
+      }),
+      context: async (turn: AgentTurnContext) =>
+        turn.sessionId
+          ? workspaceTurnContext({
+              bridge,
+              projectId: turn.projectId,
+              sessionId: turn.sessionId,
+              coordination: {
+                strategy,
+                peers: (projectId, sessionId) =>
+                  this.deps.sessionPeers?.(projectId, sessionId) ??
+                  Promise.resolve([]),
+                checkoutNotice: (projectId, sessionId) =>
+                  this.deps.checkoutNotice?.(projectId, sessionId) ??
+                  Promise.resolve(null),
+              },
+              desktopFacts: (projectId) => {
+                const settings = this.settingsContext(projectId, config);
+                return {
+                  ...("personalFilesDirectory" in settings &&
+                  settings.personalFilesDirectory
+                    ? {
+                        personalFilesDirectory: settings.personalFilesDirectory,
+                      }
+                    : {}),
+                  ...("errors" in settings && settings.errors?.length
+                    ? { settingsErrors: settings.errors }
+                    : {}),
+                };
+              },
+            })
+          : [],
+    };
+  }
+
+  /**
+   * Who failed, for errors the person can act on: raw provider bodies
+   * (OpenRouter's 401 is literally "User not found.") become a reconnect.
+   */
+  private errorLabels(config: AgentConfig): AgentErrorLabels {
     const labels: Record<string, string> = {
       anthropic: "Anthropic",
       openai: "OpenAI",
       openrouter: "OpenRouter",
     };
-    const label =
-      config.harness === "claude-code"
-        ? "Claude Code"
-        : config.harness === "codex"
-          ? "Codex"
-          : (labels[config.provider ?? "anthropic"] ?? "The model provider");
-    return new FriendlyAgentErrors(provider, config.name, label);
+    return {
+      agentName: config.name,
+      providerLabel:
+        config.harness === "claude-code"
+          ? "Claude Code"
+          : config.harness === "codex"
+            ? "Codex"
+            : (labels[config.provider ?? "anthropic"] ?? "The model provider"),
+    };
   }
 
-  /** Workspace awareness (context snapshots + playbook), when bridged. */
-  private withWorkspace(
-    provider: CodingAgentProvider,
-    opts: { hasTools: boolean; config: AgentConfig; profileId: string },
-  ): CodingAgentProvider {
-    const bridge = this.deps.workspaceBridge;
-    if (!bridge) return provider;
-    const hasTools = opts.hasTools && this.workspaceToolkit !== undefined;
-    return new WorkspaceContextAgent(provider, {
-      bridge,
-      hasTools,
-      skillsNote: () => this.skillsNote(opts.config, opts.profileId, hasTools),
-      coordination: {
-        strategy: opts.config.coordination ?? "shared-first",
-        peers: (projectId, sessionId) =>
-          this.deps.sessionPeers?.(projectId, sessionId) ?? Promise.resolve([]),
-        checkoutNotice: (projectId, sessionId) =>
-          this.deps.checkoutNotice?.(projectId, sessionId) ??
-          Promise.resolve(null),
-      },
-      desktopFacts: (projectId) => {
-        const settings = this.settingsContext(projectId, opts.config);
-        return {
-          ...("personalFilesDirectory" in settings &&
-          settings.personalFilesDirectory
-            ? { personalFilesDirectory: settings.personalFilesDirectory }
-            : {}),
-          ...("errors" in settings && settings.errors?.length
-            ? {
-                settingsErrors: settings.errors,
-              }
-            : {}),
-        };
-      },
-      bindTurn: (sessionId, options) =>
-        this.mcp.bindSessionQuestions({ sessionId, options }),
-    });
+  /** The built-in agent's shell for one chat, kept across its turns. */
+  private shell(sessionId: string): ShellState {
+    let shell = this.shells.get(sessionId);
+    if (!shell) {
+      shell = {};
+      this.shells.set(sessionId, shell);
+    }
+    return shell;
   }
 
   /** Host configuration paths and state, for the desktop_settings tool. */
@@ -1401,48 +1222,49 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
 
   /** Live policy/configuration, shared by direct and discovered projections. */
   capabilitySurface(id: string) {
-    const registered = this.get(id);
-    const found = this.findConfig(id) ?? this.cache.get(id);
-    if (!found || !registered) return undefined;
+    const found = this.configFor(id);
+    if (!found || !this.get(id)) return undefined;
     const { config, profileId } = found;
-    const topology = registered.topology;
     return {
-      revision: JSON.stringify([id, config.sandboxing, profileId, topology]),
-      tools: this.workspaceTools(config, topology, true) ?? [],
+      revision: JSON.stringify([id, config.sandboxing, profileId, "native"]),
+      tools: this.workspaceTools(config, "native", true) ?? [],
       readOnly: config.sandboxing === "contained",
       profileId,
       mcp: this.mcp.live({ config, profileId }),
-      ask: this.mcp.permissionHandler({ config, profileId }),
     };
   }
 
-  /** Filtered host workspace tools for a loopback, session-scoped harness. */
-  workspaceToolsForAgent(id: string): ExtraTool[] | undefined {
+  /**
+   * Keep a person's "Always allow" on the connection's policy (the profile
+   * ceiling), so the next attempt and every other agent see it (ADR 0054).
+   */
+  rememberToolAllowed(input: { agentId: string | null; server: string; tool: string }): void {
+    const id = input.agentId ?? this.defaultAgentId();
+    const found = id ? this.configFor(id) : undefined;
+    if (!found) return;
+    const connectionId = this.mcp.live(found).connectionIds[input.server];
+    if (!connectionId) return;
+    this.deps.profileConfig
+      .forProfile(found.profileId)
+      .connections.setToolPermission(connectionId, input.tool, "allow");
+  }
+
+  /** A profile agent's config, or a project agent's as its definition says. */
+  private configFor(
+    id: string,
+  ): { config: AgentConfig; profileId: string } | undefined {
     const profile = this.findConfig(id);
-    if (profile) return this.workspaceTools(profile.config, "native");
+    if (profile) return profile;
     const project = parseProjectAgentId(id);
-    const root = project
-      ? this.deps.projectRootPath?.(project.projectId)
-      : undefined;
-    if (!project || !root) return undefined;
-    try {
-      const raw = JSON.parse(
-        fs.readFileSync(
-          path.join(root, PROJECT_AGENTS_DIR, `${project.slug}.json`),
-          "utf8",
-        ),
-      );
-      const validated = validateAgentDefinition(raw, {
-        allowE2eFake: this.deps.e2eFake,
-      });
-      if ("error" in validated) return undefined;
-      return this.workspaceTools(
-        { sandboxing: validated.definition.sandboxing },
-        "native",
-      );
-    } catch {
-      return undefined;
-    }
+    if (!project) return undefined;
+    const resolved = this.resolveProjectConfig(
+      id,
+      project.projectId,
+      project.slug,
+    );
+    return "error" in resolved
+      ? undefined
+      : { config: resolved.config, profileId: resolved.profileId };
   }
 
   /** Effective concurrent-checkout doctrine for a profile or project agent. */
@@ -1471,27 +1293,4 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       return "shared-first";
     }
   }
-}
-
-/**
- * The cache-key view of a server set: everything but header values.
- * Which servers exist and where they point decides the provider; what
- * they authenticate with is read live (a refreshed OAuth bearer must not
- * rebuild the provider and drop its sessions).
- */
-function serverShapes(
-  servers: Record<string, AgentMcpServerConfig>,
-): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(servers).map(([name, server]) => [
-      name,
-      server.transport === "stdio"
-        ? server
-        : {
-            transport: server.transport,
-            url: server.url,
-            headerNames: Object.keys(server.headers ?? {}).sort(),
-          },
-    ]),
-  );
 }

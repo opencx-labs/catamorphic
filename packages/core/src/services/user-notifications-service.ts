@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DB } from "@catamorphic/db";
-import { type Kysely, sql } from "kysely";
+import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
 
 export interface PushSubscriptionInput {

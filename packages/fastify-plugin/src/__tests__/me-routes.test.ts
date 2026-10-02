@@ -102,6 +102,7 @@ describe("GET /me (ADR 0055 introspection)", () => {
         agentSessions: true,
         storeUploadMaxBytes: 64 * 1024 * 1024,
       },
+      agentProtocol: { session: 1, runner: 1 },
     });
   });
 
@@ -175,6 +176,7 @@ describe("GET /me (ADR 0055 introspection)", () => {
         agentSessions: true,
         storeUploadMaxBytes: 64 * 1024 * 1024,
       },
+      agentProtocol: { session: 1 as const, runner: 1 as const },
     };
     expect(MeSchema.safeParse(response).success).toBe(false);
     expect(

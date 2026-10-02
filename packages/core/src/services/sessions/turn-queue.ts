@@ -19,7 +19,12 @@ export interface ClaimedTurn {
   recovered: boolean;
 }
 
-export type TurnCommandKind = "steer" | "interrupt" | "respond" | "release" | "stop";
+export type TurnCommandKind =
+  | "steer"
+  | "interrupt"
+  | "respond"
+  | "release"
+  | "stop";
 
 export interface TurnCommand {
   id: string;
@@ -189,14 +194,22 @@ export class TurnQueue {
                               "allocation.worker_node_id",
                             )
                             .where("node.enabled", "=", true)
-                            .where("node.lease_expires_at", ">", sql<Date>`now()`)
+                            .where(
+                              "node.lease_expires_at",
+                              ">",
+                              sql<Date>`now()`,
+                            )
                             .where((node) =>
                               node.or([
                                 node("node.remote", "is not", null),
                                 ...(input.localNode
                                   ? [
                                       node.and([
-                                        node("node.id", "=", input.localNode.id),
+                                        node(
+                                          "node.id",
+                                          "=",
+                                          input.localNode.id,
+                                        ),
                                         node(
                                           "node.lease_token",
                                           "=",
@@ -222,7 +235,11 @@ export class TurnQueue {
                           .where(
                             sql<boolean>`runner.id::text = split_part(allocation.binding_id, ':', 2)`,
                           )
-                          .where("runner.lease_expires_at", ">", sql<Date>`now()`),
+                          .where(
+                            "runner.lease_expires_at",
+                            ">",
+                            sql<Date>`now()`,
+                          ),
                       ),
                     ),
                   ]),

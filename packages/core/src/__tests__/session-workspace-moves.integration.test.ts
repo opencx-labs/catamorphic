@@ -152,7 +152,10 @@ describe("workspace moves in native checkouts (ADR 0178)", () => {
           input.sessionId,
         );
         expect(
-          detail.snapshot.turns.map((turn) => [turn.status, turn.error?.message]),
+          detail.snapshot.turns.map((turn) => [
+            turn.status,
+            turn.error?.message,
+          ]),
         ).toEqual([["completed", undefined]]);
       },
       { timeout: 20_000 },

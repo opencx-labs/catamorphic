@@ -43,9 +43,14 @@ import {
 import { buildContextHandoff } from "./context-handoff.js";
 import { NativeStateStore } from "./native-state.js";
 import {
-  reattachInProcessRunner,
+  type ApprovalPolicy,
+  approvalPolicy,
+  governApproval,
+} from "./request-policy.js";
+import {
   type RunnerChannel,
   type RunnerLocation,
+  reattachInProcessRunner,
 } from "./runner-channels.js";
 import type { SessionLog } from "./session-log.js";
 import {
@@ -57,11 +62,6 @@ import {
   turnFromRow,
 } from "./session-rows.js";
 import { derivedId, ingestHarnessEvents } from "./turn-ingest.js";
-import {
-  type ApprovalPolicy,
-  approvalPolicy,
-  governApproval,
-} from "./request-policy.js";
 import type { ClaimedTurn, TurnCommandKind, TurnQueue } from "./turn-queue.js";
 
 const tracer = getTracer("@catamorphic/core");
@@ -163,7 +163,10 @@ export interface TurnEngineHost {
     retrying: boolean;
   }): Promise<void>;
   /** Approvals that opened and wait on approvers, after they committed. */
-  approvalsOpened?(input: { session: SessionRow; requests: RuntimeRequest[] }): Promise<void>;
+  approvalsOpened?(input: {
+    session: SessionRow;
+    requests: RuntimeRequest[];
+  }): Promise<void>;
 }
 
 /** The model-facing text of an input item (a delivery's provenance included). */
@@ -183,9 +186,15 @@ interface LocalTurn {
 }
 
 /** The runner state to save: without calls this holder already answered. */
-function unanswered(local: LocalTurn, attemptId: string, runner: RunnerState): RunnerState {
+function unanswered(
+  local: LocalTurn,
+  attemptId: string,
+  runner: RunnerState,
+): RunnerState {
   const calls = Object.fromEntries(
-    Object.entries(runner.calls).filter(([callId]) => !local.answered.has(`${attemptId}:${callId}`)),
+    Object.entries(runner.calls).filter(
+      ([callId]) => !local.answered.has(`${attemptId}:${callId}`),
+    ),
   );
   return { ...runner, calls };
 }
@@ -273,7 +282,9 @@ export class TurnEngine {
             .catch(() => {}),
         );
       } else {
-        pending.push(this.requestInterrupt(local.claim.turn.id).catch(() => {}));
+        pending.push(
+          this.requestInterrupt(local.claim.turn.id).catch(() => {}),
+        );
         local.wake();
       }
     }
@@ -391,7 +402,11 @@ export class TurnEngine {
 
   // -------------------------------------------------------------------------
 
-  private async drive(local: LocalTurn, rearm: () => void, span?: Span): Promise<void> {
+  private async drive(
+    local: LocalTurn,
+    rearm: () => void,
+    span?: Span,
+  ): Promise<void> {
     const { db } = this.deps;
     const turnId = local.claim.turn.id;
     const session = await db
@@ -424,17 +439,32 @@ export class TurnEngine {
       if (local.abort.signal.aborted) return;
       if (turn.status === "finalizing") {
         const attempt = await this.activeAttempt(turn);
-        await this.finalize(local, { identity, session, turn, attempt, completion: { status: attemptOutcome(attempt) } });
+        await this.finalize(local, {
+          identity,
+          session,
+          turn,
+          attempt,
+          completion: { status: attemptOutcome(attempt) },
+        });
         return;
       }
       if (turn.status === "preparing") {
-        const outcome = await this.prepareAndLaunch(local, { identity, session, turn });
+        const outcome = await this.prepareAndLaunch(local, {
+          identity,
+          session,
+          turn,
+        });
         if (outcome.kind === "settled") return;
         turn = outcome.turn;
       }
       if (turn.status === "running" || turn.status === "waiting") {
         const attempt = await this.activeAttempt(turn);
-        const result = await this.pump(local, rearm, { identity, session, turn, attempt });
+        const result = await this.pump(local, rearm, {
+          identity,
+          session,
+          turn,
+          attempt,
+        });
         if (result.kind === "aborted") {
           // Lost or handed back: a sandbox runner stays for whoever holds
           // the turn next; one in this process cannot be reached by anyone
@@ -444,7 +474,13 @@ export class TurnEngine {
           return;
         }
         if (result.kind === "lost") {
-          await this.lose(local, { identity, session, turn: result.turn, attempt: result.attempt, reason: result.reason });
+          await this.lose(local, {
+            identity,
+            session,
+            turn: result.turn,
+            attempt: result.attempt,
+            reason: result.reason,
+          });
           return;
         }
         if (result.kind === "restart") {
@@ -474,7 +510,11 @@ export class TurnEngine {
     return turnFromRow(row);
   }
 
-  private async activeAttempt(turn: Turn): Promise<Attempt & { runner: RunnerState | null; providerStartedAt: Date | null }> {
+  private async activeAttempt(
+    turn: Turn,
+  ): Promise<
+    Attempt & { runner: RunnerState | null; providerStartedAt: Date | null }
+  > {
     const row = turn.activeAttemptId
       ? await this.deps.db
           .selectFrom("agent_turn_attempts")
@@ -491,7 +531,9 @@ export class TurnEngine {
   }
 
   /** Why the next attempt of this turn runs. */
-  private async nextReason(turn: Turn): Promise<{ reason: AttemptReason; previous: Attempt | null }> {
+  private async nextReason(
+    turn: Turn,
+  ): Promise<{ reason: AttemptReason; previous: Attempt | null }> {
     const row = await this.deps.db
       .selectFrom("agent_turn_attempts")
       .selectAll()
@@ -501,8 +543,10 @@ export class TurnEngine {
       .executeTakeFirst();
     if (!row) return { reason: "initial", previous: null };
     const previous = attemptFromRow(row);
-    if (previous.status === "preparing") return { reason: previous.reason, previous };
-    if (previous.status === "superseded") return { reason: "steer_restart", previous };
+    if (previous.status === "preparing")
+      return { reason: previous.reason, previous };
+    if (previous.status === "superseded")
+      return { reason: "steer_restart", previous };
     if (previous.status === "lost") return { reason: "recovery", previous };
     return { reason: "retry", previous };
   }
@@ -559,7 +603,12 @@ export class TurnEngine {
       identity: ctx.identity,
       session: ctx.session,
     });
-    const binding = await this.bindThread({ turn, attempt, harness: harness.harness, local });
+    const binding = await this.bindThread({
+      turn,
+      attempt,
+      harness: harness.harness,
+      local,
+    });
     turn = binding.turn;
     attempt = binding.attempt;
 
@@ -596,10 +645,19 @@ export class TurnEngine {
       attempt,
       reason,
       inputItem: inputItem ? itemFromRow(inputItem) : null,
-      handoff: [binding.handoff, ...(prepared.notes ?? [])].filter(Boolean).join("\n\n") || null,
+      handoff:
+        [binding.handoff, ...(prepared.notes ?? [])]
+          .filter(Boolean)
+          .join("\n\n") || null,
     });
-    if (prepared.checkpointBefore !== undefined && turn.checkpoint.before === null)
-      turn = { ...turn, checkpoint: { ...turn.checkpoint, before: prepared.checkpointBefore } };
+    if (
+      prepared.checkpointBefore !== undefined &&
+      turn.checkpoint.before === null
+    )
+      turn = {
+        ...turn,
+        checkpoint: { ...turn.checkpoint, before: prepared.checkpointBefore },
+      };
     const start: AttemptStart = {
       ...prepared.start,
       protocol: RUNNER_PROTOCOL_VERSION,
@@ -619,7 +677,8 @@ export class TurnEngine {
       hello: null,
       calls: {},
       restartWith: [],
-      consumed: reason === "steer_restart" ? await this.steeredItemIds(turn) : [],
+      consumed:
+        reason === "steer_restart" ? await this.steeredItemIds(turn) : [],
       interruptSentAt: null,
     };
     const running: Turn = {
@@ -634,7 +693,10 @@ export class TurnEngine {
       await this.assertOwned(local, trx);
       await trx
         .updateTable("agent_turn_attempts")
-        .set({ runner: runner as unknown as Json, provider_started_at: new Date() })
+        .set({
+          runner: runner as unknown as Json,
+          provider_started_at: new Date(),
+        })
         .where("id", "=", attempt.id)
         .execute();
       await log.append(trx, {
@@ -674,7 +736,9 @@ export class TurnEngine {
         : [];
     const steerTexts = steered
       .map((row) => itemFromRow(row))
-      .flatMap((item) => (item.kind === "user_message" ? [this.deps.inputText(item)] : []));
+      .flatMap((item) =>
+        item.kind === "user_message" ? [this.deps.inputText(item)] : [],
+      );
     const base = input.inputItem;
     const text =
       base?.kind === "user_message"
@@ -748,12 +812,19 @@ export class TurnEngine {
       thread = providerThreadFromRow(sameHarness);
       const nativeRef = sameHarness.native_ref as unknown as NativeRef;
       binding = {
-        mode: (await this.native.has({ threadId: thread.id })) ? "restore" : "resume",
+        mode: (await this.native.has({ threadId: thread.id }))
+          ? "restore"
+          : "resume",
         providerThreadId: thread.id,
         nativeRef,
-        ...(sameHarness.state_path ? { statePath: sameHarness.state_path } : {}),
+        ...(sameHarness.state_path
+          ? { statePath: sameHarness.state_path }
+          : {}),
       };
-      if (thread.lastTurnOrdinal !== null && thread.lastTurnOrdinal < input.turn.ordinal - 1) {
+      if (
+        thread.lastTurnOrdinal !== null &&
+        thread.lastTurnOrdinal < input.turn.ordinal - 1
+      ) {
         handoffFrom = thread.lastTurnOrdinal + 1;
         strategy = "delta";
       }
@@ -784,10 +855,17 @@ export class TurnEngine {
             strategy,
           })
         : null;
-    const turn: Turn = { ...input.turn, providerThreadId: thread.id, updatedAt: now };
+    const turn: Turn = {
+      ...input.turn,
+      providerThreadId: thread.id,
+      updatedAt: now,
+    };
     const attempt: Attempt = { ...input.attempt, providerThreadId: thread.id };
     const events: SessionEvent[] = [
-      { type: "provider_thread.changed", thread: { ...thread, updatedAt: now } },
+      {
+        type: "provider_thread.changed",
+        thread: { ...thread, updatedAt: now },
+      },
       { type: "attempt.changed", attempt },
       { type: "turn.changed", turn },
     ];
@@ -853,7 +931,10 @@ export class TurnEngine {
         kind: "completed";
         turn: Turn;
         attempt: Attempt;
-        completion: { status: "completed" | "failed" | "interrupted"; error?: TurnError };
+        completion: {
+          status: "completed" | "failed" | "interrupted";
+          error?: TurnError;
+        };
       }
   > {
     const { db, log, queue } = this.deps;
@@ -861,7 +942,12 @@ export class TurnEngine {
     let turn = ctx.turn;
     let attempt: Attempt = ctx.attempt;
     if (!runner)
-      return { kind: "lost", turn, attempt, reason: "The agent's runner never started." };
+      return {
+        kind: "lost",
+        turn,
+        attempt,
+        reason: "The agent's runner never started.",
+      };
     let channel = local.channel;
     if (!channel) {
       channel =
@@ -881,13 +967,25 @@ export class TurnEngine {
         };
       local.channel = channel;
       // Answer again what the previous holder took and did not answer.
-      await this.answerCalls(local, ctx, channel, runner, Object.entries(runner.calls), true);
+      await this.answerCalls(
+        local,
+        ctx,
+        channel,
+        Object.entries(runner.calls),
+        true,
+      );
     }
     let thread = await this.loadThread(attempt.providerThreadId);
     let completion:
-      | { status: "completed" | "failed" | "interrupted"; error?: TurnError; ref?: NativeRef }
+      | {
+          status: "completed" | "failed" | "interrupted";
+          error?: TurnError;
+          ref?: NativeRef;
+        }
       | undefined;
-    let interruptAt = runner.interruptSentAt ? Date.parse(runner.interruptSentAt) : null;
+    let interruptAt = runner.interruptSentAt
+      ? Date.parse(runner.interruptSentAt)
+      : null;
     const agentId = ctx.session.agent_id;
 
     const sendCommands = async () => {
@@ -900,10 +998,15 @@ export class TurnEngine {
       }
       await channel?.send(frames);
       await queue.markCommands({
-        ids: commands.filter((command) => command.status === "pending").map((command) => command.id),
+        ids: commands
+          .filter((command) => command.status === "pending")
+          .map((command) => command.id),
         status: "sent",
       });
-      if (commands.some((command) => command.kind === "interrupt") && interruptAt === null)
+      if (
+        commands.some((command) => command.kind === "interrupt") &&
+        interruptAt === null
+      )
         interruptAt = Date.now();
     };
     await sendCommands();
@@ -915,9 +1018,13 @@ export class TurnEngine {
         commandsInFlight = local.waiter?.then(async () => {
           rearm();
           commandsInFlight = undefined;
-          if (!local.abort.signal.aborted) await sendCommands().catch((error) =>
-            console.warn("[catamorphic] Could not deliver turn commands", error),
-          );
+          if (!local.abort.signal.aborted)
+            await sendCommands().catch((error) =>
+              console.warn(
+                "[catamorphic] Could not deliver turn commands",
+                error,
+              ),
+            );
         });
       const read = await channel.read({
         cursor: runner.cursor,
@@ -943,7 +1050,13 @@ export class TurnEngine {
         runner = outcome.runner;
         if (outcome.completion) completion = outcome.completion;
         if (outcome.calls.length > 0)
-          void this.answerCalls(local, ctx, channel, runner, outcome.calls, false).catch((error) =>
+          void this.answerCalls(
+            local,
+            ctx,
+            channel,
+            outcome.calls,
+            false,
+          ).catch((error) =>
             console.warn("[catamorphic] A host call failed", error),
           );
         if (outcome.refusedSteers.length > 0) {
@@ -957,7 +1070,10 @@ export class TurnEngine {
         }
       }
       if (completion) {
-        if (completion.status === "interrupted" && runner.restartWith.length > 0) {
+        if (
+          completion.status === "interrupted" &&
+          runner.restartWith.length > 0
+        ) {
           // Steered input the harness could not take: a new attempt of the
           // same turn, on the same native thread, with that input.
           const superseded: Attempt = {
@@ -965,11 +1081,18 @@ export class TurnEngine {
             status: "superseded",
             completedAt: new Date().toISOString(),
           };
-          const preparing: Turn = { ...turn, status: "preparing", activity: "Taking in your message", updatedAt: new Date().toISOString() };
+          const preparing: Turn = {
+            ...turn,
+            status: "preparing",
+            activity: "Taking in your message",
+            updatedAt: new Date().toISOString(),
+          };
           await db.transaction().execute(async (trx) => {
             await this.assertOwned(local, trx);
             await queue.markCommands({
-              ids: (await queue.openCommands({ turnId: turn.id, executor: trx }))
+              ids: (
+                await queue.openCommands({ turnId: turn.id, executor: trx })
+              )
                 .filter((command) => command.kind === "interrupt")
                 .map((command) => command.id),
               status: "dropped",
@@ -979,13 +1102,19 @@ export class TurnEngine {
               sessionId: turn.sessionId,
               events: [
                 { type: "attempt.changed", attempt: superseded },
-                { type: "turn.changed", turn: { ...preparing, cancellationRequested: false } },
+                {
+                  type: "turn.changed",
+                  turn: { ...preparing, cancellationRequested: false },
+                },
               ],
             });
           });
           await this.stopRunner(local, channel);
           local.channel = undefined;
-          return { kind: "restart", turn: { ...preparing, cancellationRequested: false } };
+          return {
+            kind: "restart",
+            turn: { ...preparing, cancellationRequested: false },
+          };
         }
         await this.stopRunner(local, channel);
         local.channel = undefined;
@@ -996,9 +1125,13 @@ export class TurnEngine {
           kind: "lost",
           turn,
           attempt,
-          reason: "The agent stopped unexpectedly before it finished this turn.",
+          reason:
+            "The agent stopped unexpectedly before it finished this turn.",
         };
-      if (interruptAt !== null && Date.now() - interruptAt > INTERRUPT_GRACE_MS) {
+      if (
+        interruptAt !== null &&
+        Date.now() - interruptAt > INTERRUPT_GRACE_MS
+      ) {
         // A harness that ignores its interrupt is stopped by force.
         await channel.kill();
         return {
@@ -1032,7 +1165,10 @@ export class TurnEngine {
       case "stop":
         return { id, command: { kind: "stop" } };
       case "steer": {
-        const itemId = typeof command.payload.itemId === "string" ? command.payload.itemId : "";
+        const itemId =
+          typeof command.payload.itemId === "string"
+            ? command.payload.itemId
+            : "";
         const row = await this.deps.db
           .selectFrom("agent_items")
           .select("payload")
@@ -1044,22 +1180,41 @@ export class TurnEngine {
           id,
           command: {
             kind: "steer",
-            input: { itemId, text: this.deps.inputText(item), attachments: item.attachments },
+            input: {
+              itemId,
+              text: this.deps.inputText(item),
+              attachments: item.attachments,
+            },
           },
         };
       }
       case "respond": {
-        const requestKey = typeof command.payload.requestKey === "string" ? command.payload.requestKey : "";
-        const response = command.payload.response as unknown as RuntimeRequestResponse | undefined;
+        const requestKey =
+          typeof command.payload.requestKey === "string"
+            ? command.payload.requestKey
+            : "";
+        const response = command.payload.response as unknown as
+          | RuntimeRequestResponse
+          | undefined;
         if (!requestKey || !response) return null;
         // A response for an earlier attempt's request has nobody to reach.
         if (command.attemptId && command.attemptId !== attemptId) return null;
         return { id, command: { kind: "respond", requestKey, response } };
       }
       case "release": {
-        const requestKey = typeof command.payload.requestKey === "string" ? command.payload.requestKey : "";
-        const reason = typeof command.payload.reason === "string" ? command.payload.reason : "";
-        if (!requestKey || (command.attemptId && command.attemptId !== attemptId)) return null;
+        const requestKey =
+          typeof command.payload.requestKey === "string"
+            ? command.payload.requestKey
+            : "";
+        const reason =
+          typeof command.payload.reason === "string"
+            ? command.payload.reason
+            : "";
+        if (
+          !requestKey ||
+          (command.attemptId && command.attemptId !== attemptId)
+        )
+          return null;
         return { id, command: { kind: "release", requestKey, reason } };
       }
     }
@@ -1085,7 +1240,11 @@ export class TurnEngine {
     runner: RunnerState;
     calls: Array<[string, HostCall]>;
     refusedSteers: string[];
-    completion?: { status: "completed" | "failed" | "interrupted"; error?: TurnError; ref?: NativeRef };
+    completion?: {
+      status: "completed" | "failed" | "interrupted";
+      error?: TurnError;
+      ref?: NativeRef;
+    };
   }> {
     const { db, log, queue } = this.deps;
     let policy: ApprovalPolicy | undefined;
@@ -1094,16 +1253,27 @@ export class TurnEngine {
     const applied = await db.transaction().execute(async (trx) => {
       await this.assertOwned(local, trx);
       let runner: RunnerState = { ...input.runner, cursor: input.cursor };
-      const events = input.frames.flatMap((frame) => (frame.type === "event" ? [frame.event] : []));
+      const events = input.frames.flatMap((frame) =>
+        frame.type === "event" ? [frame.event] : [],
+      );
       const calls: Array<[string, HostCall]> = [];
       const acked: string[] = [];
       const refusedSteers: string[] = [];
       for (const frame of input.frames) {
         if (frame.type === "hello")
-          runner = { ...runner, hello: { harness: frame.harness.id, capabilities: frame.harness.capabilities } };
+          runner = {
+            ...runner,
+            hello: {
+              harness: frame.harness.id,
+              capabilities: frame.harness.capabilities,
+            },
+          };
         else if (frame.type === "call") {
           if (!(frame.callId in runner.calls)) {
-            runner = { ...runner, calls: { ...runner.calls, [frame.callId]: frame.call } };
+            runner = {
+              ...runner,
+              calls: { ...runner.calls, [frame.callId]: frame.call },
+            };
             calls.push([frame.callId, frame.call]);
           }
         } else if (frame.type === "ack") {
@@ -1129,14 +1299,25 @@ export class TurnEngine {
         now: new Date(),
       });
       if (ingested.consumed.length > 0)
-        runner = { ...runner, consumed: [...(runner.consumed ?? []), ...ingested.consumed] };
+        runner = {
+          ...runner,
+          consumed: [...(runner.consumed ?? []), ...ingested.consumed],
+        };
       let turn = ingested.turn;
       const extra: SessionEvent[] = [];
-      if (ingested.title) extra.push({ type: "session.changed", session: { title: ingested.title } });
+      if (ingested.title)
+        extra.push({
+          type: "session.changed",
+          session: { title: ingested.title },
+        });
       if (ingested.usage) {
         turn = {
           ...turn,
-          outcome: { changedFiles: turn.outcome?.changedFiles ?? [], ...turn.outcome, usage: ingested.usage },
+          outcome: {
+            changedFiles: turn.outcome?.changedFiles ?? [],
+            ...turn.outcome,
+            usage: ingested.usage,
+          },
         };
         extra.push({ type: "turn.changed", turn });
       }
@@ -1150,7 +1331,9 @@ export class TurnEngine {
               : ingested.completed.status === "interrupted"
                 ? "interrupted"
                 : "failed",
-          ...(ingested.completed.ref ? { nativeTurnRef: ingested.completed.ref } : {}),
+          ...(ingested.completed.ref
+            ? { nativeTurnRef: ingested.completed.ref }
+            : {}),
           error: ingested.completed.error ?? null,
           completedAt: new Date().toISOString(),
         };
@@ -1170,7 +1353,11 @@ export class TurnEngine {
           continue;
         }
         policy ??= await approvalPolicy(trx, input.turn.sessionId);
-        const outcome = governApproval({ request: event.request, policy, now: Date.now() });
+        const outcome = governApproval({
+          request: event.request,
+          policy,
+          now: Date.now(),
+        });
         governed.push({ type: "request.changed", request: outcome.request });
         if (outcome.refusal && event.request.runnerKey) {
           refused = true;
@@ -1180,12 +1367,20 @@ export class TurnEngine {
             kind: "respond",
             payload: {
               requestKey: event.request.runnerKey,
-              response: { kind: "approval", decision: "denied", reason: outcome.refusal },
+              response: {
+                kind: "approval",
+                decision: "denied",
+                reason: outcome.refusal,
+              },
             },
           });
-        } else if (outcome.request.approvers.length > 0) opened.push(outcome.request);
+        } else if (outcome.request.approvers.length > 0)
+          opened.push(outcome.request);
       }
-      await log.append(trx, { sessionId: input.turn.sessionId, events: [...governed, ...extra] });
+      await log.append(trx, {
+        sessionId: input.turn.sessionId,
+        events: [...governed, ...extra],
+      });
       if (ingested.statePath)
         await trx
           .updateTable("agent_provider_threads")
@@ -1194,10 +1389,16 @@ export class TurnEngine {
           .execute();
       // Steers refused by the harness are restarted, not acknowledged.
       const acknowledged = acked.filter((id) => !refusedSteers.includes(id));
-      await queue.markCommands({ ids: acknowledged, status: "acknowledged", executor: trx });
+      await queue.markCommands({
+        ids: acknowledged,
+        status: "acknowledged",
+        executor: trx,
+      });
       await trx
         .updateTable("agent_turn_attempts")
-        .set({ runner: unanswered(local, attempt.id, runner) as unknown as Json })
+        .set({
+          runner: unanswered(local, attempt.id, runner) as unknown as Json,
+        })
         .where("id", "=", attempt.id)
         .execute();
       return {
@@ -1214,16 +1415,24 @@ export class TurnEngine {
     if (opened.length > 0)
       await this.deps.host
         .approvalsOpened?.({ session: input.session, requests: opened })
-        .catch((error) => console.warn("[catamorphic] Could not tell approvers", error));
+        .catch((error) =>
+          console.warn("[catamorphic] Could not tell approvers", error),
+        );
     return applied;
   }
 
-  private async saveRunner(local: LocalTurn, attemptId: string, runner: RunnerState): Promise<void> {
+  private async saveRunner(
+    local: LocalTurn,
+    attemptId: string,
+    runner: RunnerState,
+  ): Promise<void> {
     await this.deps.db.transaction().execute(async (trx) => {
       await this.assertOwned(local, trx);
       await trx
         .updateTable("agent_turn_attempts")
-        .set({ runner: unanswered(local, attemptId, runner) as unknown as Json })
+        .set({
+          runner: unanswered(local, attemptId, runner) as unknown as Json,
+        })
         .where("id", "=", attemptId)
         .execute();
     });
@@ -1237,9 +1446,13 @@ export class TurnEngine {
    */
   private async answerCalls(
     local: LocalTurn,
-    ctx: { identity: Identity; session: SessionRow; turn: Turn; attempt: Attempt },
+    ctx: {
+      identity: Identity;
+      session: SessionRow;
+      turn: Turn;
+      attempt: Attempt;
+    },
     channel: RunnerChannel,
-    runner: RunnerState,
     calls: ReadonlyArray<[string, HostCall]>,
     /** Answering what an earlier holder took: a tool it may have run is not run again. */
     takeover: boolean,
@@ -1253,13 +1466,22 @@ export class TurnEngine {
         if (call.kind === "native_state.append") {
           await this.deps.db.transaction().execute(async (trx) => {
             await this.assertOwned(local, trx);
-            await this.native.append({ threadId, ...(call.subpath ? { subpath: call.subpath } : {}), entries: call.entries, executor: trx });
+            await this.native.append({
+              threadId,
+              ...(call.subpath ? { subpath: call.subpath } : {}),
+              entries: call.entries,
+              executor: trx,
+            });
             await this.forgetCall(trx, ctx.attempt.id, callId);
           });
           local.answered.add(`${ctx.attempt.id}:${callId}`);
           result = null;
         } else if (call.kind === "native_state.load") {
-          result = (await this.native.load({ threadId, ...(call.subpath ? { subpath: call.subpath } : {}) })) ?? null;
+          result =
+            (await this.native.load({
+              threadId,
+              ...(call.subpath ? { subpath: call.subpath } : {}),
+            })) ?? null;
         } else if (call.kind === "native_state.subpaths") {
           result = await this.native.subpaths({ threadId });
         } else if (takeover) {
@@ -1284,7 +1506,9 @@ export class TurnEngine {
           command: {
             kind: "host_result",
             callId,
-            ...(error === undefined ? { result: result ?? null } : { error: { message: error } }),
+            ...(error === undefined
+              ? { result: result ?? null }
+              : { error: { message: error } }),
           },
         },
       ]);
@@ -1298,7 +1522,11 @@ export class TurnEngine {
     }
   }
 
-  private async forgetCall(trx: Transaction<DB>, attemptId: string, callId: string): Promise<void> {
+  private async forgetCall(
+    trx: Transaction<DB>,
+    attemptId: string,
+    callId: string,
+  ): Promise<void> {
     await trx
       .updateTable("agent_turn_attempts")
       .set({ runner: sql`runner #- ${`{calls,${callId}}`}::text[]` })
@@ -1307,7 +1535,10 @@ export class TurnEngine {
   }
 
   /** A native state call's thread: the attempt's, or a fork's source. */
-  private async threadForCall(attempt: Attempt, call: HostCall): Promise<string> {
+  private async threadForCall(
+    attempt: Attempt,
+    call: HostCall,
+  ): Promise<string> {
     const own = attempt.providerThreadId;
     if (!own) throw new Error("The attempt has no provider thread");
     if (call.kind === "tool" || !call.thread) return own;
@@ -1317,21 +1548,32 @@ export class TurnEngine {
       .where("session_id", "=", attempt.sessionId)
       .execute();
     const match = rows.find(
-      (row) => (row.native_ref as unknown as NativeRef | null)?.id === call.thread,
+      (row) =>
+        (row.native_ref as unknown as NativeRef | null)?.id === call.thread,
     );
     if (match) return match.id;
     // A fork reads its source thread, which belongs to the source session.
     const ownRow = rows.find((row) => row.id === own);
-    const source = (ownRow?.fork_source as unknown as { threadId?: string; source?: NativeRef } | null) ?? null;
-    if (source?.threadId && source.source?.id === call.thread) return source.threadId;
+    const source =
+      (ownRow?.fork_source as unknown as {
+        threadId?: string;
+        source?: NativeRef;
+      } | null) ?? null;
+    if (source?.threadId && source.source?.id === call.thread)
+      return source.threadId;
     return own;
   }
 
-  private async stopRunner(local: LocalTurn, channel: RunnerChannel | undefined): Promise<void> {
+  private async stopRunner(
+    local: LocalTurn,
+    channel: RunnerChannel | undefined,
+  ): Promise<void> {
     if (!channel) return;
     // A runner on a sandbox that outlives this holder is left for the next.
     if (local.handingBack) return;
-    await channel.send([{ id: `stop:${randomUUID()}`, command: { kind: "stop" } }]).catch(() => {});
+    await channel
+      .send([{ id: `stop:${randomUUID()}`, command: { kind: "stop" } }])
+      .catch(() => {});
     if (channel.location.kind === "in_process") await channel.kill();
   }
 
@@ -1345,22 +1587,40 @@ export class TurnEngine {
       session: SessionRow;
       turn: Turn;
       attempt: Attempt;
-      completion: { status: "completed" | "failed" | "interrupted"; error?: TurnError };
+      completion: {
+        status: "completed" | "failed" | "interrupted";
+        error?: TurnError;
+      };
     },
   ): Promise<void> {
     const { db, log } = this.deps;
     let turn: Turn = ctx.turn;
     if (turn.status !== "finalizing") {
-      turn = { ...turn, status: "finalizing", activity: "Saving changes", activityAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      turn = {
+        ...turn,
+        status: "finalizing",
+        activity: "Saving changes",
+        activityAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
       await db.transaction().execute(async (trx) => {
         await this.assertOwned(local, trx);
-        await log.append(trx, { sessionId: turn.sessionId, events: [{ type: "turn.changed", turn }] });
+        await log.append(trx, {
+          sessionId: turn.sessionId,
+          events: [{ type: "turn.changed", turn }],
+        });
       });
     }
     const inputItem = turn.inputItemId
-      ? await db.selectFrom("agent_items").select("payload").where("id", "=", turn.inputItemId).executeTakeFirst()
+      ? await db
+          .selectFrom("agent_items")
+          .select("payload")
+          .where("id", "=", turn.inputItemId)
+          .executeTakeFirst()
       : undefined;
-    const inputText = inputItem ? itemText(itemFromRow(inputItem)) : CONTINUATION_PROMPT;
+    const inputText = inputItem
+      ? itemText(itemFromRow(inputItem))
+      : CONTINUATION_PROMPT;
     const finalized = await this.deps.host.finalize({
       identity: ctx.identity,
       session: ctx.session,
@@ -1368,9 +1628,7 @@ export class TurnEngine {
       inputText,
       completion: { status: ctx.completion.status },
     });
-    const status = finalized.failure
-      ? "failed"
-      : ctx.completion.status;
+    const status = finalized.failure ? "failed" : ctx.completion.status;
     await this.settle(local, {
       identity: ctx.identity,
       session: ctx.session,
@@ -1401,9 +1659,13 @@ export class TurnEngine {
     const transient =
       input.status === "failed" &&
       input.error?.retrySafe === true &&
-      (input.error.kind === "rate_limit" || input.error.kind === "unavailable") &&
+      (input.error.kind === "rate_limit" ||
+        input.error.kind === "unavailable") &&
       input.turn.attemptCount < MAX_TRANSIENT_RETRIES;
-    const delay = BACKOFF_MS[Math.min(input.turn.attemptCount - 1, BACKOFF_MS.length - 1)] ?? 60_000;
+    const delay =
+      BACKOFF_MS[
+        Math.min(input.turn.attemptCount - 1, BACKOFF_MS.length - 1)
+      ] ?? 60_000;
     const retryAt = transient
       ? new Date(Date.now() + delay + Math.floor(Math.random() * delay * 0.2))
       : null;
@@ -1415,7 +1677,10 @@ export class TurnEngine {
       cancellationRequested: false,
       error: input.status === "completed" ? null : (input.error ?? null),
       outcome: input.outcome,
-      checkpoint: { ...input.turn.checkpoint, after: input.checkpointAfter ?? input.turn.checkpoint.after },
+      checkpoint: {
+        ...input.turn.checkpoint,
+        after: input.checkpointAfter ?? input.turn.checkpoint.after,
+      },
       retryAt: retryAt?.toISOString() ?? null,
       completedAt: transient ? null : now,
       updatedAt: now,
@@ -1424,15 +1689,36 @@ export class TurnEngine {
     await db.transaction().execute(async (trx) => {
       await this.assertOwned(local, trx);
       const events: SessionEvent[] = [];
-      if (input.attempt.status === "preparing" || input.attempt.status === "running")
+      if (
+        input.attempt.status === "preparing" ||
+        input.attempt.status === "running"
+      )
         events.push({
           type: "attempt.changed",
-          attempt: { ...input.attempt, status: input.status === "completed" ? "completed" : input.status === "interrupted" ? "interrupted" : "failed", completedAt: now, error: input.error ?? null },
+          attempt: {
+            ...input.attempt,
+            status:
+              input.status === "completed"
+                ? "completed"
+                : input.status === "interrupted"
+                  ? "interrupted"
+                  : "failed",
+            completedAt: now,
+            error: input.error ?? null,
+          },
         });
       // Whatever the attempt left open closes with the turn.
-      events.push(...(await closeOpenWork(trx, { turn: input.turn, attemptId: input.attempt.id, reason: "The turn ended before it was answered.", now })));
+      events.push(
+        ...(await closeOpenWork(trx, {
+          turn: input.turn,
+          attemptId: input.attempt.id,
+          reason: "The turn ended before it was answered.",
+          now,
+        })),
+      );
       events.push({ type: "turn.changed", turn: settled });
-      if (!transient) events.push(...(await this.requeueSteers(trx, input.turn, now)));
+      if (!transient)
+        events.push(...(await this.requeueSteers(trx, input.turn, now)));
       if (input.attempt.providerThreadId && input.status !== "failed") {
         const threadRow = await trx
           .selectFrom("agent_provider_threads")
@@ -1442,29 +1728,46 @@ export class TurnEngine {
         if (threadRow)
           events.push({
             type: "provider_thread.changed",
-            thread: { ...providerThreadFromRow(threadRow), lastTurnOrdinal: input.turn.ordinal, updatedAt: now },
+            thread: {
+              ...providerThreadFromRow(threadRow),
+              lastTurnOrdinal: input.turn.ordinal,
+              updatedAt: now,
+            },
           });
       }
       const needsAttention =
-        (input.status === "failed" && !transient) || input.outcome.notification !== undefined;
+        (input.status === "failed" && !transient) ||
+        input.outcome.notification !== undefined;
       if (needsAttention)
         events.push({
           type: "session.changed",
-          session: { attentionRevision: Number(input.session.attention_revision) + 1 },
+          session: {
+            attentionRevision: Number(input.session.attention_revision) + 1,
+          },
         });
       if (input.session.title === null && input.turn.inputItemId) {
-        const row = await trx.selectFrom("agent_items").select("payload").where("id", "=", input.turn.inputItemId).executeTakeFirst();
+        const row = await trx
+          .selectFrom("agent_items")
+          .select("payload")
+          .where("id", "=", input.turn.inputItemId)
+          .executeTakeFirst();
         const item = row ? itemFromRow(row) : null;
         if (item?.kind === "user_message")
-          events.push({ type: "session.changed", session: { title: titleFrom(item) } });
+          events.push({
+            type: "session.changed",
+            session: { title: titleFrom(item) },
+          });
       }
       await log.append(trx, { sessionId: input.turn.sessionId, events });
       await queue.markCommands({
-        ids: (await queue.openCommands({ turnId: input.turn.id, executor: trx })).map((command) => command.id),
+        ids: (
+          await queue.openCommands({ turnId: input.turn.id, executor: trx })
+        ).map((command) => command.id),
         status: "dropped",
         executor: trx,
       });
-      if (retryAt) await queue.scheduleRetry(trx, { turnId: input.turn.id, at: retryAt });
+      if (retryAt)
+        await queue.scheduleRetry(trx, { turnId: input.turn.id, at: retryAt });
       await queue.release(trx, { turnId: input.turn.id });
       const replyRow = await trx
         .selectFrom("agent_items")
@@ -1484,7 +1787,9 @@ export class TurnEngine {
         reply,
         retrying: transient,
       })
-      .catch((error) => console.warn("[catamorphic] After-turn work failed", error));
+      .catch((error) =>
+        console.warn("[catamorphic] After-turn work failed", error),
+      );
   }
 
   /**
@@ -1495,7 +1800,13 @@ export class TurnEngine {
    */
   private async lose(
     local: LocalTurn,
-    ctx: { identity: Identity; session: SessionRow; turn: Turn; attempt: Attempt; reason: string },
+    ctx: {
+      identity: Identity;
+      session: SessionRow;
+      turn: Turn;
+      attempt: Attempt;
+      reason: string;
+    },
   ): Promise<void> {
     const { db, log, queue } = this.deps;
     const now = new Date().toISOString();
@@ -1506,8 +1817,21 @@ export class TurnEngine {
     await db.transaction().execute(async (trx) => {
       await this.assertOwned(local, trx);
       const events: SessionEvent[] = [
-        { type: "attempt.changed", attempt: { ...ctx.attempt, status: "lost", completedAt: now, error: { message: ctx.reason } } },
-        ...(await closeOpenWork(trx, { turn: ctx.turn, attemptId: ctx.attempt.id, reason: "The agent that asked stopped before it was answered.", now })),
+        {
+          type: "attempt.changed",
+          attempt: {
+            ...ctx.attempt,
+            status: "lost",
+            completedAt: now,
+            error: { message: ctx.reason },
+          },
+        },
+        ...(await closeOpenWork(trx, {
+          turn: ctx.turn,
+          attemptId: ctx.attempt.id,
+          reason: "The agent that asked stopped before it was answered.",
+          now,
+        })),
         {
           type: "turn.changed",
           turn: {
@@ -1527,15 +1851,25 @@ export class TurnEngine {
       const requeued = await this.requeueSteers(trx, ctx.turn, now);
       events.push(...requeued);
       const thread = ctx.attempt.providerThreadId
-        ? await trx.selectFrom("agent_provider_threads").selectAll().where("id", "=", ctx.attempt.providerThreadId).executeTakeFirst()
+        ? await trx
+            .selectFrom("agent_provider_threads")
+            .selectAll()
+            .where("id", "=", ctx.attempt.providerThreadId)
+            .executeTakeFirst()
         : undefined;
-      const strong = (thread?.native_ref as unknown as NativeRef | null)?.strength === "strong";
+      const strong =
+        (thread?.native_ref as unknown as NativeRef | null)?.strength ===
+        "strong";
       // The thread took this turn's input before its runner went away: a
       // continuation on it is not handed the turn again.
       if (thread)
         events.push({
           type: "provider_thread.changed",
-          thread: { ...providerThreadFromRow(thread), lastTurnOrdinal: ctx.turn.ordinal, updatedAt: now },
+          thread: {
+            ...providerThreadFromRow(thread),
+            lastTurnOrdinal: ctx.turn.ordinal,
+            updatedAt: now,
+          },
         });
       const newer = await trx
         .selectFrom("agent_turns")
@@ -1612,9 +1946,15 @@ export class TurnEngine {
         );
         continued = true;
       }
-      await log.append(trx, { sessionId: ctx.turn.sessionId, commandId: `continue:${ctx.turn.id}`, events });
+      await log.append(trx, {
+        sessionId: ctx.turn.sessionId,
+        commandId: `continue:${ctx.turn.id}`,
+        events,
+      });
       await queue.markCommands({
-        ids: (await queue.openCommands({ turnId: ctx.turn.id, executor: trx })).map((command) => command.id),
+        ids: (
+          await queue.openCommands({ turnId: ctx.turn.id, executor: trx })
+        ).map((command) => command.id),
         status: "dropped",
         executor: trx,
       });
@@ -1625,11 +1965,17 @@ export class TurnEngine {
       .settled({
         identity: ctx.identity,
         session: ctx.session,
-        turn: { ...ctx.turn, status: "interrupted", error: { message: ctx.reason } },
+        turn: {
+          ...ctx.turn,
+          status: "interrupted",
+          error: { message: ctx.reason },
+        },
         reply: null,
         retrying: continued,
       })
-      .catch((error) => console.warn("[catamorphic] After-turn work failed", error));
+      .catch((error) =>
+        console.warn("[catamorphic] After-turn work failed", error),
+      );
   }
 
   /** Items steered into a turn after its input, in order. */
@@ -1655,7 +2001,11 @@ export class TurnEngine {
    * then the turn ended) runs as turns of its own after it, in order: a
    * person's message is never dropped.
    */
-  private async requeueSteers(trx: Transaction<DB>, turn: Turn, now: string): Promise<SessionEvent[]> {
+  private async requeueSteers(
+    trx: Transaction<DB>,
+    turn: Turn,
+    now: string,
+  ): Promise<SessionEvent[]> {
     const steered = await this.steeredItemIds(turn, trx);
     if (steered.length === 0) return [];
     const attempts = await trx
@@ -1664,7 +2014,9 @@ export class TurnEngine {
       .where("turn_id", "=", turn.id)
       .execute();
     const consumed = new Set(
-      attempts.flatMap((row) => ((row.runner as unknown as RunnerState | null)?.consumed ?? [])),
+      attempts.flatMap(
+        (row) => (row.runner as unknown as RunnerState | null)?.consumed ?? [],
+      ),
     );
     const pending = steered.filter((id) => !consumed.has(id));
     if (pending.length === 0) return [];
@@ -1676,7 +2028,11 @@ export class TurnEngine {
     let ordinal = Number(last?.ordinal ?? turn.ordinal);
     const events: SessionEvent[] = [];
     for (const itemId of pending) {
-      const row = await trx.selectFrom("agent_items").select("payload").where("id", "=", itemId).executeTakeFirst();
+      const row = await trx
+        .selectFrom("agent_items")
+        .select("payload")
+        .where("id", "=", itemId)
+        .executeTakeFirst();
       if (!row) continue;
       const item = itemFromRow(row);
       ordinal += 1;
@@ -1706,16 +2062,25 @@ export class TurnEngine {
       };
       events.push(
         { type: "turn.changed", turn: next },
-        { type: "item.changed", item: { ...item, turnId: next.id, updatedAt: now } as Item },
+        {
+          type: "item.changed",
+          item: { ...item, turnId: next.id, updatedAt: now } as Item,
+        },
       );
     }
     return events;
   }
 
   /** A failure outside the protocol (preparation threw): the turn fails, saying why. */
-  private async failUnexpectedly(local: LocalTurn, error: unknown): Promise<void> {
+  private async failUnexpectedly(
+    local: LocalTurn,
+    error: unknown,
+  ): Promise<void> {
     const turn = await this.loadTurn(local.claim.turn.id);
-    if (!["preparing", "running", "waiting", "finalizing"].includes(turn.status)) return;
+    if (
+      !["preparing", "running", "waiting", "finalizing"].includes(turn.status)
+    )
+      return;
     const session = await this.deps.db
       .selectFrom("agent_sessions")
       .selectAll()
@@ -1724,7 +2089,11 @@ export class TurnEngine {
     const identity = await this.deps.host.owner(session);
     if (!identity) return;
     const attemptRow = turn.activeAttemptId
-      ? await this.deps.db.selectFrom("agent_turn_attempts").selectAll().where("id", "=", turn.activeAttemptId).executeTakeFirst()
+      ? await this.deps.db
+          .selectFrom("agent_turn_attempts")
+          .selectAll()
+          .where("id", "=", turn.activeAttemptId)
+          .executeTakeFirst()
       : undefined;
     const now = new Date().toISOString();
     const attempt: Attempt = attemptRow
@@ -1750,13 +2119,18 @@ export class TurnEngine {
       turn,
       attempt,
       status: "failed",
-      error: { message: error instanceof Error ? error.message : String(error) },
+      error: {
+        message: error instanceof Error ? error.message : String(error),
+      },
       outcome: turn.outcome ?? { changedFiles: [] },
       checkpointAfter: null,
     });
   }
 
-  private async assertOwned(local: LocalTurn, trx: Transaction<DB>): Promise<void> {
+  private async assertOwned(
+    local: LocalTurn,
+    trx: Transaction<DB>,
+  ): Promise<void> {
     const owned = await this.deps.queue.owns({
       turnId: local.claim.turn.id,
       leaseToken: local.claim.leaseToken,
@@ -1787,23 +2161,33 @@ const QUEUED_COMMAND_KINDS: ReadonlySet<string> = new Set<TurnCommandKind>([
 
 function splitCommandId(id: string): [string, string | undefined] {
   const index = id.indexOf(":");
-  return index < 0 ? [id, undefined] : [id.slice(0, index), id.slice(index + 1)];
+  return index < 0
+    ? [id, undefined]
+    : [id.slice(0, index), id.slice(index + 1)];
 }
 
-function attemptOutcome(attempt: Attempt): "completed" | "failed" | "interrupted" {
+function attemptOutcome(
+  attempt: Attempt,
+): "completed" | "failed" | "interrupted" {
   return attempt.status === "completed"
     ? "completed"
-    : attempt.status === "interrupted" || attempt.status === "superseded" || attempt.status === "lost"
+    : attempt.status === "interrupted" ||
+        attempt.status === "superseded" ||
+        attempt.status === "lost"
       ? "interrupted"
       : "failed";
 }
 
 function itemText(item: Item): string {
-  return item.kind === "user_message" || item.kind === "notice" ? item.text : "";
+  return item.kind === "user_message" || item.kind === "notice"
+    ? item.text
+    : "";
 }
 
 function titleFrom(item: Extract<Item, { kind: "user_message" }>): string {
-  const names = item.attachments.map((attachment) => attachment.name).filter(Boolean);
+  const names = item.attachments
+    .map((attachment) => attachment.name)
+    .filter(Boolean);
   const text = item.text.replace(/\s+/g, " ").trim() || names.join(", ");
   return text.length > 500 ? `${text.slice(0, 499)}…` : text;
 }
@@ -1842,7 +2226,12 @@ async function closeOpenWork(
     if (item.kind === "request" && outliving.has(item.requestId)) continue;
     events.push({
       type: "item.changed",
-      item: { ...item, status: "cancelled", endedAt: input.now, updatedAt: input.now } as Item,
+      item: {
+        ...item,
+        status: "cancelled",
+        endedAt: input.now,
+        updatedAt: input.now,
+      } as Item,
     });
   }
   for (const row of requests) {
@@ -1850,7 +2239,13 @@ async function closeOpenWork(
     if (outliving.has(request.id)) continue;
     events.push({
       type: "request.changed",
-      request: { ...request, status: "expired", answerable: false, reason: input.reason, resolvedAt: input.now },
+      request: {
+        ...request,
+        status: "expired",
+        answerable: false,
+        reason: input.reason,
+        resolvedAt: input.now,
+      },
     });
   }
   return events;

@@ -13,7 +13,6 @@ import {
   projectRelativePath,
   readListedFiles,
   readPersonalEnvironmentConfig,
-  requestedLogins,
   updatePersonalEnvironmentConfig,
 } from "./personal-environment-config.js";
 
@@ -31,37 +30,36 @@ afterEach(() => {
 });
 
 describe("parsePersonalEnvironmentConfig", () => {
-  it("reads logins and files, dropping duplicates", () => {
+  it("reads files, dropping duplicates", () => {
     expect(
       parsePersonalEnvironmentConfig(
-        JSON.stringify({
-          logins: ["codex", "codex"],
-          files: [".env", "apps/api/.env.local", ".env"],
-        }),
+        JSON.stringify({ files: [".env", "apps/api/.env.local", ".env"] }),
       ),
     ).toEqual({
       ok: true,
-      config: { logins: ["codex"], files: [".env", "apps/api/.env.local"] },
+      config: { files: [".env", "apps/api/.env.local"] },
     });
   });
 
-  it("defaults logins when the key is absent and allows turning them off", () => {
+  it("defaults to no files when the key is absent", () => {
     expect(parsePersonalEnvironmentConfig("{}")).toEqual({
       ok: true,
       config: DEFAULT_PERSONAL_ENVIRONMENT,
     });
-    expect(parsePersonalEnvironmentConfig('{"logins": []}')).toEqual({
-      ok: true,
-      config: { logins: [], files: [] },
-    });
+  });
+
+  it("refuses a logins list: sign-ins stay on the machine", () => {
+    for (const text of ['{"logins": []}', '{"logins": ["codex"], "files": []}'])
+      expect(parsePersonalEnvironmentConfig(text)).toEqual({
+        ok: false,
+        error: expect.stringContaining('Remove "logins"'),
+      });
   });
 
   it.each([
     ["not json", "is not valid JSON"],
     ["[]", "must be a JSON object"],
     ['{"file": [".env"]}', 'Unknown key "file"'],
-    ['{"logins": "codex"}', '"logins" must be a list'],
-    ['{"logins": ["cursor"]}', '"logins" accepts'],
     ['{"files": ".env"}', '"files" must be a list'],
     ['{"files": [1]}', "must be text paths"],
     ['{"files": ["../secrets"]}', "outside the project folder"],
@@ -103,38 +101,6 @@ describe("parsePersonalEnvironmentConfig", () => {
   });
 });
 
-describe("requestedLogins", () => {
-  it("sends every login present here by default, in a stable order", () => {
-    expect(
-      requestedLogins({
-        config: DEFAULT_PERSONAL_ENVIRONMENT,
-        available: ["codex", "claude-code"],
-      }),
-    ).toEqual(["claude-code", "codex"]);
-    expect(
-      requestedLogins({
-        config: DEFAULT_PERSONAL_ENVIRONMENT,
-        available: ["codex"],
-      }),
-    ).toEqual(["codex"]);
-  });
-
-  it("honours the listed logins and an empty list", () => {
-    expect(
-      requestedLogins({
-        config: { logins: ["codex"], files: [] },
-        available: ["codex", "claude-code"],
-      }),
-    ).toEqual(["codex"]);
-    expect(
-      requestedLogins({
-        config: { logins: [], files: [] },
-        available: ["codex", "claude-code"],
-      }),
-    ).toEqual([]);
-  });
-});
-
 describe("config file", () => {
   it("reads defaults when absent, writes atomically, and excludes the folder from Git", async () => {
     const root = project();
@@ -147,10 +113,7 @@ describe("config file", () => {
     const written = JSON.parse(
       fs.readFileSync(path.join(root, PERSONAL_ENVIRONMENT_PATH), "utf8"),
     );
-    expect(written).toEqual({
-      logins: ["claude-code", "codex"],
-      files: [".env"],
-    });
+    expect(written).toEqual({ files: [".env"] });
     expect(
       fs.readFileSync(path.join(root, ".git", "info", "exclude"), "utf8"),
     ).toContain("/.work/personal/");
@@ -179,9 +142,9 @@ describe("config file", () => {
     const root = project();
     await ensurePersonalEnvironmentConfig({ root });
     const file = path.join(root, PERSONAL_ENVIRONMENT_PATH);
-    fs.writeFileSync(file, '{"logins": []}\n');
+    fs.writeFileSync(file, '{"files": [".env"]}\n');
     await ensurePersonalEnvironmentConfig({ root });
-    expect(fs.readFileSync(file, "utf8")).toBe('{"logins": []}\n');
+    expect(fs.readFileSync(file, "utf8")).toBe('{"files": [".env"]}\n');
   });
 });
 

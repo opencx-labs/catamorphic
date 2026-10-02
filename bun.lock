@@ -21,6 +21,8 @@
       "dependencies": {
         "@ai-sdk/anthropic": "^4.0.52",
         "@ai-sdk/openai": "^4.0.65",
+        "@catamorphic/agent-protocol": "workspace:*",
+        "@catamorphic/agent-runner": "workspace:*",
         "@catamorphic/ai-sdk": "workspace:*",
         "@catamorphic/api-client": "workspace:*",
         "@catamorphic/app": "workspace:*",
@@ -313,6 +315,7 @@
       },
       "devDependencies": {
         "@catamorphic/cloudflare": "workspace:*",
+        "@catamorphic/local-process": "workspace:*",
         "@electric-sql/pglite": "^0.5.4",
         "@opentelemetry/api": "^1.9.1",
         "@opentelemetry/sdk-trace-node": "^2.9.0",
@@ -353,6 +356,7 @@
       "name": "@catamorphic/fastify-plugin",
       "version": "0.0.1",
       "dependencies": {
+        "@catamorphic/agent-protocol": "workspace:*",
         "@catamorphic/app": "workspace:*",
         "@catamorphic/core": "workspace:*",
         "@catamorphic/db": "workspace:*",
@@ -372,6 +376,8 @@
         "zod": "^4.4.3",
       },
       "devDependencies": {
+        "@catamorphic/agent-runner": "workspace:*",
+        "@electric-sql/pglite": "^0.5.4",
         "@opentelemetry/sdk-trace-node": "^2.9.0",
       },
     },
@@ -639,6 +645,7 @@
         "zod": "^4.4.3",
       },
       "devDependencies": {
+        "@catamorphic/agent-runner": "workspace:*",
         "@catamorphic/fastify-plugin": "workspace:*",
         "@catamorphic/parser": "workspace:*",
         "@electric-sql/pglite": "^0.5.4",

@@ -5,9 +5,9 @@ import {
   type Attempt,
   type CommandReceipt,
   type DispatchMode,
+  type Item,
   isActiveTurnStatus,
   isSettledTurnStatus,
-  type Item,
   type JsonValue,
   type NativeRef,
   type JsonObject as ProtocolJsonObject,
@@ -181,22 +181,22 @@ import {
   workspaceMoveRefusedNote,
 } from "./session-workspaces.js";
 import {
+  approvalPolicy,
+  expiredApprovalReason,
+} from "./sessions/request-policy.js";
+import {
+  type RunnerChannel,
+  type RunnerLocation,
   sandboxChannel,
   startInProcessRunner,
   startSandboxRunner,
-  type RunnerChannel,
-  type RunnerLocation,
 } from "./sessions/runner-channels.js";
+import { copySettledHistory } from "./sessions/session-copy.js";
+import { SessionFeed } from "./sessions/session-feed.js";
 import {
   SessionCommandRejectedError,
   SessionLog,
 } from "./sessions/session-log.js";
-import {
-  approvalPolicy,
-  expiredApprovalReason,
-} from "./sessions/request-policy.js";
-import { copySettledHistory } from "./sessions/session-copy.js";
-import { SessionFeed } from "./sessions/session-feed.js";
 import {
   readFullSnapshot,
   readItemsBefore,
@@ -635,6 +635,17 @@ export function buildAgentSystemPrompt({
     .join("\n\n");
 }
 
+/** A person's "Always allow" for one tool of one server. */
+export interface ToolAlwaysAllowedEvent {
+  identity: Identity;
+  projectId: string;
+  sessionId: string;
+  agentId: string | null;
+  /** The server key the harness knows the tool by. */
+  server: string;
+  tool: string;
+}
+
 /** A chat turn reaching a settled state, for host hooks (e.g. triggers). */
 export interface AgentTurnSettledEvent {
   identity: Identity;
@@ -765,6 +776,12 @@ interface AgentSessionsDeps {
    */
   onTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
   /**
+   * A person chose "Always allow" for a tool (ADR 0054): the host persists
+   * it where its policies live, so later attempts and other agents see it.
+   * The asking attempt already remembers it. Exceptions are swallowed.
+   */
+  onToolAlwaysAllowed?: (input: ToolAlwaysAllowedEvent) => void | Promise<void>;
+  /**
    * The host's standing agent prompt: `undefined` = framework default,
    * string = replacement, `false` = none (ADR 0049).
    */
@@ -803,20 +820,6 @@ export interface ArchiveSessionResourcesHandler {
     projectId: string;
     sessionIds: readonly string[];
   }): Promise<void>;
-}
-
-/** A turn this process claimed and runs (ADR 0193). */
-interface LocalTurn {
-  turnId: string;
-  session: SessionRow;
-  /** This process's local node, when the turn's workspace is on it. */
-  nodeLease?: { id: string; token: string };
-  /** `parked` while it holds a question its answer continues. */
-  phase: "working" | "parked";
-  /** Someone asked the turn to stop, through any replica. */
-  cancelRequested: boolean;
-  /** Wakes the turn while it waits for an answer. */
-  wake?: () => void;
 }
 
 /**
@@ -868,6 +871,7 @@ export class AgentSessionsService {
   private readonly plugins?: PluginsService;
   private readonly pluginResolver?: PluginResolver;
   private readonly onTurnSettled?: AgentSessionsDeps["onTurnSettled"];
+  private readonly onToolAlwaysAllowed?: AgentSessionsDeps["onToolAlwaysAllowed"];
   private readonly agentCapabilities?: AgentCapabilitiesService;
   private readonly standingAgentPrompt?: string | false;
   private readonly mcpToolNames?: AgentSessionsDeps["mcpToolNames"];
@@ -910,7 +914,11 @@ export class AgentSessionsService {
       (
         await this.db
           .selectFrom("execution_allocations")
-          .leftJoin("worker_nodes", "worker_nodes.id", "execution_allocations.worker_node_id")
+          .leftJoin(
+            "worker_nodes",
+            "worker_nodes.id",
+            "execution_allocations.worker_node_id",
+          )
           .select("execution_allocations.id")
           .where("execution_allocations.status", "=", "active")
           .where((eb) =>
@@ -963,13 +971,29 @@ export class AgentSessionsService {
           query.where(({ exists, selectFrom }) =>
             exists(
               selectFrom("execution_allocations")
-                .leftJoin("worker_nodes", "worker_nodes.id", "execution_allocations.worker_node_id")
+                .leftJoin(
+                  "worker_nodes",
+                  "worker_nodes.id",
+                  "execution_allocations.worker_node_id",
+                )
                 .select("execution_allocations.id")
-                .whereRef("execution_allocations.id", "=", "agent_sessions.allocation_id")
+                .whereRef(
+                  "execution_allocations.id",
+                  "=",
+                  "agent_sessions.allocation_id",
+                )
                 .where((allocation) =>
                   allocation.or([
-                    allocation("execution_allocations.worker_node_id", "is", null),
-                    allocation("execution_allocations.worker_node_id", "=", this.workerNode?.id ?? ""),
+                    allocation(
+                      "execution_allocations.worker_node_id",
+                      "is",
+                      null,
+                    ),
+                    allocation(
+                      "execution_allocations.worker_node_id",
+                      "=",
+                      this.workerNode?.id ?? "",
+                    ),
                     allocation("worker_nodes.remote", "is not", null),
                     allocation("execution_allocations.status", "=", "released"),
                   ]),
@@ -993,7 +1017,11 @@ export class AgentSessionsService {
                     eb("agent_turns.status", "in", [...ACTIVE_TURN_STATUSES]),
                     or([
                       eb("agent_turns.lease_expires_at", "is", null),
-                      eb("agent_turns.lease_expires_at", "<=", sql<Date>`now()`),
+                      eb(
+                        "agent_turns.lease_expires_at",
+                        "<=",
+                        sql<Date>`now()`,
+                      ),
                     ]),
                   ]),
                 ]),
@@ -1041,6 +1069,9 @@ export class AgentSessionsService {
         stopped = true;
         clearInterval(timer);
         await polling;
+        // The resolver belongs to this worker.
+        if (this.resolveOwner === input.resolveIdentity)
+          this.resolveOwner = undefined;
       },
     };
   }
@@ -1062,7 +1093,16 @@ export class AgentSessionsService {
         const request = requestFromRow(row);
         const now = new Date().toISOString();
         const events: SessionEvent[] = [
-          { type: "request.changed", request: { ...request, status: "expired", answerable: false, reason: "Nobody answered in time.", resolvedAt: now } },
+          {
+            type: "request.changed",
+            request: {
+              ...request,
+              status: "expired",
+              answerable: false,
+              reason: "Nobody answered in time.",
+              resolvedAt: now,
+            },
+          },
         ];
         if (request.turnId && request.attemptId && request.runnerKey)
           await this.queue.enqueueCommand(trx, {
@@ -1073,7 +1113,11 @@ export class AgentSessionsService {
               requestKey: request.runnerKey,
               response:
                 request.kind === "approval"
-                  ? { kind: "approval", decision: "denied", reason: expiredApprovalReason(request) }
+                  ? {
+                      kind: "approval",
+                      decision: "denied",
+                      reason: expiredApprovalReason(request),
+                    }
                   : request.kind === "elicitation"
                     ? { kind: "elicitation", action: "cancel" }
                     : { kind: "question", answers: ["(No answer in time.)"] },
@@ -1109,6 +1153,7 @@ export class AgentSessionsService {
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
     this.onTurnSettled = deps.onTurnSettled;
+    this.onToolAlwaysAllowed = deps.onToolAlwaysAllowed;
     this.standingAgentPrompt = deps.standingAgentPrompt;
     this.agentCapabilities = deps.agentCapabilities;
     this.mcpToolNames = deps.mcpToolNames;
@@ -1565,7 +1610,9 @@ export class AgentSessionsService {
     await this.db.transaction().execute((trx) =>
       this.log.append(trx, {
         sessionId,
-        events: [{ type: "session.changed", session: { activity: normalized } }],
+        events: [
+          { type: "session.changed", session: { activity: normalized } },
+        ],
       }),
     );
   }
@@ -1626,7 +1673,9 @@ export class AgentSessionsService {
     // the next harness event is a long command away.
     const current = todos.find((item) => item.status === "in_progress");
     await this.db.transaction().execute(async (trx) => {
-      const events: SessionEvent[] = [{ type: "session.changed", session: { todos } }];
+      const events: SessionEvent[] = [
+        { type: "session.changed", session: { todos } },
+      ];
       if (current?.activeForm) {
         const running = await trx
           .selectFrom("agent_turns")
@@ -1675,7 +1724,13 @@ export class AgentSessionsService {
       await this.sessionsWithRunningTurns({ sessionIds: [sessionId] })
     ).has(sessionId);
     return {
-      ...mapSession(row, running, this.hostId, this.authorityLeaseMs, presentation),
+      ...mapSession(
+        row,
+        running,
+        this.hostId,
+        this.authorityLeaseMs,
+        presentation,
+      ),
       attentionMessage: await this.attentionItem(sessionId),
       snapshot,
     };
@@ -1812,7 +1867,12 @@ export class AgentSessionsService {
     const itemId = input.itemId ?? randomUUID();
     const events: SessionEvent[] = [];
     if (replyToWaiting && active)
-      events.push(...(await this.deferWaitingRequests(trx, { turn: turnFromRow(active), now })));
+      events.push(
+        ...(await this.deferWaitingRequests(trx, {
+          turn: turnFromRow(active),
+          now,
+        })),
+      );
     let turnId: string | null = null;
     if (dispatch === "steer" && active) {
       turnId = active.id;
@@ -1851,7 +1911,11 @@ export class AgentSessionsService {
       if (dispatch === "interrupt" && active) {
         events.push({
           type: "turn.changed",
-          turn: { ...turnFromRow(active), cancellationRequested: true, updatedAt: now },
+          turn: {
+            ...turnFromRow(active),
+            cancellationRequested: true,
+            updatedAt: now,
+          },
         });
         await this.queue.enqueueCommand(trx, {
           turnId: active.id,
@@ -1860,7 +1924,8 @@ export class AgentSessionsService {
         });
       }
     }
-    const attention = (input.attention ?? input.metadata?.attention) === "required";
+    const attention =
+      (input.attention ?? input.metadata?.attention) === "required";
     const metadata: JsonObject = { ...input.metadata };
     delete metadata.attention;
     delete metadata.attachments;
@@ -2027,7 +2092,12 @@ export class AgentSessionsService {
     },
   ): Promise<SessionDeliveryReceipt> {
     if (input.workspace)
-      await this.requestWorkspace(identity, projectId, sessionId, input.workspace);
+      await this.requestWorkspace(
+        identity,
+        projectId,
+        sessionId,
+        input.workspace,
+      );
     const metadata: JsonObject = {
       ...input.metadata,
       // Whose call delivered it, whatever author it names: a chat that runs
@@ -2044,7 +2114,8 @@ export class AgentSessionsService {
         : {}),
     };
     const session = await this.requireSession(identity, projectId, sessionId);
-    if (session.status !== "active") throw new AgentSessionClosedError(sessionId);
+    if (session.status !== "active")
+      throw new AgentSessionClosedError(sessionId);
     if (
       session.authority_host_id !== "unassigned" &&
       session.authority_host_id !== this.hostId
@@ -2057,9 +2128,14 @@ export class AgentSessionsService {
         content: input.content,
         author: input.author,
         mode: input.mode,
-        ...(input.attention ? { attention: input.attention } : {}),
-        ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
-        metadata,
+        ...(input.idempotencyKey
+          ? { idempotencyKey: input.idempotencyKey }
+          : {}),
+        // The authority applies the attention when it imports the item.
+        metadata: {
+          ...metadata,
+          ...(input.attention ? { attention: input.attention } : {}),
+        },
       });
     await this.claimLocalAuthority(session);
     const receipt = await this.db.transaction().execute(async (trx) => {
@@ -2069,7 +2145,8 @@ export class AgentSessionsService {
         .where("id", "=", sessionId)
         .forUpdate()
         .executeTakeFirstOrThrow();
-      if (locked.status !== "active") throw new AgentSessionClosedError(sessionId);
+      if (locked.status !== "active")
+        throw new AgentSessionClosedError(sessionId);
       return this.deliverIn(trx, {
         session: locked,
         text: input.content,
@@ -2077,12 +2154,15 @@ export class AgentSessionsService {
         dispatch: input.mode,
         ...(input.attachments ? { attachments: input.attachments } : {}),
         ...(input.attention ? { attention: input.attention } : {}),
-        ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+        ...(input.idempotencyKey
+          ? { idempotencyKey: input.idempotencyKey }
+          : {}),
         metadata,
       });
     });
     // Work delivered to an archived chat runs; the chat comes back into view.
-    if (receipt.created && receipt.turnId) await this.restoreArchived([sessionId]);
+    if (receipt.created && receipt.turnId)
+      await this.restoreArchived([sessionId]);
     if (receipt.turnId) this.kick(sessionId);
     return receipt;
   }
@@ -2093,8 +2173,13 @@ export class AgentSessionsService {
     projectId: string,
     item: SessionMailboxItem,
   ): Promise<SessionDeliveryReceipt> {
-    const session = await this.requireSession(identity, projectId, item.sessionId);
-    if (session.status !== "active") throw new AgentSessionClosedError(item.sessionId);
+    const session = await this.requireSession(
+      identity,
+      projectId,
+      item.sessionId,
+    );
+    if (session.status !== "active")
+      throw new AgentSessionClosedError(item.sessionId);
     if (
       session.authority_host_id !== this.hostId ||
       Number(session.authority_revision) !== item.authorityRevision ||
@@ -2109,9 +2194,12 @@ export class AgentSessionsService {
       typeof action.operation === "string" &&
       this.sessionActionHandler
     ) {
-      const { SESSION_ACTION_SCHEMAS } = await import("./session-actions-service.js");
+      const { SESSION_ACTION_SCHEMAS } = await import(
+        "./session-actions-service.js"
+      );
       const operation = action.operation;
-      if (!(operation in SESSION_ACTION_SCHEMAS)) throw new Error("Unknown session action");
+      if (!(operation in SESSION_ACTION_SCHEMAS))
+        throw new Error("Unknown session action");
       await this.sessionActionHandler({
         identity,
         projectId,
@@ -2119,14 +2207,23 @@ export class AgentSessionsService {
         operation: operation as keyof typeof SESSION_ACTION_SCHEMAS,
         args: action.args,
         provenance:
-          action.provenance && typeof action.provenance === "object" && !Array.isArray(action.provenance)
+          action.provenance &&
+          typeof action.provenance === "object" &&
+          !Array.isArray(action.provenance)
             ? action.provenance
             : {},
         causation: Array.isArray(action.causation)
-          ? action.causation.filter((id): id is string => typeof id === "string")
+          ? action.causation.filter(
+              (id): id is string => typeof id === "string",
+            )
           : [],
       });
-      return { messageId: item.messageId, mode: "message_only", turnId: null, created: true };
+      return {
+        messageId: item.messageId,
+        mode: "message_only",
+        turnId: null,
+        created: true,
+      };
     }
     const receipt = await this.db.transaction().execute(async (trx) => {
       const locked = await trx
@@ -2160,7 +2257,10 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
     message: string,
-    input: { attachments?: AgentAttachment[]; dispatch?: "queue" | "interrupt" } = {},
+    input: {
+      attachments?: AgentAttachment[];
+      dispatch?: "queue" | "interrupt";
+    } = {},
   ): Promise<{ reply: Item | null; turn: Turn }> {
     const receipt = await this.command(identity, projectId, sessionId, {
       type: "send",
@@ -2171,14 +2271,19 @@ export class AgentSessionsService {
     });
     if (receipt.status === "rejected")
       throw new Error(receipt.error?.message ?? "The message was refused");
-    const turnId = typeof receipt.result?.turnId === "string" ? receipt.result.turnId : null;
+    const turnId =
+      typeof receipt.result?.turnId === "string" ? receipt.result.turnId : null;
     if (!turnId) throw new Error("A send must create a turn");
     let unclaimedSince = Date.now();
     for (;;) {
       const row = await this.db
         .selectFrom("agent_turns")
         .selectAll()
-        .select(sql<boolean>`coalesce(lease_expires_at > now(), false)`.as("lease_live"))
+        .select(
+          sql<boolean>`coalesce(lease_expires_at > now(), false)`.as(
+            "lease_live",
+          ),
+        )
         .where("id", "=", turnId)
         .executeTakeFirstOrThrow();
       const turn = turnFromRow(row);
@@ -2234,7 +2339,12 @@ export class AgentSessionsService {
       );
     await this.claimLocalAuthority(session);
     if (command.type === "send" && command.workspace)
-      await this.requestWorkspace(identity, projectId, sessionId, command.workspace);
+      await this.requestWorkspace(
+        identity,
+        projectId,
+        sessionId,
+        command.workspace,
+      );
     const commandId = `user:${identity.externalUserId}:${command.commandId}`;
     const receipt = await this.log.command({
       sessionId,
@@ -2257,41 +2367,83 @@ export class AgentSessionsService {
               .where("status", "in", [...ACTIVE_TURN_STATUSES])
               .executeTakeFirst();
             const dispatch: DispatchMode =
-              command.dispatch ?? (locked.parent_session_id && active ? "steer" : "queue");
+              command.dispatch ??
+              (locked.parent_session_id && active ? "steer" : "queue");
             const delivered = await this.deliverIn(trx, {
               session: locked,
               text: command.text,
               author: { kind: "user", externalUserId: identity.externalUserId },
               dispatch,
-              ...(command.attachments ? { attachments: command.attachments as AgentAttachment[] } : {}),
+              ...(command.attachments
+                ? { attachments: command.attachments as AgentAttachment[] }
+                : {}),
               idempotencyKey: commandId,
               commandId,
               metadata: { deliveredBy: identity.externalUserId },
             });
-            return { itemId: delivered.messageId, turnId: delivered.turnId, mode: delivered.mode };
+            return {
+              itemId: delivered.messageId,
+              turnId: delivered.turnId,
+              mode: delivered.mode,
+            };
           }
           case "interrupt":
-            return this.interruptIn(trx, { identity, session: locked, turnId: command.turnId, commandId });
+            return this.interruptIn(trx, {
+              identity,
+              session: locked,
+              turnId: command.turnId,
+              commandId,
+            });
           case "retry":
-            return this.retryIn(trx, { session: locked, turnId: command.turnId, commandId });
+            return this.retryIn(trx, {
+              session: locked,
+              turnId: command.turnId,
+              commandId,
+            });
           case "edit_queued":
           case "cancel_queued":
           case "send_now":
-            return this.changeQueuedIn(trx, { session: locked, command, commandId });
+            return this.changeQueuedIn(trx, {
+              session: locked,
+              command,
+              commandId,
+            });
           case "respond":
-            return this.respondIn(trx, { identity, session: locked, command, commandId });
+            return this.respondIn(trx, {
+              identity,
+              session: locked,
+              command,
+              commandId,
+            });
           case "rollback":
-            return this.rollbackIn(trx, { identity, session: locked, turnId: command.turnId, commandId });
+            return this.rollbackIn(trx, {
+              identity,
+              session: locked,
+              turnId: command.turnId,
+              commandId,
+            });
         }
       },
     });
     if (receipt.status === "accepted") {
       if (command.type === "send") {
-        if (session.parent_session_id) await this.promoteSession(identity, sessionId);
+        if (session.parent_session_id)
+          await this.promoteSession(identity, sessionId);
         await this.restoreArchived([sessionId]);
       }
       if (command.type === "interrupt")
         await this.interruptDelegation(identity, projectId, sessionId);
+      if (
+        command.type === "respond" &&
+        command.response.kind === "approval" &&
+        command.response.decision === "approved" &&
+        command.response.remember === "always"
+      )
+        await this.rememberAlwaysAllowed({
+          identity,
+          session,
+          requestId: command.requestId,
+        });
       this.kick(sessionId);
     }
     return receipt;
@@ -2327,15 +2479,52 @@ export class AgentSessionsService {
     this.kick(sessionId);
   }
 
+  private async rememberAlwaysAllowed(input: {
+    identity: Identity;
+    session: SessionRow;
+    requestId: string;
+  }): Promise<void> {
+    if (!this.onToolAlwaysAllowed) return;
+    const row = await this.db
+      .selectFrom("agent_runtime_requests")
+      .selectAll()
+      .where("session_id", "=", input.session.id)
+      .where("request_id", "=", input.requestId)
+      .executeTakeFirst();
+    const tool = row ? requestFromRow(row).approval?.tool : undefined;
+    if (!tool?.server) return;
+    await Promise.resolve()
+      .then(() =>
+        this.onToolAlwaysAllowed?.({
+          identity: input.identity,
+          projectId: input.session.project_id,
+          sessionId: input.session.id,
+          agentId: input.session.agent_id,
+          server: tool.server ?? "",
+          tool: tool.name,
+        }),
+      )
+      .catch((error) =>
+        console.warn("[catamorphic] Could not keep an Always allow", error),
+      );
+  }
+
   private async interruptIn(
     trx: Transaction<DB>,
-    input: { identity: Identity; session: SessionRow; turnId?: string; commandId: string },
+    input: {
+      identity: Identity;
+      session: SessionRow;
+      turnId?: string;
+      commandId: string;
+    },
   ): Promise<JsonObject> {
     const rows = await trx
       .selectFrom("agent_turns")
       .selectAll()
       .where("session_id", "=", input.session.id)
-      .$if(input.turnId !== undefined, (query) => query.where("id", "=", input.turnId ?? ""))
+      .$if(input.turnId !== undefined, (query) =>
+        query.where("id", "=", input.turnId ?? ""),
+      )
       .where("status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES])
       .execute();
     const now = new Date().toISOString();
@@ -2344,14 +2533,33 @@ export class AgentSessionsService {
       const turn = turnFromRow(row);
       if (isActiveTurnStatus(turn.status)) {
         // A transient retry waiting in the queue is withdrawn with it.
-        events.push({ type: "turn.changed", turn: { ...turn, cancellationRequested: true, updatedAt: now } });
-        await this.queue.enqueueCommand(trx, { turnId: turn.id, attemptId: turn.activeAttemptId, kind: "interrupt" });
+        events.push({
+          type: "turn.changed",
+          turn: { ...turn, cancellationRequested: true, updatedAt: now },
+        });
+        await this.queue.enqueueCommand(trx, {
+          turnId: turn.id,
+          attemptId: turn.activeAttemptId,
+          kind: "interrupt",
+        });
       } else if (input.turnId !== undefined || turn.attemptCount > 0) {
         // Interrupting a named queued turn, or one waiting to retry, cancels it.
-        events.push({ type: "turn.changed", turn: { ...turn, status: "cancelled", completedAt: now, updatedAt: now } });
+        events.push({
+          type: "turn.changed",
+          turn: {
+            ...turn,
+            status: "cancelled",
+            completedAt: now,
+            updatedAt: now,
+          },
+        });
       }
     }
-    await this.log.append(trx, { sessionId: input.session.id, events, commandId: input.commandId });
+    await this.log.append(trx, {
+      sessionId: input.session.id,
+      events,
+      commandId: input.commandId,
+    });
     return { interrupted: rows.map((row) => row.id) };
   }
 
@@ -2374,7 +2582,10 @@ export class AgentSessionsService {
     const events: SessionEvent[] = [];
     for (const request of rows.map(requestFromRow)) {
       if (request.kind === "question") {
-        events.push({ type: "request.changed", request: { ...request, blocking: false } });
+        events.push({
+          type: "request.changed",
+          request: { ...request, blocking: false },
+        });
         if (request.runnerKey)
           await this.queue.enqueueCommand(trx, {
             turnId: input.turn.id,
@@ -2391,7 +2602,13 @@ export class AgentSessionsService {
         "The user wrote in the chat instead of answering this permission request, so it was withdrawn and nothing ran. Their message follows; respond to it.";
       events.push({
         type: "request.changed",
-        request: { ...request, status: "cancelled", answerable: false, reason, resolvedAt: input.now },
+        request: {
+          ...request,
+          status: "cancelled",
+          answerable: false,
+          reason,
+          resolvedAt: input.now,
+        },
       });
       if (request.runnerKey)
         await this.queue.enqueueCommand(trx, {
@@ -2410,7 +2627,13 @@ export class AgentSessionsService {
     if (events.length > 0)
       events.push({
         type: "turn.changed",
-        turn: { ...input.turn, status: "running", activity: "Reading your message", activityAt: input.now, updatedAt: input.now },
+        turn: {
+          ...input.turn,
+          status: "running",
+          activity: "Reading your message",
+          activityAt: input.now,
+          updatedAt: input.now,
+        },
       });
     return events;
   }
@@ -2443,7 +2666,10 @@ export class AgentSessionsService {
       mode: "queue",
       idempotencyKey: `delegation:${delegation.id}:interrupted`,
     }).catch((error) =>
-      console.warn("[catamorphic] Could not tell a parent about an interrupted subsession", error),
+      console.warn(
+        "[catamorphic] Could not tell a parent about an interrupted subsession",
+        error,
+      ),
     );
   }
 
@@ -2458,26 +2684,51 @@ export class AgentSessionsService {
       .where("id", "=", input.turnId)
       .where("session_id", "=", input.session.id)
       .executeTakeFirst();
-    if (!row) throw new SessionCommandRejectedError("not_found", "That turn does not exist.", 404);
+    if (!row)
+      throw new SessionCommandRejectedError(
+        "not_found",
+        "That turn does not exist.",
+        404,
+      );
     const turn = turnFromRow(row);
     if (turn.status !== "failed" && turn.status !== "interrupted")
-      throw new SessionCommandRejectedError("not_retryable", "Only a failed or interrupted turn can be retried.");
+      throw new SessionCommandRejectedError(
+        "not_retryable",
+        "Only a failed or interrupted turn can be retried.",
+      );
     const busy = await trx
       .selectFrom("agent_turns")
       .select("id")
       .where("session_id", "=", input.session.id)
       .where("status", "in", [...ACTIVE_TURN_STATUSES])
       .executeTakeFirst();
-    if (busy) throw new SessionCommandRejectedError("turn_in_progress", "Wait for the running turn to finish, or interrupt it.");
+    if (busy)
+      throw new SessionCommandRejectedError(
+        "turn_in_progress",
+        "Wait for the running turn to finish, or interrupt it.",
+      );
     const now = new Date().toISOString();
-    await trx.updateTable("agent_turns").set({ available_at: new Date() }).where("id", "=", turn.id).execute();
+    await trx
+      .updateTable("agent_turns")
+      .set({ available_at: new Date() })
+      .where("id", "=", turn.id)
+      .execute();
     await this.log.append(trx, {
       sessionId: input.session.id,
       commandId: input.commandId,
       events: [
         {
           type: "turn.changed",
-          turn: { ...turn, status: "queued", error: null, cancellationRequested: false, completedAt: null, retryAt: null, priority: 100, updatedAt: now },
+          turn: {
+            ...turn,
+            status: "queued",
+            error: null,
+            cancellationRequested: false,
+            completedAt: null,
+            retryAt: null,
+            priority: 100,
+            updatedAt: now,
+          },
         },
       ],
     });
@@ -2488,7 +2739,10 @@ export class AgentSessionsService {
     trx: Transaction<DB>,
     input: {
       session: SessionRow;
-      command: Extract<SessionCommand, { type: "edit_queued" | "cancel_queued" | "send_now" }>;
+      command: Extract<
+        SessionCommand,
+        { type: "edit_queued" | "cancel_queued" | "send_now" }
+      >;
       commandId: string;
     },
   ): Promise<JsonObject> {
@@ -2498,26 +2752,61 @@ export class AgentSessionsService {
       .where("id", "=", input.command.turnId)
       .where("session_id", "=", input.session.id)
       .executeTakeFirst();
-    if (!row) throw new SessionCommandRejectedError("not_found", "That turn does not exist.", 404);
+    if (!row)
+      throw new SessionCommandRejectedError(
+        "not_found",
+        "That turn does not exist.",
+        404,
+      );
     const turn = turnFromRow(row);
     if (turn.status !== "queued" && turn.status !== "held")
-      throw new SessionCommandRejectedError("not_queued", "That message already ran.");
+      throw new SessionCommandRejectedError(
+        "not_queued",
+        "That message already ran.",
+      );
     const now = new Date().toISOString();
     const events: SessionEvent[] = [];
     if (input.command.type === "cancel_queued") {
-      events.push({ type: "turn.changed", turn: { ...turn, status: "cancelled", completedAt: now, updatedAt: now } });
+      events.push({
+        type: "turn.changed",
+        turn: {
+          ...turn,
+          status: "cancelled",
+          completedAt: now,
+          updatedAt: now,
+        },
+      });
     } else if (input.command.type === "edit_queued") {
       const { text, held } = input.command;
       if (text !== undefined && turn.inputItemId) {
-        const itemRow = await trx.selectFrom("agent_items").select("payload").where("id", "=", turn.inputItemId).executeTakeFirst();
+        const itemRow = await trx
+          .selectFrom("agent_items")
+          .select("payload")
+          .where("id", "=", turn.inputItemId)
+          .executeTakeFirst();
         const item = itemRow ? itemFromRow(itemRow) : null;
         if (item?.kind === "user_message")
-          events.push({ type: "item.changed", item: { ...item, text, updatedAt: now } });
+          events.push({
+            type: "item.changed",
+            item: { ...item, text, updatedAt: now },
+          });
       }
       if (held !== undefined)
-        events.push({ type: "turn.changed", turn: { ...turn, status: held ? "held" : "queued", updatedAt: now } });
+        events.push({
+          type: "turn.changed",
+          turn: { ...turn, status: held ? "held" : "queued", updatedAt: now },
+        });
     } else {
-      events.push({ type: "turn.changed", turn: { ...turn, status: "queued", priority: 100, dispatch: "interrupt", updatedAt: now } });
+      events.push({
+        type: "turn.changed",
+        turn: {
+          ...turn,
+          status: "queued",
+          priority: 100,
+          dispatch: "interrupt",
+          updatedAt: now,
+        },
+      });
       const active = await trx
         .selectFrom("agent_turns")
         .selectAll()
@@ -2525,11 +2814,26 @@ export class AgentSessionsService {
         .where("status", "in", [...ACTIVE_TURN_STATUSES])
         .executeTakeFirst();
       if (active) {
-        events.push({ type: "turn.changed", turn: { ...turnFromRow(active), cancellationRequested: true, updatedAt: now } });
-        await this.queue.enqueueCommand(trx, { turnId: active.id, attemptId: active.active_attempt_id, kind: "interrupt" });
+        events.push({
+          type: "turn.changed",
+          turn: {
+            ...turnFromRow(active),
+            cancellationRequested: true,
+            updatedAt: now,
+          },
+        });
+        await this.queue.enqueueCommand(trx, {
+          turnId: active.id,
+          attemptId: active.active_attempt_id,
+          kind: "interrupt",
+        });
       }
     }
-    await this.log.append(trx, { sessionId: input.session.id, events, commandId: input.commandId });
+    await this.log.append(trx, {
+      sessionId: input.session.id,
+      events,
+      commandId: input.commandId,
+    });
     return { turnId: turn.id };
   }
 
@@ -2540,14 +2844,20 @@ export class AgentSessionsService {
    * message. A request whose agent stopped can no longer be answered.
    */
   /** Each approver hears about an approval and finds the chat waiting for them. */
-  private async notifyApprovers(input: { session: SessionRow; requests: RuntimeRequest[] }): Promise<void> {
+  private async notifyApprovers(input: {
+    session: SessionRow;
+    requests: RuntimeRequest[];
+  }): Promise<void> {
     const project = await this.db
       .selectFrom("projects")
       .select("tenant_id")
       .where("id", "=", input.session.project_id)
       .executeTakeFirstOrThrow();
     const notifications = new UserNotificationsService(this.db);
-    const agent = await this.resolveAgent(input.session.agent_id, input.session.project_id).catch(() => undefined);
+    const agent = await this.resolveAgent(
+      input.session.agent_id,
+      input.session.project_id,
+    ).catch(() => undefined);
     const label = agent?.name ?? "An agent";
     for (const request of input.requests)
       for (const approver of request.approvers) {
@@ -2663,7 +2973,13 @@ export class AgentSessionsService {
       if (turn.status === "running")
         events.push({
           type: "turn.changed",
-          turn: { ...turn, status: "waiting", activity: "Waiting for your approval", activityAt: now, updatedAt: now },
+          turn: {
+            ...turn,
+            status: "waiting",
+            activity: "Waiting for your approval",
+            activityAt: now,
+            updatedAt: now,
+          },
         });
       await this.log.append(trx, { sessionId: input.sessionId, events });
       return request;
@@ -2675,8 +2991,9 @@ export class AgentSessionsService {
         .selectAll()
         .where("id", "=", input.sessionId)
         .executeTakeFirstOrThrow();
-      await this.notifyApprovers({ session, requests: [opened] }).catch((error) =>
-        console.warn("[catamorphic] Could not tell approvers", error),
+      await this.notifyApprovers({ session, requests: [opened] }).catch(
+        (error) =>
+          console.warn("[catamorphic] Could not tell approvers", error),
       );
     }
     const deadline = Date.now() + timeoutMs;
@@ -2687,8 +3004,9 @@ export class AgentSessionsService {
         .where("request_id", "=", opened.id)
         .executeTakeFirst();
       const request = row ? requestFromRow(row) : null;
-      if (!request || request.status !== "pending")
-        return request?.response?.kind === "approval" && request.response.decision === "approved"
+      if (request?.status !== "pending")
+        return request?.response?.kind === "approval" &&
+          request.response.decision === "approved"
           ? "allow"
           : "deny";
       await delay(500);
@@ -2712,7 +3030,9 @@ export class AgentSessionsService {
             ...request,
             status: input.signal?.aborted ? "cancelled" : "expired",
             answerable: false,
-            reason: input.signal?.aborted ? "The action was withdrawn." : "Nobody answered in time.",
+            reason: input.signal?.aborted
+              ? "The action was withdrawn."
+              : "Nobody answered in time.",
             resolvedAt: now,
           },
         },
@@ -2724,9 +3044,16 @@ export class AgentSessionsService {
   }
 
   /** The turn back to running once none of its blocking requests is open. */
-  private async unblockedTurn(trx: Transaction<DB>, request: RuntimeRequest): Promise<SessionEvent[]> {
+  private async unblockedTurn(
+    trx: Transaction<DB>,
+    request: RuntimeRequest,
+  ): Promise<SessionEvent[]> {
     if (!request.turnId) return [];
-    const row = await trx.selectFrom("agent_turns").selectAll().where("id", "=", request.turnId).executeTakeFirst();
+    const row = await trx
+      .selectFrom("agent_turns")
+      .selectAll()
+      .where("id", "=", request.turnId)
+      .executeTakeFirst();
     if (!row) return [];
     const turn = turnFromRow(row);
     if (turn.status !== "waiting") return [];
@@ -2740,7 +3067,18 @@ export class AgentSessionsService {
       .executeTakeFirst();
     if (others) return [];
     const now = new Date().toISOString();
-    return [{ type: "turn.changed", turn: { ...turn, status: "running", activity: "Continuing", activityAt: now, updatedAt: now } }];
+    return [
+      {
+        type: "turn.changed",
+        turn: {
+          ...turn,
+          status: "running",
+          activity: "Continuing",
+          activityAt: now,
+          updatedAt: now,
+        },
+      },
+    ];
   }
 
   private async respondIn(
@@ -2759,13 +3097,22 @@ export class AgentSessionsService {
       .where("request_id", "=", input.command.requestId)
       .forUpdate()
       .executeTakeFirst();
-    if (!row) throw new SessionCommandRejectedError("not_found", "That request does not exist.", 404);
+    if (!row)
+      throw new SessionCommandRejectedError(
+        "not_found",
+        "That request does not exist.",
+        404,
+      );
     const request = requestFromRow(row);
     // An unattended chat's approvers answer its approvals (ADR 0176);
     // otherwise whoever may change the chat does.
     if (request.approvers.length > 0) {
       if (!request.approvers.includes(input.identity.externalUserId))
-        throw new SessionCommandRejectedError("not_an_approver", "Only this chat's approvers can answer this request.", 403);
+        throw new SessionCommandRejectedError(
+          "not_an_approver",
+          "Only this chat's approvers can answer this request.",
+          403,
+        );
     } else
       assertAgentSessionAccess({
         identity: input.identity,
@@ -2775,11 +3122,21 @@ export class AgentSessionsService {
         intent: "change",
       });
     if (request.status !== "pending")
-      throw new SessionCommandRejectedError("already_answered", "That request was already answered or withdrawn.");
+      throw new SessionCommandRejectedError(
+        "already_answered",
+        "That request was already answered or withdrawn.",
+      );
     if (!request.answerable && request.blocking)
-      throw new SessionCommandRejectedError("not_answerable", request.reason ?? "The agent that asked stopped, so this can no longer be answered. Send a message to continue.");
+      throw new SessionCommandRejectedError(
+        "not_answerable",
+        request.reason ??
+          "The agent that asked stopped, so this can no longer be answered. Send a message to continue.",
+      );
     if (input.command.response.kind !== request.kind)
-      throw new SessionCommandRejectedError("wrong_kind", `This request needs a ${request.kind} answer.`);
+      throw new SessionCommandRejectedError(
+        "wrong_kind",
+        `This request needs a ${request.kind} answer.`,
+      );
     const now = new Date().toISOString();
     const response = input.command.response as RuntimeRequestResponse;
     const resolved: RuntimeRequest = {
@@ -2790,9 +3147,15 @@ export class AgentSessionsService {
       resolvedBy: input.identity.externalUserId,
       resolvedAt: now,
     };
-    const events: SessionEvent[] = [{ type: "request.changed", request: resolved }];
+    const events: SessionEvent[] = [
+      { type: "request.changed", request: resolved },
+    ];
     const turnRow = request.turnId
-      ? await trx.selectFrom("agent_turns").selectAll().where("id", "=", request.turnId).executeTakeFirst()
+      ? await trx
+          .selectFrom("agent_turns")
+          .selectAll()
+          .where("id", "=", request.turnId)
+          .executeTakeFirst()
       : undefined;
     const turn = turnRow ? turnFromRow(turnRow) : null;
     // A non-blocking question's agent moved on: its answer is a message.
@@ -2809,20 +3172,41 @@ export class AgentSessionsService {
           turnId: turn.id,
           attemptId: request.attemptId,
           kind: "respond",
-          payload: { requestKey: request.runnerKey, response: protocolJson(response) },
+          payload: {
+            requestKey: request.runnerKey,
+            response: protocolJson(response),
+          },
         });
       events.push(...(await this.unblockedTurn(trx, request)));
     }
     if (request.itemId) {
-      const itemRow = await trx.selectFrom("agent_items").select("payload").where("id", "=", request.itemId).executeTakeFirst();
+      const itemRow = await trx
+        .selectFrom("agent_items")
+        .select("payload")
+        .where("id", "=", request.itemId)
+        .executeTakeFirst();
       if (itemRow) {
         const item = itemFromRow(itemRow);
-        events.push({ type: "item.changed", item: { ...item, status: "completed", endedAt: now, updatedAt: now } as Item });
+        events.push({
+          type: "item.changed",
+          item: {
+            ...item,
+            status: "completed",
+            endedAt: now,
+            updatedAt: now,
+          } as Item,
+        });
       }
     }
-    await this.log.append(trx, { sessionId: input.session.id, events, commandId: input.commandId });
+    await this.log.append(trx, {
+      sessionId: input.session.id,
+      events,
+      commandId: input.commandId,
+    });
     if (!live && response.kind === "question") {
-      const questions = (request.questions ?? []).map((question) => question.question).join("\n");
+      const questions = (request.questions ?? [])
+        .map((question) => question.question)
+        .join("\n");
       // The agent learns a non-blocking answer as a message: within the
       // turn still working, else as a turn of its own.
       await this.deliverIn(trx, {
@@ -2835,7 +3219,10 @@ export class AgentSessionsService {
           questionRequestId: request.id,
           deliveredBy: input.identity.externalUserId,
           // The batch and the raw answer render the history entry.
-          question: protocolJson({ questions: request.questions ?? [], answers: response.answers }),
+          question: protocolJson({
+            questions: request.questions ?? [],
+            answers: response.answers,
+          }),
         },
       });
     }
@@ -2852,7 +3239,12 @@ export class AgentSessionsService {
    */
   private async rollbackIn(
     trx: Transaction<DB>,
-    input: { identity: Identity; session: SessionRow; turnId: string; commandId: string },
+    input: {
+      identity: Identity;
+      session: SessionRow;
+      turnId: string;
+      commandId: string;
+    },
   ): Promise<JsonObject> {
     const { session } = input;
     const busy = await trx
@@ -2862,17 +3254,28 @@ export class AgentSessionsService {
       .where("status", "in", [...ACTIVE_TURN_STATUSES])
       .executeTakeFirst();
     if (busy)
-      throw new SessionCommandRejectedError("turn_in_progress", "Stop the running turn before rolling back.");
+      throw new SessionCommandRejectedError(
+        "turn_in_progress",
+        "Stop the running turn before rolling back.",
+      );
     const targetRow = await trx
       .selectFrom("agent_turns")
       .selectAll()
       .where("id", "=", input.turnId)
       .where("session_id", "=", session.id)
       .executeTakeFirst();
-    if (!targetRow) throw new SessionCommandRejectedError("not_found", "That turn does not exist.", 404);
+    if (!targetRow)
+      throw new SessionCommandRejectedError(
+        "not_found",
+        "That turn does not exist.",
+        404,
+      );
     const target = turnFromRow(targetRow);
     if (target.status === "rolled_back")
-      throw new SessionCommandRejectedError("already_rolled_back", "That turn was already rolled back.");
+      throw new SessionCommandRejectedError(
+        "already_rolled_back",
+        "That turn was already rolled back.",
+      );
     const later = await trx
       .selectFrom("agent_turns")
       .selectAll()
@@ -2892,7 +3295,10 @@ export class AgentSessionsService {
         expectedHead: last?.checkpoint_after?.trim() ?? null,
       });
       if (restored !== "restored")
-        throw new SessionCommandRejectedError("workspace_not_restored", restored);
+        throw new SessionCommandRejectedError(
+          "workspace_not_restored",
+          restored,
+        );
     }
     const now = new Date().toISOString();
     const events: SessionEvent[] = later.map((row) => ({
@@ -2911,16 +3317,28 @@ export class AgentSessionsService {
       .limit(1)
       .executeTakeFirst();
     const threadRow = target.providerThreadId
-      ? await trx.selectFrom("agent_provider_threads").selectAll().where("id", "=", target.providerThreadId).executeTakeFirst()
+      ? await trx
+          .selectFrom("agent_provider_threads")
+          .selectAll()
+          .where("id", "=", target.providerThreadId)
+          .executeTakeFirst()
       : undefined;
     if (threadRow) {
       events.push({
         type: "provider_thread.changed",
-        thread: { ...providerThreadFromRow(threadRow), status: "closed", updatedAt: now },
+        thread: {
+          ...providerThreadFromRow(threadRow),
+          status: "closed",
+          updatedAt: now,
+        },
       });
       const endRef = previous?.active_attempt_id
         ? ((
-            await trx.selectFrom("agent_turn_attempts").select("native_turn_ref").where("id", "=", previous.active_attempt_id).executeTakeFirst()
+            await trx
+              .selectFrom("agent_turn_attempts")
+              .select("native_turn_ref")
+              .where("id", "=", previous.active_attempt_id)
+              .executeTakeFirst()
           )?.native_turn_ref as unknown as NativeRef | null)
         : null;
       const sourceRef = threadRow.native_ref as unknown as NativeRef | null;
@@ -2940,18 +3358,33 @@ export class AgentSessionsService {
             updatedAt: now,
           },
         });
-        await this.log.append(trx, { sessionId: session.id, events, commandId: input.commandId });
+        await this.log.append(trx, {
+          sessionId: session.id,
+          events,
+          commandId: input.commandId,
+        });
         await trx
           .updateTable("agent_provider_threads")
           .set({
-            fork_source: { source: sourceRef, throughTurnRef: endRef, threadId: threadRow.id, ...(threadRow.state_path ? { statePath: threadRow.state_path } : {}) } as unknown as Json,
+            fork_source: {
+              source: sourceRef,
+              throughTurnRef: endRef,
+              threadId: threadRow.id,
+              ...(threadRow.state_path
+                ? { statePath: threadRow.state_path }
+                : {}),
+            } as unknown as Json,
           })
           .where("id", "=", forkId)
           .execute();
         return { rolledBack: later.map((row) => row.id) };
       }
     }
-    await this.log.append(trx, { sessionId: session.id, events, commandId: input.commandId });
+    await this.log.append(trx, {
+      sessionId: session.id,
+      events,
+      commandId: input.commandId,
+    });
     return { rolledBack: later.map((row) => row.id) };
   }
 
@@ -2967,7 +3400,10 @@ export class AgentSessionsService {
     commit: string;
     expectedHead: string | null;
   }): Promise<"restored" | string> {
-    const agent = await this.resolveAgent(input.session.agent_id, input.session.project_id);
+    const agent = await this.resolveAgent(
+      input.session.agent_id,
+      input.session.project_id,
+    );
     if (agent.topology === "native") {
       const checkout = await this.nativeAgentCheckout?.resolve({
         projectId: input.session.project_id,
@@ -3027,7 +3463,8 @@ export class AgentSessionsService {
       .then(() => this.drainSession(sessionId));
     this.drainers.set(sessionId, current);
     const cleanup = () => {
-      if (this.drainers.get(sessionId) === current) this.drainers.delete(sessionId);
+      if (this.drainers.get(sessionId) === current)
+        this.drainers.delete(sessionId);
     };
     void current.then(cleanup, cleanup);
     return current;
@@ -3049,12 +3486,19 @@ export class AgentSessionsService {
       const identity = await this.ownerOf(session);
       if (!identity) return;
       if (session.status !== "active") {
-        await this.finishClosing({ identity, projectId: session.project_id, sessionId });
+        await this.finishClosing({
+          identity,
+          projectId: session.project_id,
+          sessionId,
+        });
         return;
       }
       if (session.handoff_status !== "none") return;
       const allocation = session.allocation_id
-        ? await this.executionAllocations.get({ identity, allocationId: session.allocation_id })
+        ? await this.executionAllocations.get({
+            identity,
+            allocationId: session.allocation_id,
+          })
         : undefined;
       const due = await this.db
         .selectFrom("agent_turns")
@@ -3094,7 +3538,10 @@ export class AgentSessionsService {
       .executeTakeFirst();
     if (!project) return null;
     if (isProjectPrincipal(session.external_user_id))
-      return projectChatIdentity({ tenantId: project.tenant_id, projectId: session.project_id });
+      return projectChatIdentity({
+        tenantId: project.tenant_id,
+        projectId: session.project_id,
+      });
     const known = this.knownOwners.get(
       `${project.tenant_id}:${session.project_id}:${session.external_user_id}`,
     );
@@ -3115,7 +3562,10 @@ export class AgentSessionsService {
     return {
       owner: (session) => this.ownerOf(session),
       harnessOf: async ({ session }) => {
-        const agent = await this.resolveAgent(session.agent_id, session.project_id);
+        const agent = await this.resolveAgent(
+          session.agent_id,
+          session.project_id,
+        );
         return {
           harness: harnessIdOf(agent),
           agentId: session.agent_id,
@@ -3140,7 +3590,9 @@ export class AgentSessionsService {
     workingDirectory?: string;
   }): Promise<ExtraTool[]> {
     const own = [
-      ...(input.agent.harness.placement === "host" ? (input.agent.harness.hostTools ?? []) : []),
+      ...(input.agent.harness.placement === "host"
+        ? (input.agent.harness.hostTools ?? [])
+        : []),
       this.closeQuestionsTool(input.session.id),
     ];
     if (!this.agentCapabilities) return own;
@@ -3153,7 +3605,9 @@ export class AgentSessionsService {
     const names = new Set(own.map((tool) => tool.name));
     return [
       ...own,
-      ...agentCapabilityTools(gateway, new AbortController().signal).filter((tool) => !names.has(tool.name)),
+      ...agentCapabilityTools(gateway, new AbortController().signal).filter(
+        (tool) => !names.has(tool.name),
+      ),
     ];
   }
 
@@ -3174,23 +3628,27 @@ export class AgentSessionsService {
             .where("kind", "=", "question")
             .where("status", "=", "pending")
             .where("blocking", "=", false)
-            .$if(requestIds !== undefined, (query) => query.where("request_id", "in", requestIds ?? []))
+            .$if(requestIds !== undefined, (query) =>
+              query.where("request_id", "in", requestIds ?? []),
+            )
             .execute();
           const now = new Date().toISOString();
           const requests = rows.map(requestFromRow);
           if (requests.length > 0)
             await this.log.append(trx, {
               sessionId,
-              events: requests.map((request): SessionEvent => ({
-                type: "request.changed",
-                request: {
-                  ...request,
-                  status: "cancelled",
-                  answerable: false,
-                  reason: "The agent closed this question.",
-                  resolvedAt: now,
-                },
-              })),
+              events: requests.map(
+                (request): SessionEvent => ({
+                  type: "request.changed",
+                  request: {
+                    ...request,
+                    status: "cancelled",
+                    answerable: false,
+                    reason: "The agent closed this question.",
+                    resolvedAt: now,
+                  },
+                }),
+              ),
             });
           return requests;
         });
@@ -3208,19 +3666,32 @@ export class AgentSessionsService {
     name: string;
     input: JsonValue;
   }): Promise<HostToolResult> {
-    const agent = await this.resolveAgent(input.session.agent_id, input.session.project_id);
-    const tools = await this.hostToolsFor({ identity: input.identity, session: input.session, agent, turnId: input.turn.id });
+    const agent = await this.resolveAgent(
+      input.session.agent_id,
+      input.session.project_id,
+    );
+    const tools = await this.hostToolsFor({
+      identity: input.identity,
+      session: input.session,
+      agent,
+      turnId: input.turn.id,
+    });
     const tool = tools.find((candidate) => candidate.name === input.name);
     if (!tool) throw new Error(`This agent has no tool '${input.name}'`);
     const args =
-      input.input && typeof input.input === "object" && !Array.isArray(input.input)
+      input.input &&
+      typeof input.input === "object" &&
+      !Array.isArray(input.input)
         ? (input.input as Record<string, unknown>)
         : {};
     const result = await tool.execute(args, {
       projectId: input.session.project_id,
       sessionId: input.session.id,
       workingDirectory: this.workingDirectories.get(input.turn.id) ?? "",
-      caller: { tenantId: input.identity.tenantId, externalUserId: input.identity.externalUserId },
+      caller: {
+        tenantId: input.identity.tenantId,
+        externalUserId: input.identity.externalUserId,
+      },
     });
     return hostToolResult(extraToolResult(result));
   }
@@ -3238,7 +3709,9 @@ export class AgentSessionsService {
     const runtime = await this.executionEnvironments.getRuntimeBinding({
       identity: input.identity,
       bindingId: allocation.bindingId,
-      ...(allocation.workerNodeId ? { workerNodeId: allocation.workerNodeId } : {}),
+      ...(allocation.workerNodeId
+        ? { workerNodeId: allocation.workerNodeId }
+        : {}),
       owner: placementOwner(input.session.external_user_id),
     });
     const selected = runtime?.sandboxProvider;
@@ -3254,10 +3727,15 @@ export class AgentSessionsService {
     const present = await processes
       .listProcesses({ sandboxId: input.location.sandboxId })
       .then(
-        (list) => list.some((process) => process.processId === input.location.processId),
+        (list) =>
+          list.some(
+            (process) => process.processId === input.location.processId,
+          ),
         () => false,
       );
-    return present ? sandboxChannel({ provider, location: input.location }) : undefined;
+    return present
+      ? sandboxChannel({ provider, location: input.location })
+      : undefined;
   }
 
   /**
@@ -3283,25 +3761,60 @@ export class AgentSessionsService {
     const projectId = session.project_id;
     const sessionId = session.id;
     const agent = await this.resolveAgent(session.agent_id, projectId);
-    const runtime = await this.resolveExecutionRuntime(identity, projectId, session, agent);
+    const runtime = await this.resolveExecutionRuntime(
+      identity,
+      projectId,
+      session,
+      agent,
+    );
     const notes: string[] = [];
     const inputItem = turn.inputItemId
-      ? await this.db.selectFrom("agent_items").select("payload").where("id", "=", turn.inputItemId).executeTakeFirst()
+      ? await this.db
+          .selectFrom("agent_items")
+          .select("payload")
+          .where("id", "=", turn.inputItemId)
+          .executeTakeFirst()
       : undefined;
     const input_ = inputItem ? itemFromRow(inputItem) : null;
     const author: SessionMessageAuthor =
-      input_?.kind === "user_message" ? input_.author : { kind: "system", code: "turn_continued" };
-    const requestMetadata = input_?.kind === "user_message" ? input_.metadata : null;
+      input_?.kind === "user_message"
+        ? input_.author
+        : { kind: "system", code: "turn_continued" };
+    const requestMetadata =
+      input_?.kind === "user_message" ? input_.metadata : null;
 
     // A base a delivery asked for moves before the agent runs (ADR 0178).
     const workspaceMove = parseWorkspaceMove(session.workspace_move);
     if (workspaceMove && agent.topology !== "native")
-      notes.push(await this.applyWorkspaceMove({ identity, projectId, session, move: workspaceMove }));
-    const workspace = await this.ensureWorkspace(identity, projectId, session, agent, runtime);
-    session = await this.db.selectFrom("agent_sessions").selectAll().where("id", "=", sessionId).executeTakeFirstOrThrow();
+      notes.push(
+        await this.applyWorkspaceMove({
+          identity,
+          projectId,
+          session,
+          move: workspaceMove,
+        }),
+      );
+    const workspace = await this.ensureWorkspace(
+      identity,
+      projectId,
+      session,
+      agent,
+      runtime,
+    );
+    session = await this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where("id", "=", sessionId)
+      .executeTakeFirstOrThrow();
     if (workspaceMove && agent.topology === "native")
       notes.push(
-        await this.applyWorkspaceMove({ identity, projectId, session, move: workspaceMove, native: { checkout: workspace.checkout } }),
+        await this.applyWorkspaceMove({
+          identity,
+          projectId,
+          session,
+          move: workspaceMove,
+          native: { checkout: workspace.checkout },
+        }),
       );
     await this.keepConnectionGrants(sessionId);
 
@@ -3316,7 +3829,14 @@ export class AgentSessionsService {
       });
       if (agent.signIn) {
         // The owner's own sign-in, mounted from the machine's disk (ADR 0198).
-        if (!(await this.authoredByOwner({ projectId, owner: session.external_user_id, author, metadata: requestMetadata })))
+        if (
+          !(await this.authoredByOwner({
+            projectId,
+            owner: session.external_user_id,
+            author,
+            metadata: requestMetadata,
+          }))
+        )
           throw new Error(
             `This chat runs on its owner's own ${SIGN_IN_HARNESS_NAMES[agent.signIn]} sign-in, so only they can send it messages.`,
           );
@@ -3333,7 +3853,12 @@ export class AgentSessionsService {
           throw new Error(
             "This agent reaches its model through the gateway, and this chat has no model connection: bind one in the agent's Environment and name it in the agent's credentials.",
           );
-        modelAccess = { kind: "gateway", api: gateway.api, baseUrl: gateway.baseUrl, keyFile: gateway.keyFile };
+        modelAccess = {
+          kind: "gateway",
+          api: gateway.api,
+          baseUrl: gateway.baseUrl,
+          keyFile: gateway.keyFile,
+        };
       }
       const files = await this.preparePersonalFiles({
         identity,
@@ -3365,7 +3890,10 @@ export class AgentSessionsService {
       sessionId,
       turnId: turn.id,
       workingDirectory,
-      caller: { tenantId: identity.tenantId, externalUserId: identity.externalUserId },
+      caller: {
+        tenantId: identity.tenantId,
+        externalUserId: identity.externalUserId,
+      },
     };
     const fragments: TurnContextFragment[] = [];
     if (this.agentCapabilities)
@@ -3386,28 +3914,49 @@ export class AgentSessionsService {
     // (ADR 0055): pulled before the turn, shipped after it.
     const storeDir = parseWorkspaceBase(session.workspace)
       ? null
-      : await this.storeSyncDir(identity, projectId, workspace, sessionId, this.usesSessionCopy(session));
+      : await this.storeSyncDir(
+          identity,
+          projectId,
+          workspace,
+          sessionId,
+          this.usesSessionCopy(session),
+        );
     if (storeDir)
       await syncRemoteProject(
         storeDir,
-        documentsClientFor(this.storeSync!.documents, identity, projectId, { source: "store" }),
+        documentsClientFor(this.storeSync!.documents, identity, projectId, {
+          source: "store",
+        }),
       ).catch((error) =>
-        console.warn(`[catamorphic] store pull before turn failed: ${error instanceof Error ? error.message : String(error)}`),
+        console.warn(
+          `[catamorphic] store pull before turn failed: ${error instanceof Error ? error.message : String(error)}`,
+        ),
       );
 
     const plugins = await this.loadAttachedPlugins(projectId);
     if (plugins?.length) {
       const files = stagedPluginFiles(plugins);
-      if (workspace.sandboxProviderId && runtime.provider && Object.keys(files).length > 0)
-        await runtime.provider.uploadFiles(workspace.sandboxProviderId, files, workingDirectory);
-      else if (!workspace.sandboxProviderId) await stagePluginDocs(workingDirectory, plugins);
+      if (
+        workspace.sandboxProviderId &&
+        runtime.provider &&
+        Object.keys(files).length > 0
+      )
+        await runtime.provider.uploadFiles(
+          workspace.sandboxProviderId,
+          files,
+          workingDirectory,
+        );
+      else if (!workspace.sandboxProviderId)
+        await stagePluginDocs(workingDirectory, plugins);
     }
     const instructions = buildAgentSystemPrompt({
       systemPrompt:
         [
           agent.systemPrompt,
           session.system_prompt,
-          agent.harness.placement === "host" ? agent.harness.instructions : undefined,
+          agent.harness.placement === "host"
+            ? agent.harness.instructions
+            : undefined,
           plugins?.length ? buildPluginsPreamble(plugins, {}) : undefined,
         ]
           .filter(Boolean)
@@ -3415,15 +3964,38 @@ export class AgentSessionsService {
       standingPrompt: this.standingAgentPrompt,
     });
 
-    const tools = await this.hostToolsFor({ identity, session, agent, turnId: turn.id, workingDirectory });
-    const ownPolicies = agent.harness.placement === "host" ? agent.harness.toolPolicies?.() : undefined;
-    const callerLayers = withAgentLayers(await this.callerToolPolicies(identity, projectId, session.agent_id), agent);
-    const toolPolicies = mergePolicyLayers(ownPolicies, callerLayers ? { ...callerLayers } : undefined) ?? {};
+    const tools = await this.hostToolsFor({
+      identity,
+      session,
+      agent,
+      turnId: turn.id,
+      workingDirectory,
+    });
+    const ownPolicies =
+      agent.harness.placement === "host"
+        ? agent.harness.toolPolicies?.()
+        : undefined;
+    const callerLayers = withAgentLayers(
+      await this.callerToolPolicies(identity, projectId, session.agent_id),
+      agent,
+    );
+    const toolPolicies =
+      mergePolicyLayers(
+        ownPolicies,
+        callerLayers ? { ...callerLayers } : undefined,
+      ) ?? {};
     const mcpServers: Record<string, AgentMcpServerConfig> = {
-      ...(agent.harness.placement === "host" ? agent.harness.mcpServers?.(context) : {}),
+      ...(agent.harness.placement === "host"
+        ? agent.harness.mcpServers?.(context)
+        : {}),
       ...(await this.connectionMcpServers(identity, session)),
     };
-    const checkpointBefore = await this.workspaceHead({ identity, session, agent, workspace }).catch(() => null);
+    const checkpointBefore = await this.workspaceHead({
+      identity,
+      session,
+      agent,
+      workspace,
+    }).catch(() => null);
     const stateDirectory = runtime.provider
       ? `${runtime.provider.workspaceRoot}/${SESSION_DIRECTORY}`
       : workingDirectory;
@@ -3434,17 +4006,29 @@ export class AgentSessionsService {
       stateDirectory,
       systemPrompt: instructions,
       context: renderTurnContext(fragments),
-      ...((session.model ?? agent.defaults?.model) ? { model: session.model ?? agent.defaults?.model } : {}),
+      ...((session.model ?? agent.defaults?.model)
+        ? { model: session.model ?? agent.defaults?.model }
+        : {}),
       ...((session.model_effort ?? agent.defaults?.effort)
-        ? { effort: (session.model_effort as AgentEffort | null) ?? agent.defaults?.effort }
+        ? {
+            effort:
+              (session.model_effort as AgentEffort | null) ??
+              agent.defaults?.effort,
+          }
         : {}),
       permissions,
       modelAccess,
       toolPolicies: protocolPolicies(toolPolicies),
-      toolAnnotations: agent.harness.placement === "host" ? (agent.harness.toolAnnotations?.() ?? {}) : {},
+      toolAnnotations:
+        agent.harness.placement === "host"
+          ? (agent.harness.toolAnnotations?.() ?? {})
+          : {},
       mcpServers: protocolMcpServers(mcpServers),
       hostTools: tools.map(hostToolDescriptor),
-      plugins: agent.harness.placement === "host" ? [...(agent.harness.plugins ?? [])] : [],
+      plugins:
+        agent.harness.placement === "host"
+          ? [...(agent.harness.plugins ?? [])]
+          : [],
       env: agent.harness.placement === "host" ? { ...agent.harness.env } : {},
       options: protocolJson(agent.options ?? {}),
     };
@@ -3467,14 +4051,20 @@ export class AgentSessionsService {
                       provider,
                       sandboxId: sandboxProviderId,
                       workingDirectory,
-                      ...(runtime.commandTimeoutSeconds ? { commandBudgetSeconds: runtime.commandTimeoutSeconds } : {}),
+                      ...(runtime.commandTimeoutSeconds
+                        ? {
+                            commandBudgetSeconds: runtime.commandTimeoutSeconds,
+                          }
+                        : {}),
                     },
                   }
                 : {}),
             },
           });
         if (!provider || !sandboxProviderId || !session.allocation_id)
-          throw new Error("This agent runs in the session's sandbox, and the chat has none.");
+          throw new Error(
+            "This agent runs in the session's sandbox, and the chat has none.",
+          );
         return startSandboxRunner({
           provider,
           allocationId: session.allocation_id,
@@ -3493,7 +4083,11 @@ export class AgentSessionsService {
     workspace: { workingDirectory: string; sandboxProviderId?: string };
   }): Promise<string | null> {
     if (input.agent.topology === "native")
-      return (await this.nativeAgentCheckout?.head?.({ workingDirectory: input.workspace.workingDirectory })) ?? null;
+      return (
+        (await this.nativeAgentCheckout?.head?.({
+          workingDirectory: input.workspace.workingDirectory,
+        })) ?? null
+      );
     if (!this.usesSessionCopy(input.session)) return null;
     const copy = await this.projectManager.openSession({
       tenantId: input.identity.tenantId,
@@ -3519,15 +4113,26 @@ export class AgentSessionsService {
     completion: { status: "completed" | "failed" | "interrupted" };
   }): Promise<FinalizedTurn> {
     const { identity, turn } = input;
-    const session = await this.db.selectFrom("agent_sessions").selectAll().where("id", "=", input.session.id).executeTakeFirstOrThrow();
+    const session = await this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where("id", "=", input.session.id)
+      .executeTakeFirstOrThrow();
     const projectId = session.project_id;
     const sessionId = session.id;
     this.stopGrantRenewal(sessionId);
     const agent = await this.resolveAgent(session.agent_id, projectId);
-    const runtime = await this.resolveExecutionRuntime(identity, projectId, session, agent);
+    const runtime = await this.resolveExecutionRuntime(
+      identity,
+      projectId,
+      session,
+      agent,
+    );
     const sandboxProviderId =
       session.sandbox_id && runtime.provider
-        ? await this.resolveSandboxProviderId(session, runtime.provider).catch(() => undefined)
+        ? await this.resolveSandboxProviderId(session, runtime.provider).catch(
+            () => undefined,
+          )
         : undefined;
     const workingDirectory =
       agent.topology === "native" && this.nativeAgentCheckout
@@ -3538,12 +4143,16 @@ export class AgentSessionsService {
               bindingId: runtime.bindingId,
               environmentName: runtime.environmentName,
             })
-          )?.path ?? this.workingDirectories.get(turn.id) ?? "")
+          )?.path ??
+          this.workingDirectories.get(turn.id) ??
+          "")
         : runtime.provider
           ? this.projectDir(runtime.provider)
           : "";
     this.workingDirectories.set(turn.id, workingDirectory);
-    const keepsChangesInSandbox = Boolean(sandboxProviderId && agent.sandboxing === "contained");
+    const keepsChangesInSandbox = Boolean(
+      sandboxProviderId && agent.sandboxing === "contained",
+    );
     let workspaceSyncError: string | undefined;
     const changedFiles: SyncedFileChange[] = keepsChangesInSandbox
       ? []
@@ -3556,63 +4165,102 @@ export class AgentSessionsService {
             this.usesSessionCopy(session) ? sessionId : undefined,
           ).catch((error: unknown) => {
             if (!(error instanceof SandboxSyncError)) throw error;
-            console.warn(`[catamorphic] Session ${sessionId}: ${error.message}`);
+            console.warn(
+              `[catamorphic] Session ${sessionId}: ${error.message}`,
+            );
             workspaceSyncError = error.message;
             return [];
           })
-        : await this.changedFilesOfTurn(turn.id);
+        : await this.changedFilesOfTurn(turn.id, workingDirectory);
     let storeSync: JsonObject | undefined;
     const storeDir =
       sandboxProviderId && !parseWorkspaceBase(session.workspace)
-        ? await this.storeSyncDir(identity, projectId, { sandboxProviderId }, sessionId, this.usesSessionCopy(session))
+        ? await this.storeSyncDir(
+            identity,
+            projectId,
+            { sandboxProviderId },
+            sessionId,
+            this.usesSessionCopy(session),
+          )
         : null;
     if (storeDir && !keepsChangesInSandbox) {
       try {
         const report = await shipRemoteProject(
           storeDir,
-          documentsClientFor(this.storeSync!.documents, identity, projectId, { source: "store" }),
+          documentsClientFor(this.storeSync!.documents, identity, projectId, {
+            source: "store",
+          }),
         );
         if (
-          report.shipped.length + report.deleted.length + report.conflicts.length + report.notShippable.length + report.failed.length >
+          report.shipped.length +
+            report.deleted.length +
+            report.conflicts.length +
+            report.notShippable.length +
+            report.failed.length >
           0
         )
           storeSync = protocolJson(report) as JsonObject;
       } catch (error) {
-        storeSync = { error: error instanceof Error ? error.message : String(error) };
+        storeSync = {
+          error: error instanceof Error ? error.message : String(error),
+        };
       }
     }
     let failure: TurnError | undefined;
     let checkpointAfter: string | null = null;
-    if (!keepsChangesInSandbox && (agent.topology === "native" || changedFiles.length > 0)) {
+    if (
+      !keepsChangesInSandbox &&
+      (agent.topology === "native" || changedFiles.length > 0)
+    ) {
       try {
-        checkpointAfter = await this.checkpointTurn(identity, projectId, input.inputText, {
-          sessionId,
-          workingDirectory,
-          nativeExecution: agent.topology === "native",
-          // A native agent's checkout is the host's: no session copy there.
-          sessionCopy: agent.topology !== "native" && this.usesSessionCopy(session),
-        });
+        checkpointAfter = await this.checkpointTurn(
+          identity,
+          projectId,
+          input.inputText,
+          {
+            sessionId,
+            workingDirectory,
+            nativeExecution: agent.topology === "native",
+            // A native agent's checkout is the host's: no session copy there.
+            sessionCopy:
+              agent.topology !== "native" && this.usesSessionCopy(session),
+          },
+        );
       } catch (error) {
-        failure = { message: error instanceof Error ? error.message : String(error) };
+        failure = {
+          message: error instanceof Error ? error.message : String(error),
+        };
       }
     }
     let usage = turn.outcome?.usage;
     if (!usage && agent.modelConnection)
-      usage = await this.sandboxGateway?.turnUsage?.({ sessionId, turnId: turn.id }).catch(() => undefined);
+      usage = await this.sandboxGateway
+        ?.turnUsage?.({ sessionId, turnId: turn.id })
+        .catch(() => undefined);
     const inputRow = turn.inputItemId
-      ? await this.db.selectFrom("agent_items").select("payload").where("id", "=", turn.inputItemId).executeTakeFirst()
+      ? await this.db
+          .selectFrom("agent_items")
+          .select("payload")
+          .where("id", "=", turn.inputItemId)
+          .executeTakeFirst()
       : undefined;
     const inputItem = inputRow ? itemFromRow(inputRow) : null;
     const notification =
-      inputItem?.kind === "user_message" && input.completion.status !== "interrupted"
+      inputItem?.kind === "user_message" &&
+      input.completion.status !== "interrupted"
         ? workflowNotification(inputItem.metadata as JsonObject)
         : undefined;
     return {
       outcome: {
-        changedFiles: changedFiles.map((change) => ({ path: change.path, kind: change.kind })),
+        changedFiles: changedFiles.map((change) => ({
+          path: change.path,
+          kind: change.kind,
+        })),
         ...(usage ? { usage } : {}),
         ...(storeSync ? { storeSync: protocolJson(storeSync) } : {}),
-        ...(workspaceSyncError ? { workspaceSync: { error: workspaceSyncError } } : {}),
+        ...(workspaceSyncError
+          ? { workspaceSync: { error: workspaceSyncError } }
+          : {}),
         ...(notification ? { notification } : {}),
       },
       checkpointAfter,
@@ -3621,7 +4269,18 @@ export class AgentSessionsService {
   }
 
   /** Files a native turn changed, from its file change items. */
-  private async changedFilesOfTurn(turnId: string): Promise<SyncedFileChange[]> {
+  /**
+   * Changed files of a host-execution turn: there is no sandbox baseline to
+   * diff, so the harness's file items are the record, relative to the
+   * checkout so they read like repository paths.
+   */
+  private async changedFilesOfTurn(
+    turnId: string,
+    workingDirectory: string,
+  ): Promise<SyncedFileChange[]> {
+    const root = workingDirectory.endsWith("/")
+      ? workingDirectory
+      : `${workingDirectory}/`;
     const rows = await this.db
       .selectFrom("agent_items")
       .select("payload")
@@ -3631,8 +4290,15 @@ export class AgentSessionsService {
     const paths = new Map<string, SyncedFileChange>();
     for (const row of rows) {
       const item = itemFromRow(row);
-      if (item.kind === "file_change" && item.path)
-        paths.set(item.path, { path: item.path, kind: item.change === "deleted" ? "deleted" : "modified" });
+      if (item.kind !== "file_change" || !item.path) continue;
+      const path =
+        workingDirectory && item.path.startsWith(root)
+          ? item.path.slice(root.length)
+          : item.path;
+      paths.set(path, {
+        path,
+        kind: item.change === "deleted" ? "deleted" : "modified",
+      });
     }
     return [...paths.values()];
   }
@@ -3648,12 +4314,18 @@ export class AgentSessionsService {
     const { turn } = input;
     const workingDirectory = this.workingDirectories.get(turn.id) ?? "";
     this.workingDirectories.delete(turn.id);
-    if (!input.retrying)
+    // An interrupted or cancelled turn is no result: whoever stopped it
+    // (the person, an archive) tells the parent.
+    if (
+      !input.retrying &&
+      (turn.status === "completed" || turn.status === "failed")
+    )
       await this.settleDelegation({
         identity: input.identity,
         projectId: input.session.project_id,
         sessionId: input.session.id,
-        resultMessageId: input.reply?.id ?? input.turn.inputItemId ?? input.turn.id,
+        resultMessageId:
+          input.reply?.id ?? input.turn.inputItemId ?? input.turn.id,
         status: turn.status === "completed" ? "completed" : "failed",
         content:
           input.reply?.kind === "assistant_message" && input.reply.text
@@ -3670,14 +4342,20 @@ export class AgentSessionsService {
       status: turn.status === "completed" ? "completed" : "failed",
       interrupted: turn.status === "interrupted",
       retrying: input.retrying,
-      ...(turn.outcome?.notification ? { notification: turn.outcome.notification } : {}),
-      changedFiles: (turn.outcome?.changedFiles ?? []).map((change) => change.path),
+      ...(turn.outcome?.notification
+        ? { notification: turn.outcome.notification }
+        : {}),
+      changedFiles: (turn.outcome?.changedFiles ?? []).map(
+        (change) => change.path,
+      ),
       workingDirectory,
     };
     await Promise.resolve()
       .then(() => this.onTurnSettled?.(event))
       .catch((error) =>
-        console.warn(`[catamorphic] onTurnSettled hook failed: ${error instanceof Error ? error.message : String(error)}`),
+        console.warn(
+          `[catamorphic] onTurnSettled hook failed: ${error instanceof Error ? error.message : String(error)}`,
+        ),
       );
   }
 
@@ -4377,12 +5055,21 @@ export class AgentSessionsService {
     if (!service || isProjectPrincipal(owner)) return {};
     if (
       !input.allowed ||
-      !(await this.authoredByOwner({ projectId, owner, author: input.author, metadata: input.requestMetadata }))
+      !(await this.authoredByOwner({
+        projectId,
+        owner,
+        author: input.author,
+        metadata: input.requestMetadata,
+      }))
     ) {
       await withdraw();
       return {};
     }
-    const environment = await service.unseal({ tenantId: identity.tenantId, projectId, owner });
+    const environment = await service.unseal({
+      tenantId: identity.tenantId,
+      projectId,
+      owner,
+    });
     if (environment.files.length === 0) {
       await withdraw();
       return {};
@@ -4398,7 +5085,9 @@ export class AgentSessionsService {
         identity,
         projectId,
         sessionId: session.id,
-        ...(session.allocation_id ? { allocationId: session.allocation_id } : {}),
+        ...(session.allocation_id
+          ? { allocationId: session.allocation_id }
+          : {}),
         delivered: result.delivered,
         refused: [...result.refused, ...result.unsafe],
       });
@@ -4798,18 +5487,26 @@ export class AgentSessionsService {
           throw new AccessDeniedError();
         if (existing) await this.assertNoRunningTurn({ sessionId });
         const fallback = this.codingAgents.defaultAgentId(projectId) ?? null;
-        const preferred = input.agentSlug ? formatProjectAgentId(projectId, input.agentSlug) : null;
+        const preferred = input.agentSlug
+          ? formatProjectAgentId(projectId, input.agentSlug)
+          : null;
         const usable =
           preferred !== null &&
           this.codingAgents.get(preferred) !== undefined &&
           this.coveringAgentRef(identity, projectId, preferred) !== undefined;
-        const agentId = existing ? existing.agent_id : usable ? preferred : fallback;
+        const agentId = existing
+          ? existing.agent_id
+          : usable
+            ? preferred
+            : fallback;
         const agentNotice =
           !existing && input.agentSlug && !usable
             ? "This chat continues with the server's default agent: this server has no agent for it that your role can use."
             : undefined;
         this.assertAgentAccess(identity, projectId, agentId);
-        const mirrorAgent = existing ? undefined : await this.resolveAgent(agentId, projectId);
+        const mirrorAgent = existing
+          ? undefined
+          : await this.resolveAgent(agentId, projectId);
         const mirrorAdmission = mirrorAgent
           ? await this.executionEnvironments.admit({
               identity,
@@ -4851,7 +5548,12 @@ export class AgentSessionsService {
           ...(mirrorConnections ? { mirrorConnections } : {}),
         });
         return {
-          ...mapSession(written.session, false, this.hostId, this.authorityLeaseMs),
+          ...mapSession(
+            written.session,
+            false,
+            this.hostId,
+            this.authorityLeaseMs,
+          ),
           sequence: written.sequence,
           ...(agentNotice ? { agentNotice } : {}),
         };
@@ -4869,7 +5571,12 @@ export class AgentSessionsService {
     sessionId: string;
     after: number | null;
   }): Promise<Pick<SessionMirrorInput, "base" | "events" | "projectEvents">> {
-    await this.requireSession(input.identity, input.projectId, input.sessionId, "read");
+    await this.requireSession(
+      input.identity,
+      input.projectId,
+      input.sessionId,
+      "read",
+    );
     const projectEvents = await this.db
       .selectFrom("project_events")
       .select(["id", "kind", "occurred_at", "payload"])
@@ -4893,7 +5600,10 @@ export class AgentSessionsService {
       });
       if (!gap.reset) return { events: gap.events, projectEvents: exported };
     }
-    const base = await readFullSnapshot({ db: this.db, sessionId: input.sessionId });
+    const base = await readFullSnapshot({
+      db: this.db,
+      sessionId: input.sessionId,
+    });
     return { base, events: [], projectEvents: exported };
   }
 
@@ -4915,7 +5625,11 @@ export class AgentSessionsService {
         id: derivedNoticeId(sessionId, "mirror_fork"),
         code: "mirror_fork",
         text: `Continued on ${hostOf(fork.serverUrl)}. This copy is history now.`,
-        data: { serverUrl: fork.serverUrl, remoteProjectId: fork.remoteProjectId, sessionId },
+        data: {
+          serverUrl: fork.serverUrl,
+          remoteProjectId: fork.remoteProjectId,
+          sessionId,
+        },
       }),
     );
   }
@@ -4927,11 +5641,21 @@ export class AgentSessionsService {
    */
   private async appendNotice(
     trx: Transaction<DB>,
-    input: { sessionId: string; id?: string; code: string; text: string; data?: JsonObject },
+    input: {
+      sessionId: string;
+      id?: string;
+      code: string;
+      text: string;
+      data?: JsonObject;
+    },
   ): Promise<void> {
     const id = input.id ?? randomUUID();
     if (input.id) {
-      const existing = await trx.selectFrom("agent_items").select("id").where("id", "=", id).executeTakeFirst();
+      const existing = await trx
+        .selectFrom("agent_items")
+        .select("id")
+        .where("id", "=", id)
+        .executeTakeFirst();
       if (existing) return;
     }
     const now = new Date().toISOString();
@@ -5115,12 +5839,19 @@ export class AgentSessionsService {
           {
             type: "session.changed",
             session: {
-              ...(updates.agent_id !== undefined ? { agentId: updates.agent_id } : {}),
+              ...(updates.agent_id !== undefined
+                ? { agentId: updates.agent_id }
+                : {}),
               ...(updates.model !== undefined ? { model: updates.model } : {}),
               ...(updates.model_effort !== undefined
-                ? { modelEffort: (updates.model_effort as AgentEffort | null) ?? null }
+                ? {
+                    modelEffort:
+                      (updates.model_effort as AgentEffort | null) ?? null,
+                  }
                 : {}),
-              ...(updates.environment_name !== undefined ? { environment: updates.environment_name } : {}),
+              ...(updates.environment_name !== undefined
+                ? { environment: updates.environment_name }
+                : {}),
             },
           },
         ],
@@ -5265,10 +5996,14 @@ export class AgentSessionsService {
             sessionId: forkId,
             ...(input.messageId ? { throughItemId: input.messageId } : {}),
           });
-          if (!copy) throw new AgentSessionNotFoundError(input.messageId ?? sessionId);
+          if (!copy)
+            throw new AgentSessionNotFoundError(input.messageId ?? sessionId);
           const fork = await trx
             .updateTable("agent_sessions")
-            .set({ icon: session.icon, base_commit_sha: session.base_commit_sha })
+            .set({
+              icon: session.icon,
+              base_commit_sha: session.base_commit_sha,
+            })
             .where("id", "=", forkId)
             .returningAll()
             .executeTakeFirstOrThrow();
@@ -5278,7 +6013,10 @@ export class AgentSessionsService {
           );
           // Positions stay the source's, so the fork's log continues after
           // the source's sequence.
-          await this.log.importSnapshot(trx, { sessionId: forkId, snapshot: copy.snapshot });
+          await this.log.importSnapshot(trx, {
+            sessionId: forkId,
+            snapshot: copy.snapshot,
+          });
           await sql`select set_config('catamorphic.suppress_session_events', 'false', true)`.execute(
             trx,
           );
@@ -5304,7 +6042,8 @@ export class AgentSessionsService {
                     harness: copy.forkPoint.harness,
                     nativeRef: null,
                     status: "active",
-                    lastTurnOrdinal: copy.snapshot.turns.at(-1)?.ordinal ?? null,
+                    lastTurnOrdinal:
+                      copy.snapshot.turns.at(-1)?.ordinal ?? null,
                     portable: false,
                     createdAt: now,
                     updatedAt: now,
@@ -5321,7 +6060,9 @@ export class AgentSessionsService {
                   ...(copy.forkPoint.throughTurnRef
                     ? { throughTurnRef: copy.forkPoint.throughTurnRef }
                     : {}),
-                  ...(source?.state_path ? { statePath: source.state_path } : {}),
+                  ...(source?.state_path
+                    ? { statePath: source.state_path }
+                    : {}),
                 }),
               })
               .where("id", "=", threadId)
@@ -5497,7 +6238,10 @@ export class AgentSessionsService {
         transaction,
       });
       if (inherited) {
-        const copy = copySettledHistory({ snapshot: inherited, sessionId: child.id });
+        const copy = copySettledHistory({
+          snapshot: inherited,
+          sessionId: child.id,
+        });
         if (copy) {
           await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
             transaction,
@@ -5690,7 +6434,8 @@ export class AgentSessionsService {
       .where("turn.status", "in", [...ACTIVE_TURN_STATUSES])
       .executeTakeFirst();
     const item = row ? itemFromRow(row) : null;
-    const chain = item?.kind === "user_message" ? item.metadata.causation : undefined;
+    const chain =
+      item?.kind === "user_message" ? item.metadata.causation : undefined;
     return Array.isArray(chain)
       ? chain.filter((id): id is string => typeof id === "string")
       : [];
@@ -6176,7 +6921,11 @@ export class AgentSessionsService {
             selectFrom("agent_turns")
               .select("agent_turns.id")
               .whereRef("agent_turns.session_id", "=", "session.id")
-              .where("agent_turns.status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES]),
+              .where("agent_turns.status", "in", [
+                "queued",
+                "held",
+                ...ACTIVE_TURN_STATUSES,
+              ]),
           ),
         ),
       )
@@ -6438,7 +7187,12 @@ export class AgentSessionsService {
           for (const id of sessionIds)
             await this.log.append(trx, {
               sessionId: id,
-              events: [{ type: "session.changed", session: { status: "closed", activity: null } }],
+              events: [
+                {
+                  type: "session.changed",
+                  session: { status: "closed", activity: null },
+                },
+              ],
             });
           // Work delivered while the running turns stopped would wait on a
           // closed chat forever: cancel it with the closing, under the lock.
@@ -6496,12 +7250,25 @@ export class AgentSessionsService {
       const turn = turnFromRow(row);
       const events = bySession.get(turn.sessionId) ?? [];
       if (isActiveTurnStatus(turn.status)) {
-        events.push({ type: "turn.changed", turn: { ...turn, cancellationRequested: true, updatedAt: now } });
-        await this.queue.enqueueCommand(trx, { turnId: turn.id, attemptId: turn.activeAttemptId, kind: "interrupt" });
+        events.push({
+          type: "turn.changed",
+          turn: { ...turn, cancellationRequested: true, updatedAt: now },
+        });
+        await this.queue.enqueueCommand(trx, {
+          turnId: turn.id,
+          attemptId: turn.activeAttemptId,
+          kind: "interrupt",
+        });
       } else {
         events.push({
           type: "turn.changed",
-          turn: { ...turn, status: "cancelled", error: { message: input.reason }, completedAt: now, updatedAt: now },
+          turn: {
+            ...turn,
+            status: "cancelled",
+            error: { message: input.reason },
+            completedAt: now,
+            updatedAt: now,
+          },
         });
       }
       bySession.set(turn.sessionId, events);
@@ -6647,20 +7414,25 @@ export class AgentSessionsService {
           if (abandoned.length === 0) return;
           await this.log.append(trx, {
             sessionId: row.id,
-            events: abandoned.map((turnRow): SessionEvent => ({
-              type: "turn.changed",
-              turn: {
-                ...turnFromRow(turnRow),
-                status: "interrupted",
-                activity: null,
-                activityAt: null,
-                error: { message: "The host stopped while this turn was running." },
-                completedAt: now,
-                updatedAt: now,
-              },
-            })),
+            events: abandoned.map(
+              (turnRow): SessionEvent => ({
+                type: "turn.changed",
+                turn: {
+                  ...turnFromRow(turnRow),
+                  status: "interrupted",
+                  activity: null,
+                  activityAt: null,
+                  error: {
+                    message: "The host stopped while this turn was running.",
+                  },
+                  completedAt: now,
+                  updatedAt: now,
+                },
+              }),
+            ),
           });
-          for (const turnRow of abandoned) await this.queue.release(trx, { turnId: turnRow.id });
+          for (const turnRow of abandoned)
+            await this.queue.release(trx, { turnId: turnRow.id });
         });
         // A chat another process is finishing is left to it: the sweep
         // never waits.
@@ -6800,7 +7572,10 @@ export class AgentSessionsService {
     // Cancel waiting work before interrupting the current turns so a drainer
     // cannot claim another queued turn during shutdown.
     await this.db.transaction().execute((trx) =>
-      this.stopSessionTurns(trx, { sessionIds: impact.sessionIds, reason: "Session archived" }),
+      this.stopSessionTurns(trx, {
+        sessionIds: impact.sessionIds,
+        reason: "Session archived",
+      }),
     );
     await this.archiveResources?.stop({
       identity,
@@ -7497,14 +8272,27 @@ export class AgentSessionsService {
     checkout?: NativeCheckout;
   }> {
     if (agent.topology === "native") {
-      const checkout = await this.resolveNativePath(projectId, session, runtime, identity);
+      const checkout = await this.resolveNativePath(
+        projectId,
+        session,
+        runtime,
+        identity,
+      );
       return { workingDirectory: checkout.path, checkout };
     }
     if (!runtime.provider || !runtime.devSandboxes)
-      throw new Error("The selected Environment has no agent workspace provider");
+      throw new Error(
+        "The selected Environment has no agent workspace provider",
+      );
     if (session.sandbox_id) {
-      const sandboxProviderId = await this.resolveSandboxProviderId(session, runtime.provider);
-      return { workingDirectory: this.projectDir(runtime.provider), sandboxProviderId };
+      const sandboxProviderId = await this.resolveSandboxProviderId(
+        session,
+        runtime.provider,
+      );
+      return {
+        workingDirectory: this.projectDir(runtime.provider),
+        sandboxProviderId,
+      };
     }
     const { handle, baseCommitSha } = await this.prepareDevSandbox(
       { provider: runtime.provider, devSandboxes: runtime.devSandboxes },
@@ -8111,25 +8899,6 @@ export class AgentSessionsService {
     return agent ? agent.sandboxing : "contained";
   }
 
-  /** `caller` + `toolPolicies` for {@link StartSessionOpts}. */
-  private async callerOpts(
-    identity: Identity,
-    projectId: string,
-    agentId: string | null,
-  ): Promise<{
-    caller: Identity;
-    toolPolicies?: Record<string, McpToolPolicyLayers>;
-  }> {
-    const toolPolicies = withAgentLayers(
-      await this.callerToolPolicies(identity, projectId, agentId),
-      await this.resolveAgent(agentId, projectId).catch(() => undefined),
-    );
-    // The root identity sends an EMPTY map, not none: a turn's layers replace the
-    // session's, so the root continuing a viewer's session sheds the
-    // viewer's narrowing instead of inheriting it.
-    return { caller: identity, toolPolicies: toolPolicies ?? {} };
-  }
-
   /** Ownership check without loading messages: throws when the session
    * isn't the caller's / the project's. */
   async assertSession(
@@ -8237,7 +9006,7 @@ export class AgentSessionsService {
             ? "awaiting_input"
             : turn.status === "completed"
               ? "completed"
-              : isSettledTurnStatus(turn.status)
+              : turn.status === "failed"
                 ? "failed"
                 : null;
         if (!status) continue;
@@ -8496,11 +9265,6 @@ export function liveStatusLine(value: string | undefined): string | undefined {
     .replace(/[.:]+$/, "");
   if (!line) return undefined;
   return line.length > 80 ? `${line.slice(0, 79).trimEnd()}…` : line;
-}
-
-
-function truncate(value: string, max: number): string {
-  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
 function hostOf(serverUrl: string): string {
@@ -8814,10 +9578,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function agentTodosJson(value: readonly AgentTodoInput[]) {
-  return sql<Json>`${JSON.stringify(value)}::jsonb`;
-}
-
 export function modelVisibleDelivery(
   content: string,
   author: SessionMessageAuthor,
@@ -8861,7 +9621,9 @@ function hostToolDescriptor(tool: ExtraTool): HostToolDescriptor {
 }
 
 /** MCP content from what a host tool returned. */
-function hostToolResult(value: ReturnType<typeof extraToolResult>): HostToolResult {
+function hostToolResult(
+  value: ReturnType<typeof extraToolResult>,
+): HostToolResult {
   const content = (value.content ?? []).flatMap(
     (part): HostToolResult["content"] =>
       part.type === "text"
@@ -8919,6 +9681,8 @@ const SIGN_IN_HARNESS_NAMES: Record<SignInHarness, string> = {
 
 /** A deterministic id for a notice Work writes at most once per session. */
 function derivedNoticeId(sessionId: string, code: string): string {
-  const hex = createHash("sha256").update(`notice ${sessionId} ${code}`).digest("hex");
+  const hex = createHash("sha256")
+    .update(`notice ${sessionId} ${code}`)
+    .digest("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }

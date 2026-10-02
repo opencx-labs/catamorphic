@@ -1,19 +1,9 @@
 /**
- * A member's remote environment (ADR 0184): their own harness sign-ins and
- * chosen project files, sent by this desktop to a linked Work server for
- * their own sessions there. Plain data shared by main and renderer.
+ * A member's remote environment (ADR 0184): the project files they chose,
+ * sent by this desktop to a linked Work server for their own sessions there.
+ * Sign-ins stay on the machine they were made on (ADR 0198). Plain data
+ * shared by main and renderer.
  */
-export const PERSONAL_HARNESSES = ["claude-code", "codex"] as const;
-export type PersonalHarness = (typeof PERSONAL_HARNESSES)[number];
-
-export const PERSONAL_HARNESS_LABELS: Record<PersonalHarness, string> = {
-  "claude-code": "Claude Code",
-  codex: "Codex",
-};
-
-export function isPersonalHarness(value: unknown): value is PersonalHarness {
-  return PERSONAL_HARNESSES.some((harness) => harness === value);
-}
 
 /** What the server says about this member's environment. */
 export type PersonalEnvironmentServerState =
@@ -30,23 +20,6 @@ export type PersonalEnvironmentServerState =
   /** The server could not be reached. */
   | "unreachable";
 
-export interface PersonalEnvironmentLoginView {
-  harness: PersonalHarness;
-  label: string;
-  /** Listed in the config (or included by default). */
-  included: boolean;
-  /** Signed in on this computer. */
-  available: boolean;
-  /** The local sign-in's access expiry. */
-  expiresAt: string | null;
-  /** The copy the server holds, when it holds one. */
-  server: {
-    expiresAt: string | null;
-    updatedAt: string;
-    needsRefresh: boolean;
-  } | null;
-}
-
 export interface PersonalEnvironmentFileView {
   path: string;
   bytes: number | null;
@@ -62,7 +35,6 @@ export interface PersonalEnvironmentView {
   configExists: boolean;
   configError: string | null;
   server: PersonalEnvironmentServerState;
-  logins: PersonalEnvironmentLoginView[];
   files: PersonalEnvironmentFileView[];
   /** When this desktop last sent the environment. */
   lastSyncAt: string | null;

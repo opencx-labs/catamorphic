@@ -8,9 +8,15 @@ const harness = vi.hoisted(() => ({
   codex: vi.fn(),
 }));
 vi.mock("@catamorphic/claude-code", () => ({
+  CLAUDE_CODE_CAPABILITIES: {},
+  createClaudeCodeAdapter: () => ({ id: "claude-code" }),
   resolveClaudeCodeModel: harness.claude,
 }));
-vi.mock("@catamorphic/codex", () => ({ resolveCodexModel: harness.codex }));
+vi.mock("@catamorphic/codex", () => ({
+  CODEX_CAPABILITIES: {},
+  createCodexAdapter: () => ({ id: "codex" }),
+  resolveCodexModel: harness.codex,
+}));
 vi.mock("electron", () => ({ safeStorage: {} }));
 
 import type { AgentConfig } from "../agents-store.js";
@@ -38,7 +44,6 @@ function registryWith(configs: Partial<AgentConfig>[]) {
         connections: { list: () => [] },
       }),
     },
-    sandboxProvider: {},
     agentHomesDir: homes,
     harnessComponentsDir: "/unused",
   } as unknown as DesktopAgentRegistryDeps;
@@ -78,7 +83,6 @@ it("asks Claude Code with the session's credentials and caches per agent and fol
   // Another folder can carry its own project settings.
   await ask("/worktree");
   expect(harness.claude).toHaveBeenCalledTimes(2);
-  await registry.dispose();
 });
 
 it("does not keep a failed answer", async () => {
@@ -103,7 +107,6 @@ it("does not keep a failed answer", async () => {
     workingDirectory: "/project",
     env: { PATH: "/toolchain" },
   });
-  await registry.dispose();
 });
 
 it("names the built-in agent's resolved model without spawning anything", async () => {
@@ -120,5 +123,4 @@ it("names the built-in agent's resolved model without spawning anything", async 
   ).resolves.toEqual({ model: { id: "vendor/free-model:free" } });
   expect(harness.claude).not.toHaveBeenCalled();
   expect(harness.codex).not.toHaveBeenCalled();
-  await registry.dispose();
 });

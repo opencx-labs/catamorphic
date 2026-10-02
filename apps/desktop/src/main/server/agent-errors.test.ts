@@ -1,9 +1,5 @@
-import type {
-  CodingAgentProvider,
-  ProviderSession,
-} from "@catamorphic/sandbox";
 import { describe, expect, it } from "vitest";
-import { classifyAgentError, FriendlyAgentErrors } from "./agent-errors.js";
+import { classifyAgentError, friendlyTurnError } from "./agent-errors.js";
 
 describe("classifyAgentError", () => {
   it("classifies CLI OAuth session failures as auth", () => {
@@ -38,68 +34,46 @@ describe("classifyAgentError", () => {
   });
 });
 
-it("explains native writer ownership without classifying it for automatic retry", async () => {
-  const session: ProviderSession = {
-    providerSessionId: "native-test-thread",
-    sessionId: "test-session",
-    projectId: "test-project",
-    sandboxId: "local",
-    workingDirectory: "/test",
-  };
+it("explains native writer ownership without classifying it for automatic retry", () => {
   const original =
     "thread 01a090c8-1302-70e3-8055-5a412ec59c75 already has an active writer";
-  const inner: CodingAgentProvider = {
-    name: "codex",
-    async startSession() {
-      return session;
-    },
-    async *sendMessage() {
-      yield { type: "error", content: original };
-      yield { type: "error", content: `Tool read failed: ${original}` };
-    },
-    async dispose() {},
-  };
-  const events = [];
-  for await (const event of new FriendlyAgentErrors(
-    inner,
-    "Codex",
-    "Codex",
-  ).sendMessage(session, "Continue"))
-    events.push(event);
-  expect(events[0]?.content).toContain("Close it there, then retry here");
-  expect(events[0]?.content).not.toContain("01a090c8");
-  expect(events[0]?.errorKind).toBeUndefined();
-  expect(events[1]?.content).toBe(`Tool read failed: ${original}`);
+  const owned = friendlyTurnError({
+    error: { message: original },
+    agentName: "Codex",
+    providerLabel: "Codex",
+  });
+  expect(owned.message).toContain("Close it there, then retry here");
+  expect(owned.message).not.toContain("01a090c8");
+  expect(owned.kind).toBeUndefined();
+  const tool = friendlyTurnError({
+    error: { message: `Tool read failed: ${original}` },
+    agentName: "Codex",
+    providerLabel: "Codex",
+  });
+  expect(tool.message).toBe(`Tool read failed: ${original}`);
 });
 
-it("does not mistake an unsupported Codex model for an unrelated MCP sign-in failure", async () => {
-  const content =
+it("does not mistake an unsupported Codex model for an unrelated MCP sign-in failure", () => {
+  const message =
     "MCP connection failed: Unauthorized\nThis model requires a newer version of Codex";
-  expect(classifyAgentError(content)).toBeUndefined();
-  const session: ProviderSession = {
-    providerSessionId: "native",
-    sessionId: "session",
-    projectId: "project",
-    sandboxId: "local",
-    workingDirectory: "/test",
-  };
-  const inner: CodingAgentProvider = {
-    name: "codex",
-    async startSession() {
-      return session;
-    },
-    async *sendMessage() {
-      yield { type: "error", content, errorKind: "auth" };
-    },
-    async dispose() {},
-  };
-  const events = [];
-  for await (const event of new FriendlyAgentErrors(
-    inner,
-    "Codex",
-    "Codex",
-  ).sendMessage(session, "Hello"))
-    events.push(event);
-  expect(events[0]?.content).toContain("Choose another model");
-  expect(events[0]?.errorKind).toBeUndefined();
+  expect(classifyAgentError(message)).toBeUndefined();
+  const error = friendlyTurnError({
+    error: { message, kind: "auth" },
+    agentName: "Codex",
+    providerLabel: "Codex",
+  });
+  expect(error.message).toContain("Choose another model");
+  expect(error.kind).toBeUndefined();
+});
+
+it("rewrites a provider's raw auth failure into the reconnect path", () => {
+  const error = friendlyTurnError({
+    error: { message: "User not found." },
+    agentName: "Fake Agent",
+    providerLabel: "OpenRouter",
+  });
+  expect(error.kind).toBe("auth");
+  expect(error.message).toContain(
+    'rejected the credentials of the "Fake Agent"',
+  );
 });

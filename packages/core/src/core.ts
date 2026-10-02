@@ -1,8 +1,11 @@
+import type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
 import { type DB, type Json, withJsonArrayParameters } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import type { PluginResolver } from "@catamorphic/plugins";
-import type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
-import type { EnvironmentProvider, SandboxProvider } from "@catamorphic/sandbox";
+import type {
+  EnvironmentProvider,
+  SandboxProvider,
+} from "@catamorphic/sandbox";
 import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import { PROJECT_SKILLS_DIR } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
@@ -16,6 +19,7 @@ import {
   AgentSessionsService,
   type AgentTurnSettledEvent,
   type NativeAgentCheckout,
+  type ToolAlwaysAllowedEvent,
 } from "./services/agent-sessions-service.js";
 import type { AppBundleStore } from "./services/app-bundle-store.js";
 import { AppPoliciesService } from "./services/app-policies-service.js";
@@ -295,6 +299,8 @@ export interface CatamorphicCoreConfig {
    * kind. Exceptions are swallowed and never delay the turn.
    */
   onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
+  /** A person chose "Always allow" for an agent's tool; the host keeps it (ADR 0054). */
+  onToolAlwaysAllowed?: (event: ToolAlwaysAllowedEvent) => void | Promise<void>;
   /** Optional host-owned Web Push transport. Events remain durable without it. */
   pushNotifications?: PushNotificationTransport;
   /**
@@ -1163,6 +1169,9 @@ export class CatamorphicCore {
           : {}),
         plugins: this.plugins,
         pluginResolver: this.pluginResolver,
+        ...(config.onToolAlwaysAllowed
+          ? { onToolAlwaysAllowed: config.onToolAlwaysAllowed }
+          : {}),
         onTurnSettled: async (event) => {
           if (
             event.status === "completed" ||
@@ -1292,18 +1301,17 @@ export class CatamorphicCore {
       ...previous,
       ...(run.workflow_enablement_id ? [run.workflow_enablement_id] : []),
     ];
-    const author: SessionMessageAuthor =
-      {
-        kind: "workflow",
-        runId: context.runId,
-        workflowName: context.workflowName,
-        ...(run.provenance &&
-        typeof run.provenance === "object" &&
-        !Array.isArray(run.provenance) &&
-        typeof run.provenance.displayName === "string"
-          ? { displayName: run.provenance.displayName }
-          : {}),
-      };
+    const author: SessionMessageAuthor = {
+      kind: "workflow",
+      runId: context.runId,
+      workflowName: context.workflowName,
+      ...(run.provenance &&
+      typeof run.provenance === "object" &&
+      !Array.isArray(run.provenance) &&
+      typeof run.provenance.displayName === "string"
+        ? { displayName: run.provenance.displayName }
+        : {}),
+    };
     return {
       author,
       causation,

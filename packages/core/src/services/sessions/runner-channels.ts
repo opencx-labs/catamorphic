@@ -132,16 +132,11 @@ export async function startSandboxRunner(input: {
   bundle ??= loadRunnerBundle();
   const { source, hash } = await bundle;
   const directory = `${input.stateDirectory}/runner`;
-  // Commands name the bundle relative to their working directory: a
-  // provider maps working directories, never paths inside commands.
-  const relative = `runner/${hash}.mjs`;
   const present = await input.provider
     .executeCommand(
       input.sandboxId,
-      `test -f ${shellQuote(relative)} && echo present`,
-      {
-        cwd: input.stateDirectory,
-      },
+      `test -f ${shellQuote(`runner/${hash}.mjs`)} && echo present`,
+      { cwd: input.stateDirectory },
     )
     .then(
       (result) => result.result.includes("present"),
@@ -155,7 +150,9 @@ export async function startSandboxRunner(input: {
     );
   const started = await processes.startProcess({
     sandboxId: input.sandboxId,
-    command: `runtime="$(command -v bun || command -v node)"; if [ -z "$runtime" ]; then echo "This sandbox has neither Bun nor Node to run the agent runner." >&2; exit 127; fi; exec "$runtime" ${shellQuote(relative)}`,
+    // Relative to its working directory: a provider maps only the cwd onto
+    // its own filesystem, never paths inside a command.
+    command: `runtime="$(command -v bun || command -v node)"; if [ -z "$runtime" ]; then echo "This sandbox has neither Bun nor Node to run the agent runner." >&2; exit 127; fi; exec "$runtime" ${shellQuote(`runner/${hash}.mjs`)}`,
     cwd: input.stateDirectory,
     ...(input.env ? { env: input.env } : {}),
     name: "Agent runner",

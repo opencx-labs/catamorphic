@@ -365,7 +365,7 @@ Project permissions are `thing:action`. Catamorphic enforces these:
 
 `write` and `publish` each imply `read` on the same thing; nothing else implies anything, so `program:publish` does not include `program:write`. A grant may be `thing:*` or `*`. Deleting a project is a tenant operation for the root identity only.
 
-Which artifacts and permissions each user gets is host policy (a role file, an entitlement table); catamorphic only enforces the result. Enforcement lives in core, so `server-sdk` callers get it too: `catamorphic.forTenant({ tenantId }).forUser({ externalUserId, scope, projectPermissions })`. Scoped agent sessions hand the harness the caller (`StartSessionOpts.caller`, forwarded on `ExtraToolContext.caller`) and the caller's policy layers (`StartSessionOpts.toolPolicies`, refreshed on every `TurnOptions.toolPolicies`) — a hosting backend uses `caller` in `mcpServersForSession` to mint the project MCP endpoint's credentials for that user, so the endpoint enforces the same scope structurally. See [`docs/decisions/0053-identity-scope-and-app-routes.md`](docs/decisions/0053-identity-scope-and-app-routes.md) and [`0055`](docs/decisions/0055-company-brain-roles-store-and-change-loop.md).
+Which artifacts and permissions each user gets is host policy (a role file, an entitlement table); catamorphic only enforces the result. Enforcement lives in core, so `server-sdk` callers get it too: `catamorphic.forTenant({ tenantId }).forUser({ externalUserId, scope, projectPermissions })`. Scoped agent sessions hand host hooks the caller (`AgentTurnContext.caller`, also on `ExtraToolContext.caller`) and the harness the caller's policy layers (`AttemptStart.toolPolicies`, read again at every attempt): a hosting backend uses `caller` in `harness.mcpServers(context)` to mint the project MCP endpoint's credentials for that user, so the endpoint enforces the same scope structurally. See [`docs/decisions/0053-identity-scope-and-app-routes.md`](docs/decisions/0053-identity-scope-and-app-routes.md) and [`0055`](docs/decisions/0055-company-brain-roles-store-and-change-loop.md).
 
 ### Roles as files, memberships as the stock source (ADR 0055)
 
@@ -446,6 +446,37 @@ Scope is how a host says "may not"; a few coarse switches say what the whole ins
 
 **Remote login.** Connect links are credential-free locators: `work://connect?server=…&project=…&invitation=…`. A compatible host publishes OAuth protected-resource and authorization-server metadata. The desktop and PWA dynamically register public clients, use authorization code with S256 PKCE, keep refreshable credentials in local protected storage, and redeem admission after sign-in. A 401 changes the connection state to "Sign in again" and reruns the same OAuth path. Embedders may implement that contract with their existing identity system; Catamorphic's framework packages remain auth-neutral.
 
+### Agent sessions: an event log of turns (ADRs 0196, 0197)
+
+A session holds turns; a turn holds attempts; items are the ordered
+transcript (messages, reasoning, tool calls, commands, file changes, plans,
+requests, subagents, notices); runtime requests are questions, approvals and
+elicitations; provider threads are the harnesses' native conversations. Every
+change is an event in the session's gapless log, committed with the rows it
+changes, so a client folds the same history wherever it reads it. The types
+and the pure reducer are `@catamorphic/agent-protocol`.
+
+- `GET /projects/:id/agent/sessions/:sid` returns the session with a bounded
+  `snapshot` (recent turns, their items, open requests, threads) and its
+  `sequence`; `GET .../items?before` pages older items.
+- `GET .../events?after=<sequence>` streams events over SSE (`events`,
+  `reset` with a fresh snapshot when the gap is too large, `heartbeat`).
+  Fold them with `applySessionEvents`; resume from the last sequence.
+- `POST .../commands` takes one `SessionCommand` (`send` with `dispatch:
+  queue | steer | interrupt`, `interrupt`, `retry`, `edit_queued`,
+  `cancel_queued`, `send_now`, `respond`, `rollback`) with a client-made
+  `commandId`; sending it again returns its first receipt.
+
+Agents are `RegisteredCodingAgent`s whose `harness` is either `{ placement:
+"host", adapter }` (a `HarnessAdapter` such as `createClaudeCodeAdapter`,
+`createCodexAdapter` or `createAiSdkAdapter`, run in this process, beside a
+checkout on this machine or driving a sandbox through its tools) or `{
+placement: "sandbox", id }` (the bundled runner runs the CLI inside the
+session's sandbox). A turn whose machine went away is recovered by any
+replica: its runner is reattached when it survived, otherwise the attempt is
+lost and a continuation turn resumes the native thread (`recovery:
+"continue"`, the default).
+
 ### Agent session lifecycle and delegation
 
 Agent sessions carry source provenance, hierarchy, fork lineage, presentation,
@@ -460,8 +491,7 @@ durable identities and policies.
 Archive is a recursive server operation, not a local hidden flag. It reports
 the session ids, running work, Watchers, and processes that would stop and
 returns `409 archive_confirmation_required` until the caller confirms when
-necessary. Unarchive restores navigation; later work re-anchors the chosen
-provider. React hosts use `useArchiveAgentSession`,
+necessary. Unarchive restores navigation. React hosts use `useArchiveAgentSession`,
 `useUnarchiveAgentSession`, and
 `useAcknowledgeAgentSessionAttention` instead of hand-written state.
 
@@ -548,34 +578,31 @@ Coding-agent harnesses gate every MCP tool call through a permission policy
 (`allow` / `ask` / `deny`; `auto` = read-only tools run, others ask). A host
 supplies two things:
 
-- **Policies** — per server key, as layers that intersect (strictest wins).
-  Pass `mcpPolicies` (a value or a getter) to `AiSdkCodingAgent` /
-  `ClaudeCodeAgent` / `CodexAgent`; a shared org credential's ceiling is
-  simply the first layer, the user's own policy the second, the agent's the
-  third. Codex has no per-call approval channel: `deny` and `ask` become
-  `disabled_tools` there.
-- **The answer to `ask`** — `onToolPermission`. Hosts with their own consent
-  UI implement it directly. Browser-served hosts use the broker: create a
-  `ToolPermissionBroker` (from `@catamorphic/core`), pass it as
-  `toolPermissions` on the core config and hand `broker.handlerFor(agentName)`
-  to each provider. The plugin then serves
-  `GET /projects/:id/agent/sessions/:sid/permissions` and
-  `POST …/permissions/:pid` (`{decision: "allow" | "deny", remember?:
-  "always"}`); `useToolPermissions()` in `@catamorphic/react` polls them
-  while a turn runs and the registry's `tool-permission-card` (already inside
-  `agent-chat`) renders the consent. Unanswered asks deny after five minutes.
-  Persisting an "always allow" is the host's job — it knows where the
-  connection's policy lives.
-- **Unattended chats** (ADR 0176) — `DurableToolPermissionBroker` (durable,
-  any replica answers) routes an ask in a project chat, or one a workflow
-  delivered with `approvers: { members, roles }`, to those people: it
-  publishes an `approval_requested` notification, promotes the chat in their
-  list, and lets them answer the card without otherwise holding the chat
-  (the permission routes filter to what they may answer). It waits the
-  Environment's `approvals.waitMinutes` (options `timeoutMs` and
-  `unattendedTimeoutMs` set the defaults: five and 30 minutes) and denies
-  with a `reason` the agent reads. Role holders come from stock memberships;
-  hosts with their own directory name members.
+- **Policies**: per server key, as layers that intersect (strictest wins).
+  A host agent's `harness.toolPolicies()` (read at every attempt) and
+  `RegisteredCodingAgent.toolPolicies` give the host's and the agent's
+  layers; core adds the caller's. A shared org credential's ceiling is simply
+  the first layer, the user's own policy the second, the agent's the third.
+  The runner applies them to every tool call, in every harness (ADR 0197).
+- **The answer to `ask`** (ADR 0196): an ask is a runtime request on the
+  session's working turn (`kind: "approval"`), in the session snapshot and
+  its event stream like any other change. Any client answers it on any
+  replica with a `respond` command:
+  `POST /projects/:id/agent/sessions/:sid/commands` with
+  `{ type: "respond", commandId, requestId, response: { kind: "approval",
+  decision: "approved" | "denied", remember?: "always" } }`. Questions and
+  elicitations answer the same way. Persisting an "always allow" is the
+  host's job, through `onToolAlwaysAllowed({ agentId, server, tool })`: it
+  knows where the connection's policy lives.
+- **Unattended chats** (ADR 0176): an approval in a project chat, or in one a
+  workflow delivered with `approvers: { members, roles }`, opens with those
+  people as its `approvers`: they get an `approval_requested` notification,
+  the chat is promoted in their list, and only they may answer it (they need
+  no other access to the chat). It waits the Environment's
+  `approvals.waitMinutes` (default 30 minutes; five in a person's own chat)
+  and then denies with a `reason` the agent reads. With nobody to approve it
+  is refused at once, with a reason. Role holders come from stock
+  memberships; hosts with their own directory name members.
 
 Core also applies a committed definition's `toolPolicies` (keyed by
 connection alias or `catamorphic`) as the agent's layer on every host, and
@@ -587,8 +614,7 @@ gateway, and only read connection actions run
 `RegisteredCodingAgent.sandboxing` and `.toolPolicies` carry the same for
 agents a host defines itself. A definition's `harnessPermissions` (Claude
 Code `permissionMode`; Codex `sandbox` and `approvals`) reach the harness as
-`TurnOptions.harnessPermissions` on every turn; harnesses honor them over
-their constructor defaults.
+`AttemptStart.permissions` on every attempt, over the agent's own options.
 
 ## Ready-made components: `@catamorphic/ui`
 
@@ -837,7 +863,7 @@ entries is legitimate:
 - `standingAgentPrompt` — the standing system prompt for agent sessions:
   omit for the default (`STANDING_AGENT_PROMPT`: general work, audience
   calibration, skills on demand), a string to replace, `false` for none.
-  Keep it stable; per-turn facts belong in `TurnOptions.context` fragments
+  Keep it stable; per-turn facts belong in `harness.context(context)` fragments
   (ADR 0152), not the system prompt.
 
 ```ts
@@ -950,7 +976,7 @@ the Work server ship none. Core runs them in order on every brokered action
 (connections, Git, models) and keeps the mechanics: any deny wins, a guard
 that throws denies, one slower than `connectionGuardTimeoutMs` (default 30
 seconds) escalates, an escalation asks the agent session's person or a project
-chat's approvers through `toolPermissions` (a workflow's is refused), and each
+chat's approvers with a request on the working turn (a workflow's is refused), and each
 verdict lands in the connection audit. Guards skip connections outside their
 `kinds`, so the audit holds only verdicts that were judged. Provider limits,
 Git push rules, and model allowlists and budgets are mechanics and stay in
@@ -1028,23 +1054,24 @@ back unchanged. Guards see kind `model` with action = method and path
 spending rules belong in guards. Usage lands in `model_usage` per session and
 turn, read passively from Anthropic and OpenAI answers (zero when a format is
 not recognized, such as a Chat Completions stream without
-`stream_options.include_usage`). At each sandbox turn core writes the grant of every model alias into
-the sandbox (the same `sandbox`-channel grants as Git) and passes the turn
-`TurnOptions.sandbox` and, for an agent registered with `modelConnection:
-<alias>`, `TurnOptions.modelGateway`. `ClaudeCodeAgent` and `CodexAgent` with
-`sandbox: {}` then run their CLI inside that sandbox over process operations
-(`spawnInSandbox`; providers implement `processes.writeProcessInput` for a
-process started with `stdin: true`), with the gateway as their only model
-endpoint. Harness binaries come from the Environment image.
+`stream_options.include_usage`). At each sandbox attempt core writes the grant of every model alias into
+the sandbox (the same `sandbox`-channel grants as Git), and an agent
+registered with `harness: { placement: "sandbox", id }` and `modelConnection:
+<alias>` gets `AttemptStart.modelAccess = { kind: "gateway", ... }`. Core
+starts the runner bundle (`@catamorphic/runner-bundle`) inside the sandbox
+as a process with standard input (providers implement
+`processes.writeProcessInput` for a process started with `stdin: true`); the
+runner runs the harness's CLI beside the workspace, with the gateway as its
+only model endpoint, and any replica can read it or reattach to it (ADR
+0197). Harness binaries come from the Environment image.
 
-Personal credentials (ADR 0184): a member's own harness logins and listed
-files may reach sandboxes that run only that member's work. The member's
-client calls `PUT /projects/:id/personal-environment` with `{ logins:
-{ "claude-code"?: { credentials, expiresAt? }, codex?: { auth, expiresAt? } },
-files: [{ path, content /* base64 */ }] }` (refresh tokens refused, at most
-50 files of 256 KiB, repository-relative paths); `GET` answers `{ allowed,
-logins: { [kind]: { fingerprint, expiresAt?, updatedAt, needsRefresh } },
-files: [{ path, fingerprint, bytes, updatedAt }] }` and `DELETE` forgets them.
+Personal credentials (ADRs 0184, 0198): a member's listed files may reach
+sandboxes that run only that member's work. The member's client calls
+`PUT /projects/:id/personal-environment` with `{ files: [{ path, content
+/* base64 */ }] }` (at most 50 files of 256 KiB, repository-relative paths);
+a body naming `logins` is refused with 400, since sign-ins stay on the
+machine they were made on. `GET` answers `{ allowed, files: [{ path,
+fingerprint, bytes, updatedAt }] }` and `DELETE` forgets them.
 Values are sealed in `credentialVault` (required) as
 `core.personalEnvironments`. An Environment opts in with
 `personalCredentials: true`; admission then requires the chat's owner to be a
@@ -1052,14 +1079,15 @@ member (not the project principal) and the placement to isolate them:
 binding isolation `sandbox`, a `device: "member"` Environment, an
 `EnvironmentRuntimeBinding.servesOnlyOwner` from the host's provider, or the
 machine capability `credentials.personal` (`MACHINE_CAPABILITIES` in
-`@catamorphic/sandbox`). Register an agent with `personalLogin:
-"claude-code" | "codex"` to run on the owner's login: admission and
-discovery pass it through (refusals are `EnvironmentIncompatibleError`
-reasons; without an Environment image the machine must advertise
-`harness.claude-code` or `harness.codex`), core writes the login under
-`.work-session/home/` each turn and on grant renewal and passes
-`TurnOptions.personalLogin`, and the harnesses run with `CLAUDE_CONFIG_DIR` or
-`CODEX_HOME` instead of the gateway. Listed files are delivered to any of the
+`@catamorphic/sandbox`). Register an agent with `signIn:
+"claude-code" | "codex"` to run on the owner's own subscription (ADR 0198):
+the sign-in is made on the machine that runs the chat (`work worker sign-in
+<harness>` on a worker) and never leaves it. Work copies no sign-in.
+Placement takes only machines that report `sign-in:<harness>:<member>`
+(`signInCapability`), turns must be authored by the owner, and the sandbox
+mounts that member's harness home (`CreateSandboxOpts.signIns`) so the
+harness runs with `CLAUDE_CONFIG_DIR` or `CODEX_HOME` instead of the
+gateway. Listed files are delivered to any of the
 owner's chats in such an Environment, excluded from Git through
 `.git/info/exclude`, and removed on close and idle release. Discovery items
 carry `personalCredentials` when an Environment allows them.

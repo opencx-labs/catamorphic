@@ -1,9 +1,8 @@
+import type { JsonObject, JsonValue } from "@catamorphic/agent-protocol";
 import {
   AccessDeniedError,
   AgentDelegationDeniedError,
   AgentNotConfiguredError,
-  AgentRequestAlreadyResolvedError,
-  AgentRuntimeRequestNotFoundError,
   AgentSessionArchiveConfirmationRequiredError,
   AgentSessionAuthorityRequiredError,
   AgentSessionClosedError,
@@ -20,6 +19,7 @@ import {
   NoCompatibleEnvironmentError,
   ProjectNotFoundError,
   parseChatKey,
+  SessionMirrorBehindError,
   SessionMirrorDivergedError,
   UnsupportedAgentTopologyError,
 } from "@catamorphic/core";
@@ -30,7 +30,6 @@ import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import {
   AgentCatalogSchema,
-  AgentQuestionParamsSchema,
   AgentSessionArchiveConfirmationSchema,
   AgentSessionArchiveImpactSchema,
   AgentSessionArchiveResultSchema,
@@ -41,11 +40,10 @@ import {
   AgentSessionsQuerySchema,
   AgentSubsessionIdParamsSchema,
   AgentSubsessionSchema,
-  AgentTurnIdParamsSchema,
-  AnswerAgentQuestionSchema,
   ArchiveAgentSessionSchema,
   AuthenticationRequiredSchema,
   ClosedKeyedChatSchema,
+  CommandReceiptSchema,
   CreateAgentSessionSchema,
   CreateAgentSubsessionSchema,
   EnvironmentAccessErrorSchema,
@@ -55,70 +53,29 @@ import {
   KeyedChatParamsSchema,
   KeyedChatQuerySchema,
   ListSchema,
+  MirrorAgentSessionResultSchema,
   MirrorAgentSessionSchema,
   MirrorConflictSchema,
+  MirrorExportSchema,
   OkSchema,
-  PendingToolPermissionsSchema,
   ProjectAgentEntrySchema,
   ProjectIdParamsSchema,
   ResumeAgentSessionSchema,
-  SendMessageSchema,
-  SessionDeliveryReceiptSchema,
+  SessionCommandSchema,
+  SessionEventsQuerySchema,
+  SessionItemsPageSchema,
+  SessionItemsQuerySchema,
+  SessionMirrorQuerySchema,
+  SessionStreamMessageSchema,
   SkillSchema,
-  ToolPermissionDecisionSchema,
-  ToolPermissionIdParamsSchema,
   UpdateAgentSessionActivitySchema,
   UpdateAgentSessionSchema,
-  UpdateQueuedAgentTurnSchema,
   WaitForAgentSubsessionsSchema,
 } from "../schemas.js";
+import { SessionEventStream } from "../session-event-stream.js";
 
 export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-
-  typed.route({
-    method: "POST",
-    url: "/projects/:projectId/agent/sessions/:sessionId/questions/:requestId/answer",
-    schema: {
-      params: AgentQuestionParamsSchema,
-      body: AnswerAgentQuestionSchema,
-      response: {
-        202: SessionDeliveryReceiptSchema,
-        404: ErrorSchema,
-        409: ErrorSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      if (!ctx.core?.agentSessions)
-        return reply.status(503).send({ error: "Coding agent not configured" });
-      try {
-        const receipt = await ctx.core.agentSessions.answerQuestion({
-          identity: resolveIdentity(request),
-          ...request.params,
-          answer: request.body.answer,
-        });
-        return reply.status(202).send(receipt);
-      } catch (error) {
-        if (
-          error instanceof AgentRuntimeRequestNotFoundError ||
-          error instanceof AgentSessionNotFoundError ||
-          error instanceof ProjectNotFoundError
-        ) {
-          return reply.status(404).send({ error: "Question not found" });
-        }
-        if (
-          error instanceof AgentRequestAlreadyResolvedError ||
-          error instanceof AgentSessionClosedError ||
-          error instanceof AgentSessionHandoffPendingError ||
-          error instanceof AgentSessionAuthorityRequiredError
-        ) {
-          return reply.status(409).send({ error: error.message });
-        }
-        throw error;
-      }
-    },
-  });
 
   typed.route({
     method: "POST",
@@ -220,170 +177,6 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           });
         }
         throw err;
-      }
-    },
-  });
-
-  // Session mirroring (ADR 0061): another backend (a linked desktop)
-  // pushes a session's transcript here so members see it on this server
-  // and can CONTINUE it here when the source dies. Idempotent per
-  // message id; 409 with `diverged: true` once this server has messages
-  // the source doesn't — the source must then stop pushing.
-  typed.route({
-    method: "PUT",
-    url: "/projects/:projectId/agent/sessions/:sessionId/mirror",
-    // A mirror carries a whole transcript, message metadata (tool inputs
-    // and results) included: the same order of magnitude as the media a
-    // single message may carry, well past Fastify's 1MB default.
-    bodyLimit: 96 * 1024 * 1024,
-    schema: {
-      params: AgentSessionIdParamsSchema,
-      body: MirrorAgentSessionSchema,
-      response: {
-        200: AgentSessionSchema.extend({
-          agentNotice: z
-            .string()
-            .optional()
-            .describe(
-              "Why a newly mirrored chat continues with another agent than the one it ran (ADR 0184)",
-            ),
-        }),
-        403: EnvironmentAccessErrorSchema,
-        404: ErrorSchema,
-        409: z.union([MirrorConflictSchema, EnvironmentErrorSchema]),
-        422: EnvironmentErrorSchema,
-        428: AuthenticationRequiredSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      const agentSessions = ctx.core?.agentSessions;
-      if (!agentSessions)
-        return reply.status(503).send({ error: "Coding agent not configured" });
-      const identity = resolveIdentity(request);
-      try {
-        const session = await agentSessions.mirror(
-          identity,
-          request.params.projectId,
-          request.params.sessionId,
-          {
-            authority: request.body.authority,
-            title: request.body.title ?? null,
-            icon: request.body.icon ?? null,
-            todos: request.body.todos,
-            ...(request.body.provider
-              ? { provider: request.body.provider }
-              : {}),
-            ...(request.body.source ? { source: request.body.source } : {}),
-            ...(request.body.agentSlug
-              ? { agentSlug: request.body.agentSlug }
-              : {}),
-            messages: request.body.messages.map((message) => ({
-              ...message,
-              metadata: message.metadata ?? null,
-            })),
-          },
-        );
-        return reply.send(session);
-      } catch (err) {
-        if (err instanceof ProjectNotFoundError) {
-          return reply.status(404).send({ error: "Project not found" });
-        }
-        if (err instanceof SessionMirrorDivergedError) {
-          return reply.status(409).send({ error: err.message, diverged: true });
-        }
-        if (err instanceof AgentTurnInProgressError) {
-          return reply.status(409).send({
-            error: "A turn is in progress here; try again when it settles",
-            diverged: false,
-          });
-        }
-        if (err instanceof AuthenticationRequiredError) {
-          return reply.status(428).send({
-            error: err.message,
-            code: "authentication_required",
-            environment: err.environment,
-            requirements: [...err.requirements],
-          });
-        }
-        if (err instanceof EnvironmentAccessDeniedError) {
-          return reply.status(403).send({
-            error: err.message,
-            code: "environment_access_denied",
-          });
-        }
-        if (
-          err instanceof EnvironmentCapacityError ||
-          err instanceof EnvironmentBindingUnavailableError ||
-          err instanceof EnvironmentNotFoundError
-        ) {
-          return reply.status(409).send({
-            error: err.message,
-            code:
-              err instanceof EnvironmentCapacityError
-                ? "environment_full"
-                : "environment_unavailable",
-          });
-        }
-        if (err instanceof NoCompatibleEnvironmentError)
-          return reply.status(422).send({
-            error: err.message,
-            code: "environment_unavailable",
-            reasons: Object.values(err.reasons).flatMap((items) => [...items]),
-          });
-        if (err instanceof EnvironmentIncompatibleError) {
-          return reply.status(422).send({
-            error: err.message,
-            code: "environment_incompatible",
-            reasons: [...err.reasons],
-          });
-        }
-        throw err;
-      }
-    },
-  });
-
-  typed.route({
-    method: "POST",
-    url: "/projects/:projectId/agent/sessions/:sessionId/resume",
-    schema: {
-      params: AgentSessionIdParamsSchema,
-      body: ResumeAgentSessionSchema,
-      response: {
-        200: AgentSessionSchema,
-        404: ErrorSchema,
-        409: ErrorSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      const agentSessions = ctx.core?.agentSessions;
-      if (!agentSessions) {
-        return reply.status(503).send({ error: "Coding agent not configured" });
-      }
-      try {
-        return reply.send(
-          await agentSessions.resume(
-            resolveIdentity(request),
-            request.params.projectId,
-            request.params.sessionId,
-            request.body,
-          ),
-        );
-      } catch (error) {
-        if (
-          error instanceof ProjectNotFoundError ||
-          error instanceof AgentSessionNotFoundError
-        ) {
-          return reply.status(404).send({ error: "Session not found" });
-        }
-        if (
-          error instanceof AgentSessionClosedError ||
-          error instanceof SessionMirrorDivergedError
-        ) {
-          return reply.status(409).send({ error: error.message });
-        }
-        throw error;
       }
     },
   });
@@ -542,6 +335,372 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           return reply.status(404).send({ error: "Session not found" });
         }
         throw err;
+      }
+    },
+  });
+
+  // Older items of a session, paging back from a snapshot's `olderBefore`.
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/agent/sessions/:sessionId/items",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      querystring: SessionItemsQuerySchema,
+      response: {
+        200: SessionItemsPageSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      try {
+        return reply.send(
+          await agentSessions.items(
+            resolveIdentity(request),
+            request.params.projectId,
+            request.params.sessionId,
+            {
+              before: request.query.before,
+              ...(request.query.limit ? { limit: request.query.limit } : {}),
+            },
+          ),
+        );
+      } catch (error) {
+        if (
+          error instanceof ProjectNotFoundError ||
+          error instanceof AgentSessionNotFoundError
+        )
+          return reply.status(404).send({ error: "Session not found" });
+        throw error;
+      }
+    },
+  });
+
+  // The session's events after a cursor, as server-sent events (ADR 0196):
+  // the gap (or `reset` with a fresh snapshot when it is too large), then
+  // live events, with a heartbeat every 15 seconds. A reader that falls too
+  // far behind is closed and resumes from its cursor, which each event's
+  // `id:` carries, so a browser EventSource resumes by itself.
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/agent/sessions/:sessionId/events",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      querystring: SessionEventsQuerySchema,
+      headers: z.looseObject({
+        "last-event-id": z
+          .string()
+          .regex(/^\d+$/)
+          .optional()
+          .describe(
+            "The last sequence the client applied; a reconnecting EventSource sends it, and it wins over `after`",
+          ),
+      }),
+      response: {
+        200: {
+          description:
+            "A stream of `data: <SessionStreamMessage JSON>` events; each `id:` is the stream's sequence",
+          content: {
+            "text/event-stream": { schema: SessionStreamMessageSchema },
+          },
+        },
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      const lastEventId = request.headers["last-event-id"];
+      const after =
+        lastEventId !== undefined
+          ? Number(lastEventId)
+          : (request.query.after ?? 0);
+      const stream = new SessionEventStream({
+        raw: reply.raw,
+        sequence: after,
+      });
+      try {
+        stream.attach(
+          await agentSessions.subscribe(
+            resolveIdentity(request),
+            request.params.projectId,
+            request.params.sessionId,
+            {
+              after,
+              send: (message) => stream.send(message),
+              onClose: () => stream.end(),
+            },
+          ),
+        );
+      } catch (error) {
+        stream.end();
+        if (
+          error instanceof ProjectNotFoundError ||
+          error instanceof AgentSessionNotFoundError
+        )
+          return reply.status(404).send({ error: "Session not found" });
+        throw error;
+      }
+      reply.hijack();
+      stream.open(reply.getHeaders());
+      return reply;
+    },
+  });
+
+  // A person's command to a session (ADR 0196): send, interrupt, retry,
+  // queue edits, send now, answer a request, roll back. Each carries a
+  // client `commandId`; sending it again returns the first receipt. A
+  // refusal is a durable answer too, so both receipts are 200.
+  typed.route({
+    method: "POST",
+    url: "/projects/:projectId/agent/sessions/:sessionId/commands",
+    // Base64 media rides in a send's attachments; the rest of the API keeps
+    // Fastify's default cap.
+    bodyLimit: 96 * 1024 * 1024,
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      body: SessionCommandSchema,
+      response: {
+        200: CommandReceiptSchema,
+        404: ErrorSchema,
+        409: ErrorSchema,
+        422: EnvironmentErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      try {
+        return reply.send(
+          await agentSessions.command(
+            resolveIdentity(request),
+            request.params.projectId,
+            request.params.sessionId,
+            request.body,
+          ),
+        );
+      } catch (err) {
+        if (
+          err instanceof ProjectNotFoundError ||
+          err instanceof AgentSessionNotFoundError
+        )
+          return reply.status(404).send({ error: "Session not found" });
+        if (err instanceof AgentSessionClosedError)
+          return reply.status(409).send({ error: "Session is closed" });
+        if (
+          err instanceof AgentSessionAuthorityRequiredError ||
+          err instanceof AgentSessionHandoffPendingError
+        )
+          return reply.status(409).send({ error: err.message });
+        if (err instanceof UnsupportedAgentTopologyError)
+          return reply.status(422).send({
+            error: err.message,
+            code: "agent_topology_unsupported",
+          });
+        throw err;
+      }
+    },
+  });
+
+  // Session mirroring (ADR 0196): another backend (a linked desktop)
+  // pushes the session's log after this copy's sequence, so members see it
+  // here and can continue it when the source is gone. A copy that does not
+  // exist yet starts from the push's `base` snapshot.
+  // A mirrored chat is continued here: this host takes its authority, if
+  // the source still holds the revision the caller saw (ADR 0077).
+  typed.route({
+    method: "POST",
+    url: "/projects/:projectId/agent/sessions/:sessionId/resume",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      body: ResumeAgentSessionSchema,
+      response: {
+        200: AgentSessionSchema,
+        404: ErrorSchema,
+        409: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions) {
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      }
+      try {
+        return reply.send(
+          await agentSessions.resume(
+            resolveIdentity(request),
+            request.params.projectId,
+            request.params.sessionId,
+            request.body,
+          ),
+        );
+      } catch (error) {
+        if (
+          error instanceof ProjectNotFoundError ||
+          error instanceof AgentSessionNotFoundError
+        ) {
+          return reply.status(404).send({ error: "Session not found" });
+        }
+        if (
+          error instanceof AgentSessionClosedError ||
+          error instanceof SessionMirrorDivergedError
+        ) {
+          return reply.status(409).send({ error: error.message });
+        }
+        throw error;
+      }
+    },
+  });
+
+  typed.route({
+    method: "PUT",
+    url: "/projects/:projectId/agent/sessions/:sessionId/mirror",
+    // A new copy carries a whole session (tool inputs and results
+    // included): the order of the media one message may carry.
+    bodyLimit: 96 * 1024 * 1024,
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      body: MirrorAgentSessionSchema,
+      response: {
+        200: MirrorAgentSessionResultSchema,
+        403: EnvironmentAccessErrorSchema,
+        404: ErrorSchema,
+        409: z.union([MirrorConflictSchema, EnvironmentErrorSchema]),
+        422: EnvironmentErrorSchema,
+        428: AuthenticationRequiredSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      try {
+        const { sequence, agentNotice, ...session } =
+          await agentSessions.mirror(
+            resolveIdentity(request),
+            request.params.projectId,
+            request.params.sessionId,
+            request.body,
+          );
+        return reply.send({
+          session,
+          sequence,
+          ...(agentNotice ? { agentNotice } : {}),
+        });
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError)
+          return reply.status(404).send({ error: "Project not found" });
+        if (err instanceof SessionMirrorDivergedError)
+          return reply
+            .status(409)
+            .send({ error: err.message, code: "diverged" as const });
+        if (err instanceof SessionMirrorBehindError)
+          return reply.status(409).send({
+            error: err.message,
+            code: "behind" as const,
+            sequence: err.sequence,
+          });
+        if (err instanceof AgentTurnInProgressError)
+          return reply.status(409).send({
+            error: "A turn is in progress here; push again when it settles",
+            code: "turn_in_progress" as const,
+          });
+        if (err instanceof AuthenticationRequiredError)
+          return reply.status(428).send({
+            error: err.message,
+            code: "authentication_required",
+            environment: err.environment,
+            requirements: [...err.requirements],
+          });
+        if (err instanceof EnvironmentAccessDeniedError)
+          return reply.status(403).send({
+            error: err.message,
+            code: "environment_access_denied",
+          });
+        if (
+          err instanceof EnvironmentCapacityError ||
+          err instanceof EnvironmentBindingUnavailableError ||
+          err instanceof EnvironmentNotFoundError
+        )
+          return reply.status(409).send({
+            error: err.message,
+            code:
+              err instanceof EnvironmentCapacityError
+                ? "environment_full"
+                : "environment_unavailable",
+          });
+        if (err instanceof NoCompatibleEnvironmentError)
+          return reply.status(422).send({
+            error: err.message,
+            code: "environment_unavailable",
+            reasons: Object.values(err.reasons).flatMap((items) => [...items]),
+          });
+        if (err instanceof EnvironmentIncompatibleError)
+          return reply.status(422).send({
+            error: err.message,
+            code: "environment_incompatible",
+            reasons: [...err.reasons],
+          });
+        throw err;
+      }
+    },
+  });
+
+  // What a mirror of this session pushes (ADR 0196): its log after the
+  // copy's sequence, or the whole session (`base`) for a copy that does not
+  // exist yet or fell too far behind.
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/agent/sessions/:sessionId/mirror",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      querystring: SessionMirrorQuerySchema,
+      response: {
+        200: MirrorExportSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      try {
+        const { projectEvents, ...exported } = await agentSessions.mirrorExport(
+          {
+            identity: resolveIdentity(request),
+            projectId: request.params.projectId,
+            sessionId: request.params.sessionId,
+            after: request.query.after ?? null,
+          },
+        );
+        return reply.send({
+          ...exported,
+          ...(projectEvents
+            ? {
+                projectEvents: projectEvents.map((event) => ({
+                  ...event,
+                  payload: wireObject(event.payload),
+                })),
+              }
+            : {}),
+        });
+      } catch (error) {
+        if (
+          error instanceof ProjectNotFoundError ||
+          error instanceof AgentSessionNotFoundError
+        )
+          return reply.status(404).send({ error: "Session not found" });
+        throw error;
       }
     },
   });
@@ -855,242 +1014,8 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
     },
   });
 
-  typed.route({
-    method: "POST",
-    url: "/projects/:projectId/agent/sessions/:sessionId/messages",
-    // Base64 media rides in the message body (~10MB per attachment, 4/3
-    // inflated, up to 32); the rest of the API keeps Fastify's default cap.
-    bodyLimit: 96 * 1024 * 1024,
-    schema: {
-      params: AgentSessionIdParamsSchema,
-      body: SendMessageSchema,
-      response: {
-        202: SessionDeliveryReceiptSchema,
-        404: ErrorSchema,
-        409: ErrorSchema,
-        422: EnvironmentErrorSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      const agentSessions = ctx.core?.agentSessions;
-      if (!agentSessions)
-        return reply.status(503).send({ error: "Coding agent not configured" });
-      const identity = resolveIdentity(request);
-      try {
-        const receipt = await agentSessions.enqueueMessage(
-          identity,
-          request.params.projectId,
-          request.params.sessionId,
-          request.body.message,
-          {
-            attachments: request.body.attachments,
-            deliveryMode: request.body.deliveryMode,
-            idempotencyKey: request.body.idempotencyKey
-              ? `user:${identity.externalUserId}:${request.body.idempotencyKey}`
-              : undefined,
-            ...(request.body.workspace
-              ? { workspace: request.body.workspace }
-              : {}),
-          },
-        );
-        return reply.status(202).send(receipt);
-      } catch (err) {
-        if (
-          err instanceof ProjectNotFoundError ||
-          err instanceof AgentSessionNotFoundError
-        ) {
-          return reply.status(404).send({ error: "Session not found" });
-        }
-        if (err instanceof AgentSessionClosedError) {
-          return reply.status(409).send({ error: "Session is closed" });
-        }
-        if (
-          err instanceof AgentSessionAuthorityRequiredError ||
-          err instanceof AgentSessionHandoffPendingError
-        ) {
-          return reply.status(409).send({ error: err.message });
-        }
-        if (err instanceof UnsupportedAgentTopologyError) {
-          return reply.status(422).send({
-            error: err.message,
-            code: "agent_topology_unsupported",
-          });
-        }
-        throw err;
-      }
-    },
-  });
-
-  // Tool permissions (ADR 0054), for hosts that answer "ask" over HTTP:
-  // the pending asks of a session, and the answer. Only when the host
-  // configured a broker (the desktop answers through its own bridge).
-  typed.route({
-    method: "GET",
-    url: "/projects/:projectId/agent/sessions/:sessionId/permissions",
-    schema: {
-      params: AgentSessionIdParamsSchema,
-      response: {
-        200: PendingToolPermissionsSchema,
-        404: ErrorSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      const agentSessions = ctx.core?.agentSessions;
-      const broker = ctx.core?.toolPermissions;
-      if (!agentSessions || !broker) {
-        return reply
-          .status(503)
-          .send({ error: "Tool permissions are not configured" });
-      }
-      const identity = resolveIdentity(request);
-      const approverOnly = await agentSessions
-        .assertSession(
-          identity,
-          request.params.projectId,
-          request.params.sessionId,
-        )
-        .then(() => false)
-        .catch((err: unknown) => {
-          // An unattended chat's approvers see the asks they may answer
-          // (ADR 0176), and nothing else of the chat.
-          if (err instanceof AccessDeniedError) return true;
-          throw err;
-        })
-        .catch((err: unknown) => {
-          if (
-            err instanceof ProjectNotFoundError ||
-            err instanceof AgentSessionNotFoundError
-          )
-            return undefined;
-          throw err;
-        });
-      if (approverOnly === undefined)
-        return reply.status(404).send({ error: "Session not found" });
-      const permissions = await broker.list(request.params.sessionId);
-      // An ask that names approvers is shown to them alone; the rest to
-      // whoever holds the chat.
-      return reply.send({
-        permissions: permissions.filter((permission) =>
-          permission.approvers?.length
-            ? permission.approvers.includes(identity.externalUserId)
-            : !approverOnly,
-        ),
-      });
-    },
-  });
-
-  typed.route({
-    method: "POST",
-    url: "/projects/:projectId/agent/sessions/:sessionId/permissions/:permissionId",
-    schema: {
-      params: ToolPermissionIdParamsSchema,
-      body: ToolPermissionDecisionSchema,
-      response: { 200: OkSchema, 404: ErrorSchema, 503: ErrorSchema },
-    },
-    handler: async (request, reply) => {
-      const agentSessions = ctx.core?.agentSessions;
-      const broker = ctx.core?.toolPermissions;
-      if (!agentSessions || !broker) {
-        return reply
-          .status(503)
-          .send({ error: "Tool permissions are not configured" });
-      }
-      const identity = resolveIdentity(request);
-      const pending = await broker.get(request.params.permissionId);
-      try {
-        await agentSessions.assertSession(
-          identity,
-          request.params.projectId,
-          request.params.sessionId,
-        );
-      } catch (err) {
-        if (
-          err instanceof ProjectNotFoundError ||
-          err instanceof AgentSessionNotFoundError
-        ) {
-          return reply.status(404).send({ error: "Session not found" });
-        }
-        // A named approver answers without otherwise holding the chat.
-        if (
-          !(err instanceof AccessDeniedError) ||
-          !pending?.approvers?.includes(identity.externalUserId)
-        )
-          throw err;
-      }
-      // Named approvers answer it, and nobody else (ADR 0176).
-      if (
-        pending?.approvers?.length &&
-        !pending.approvers.includes(identity.externalUserId)
-      )
-        throw new AccessDeniedError();
-      // An ask belongs to the session it was raised in — answering it from
-      // another session's URL is a 404, not a hijack.
-      if (!pending || pending.sessionId !== request.params.sessionId) {
-        return reply.status(404).send({ error: "Permission not found" });
-      }
-      if (
-        !(await broker.answer(
-          request.params.permissionId,
-          request.body,
-          resolveIdentity(request),
-        ))
-      ) {
-        return reply
-          .status(404)
-          .send({ error: "Permission is no longer pending" });
-      }
-      return reply.send({ ok: true });
-    },
-  });
-
-  // Re-run the last failed turn in place — no new user message; the failed
-  // assistant row flips back to in-progress and settles with the retry.
-  typed.route({
-    method: "POST",
-    url: "/projects/:projectId/agent/sessions/:sessionId/retry",
-    schema: {
-      params: AgentSessionIdParamsSchema,
-      response: {
-        202: SessionDeliveryReceiptSchema,
-        404: ErrorSchema,
-        409: ErrorSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      const agentSessions = ctx.core?.agentSessions;
-      if (!agentSessions)
-        return reply.status(503).send({ error: "Coding agent not configured" });
-      const identity = resolveIdentity(request);
-      try {
-        const receipt = await agentSessions.retry(
-          identity,
-          request.params.projectId,
-          request.params.sessionId,
-        );
-        return reply.status(202).send(receipt);
-      } catch (err) {
-        if (
-          err instanceof ProjectNotFoundError ||
-          err instanceof AgentSessionNotFoundError
-        ) {
-          return reply.status(404).send({ error: "Session not found" });
-        }
-        if (
-          err instanceof AgentSessionClosedError ||
-          err instanceof AgentTurnInProgressError
-        ) {
-          return reply.status(409).send({ error: "Session is busy or closed" });
-        }
-        throw err;
-      }
-    },
-  });
-
   // Fork the conversation: a new session on the same agent carrying the
-  // transcript up to `messageId` (or all settled turns when omitted).
+  // transcript through the item `messageId` names (or every settled turn).
   typed.route({
     method: "POST",
     url: "/projects/:projectId/agent/sessions/:sessionId/fork",
@@ -1116,164 +1041,6 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           { messageId: request.body?.messageId },
         );
         return reply.status(201).send(session);
-      } catch (err) {
-        if (
-          err instanceof ProjectNotFoundError ||
-          err instanceof AgentSessionNotFoundError
-        ) {
-          return reply.status(404).send({ error: "Session not found" });
-        }
-        throw err;
-      }
-    },
-  });
-
-  typed.route({
-    method: "PATCH",
-    url: "/projects/:projectId/agent/sessions/:sessionId/turns/:turnId",
-    schema: {
-      params: AgentTurnIdParamsSchema,
-      body: UpdateQueuedAgentTurnSchema,
-      response: {
-        200: OkSchema,
-        404: ErrorSchema,
-        409: ErrorSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      const agentSessions = ctx.core?.agentSessions;
-      if (!agentSessions)
-        return reply.status(503).send({ error: "Coding agent not configured" });
-      try {
-        const updated = await agentSessions.updateQueuedTurn(
-          resolveIdentity(request),
-          request.params.projectId,
-          request.params.sessionId,
-          request.params.turnId,
-          {
-            content: request.body.content,
-            metadata: request.body.metadata
-              ? JSON.parse(JSON.stringify(request.body.metadata))
-              : undefined,
-            held: request.body.held,
-          },
-        );
-        return updated
-          ? reply.send({ ok: true })
-          : reply.status(409).send({ error: "Turn is no longer queued" });
-      } catch (error) {
-        if (
-          error instanceof ProjectNotFoundError ||
-          error instanceof AgentSessionNotFoundError
-        ) {
-          return reply.status(404).send({ error: "Session not found" });
-        }
-        throw error;
-      }
-    },
-  });
-
-  typed.route({
-    method: "DELETE",
-    url: "/projects/:projectId/agent/sessions/:sessionId/turns/:turnId",
-    schema: {
-      params: AgentTurnIdParamsSchema,
-      response: {
-        200: OkSchema,
-        404: ErrorSchema,
-        409: ErrorSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      const agentSessions = ctx.core?.agentSessions;
-      if (!agentSessions)
-        return reply.status(503).send({ error: "Coding agent not configured" });
-      try {
-        const cancelled = await agentSessions.cancelQueuedTurn(
-          resolveIdentity(request),
-          request.params.projectId,
-          request.params.sessionId,
-          request.params.turnId,
-        );
-        return cancelled
-          ? reply.send({ ok: true })
-          : reply.status(409).send({ error: "Turn is no longer queued" });
-      } catch (error) {
-        if (
-          error instanceof ProjectNotFoundError ||
-          error instanceof AgentSessionNotFoundError
-        ) {
-          return reply.status(404).send({ error: "Session not found" });
-        }
-        throw error;
-      }
-    },
-  });
-
-  typed.route({
-    method: "POST",
-    url: "/projects/:projectId/agent/sessions/:sessionId/turns/:turnId/send-now",
-    schema: {
-      params: AgentTurnIdParamsSchema,
-      response: {
-        200: OkSchema,
-        404: ErrorSchema,
-        409: ErrorSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      const agentSessions = ctx.core?.agentSessions;
-      if (!agentSessions)
-        return reply.status(503).send({ error: "Coding agent not configured" });
-      try {
-        const promoted = await agentSessions.promoteQueuedTurn(
-          resolveIdentity(request),
-          request.params.projectId,
-          request.params.sessionId,
-          request.params.turnId,
-        );
-        return promoted
-          ? reply.send({ ok: true })
-          : reply.status(409).send({ error: "Turn is no longer queued" });
-      } catch (error) {
-        if (
-          error instanceof ProjectNotFoundError ||
-          error instanceof AgentSessionNotFoundError
-        ) {
-          return reply.status(404).send({ error: "Session not found" });
-        }
-        throw error;
-      }
-    },
-  });
-
-  // Abort the in-flight turn (and cancel any scheduled auto-retry).
-  typed.route({
-    method: "POST",
-    url: "/projects/:projectId/agent/sessions/:sessionId/interrupt",
-    schema: {
-      params: AgentSessionIdParamsSchema,
-      response: {
-        200: OkSchema,
-        404: ErrorSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      const agentSessions = ctx.core?.agentSessions;
-      if (!agentSessions)
-        return reply.status(503).send({ error: "Coding agent not configured" });
-      const identity = resolveIdentity(request);
-      try {
-        await agentSessions.interrupt(
-          identity,
-          request.params.projectId,
-          request.params.sessionId,
-        );
-        return reply.status(200).send({ ok: true });
       } catch (err) {
         if (
           err instanceof ProjectNotFoundError ||
@@ -1631,6 +1398,33 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
       }
     },
   });
+}
+
+/**
+ * A stored JSON object as wire JSON: members holding `undefined` are
+ * dropped, as serializing would drop them.
+ */
+function wireObject(value: object): JsonObject {
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter((entry) => entry[1] !== undefined)
+      .map(([key, member]) => [key, wireJson(member)]),
+  );
+}
+
+function wireJson(value: unknown): JsonValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  )
+    return value;
+  if (Array.isArray(value))
+    return value.map((member) =>
+      member === undefined ? null : wireJson(member),
+    );
+  return typeof value === "object" ? wireObject(value) : null;
 }
 
 function keyedAudience(query: {
