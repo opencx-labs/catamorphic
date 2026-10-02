@@ -21,7 +21,7 @@ function toJson(value: unknown): JsonValue {
 }
 
 /**
- * Claude Code's transcript stored with Work (ADR 0197): the Agent SDK's
+ * Claude Code's transcript stored with Work (ADR 0198): the Agent SDK's
  * `SessionStore`, answered through the runner's native state host calls,
  * so a thread resumes in any sandbox or on any machine. The SDK's project
  * key (derived from the working directory) is ignored: a thread is Work's

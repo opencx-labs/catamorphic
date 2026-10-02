@@ -9,7 +9,7 @@ import type {
 import { EchoAdapter } from "@catamorphic/agent-runner";
 
 /**
- * A harness for tests that look at what Work hands a harness (ADR 0197):
+ * A harness for tests that look at what Work hands a harness (ADR 0198):
  * every attempt's start is recorded, then the echo harness answers it, so
  * directives (`[[ask ...]]`, `[[wait ...]]`) still work.
  */

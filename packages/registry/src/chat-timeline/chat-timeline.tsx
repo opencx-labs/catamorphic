@@ -160,7 +160,7 @@ export interface ChatTimelineProps {
 }
 
 /**
- * Presentational conversation log over the session's turns (ADR 0196):
+ * Presentational conversation log over the session's turns (ADR 0197):
  * each turn reads as its message, the work that led to the answer behind
  * a "N steps" disclosure, and the answer, with notices, handoffs, answered
  * questions, failures and rollbacks in place. Owns no chat state: feed it

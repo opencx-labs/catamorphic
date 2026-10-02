@@ -26,7 +26,11 @@ The tagged release workflow uploads the DMG, ZIP, blockmaps, metadata, and
 checksums before it advances the Homebrew tap's channel pointer.
 
 The app checks once shortly after launch, every six hours while running, and
-after the Mac resumes from sleep. Background checks do not interrupt the user.
+after the Mac resumes from sleep. The six hours are wall-clock time, so sleep
+counts; the wake check waits a minute for the network, a failed check is
+retried after 15 minutes, and a check that does not answer in two minutes is
+abandoned so it cannot hold later ones. Update activity is written to
+`updates.log` in the app's log folder. Background checks do not interrupt the user.
 When an update exists, the app offers an explicit download, continues to work
 while it downloads, and offers an explicit restart after verification. It
 does not download automatically, install on ordinary quit, or restart while

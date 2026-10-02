@@ -39,12 +39,14 @@ import type { AgentConfig } from "../agents-store.js";
 import { readableAttachments } from "../composer-files.js";
 import type { ConnectorsService } from "../connectors.js";
 import {
+  type ClaudeCodeInstallStatus,
   type DownloadableHarness,
   HarnessComponentStore,
   type HarnessDownloadProgress,
   type HarnessExecutable,
   harnessPathEnvironment,
 } from "../harness-components.js";
+import type { InstalledClaudeCodeFinder } from "../installed-claude-code.js";
 import { bestFreeModelId, fetchOpenRouterModels } from "../openrouter.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
@@ -88,6 +90,11 @@ export interface DesktopAgentRegistryDeps {
   agentHomesDir: string;
   /** App-owned cache for integrity-pinned native harness components. */
   harnessComponentsDir: string;
+  /**
+   * The person's own Claude Code, run instead of Work's copy when new
+   * enough (ADR 0196). Absent in tests, which never use the host's install.
+   */
+  installedClaudeCode?: Pick<InstalledClaudeCodeFinder, "find" | "update">;
   /**
    * Files pasted into chats (`<attachmentsDir>/<projectId>/`), which the
    * built-in agent may read though they sit outside the project.
@@ -177,7 +184,7 @@ const codex = createCodexAdapter();
  * per-profile agents.json files and committed project agents, resolved
  * live on every lookup, so adding or editing an agent in Settings applies
  * to the next turn without a restart. Every agent runs its harness on this
- * machine, in the chat's checkout (`topology: "native"`, ADR 0197); its
+ * machine, in the chat's checkout (`topology: "native"`, ADR 0198); its
  * conversation lives in the session log, so nothing here holds a chat.
  */
 export class DesktopAgentRegistry implements CodingAgentRegistry {
@@ -207,7 +214,15 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     this.mcp = new DesktopAgentMcp(deps);
     this.harnessComponents = new HarnessComponentStore({
       rootDir: deps.harnessComponentsDir,
+      // The person's own Claude Code runs when new enough (ADR 0196).
+      ...(deps.installedClaudeCode
+        ? { installedClaudeCode: deps.installedClaudeCode }
+        : {}),
     });
+    // The first look reads the login shell's PATH (about a second); do it
+    // now rather than in the first chat's turn.
+    if (deps.installedClaudeCode)
+      void this.harnessComponents.claudeCodeStatus();
     this.workspaceToolkit = deps.workspaceBridge
       ? buildWorkspaceToolkit(deps.workspaceBridge, {
           desktopSettings: (projectId) => this.settingsContext(projectId),
@@ -234,6 +249,16 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     harness: DownloadableHarness,
   ): Promise<HarnessExecutable> {
     return this.harnessComponents.ensure(harness);
+  }
+
+  /** Which Claude Code runs: the person's own install or Work's copy. */
+  claudeCodeStatus(): Promise<ClaudeCodeInstallStatus> {
+    return this.harnessComponents.claudeCodeStatus();
+  }
+
+  /** Run the person's own Claude Code updater, at their request. */
+  updateInstalledClaudeCode() {
+    return this.harnessComponents.updateInstalledClaudeCode();
   }
 
   /** First-use harness downloads, so sign-in UI can show real progress. */

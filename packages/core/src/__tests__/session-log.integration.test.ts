@@ -32,7 +32,7 @@ import { readFullSnapshot } from "../services/sessions/session-reads.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /*
- * The session log end to end (ADRs 0196, 0197): a real AgentSessionsService
+ * The session log end to end (ADRs 0197, 0198): a real AgentSessionsService
  * on PGlite driving the deterministic echo harness in this process.
  */
 
@@ -386,7 +386,7 @@ describe("session log", () => {
     expect(open).toEqual([]);
   }, 40_000);
 
-  it("keeps a turn on its owner's sign-in to the owner's words (ADR 0198)", async () => {
+  it("keeps a turn on its owner's sign-in to the owner's words (ADR 0199)", async () => {
     const { projectId, sessionId } = await chat("OwnerOnly");
     const admin: Identity = { ...identity, externalUserId: "admin" };
     await sessions.command(identity, projectId, sessionId, {

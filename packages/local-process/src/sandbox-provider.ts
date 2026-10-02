@@ -84,7 +84,7 @@ export interface LocalProcessProviderConfig {
    */
   acceptUnenforcedEgress?: boolean;
   /**
-   * Where this machine keeps members' own harness sign-ins (ADR 0198),
+   * Where this machine keeps members' own harness sign-ins (ADR 0199),
    * one home per harness and member (`machineSignInHome`). A sandbox
    * created with `signIns` links exactly those homes at
    * `signInHomePath`, so the harness's own home is the one on this
@@ -202,7 +202,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
       fs.mkdirSync(path.join(this.root, id, dir), { recursive: true });
     }
     // The owner's own sign-in stays where they made it; the sandbox's
-    // harness home is a link to it (ADR 0198).
+    // harness home is a link to it (ADR 0199).
     for (const signIn of signIns) {
       const link = this.resolvePath(id, signIn.virtual);
       fs.mkdirSync(path.dirname(link), { recursive: true });
@@ -565,7 +565,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * The sign-in homes a sandbox links (ADR 0198): each one this machine
+   * The sign-in homes a sandbox links (ADR 0199): each one this machine
    * keeps for the member named, nothing else of the sign-in root.
    */
   private signInHomes(

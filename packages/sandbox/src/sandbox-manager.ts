@@ -46,7 +46,7 @@ interface SandboxManagerOpts {
   resources?: SandboxResources;
   /**
    * Members' own sign-ins a new dev sandbox mounts from the machine (ADR
-   * 0198): the session owner's, for an agent that runs on it.
+   * 0199): the session owner's, for an agent that runs on it.
    */
   signIns?: ReadonlyArray<{ harness: SignInHarness; member: string }>;
 }

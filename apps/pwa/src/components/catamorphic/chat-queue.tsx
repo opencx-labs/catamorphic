@@ -28,7 +28,7 @@ function editableText(queued: QueuedMessage): string {
 }
 
 /**
- * The session's turn queue (ADR 0196), rendered at the end of the chat as
+ * The session's turn queue (ADR 0197), rendered at the end of the chat as
  * ghost bubbles: dashed, right-aligned, each editable (which holds the
  * turn so it does not start under the cursor), cancellable, or promotable
  * ("send now" stops the running turn and runs this one). Long queues

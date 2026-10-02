@@ -72,6 +72,9 @@ confirmation. "Release" alone does not mean Stable.
    `apps/desktop/src/main/harness-components.ts` together: platform package
    version, tarball URL and SHA-512 integrity for every supported platform. Run
    its tests. Never ship a floating version or a missing integrity pin.
+   `bun scripts/harness-bump.ts <claude-code|codex> [version]` moves a
+   harness's SDK, CLI version and every integrity together (ADR 0196); the
+   scheduled harness bump workflow opens those pull requests daily.
 5. Run `bun run check`, push, open the PR, wait for checks and the required human
    review. Never merge by bypass.
 6. After merge, fetch again and confirm `main` has the intended version and green

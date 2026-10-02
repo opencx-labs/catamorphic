@@ -7,7 +7,7 @@ import { AttemptRunner } from "./runner.js";
 
 /**
  * A runner in the host's own process: the desktop's harnesses and the
- * control plane's built-in agent (ADR 0197). Same protocol, no transport.
+ * control plane's built-in agent (ADR 0198). Same protocol, no transport.
  * Its frames live only in memory, so the attempt ends with the process.
  */
 export class InProcessRunner {

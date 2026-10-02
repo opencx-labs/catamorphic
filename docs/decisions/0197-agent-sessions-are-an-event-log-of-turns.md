@@ -1,4 +1,4 @@
-# 0196 — Agent sessions are an event log of turns
+# 0197 — Agent sessions are an event log of turns
 
 - **Status:** Accepted
 - **Date:** 2026-10-02
@@ -70,7 +70,7 @@ them through the same projector. Authority still moves only by the 0077
 compare-and-swap, so a mirror never dispatches. The source's provider
 threads arrive as unavailable (their native state lives on the source's
 machine), so a copy that continues the session starts a thread of its own
-and is handed the history (ADR 0197). A copy that has logged nothing (only a
+and is handed the history (ADR 0198). A copy that has logged nothing (only a
 base, or a chat converted from before the log) takes its source's base
 whole; a copy with a log of its own never does.
 
@@ -97,7 +97,7 @@ Work tool every agent gets.
 
 Clients stream instead of polling and resume after any disconnect. Mirrors
 send deltas. Every behavior is testable from recorded provider transcripts
-through real persistence (ADR 0197). `agent_messages` and the old turn
+through real persistence (ADR 0198). `agent_messages` and the old turn
 queue columns are gone; a forward migration converts existing sessions.
 Their native threads were never stored by Work, so they convert as
 unavailable and each session continues on a fresh thread handed its history.

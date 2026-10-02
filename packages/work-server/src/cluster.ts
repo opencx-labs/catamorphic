@@ -55,7 +55,7 @@ export async function registerWorkMachine(args: {
   /** What this machine offers beside its sandbox provider (ADR 0184). */
   capabilities?: readonly string[];
   /**
-   * Members' sign-ins on this machine (ADR 0198), read again every few
+   * Members' sign-ins on this machine (ADR 0199), read again every few
    * seconds: a sign-in made or removed here reaches placement without a
    * restart.
    */

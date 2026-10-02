@@ -49,7 +49,7 @@ export const REPLAY_MAX_EVENTS = 256;
 export const REPLAY_MAX_BYTES = 1024 * 1024;
 
 /**
- * The session event log (ADR 0196): the only writer of a session's turns,
+ * The session event log (ADR 0197): the only writer of a session's turns,
  * attempts, items, runtime requests, provider threads and visible fields.
  * Events and their projections commit in one transaction; sequences are
  * per session, gapless, allocated under the session row lock.
@@ -127,7 +127,7 @@ export class SessionLog {
 
   /**
    * Apply events another copy of the session committed, keeping their
-   * sequences (a mirror, ADR 0196). They must continue this copy's log.
+   * sequences (a mirror, ADR 0197). They must continue this copy's log.
    */
   async replicate(
     trx: Transaction<DB>,
@@ -173,7 +173,7 @@ export class SessionLog {
 
   /**
    * Start a copy of a session from another copy's snapshot (a mirror's
-   * first push, ADR 0196): its entities are projected as they stand, and
+   * first push, ADR 0197): its entities are projected as they stand, and
    * the copy's log continues from the snapshot's sequence.
    */
   async importSnapshot(
@@ -236,7 +236,7 @@ export class SessionLog {
 
   /**
    * Empty a copy that logged nothing, so a snapshot replaces it whole (a
-   * mirror's base over a converted or stale copy, ADR 0196). A copy with a
+   * mirror's base over a converted or stale copy, ADR 0197). A copy with a
    * log of its own is refused: its turns are not another copy's to replace.
    */
   async clearUnlogged(
@@ -296,7 +296,7 @@ export class SessionLog {
   }
 
   /**
-   * Run a command at most once (ADR 0196). A command id seen before returns
+   * Run a command at most once (ADR 0197). A command id seen before returns
    * its first receipt and runs nothing. `run` writes through `append` in
    * the same transaction; a {@link SessionCommandRejectedError} it throws
    * becomes a durable rejection, anything else rolls back and is retried
@@ -877,7 +877,7 @@ const COPIED_SESSION_FIELDS = new Set([
 ]);
 
 /**
- * Events another copy sent (a mirror's push or base, ADR 0196), checked
+ * Events another copy sent (a mirror's push or base, ADR 0197), checked
  * before anything is projected: every record they carry belongs to this
  * session and to no other, every turn they name is this session's, and a
  * session change keeps only presentation fields. Agent, Environment,

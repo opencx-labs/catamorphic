@@ -13,7 +13,7 @@ import {
 import { startWorkWorker } from "./worker-runtime.js";
 
 /**
- * Workers state their protocol on every call (ADR 0197): a control plane
+ * Workers state their protocol on every call (ADR 0198): a control plane
  * that cannot drive one answers 426 naming which side to update, and the
  * worker says so and waits instead of retrying every few seconds.
  */

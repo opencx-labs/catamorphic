@@ -68,7 +68,7 @@ const STATUS_MAX = 200;
 
 /**
  * Turn one batch of an attempt's harness events into session events
- * (ADR 0196). Item and request ids derive from the attempt and the
+ * (ADR 0197). Item and request ids derive from the attempt and the
  * adapter's keys, so ingesting a frame twice (a replica took over and read
  * from its cursor again) changes nothing: an item that exists is merged,
  * never duplicated. Deltas of one item in a batch arrive as one append.

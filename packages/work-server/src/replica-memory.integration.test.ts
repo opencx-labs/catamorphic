@@ -279,7 +279,7 @@ it.skipIf(!process.env.DATABASE_URL)(
 
       // 3. A question a replica's harness holds waits there; its answer,
       // sent through either replica, continues where it was asked (ADR
-      // 0197).
+      // 0198).
       const questions = await sessions(a).create(
         await memberOn(a),
         projectId,

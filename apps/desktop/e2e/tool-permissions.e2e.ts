@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
- * Approvals and connector requests are durable session requests (ADR 0196),
+ * Approvals and connector requests are durable session requests (ADR 0197),
  * answered in the chat or from any client. Navigation and reload keep them.
  */
 

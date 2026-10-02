@@ -1,5 +1,5 @@
 /**
- * The agent session model (ADR 0196): a session holds turns, a turn holds
+ * The agent session model (ADR 0197): a session holds turns, a turn holds
  * attempts, and items are the ordered transcript. Work owns every id here;
  * a provider's own ids are {@link NativeRef}s beside them.
  *
@@ -152,7 +152,7 @@ export type SessionMessageAuthor =
   | { kind: "system"; code: string };
 
 /**
- * How a delivered input runs (ADR 0196): `queue` becomes the next turn,
+ * How a delivered input runs (ADR 0197): `queue` becomes the next turn,
  * `steer` joins the active turn (natively, or by restarting its attempt),
  * `interrupt` stops the active turn and runs next, `message_only` is an
  * attributed delivery that starts nothing.
@@ -267,7 +267,7 @@ export interface Turn {
   outcome: TurnOutcome | null;
   /** Workspace commits around the turn (ADR 0044); rollback restores `before`. */
   checkpoint: { before: string | null; after: string | null };
-  /** The turn this one continues after its machine stopped (ADR 0197). */
+  /** The turn this one continues after its machine stopped (ADR 0198). */
   continuationOf: string | null;
   createdAt: string;
   startedAt: string | null;
@@ -283,7 +283,7 @@ export type AttemptStatus =
   | "completed"
   | "failed"
   | "interrupted"
-  /** The runner went away mid-attempt (ADR 0197). */
+  /** The runner went away mid-attempt (ADR 0198). */
   | "lost"
   /** Replaced by a later attempt of the same turn (steer restart). */
   | "superseded";
@@ -422,7 +422,7 @@ export type ContextHandoffStrategy =
 
 /**
  * What an agent was told about turns its provider thread did not see
- * (ADR 0197): after a switch of harness, a lost native state, or a fork.
+ * (ADR 0198): after a switch of harness, a lost native state, or a fork.
  */
 export interface ContextHandoffItem extends ItemCommon {
   kind: "context_handoff";
@@ -495,7 +495,7 @@ export interface RuntimeRequest {
   status: RuntimeRequestStatus;
   /**
    * Whether an answer still reaches the agent that asked. False once its
-   * attempt is gone (ADR 0197): the request stays visible, unanswerable.
+   * attempt is gone (ADR 0198): the request stays visible, unanswerable.
    */
   answerable: boolean;
   /** Whether the asking agent waits; a non-blocking question's answer arrives as a message. */

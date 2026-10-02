@@ -5,6 +5,7 @@ import path from "node:path";
 import { c as createArchive } from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  CLAUDE_CODE_MIN_VERSION,
   type HarnessArtifact,
   HarnessComponentStore,
 } from "./harness-components.js";
@@ -20,6 +21,72 @@ afterEach(async () => {
 });
 
 describe("HarnessComponentStore", () => {
+  it("runs the person's own Claude Code when it is new enough, else downloads Work's", async () => {
+    const fixture = await componentFixture();
+    let downloads = 0;
+    let installedVersion = "2.1.0";
+    const store = new HarnessComponentStore({
+      rootDir: fixture.installRoot,
+      artifacts: { "claude-code": fixture.artifact },
+      fetchImpl: async () => {
+        downloads += 1;
+        return new Response(await fs.readFile(fixture.archive));
+      },
+      preferInstalled: false,
+      installedClaudeCode: {
+        find: async () => ({
+          executablePath: "/home/person/.local/share/claude/versions/x",
+          commandPath: "/home/person/.local/bin/claude",
+          version: installedVersion,
+        }),
+        update: async () => {
+          installedVersion = CLAUDE_CODE_MIN_VERSION;
+          return "Successfully updated";
+        },
+      },
+    });
+
+    // Older than the SDK's release: Work's pinned copy, and an update offer.
+    expect(await store.claudeCodeStatus()).toMatchObject({
+      using: "work",
+      installed: { version: "2.1.0" },
+      minVersion: CLAUDE_CODE_MIN_VERSION,
+    });
+    expect((await store.ensure("claude-code")).source).toBe("downloaded");
+    expect(downloads).toBe(1);
+
+    // Updated through its own updater: the person's copy runs from now on.
+    const updated = await store.updateInstalledClaudeCode();
+    expect(updated.status.using).toBe("installed");
+    expect(await store.ensure("claude-code")).toEqual({
+      executablePath: "/home/person/.local/share/claude/versions/x",
+      pathEntries: [],
+      source: "system",
+    });
+    expect(downloads).toBe(1);
+  });
+
+  it("never downloads Claude Code when a new enough install is present", async () => {
+    const fixture = await componentFixture();
+    const store = new HarnessComponentStore({
+      rootDir: fixture.installRoot,
+      artifacts: { "claude-code": fixture.artifact },
+      fetchImpl: async () => {
+        throw new Error("no download expected");
+      },
+      preferInstalled: false,
+      installedClaudeCode: {
+        find: async () => ({
+          executablePath: "/usr/local/bin/claude",
+          commandPath: "/usr/local/bin/claude",
+          version: "99.0.0",
+        }),
+        update: async () => "",
+      },
+    });
+    expect((await store.ensure("claude-code")).source).toBe("system");
+  });
+
   it("downloads, verifies, atomically installs, and reuses a component", async () => {
     const fixture = await componentFixture();
     let downloads = 0;

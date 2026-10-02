@@ -2,7 +2,7 @@
   "$schema": "https://ui.shadcn.com/schema/registry-item.json",
   "name": "agent-chat",
   "type": "registry:component",
-  "description": "Coding-agent chat on the session event log (ADR 0196): turns, the editable queue, interrupt, retry, undo, fork, question panels and approval cards, in dock or full variants. Renders conversation through chat-timeline.",
+  "description": "Coding-agent chat on the session event log (ADR 0197): turns, the editable queue, interrupt, retry, undo, fork, question panels and approval cards, in dock or full variants. Renders conversation through chat-timeline.",
   "dependencies": ["@catamorphic/react", "lucide-react", "use-stick-to-bottom"],
   "registryDependencies": [
     "@catamorphic/catamorphic-provider",

@@ -45,7 +45,7 @@ export class SessionMirrorBehindError extends Error {
 }
 
 /**
- * One mirror push (ADR 0196): the source's log after this copy's last
+ * One mirror push (ADR 0197): the source's log after this copy's last
  * sequence, or, for a copy that does not exist yet, a full snapshot to
  * start from and the events after it.
  */
@@ -180,7 +180,7 @@ export async function writeSessionMirror({
     }
     // The source's native threads live on its machine: the copy keeps them
     // for the turns that name them, as unavailable, so a turn here starts a
-    // thread of its own and is handed the history (ADR 0197).
+    // thread of its own and is handed the history (ADR 0198).
     const away = <T extends { status: string }>(thread: T): T => ({
       ...thread,
       status: "unavailable",

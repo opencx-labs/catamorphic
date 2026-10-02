@@ -31,7 +31,7 @@ import { replyOf } from "./test-support.js";
 
 /**
  * A host harness that answers with where it runs: `pwd` in the session's
- * sandbox, through the provider core hands it (ADR 0197).
+ * sandbox, through the provider core hands it (ADR 0198).
  */
 class WorkspaceAgent {
   /** The sandbox each session ran in, by session id. */

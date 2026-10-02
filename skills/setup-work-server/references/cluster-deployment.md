@@ -478,7 +478,7 @@ containers are not budgeted.
 An Environment with `"personalCredentials": true` lets a member's chats run
 Claude Code or Codex on the member's own sign-in, made on a machine with
 `work worker sign-in <claude-code|codex> --member <id>` in a terminal there
-(ADR 0198, [harnesses](harnesses.md#members-own-sign-ins)), and lets their
+(ADR 0199, [harnesses](harnesses.md#members-own-sign-ins)), and lets their
 listed files reach their own chats. The sign-in never leaves that machine:
 the worker reports only `sign-in:<harness>:<member>` in its offer, and
 placement takes only a machine reporting the chat owner's. Only placements

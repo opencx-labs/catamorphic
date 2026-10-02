@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { migrateToLatest } from "../migrate.js";
 
 /*
- * Migration 045 turns existing chats into the session log (ADR 0196):
+ * Migration 045 turns existing chats into the session log (ADR 0197):
  * messages become items in order, step logs become work items, turns keep
  * their outcome, a turn caught running reads as interrupted, a queued turn
  * has made no attempt, messages outside a turn belong to none, native
@@ -181,7 +181,7 @@ describe("migration 045", () => {
 
     // A native conversation from before the log was never stored, the
     // built-in agent's included: its thread is unavailable, so the next
-    // turn starts a fresh thread handed every converted turn (ADR 0197).
+    // turn starts a fresh thread handed every converted turn (ADR 0198).
     const threads = await run(
       `SELECT session_id, harness, native_ref, status, last_turn_ordinal
          FROM agent_provider_threads ORDER BY harness`,

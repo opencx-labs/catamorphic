@@ -265,7 +265,7 @@ interface TurnView {
 }
 
 /**
- * Presentational conversation log (ADR 0196): each turn reads as its
+ * Presentational conversation log (ADR 0197): each turn reads as its
  * input, its work, then its answer; notices as quiet dividers; failed and
  * interrupted turns close with their outcome; the editable outgoing queue,
  * live activity and stick-to-bottom scrolling. Owns no chat state: feed

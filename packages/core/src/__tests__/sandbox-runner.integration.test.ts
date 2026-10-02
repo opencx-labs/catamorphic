@@ -17,7 +17,7 @@ import {
 } from "../services/sessions/runner-channels.js";
 
 /*
- * The runner bundle in a sandbox (ADR 0197): uploaded by hash, run as a
+ * The runner bundle in a sandbox (ADR 0198): uploaded by hash, run as a
  * process with standard input, read by byte cursor, and read on by another
  * holder from the stored cursor.
  */

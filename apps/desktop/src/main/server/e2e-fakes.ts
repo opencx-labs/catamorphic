@@ -312,7 +312,7 @@ interface FakeTurn {
 
 /**
  * E2E-only harness with scripted, prompt-keyed behavior over the real
- * host (ADR 0197): its tools are the desktop's workspace tools and
+ * host (ADR 0198): its tools are the desktop's workspace tools and
  * capabilities, its questions, approvals and elicitations are session
  * requests, and its files land in the chat's checkout. No model.
  *

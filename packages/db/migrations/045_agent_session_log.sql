@@ -1,5 +1,5 @@
--- Agent sessions are an event log of turns (ADR 0196); runners run
--- harnesses beside their workspace (ADR 0197).
+-- Agent sessions are an event log of turns (ADR 0197); runners run
+-- harnesses beside their workspace (ADR 0198).
 --
 -- Existing chats are converted in place: messages become items, the old
 -- queue rows become turns, a session's provider anchor becomes an
@@ -77,7 +77,7 @@ CREATE UNIQUE INDEX agent_provider_thread_entries_uuid
 -- so its thread cannot be resumed, restored or forked: it stays, for the
 -- turns that ran on it, as unavailable and without a native ref. The next
 -- turn starts a thread of its own and is handed the converted history
--- (ADR 0197).
+-- (ADR 0198).
 INSERT INTO agent_provider_threads (session_id, harness, native_ref, status, portable)
 SELECT id, provider, NULL, 'unavailable', false
   FROM agent_sessions
@@ -411,7 +411,7 @@ ALTER TABLE session_mailbox_items ADD CONSTRAINT chk_session_mailbox_delivery_mo
     CHECK (delivery_mode IN ('message_only', 'queue', 'steer', 'interrupt'));
 ALTER TABLE session_mailbox_items RENAME COLUMN message_id TO item_id;
 
--- Mirrors replicate the log (ADR 0196): watermarks are sequences.
+-- Mirrors replicate the log (ADR 0197): watermarks are sequences.
 ALTER TABLE session_sync_intents RENAME COLUMN desired_message_count TO desired_sequence;
 ALTER TABLE session_sync_intents RENAME COLUMN acknowledged_message_count TO acknowledged_sequence;
 ALTER TABLE session_sync_intents ALTER COLUMN desired_sequence TYPE bigint;

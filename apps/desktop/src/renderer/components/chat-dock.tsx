@@ -1910,7 +1910,7 @@ function ChatDockContent({
       internalAutofocusDepthRef.current -= 1;
     }
   }, []);
-  // Restore to here (ADR 0196): undo the turn and every later one, files
+  // Restore to here (ADR 0197): undo the turn and every later one, files
   // included, then hand the person their words back in the composer so
   // they can say it differently straight away.
   const rollback = async (

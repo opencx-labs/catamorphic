@@ -12,7 +12,7 @@ import {
 import { replyOf, testServerOptions } from "../test-support.js";
 import { WORKER_PROTOCOL, WORKER_PROTOCOL_HEADER } from "./worker-protocol.js";
 
-/** What every worker call states (ADR 0197). */
+/** What every worker call states (ADR 0198). */
 const PROTOCOL = { [WORKER_PROTOCOL_HEADER]: String(WORKER_PROTOCOL.server) };
 
 import { startWorkWorker } from "./worker-runtime.js";

@@ -27,7 +27,7 @@
   "dependencies": {
     "@catamorphic/agent-protocol": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
-    "@openai/codex-sdk": "0.153.4"
+    "@openai/codex-sdk": "0.160.0"
   },
   "devDependencies": {
     "@catamorphic/agent-runner": "workspace:*",

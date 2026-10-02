@@ -7,7 +7,7 @@ import type { AttemptHost } from "@catamorphic/agent-protocol/runner";
 export const ROLLOUT_SUBPATH = "rollout";
 
 /**
- * Mirrors a thread's rollout file into Work's native state (ADR 0197): each
+ * Mirrors a thread's rollout file into Work's native state (ADR 0198): each
  * poll appends the complete lines written since the last one. Codex writes
  * the file lazily and only ever appends, so a byte offset is the cursor.
  * Polls run one at a time, in order.

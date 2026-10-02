@@ -117,13 +117,13 @@ export interface RemoteMe {
     documents: Array<{ path: string; access: "read" | "write" }>;
   }>;
   features: Record<string, unknown>;
-  /** The agent protocols the server speaks (ADR 0196). */
+  /** The agent protocols the server speaks (ADR 0197). */
   agentProtocol?: { session?: number; runner?: number } | null;
 }
 
 /**
  * Refuse a server whose agent sessions speak another protocol version
- * (ADR 0196): its chats cannot be read or continued from this app.
+ * (ADR 0197): its chats cannot be read or continued from this app.
  */
 export function assertSessionProtocol(me: {
   agentProtocol?: { session?: number } | null;

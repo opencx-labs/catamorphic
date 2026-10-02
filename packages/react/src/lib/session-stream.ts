@@ -3,7 +3,7 @@ import type { CatamorphicApiClient } from "@catamorphic/api-client";
 import { CatamorphicError, toCatamorphicError } from "./errors.js";
 
 /**
- * The session protocol this client speaks (ADR 0196). A server whose
+ * The session protocol this client speaks (ADR 0197). A server whose
  * `GET /me` reports another `agentProtocol.session` cannot be talked to.
  */
 export const AGENT_SESSION_PROTOCOL = 1;
@@ -20,7 +20,7 @@ export const SESSION_PROTOCOL_MISMATCH_MESSAGE =
   "This server runs a different version of Work. Update Work to continue.";
 
 /**
- * Read one server-sent-event connection to a session's events (ADR 0196)
+ * Read one server-sent-event connection to a session's events (ADR 0197)
  * until it ends, handing each `data:` message to `onMessage` in order.
  * Resolves when the server closes the stream; rejects on a transport or
  * HTTP failure. Goes through the provider's API client, so hosts that

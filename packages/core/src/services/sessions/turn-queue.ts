@@ -37,7 +37,7 @@ export interface TurnCommand {
 
 /**
  * The session's queue of turns and the commands for the one running
- * (ADRs 0196, 0197). Whether a turn runs, and who runs it, is decided here
+ * (ADRs 0197, 0198). Whether a turn runs, and who runs it, is decided here
  * in Postgres: a claim takes the queue's head or recovers a turn whose
  * holder's lease lapsed, and one statement a second renews every turn a
  * process holds (ADR 0193).
@@ -338,7 +338,7 @@ export class TurnQueue {
       .execute();
   }
 
-  /** Make a settled turn due again later (a transient failure, ADR 0196). */
+  /** Make a settled turn due again later (a transient failure, ADR 0197). */
   async scheduleRetry(
     trx: Transaction<DB>,
     input: { turnId: string; at: Date },

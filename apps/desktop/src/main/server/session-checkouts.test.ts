@@ -556,7 +556,7 @@ describe("SessionCheckouts", () => {
     ]);
   });
 
-  it("rolls a chat's own worktree back to a turn's start, keeping history (ADR 0196)", async () => {
+  it("rolls a chat's own worktree back to a turn's start, keeping history (ADR 0197)", async () => {
     const owned = await checkouts.createManaged({ projectId, sessionId });
     const before = await checkouts.head({ workingDirectory: owned.path });
     await fs.writeFile(path.join(owned.path, "README.md"), "changed\n");

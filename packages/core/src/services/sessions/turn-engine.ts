@@ -117,7 +117,7 @@ export interface PreparedAttempt {
   checkpointBefore?: string | null;
   /**
    * The attempt runs on its owner's sign-in or personal files: only input
-   * the owner wrote may join it (ADR 0198).
+   * the owner wrote may join it (ADR 0199).
    */
   ownerOnly?: boolean;
 }
@@ -215,7 +215,7 @@ function runnerWrite(
     'applied', coalesce(runner -> 'applied', '{}'::jsonb))`;
 }
 
-/** The text a continuation turn gives the agent (ADR 0197). */
+/** The text a continuation turn gives the agent (ADR 0198). */
 export const CONTINUATION_PROMPT =
   "Your previous turn was interrupted because the machine running it stopped. Continue where you left off. First check what was already done (files, commands, messages) so you do not repeat anything that had side effects.";
 
@@ -228,7 +228,7 @@ const START_GRACE_MS = 15_000;
 const RESULT_RESEND_MS = 2_000;
 
 /**
- * Drives claimed turns (ADR 0197): prepares an attempt, starts its runner
+ * Drives claimed turns (ADR 0198): prepares an attempt, starts its runner
  * (or finds it again after a takeover), ingests its frames, answers its
  * host calls, delivers commands, and settles the turn. Every step that
  * matters to another replica is in Postgres; this process's memory holds
@@ -789,7 +789,7 @@ export class TurnEngine {
   }
 
   /**
-   * The native thread this attempt runs on (ADR 0197): the session's
+   * The native thread this attempt runs on (ADR 0198): the session's
    * thread for this harness, resumed (or restored from stored state); a
    * fork of a source thread for a forked session's first turn; else a fresh
    * one, told what it missed by a recorded handoff.
@@ -1567,7 +1567,7 @@ export class TurnEngine {
    * Answer host calls. Native state is Postgres-only, so it is answered in
    * one transaction with forgetting the call: never applied twice. A host
    * tool runs outside it; one found taken after a takeover is answered
-   * with the uncertainty, never run twice (ADR 0197).
+   * with the uncertainty, never run twice (ADR 0198).
    */
   private async answerCalls(
     local: LocalTurn,
@@ -1951,7 +1951,7 @@ export class TurnEngine {
   }
 
   /**
-   * An attempt whose runner is gone (ADR 0197): it is lost, its turn is
+   * An attempt whose runner is gone (ADR 0198): it is lost, its turn is
    * interrupted with the reason, open requests can no longer be answered,
    * and a continuation is queued once when the agent recovers by
    * continuing and its native thread can be resumed exactly.

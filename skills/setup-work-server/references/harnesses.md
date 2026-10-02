@@ -7,7 +7,7 @@ grant. The model key stays in the control plane's vault; the sandbox holds
 only the grant, which stops working when the chat closes.
 
 Members can also run Claude Code and Codex on **their own subscriptions**,
-signed in on the machine that runs their chats (ADR 0198): see
+signed in on the machine that runs their chats (ADR 0199): see
 [Members' own sign-ins](#members-own-sign-ins) below.
 
 ## 1. Connect the model key
@@ -84,7 +84,7 @@ Microsandbox machines build and boot that image. A local-process worker runs
 commands on its own machine, so install the CLIs there (for the Work image,
 a derived image `FROM` it that adds them to the PATH). Work runs the harness
 through its agent runner, a single file it uploads into the sandbox and runs
-with Bun or Node (ADR 0197): the Work image has Bun, and microsandbox
+with Bun or Node (ADR 0198): the Work image has Bun, and microsandbox
 installs Node in an image that has neither.
 
 ## 4. Define the agent
@@ -127,7 +127,7 @@ Environment restricts egress, the gateway's host is always reachable.
 A developer can run Claude Code or Codex on **their own subscription** in
 their own chats, and bring files the repository never tracks (`.env`,
 `apps/api/.env.local`). A sign-in stays on the machine it was made on
-(ADR 0198): the member signs in with the CLI's own login on the machine that
+(ADR 0199): the member signs in with the CLI's own login on the machine that
 runs their chats, into a home for them on that machine's disk. Work never
 reads, copies, uploads, stores or forwards it; the machine reports only that
 the member is signed in (`sign-in:claude-code:<member id>`).

@@ -11,7 +11,7 @@ let keychainCache: { at: number; value: string | null } | null = null;
 
 /**
  * Claude Code's default login on macOS lives in the Keychain. Read for this
- * machine's own sign-in checks; the value never leaves it (ADR 0198).
+ * machine's own sign-in checks; the value never leaves it (ADR 0199).
  */
 export async function readClaudeKeychain(): Promise<string | null> {
   if (process.platform !== "darwin") return null;

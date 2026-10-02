@@ -152,7 +152,7 @@ authorization returns to it.
   `confirmStop: true` only after the user confirms. `useUnarchiveAgentSession`
   restores it.
 - Questions, tool approvals and connector requests are session requests
-  (ADR 0196): `useAgentChat().requests`, answered with `respond`, rendered
+  (ADR 0197): `useAgentChat().requests`, answered with `respond`, rendered
   by the registry `agent-question-panel` and `tool-permission-card`.
 
 For message delivery, queue editing, failure recovery, and what a chat host is

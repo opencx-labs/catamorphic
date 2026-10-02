@@ -8,7 +8,7 @@ import { ExternalLink, ShieldQuestion } from "lucide-react";
 import { useState } from "react";
 
 /**
- * A runtime request that is not a question panel (ADR 0196): an approval
+ * A runtime request that is not a question panel (ADR 0197): an approval
  * for a tool call whose permission policy says "ask" (ADR 0054), or an MCP
  * elicitation. Approvals show which agent, which tool on which connection,
  * and exactly what it will send, with Allow once, Always allow (the host

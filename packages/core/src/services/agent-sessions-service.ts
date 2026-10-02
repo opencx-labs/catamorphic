@@ -248,7 +248,7 @@ interface AgentExecutionRuntime {
   devSandboxes?: DevSandboxService;
   /** The Allocation's budget for one foreground command (ADR 0174). */
   commandTimeoutSeconds?: number;
-  /** The placement may run the owner's own sign-ins (ADR 0198). */
+  /** The placement may run the owner's own sign-ins (ADR 0199). */
   personalCredentials?: boolean;
   /** Where the sandbox sees the owner's sign-in for the agent's harness. */
   signInHome?: string;
@@ -325,7 +325,7 @@ export interface AgentSession {
   authorityRevision: number;
   /** Last time this host observed the current authority's stable snapshot. */
   authoritySeenAt: string;
-  /** The last event sequence a mirror pushed here (ADR 0196). */
+  /** The last event sequence a mirror pushed here (ADR 0197). */
   mirrorSequence: number;
   /** A coordinated move blocks local sends while remote authority is claimed. */
   handoffStatus: "none" | "pending";
@@ -404,7 +404,7 @@ export interface AgentTodoInput {
 }
 
 /**
- * A session for one viewer, with its snapshot (ADR 0196): the per-person
+ * A session for one viewer, with its snapshot (ADR 0197): the per-person
  * fields of {@link AgentSession} and a bounded view of its turns, items and
  * requests at one sequence, which later events keep current.
  */
@@ -710,7 +710,7 @@ export interface NativeAgentCheckout {
   /** The checkout's current commit, which a rollback of the next turn restores. */
   head?(input: { workingDirectory: string }): Promise<string | null>;
   /**
-   * Put the checkout back at `commit` for a rollback (ADR 0196), or say
+   * Put the checkout back at `commit` for a rollback (ADR 0197), or say
    * why not. A checkout the chat owns is reset; a person's own folder only
    * when its commit is still `expectedHead` and it holds no other changes.
    */
@@ -856,7 +856,7 @@ const ASK_USER_HOST_TOOL: ExtraTool = {
 
 export class AgentSessionsService {
   readonly mailboxes: SessionMailboxesService;
-  /** The session event log (ADR 0196). */
+  /** The session event log (ADR 0197). */
   readonly log: SessionLog;
   readonly queue: TurnQueue;
   readonly feed: SessionFeed;
@@ -923,7 +923,7 @@ export class AgentSessionsService {
 
   /**
    * Stop this process's turns before its machine goes away (ADRs 0190,
-   * 0197). It claims no more. A turn whose runner lives in a sandbox that
+   * 0198). It claims no more. A turn whose runner lives in a sandbox that
    * outlives this process (on a worker or a member's machine) is handed
    * back at once and continues where another replica claims it; the rest
    * are asked to stop and settle here within `timeoutMs` (default 15 s).
@@ -1033,7 +1033,7 @@ export class AgentSessionsService {
                     eb("agent_turns.status", "=", "queued"),
                     eb("agent_turns.available_at", "<=", sql<Date>`now()`),
                   ]),
-                  // A turn whose holder's lease lapsed is recovered (ADR 0197).
+                  // A turn whose holder's lease lapsed is recovered (ADR 0198).
                   and([
                     eb("agent_turns.status", "in", [...ACTIVE_TURN_STATUSES]),
                     or([
@@ -1730,7 +1730,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * A session with its snapshot (ADR 0196): the per-person fields of
+   * A session with its snapshot (ADR 0197): the per-person fields of
    * {@link AgentSession} and a bounded view of its turns, items and
    * requests at one sequence. Clients apply later events from
    * {@link subscribe} to it.
@@ -1784,7 +1784,7 @@ export class AgentSessionsService {
 
   /**
    * The conversation as people read it, in order: what session tools,
-   * workflows' `history` and peers read (ADR 0196).
+   * workflows' `history` and peers read (ADR 0197).
    */
   async transcript(
     identity: Identity,
@@ -1797,7 +1797,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * Stream a session's events after `after` (ADR 0196): the gap, or a fresh
+   * Stream a session's events after `after` (ADR 0197): the gap, or a fresh
    * snapshot when it is too large, then live events. The caller's access is
    * checked once, when the stream opens.
    */
@@ -1858,7 +1858,7 @@ export class AgentSessionsService {
   // Delivering input
 
   /**
-   * Put input into a session inside the caller's transaction (ADR 0196): a
+   * Put input into a session inside the caller's transaction (ADR 0197): a
    * user item and, unless it is `message_only`, a turn. `steer` joins the
    * active turn (the engine delivers it, natively or by a restart);
    * `interrupt` jumps the queue and stops the active turn. Idempotent by
@@ -1905,7 +1905,7 @@ export class AgentSessionsService {
       .where("status", "in", [...ACTIVE_TURN_STATUSES])
       .executeTakeFirst();
     // A turn on its owner's sign-in or files takes in only what the owner
-    // wrote (ADR 0198); anyone else's message waits for a turn of its own,
+    // wrote (ADR 0199); anyone else's message waits for a turn of its own,
     // which runs without them. Before its runner starts, that is unknown.
     const joinable =
       !active ||
@@ -2177,7 +2177,7 @@ export class AgentSessionsService {
     const metadata: JsonObject = {
       ...input.metadata,
       // Whose call delivered it, whatever author it names: a chat that runs
-      // on its owner's own sign-in answers only their own doing (ADR 0198).
+      // on its owner's own sign-in answers only their own doing (ADR 0199).
       deliveredBy: identity.externalUserId,
       ...(input.author.kind === "agent" && !input.metadata?.causation
         ? {
@@ -2383,7 +2383,7 @@ export class AgentSessionsService {
   }
 
   // ---------------------------------------------------------------------------
-  // Commands (ADR 0196)
+  // Commands (ADR 0197)
 
   /**
    * Run a person's command on a session, at most once per `commandId`
@@ -3017,7 +3017,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * Answer a question, approval or elicitation (ADR 0197). An answer to an
+   * Answer a question, approval or elicitation (ADR 0198). An answer to an
    * agent still waiting goes to its runner, from whichever replica takes
    * it; an answer to a non-blocking question whose turn ended becomes a
    * message. A request whose agent stopped can no longer be answered.
@@ -3399,7 +3399,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * Undo a turn and every later one (ADR 0196): the conversation from that
+   * Undo a turn and every later one (ADR 0197): the conversation from that
    * turn on is marked rolled back, the next turn's native thread forks
    * through the turn before it (or starts over with a handoff), and the
    * workspace returns to where it stood before the turn. Files move only
@@ -3644,7 +3644,7 @@ export class AgentSessionsService {
   }
 
   // ---------------------------------------------------------------------------
-  // Running turns (ADR 0197)
+  // Running turns (ADR 0198)
 
   /** Run the session's due turns in this process, soon. */
   private kick(sessionId: string): void {
@@ -3755,7 +3755,7 @@ export class AgentSessionsService {
     );
   }
 
-  /** The engine's view of this service (ADR 0197). */
+  /** The engine's view of this service (ADR 0198). */
   private engineHost(): TurnEngineHost {
     return {
       owner: (session) => this.ownerOf(session),
@@ -3942,7 +3942,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * Ready one attempt (ADR 0197), all of it safe to do again: the
+   * Ready one attempt (ADR 0198), all of it safe to do again: the
    * workspace (moved to a requested base, anchored, seeded), the sandbox's
    * grants and Git, the owner's personal files, the store, and the
    * attempt's start: instructions, context, tools, policies, MCP servers
@@ -4023,7 +4023,7 @@ export class AgentSessionsService {
         sandboxProviderId: workspace.sandboxProviderId,
       });
       if (agent.signIn) {
-        // The owner's own sign-in, mounted from the machine's disk (ADR 0198).
+        // The owner's own sign-in, mounted from the machine's disk (ADR 0199).
         if (!ownerAuthored)
           throw new Error(
             `This chat runs on its owner's own ${SIGN_IN_HARNESS_NAMES[agent.signIn]} sign-in, so only they can send it messages.`,
@@ -4292,7 +4292,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * After the harness finished (ADR 0197), safe to do again: sync the
+   * After the harness finished (ADR 0198), safe to do again: sync the
    * sandbox's changes back, ship the store, and commit the checkpoint.
    */
   private async finalizeTurn(input: {
@@ -5219,7 +5219,7 @@ export class AgentSessionsService {
 
   /**
    * The owner's personal files in a sandbox turn (ADR 0184, files only
-   * since ADR 0198): placed where the turn's placement allows personal
+   * since ADR 0199): placed where the turn's placement allows personal
    * credentials and the owner wrote the input it answers; taken back out
    * otherwise. Returns a note for the agent about files it did not place.
    */
@@ -5363,7 +5363,7 @@ export class AgentSessionsService {
   /**
    * Whether the owner wrote everything a turn answers: its input and every
    * message steered into it, and for a continuation, the turn it continues.
-   * The condition for running on their sign-in and files (ADR 0198).
+   * The condition for running on their sign-in and files (ADR 0199).
    */
   private async ownerAuthoredTurn(input: {
     projectId: string;
@@ -5685,7 +5685,7 @@ export class AgentSessionsService {
 
   /**
    * Mirror a session from another backend (a desktop pushing its local
-   * session to the server it's linked to, ADR 0196): its log continues
+   * session to the server it's linked to, ADR 0197): its log continues
    * here from this copy's sequence, or a new copy starts from the
    * source's snapshot. The copy runs this registry's agent for the
    * source's project-agent slug, else the default. Authority stays with
@@ -5798,7 +5798,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * What a mirror pushes (ADR 0196): the log after the remote's sequence,
+   * What a mirror pushes (ADR 0197): the log after the remote's sequence,
    * or the whole session to start a copy, with its workflow-facing events.
    */
   async mirrorExport(input: {
@@ -5965,7 +5965,7 @@ export class AgentSessionsService {
       this.assertAgentAccess(identity, projectId, patch.agentId);
       const agent = await this.resolveAgent(patch.agentId, projectId);
       if (!agent) throw new AgentNotConfiguredError(patch.agentId);
-      // The next turn binds the new agent's harness thread (ADR 0197): a
+      // The next turn binds the new agent's harness thread (ADR 0198): a
       // harness it ran on before resumes, told only what it missed.
       updates.agent_id = patch.agentId;
       updates.model = null;
@@ -6257,7 +6257,7 @@ export class AgentSessionsService {
             trx,
           );
           // The fork's first turn forks the source's native thread through
-          // the fork point, when the harness can (ADR 0197); otherwise it
+          // the fork point, when the harness can (ADR 0198); otherwise it
           // starts fresh and is handed the copied history.
           if (copy.forkPoint) {
             const now = new Date().toISOString();
@@ -6427,7 +6427,7 @@ export class AgentSessionsService {
       }),
     };
     // An inheriting child starts from the parent's settled history; its
-    // first turn is handed it (ADR 0197).
+    // first turn is handed it (ADR 0198).
     const inherited =
       contextMode === "inherit"
         ? await readFullSnapshot({ db: this.db, sessionId: sourceSessionId })
@@ -8165,7 +8165,7 @@ export class AgentSessionsService {
           preferred: agent.environment?.preferred,
         });
         // A harness on its member's own sign-in is offered only in projects
-        // with an Environment that allows personal credentials (ADR 0198).
+        // with an Environment that allows personal credentials (ADR 0199).
         if (
           agent.signIn &&
           !environments.items.some(
@@ -8454,7 +8454,7 @@ export class AgentSessionsService {
     const commandTimeoutSeconds =
       allocation.policy.requirements.resources?.commandTimeoutSeconds;
     // The owner's own sign-in, when the placed machine reports it (ADR
-    // 0198): the sandbox mounts that one home from the machine's disk.
+    // 0199): the sandbox mounts that one home from the machine's disk.
     const owner = placementOwner(session.external_user_id);
     const signIn =
       agent.signIn &&
@@ -8490,7 +8490,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * Make sure the session has its workspace for the agent (ADR 0197): the
+   * Make sure the session has its workspace for the agent (ADR 0198): the
    * checkout a native agent works in, or the session's sandbox, created
    * and seeded on first use or after it was given back. The native thread
    * the harness runs on is the engine's (provider threads), not this.

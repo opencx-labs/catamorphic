@@ -15,7 +15,7 @@ export interface ContextHandoff {
 }
 
 /**
- * What a provider thread did not see (ADR 0197): the settled turns from
+ * What a provider thread did not see (ADR 0198): the settled turns from
  * `fromOrdinal` through `toOrdinal`, as an auditable, budgeted summary of
  * what was asked, answered, run and changed. Its first request and its most
  * recent turns are kept; whatever does not fit in the middle is named, not

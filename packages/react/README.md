@@ -121,7 +121,7 @@ workflow prefix so both list summaries and singular workflow graphs refresh.
 ### Agent (coding sessions)
 
 - `useAgentSessions(projectId)`
-- `useAgentSession(projectId, sessionId)`: the live session (ADR 0196). It
+- `useAgentSession(projectId, sessionId)`: the live session (ADR 0197). It
   loads the snapshot, streams the events after its sequence over SSE, folds
   them with `@catamorphic/agent-protocol`'s reducer, resumes from the last
   applied sequence after a dropped connection, replaces its state on a

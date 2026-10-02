@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Commands a person's client sends to a session (ADR 0196). Each carries a
+ * Commands a person's client sends to a session (ADR 0197). Each carries a
  * client-generated `commandId`: sending the same command again returns the
  * first receipt and runs nothing.
  */

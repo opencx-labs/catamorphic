@@ -28,7 +28,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestApp } from "./test-app.js";
 
 /*
- * The session log over HTTP (ADR 0196): real AgentSessionsServices on
+ * The session log over HTTP (ADR 0197): real AgentSessionsServices on
  * PGlite, each driving the deterministic echo harness in this process.
  */
 

@@ -5,7 +5,7 @@ import { type Kysely, sql, type Transaction } from "kysely";
 type Executor = Kysely<DB> | Transaction<DB>;
 
 /**
- * A provider thread's native state, stored with Work (ADR 0197): Claude
+ * A provider thread's native state, stored with Work (ADR 0198): Claude
  * Code's session transcript through its SessionStore, a Codex rollout, the
  * built-in agent's history. Entries keep their order; one carrying a
  * `uuid` is stored once, so a retried append never duplicates it.

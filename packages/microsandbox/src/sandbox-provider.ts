@@ -99,7 +99,7 @@ export interface MicrosandboxProviderConfig {
   /** Size of each container sandbox's Docker disk. Default 8 GiB. */
   containerDiskMib?: number;
   /**
-   * Where this machine keeps members' own harness sign-ins (ADR 0198),
+   * Where this machine keeps members' own harness sign-ins (ADR 0199),
    * one home per harness and member (`machineSignInHome`). A sandbox
    * created with `signIns` bind-mounts exactly those homes, read-write so
    * the CLI's own token refresh keeps working. Without it the provider
@@ -111,7 +111,7 @@ export interface MicrosandboxProviderConfig {
 /**
  * Runs once per new sandbox; ~20s on first use, no-op when everything
  * exists. Agent sessions need git and bash, and the agent runner needs Bun
- * or Node (ADR 0197); an image without them gets them from its package
+ * or Node (ADR 0198); an image without them gets them from its package
  * manager (Node, the smaller of the two).
  */
 const DEFAULT_SETUP_COMMAND =
@@ -279,7 +279,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * The sign-in homes a sandbox mounts (ADR 0198): each one this machine
+   * The sign-in homes a sandbox mounts (ADR 0199): each one this machine
    * keeps for the member named, nothing else of the sign-in root.
    */
   private signInMounts(

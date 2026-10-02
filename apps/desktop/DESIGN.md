@@ -1491,6 +1491,16 @@ with what was picked. A permission request gives way to a message instead of
 staying open. Pasting no longer shifts the dock: preparation spins the attach
 button. See ADR 0195.
 
+### 2026-10-02: Your own Claude Code, and update checks that survive sleep
+
+Claude Code chats run the person's own Claude Code when it is at least the
+version Work was built with, so a current install brings current models with
+no download; otherwise Work downloads its own copy as before. The agent's
+settings say which one runs and, when the installed one is too old, offer to
+update it with its own updater. Work's checks for its own updates now count
+time asleep, wait a minute after waking, retry soon after a failure and keep a
+log. See ADR 0196.
+
 ### 2026-10-02: A chat is a log every window reads the same way
 
 A chat used to be a placeholder message rewritten on every harness event and
@@ -1506,4 +1516,4 @@ going missing. Any turn can be undone with the files it changed ("Restore to
 here"), and a fork starts from the agent's own conversation at that point.
 Claude Code and Codex logins no longer leave the Mac: a remote chat on a
 subscription runs only on a machine where the person signed in themselves.
-See ADRs 0196, 0197 and 0198.
+See ADRs 0197, 0198 and 0199.

@@ -61,7 +61,7 @@ export function buildAgentRegistry(deps: {
   }
   // Without an organization model the assistant is off, but members can
   // still chat with Claude Code and Codex on their own sign-ins on a
-  // machine they signed in on (ADR 0198).
+  // machine they signed in on (ADR 0199).
   if (!resolveModel || !providerName) {
     return {
       registry: assistantRegistry({ effort }),
@@ -78,7 +78,7 @@ export function buildAgentRegistry(deps: {
 
   return {
     registry: assistantRegistry({
-      // The built-in agent runs on the control plane (ADR 0197); its file
+      // The built-in agent runs on the control plane (ADR 0198); its file
       // and shell tools act on the chat's sandbox.
       harness: {
         placement: "host",
@@ -99,7 +99,7 @@ export const ASSISTANT_SLUG = "assistant";
 
 /**
  * Claude Code and Codex on the chat owner's own sign-in, made on the
- * machine that runs the chat (ADR 0198). Offered in projects with an
+ * machine that runs the chat (ADR 0199). Offered in projects with an
  * Environment that allows personal credentials; a chat places only on a
  * machine that reports its owner's sign-in.
  */
@@ -125,7 +125,7 @@ const SYSTEM_PROMPT =
   "You work through a company server. Unless execution context explicitly identifies an authenticated member device, the working directory and home directory belong to the server or its sandbox, not the user's device. New personal files should stay local to the user's device by default. Do not claim that writing outside the project on the server satisfies device-local or private storage. If no device file tool is available, provide the requested content in chat and clearly explain that it has not been saved to their device. Use only host-supported private storage for private output. Saving, proposing, and publishing are separate actions: never add personal output to shared project source or store/ unless the user explicitly requests sharing. When asked to propose or prepare shared content for review, discover project.propose_change and pass only the intended file paths and desired content. Submit the proposal before writing shared project files: shared checkout writes can be checkpointed and synchronized immediately. If the proposal capability is unavailable, explain that and keep the proposed content in chat; do not silently publish it instead. A chat or ordinary document change alone does not require a new worktree.";
 
 /**
- * Claude Code and Codex on the server (ADRs 0180, 0197): the runner bundle
+ * Claude Code and Codex on the server (ADRs 0180, 0198): the runner bundle
  * runs each inside the chat's sandbox, on a worker or the control plane,
  * where its CLI is. Model and effort travel as turn defaults.
  */
@@ -168,7 +168,7 @@ function assistantRegistry(config: {
     defaults,
   };
   const projectForm = /^project:[0-9a-f-]+:assistant$/;
-  // Claude Code and Codex on the member's own sign-in (ADR 0198).
+  // Claude Code and Codex on the member's own sign-in (ADR 0199).
   const signInAgent = (kind: SignInHarness): RegisteredCodingAgent => ({
     id: kind,
     name: SIGN_IN_AGENTS[kind].name,
@@ -239,7 +239,7 @@ function assistantRegistry(config: {
 /**
  * A committed `claude-code` or `codex` agent, served when its credentials
  * name a model connection of its Environment (ADR 0180), or `personal`:
- * the chat owner's own sign-in on the machine that runs it (ADR 0198).
+ * the chat owner's own sign-in on the machine that runs it (ADR 0199).
  * Project secrets and the machine's own CLI login are desktop concepts.
  */
 function sandboxProjectAgent(input: {

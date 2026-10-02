@@ -1153,7 +1153,7 @@ export const AgentSessionSchema = z.object({
   authorityHostId: z.string().min(1),
   authorityRevision: z.number().int().positive(),
   authoritySeenAt: z.string().datetime(),
-  /** The last event sequence a mirror pushed here (ADR 0196). */
+  /** The last event sequence a mirror pushed here (ADR 0197). */
   mirrorSequence: z.number().int().nonnegative(),
   handoffStatus: z.enum(["none", "pending"]),
   handoffDestinationHostId: z.string().nullable(),
@@ -1291,7 +1291,7 @@ export const EnvironmentErrorSchema = z.object({
   reasons: z.array(z.string()).optional(),
 });
 
-// --- Agent session log (ADR 0196) ---
+// --- Agent session log (ADR 0197) ---
 //
 // The wire shapes of `@catamorphic/agent-protocol`. Each schema is bound to
 // its protocol type with `describes`, so a change on either side that the
@@ -1818,7 +1818,7 @@ const MirrorProjectEventSchema = z.object({
 });
 
 /**
- * One mirror push (ADR 0196): the source's log after this copy's sequence,
+ * One mirror push (ADR 0197): the source's log after this copy's sequence,
  * or, for a copy that does not exist yet, a full snapshot to start from.
  */
 export const MirrorAgentSessionSchema = z.object({
@@ -1880,7 +1880,7 @@ export const ResumeAgentSessionSchema = z.object({
 
 export const ForkAgentSessionSchema = z.object({
   /**
-   * Fork point: the item (ADR 0196) the transcript is copied through,
+   * Fork point: the item (ADR 0197) the transcript is copied through,
    * with the turn it belongs to. Omitted = every settled turn.
    */
   messageId: z.string().min(1).max(200).optional(),
@@ -1893,7 +1893,7 @@ export const SessionMailboxItemSchema = z.object({
   sourceHostId: z.string(),
   destinationHostId: z.string(),
   authorityRevision: z.number().int().positive(),
-  /** The user item the delivery becomes on the destination (ADR 0196). */
+  /** The user item the delivery becomes on the destination (ADR 0197). */
   messageId: z.string().uuid(),
   content: z.string(),
   author: SessionMessageAuthorSchema,
@@ -2267,7 +2267,7 @@ export const MeSchema = z.object({
     storeUploadMaxBytes: z.number(),
   }),
   /**
-   * The protocols this server speaks (ADR 0196, 0197): a client refuses a
+   * The protocols this server speaks (ADR 0197, 0198): a client refuses a
    * server whose session or runner protocol it does not know.
    */
   agentProtocol: z.object({
@@ -2444,11 +2444,11 @@ export const AgentCatalogSchema = z.object({
   ),
 });
 
-// --- Personal environments (ADRs 0184, 0198) ---
+// --- Personal environments (ADRs 0184, 0199) ---
 
 /** Why a body naming sign-ins is refused: they never leave their machine. */
 export const PERSONAL_SIGN_INS_REFUSED =
-  "Sign-ins stay on the machine they were made on (ADR 0198): sign in to the harness there, and send only files here.";
+  "Sign-ins stay on the machine they were made on (ADR 0199): sign in to the harness there, and send only files here.";
 
 export const PutPersonalEnvironmentSchema = z
   .strictObject(

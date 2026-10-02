@@ -1,7 +1,7 @@
 # Chat state and embedding
 
 `packages/react` owns reusable delivery orchestration. Core owns durable execution,
-the session event log and the turn queue (ADR 0196). Desktop owns surfaces, focus, bubbles, file persistence
+the session event log and the turn queue (ADR 0197). Desktop owns surfaces, focus, bubbles, file persistence
 and native clipboard access. Registry components compose the hook and callbacks;
 they must not import Electron or assume a desktop workspace.
 

@@ -1,0 +1,121 @@
+name: Harness bump
+
+# Opens a pull request when a new Claude Agent SDK or Codex SDK is
+# published (ADR 0196): the bundled SDK, the CLI release it ships with and
+# every platform executable's integrity move together. CI and review decide
+# whether it merges; pins never float.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      harness:
+        description: Harness to bump
+        type: choice
+        options: [both, claude-code, codex]
+        default: both
+      version:
+        description: SDK version to pin (default latest; one harness only)
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  # Pull requests opened with this token start no workflows; CI is
+  # dispatched on the branch instead, which reports on the same commit.
+  actions: write
+
+concurrency:
+  group: harness-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Bump ${{ matrix.harness }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      # One at a time: both edit harness-components.ts and bun.lock.
+      max-parallel: 1
+      matrix:
+        harness: [claude-code, codex]
+    steps:
+      - name: Skip a harness that was not asked for
+        id: wanted
+        env:
+          WANTED: ${{ inputs.harness || 'both' }}
+          HARNESS: ${{ matrix.harness }}
+        run: |
+          echo "run=$([ "$WANTED" = both ] || [ "$WANTED" = "$HARNESS" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        if: steps.wanted.outputs.run == 'true'
+      - uses: oven-sh/setup-bun@v2
+        if: steps.wanted.outputs.run == 'true'
+        with:
+          bun-version: 1.3.14
+      - name: Pin the latest release
+        id: bump
+        if: steps.wanted.outputs.run == 'true'
+        env:
+          HARNESS: ${{ matrix.harness }}
+          VERSION: ${{ inputs.harness == matrix.harness && inputs.version || 'latest' }}
+        run: bun scripts/harness-bump.ts "$HARNESS" "$VERSION" --output "$GITHUB_OUTPUT"
+      - name: Look for an existing pull request
+        id: existing
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: automation/${{ matrix.harness }}-${{ steps.bump.outputs.sdk }}
+        run: |
+          # A pull request for this version, open or closed, is the answer
+          # already: a closed one means someone decided against it.
+          count=$(gh pr list --head "$BRANCH" --state all --json number --jq length)
+          echo "found=$([ "$count" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - name: Update the lockfile and check the pins
+        if: steps.bump.outputs.changed == 'true' && steps.existing.outputs.found == 'false'
+        run: |
+          # Only the lockfile and the SDK manifests are needed: skip the
+          # Electron and browser downloads postinstall scripts do.
+          bun install --ignore-scripts
+          bun run test:scripts -- scripts/harness-bump.test.ts
+      - name: Open the pull request
+        if: steps.bump.outputs.changed == 'true' && steps.existing.outputs.found == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HARNESS: ${{ matrix.harness }}
+          BRANCH: automation/${{ matrix.harness }}-${{ steps.bump.outputs.sdk }}
+          FROM: ${{ steps.bump.outputs.from }}
+          SDK: ${{ steps.bump.outputs.sdk }}
+          CLI: ${{ steps.bump.outputs.cli }}
+        run: |
+          if [ "$HARNESS" = claude-code ]; then
+            name="Claude Code"; sdk_name="Claude Agent SDK"; package=packages/claude-code/package.json
+            note="Work runs a person's installed Claude Code when it is $CLI or newer, and downloads this pinned copy otherwise."
+          else
+            name="Codex"; sdk_name="Codex SDK"; package=packages/codex/package.json
+            note="Work always runs this pinned Codex: its client uses Codex's experimental app-server API."
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git add "$package" apps/desktop/src/main/harness-components.ts bun.lock
+          git commit -m "Bump $name to $CLI ($sdk_name $SDK)"
+          git push origin "$BRANCH"
+          body=$(cat <<EOF
+          Moves the $sdk_name from $FROM to $SDK, which ships $name $CLI. $note (ADR 0196)
+
+          Updated together by \`scripts/harness-bump.ts $HARNESS\`: \`$package\`, \`bun.lock\`, and the version and every platform's integrity in \`apps/desktop/src/main/harness-components.ts\`.
+
+          Before merging, read the release notes for protocol changes and let CI's native $name tests pass. Opened by the scheduled harness bump workflow.
+          EOF
+          )
+          gh pr create --base main --head "$BRANCH" \
+            --title "Bump $name to $CLI" --body "$body"
+          gh workflow run ci.yml --ref "$BRANCH"
+          # Older bump pull requests for this harness are superseded.
+          gh pr list --state open --json number,headRefName \
+            --jq ".[] | select(.headRefName | startswith(\"automation/$HARNESS-\")) | select(.headRefName != \"$BRANCH\") | .number" |
+            while read -r number; do
+              gh pr close "$number" --delete-branch --comment "Superseded by the bump to $CLI."
+            done

@@ -15,7 +15,7 @@ import {
 } from "@catamorphic/agent-protocol";
 
 /**
- * What a session reads as (ADR 0196): turns in order, each its input, the
+ * What a session reads as (ADR 0197): turns in order, each its input, the
  * work, and the answer. Every chat client renders this one projection, so
  * a turn means the same thing on the desktop, the phone and an embed.
  */

@@ -380,7 +380,7 @@ describe("keyed chats a caller may not see (ADR 0173)", () => {
   });
 });
 
-describe("personal environments (ADR 0198)", () => {
+describe("personal environments (ADR 0199)", () => {
   it("refuses sign-ins: they stay on the machine they were made on", async () => {
     const replace = vi.fn(async () => ({ allowed: true, files: [] }));
     const server = createTestApp({

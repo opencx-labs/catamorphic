@@ -374,7 +374,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
     },
   });
 
-  // The session's events after a cursor, as server-sent events (ADR 0196):
+  // The session's events after a cursor, as server-sent events (ADR 0197):
   // the gap (or `reset` with a fresh snapshot when it is too large), then
   // live events, with a heartbeat every 15 seconds. A reader that falls too
   // far behind is closed and resumes from its cursor, which each event's
@@ -447,7 +447,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
     },
   });
 
-  // A person's command to a session (ADR 0196): send, interrupt, retry,
+  // A person's command to a session (ADR 0197): send, interrupt, retry,
   // queue edits, send now, answer a request, roll back. Each carries a
   // client `commandId`; sending it again returns the first receipt. A
   // refusal is a durable answer too, so both receipts are 200.
@@ -499,7 +499,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
     },
   });
 
-  // Session mirroring (ADR 0196): another backend (a linked desktop)
+  // Session mirroring (ADR 0197): another backend (a linked desktop)
   // pushes the session's log after this copy's sequence, so members see it
   // here and can continue it when the source is gone. A copy that does not
   // exist yet starts from the push's `base` snapshot.
@@ -648,7 +648,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
     },
   });
 
-  // What a mirror of this session pushes (ADR 0196): its log after the
+  // What a mirror of this session pushes (ADR 0197): its log after the
   // copy's sequence, or the whole session (`base`) for a copy that does not
   // exist yet or fell too far behind.
   typed.route({

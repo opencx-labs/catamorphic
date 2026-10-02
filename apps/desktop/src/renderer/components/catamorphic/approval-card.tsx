@@ -9,7 +9,7 @@ import { ExternalLink, ShieldQuestionMark } from "lucide-react";
 import { useState } from "react";
 
 /**
- * A request that is not a question (ADR 0196): an approval to use a tool,
+ * A request that is not a question (ADR 0197): an approval to use a tool,
  * or a connector asking for input. Approvals show the tool and exactly
  * what it will send, with Allow once, Always allow (the host keeps it on
  * the connection) and Deny. A request whose agent has gone says why and

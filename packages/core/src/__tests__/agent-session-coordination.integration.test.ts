@@ -48,7 +48,7 @@ import { testEnvironmentProvider } from "./test-environment.js";
 
 /*
  * Coordination around agent sessions (ADRs 0090, 0173, 0176, 0179, 0195,
- * 0196): delegation, keyed chats, attention, actions, recovery and the
+ * 0197): delegation, keyed chats, attention, actions, recovery and the
  * workflow-facing events, on a scripted harness.
  */
 
@@ -714,7 +714,7 @@ describe("agent session coordination", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Failures and recovery (ADR 0197)
+  // Failures and recovery (ADR 0198)
 
   it("retries a turn its provider rejected before any work, without a second message", async () => {
     const project = await projects.create(identity, {
@@ -2365,7 +2365,7 @@ describe("agent session coordination", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Copies of a log: mirrors and forks (ADR 0196)
+  // Copies of a log: mirrors and forks (ADR 0197)
 
   it("mirrors a session's log once, with its original workflow events, and refuses others' events", async () => {
     const project = await projects.create(identity, { name: "Mirrored log" });

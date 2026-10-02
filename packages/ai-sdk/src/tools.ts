@@ -264,7 +264,7 @@ function within(resolved: string, directory: string): boolean {
 }
 
 /**
- * The host's tools (ADR 0197 host calls): offered under their own names,
+ * The host's tools (ADR 0198 host calls): offered under their own names,
  * run by the host. `call` returns MCP-shaped content; an `isError` result
  * reads to the model as the tool's error.
  */

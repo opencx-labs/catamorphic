@@ -68,7 +68,7 @@ export async function claimPairingInstall(
 }
 
 /**
- * A claim whose desktop speaks this app's session protocol (ADR 0196):
+ * A claim whose desktop speaks this app's session protocol (ADR 0197):
  * an older or newer Work desktop is refused before its connection is kept.
  */
 async function pairedWithProtocol(claim: PairingClaim): Promise<PairingClaim> {

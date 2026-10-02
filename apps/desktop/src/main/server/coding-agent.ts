@@ -39,7 +39,7 @@ You work directly in the selected project folder. Read AGENTS.md and the project
 - Never use placeholders or guess missing parameters in tool calls.`;
 
 /**
- * The built-in agent (the AI SDK tool loop, ADR 0197) for a profile agent
+ * The built-in agent (the AI SDK tool loop, ADR 0198) for a profile agent
  * config: its provider, key and model, the Work assistant's instructions,
  * and per-attempt model switches (the host binds provider and key).
  * Undefined until the config has an API key and a resolved model id

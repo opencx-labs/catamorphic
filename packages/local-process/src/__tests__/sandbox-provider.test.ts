@@ -43,7 +43,7 @@ describe("LocalProcessSandboxProvider", () => {
     }
   });
 
-  it("links exactly the owner's sign-in home from the machine (ADR 0198)", async () => {
+  it("links exactly the owner's sign-in home from the machine (ADR 0199)", async () => {
     const signInRoot = path.join(root, "sign-ins");
     const home = (member: string) =>
       machineSignInHome({ root: signInRoot, harness: "claude-code", member });

@@ -8,7 +8,7 @@ import {
 /**
  * Host-tier skill (ADR 0184): how the member, and agents on their behalf,
  * bring their private files into their sessions on a linked Work server.
- * Sign-ins stay on the machine they were made on (ADR 0198).
+ * Sign-ins stay on the machine they were made on (ADR 0199).
  */
 export const REMOTE_ENVIRONMENT_SKILL = `---
 name: remote-environment

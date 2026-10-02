@@ -1,7 +1,7 @@
 # @catamorphic/ai-sdk
 
 The built-in agent: Vercel AI SDK's tool loop as a harness adapter
-(`HarnessAdapter`, ADR 0197) with the id `ai-sdk`. It always runs in the
+(`HarnessAdapter`, ADR 0198) with the id `ai-sdk`. It always runs in the
 host's own process (the desktop, the control plane) through an in-process
 agent runner. Model calls run in the host; the `read`, `write`, `edit` and
 shell tools run on the session's sandbox through the vendor-neutral

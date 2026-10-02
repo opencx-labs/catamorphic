@@ -1,7 +1,7 @@
 # Pwa (mobile PWA)
 
 Phone-sized client for a Catamorphic server (ADR 0058): projects →
-sessions → chat. A chat is the session's event log of turns (ADR 0196):
+sessions → chat. A chat is the session's event log of turns (ADR 0197):
 the screen renders `useAgentChat().timeline` and sends every action as a
 session command. Reply, nudge (queue / send-now + interrupt), retry failed
 turns, answer agent questions (or reply in your own words, ADR 0195) and

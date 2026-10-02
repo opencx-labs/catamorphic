@@ -1,6 +1,6 @@
 # 0074: Temporary Watchers and durable session delivery
 
-- **Status:** Accepted (trigger model superseded by 0076; lifetime and placement superseded by 0139; GitHub monitor superseded by 0177; delivery modes amended by [0196](0196-agent-sessions-are-an-event-log-of-turns.md))
+- **Status:** Accepted (trigger model superseded by 0076; lifetime and placement superseded by 0139; GitHub monitor superseded by 0177; delivery modes amended by [0197](0197-agent-sessions-are-an-event-log-of-turns.md))
 - **Date:** 2026-08-28
 - **Refines:** 0039, 0061, 0067
 - **Supersedes in part:** 0068, 0069

@@ -23,7 +23,7 @@ import {
 } from "@catamorphic/sandbox";
 
 /**
- * Where an attempt's runner is (ADR 0197), persisted on the attempt so any
+ * Where an attempt's runner is (ADR 0198), persisted on the attempt so any
  * replica can find it again. A sandbox runner is reattachable by whoever
  * holds the turn; an in-process runner only by the process that made it.
  */
@@ -124,7 +124,7 @@ let bundle: ReturnType<typeof loadRunnerBundle> | undefined;
 
 /**
  * Start the runner in a sandbox as a process with standard input (ADR
- * 0197). The bundle is uploaded once per sandbox, by content hash, so the
+ * 0198). The bundle is uploaded once per sandbox, by content hash, so the
  * sandbox always runs the host's own runner. The process gets no
  * credential: the harness's own model access arrives with its attempt.
  */

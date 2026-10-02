@@ -1,5 +1,5 @@
 /**
- * The agent runner protocol (ADR 0197): how the control plane drives one
+ * The agent runner protocol (ADR 0198): how the control plane drives one
  * attempt of a turn on a harness adapter running beside its workspace.
  *
  * The runner writes NDJSON frames, each with a gapless `seq`, and reads
@@ -32,7 +32,7 @@ export const RUNNER_PROTOCOL_VERSION = 1;
 
 /**
  * What a harness can do natively. Core picks the fallback for anything
- * missing by these flags, never by harness name (ADR 0197).
+ * missing by these flags, never by harness name (ADR 0198).
  */
 export interface HarnessCapabilities {
   /** Add input to a running turn without restarting it. */
@@ -131,7 +131,7 @@ export type ModelAccess =
     }
   /**
    * The chat owner's own sign-in on this machine, in the harness's own
-   * home (ADR 0198). Work never reads it.
+   * home (ADR 0199). Work never reads it.
    */
   | { kind: "sign_in"; home: string }
   /** The harness's own configuration on the host (desktop, single-tenant hosts). */

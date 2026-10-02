@@ -1158,6 +1158,20 @@ export function registerIpcHandlers(
     };
   });
 
+  // Which Claude Code runs (ADR 0196): the person's own install when it is
+  // new enough, else Work's pinned copy. Updating runs the install's own
+  // updater, only when the person presses Update.
+  ipcMain.handle("catamorphic:claude-code-status", () =>
+    state.current?.agentRegistry
+      ? state.current.agentRegistry.claudeCodeStatus()
+      : null,
+  );
+  ipcMain.handle("catamorphic:claude-code-update", async () => {
+    const registry = state.current?.agentRegistry;
+    if (!registry) throw new Error("Work is still starting.");
+    return registry.updateInstalledClaudeCode();
+  });
+
   // Supported models for one agent, resolved live per harness (Claude
   // Code's own catalog, Codex app-server `model/list`, provider /v1/models).
   ipcMain.handle("catamorphic:agent-models", async (event, id: string) => {

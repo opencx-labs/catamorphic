@@ -38,6 +38,7 @@ import {
 } from "./agent-permission-fields.js";
 import { AgentSkillsField } from "./agent-skills-field.js";
 import { AgentToolPolicyField } from "./agent-tool-policy-field.js";
+import { ClaudeCodeInstall } from "./claude-code-install.js";
 import { ConnectionsAssignmentField } from "./connections-field.js";
 import { Modal } from "./modal.js";
 import { AnimatedHeight, ModalTab } from "./modal-tabs.js";
@@ -522,6 +523,7 @@ function ProfileAgentBody({
                 data={data}
                 projectId={projectId}
               />
+              {harness === "claude-code" && <ClaudeCodeInstall />}
             </>
           )}
 

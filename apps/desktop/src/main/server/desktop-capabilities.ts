@@ -77,7 +77,7 @@ export function desktopCapabilitySource(deps: {
       invocation: AgentCapabilityInvocation;
       annotations?: ToolPolicyAnnotations;
     }) => {
-      // An `ask` becomes a request on the chat's working turn (ADR 0197):
+      // An `ask` becomes a request on the chat's working turn (ADR 0198):
       // every client of the chat sees it and any of them may answer.
       const ask: ToolPermissionHandler = async (request, signal) => {
         const sessions = core.agentSessions;

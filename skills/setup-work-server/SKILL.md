@@ -118,7 +118,7 @@ disagree with the installed source, the source wins.
 - **Sign-ins stay on the machine.** A member's Claude Code or Codex
   subscription runs only where they signed in with the CLI's own login
   (`work worker sign-in`), in an Environment with `"personalCredentials":
-  true`; Work never copies, stores, or forwards a sign-in (ADR 0198).
+  true`; Work never copies, stores, or forwards a sign-in (ADR 0199).
 - **GitHub is a connection.** The organization's GitHub App installation is
   the `github` service connection; sync, proposals, and agents' GitHub
   actions all go through it (ADR 0177). There is no GitHub token variable

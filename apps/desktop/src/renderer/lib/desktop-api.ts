@@ -24,6 +24,7 @@ import type {
   BrowserImportRequest,
   BrowserImportResult,
 } from "../../shared/browser-import.js";
+import type { ClaudeCodeInstallStatus } from "../../shared/claude-code-install.js";
 import type {
   ChatDraft,
   ChatDraftUpdate,
@@ -1125,6 +1126,13 @@ export interface CatamorphicDesktopApi {
     slug: string,
   ) => Promise<{ ok: boolean; error?: string }>;
   agentSetupStatus: () => Promise<{ claudeCode: boolean; codex: boolean }>;
+  /** Which Claude Code runs: the person's own install or Work's copy. */
+  claudeCodeStatus: () => Promise<ClaudeCodeInstallStatus | null>;
+  /** Run the person's own Claude Code updater. */
+  claudeCodeUpdate: () => Promise<{
+    output: string;
+    status: ClaudeCodeInstallStatus;
+  }>;
   agentLogin: (
     id: string,
   ) => Promise<{ started: boolean; command?: string; error?: string }>;

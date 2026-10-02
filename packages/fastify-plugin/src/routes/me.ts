@@ -12,7 +12,7 @@ import { MeSchema } from "../schemas.js";
 
 /**
  * The agent protocols this server speaks: the session log and its commands
- * (ADR 0196) and the runner protocol its machines run (ADR 0197).
+ * (ADR 0197) and the runner protocol its machines run (ADR 0198).
  */
 const AGENT_PROTOCOL = { session: 1, runner: RUNNER_PROTOCOL_VERSION } as const;
 

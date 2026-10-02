@@ -38,7 +38,7 @@ export type {
   TurnStatus,
   UserMessageItem,
 } from "@catamorphic/agent-protocol";
-// The session model every chat client renders (ADR 0196), re-exported so a
+// The session model every chat client renders (ADR 0197), re-exported so a
 // copied registry component needs only this package.
 export {
   activeTurn,

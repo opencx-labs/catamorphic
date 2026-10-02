@@ -43,7 +43,7 @@ interface Pending<T> {
 }
 
 /**
- * Runs one attempt of a turn on a harness adapter (ADR 0197). Transport
+ * Runs one attempt of a turn on a harness adapter (ADR 0198). Transport
  * free: feed it command frames, and it writes numbered frames. A command
  * id it has seen is acknowledged again and otherwise ignored, so a host
  * that took over may resend whatever it cannot prove arrived.

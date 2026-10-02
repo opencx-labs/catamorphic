@@ -16,7 +16,7 @@ import {
 } from "../runner.js";
 
 /*
- * The attempt runner's protocol (ADR 0197): sequenced frames out, commands
+ * The attempt runner's protocol (ADR 0198): sequenced frames out, commands
  * in and deduplicated by id, requests answered or closed, native state
  * through host calls.
  */

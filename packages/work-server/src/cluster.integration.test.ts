@@ -222,7 +222,7 @@ it.skipIf(!process.env.DATABASE_URL)(
         }),
       ).toBe("private credential");
       // A question asked through one replica is answered through the
-      // other: the request and its answer live in Postgres (ADR 0197).
+      // other: the request and its answer live in Postgres (ADR 0198).
       await enqueue({
         sessions: a.catamorphic.core.agentSessions!,
         identity: member,
@@ -563,7 +563,7 @@ it.skipIf(!process.env.DATABASE_URL)(
       await server.shutdown();
       stopped = true;
       await admin.connect();
-      // A runner in this process stops with it (ADR 0197): its turn is
+      // A runner in this process stops with it (ADR 0198): its turn is
       // settled as interrupted, never left running for nobody.
       const turn = await admin.query(
         "SELECT status FROM catamorphic.agent_turns WHERE session_id = $1 ORDER BY ordinal LIMIT 1",

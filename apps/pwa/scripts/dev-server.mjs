@@ -1,6 +1,6 @@
 /*
  * A zero-dep fake Catamorphic server for pwa development and e2e: the
- * agent-session routes of ADR 0196 (session row + snapshot, the event
+ * agent-session routes of ADR 0197 (session row + snapshot, the event
  * stream, commands with receipts, older item pages) with a scripted
  * agent, speaking the same wire shapes as @catamorphic/fastify-plugin.
  * Its minimal OAuth server authorizes immediately for deterministic local

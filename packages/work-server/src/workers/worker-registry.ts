@@ -52,7 +52,7 @@ export const WorkerOfferSchema = z.strictObject({
           "credentials.personal",
           "harness.claude-code",
           "harness.codex",
-          // Its sandboxes mount members' own sign-ins (ADR 0198).
+          // Its sandboxes mount members' own sign-ins (ADR 0199).
           "sign-ins",
         ]),
         // A member signed in to a harness on it: the fact, never the value.

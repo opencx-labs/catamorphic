@@ -5,7 +5,7 @@ import type { SessionStreamMessage } from "@catamorphic/agent-protocol";
 export const SESSION_STREAM_HEARTBEAT_MS = 15_000;
 
 /**
- * One session's event stream as server-sent events (ADR 0196). Each
+ * One session's event stream as server-sent events (ADR 0197). Each
  * {@link SessionStreamMessage} is one SSE message, `data: <JSON>`, whose
  * `id:` is the stream's sequence after it, so a reconnecting EventSource
  * resumes from `Last-Event-ID`.

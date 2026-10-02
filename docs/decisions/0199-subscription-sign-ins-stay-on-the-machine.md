@@ -1,4 +1,4 @@
-# 0198 — Subscription sign-ins stay on the machine they were made on
+# 0199 — Subscription sign-ins stay on the machine they were made on
 
 - **Status:** Accepted
 - **Date:** 2026-10-02

@@ -464,7 +464,7 @@ describe("a pull request review chat with Git through the gateway", () => {
     ).toEqual({ ref: "refs/pull/42/head", commit: nextHead });
 
     // Idle release and rehydration keep the base.
-    // The reply shows before its turn finishes saving (ADR 0197).
+    // The reply shows before its turn finishes saving (ADR 0198).
     await waitFor(
       async () =>
         (

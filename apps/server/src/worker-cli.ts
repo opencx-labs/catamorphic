@@ -8,7 +8,7 @@ import {
 const HARNESSES = ["claude-code", "codex"] as const;
 type Harness = (typeof HARNESSES)[number];
 
-const USAGE = `Members' own sign-ins on this machine (ADR 0198):
+const USAGE = `Members' own sign-ins on this machine (ADR 0199):
 
   work worker sign-in <claude-code|codex> --member <id> [-- <login args>]
       Run the harness's own login here, in this terminal, for one member.

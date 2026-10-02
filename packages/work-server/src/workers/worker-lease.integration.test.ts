@@ -327,7 +327,7 @@ it.skipIf(!process.env.DATABASE_URL)(
 
       // 2. The replica running the turn crashes mid-turn (SIGKILL). Only
       // that turn is lost: once its lease lapses, another replica settles
-      // it as interrupted and never runs it again (ADR 0197). The crashing
+      // it as interrupted and never runs it again (ADR 0198). The crashing
       // replica is a process of its own; replica a takes no turns meanwhile,
       // so the crashing replica's poller claims the next one.
       await stopReplica("b");

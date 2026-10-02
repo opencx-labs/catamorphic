@@ -28,6 +28,7 @@ import type {
   BrowserHistory,
   BrowserSleepBlocker,
 } from "../shared/browser-history.js";
+import type { ClaudeCodeInstallStatus } from "../shared/claude-code-install.js";
 import type { DefaultBrowserState } from "../shared/default-browser.js";
 import type {
   ChatDraft,
@@ -234,6 +235,12 @@ const api = {
     invoke("catamorphic:project-agent-approve", projectId, slug),
   agentSetupStatus: (): Promise<{ claudeCode: boolean; codex: boolean }> =>
     invoke("catamorphic:agent-setup-status"),
+  claudeCodeStatus: (): Promise<ClaudeCodeInstallStatus | null> =>
+    invoke("catamorphic:claude-code-status"),
+  claudeCodeUpdate: (): Promise<{
+    output: string;
+    status: ClaudeCodeInstallStatus;
+  }> => invoke("catamorphic:claude-code-update"),
   agentLogin: (
     id: string,
   ): Promise<{ started: boolean; command?: string; error?: string }> =>

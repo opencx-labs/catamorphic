@@ -446,7 +446,7 @@ Scope is how a host says "may not"; a few coarse switches say what the whole ins
 
 **Remote login.** Connect links are credential-free locators: `work://connect?server=…&project=…&invitation=…`. A compatible host publishes OAuth protected-resource and authorization-server metadata. The desktop and PWA dynamically register public clients, use authorization code with S256 PKCE, keep refreshable credentials in local protected storage, and redeem admission after sign-in. A 401 changes the connection state to "Sign in again" and reruns the same OAuth path. Embedders may implement that contract with their existing identity system; Catamorphic's framework packages remain auth-neutral.
 
-### Agent sessions: an event log of turns (ADRs 0196, 0197)
+### Agent sessions: an event log of turns (ADRs 0197, 0198)
 
 A session holds turns; a turn holds attempts; items are the ordered
 transcript (messages, reasoning, tool calls, commands, file changes, plans,
@@ -583,8 +583,8 @@ supplies two things:
   `RegisteredCodingAgent.toolPolicies` give the host's and the agent's
   layers; core adds the caller's. A shared org credential's ceiling is simply
   the first layer, the user's own policy the second, the agent's the third.
-  The runner applies them to every tool call, in every harness (ADR 0197).
-- **The answer to `ask`** (ADR 0196): an ask is a runtime request on the
+  The runner applies them to every tool call, in every harness (ADR 0198).
+- **The answer to `ask`** (ADR 0197): an ask is a runtime request on the
   session's working turn (`kind: "approval"`), in the session snapshot and
   its event stream like any other change. Any client answers it on any
   replica with a `respond` command:
@@ -1063,9 +1063,9 @@ as a process with standard input (providers implement
 `processes.writeProcessInput` for a process started with `stdin: true`); the
 runner runs the harness's CLI beside the workspace, with the gateway as its
 only model endpoint, and any replica can read it or reattach to it (ADR
-0197). Harness binaries come from the Environment image.
+0198). Harness binaries come from the Environment image.
 
-Personal credentials (ADRs 0184, 0198): a member's listed files may reach
+Personal credentials (ADRs 0184, 0199): a member's listed files may reach
 sandboxes that run only that member's work. The member's client calls
 `PUT /projects/:id/personal-environment` with `{ files: [{ path, content
 /* base64 */ }] }` (at most 50 files of 256 KiB, repository-relative paths);
@@ -1080,7 +1080,7 @@ binding isolation `sandbox`, a `device: "member"` Environment, an
 `EnvironmentRuntimeBinding.servesOnlyOwner` from the host's provider, or the
 machine capability `credentials.personal` (`MACHINE_CAPABILITIES` in
 `@catamorphic/sandbox`). Register an agent with `signIn:
-"claude-code" | "codex"` to run on the owner's own subscription (ADR 0198):
+"claude-code" | "codex"` to run on the owner's own subscription (ADR 0199):
 the sign-in is made on the machine that runs the chat (`work worker sign-in
 <harness>` on a worker) and never leaves it. Work copies no sign-in.
 Placement takes only machines that report `sign-in:<harness>:<member>`

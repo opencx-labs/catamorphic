@@ -316,6 +316,10 @@ describe("agents and profiles", () => {
     }>(
       `window.catamorphicDesktop.agentsCreate({harness:'claude-code',auth:'local',name:'Claude modes'})`,
     );
+    // Tests never run the host's own Claude Code (ADR 0196): Work's copy.
+    expect(
+      await app.eval(`window.catamorphicDesktop.claudeCodeStatus()`),
+    ).toMatchObject({ using: "work", installed: null });
     // Local agents default to full freedom in both settings (ADR 0140).
     expect(created.sandboxing).toBe("publish");
     expect(created.harnessPermissions).toEqual({

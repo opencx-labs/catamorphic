@@ -1,6 +1,6 @@
 # 0095: Authoritative agent execution and independent connections
 
-- **Status:** Accepted (turn execution and recovery superseded by [0196](0196-agent-sessions-are-an-event-log-of-turns.md) and [0197](0197-agent-runners-run-harnesses-beside-their-workspace.md))
+- **Status:** Accepted (turn execution and recovery superseded by [0197](0197-agent-sessions-are-an-event-log-of-turns.md) and [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md))
 - **Date:** 2026-09-06
 
 ## Context

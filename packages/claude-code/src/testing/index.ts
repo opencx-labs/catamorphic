@@ -1,5 +1,5 @@
 /**
- * Replaying recorded Claude Code transcripts (ADR 0197): fixtures from the
+ * Replaying recorded Claude Code transcripts (ADR 0198): fixtures from the
  * real pinned CLI, a `query` that replays them into the real adapter, and
  * a scripted host to drive a runner with. Core's integration tests use
  * `replayQuery` with `createClaudeCodeAdapter({ query })` to run the turn

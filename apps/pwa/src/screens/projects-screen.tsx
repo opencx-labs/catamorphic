@@ -75,7 +75,7 @@ export function ProjectsScreen({ animation }: { animation?: string }) {
   const loading = results.some((result) => result.isLoading);
   const failed = results.filter((result) => result.isError).length;
   // A server on another session protocol is reachable but unusable: say
-  // so instead of calling it unreachable (ADR 0196).
+  // so instead of calling it unreachable (ADR 0197).
   const outdated = results.some(
     (result) => result.error?.message === SESSION_PROTOCOL_MISMATCH_MESSAGE,
   );

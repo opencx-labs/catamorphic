@@ -167,7 +167,7 @@ export interface UseAgentChatResult {
 }
 
 /**
- * Headless agent chat (ADR 0196): the live session, the conversation as
+ * Headless agent chat (ADR 0197): the live session, the conversation as
  * turns, and every command a person sends, each with its own command id.
  * Hosts own the presentation. The server's turn queue is the only queue.
  */

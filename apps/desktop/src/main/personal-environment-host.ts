@@ -10,7 +10,7 @@ import { httpDocumentsClient } from "./remote-sync.js";
 /**
  * The desktop's remote environment sync (ADR 0184): every profile's linked
  * projects and the files each lists. Sign-ins stay on this machine (ADR
- * 0198).
+ * 0199).
  */
 export function desktopPersonalEnvironment(deps: {
   profiles: ProfilesStore;

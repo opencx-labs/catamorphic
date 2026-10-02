@@ -552,7 +552,7 @@ export class Catamorphic {
     );
     // Turns running here are interrupted at once and settle before the
     // database goes; a sandbox runner is handed back for another replica
-    // to reattach (ADR 0197).
+    // to reattach (ADR 0198).
     await this.core.agentSessions
       ?.stopLocalTurns({ timeoutMs: 3_000 })
       .catch((error: unknown) =>

@@ -17,7 +17,7 @@ interface OpenItem {
 }
 
 /**
- * Codex thread items as Work items (ADR 0196). Keys are Codex's own item
+ * Codex thread items as Work items (ADR 0197). Keys are Codex's own item
  * ids (a file change adds its path, one item per changed file), so a
  * notification about an item always finds the item it describes.
  */

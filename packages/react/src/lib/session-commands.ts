@@ -18,7 +18,7 @@ export type SessionCommandInput = SessionCommand extends infer Command
   : never;
 
 /**
- * Send one command to a session (ADR 0196) and return its receipt. The
+ * Send one command to a session (ADR 0197) and return its receipt. The
  * `commandId` is generated once (or passed by a caller resending it): a
  * timeout or a server error resends the same id, which the server answers
  * with the first receipt instead of running the command twice. A refused

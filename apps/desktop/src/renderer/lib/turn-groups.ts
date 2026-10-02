@@ -6,7 +6,7 @@ import type {
 } from "@catamorphic/react";
 
 /**
- * A turn reads as its input, then its work, then its answer (ADR 0196).
+ * A turn reads as its input, then its work, then its answer (ADR 0197).
  * The agent may write notes along the way: each reply in a turn carries
  * the steps that led to it, and the last one is the answer. Two
  * independent display choices decide how that work reads (see

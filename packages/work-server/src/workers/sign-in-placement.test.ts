@@ -22,7 +22,7 @@ import { signInOnMachine, signInRoot, signOutOnMachine } from "./sign-ins.js";
 import { startWorkWorker } from "./worker-runtime.js";
 
 /**
- * Members' own sign-ins stay on the machine they were made on (ADR 0198),
+ * Members' own sign-ins stay on the machine they were made on (ADR 0199),
  * end to end: a member signs in to Claude Code on workers with the CLI's
  * own login (a stand-in that writes its credentials file), and a chat on
  * the `claude-code` agent runs the CLI (a stand-in speaking the Agent
@@ -350,7 +350,7 @@ afterAll(async () => {
   fs.rmSync(root, { recursive: true, force: true });
 }, 120_000);
 
-describe("members' own sign-ins on the machine (ADR 0198)", () => {
+describe("members' own sign-ins on the machine (ADR 0199)", () => {
   let sessionId = "";
   const agentId = () => `project:${projectId}:claude-code`;
 

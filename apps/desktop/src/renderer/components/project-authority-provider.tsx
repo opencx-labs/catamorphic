@@ -117,7 +117,7 @@ export function ProjectAuthorityProvider({
         the remote project.
       </p>
     );
-  // A server on another session protocol cannot be talked to (ADR 0196):
+  // A server on another session protocol cannot be talked to (ADR 0197):
   // say so instead of failing every chat request.
   if (member.data && !speaksSessionProtocol(member.data))
     return (

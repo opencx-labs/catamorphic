@@ -18,7 +18,7 @@ import type { DB, Json } from "@catamorphic/db";
 import type { Selectable } from "kysely";
 
 /**
- * Projection rows to protocol entities (ADR 0196). The projections are
+ * Projection rows to protocol entities (ADR 0197). The projections are
  * written only by the session log's projector, so these mappers are the
  * one place their shape is read.
  */

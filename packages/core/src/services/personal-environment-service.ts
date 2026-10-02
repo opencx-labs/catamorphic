@@ -16,7 +16,7 @@ import { toJson } from "./run-coordinator.js";
 /*
  * A member's personal environment for one project (ADR 0184): the files
  * they listed in `.work/personal/environment.json`. Harness sign-ins are
- * never sent here; they stay on the machine they were made on (ADR 0198).
+ * never sent here; they stay on the machine they were made on (ADR 0199).
  * Values
  * are sealed in the credential vault; rows hold references, fingerprints,
  * and sizes. Only the member reads or replaces their own set, and no API

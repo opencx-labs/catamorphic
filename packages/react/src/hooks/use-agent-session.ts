@@ -88,7 +88,7 @@ export function reconnectDelayMs(failures: number): number {
 }
 
 /**
- * One agent session, live (ADR 0196): loads the snapshot, streams the
+ * One agent session, live (ADR 0197): loads the snapshot, streams the
  * events after it, and folds them with the protocol's reducer. A dropped
  * stream resumes from the last applied sequence with backoff; a `reset`
  * replaces the state; a gap (the reducer marks the state stale) reloads

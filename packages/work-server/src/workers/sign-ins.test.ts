@@ -11,7 +11,7 @@ import {
 } from "./sign-ins.js";
 
 /**
- * Members' sign-ins on a machine (ADR 0198): the harness's own login, run
+ * Members' sign-ins on a machine (ADR 0199): the harness's own login, run
  * in the operator's terminal, into one member's home on this machine's
  * disk. The machine reports who is signed in to what, never a value.
  */

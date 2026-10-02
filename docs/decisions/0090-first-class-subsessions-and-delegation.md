@@ -1,6 +1,6 @@
 # 0090: First-class subsessions and explicit delegation grants
 
-- **Status:** Accepted (subsessions are sessions with a parent, amended by [0196](0196-agent-sessions-are-an-event-log-of-turns.md))
+- **Status:** Accepted (subsessions are sessions with a parent, amended by [0197](0197-agent-sessions-are-an-event-log-of-turns.md))
 - **Date:** 2026-09-04
 - **Builds on:** 0038, 0050, 0054, 0056, 0067, 0074, and 0087
 

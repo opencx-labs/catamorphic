@@ -33,10 +33,10 @@ worker owns its node lease (ADR 0192): any replica runs its agents and
 forwards their sandbox operations, and no replica keeps a worker in memory. Workflow runs and credentials stay on the control plane. Never
 give a worker database, vault, or sign-in secrets, and never add a replica for
 capacity. Workers state their protocol on every call and get `426` when the
-control plane cannot drive them (ADR 0197).
+control plane cannot drive them (ADR 0198).
 
 Members' subscription sign-ins stay on the machine they were made on (ADR
-0198): `work worker sign-in <claude-code|codex> --member <id>` runs the CLI's
+0199): `work worker sign-in <claude-code|codex> --member <id>` runs the CLI's
 own login in the operator's terminal into
 `<WORK_DATA_DIR>/sign-ins/<harness>/<member>`, the machine reports only
 `sign-in:<harness>:<member>`, and a sandbox of that member's own chat mounts
@@ -67,7 +67,7 @@ alone never free capacity.
   claude-opus-5). `WORK_FAKE_AGENT=1` = deterministic echo agent (the
   `EchoAdapter` on the host, plus workspace commands such as `run <shell>`,
   see `packages/work-server/src/fake-agent.ts`).
-- Agents run on the agent runner (ADR 0197): the built-in assistant is the
+- Agents run on the agent runner (ADR 0198): the built-in assistant is the
   AI SDK adapter on the control plane; Claude Code and Codex are the runner
   bundle (`packages/runner-bundle/dist/runner.mjs`, built with the
   packages) inside the chat's sandbox, run with Bun or Node.

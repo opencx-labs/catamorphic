@@ -1,5 +1,5 @@
 /**
- * Replay testing for the Codex adapter (ADR 0197): recorded app-server
+ * Replay testing for the Codex adapter (ADR 0198): recorded app-server
  * transcripts, a replay peer that stands in for the process, and the
  * recorder that made them. Core's integration tests build the adapter
  * with a replay transport and drive it through the real runner:

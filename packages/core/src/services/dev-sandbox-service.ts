@@ -44,7 +44,7 @@ export class DevSandboxService {
       store: DbSandboxStore;
       sessionId?: string;
       resources?: SandboxResources;
-      /** The owner's sign-ins a new sandbox mounts (ADR 0198). */
+      /** The owner's sign-ins a new sandbox mounts (ADR 0199). */
       signIns?: ReadonlyArray<{ harness: SignInHarness; member: string }>;
     },
   ) {

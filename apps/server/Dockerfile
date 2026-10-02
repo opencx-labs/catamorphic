@@ -23,7 +23,7 @@
 #     work-server bun apps/server/src/worker.ts
 #
 # A member signs in to Claude Code or Codex on the machine that runs their
-# chats with the harness's own login (ADR 0198); the sign-in stays in /data:
+# chats with the harness's own login (ADR 0199); the sign-in stays in /data:
 #
 #   docker exec -it <worker> work worker sign-in claude-code --member <id>
 FROM oven/bun:1.3.14
@@ -38,7 +38,7 @@ WORKDIR /app
 COPY . .
 # Packages (dists the server resolves, including the agent runner bundle,
 # packages/runner-bundle/dist/runner.mjs, that sandboxes run with this
-# image's Bun, ADR 0197) + the mobile PWA the server serves at its root
+# image's Bun, ADR 0198) + the mobile PWA the server serves at its root
 # (invite webLinks open it directly).
 # --ignore-scripts: the workspace's pinned `node` helper package installs a
 # Node binary through npm in its preinstall step; the image has bun only, and

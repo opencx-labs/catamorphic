@@ -28,7 +28,7 @@ export interface AgentTurnContext extends ExtraToolContext {
 }
 
 /**
- * The harness an agent runs on and where its runner runs (ADR 0197).
+ * The harness an agent runs on and where its runner runs (ADR 0198).
  * `host`: an adapter in this process, beside a checkout on this machine or
  * driving a sandbox through its tools (the desktop's harnesses, the
  * built-in agent). `sandbox`: the runner bundle inside the session's
@@ -102,7 +102,7 @@ export interface RegisteredCodingAgent {
   modelConnection?: string;
   /**
    * The harness runs on the chat owner's own sign-in, made on the machine
-   * that runs it (ADR 0198). Placement takes only machines that report it.
+   * that runs it (ADR 0199). Placement takes only machines that report it.
    */
   signIn?: SignInHarness;
   /** Per-turn defaults applied when the session carries no override. */
@@ -116,7 +116,7 @@ export interface RegisteredCodingAgent {
   /** Explicit source-to-target grants for first-class subsessions. */
   delegation?: AgentDelegationPolicy;
   /**
-   * What a turn whose machine stopped does (ADR 0197): `continue` queues a
+   * What a turn whose machine stopped does (ADR 0198): `continue` queues a
    * continuation when the native thread can resume exactly; `stop` leaves
    * it interrupted. Default `continue`.
    */

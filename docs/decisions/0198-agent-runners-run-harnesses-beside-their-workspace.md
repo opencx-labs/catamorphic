@@ -1,4 +1,4 @@
-# 0197 — Agent runners run harnesses beside their workspace
+# 0198 — Agent runners run harnesses beside their workspace
 
 - **Status:** Accepted
 - **Date:** 2026-10-02

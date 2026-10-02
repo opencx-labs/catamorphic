@@ -1,7 +1,7 @@
 /**
  * A member's remote environment (ADR 0184): the project files they chose,
  * sent by this desktop to a linked Work server for their own sessions there.
- * Sign-ins stay on the machine they were made on (ADR 0198). Plain data
+ * Sign-ins stay on the machine they were made on (ADR 0199). Plain data
  * shared by main and renderer.
  */
 

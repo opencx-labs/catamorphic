@@ -19,7 +19,7 @@ interface FakeSandbox {
 }
 
 /**
- * The deterministic agent of `WORK_FAKE_AGENT=1` (ADR 0197): lets the
+ * The deterministic agent of `WORK_FAKE_AGENT=1` (ADR 0198): lets the
  * server boot, invite and chat end to end with no model key, for tests and
  * for trying the server before configuring a provider. It is the
  * `EchoAdapter` (`Echo: <message>`, and its `[[directive]]`s) run on the

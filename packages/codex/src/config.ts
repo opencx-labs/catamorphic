@@ -163,7 +163,7 @@ export interface CodexLaunch {
 /**
  * The process, home and thread settings for an attempt, or why it cannot
  * run. The model is reached as `modelAccess` says: through the gateway
- * (ADR 0180), with the owner's own sign-in in its own home (ADR 0198), or
+ * (ADR 0180), with the owner's own sign-in in its own home (ADR 0199), or
  * however the host's own Codex configuration says.
  */
 export function codexLaunch(attempt: AttemptStart): CodexLaunch | string {

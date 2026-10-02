@@ -9,7 +9,7 @@ import {
 } from "../sign-ins.js";
 import { signInCapability } from "../types.js";
 
-describe("sign-ins stay on the machine (ADR 0198)", () => {
+describe("sign-ins stay on the machine (ADR 0199)", () => {
   it("keeps one home per harness and member, any id one path segment", () => {
     expect(
       machineSignInHome({

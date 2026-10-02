@@ -41,6 +41,7 @@ import {
   imageBuilderEnvironment,
 } from "../image-builder-command.js";
 import type { IncognitoSessionsStore } from "../incognito-sessions.js";
+import { InstalledClaudeCodeFinder } from "../installed-claude-code.js";
 import { localPerson } from "../local-person.js";
 import {
   type McpAppsService,
@@ -280,7 +281,7 @@ export async function startEmbeddedServer(
     // Desktop-local privacy flag (ADR 0062): never crosses core.
     isIncognito: (sessionId) => incognitoSessions?.has(sessionId) ?? false,
     markIncognito: (sessionId) => incognitoSessions?.set(sessionId, true),
-    // The log after the remote's watermark (ADR 0196), or a base snapshot.
+    // The log after the remote's watermark (ADR 0197), or a base snapshot.
     exportMirror: ({ projectId, sessionId, after }) =>
       catamorphic.core.agentSessions
         ? catamorphic.core.agentSessions.mirrorExport({
@@ -378,6 +379,9 @@ export async function startEmbeddedServer(
     agentHomesDir: paths.agentHomesDir,
     harnessComponentsDir: paths.harnessComponentsDir,
     attachmentsDir: paths.attachmentsDir,
+    ...(e2eFakeAgent
+      ? {}
+      : { installedClaudeCode: new InstalledClaudeCodeFinder() }),
     e2eFake: e2eFakeAgent,
     workspaceBridge,
     connectors,
@@ -470,7 +474,7 @@ export async function startEmbeddedServer(
           return null;
         return sessionCheckouts.checkpoint(input);
       },
-      // Rollback (ADR 0196): each turn records the commit it started from;
+      // Rollback (ADR 0197): each turn records the commit it started from;
       // only a checkout the chat owns, or one nothing else changed, moves.
       head: (input) => sessionCheckouts.head(input),
       restore: (input) => sessionCheckouts.restore(input),
@@ -694,7 +698,7 @@ export async function startEmbeddedServer(
     );
   };
 
-  /** A chat as people read it (ADR 0196), for read_tab and peer reads. */
+  /** A chat as people read it (ADR 0197), for read_tab and peer reads. */
   const readTranscript = async (projectId: string, sessionId: string) => {
     const service = catamorphic.core.agentSessions;
     if (!service) return null;
@@ -1230,7 +1234,7 @@ export async function startEmbeddedServer(
   );
   // Remote environments (ADR 0184): the member's chosen files, sent to each
   // linked server whose Environments allow them. Sign-ins stay on the
-  // machine they were made on (ADR 0198).
+  // machine they were made on (ADR 0199).
   const personalEnvironment = desktopPersonalEnvironment({
     profiles,
     profileConfig,

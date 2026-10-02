@@ -19,7 +19,7 @@ interface Subscriber {
 }
 
 /**
- * Live session streams for this process (ADR 0196). One poller serves
+ * Live session streams for this process (ADR 0197). One poller serves
  * every open stream: each tick reads the subscribed sessions' events after
  * their cursors in one query, in Postgres order, with no LISTEN/NOTIFY
  * (ADR 0193). A subscriber that falls behind is closed; its client resumes
