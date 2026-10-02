@@ -493,6 +493,9 @@ function ChatDockContent({
     effort: entry.effort,
     environment: selectedEnvironment,
     source: "desktop",
+    // Only a chat on screen streams; minimized ones poll while they work,
+    // so a window of chats never runs out of connections.
+    live: entry.mode === "partial" || (entry.mode === "tab" && tabActive),
     onSessionCreated: (sessionId) => {
       // Desktop-local privacy flag (ADR 0062): recorded the moment the
       // lazy session gets its id, well before the first turn can settle
@@ -2869,6 +2872,7 @@ function ChatDockContent({
                 <ApprovalCard
                   key={request.id}
                   request={request}
+                  viewerId={authority?.externalUserId}
                   busy={!expanded || responding}
                   onRespond={(response) => respond(request.id, response)}
                   onOpenUrl={(url) => onLinkClick?.(url, "tab")}

@@ -1,6 +1,7 @@
 import {
   type AgentQuestion,
   type AssistantMessageItem,
+  activeTurn,
   type ContextHandoffItem,
   type Item,
   type NoticeItem,
@@ -85,8 +86,20 @@ export function waitsToRun(turn: Turn): boolean {
   );
 }
 
+/**
+ * The turn about to start: nothing runs and it heads the queue. It reads
+ * in the conversation, not the queue, so a message sent to an idle agent
+ * goes straight from sending to working instead of flashing as queued.
+ */
+export function startingTurn(state: SessionState): Turn | undefined {
+  if (activeTurn(state)) return undefined;
+  const next = queuedTurns(state).find(waitsToRun);
+  return next?.status === "queued" ? next : undefined;
+}
+
 /** Turns the conversation leaves out: waiting ones, and ones withdrawn before they ran. */
-function hiddenTurn(turn: Turn): boolean {
+function hiddenTurn(turn: Turn, starting: Turn | undefined): boolean {
+  if (turn === starting) return false;
   return (
     waitsToRun(turn) || (turn.status === "cancelled" && turn.attemptCount === 0)
   );
@@ -122,7 +135,10 @@ export function sessionTimeline(state: SessionState): TimelineTurn[] {
     } else others.push({ key: item.id, at: item.createdAt, items: [item] });
   }
   const context = { state, answeredByMessage };
-  const turns = orderedTurns(state).filter((turn) => !hiddenTurn(turn));
+  const starting = startingTurn(state);
+  const turns = orderedTurns(state).filter(
+    (turn) => !hiddenTurn(turn, starting),
+  );
   const out: TimelineTurn[] = [];
   let otherIndex = 0;
   const flushOthersBefore = (at: string | null) => {
@@ -150,8 +166,9 @@ export function sessionTimeline(state: SessionState): TimelineTurn[] {
 
 /** Queued turns in the order they will run, with their messages. */
 export function sessionQueue(state: SessionState): QueuedMessage[] {
+  const starting = startingTurn(state);
   return queuedTurns(state)
-    .filter(waitsToRun)
+    .filter((turn) => waitsToRun(turn) && turn !== starting)
     .map((turn) => {
       const found = turn.inputItemId
         ? state.items.find((item) => item.id === turn.inputItemId)

@@ -339,7 +339,12 @@ export function ChatTimeline({
     attachments: entry.item?.attachments ?? [],
   }));
   const empty = turns.length === 0 && pending.length === 0 && !activity;
+  // Messages already on screen as pending: their items take over without
+  // playing the entrance again.
+  const seenSends = useRef(new Set<string>()).current;
+  for (const message of pending) seenSends.add(message.commandId);
   const context: RowContext = {
+    seenSends,
     requests: requests ?? {},
     resolveAgentName,
     onLinkClick,
@@ -505,6 +510,8 @@ interface RowContext {
   resolveToolIcon?: (toolName: string) => string | undefined;
   onFork?: (itemId: string) => void;
   focusMessageId?: string;
+  /** Command ids this timeline showed as pending messages. */
+  seenSends: ReadonlySet<string>;
 }
 
 /** The item id an entry reads at, for focus and deep links. */
@@ -543,8 +550,13 @@ function rowKey(group: TimelineTurn, row: TurnRow): string {
 
 /** A person's message keys by its command, matching its pending bubble. */
 function userKey(item: UserMessageItem): string {
-  const commandId = item.idempotencyKey?.match(/^user:[^:]*:(.+)$/)?.[1];
+  const commandId = sentWith(item);
   return commandId ? `send:${commandId}` : `id:${item.id}`;
+}
+
+/** The command a person's message was sent with, from its idempotency key. */
+function sentWith(item: UserMessageItem): string | undefined {
+  return item.idempotencyKey?.match(/^user:[^:]*:(.+)$/)?.[1];
 }
 
 function isPersonsMessage(item: UserMessageItem): boolean {
@@ -784,8 +796,8 @@ function JumpToPreviousUserMessage({
 }
 
 /** The entrance every message plays once: a short rise and fade. */
-function useEntered(): string {
-  const [entered, setEntered] = useState(false);
+function useEntered(already = false): string {
+  const [entered, setEntered] = useState(already);
   // Double rAF: the first frame aligns with the commit, the second
   // guarantees the browser resolved the hidden pose before it flips; a
   // single rAF can fire before the mount frame ever paints.
@@ -818,7 +830,10 @@ const UserMessage = memo(
     /** Undo this message's turn and every later one. */
     rollback?: () => undefined | boolean | Promise<boolean>;
   }) {
-    const enterClasses = useEntered();
+    const sent = sentWith(item);
+    const enterClasses = useEntered(
+      sent !== undefined && context.seenSends.has(sent),
+    );
     const notice =
       typeof item.metadata.notice === "string"
         ? item.metadata.notice

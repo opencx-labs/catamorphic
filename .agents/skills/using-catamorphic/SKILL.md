@@ -258,8 +258,9 @@ const apiClient = createApiClient({
   `useWriteProjectFile`, ...), runs (`useRuns`, `useRun`, `useTriggerRun`,
   `useCancelRun`, ...), git (`useProjectGit`, `useDeployProject`,
   `useProjectGitState`, ...), plugins and secrets, agent sessions
-  (`useAgentSessions`, `useSendAgentMessage`, `useArchiveAgentSession`, ...),
-  enablements, `useAgentCatalog`, `useEnvironments`, `useToolPermissions`, and
+  (`useAgentSessions`, `useAgentSession`, `useAgentChat`,
+  `useArchiveAgentSession`, ...), enablements, `useAgentCatalog`,
+  `useEnvironments`, and
   parsing (`useOnParse`, `useParseWorkflow`). The export list is
   [`packages/react/src/index.ts`](../../../packages/react/src/index.ts).
 - Import server shapes from `@catamorphic/react/types` (`Project`, `Run`,

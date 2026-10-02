@@ -910,7 +910,7 @@ describe("agents and profiles", () => {
       throw new Error("queued message dispatched while it was being edited");
     }
     // Rejected edits keep both the local draft and the server hold.
-    await app.blockRequests(["*/agent/sessions/*/turns/*"]);
+    await app.blockRequests(["*/agent/sessions/*/commands"]);
     await run(`
       $('[data-testid="chat-queued-edit"]').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',bubbles:true,cancelable:true}));
       return true;

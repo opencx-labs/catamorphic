@@ -24,6 +24,7 @@ import {
   type QueuedMessage,
   sessionQueue,
   sessionTimeline,
+  startingTurn,
   type TimelineTurn,
 } from "../lib/session-timeline.js";
 import { useCatamorphic } from "../provider.js";
@@ -108,6 +109,8 @@ export interface UseAgentChatResult {
   pending: PendingAgentMessage[];
   /** The turn the agent works on now. */
   activeTurn: Turn | null;
+  /** The turn about to start while nothing runs: it reads in the timeline. */
+  startingTurn: Turn | null;
   /** Questions, approvals and elicitations waiting on an answer. */
   requests: RuntimeRequest[];
   isLoading: boolean;
@@ -376,18 +379,20 @@ export function useAgentChat(
     } catch (cause) {
       if (scopeRef.current.token !== token) return null;
       const error = toCatamorphicError({ cause });
-      setError(token, error);
       if (
         error.code === "authentication_required" &&
         !scopeRef.current.sessionId
       ) {
         // Starting the chat was refused before anything was accepted:
         // keep the message to send once the member authorizes access.
+        setError(token, error);
         blockedRef.current = { token, send: message };
         updatePending(token, (items) =>
           items.filter((item) => item.commandId !== message.commandId),
         );
-      } else
+      }
+      // The failure is the message's own: it stays, unsent, with why.
+      else
         updatePending(token, (items) =>
           items.map((item) =>
             item.commandId === message.commandId
@@ -416,6 +421,7 @@ export function useAgentChat(
 
   const turns = state ? Object.values(state.turns) : [];
   const active = state ? (activeTurnOf(state) ?? null) : null;
+  const starting = state ? (startingTurn(state) ?? null) : null;
   const queue = state ? sessionQueue(state) : [];
   const working = active !== null;
   const latestRetryable = [...turns]
@@ -448,6 +454,7 @@ export function useAgentChat(
     queue,
     pending,
     activeTurn: active,
+    startingTurn: starting,
     requests: state ? pendingRequests(state) : [],
     isLoading: live.isLoading,
     isSending: sending,
@@ -458,7 +465,7 @@ export function useAgentChat(
         ? turnActivity(active)
         : sending
           ? "Sending message"
-          : queue.length > 0
+          : starting
             ? "Waiting for agent"
             : undefined,
     connection: live.connection,

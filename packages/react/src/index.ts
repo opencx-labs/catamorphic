@@ -330,6 +330,7 @@ export {
   type QueuedMessage,
   sessionQueue,
   sessionTimeline,
+  startingTurn,
   type TimelineEntry,
   type TimelineTurn,
   type WorkItem,

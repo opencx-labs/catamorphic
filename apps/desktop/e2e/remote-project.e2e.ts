@@ -177,6 +177,7 @@ function startFakeServer(): Promise<void> {
           agentSessions: true,
           storeUploadMaxBytes: 1024 * 1024,
         },
+        agentProtocol: { session: 1, runner: 1 },
       });
     }
     if (

@@ -282,9 +282,15 @@ describe("useAgentChat commands", () => {
       }),
     );
     await waitFor(() => expect(result.current.pending).toEqual([]));
-    expect(result.current.queue.map((entry) => entry.item?.text)).toEqual([
-      "Second question",
-    ]);
+    // Nothing runs, so the turn about to start reads in the conversation,
+    // not as queued.
+    expect(result.current.queue).toEqual([]);
+    expect(result.current.startingTurn?.id).toBe("t2");
+    expect(result.current.timeline.at(-1)?.entries[0]).toMatchObject({
+      kind: "input",
+      item: { text: "Second question" },
+    });
+    expect(result.current.activity).toBe("Waiting for agent");
   });
 
   it("resends the same command id after a server error", async () => {
@@ -361,10 +367,12 @@ describe("useAgentChat commands", () => {
             error: { message: "Provider down" },
           }),
           turn("t2", 2, { status: "queued" }),
+          turn("t3", 3, { status: "running" }),
         ],
         items: [
           userMessage("t1:input", 1, "t1", "Hello"),
           userMessage("t2:input", 3, "t2", "Queued text"),
+          userMessage("t3:input", 4, "t3", "Running"),
         ],
       }),
     );

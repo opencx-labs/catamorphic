@@ -105,3 +105,54 @@ export function parseFrame(frame: string): SessionStreamMessage | undefined {
     });
   }
 }
+
+/**
+ * How many session streams one API client keeps open at once. A browser
+ * gives an HTTP/1.1 origin six connections and every open stream holds
+ * one, so a host with many chats mounted would starve its own requests.
+ * Readers past the limit poll instead until a slot frees.
+ */
+export const MAX_SESSION_STREAMS = 4;
+
+interface StreamSlots {
+  used: number;
+  waiting: Set<() => void>;
+}
+
+const streamSlots = new WeakMap<object, StreamSlots>();
+
+/**
+ * Take one of `client`'s stream slots. Returns its release, or null when
+ * all are taken: `onFree` then runs once one frees, to try again, unless
+ * `cancel` ran first.
+ */
+export function acquireStreamSlot(
+  client: object,
+  onFree: () => void,
+): { release: (() => void) | null; cancel: () => void } {
+  let slots = streamSlots.get(client);
+  if (!slots) {
+    slots = { used: 0, waiting: new Set() };
+    streamSlots.set(client, slots);
+  }
+  const owned = slots;
+  if (owned.used >= MAX_SESSION_STREAMS) {
+    owned.waiting.add(onFree);
+    return { release: null, cancel: () => owned.waiting.delete(onFree) };
+  }
+  owned.used += 1;
+  let released = false;
+  return {
+    release: () => {
+      if (released) return;
+      released = true;
+      owned.used -= 1;
+      const [next] = owned.waiting;
+      if (next) {
+        owned.waiting.delete(next);
+        next();
+      }
+    },
+    cancel: () => {},
+  };
+}

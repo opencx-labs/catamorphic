@@ -1238,7 +1238,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
    * Keep a person's "Always allow" on the connection's policy (the profile
    * ceiling), so the next attempt and every other agent see it (ADR 0054).
    */
-  rememberToolAllowed(input: { agentId: string | null; server: string; tool: string }): void {
+  rememberToolAllowed(input: {
+    agentId: string | null;
+    server: string;
+    tool: string;
+  }): void {
     const id = input.agentId ?? this.defaultAgentId();
     const found = id ? this.configFor(id) : undefined;
     if (!found) return;

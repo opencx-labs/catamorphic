@@ -21,7 +21,7 @@ import {
   type CatamorphicError,
   runWithCatamorphicError,
 } from "../lib/errors.js";
-import { readSessionStream } from "../lib/session-stream.js";
+import { acquireStreamSlot, readSessionStream } from "../lib/session-stream.js";
 import { useCatamorphic } from "../provider.js";
 import type { AgentSessionDetail } from "../types.js";
 
@@ -46,8 +46,14 @@ export type AgentSessionConnection =
   | "reconnecting";
 
 export interface UseAgentSessionOptions {
-  /** Stream live events (default true). Off: the snapshot only. */
+  /**
+   * Stream live events (default true). Off, or past the client's stream
+   * limit, the snapshot is polled instead: every `pollIntervalMs` while a
+   * turn runs, and not at all while idle.
+   */
   live?: boolean;
+  /** Poll cadence while a turn runs and nothing streams (default 1500). */
+  pollIntervalMs?: number;
 }
 
 export interface UseAgentSessionResult {
@@ -96,6 +102,10 @@ export function useAgentSession(
   const queryClient = useQueryClient();
   const queryKey = agentSessionQueryKey(projectId, sessionId);
   const enabled = Boolean(projectId && sessionId);
+  const live = options.live ?? true;
+  const pollIntervalMs = options.pollIntervalMs ?? 1_500;
+  // Whether this reader holds a stream; one past the limit polls instead.
+  const [streaming, setStreaming] = useState(false);
   const query = useQuery<AgentSessionData, CatamorphicError>({
     queryKey,
     queryFn: ({ signal }) =>
@@ -133,10 +143,14 @@ export function useAgentSession(
     // The stream keeps it current; a refetch is a resync, not a poll.
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
-    refetchInterval: (current) => (current.state.error ? 3_000 : false),
+    refetchInterval: (current) => {
+      if (current.state.error) return 3_000;
+      if (streaming) return false;
+      const data = current.state.data;
+      return data && isWorking(data.state) ? pollIntervalMs : false;
+    },
   });
 
-  const live = options.live ?? true;
   const loaded = query.data !== undefined;
   const stale = query.data?.state.stale === true;
   const [connection, setConnection] = useState<AgentSessionConnection>("idle");
@@ -152,18 +166,39 @@ export function useAgentSession(
   useEffect(() => {
     if (!live || !loaded || !projectId || !sessionId) {
       setConnection("idle");
+      setStreaming(false);
       return;
     }
     const controller = new AbortController();
     const key = agentSessionQueryKey(projectId, sessionId);
     let failures = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let slot: ReturnType<typeof acquireStreamSlot> | undefined;
     const sequence = () =>
       queryClient.getQueryData<AgentSessionData>(key)?.state.sequence;
+    const start = () => {
+      if (controller.signal.aborted) return;
+      slot = acquireStreamSlot(apiClient, () => {
+        // A slot freed: catch up, then stream from there.
+        void queryClient
+          .invalidateQueries({ queryKey: key, exact: true })
+          .finally(start);
+      });
+      if (!slot.release) {
+        setStreaming(false);
+        setConnection("idle");
+        return;
+      }
+      setStreaming(true);
+      connect();
+    };
     const connect = () => {
       const after = sequence();
       if (after === undefined || controller.signal.aborted) return;
-      setConnection(failures === 0 ? "connecting" : "reconnecting");
+      // One quick retry is not news; a second failure is.
+      setConnection(
+        failures === 0 ? "connecting" : failures > 1 ? "reconnecting" : "live",
+      );
       void readSessionStream({
         apiClient,
         projectId,
@@ -179,16 +214,19 @@ export function useAgentSession(
         .catch(() => undefined)
         .then(() => {
           if (controller.signal.aborted) return;
-          // A clean end (the server closed a slow reader) resumes at once.
+          // A clean end (the server closed a slow reader) resumes soon.
           failures += 1;
-          setConnection("reconnecting");
+          if (failures > 1) setConnection("reconnecting");
           timer = setTimeout(connect, reconnectDelayMs(failures));
         });
     };
-    connect();
+    start();
     return () => {
       controller.abort();
       if (timer) clearTimeout(timer);
+      slot?.cancel();
+      slot?.release?.();
+      setStreaming(false);
     };
   }, [live, loaded, projectId, sessionId, apiClient, queryClient]);
 
