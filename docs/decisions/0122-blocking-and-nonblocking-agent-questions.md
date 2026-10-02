@@ -1,6 +1,6 @@
 # 0122: Blocking and non-blocking agent questions
 
-- **Status:** Accepted
+- **Status:** Accepted (refined by [0195](0195-conversation-continues-around-agent-questions.md): a chat message no longer waits behind a blocking question)
 - **Date:** 2026-09-10
 - **Refines:** 0067, 0074, 0112
 

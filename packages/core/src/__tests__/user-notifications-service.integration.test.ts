@@ -43,11 +43,10 @@ describe("durable user notifications", () => {
         id: sessionId,
         project_id: projectId,
         external_user_id: identity.externalUserId,
-        provider: "test",
         authority_host_id: "desktop-1",
         authority_revision: 2,
         authority_seen_at: new Date(0),
-        mirror_message_count: 4,
+        mirror_sequence: 4,
       })
       .execute();
   }, 30_000);
@@ -132,29 +131,14 @@ describe("durable user notifications", () => {
       })
       .where("id", "=", sessionId)
       .execute();
-    const request = await db
-      .insertInto("agent_messages")
-      .values({ session_id: sessionId, role: "user", content: "Work" })
-      .returning("id")
-      .executeTakeFirstOrThrow();
-    const response = await db
-      .insertInto("agent_messages")
-      .values({
-        session_id: sessionId,
-        role: "assistant",
-        content: "Disconnected",
-        metadata: { status: "failed" },
-      })
-      .returning("id")
-      .executeTakeFirstOrThrow();
+    // A turn waiting to retry after a transient failure.
     const turn = await db
       .insertInto("agent_turns")
       .values({
         session_id: sessionId,
-        message_id: request.id,
-        result_message_id: response.id,
+        ordinal: 1,
         status: "queued",
-        delivery_mode: "queue",
+        attempt_count: 1,
       })
       .returning("id")
       .executeTakeFirstOrThrow();
@@ -173,11 +157,16 @@ describe("durable user notifications", () => {
       kind: "agent_reconnecting",
       route: `/?project=${projectId}&session=${sessionId}`,
     });
+    // A person's interrupt is not a failure.
     await db
-      .updateTable("agent_messages")
-      .set({ metadata: { status: "failed", interrupted: true } })
-      .where("id", "=", response.id)
+      .updateTable("agent_turns")
+      .set({ status: "interrupted" })
+      .where("id", "=", turn.id)
       .execute();
+    await notifications.publishFailedAgentTurns({
+      authorityHostId: "server-1",
+    });
+    expect(await notifications.drain("worker")).toBe(0);
     await db
       .updateTable("agent_turns")
       .set({ status: "failed" })
@@ -186,6 +175,9 @@ describe("durable user notifications", () => {
     await notifications.publishFailedAgentTurns({
       authorityHostId: "server-1",
     });
-    expect(await notifications.drain("worker")).toBe(0);
+    expect(await notifications.drain("worker")).toBe(1);
+    expect(JSON.parse(sent.at(-1) ?? "{}")).toMatchObject({
+      kind: "agent_failed",
+    });
   });
 });

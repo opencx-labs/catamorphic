@@ -56,7 +56,7 @@ describe("codexLaunch", () => {
     );
   });
 
-  it("runs a sign-in in its own home and the host's Codex as configured (ADR 0197)", () => {
+  it("runs a sign-in in its own home and the host's Codex as configured (ADR 0198)", () => {
     const signIn = launch({
       modelAccess: { kind: "sign_in", home: "/homes/ada" },
     });

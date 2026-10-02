@@ -3,7 +3,7 @@ import type { JsonObject } from "@catamorphic/agent-protocol";
 
 /**
  * A recorded conversation between the Codex adapter and the pinned
- * `codex app-server` (ADR 0196: tests replay real transcripts). Entries are
+ * `codex app-server` (ADR 0197: tests replay real transcripts). Entries are
  * in the order they crossed the process boundary, so a replay keeps every
  * race between responses, notifications and server requests as it was.
  *

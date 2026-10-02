@@ -1592,6 +1592,8 @@ export const AgentExecutionSchema = z.object({
 export const PendingAgentQuestionSchema = z.object({
   requestId: z.string(),
   blocking: z.boolean().optional(),
+  /** A permission request: a chat message withdraws it (ADR 0195). */
+  consent: z.boolean().optional(),
   questions: z
     .array(
       z.object({

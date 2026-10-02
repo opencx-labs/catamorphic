@@ -4,13 +4,10 @@ import path from "node:path";
 import type { DB } from "@catamorphic/db";
 import { migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
+import { randomUUID } from "node:crypto";
 import type {
-  AgentEvent,
-  CodingAgentProvider,
   EnvironmentProvider,
   EnvironmentRuntimeBinding,
-  ProviderSession,
-  StartSessionOpts,
 } from "@catamorphic/sandbox";
 import { SANDBOX_CAPABILITIES } from "@catamorphic/sandbox";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
@@ -25,41 +22,23 @@ import { ExecutionEnvironmentsService } from "../services/execution-environments
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
 import { SessionActionsService } from "../services/session-actions-service.js";
+import { RecordingAdapter } from "./recording-adapter.js";
 
-/** A native agent recording whom each of its sessions was started for. */
-class RecordingProvider implements CodingAgentProvider {
-  readonly name = "recording";
+/** A native agent recording whom each of its turns ran for. */
+class Recorder {
   readonly startedFor: string[] = [];
-  /** A turn told "Block" runs until this settles, interrupted or not. */
+  /** A turn told "Block" runs until this settles. */
   blocker: Promise<void> = Promise.resolve();
   running = false;
-  async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
-    this.startedFor.push(opts.userId);
-    return {
-      providerSessionId: crypto.randomUUID(),
-      sessionId: opts.sessionId,
-      projectId: opts.projectId,
-      sandboxId: opts.sandboxId,
-      workingDirectory: opts.workingDirectory,
-    };
-  }
-  async *sendMessage(
-    _session: ProviderSession,
-    message: string,
-  ): AsyncIterable<AgentEvent> {
-    if (message === "Block") {
-      this.running = true;
-      await this.blocker;
-      this.running = false;
-    }
-    yield { type: "text", content: "done" };
-    yield { type: "done" };
-  }
-  readonly disposed: string[] = [];
-  async dispose(session: ProviderSession): Promise<void> {
-    if (session.providerSessionId)
-      this.disposed.push(session.providerSessionId);
-  }
+  readonly adapter = new RecordingAdapter({
+    before: async (attempt) => {
+      if (attempt.input?.text === "Block") {
+        this.running = true;
+        await this.blocker;
+        this.running = false;
+      }
+    },
+  });
 }
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
@@ -92,7 +71,7 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
   let tmpDir: string;
   let projectId: string;
   let projectManager: ProjectManager;
-  const provider = new RecordingProvider();
+  const provider = new Recorder();
   const allocations = new ExecutionAllocationsService(db);
   /** Whom the host resolves; a person who left resolves to nobody. */
   const members = new Map<string, Identity>([["alice", alice]]);
@@ -100,7 +79,18 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
   /** Every service made here, stopped before the database closes. */
   const services: AgentSessionsService[] = [];
   const service = (workerNode?: { id: string; token: string }) => {
-    const agent = { id: "worker", provider, topology: "native" as const };
+    const agent = {
+      id: "worker",
+      harness: {
+        placement: "host" as const,
+        adapter: provider.adapter,
+        local: (context: { caller?: { externalUserId: string } }) => {
+          provider.startedFor.push(context.caller?.externalUserId ?? "");
+          return {};
+        },
+      },
+      topology: "native" as const,
+    };
     const sessions = new AgentSessionsService(db, {
       hostId: HOST,
       ...(workerNode ? { workerNode } : {}),
@@ -212,14 +202,15 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
       });
       provider.startedFor.length = 0;
       // Bob may write to everyone's chats; his message still runs as Alice.
-      await sessions.enqueueMessage(bob, projectId, sessionId, "Continue");
+      await sessions.command(bob, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "Continue",
+    });
       await vi.waitFor(
         async () => {
           const detail = await sessions.get(alice, projectId, sessionId);
-          expect(detail.messages.at(-1)).toMatchObject({
-            role: "assistant",
-            content: "done",
-          });
+          expect(detail.snapshot.turns.at(-1)?.status).toBe("completed");
         },
         { timeout: 10_000 },
       );
@@ -245,7 +236,11 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
       const { sessionId, allocationId } = await releasedChat(sessions);
       members.delete("alice");
       provider.startedFor.length = 0;
-      await sessions.enqueueMessage(bob, projectId, sessionId, "Continue");
+      await sessions.command(bob, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "Continue",
+    });
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(provider.startedFor).toEqual([]);
       expect(await currentAllocation(sessionId)).toBe(allocationId);
@@ -268,7 +263,11 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
     provider.blocker = new Promise<void>((resolve) => {
       unblock = resolve;
     });
-    await sessions.enqueueMessage(alice, projectId, chat.id, "Block");
+    await sessions.command(alice, projectId, chat.id, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "Block",
+    });
     await vi.waitFor(() => expect(provider.running).toBe(true));
     const closing = sessions.close(alice, projectId, chat.id);
     // While close waits for the running turn, more work arrives and is held.
@@ -278,13 +277,12 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
       author: { kind: "user", externalUserId: "alice" },
       mode: "queue",
     });
-    await sessions.updateQueuedTurn(
-      alice,
-      projectId,
-      chat.id,
-      late.turnId ?? "",
-      { held: true },
-    );
+    await sessions.command(alice, projectId, chat.id, {
+      type: "edit_queued",
+      commandId: randomUUID(),
+      turnId: late.turnId ?? "",
+      held: true,
+    });
     unblock();
     await closing;
     const open = await db
@@ -359,14 +357,6 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
       workflowName: "reviewOnOpen",
     });
     await sessions.sendMessage(alice, projectId, chat.sessionId, "Hello");
-    const providerSessionId = (
-      await db
-        .selectFrom("agent_sessions")
-        .select("provider_session_id")
-        .where("id", "=", chat.sessionId)
-        .executeTakeFirstOrThrow()
-    ).provider_session_id;
-    expect(providerSessionId).toBeTruthy();
     let sweeps = 0;
     sessions.setArchiveResourcesHandler({
       impact: async () => ({ activeProcessCount: 0 }),
@@ -380,13 +370,12 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
     expect((await sessions.get(alice, projectId, chat.sessionId)).status).toBe(
       "closed",
     );
-    expect(provider.disposed).not.toContain(providerSessionId);
     // Retrying finishes it, though the key no longer names the chat.
     expect(await act(merged)).toEqual({
       sessionId: chat.sessionId,
       closed: true,
     });
-    expect(provider.disposed).toContain(providerSessionId);
+    expect(sweeps).toBeGreaterThan(2);
   });
 
   it("admits a released chat again although the machine it left is gone", async () => {
@@ -398,8 +387,7 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
       .set({ worker_node_id: "worker.gone" })
       .where("id", "=", allocationId)
       .execute();
-    await creator.turns.deliver({
-      sessionId,
+    await creator.deliver(alice, projectId, sessionId, {
       content: "Continue",
       author: { kind: "user", externalUserId: "alice" },
       mode: "queue",

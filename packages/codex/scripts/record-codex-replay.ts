@@ -1,5 +1,5 @@
 /**
- * Records the Codex replay transcripts (ADR 0196) from the pinned
+ * Records the Codex replay transcripts (ADR 0197) from the pinned
  * `codex app-server` against a scripted loopback Responses API:
  *
  *   bun run record:codex-replay [scenario...]

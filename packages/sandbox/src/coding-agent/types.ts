@@ -287,15 +287,31 @@ export interface TurnOptions {
   modelGateway?: SandboxModelGateway;
   /** The owner's own harness login in the sandbox (ADR 0184). */
   personalLogin?: SandboxPersonalLogin;
-  /** Host-owned question persistence and answer delivery. */
+  /**
+   * Host-owned question persistence and answer delivery. A blocking ask
+   * rejects with `QuestionReplyError` when the person writes in the chat
+   * instead of answering (ADR 0195): an agent's question stays open beside
+   * the conversation, a `consent` request is withdrawn. The person's
+   * message then arrives through `readPendingMessages`.
+   */
   askQuestion?: (input: {
     requestId: string;
     questions: AgentQuestion[];
     blocking: boolean;
+    /** A permission request the host asks for, not the agent's question. */
+    consent?: boolean;
     signal?: AbortSignal;
   }) => Promise<string>;
-  /** Read durable input at a model-step boundary, without removing it. */
-  readPendingMessages?: () => Promise<Array<{ id: string; content: string }>>;
+  /** Close open questions this chat's agent asked; resolves to a report. */
+  closeQuestions?: (input: { requestIds?: string[] }) => Promise<string>;
+  /**
+   * Read durable input at a model-step boundary, without removing it. The
+   * message's attachments ride along for the harness to render like a
+   * turn's own.
+   */
+  readPendingMessages?: () => Promise<
+    Array<{ id: string; content: string; attachments?: AgentAttachment[] }>
+  >;
   /** Acknowledge input only after the model step incorporating it completes. */
   acknowledgeMessages?: (input: { ids: string[] }) => Promise<void>;
 

@@ -22,7 +22,7 @@ export const SNAPSHOT_TURNS = 30;
 export const HISTORY_PAGE_ITEMS = 400;
 
 /**
- * A bounded snapshot at one sequence (ADR 0195): the session's fields, its
+ * A bounded snapshot at one sequence (ADR 0196): the session's fields, its
  * recent turns with their attempts and items, every turn still waiting or
  * working, and open requests. One repeatable-read transaction, so the
  * sequence describes exactly what it holds.
@@ -163,7 +163,7 @@ async function firstPosition(
 
 /**
  * Every turn, item, request and thread of a session at one sequence: what a
- * mirror sends to start a copy elsewhere (ADR 0195).
+ * mirror sends to start a copy elsewhere (ADR 0196).
  */
 export async function readFullSnapshot(input: {
   db: Kysely<DB>;

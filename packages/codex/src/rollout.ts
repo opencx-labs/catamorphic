@@ -10,7 +10,7 @@ export const ROLLOUT_SUBPATH = "rollout";
 const APPEND_BATCH_CHARS = 256 * 1024;
 
 /**
- * Mirrors a thread's rollout file into Work's native state (ADR 0196): each
+ * Mirrors a thread's rollout file into Work's native state (ADR 0197): each
  * poll appends the complete lines written since the last one. Codex writes
  * the file lazily and only ever appends, so a byte offset is the cursor.
  * Polls run one at a time, in order.

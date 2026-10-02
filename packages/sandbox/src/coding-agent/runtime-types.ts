@@ -172,6 +172,11 @@ export interface AgentQuestionRequest extends AgentRuntimeRequestBase {
   kind: "question";
   /** Whether the requesting tool waits for the answer. Defaults to true. */
   blocking?: boolean;
+  /**
+   * A permission request the host asks for. A chat message withdraws it
+   * rather than leaving it open (ADR 0195).
+   */
+  consent?: boolean;
   /** All questions in one agent-authored batch. */
   questions?: AgentQuestion[];
   question: {

@@ -61,10 +61,10 @@ export interface EnvironmentRuntimeBinding {
 export const MACHINE_CAPABILITIES = {
   /**
    * The operator lets members' own sign-ins run on this machine although
-   * it runs several people's work as processes (ADR 0197).
+   * it runs several people's work as processes (ADR 0198).
    */
   personalCredentials: "credentials.personal",
-  /** The machine's sandboxes can mount members' own sign-ins (ADR 0197). */
+  /** The machine's sandboxes can mount members' own sign-ins (ADR 0198). */
   signIns: "sign-ins",
   /** The Claude Code CLI is on the machine's path. */
   claudeCode: "harness.claude-code",

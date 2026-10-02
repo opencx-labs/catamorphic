@@ -3671,6 +3671,11 @@ export function App({
         [chat.localId]: (current[chat.localId] ?? 0) + 1,
       }));
     },
+    "archive-chat": () => {
+      // The chat the palette targets: the focused one, as Status does.
+      const chat = actionChat(workspaceRef.current);
+      if (chat?.sessionId) applySessionAction(chat.sessionId, "archive");
+    },
     "switch-agent": () => openPalettePicker("switch-agent"),
     "configure-agent": () => openPalettePicker("configure-agent"),
     "change-effort": () => openPalettePicker("effort"),
@@ -5103,6 +5108,8 @@ export function App({
     "switch-agent":
       focusedChat !== undefined && paletteSwitchableAgentIds.size > 0,
     "session-status": focusedChat !== undefined,
+    "archive-chat":
+      focusedSession !== undefined && focusedSession.visibility !== "archived",
     // Project-agent models are committed in their project definition, so
     // the mutable model picker only applies to configured profile agents.
     "switch-model":

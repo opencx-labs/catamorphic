@@ -9,7 +9,7 @@ export interface HeldTurnLease {
   onLost(): void;
   /** Someone asked the turn to stop, through any replica. Called once. */
   onCancel(): void;
-  /** Commands wait for the turn's runner (ADR 0196). Called on every renewal that sees them. */
+  /** Commands wait for the turn's runner (ADR 0197). Called on every renewal that sees them. */
   onCommands?(): void;
 }
 

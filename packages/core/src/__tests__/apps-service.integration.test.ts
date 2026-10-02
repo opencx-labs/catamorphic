@@ -580,7 +580,6 @@ describeIf("AppsService integration", () => {
         id: sessionId,
         project_id: projectId,
         external_user_id: identity.externalUserId,
-        provider: "test",
       })
       .execute();
     const source = await artifacts.create({

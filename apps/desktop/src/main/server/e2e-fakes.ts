@@ -27,6 +27,7 @@ import type {
 } from "@catamorphic/sandbox";
 import {
   inlineAttachmentReferences,
+  isQuestionReply,
   StdioDeploymentRuntimeProvider,
 } from "@catamorphic/sandbox";
 import { z } from "zod";
@@ -212,6 +213,9 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
  *
  * - "ask me ... questions" → a preamble, then an ask_user question turn;
  *   the follow-up answer gets acknowledged with plain text.
+ * - "blocking question" → a blocking ask_user call; a chat message sent
+ *   while it waits is answered in the same turn (ADR 0195).
+ * - "close my questions" → closes the chat's open questions.
  * - "preamble" → two preamble text segments split by tool work, then a
  *   final summary (exercises the streamed-preamble message split).
  * - "edit a file" → writes a file in the sandbox (exercises changed-file
@@ -400,6 +404,77 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
           },
     );
     const prompt = message.toLowerCase();
+
+    if (
+      prompt.includes("blocking question") &&
+      !prompt.includes("nonblocking")
+    ) {
+      try {
+        const answer = await opts?.askQuestion?.({
+          requestId: "layout",
+          blocking: true,
+          questions: [
+            {
+              question: "Which layout should I use?",
+              header: "Layout",
+              multiSelect: false,
+              options: [
+                { label: "Grid", description: "Cards in columns." },
+                { label: "List", description: "One row per item." },
+              ],
+            },
+          ],
+        });
+        yield { type: "text", content: `Using the ${answer} layout.` };
+      } catch (error) {
+        if (!isQuestionReply(error)) throw error;
+        for (let step = 0; step < 100; step++) {
+          const input = (await opts?.readPendingMessages?.()) ?? [];
+          if (input.length) {
+            await opts?.acknowledgeMessages?.({
+              ids: input.map((entry) => entry.id),
+            });
+            const attached = input.flatMap((entry) => entry.attachments ?? []);
+            yield {
+              type: "text",
+              content: `Replying before you answer: ${input.map((entry) => entry.content).join("\n")}${attached.length ? ` (attachments: ${attached.map((item) => item.name).join(", ")})` : ""}`,
+            };
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+      yield { type: "done" };
+      return;
+    }
+
+    if (prompt.includes("look at my screen")) {
+      const readTab = workspaceTools.find((tool) => tool.name === "read_tab");
+      const result = (await readTab?.execute(
+        { key: "window" },
+        state.toolContext,
+      )) as { content?: Array<{ type: string; text?: string }> } | undefined;
+      const images = result?.content?.filter((part) => part.type === "image");
+      const text = result?.content?.find((part) => part.type === "text")?.text;
+      yield {
+        type: "tool_call",
+        toolName: "read_tab",
+        toolInput: { key: "window" },
+      };
+      yield {
+        type: "text",
+        content: `Saw ${images?.length ?? 0} window image: ${text ?? "nothing"}`,
+      };
+      yield { type: "done" };
+      return;
+    }
+
+    if (prompt.includes("close my questions")) {
+      const report = await opts?.closeQuestions?.({});
+      yield { type: "text", content: `Questions: ${report ?? "none"}` };
+      yield { type: "done" };
+      return;
+    }
 
     if (prompt.includes("nonblocking question")) {
       await opts?.askQuestion?.({

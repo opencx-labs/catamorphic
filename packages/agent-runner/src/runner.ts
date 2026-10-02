@@ -40,7 +40,7 @@ interface Pending<T> {
 }
 
 /**
- * Runs one attempt of a turn on a harness adapter (ADR 0196). Transport
+ * Runs one attempt of a turn on a harness adapter (ADR 0197). Transport
  * free: feed it command frames, and it writes numbered frames. A command
  * id it has seen is acknowledged again and otherwise ignored, so a host
  * that took over may resend whatever it cannot prove arrived.
@@ -158,6 +158,14 @@ export class AttemptRunner {
           this.requests.delete(command.requestKey);
           pending.resolve(command.response);
           this.ack(frame.id);
+          return;
+        }
+        case "release": {
+          // No request.closed: the request stays open in Work.
+          const pending = this.requests.get(command.requestKey);
+          this.requests.delete(command.requestKey);
+          pending?.reject(new RequestClosedError(command.reason));
+          this.ack(frame.id, pending ? undefined : "unknown_request");
           return;
         }
         case "host_result": {
@@ -323,7 +331,10 @@ export class AttemptRunner {
             decision: "allow",
             ...(response.remember ? { remember: response.remember } : {}),
           }
-        : { decision: "deny" };
+        : {
+            decision: "deny",
+            ...(response.reason ? { reason: response.reason } : {}),
+          };
     });
     return {
       emit: (event) => this.emitEvent(event),
