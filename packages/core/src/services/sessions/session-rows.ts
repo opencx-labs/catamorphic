@@ -74,7 +74,9 @@ export function turnFromRow(row: TurnRow): Turn {
     activeAttemptId: row.active_attempt_id,
     providerThreadId: row.provider_thread_id,
     retryAt:
-      row.status === "queued" && row.attempt_count > 0 && row.available_at > new Date()
+      row.status === "queued" &&
+      row.attempt_count > 0 &&
+      row.available_at > new Date()
         ? row.available_at.toISOString()
         : null,
     cancellationRequested: row.cancellation_requested_at !== null,
@@ -181,7 +183,13 @@ export function providerThreadFromRow(row: ProviderThreadRow): ProviderThread {
   };
 }
 
-const EFFORTS: readonly AgentEffort[] = ["low", "medium", "high", "xhigh", "max"];
+const EFFORTS: readonly AgentEffort[] = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
 
 export function sessionFieldsFromRow(row: SessionRow): SessionFields {
   return {
@@ -195,7 +203,9 @@ export function sessionFieldsFromRow(row: SessionRow): SessionFields {
     status: row.status === "closed" ? "closed" : "active",
     workStatus: row.work_status === "completed" ? "completed" : "open",
     activity: row.activity,
-    todos: Array.isArray(row.todos) ? (row.todos as unknown as AgentTodo[]) : [],
+    todos: Array.isArray(row.todos)
+      ? (row.todos as unknown as AgentTodo[])
+      : [],
     parentSessionId: row.parent_session_id,
     forkedFromSessionId: row.forked_from_session_id,
     attentionRevision: Number(row.attention_revision),

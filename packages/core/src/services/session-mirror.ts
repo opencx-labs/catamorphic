@@ -14,7 +14,7 @@ import {
   admissionPolicy,
   type ExecutionEnvironmentsService,
 } from "./execution-environments-service.js";
-import { SessionLogGapError, type SessionLog } from "./sessions/session-log.js";
+import { type SessionLog, SessionLogGapError } from "./sessions/session-log.js";
 
 /**
  * The session was continued on THIS backend: its authority moved here, so
@@ -173,16 +173,25 @@ export async function writeSessionMirror({
     // The source's native threads live on its machine: the copy keeps them
     // for the turns that name them, as unavailable, so a turn here starts a
     // thread of its own and is handed the history (ADR 0197).
-    const away = <T extends { status: string }>(thread: T): T => ({ ...thread, status: "unavailable" });
+    const away = <T extends { status: string }>(thread: T): T => ({
+      ...thread,
+      status: "unavailable",
+    });
     if (input.base && (!current || Number(current.event_sequence) === 0)) {
       await log.importSnapshot(trx, {
         sessionId,
-        snapshot: { ...input.base, providerThreads: input.base.providerThreads.map(away) },
+        snapshot: {
+          ...input.base,
+          providerThreads: input.base.providerThreads.map(away),
+        },
       });
     }
     const events = input.events.map((stored) =>
       stored.event.type === "provider_thread.changed"
-        ? { ...stored, event: { ...stored.event, thread: away(stored.event.thread) } }
+        ? {
+            ...stored,
+            event: { ...stored.event, thread: away(stored.event.thread) },
+          }
         : stored,
     );
     let sequence: number;
@@ -233,7 +242,9 @@ export async function writeSessionMirror({
             externalUserId: identity.externalUserId,
             agentId: session.agent_id,
             session:
-              snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
+              snapshot &&
+              typeof snapshot === "object" &&
+              !Array.isArray(snapshot)
                 ? { ...snapshot, id: sessionId }
                 : {},
           },

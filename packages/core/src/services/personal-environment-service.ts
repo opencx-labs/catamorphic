@@ -318,13 +318,7 @@ export class PersonalEnvironmentService {
     await this.requireMember(identity, projectId);
     const rows = await this.deps.db
       .selectFrom("personal_environment_entries")
-      .select([
-        "kind",
-        "name",
-        "fingerprint",
-        "bytes",
-        "updated_at",
-      ])
+      .select(["kind", "name", "fingerprint", "bytes", "updated_at"])
       .where("tenant_id", "=", identity.tenantId)
       .where("project_id", "=", projectId)
       .where("external_user_id", "=", identity.externalUserId)

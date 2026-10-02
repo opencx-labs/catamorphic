@@ -79,7 +79,10 @@ export class SessionFeed {
       after: input.after,
     });
     if (gap.reset) {
-      const snapshot = await readSnapshot({ db: this.db, sessionId: input.sessionId });
+      const snapshot = await readSnapshot({
+        db: this.db,
+        sessionId: input.sessionId,
+      });
       subscriber.after = Math.max(subscriber.after, snapshot.sequence);
       this.deliver(subscriber, { type: "reset", snapshot });
     } else if (gap.events.length > 0) {
@@ -130,11 +133,16 @@ export class SessionFeed {
         const current = cursors.get(subscriber.sessionId);
         cursors.set(
           subscriber.sessionId,
-          current === undefined ? subscriber.after : Math.min(current, subscriber.after),
+          current === undefined
+            ? subscriber.after
+            : Math.min(current, subscriber.after),
         );
       }
       const events = await this.log.eventsAfterMany({
-        cursors: [...cursors].map(([sessionId, after]) => ({ sessionId, after })),
+        cursors: [...cursors].map(([sessionId, after]) => ({
+          sessionId,
+          after,
+        })),
         limit: 2_000,
       });
       if (events.length === 0) return;

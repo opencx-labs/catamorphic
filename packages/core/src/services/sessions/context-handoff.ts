@@ -82,7 +82,9 @@ export async function buildContextHandoff(input: {
   const first = sections[0] ?? "";
   const omitted = sections.length - 1 - kept.length;
   const body = [
-    used + first.length <= budget ? first : truncate(first, Math.max(0, budget - used)),
+    used + first.length <= budget
+      ? first
+      : truncate(first, Math.max(0, budget - used)),
     omitted > 0
       ? `(${omitted} turn${omitted === 1 ? "" : "s"} in between are not shown; read them with the session history tool.)`
       : "",

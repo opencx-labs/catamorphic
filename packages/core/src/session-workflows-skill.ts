@@ -269,8 +269,9 @@ Both recipes, with the trigger library they bind, are in the \`slack\` skill.
   so a workflow on session.turn-changed reads exactly the reply the event's
   detail.resultMessageId names, even after later turns.
 - deliver message_only records context without a model turn; queue starts
-  work when idle or queues behind the active turn; interrupt requests a course
-  change. The host preserves origin in model input and in visible history.
+  work when idle or queues behind the active turn; steer adds the message to
+  the turn working now (it queues when none is); interrupt stops the active
+  turn and runs this next. The host preserves origin in model input and in visible history.
   Authoring a workflow message does not grant system/developer instruction rank.
 - deliver names its chat one of two ways. sessionId reaches that exact chat.
   key reaches the chat this workflow keeps for the key: the first delivery starts

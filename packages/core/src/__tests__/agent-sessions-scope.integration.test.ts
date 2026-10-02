@@ -2,15 +2,15 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AttemptStart } from "@catamorphic/agent-protocol/runner";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
 import { correlationAttributes, withTelemetryContext } from "@catamorphic/otel";
-import type { AttemptStart } from "@catamorphic/agent-protocol/runner";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import { context, trace } from "@opentelemetry/api";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { sql } from "kysely";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type Identity, projectPrincipalIdentity } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
@@ -83,7 +83,9 @@ class RecordingProvider {
       harness: {
         placement: "host" as const,
         adapter: this.adapter,
-        local: (context: { caller?: { tenantId: string; externalUserId: string } }) => {
+        local: (context: {
+          caller?: { tenantId: string; externalUserId: string };
+        }) => {
           if (context.caller) this.callers.push(context.caller);
           return {};
         },

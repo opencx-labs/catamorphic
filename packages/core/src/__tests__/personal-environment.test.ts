@@ -189,7 +189,6 @@ describe("gitignore patterns for personal files", () => {
       "# BEGIN Work personal files (ADR 0184)\n/.env\n# END Work personal files\n",
     );
   });
-
 });
 
 /** A sandbox that is a directory on this machine, like local-process. */
@@ -299,14 +298,12 @@ describe("personal files in a sandbox (ADR 0184)", () => {
       provider,
       sandboxId: "s",
       projectDir: "/workspace/project",
-      environment: environment(
-        {
-          ".env": "SECRET=1\n",
-          "apps/api/.env.local": "LOCAL=1\n",
-          "config/tracked.env": "T=mine\n",
-          "odd [name]*.env": "ODD=1\n",
-        },
-      ),
+      environment: environment({
+        ".env": "SECRET=1\n",
+        "apps/api/.env.local": "LOCAL=1\n",
+        "config/tracked.env": "T=mine\n",
+        "odd [name]*.env": "ODD=1\n",
+      }),
     });
     expect(result.refused).toEqual(["config/tracked.env"]);
     expect(result.delivered.map((entry) => entry.name).sort()).toEqual([

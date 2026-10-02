@@ -32,7 +32,11 @@ export class RecordingAdapter implements HarnessAdapter {
     return this.echo.capabilities();
   }
 
-  start(attempt: AttemptStart, host: AttemptHost, local?: Record<string, unknown>): AttemptControl {
+  start(
+    attempt: AttemptStart,
+    host: AttemptHost,
+    local?: Record<string, unknown>,
+  ): AttemptControl {
     this.attempts.push(attempt);
     if (!this.options.before) return this.echo.start(attempt, host);
     let control: AttemptControl | undefined;
@@ -48,7 +52,9 @@ export class RecordingAdapter implements HarnessAdapter {
         host.emit({
           type: "turn.completed",
           status: "failed",
-          error: { message: error instanceof Error ? error.message : String(error) },
+          error: {
+            message: error instanceof Error ? error.message : String(error),
+          },
         });
       }),
     };

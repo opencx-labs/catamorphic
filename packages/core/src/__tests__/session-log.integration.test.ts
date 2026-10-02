@@ -7,8 +7,8 @@ import {
   itemsOfTurn,
   orderedTurns,
   pendingRequests,
-  sessionStateFromSnapshot,
   type SessionStreamMessage,
+  sessionStateFromSnapshot,
 } from "@catamorphic/agent-protocol";
 import { EchoAdapter } from "@catamorphic/agent-runner";
 import type { DB } from "@catamorphic/db";
@@ -79,28 +79,30 @@ describe("session log", () => {
       id: "guarded",
       toolPolicies: { prod: [{ default: "ask" }] },
     };
-    makeService = () => new AgentSessionsService(db, {
-      hostId: "session-log-host",
-      projectManager,
-      executionEnvironments: new ExecutionEnvironmentsService(
-        new ProjectEnvironmentsService(db, projectManager),
-        testEnvironmentProvider(unusedSandbox),
-      ),
-      executionAllocations: new ExecutionAllocationsService(db),
-      codingAgents: {
-        defaultAgentId: () => "echo",
-        get: (id) => (id === "echo" ? echo : id === "guarded" ? guarded : undefined),
-        list: () => [echo, guarded],
-      },
-      nativeAgentCheckout: {
-        resolve: async ({ projectId }) => {
-          const checkout = path.join(tmpDir, "checkouts", projectId);
-          await fs.mkdir(checkout, { recursive: true });
-          return { path: checkout, owned: false };
+    makeService = () =>
+      new AgentSessionsService(db, {
+        hostId: "session-log-host",
+        projectManager,
+        executionEnvironments: new ExecutionEnvironmentsService(
+          new ProjectEnvironmentsService(db, projectManager),
+          testEnvironmentProvider(unusedSandbox),
+        ),
+        executionAllocations: new ExecutionAllocationsService(db),
+        codingAgents: {
+          defaultAgentId: () => "echo",
+          get: (id) =>
+            id === "echo" ? echo : id === "guarded" ? guarded : undefined,
+          list: () => [echo, guarded],
         },
-        checkpoint: () => Promise.resolve(null),
-      },
-    });
+        nativeAgentCheckout: {
+          resolve: async ({ projectId }) => {
+            const checkout = path.join(tmpDir, "checkouts", projectId);
+            await fs.mkdir(checkout, { recursive: true });
+            return { path: checkout, owned: false };
+          },
+          checkpoint: () => Promise.resolve(null),
+        },
+      });
     sessions = makeService();
   }, 30_000);
 
@@ -132,9 +134,9 @@ describe("session log", () => {
     const state = sessionStateFromSnapshot(detail.snapshot);
     const [only] = orderedTurns(state);
     expect(only?.status).toBe("completed");
-    expect(
-      itemsOfTurn(state, only?.id ?? "").map((item) => item.kind),
-    ).toEqual(["user_message", "assistant_message"]);
+    expect(itemsOfTurn(state, only?.id ?? "").map((item) => item.kind)).toEqual(
+      ["user_message", "assistant_message"],
+    );
 
     // Folding the log from the start gives the same transcript.
     const events = await db
@@ -202,7 +204,11 @@ describe("session log", () => {
     expect(receipt.status).toBe("accepted");
     const { turn } = await running;
     expect(turn.status).toBe("completed");
-    const transcript = await sessions.transcript(identity, projectId, sessionId);
+    const transcript = await sessions.transcript(
+      identity,
+      projectId,
+      sessionId,
+    );
     expect(transcript.map((message) => message.content)).toContain(
       "You answered: Yes",
     );
@@ -386,7 +392,9 @@ describe("session log", () => {
     await vi.waitFor(
       async () => {
         const detail = await sessions.get(identity, projectId, sessionId);
-        expect(orderedTurns(sessionStateFromSnapshot(detail.snapshot))[1]?.status).toBe("running");
+        expect(
+          orderedTurns(sessionStateFromSnapshot(detail.snapshot))[1]?.status,
+        ).toBe("running");
       },
       { timeout: 10_000 },
     );
@@ -394,7 +402,10 @@ describe("session log", () => {
     // stops and its in-process runner goes with it.
     await db
       .updateTable("agent_turns")
-      .set({ lease_owner: "gone", lease_expires_at: new Date(Date.now() - 1_000) })
+      .set({
+        lease_owner: "gone",
+        lease_expires_at: new Date(Date.now() - 1_000),
+      })
       .where("session_id", "=", sessionId)
       .where("status", "=", "running")
       .execute();
@@ -417,7 +428,8 @@ describe("session log", () => {
           expect(turns[2]?.continuationOf).toBe(turns[1]?.id);
           expect(
             detail.snapshot.items.some(
-              (item) => item.kind === "notice" && item.code === "turn_continued",
+              (item) =>
+                item.kind === "notice" && item.code === "turn_continued",
             ),
           ).toBe(true);
         },
@@ -444,10 +456,19 @@ describe("session log", () => {
     expect(receipt.status).toBe("accepted");
     const after = await sessions.get(identity, projectId, sessionId);
     expect(
-      orderedTurns(sessionStateFromSnapshot(after.snapshot)).map((turn) => turn.status),
+      orderedTurns(sessionStateFromSnapshot(after.snapshot)).map(
+        (turn) => turn.status,
+      ),
     ).toEqual(["completed", "rolled_back", "rolled_back"]);
-    const { reply } = await sessions.sendMessage(identity, projectId, sessionId, "four");
-    expect(reply?.kind === "assistant_message" && reply.text).toContain("Echo: four");
+    const { reply } = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "four",
+    );
+    expect(reply?.kind === "assistant_message" && reply.text).toContain(
+      "Echo: four",
+    );
   });
 
   it("asks the person to approve a host-guarded action on the working turn", async () => {
@@ -467,7 +488,11 @@ describe("session log", () => {
     const decision = sessions.askApproval({
       sessionId,
       title: "Allow push on github?",
-      origin: { kind: "host", id: "connection_github", displayName: "Connection gateway" },
+      origin: {
+        kind: "host",
+        id: "connection_github",
+        displayName: "Connection gateway",
+      },
       approval: { action: "connection_github · push" },
       timeoutMs: 20_000,
     });
@@ -499,7 +524,9 @@ describe("session log", () => {
 
   it("asks the chat's person before a guarded tool, and the harness goes on with the answer", async () => {
     const project = await projects.create(identity, { name: "Guarded" });
-    const session = await sessions.create(identity, project.id, { agentId: "guarded" });
+    const session = await sessions.create(identity, project.id, {
+      agentId: "guarded",
+    });
     const running = sessions.sendMessage(
       identity,
       project.id,
@@ -509,7 +536,9 @@ describe("session log", () => {
     const request = await vi.waitFor(
       async () => {
         const detail = await sessions.get(identity, project.id, session.id);
-        const [pending] = pendingRequests(sessionStateFromSnapshot(detail.snapshot));
+        const [pending] = pendingRequests(
+          sessionStateFromSnapshot(detail.snapshot),
+        );
         expect(pending?.kind).toBe("approval");
         return pending;
       },
@@ -525,8 +554,14 @@ describe("session log", () => {
       response: { kind: "approval", decision: "approved" },
     });
     await running;
-    const transcript = await sessions.transcript(identity, project.id, session.id);
-    expect(transcript.map((message) => message.content)).toContain("Allowed query.");
+    const transcript = await sessions.transcript(
+      identity,
+      project.id,
+      session.id,
+    );
+    expect(transcript.map((message) => message.content)).toContain(
+      "Allowed query.",
+    );
   });
 
   it("takes a reply sent while a question waits into the same turn, and keeps the question open (ADR 0195)", async () => {
@@ -557,7 +592,9 @@ describe("session log", () => {
       async () => {
         const detail = await sessions.get(identity, projectId, sessionId);
         const state = sessionStateFromSnapshot(detail.snapshot);
-        expect(orderedTurns(state).map((turn) => turn.status)).toEqual(["completed"]);
+        expect(orderedTurns(state).map((turn) => turn.status)).toEqual([
+          "completed",
+        ]);
         const [open] = pendingRequests(state);
         expect(open?.id).toBe(question?.id);
         expect(open?.blocking).toBe(false);
@@ -575,11 +612,17 @@ describe("session log", () => {
       async () => {
         const detail = await sessions.get(identity, projectId, sessionId);
         const turns = orderedTurns(sessionStateFromSnapshot(detail.snapshot));
-        expect(turns.map((turn) => turn.status)).toEqual(["completed", "completed"]);
+        expect(turns.map((turn) => turn.status)).toEqual([
+          "completed",
+          "completed",
+        ]);
         const answer = detail.snapshot.items.find(
-          (item) => item.kind === "user_message" && item.text.includes("User answer:"),
+          (item) =>
+            item.kind === "user_message" && item.text.includes("User answer:"),
         );
-        expect(answer?.kind === "user_message" && answer.metadata.question).toEqual({
+        expect(
+          answer?.kind === "user_message" && answer.metadata.question,
+        ).toEqual({
           questions: question?.questions,
           answers: ["Dark"],
         });

@@ -1,5 +1,5 @@
-import type { DispatchMode } from "@catamorphic/agent-protocol";
 import { createHash } from "node:crypto";
+import type { DispatchMode } from "@catamorphic/agent-protocol";
 import { z } from "zod";
 import {
   EVERY_ARTIFACT,

@@ -8,7 +8,10 @@ import {
   type RunnerFrame,
   splitLines,
 } from "@catamorphic/agent-protocol/runner";
-import { AGENT_RUNNER_VERSION, InProcessRunner } from "@catamorphic/agent-runner";
+import {
+  AGENT_RUNNER_VERSION,
+  InProcessRunner,
+} from "@catamorphic/agent-runner";
 import { loadRunnerBundle } from "@catamorphic/runner-bundle";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 
@@ -131,7 +134,10 @@ export async function startSandboxRunner(input: {
   const directory = `${input.stateDirectory}/runner`;
   const file = `${directory}/${hash}.mjs`;
   const present = await input.provider
-    .executeCommand(input.sandboxId, `test -f ${shellQuote(file)} && echo present`)
+    .executeCommand(
+      input.sandboxId,
+      `test -f ${shellQuote(file)} && echo present`,
+    )
     .then(
       (result) => result.result.includes("present"),
       () => false,
@@ -207,7 +213,9 @@ export function sandboxChannel(input: {
       // An incomplete last line is read again with the next chunk.
       const next = output.nextCursor - Buffer.byteLength(split.rest, "utf8");
       const exited =
-        output.status === "exited" && !output.more && split.rest.length === 0 &&
+        output.status === "exited" &&
+        !output.more &&
+        split.rest.length === 0 &&
         next >= output.outputBytes;
       return { frames, diagnostics, cursor: next, exited };
     },

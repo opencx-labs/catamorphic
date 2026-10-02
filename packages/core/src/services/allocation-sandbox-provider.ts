@@ -1,5 +1,5 @@
-import { ACTIVE_TURN_STATUSES } from "@catamorphic/agent-protocol";
 import { randomUUID } from "node:crypto";
+import { ACTIVE_TURN_STATUSES } from "@catamorphic/agent-protocol";
 import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type {

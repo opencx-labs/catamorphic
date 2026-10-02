@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
+import type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
 import type { DB, Json, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
 import type { AgentSessionsService } from "./agent-sessions-service.js";
-import type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
 import { AccessDeniedError } from "./artifact-scope.js";
 import {
   ChatAudienceSchema,

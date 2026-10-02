@@ -256,7 +256,7 @@ describeIf("personal environments (ADR 0184)", () => {
           identity: cara,
           projectId,
           input: {
-                files: [
+            files: [
               { path: ".env", content: base64(`N=${index}\n`) },
               { path: `only-${index}.env`, content: base64("x") },
             ],
