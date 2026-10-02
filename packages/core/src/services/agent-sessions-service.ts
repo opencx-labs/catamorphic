@@ -1040,6 +1040,8 @@ export class AgentSessionsService {
         stopped = true;
         clearInterval(timer);
         await polling;
+        // The resolver belongs to this worker.
+        if (this.resolveOwner === input.resolveIdentity) this.resolveOwner = undefined;
       },
     };
   }
@@ -2056,9 +2058,9 @@ export class AgentSessionsService {
         content: input.content,
         author: input.author,
         mode: input.mode,
-        ...(input.attention ? { attention: input.attention } : {}),
         ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
-        metadata,
+        // The authority applies the attention when it imports the item.
+        metadata: { ...metadata, ...(input.attention ? { attention: input.attention } : {}) },
       });
     await this.claimLocalAuthority(session);
     const receipt = await this.db.transaction().execute(async (trx) => {
@@ -3557,7 +3559,7 @@ export class AgentSessionsService {
             workspaceSyncError = error.message;
             return [];
           })
-        : await this.changedFilesOfTurn(turn.id);
+        : await this.changedFilesOfTurn(turn.id, workingDirectory);
     let storeSync: JsonObject | undefined;
     const storeDir =
       sandboxProviderId && !parseWorkspaceBase(session.workspace)
@@ -3618,7 +3620,13 @@ export class AgentSessionsService {
   }
 
   /** Files a native turn changed, from its file change items. */
-  private async changedFilesOfTurn(turnId: string): Promise<SyncedFileChange[]> {
+  /**
+   * Changed files of a host-execution turn: there is no sandbox baseline to
+   * diff, so the harness's file items are the record, relative to the
+   * checkout so they read like repository paths.
+   */
+  private async changedFilesOfTurn(turnId: string, workingDirectory: string): Promise<SyncedFileChange[]> {
+    const root = workingDirectory.endsWith("/") ? workingDirectory : `${workingDirectory}/`;
     const rows = await this.db
       .selectFrom("agent_items")
       .select("payload")
@@ -3628,8 +3636,9 @@ export class AgentSessionsService {
     const paths = new Map<string, SyncedFileChange>();
     for (const row of rows) {
       const item = itemFromRow(row);
-      if (item.kind === "file_change" && item.path)
-        paths.set(item.path, { path: item.path, kind: item.change === "deleted" ? "deleted" : "modified" });
+      if (item.kind !== "file_change" || !item.path) continue;
+      const path = workingDirectory && item.path.startsWith(root) ? item.path.slice(root.length) : item.path;
+      paths.set(path, { path, kind: item.change === "deleted" ? "deleted" : "modified" });
     }
     return [...paths.values()];
   }
@@ -3645,7 +3654,9 @@ export class AgentSessionsService {
     const { turn } = input;
     const workingDirectory = this.workingDirectories.get(turn.id) ?? "";
     this.workingDirectories.delete(turn.id);
-    if (!input.retrying)
+    // An interrupted or cancelled turn is no result: whoever stopped it
+    // (the person, an archive) tells the parent.
+    if (!input.retrying && (turn.status === "completed" || turn.status === "failed"))
       await this.settleDelegation({
         identity: input.identity,
         projectId: input.session.project_id,
@@ -8214,7 +8225,7 @@ export class AgentSessionsService {
             ? "awaiting_input"
             : turn.status === "completed"
               ? "completed"
-              : isSettledTurnStatus(turn.status)
+              : turn.status === "failed"
                 ? "failed"
                 : null;
         if (!status) continue;

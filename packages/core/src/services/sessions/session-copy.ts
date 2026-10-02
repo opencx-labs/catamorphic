@@ -53,7 +53,9 @@ export function copySettledHistory(input: {
   const items = snapshot.items.filter(
     (item) =>
       item.position <= limit &&
-      (item.turnId ? kept.has(item.turnId) : item.kind !== "user_message"),
+      // Items of unsettled turns stay behind; messages that started no
+      // turn (message_only, notices) come along.
+      (item.turnId ? kept.has(item.turnId) : true),
   );
   const attempts = snapshot.attempts.filter((attempt) => kept.has(attempt.turnId));
   const requests = snapshot.requests.filter(
@@ -78,8 +80,9 @@ export function copySettledHistory(input: {
     snapshot: {
       ...snapshot,
       session: { ...snapshot.session, id: input.sessionId },
-      turns: turns.map(rebase),
-      attempts: attempts.map(rebase),
+      // The copy runs on threads of its own: the source's stay the source's.
+      turns: turns.map(rebase).map((turn) => ({ ...turn, providerThreadId: null })),
+      attempts: attempts.map(rebase).map((attempt) => ({ ...attempt, providerThreadId: null })),
       items: items.map(rebase),
       requests: requests.map(rebase),
       providerThreads: [],
