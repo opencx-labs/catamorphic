@@ -1,73 +1,74 @@
 # @catamorphic/ai-sdk
 
-Minimal coding-agent plugin built on Vercel AI SDK's `ToolLoopAgent`.
-
-The agent loop and model calls run in the host process. Its `read`, `write`,
-`edit`, and `bash` tools operate on the project's remote development sandbox
-through Catamorphic's vendor-neutral `SandboxProvider` contract. Model
-credentials never enter the sandbox.
+The built-in agent: Vercel AI SDK's tool loop as a harness adapter
+(`HarnessAdapter`, ADR 0196) with the id `ai-sdk`. It always runs in the
+host's own process (the desktop, the control plane) through an in-process
+agent runner. Model calls run in the host; the `read`, `write`, `edit` and
+shell tools run on the session's sandbox through the vendor-neutral
+`SandboxProvider` contract. Model credentials never enter the sandbox.
 
 ## Usage
 
 ```ts
 import { anthropic } from "@ai-sdk/anthropic";
-import { AiSdkCodingAgent } from "@catamorphic/ai-sdk";
-import { CloudflareSandboxProvider } from "@catamorphic/cloudflare";
-import {
-  createCatamorphic,
-  defineStaticEnvironments,
-} from "@catamorphic/server-sdk";
+import { createAiSdkAdapter, type AiSdkLocal } from "@catamorphic/ai-sdk";
+import { InProcessRunner } from "@catamorphic/agent-runner";
 
-const sandboxProvider = new CloudflareSandboxProvider({
-  apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
-  apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
+const adapter = createAiSdkAdapter({
+  model: anthropic("claude-sonnet-4-5"),
+  resolveModel: (id) => anthropic(id), // enables per-attempt model overrides
+  effort: "medium",
+  instructions: "Optional host-level instructions.",
 });
-const environmentProvider = defineStaticEnvironments([
-  {
-    descriptor: {
-      id: "local",
-      label: "Managed execution",
-      trust: "managed",
-      isolation: "sandbox",
-      workloads: ["agent", "workflow"],
-      agentTopologies: ["controller"],
-      capabilities: ["network.egress"],
-      resources: {},
-    },
-    sandboxProvider,
-  },
-]);
 
-const catamorphic = createCatamorphic({
-  hostId: "my-host",
-  database: { connectionString: process.env.DATABASE_URL! },
-  storage: { projectManager },
-  sandboxProvider,
-  environmentProvider,
-  codingAgent: new AiSdkCodingAgent({
-    model: anthropic("claude-sonnet-4-5"),
-    sandboxProvider,
-    instructions: "Optional host-level system prompt prefix.",
-  }),
+const local: AiSdkLocal = {
+  sandbox: { provider: sandboxProvider, sandboxId, workingDirectory },
+  readableRoots: [pastedFilesDirectory],
+  shell: chatShellState, // kept by the host across a chat's attempts
+};
+const runner = new InProcessRunner({
+  adapters: { [adapter.id]: adapter },
+  version,
+  local,
 });
+runner.send({ id: commandId, command: { kind: "start", attempt } });
 ```
 
-The host constructs and injects any AI SDK `LanguageModel`; this package does
-not select providers or read model credentials.
+The host constructs the `LanguageModel`; this package never selects
+providers or reads model credentials. Everything per turn arrives in the
+`AttemptStart`: model and effort overrides, the system prompt, turn context,
+input, MCP servers and their tool policies, host tools, plugins.
 
-## Scope
+## What it does
 
-The implementation deliberately relies on AI SDK's tool loop and message
-types. It adds only:
+- Streams assistant text and reasoning as items, shell commands as
+  `command` items, file writes and edits as `file_change` items, and MCP and
+  host tools as `tool_call` items; reasoning headings become the live status.
+- Asks questions (`ask_user`), approvals (policed MCP servers) and MCP
+  elicitations as runtime requests through the host.
+- Takes steered input before its next model step, and stops on interrupt.
+- Stores its native thread, the AI SDK message history, with Work one step
+  at a time (`nativeState: "store"`), so a later turn resumes on any
+  replica or after a restart. A native retry (`input: null`) re-runs the
+  last turn on that history, and a fork copies a thread through a turn.
 
-- remote sandbox-backed `read`, `write`, `edit`, and `bash` tools;
-- rejection of direct filesystem paths outside the project working directory;
-- in-memory multi-turn message history;
-- plugin documentation staging and Catamorphic `AgentEvent` mapping.
+## Tests
 
-Project skills remain normal files at `.work/skills/<name>/SKILL.md`. The
-agent is instructed to inspect relevant skills through its filesystem tools.
-Provider state remains in memory. After a host restart,
-`AgentSessionsService` detects the missing provider anchor and starts a fresh
-anchor seeded with the durable Catamorphic transcript; callers continue the
-same host session instead of creating a new one.
+`@catamorphic/ai-sdk/testing` replays recorded model transcripts (the
+provider's stream parts, call by call) as a `LanguageModel`, so tests
+replace only the model transport. `recordModel` captures a transcript from
+a live model; `replyCall`, `toolCallsCall`, `rejectedCall` and friends
+write one by hand.
+
+```ts
+import { replayModel, replyCall, toolCallsCall } from "@catamorphic/ai-sdk/testing";
+
+const replay = replayModel({
+  calls: [
+    toolCallsCall([{ id: "c1", name: "bash", input: { command: "ls" } }]),
+    replyCall("Listed."),
+  ],
+});
+const adapter = createAiSdkAdapter({ model: replay.model });
+// ...drive a real runner and host; replay.calls holds what the model saw.
+```

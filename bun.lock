@@ -191,6 +191,7 @@
       "name": "@catamorphic/ai-sdk",
       "version": "0.0.1",
       "dependencies": {
+        "@catamorphic/agent-protocol": "workspace:*",
         "@catamorphic/mcp": "workspace:*",
         "@catamorphic/otel": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
@@ -199,6 +200,8 @@
         "zod": "^4.1.8",
       },
       "devDependencies": {
+        "@catamorphic/agent-runner": "workspace:*",
+        "@catamorphic/local-process": "workspace:*",
         "@opentelemetry/sdk-metrics": "^2.9.0",
         "@opentelemetry/sdk-trace-node": "^2.9.0",
         "@types/node": "^26.1.1",
