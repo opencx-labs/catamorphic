@@ -38,11 +38,7 @@ import type {
 import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
-import {
-  isPersonalHarness,
-  PERSONAL_HARNESSES,
-  type PersonalEnvironmentView,
-} from "../shared/personal-environment.js";
+import type { PersonalEnvironmentView } from "../shared/personal-environment.js";
 import {
   prCommentInputSchema,
   prDecisionInputSchema,
@@ -1231,7 +1227,6 @@ export function registerIpcHandlers(
    * credentials in the KEYCHAIN — there is no .credentials.json to stat.
    * The fingerprint doubles as a change detector: the terminal /login flow
    * gives no exit signal, so completion is "the credentials changed".
-   * The read is shared with the remote environment sync (harness-logins).
    */
   const claudeKeychainRaw = readClaudeKeychain;
 
@@ -2381,9 +2376,8 @@ export function registerIpcHandlers(
   ipcMain.handle(
     "catamorphic:remote-disconnect",
     async (event, projectId: string) => {
-      // Leaving a server takes the member's sign-ins and private files with
-      // them (ADR 0184). Best effort: an unreachable server keeps its sealed
-      // copies (logins stop working when they expire).
+      // Leaving a server takes the member's private files with them (ADR
+      // 0184). Best effort: an unreachable server keeps its sealed copies.
       const linked = storesFor(event).remoteProjects.get(projectId);
       if (linked?.credentials)
         await Promise.race([
@@ -2662,28 +2656,6 @@ export function registerIpcHandlers(
         ...config,
         files: config.files.filter((file) => file !== input.path),
       })),
-  );
-  ipcMain.handle(
-    "catamorphic:personal-environment-set-login",
-    (
-      event,
-      input: { projectId: string; harness: string; included: boolean },
-    ): Promise<PersonalEnvironmentView> => {
-      const harness = input.harness;
-      if (!isPersonalHarness(harness))
-        throw new Error("Choose Claude Code or Codex");
-      return editPersonalEnvironment(event, input.projectId, (config) => {
-        const current = config.logins ?? [...PERSONAL_HARNESSES];
-        return {
-          ...config,
-          logins: input.included
-            ? PERSONAL_HARNESSES.filter(
-                (entry) => entry === harness || current.includes(entry),
-              )
-            : current.filter((entry) => entry !== harness),
-        };
-      });
-    },
   );
   // Creates the file with its defaults so the editor has something to open.
   ipcMain.handle(

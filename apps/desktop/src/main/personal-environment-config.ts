@@ -3,17 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { ensurePersonalFilesExcluded } from "@catamorphic/git";
 import { PROJECT_PERSONAL_DIR } from "@catamorphic/workflow/project-layout";
-import {
-  isPersonalHarness,
-  PERSONAL_HARNESS_LABELS,
-  PERSONAL_HARNESSES,
-  type PersonalHarness,
-} from "../shared/personal-environment.js";
 
 /**
- * `.work/personal/environment.json` (ADR 0184): which of the member's own
- * sign-ins and which project files reach their sessions on the linked Work
- * server. Inside the git-excluded personal folder, so it never ships.
+ * `.work/personal/environment.json` (ADR 0184): which project files reach
+ * the member's sessions on the linked Work server. Sign-ins never do (ADR
+ * 0197). Inside the git-excluded personal folder, so it never ships.
  */
 export const PERSONAL_ENVIRONMENT_PATH = `${PROJECT_PERSONAL_DIR}/environment.json`;
 /** Status for agents and people: no secrets, rewritten only on change. */
@@ -22,8 +16,6 @@ export const PERSONAL_FILE_MAX_BYTES = 256 * 1024;
 export const PERSONAL_FILES_MAX = 50;
 
 export interface PersonalEnvironmentConfig {
-  /** null: every sign-in present on this computer (the file's default). */
-  logins: PersonalHarness[] | null;
   files: string[];
 }
 
@@ -32,7 +24,6 @@ export type ParsedPersonalEnvironment =
   | { ok: false; error: string };
 
 export const DEFAULT_PERSONAL_ENVIRONMENT: PersonalEnvironmentConfig = {
-  logins: null,
   files: [],
 };
 
@@ -73,34 +64,19 @@ export function parsePersonalEnvironmentConfig(
       ok: false,
       error: `${PERSONAL_ENVIRONMENT_PATH} must be a JSON object`,
     };
-  const unknown = Object.keys(value).filter(
-    (key) => key !== "logins" && key !== "files",
-  );
+  if ("logins" in value)
+    return {
+      ok: false,
+      error: `Remove "logins": sign-ins stay on the machine they were made on and are never sent to the server`,
+    };
+  const unknown = Object.keys(value).filter((key) => key !== "files");
   if (unknown.length > 0)
     return {
       ok: false,
       error: `Unknown ${unknown.length === 1 ? "key" : "keys"} ${unknown
         .map((key) => `"${key}"`)
-        .join(", ")}; use "logins" and "files"`,
+        .join(", ")}; use "files"`,
     };
-  let logins: PersonalHarness[] | null = null;
-  if ("logins" in value) {
-    const raw = value.logins;
-    if (!Array.isArray(raw))
-      return {
-        ok: false,
-        error: `"logins" must be a list, like ["claude-code", "codex"]`,
-      };
-    logins = [];
-    for (const entry of raw) {
-      if (!isPersonalHarness(entry))
-        return {
-          ok: false,
-          error: `"logins" accepts ${PERSONAL_HARNESSES.map((harness) => `"${harness}"`).join(" and ")}, not ${JSON.stringify(entry)}`,
-        };
-      if (!logins.includes(entry)) logins.push(entry);
-    }
-  }
   const files: string[] = [];
   if ("files" in value) {
     const raw = value.files;
@@ -122,31 +98,13 @@ export function parsePersonalEnvironmentConfig(
         error: `List at most ${PERSONAL_FILES_MAX} files`,
       };
   }
-  return { ok: true, config: { logins, files } };
-}
-
-/** The sign-ins a config asks for, given which are present locally. */
-export function requestedLogins(args: {
-  config: PersonalEnvironmentConfig;
-  available: readonly PersonalHarness[];
-}): PersonalHarness[] {
-  const wanted = args.config.logins ?? PERSONAL_HARNESSES;
-  return PERSONAL_HARNESSES.filter(
-    (harness) => wanted.includes(harness) && args.available.includes(harness),
-  );
+  return { ok: true, config: { files } };
 }
 
 export function serializePersonalEnvironmentConfig(
   config: PersonalEnvironmentConfig,
 ): string {
-  return `${JSON.stringify(
-    {
-      logins: config.logins ?? [...PERSONAL_HARNESSES],
-      files: config.files,
-    },
-    null,
-    2,
-  )}\n`;
+  return `${JSON.stringify({ files: config.files }, null, 2)}\n`;
 }
 
 export interface PersonalEnvironmentFile {
@@ -306,10 +264,6 @@ export async function readListedFiles(args: {
 
 export function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
-}
-
-export function loginLabel(harness: PersonalHarness): string {
-  return PERSONAL_HARNESS_LABELS[harness];
 }
 
 function isMissing(cause: unknown): boolean {

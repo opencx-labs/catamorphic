@@ -1,16 +1,7 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
-import { AiSdkCodingAgent } from "@catamorphic/ai-sdk";
-import type { ElicitHandler } from "@catamorphic/mcp";
-import type {
-  AgentMcpServerConfig,
-  ExtraTool,
-  ExtraToolContext,
-  McpServersSource,
-  McpToolPolicyLayers,
-  SandboxProvider,
-  ToolPermissionHandler,
-} from "@catamorphic/sandbox";
+import type { HarnessAdapter } from "@catamorphic/agent-protocol/runner";
+import { createAiSdkAdapter } from "@catamorphic/ai-sdk";
 import type { AgentConfig } from "../agents-store.js";
 
 const INSTRUCTIONS = `You are the Work assistant, an interactive agent built into the Work desktop app. A project is a folder that can hold any kind of work: documents, notes, data, plans, code, automations, apps, or a mix. You help users with whatever their project actually is: look at what's in it before assuming what kind of work it holds. Use the instructions below and the tools available to you to assist the user.
@@ -48,72 +39,33 @@ You work directly in the selected project folder. Read AGENTS.md and the project
 - Never use placeholders or guess missing parameters in tool calls.`;
 
 /**
- * Build the built-in agent (sandboxed AI-SDK tool loop) from a profile
- * agent config. Returns undefined until the config has an API key and a
- * resolved model id (OpenRouter's default arrives from the live catalog).
+ * The built-in agent (the AI SDK tool loop, ADR 0196) for a profile agent
+ * config: its provider, key and model, the Work assistant's instructions,
+ * and per-attempt model switches (the host binds provider and key).
+ * Undefined until the config has an API key and a resolved model id
+ * (OpenRouter's default arrives from the live catalog).
  */
-export interface BuildAiSdkAgentOpts {
-  config: AgentConfig;
-  sandboxProvider: Pick<
-    SandboxProvider,
-    "executeCommand" | "uploadFiles" | "downloadFile"
-  >;
-  pluginDirectory?: string;
-  modelId: string;
-  extraTools?: ExtraTool[];
-  mcpServers?: McpServersSource;
-  mcpServersForSession?: (
-    context: ExtraToolContext,
-  ) => Record<string, AgentMcpServerConfig>;
-  onElicit?: ElicitHandler;
-  /** Per-server tool policy layers + the prompt for `ask` tools. */
-  mcpPolicies?:
-    | Record<string, McpToolPolicyLayers>
-    | (() => Record<string, McpToolPolicyLayers>);
-  onToolPermission?: ToolPermissionHandler;
-  /** Read-only directories per project, e.g. its pasted attachments. */
-  readableRoots?: (context: { projectId: string }) => readonly string[];
-}
-
-export function buildAiSdkAgent({
+export function buildAiSdkAdapter({
   config,
-  sandboxProvider,
-  pluginDirectory,
   modelId,
-  extraTools,
-  mcpServers,
-  mcpServersForSession,
-  onElicit,
-  mcpPolicies,
-  onToolPermission,
-  readableRoots,
-}: BuildAiSdkAgentOpts): AiSdkCodingAgent | undefined {
+}: {
+  config: Pick<AgentConfig, "apiKey" | "provider" | "effort">;
+  modelId: string;
+}): HarnessAdapter | undefined {
   if (!config.apiKey || !modelId) return undefined;
+  const apiKey = config.apiKey;
   const provider = config.provider ?? "anthropic";
   const resolveModel = (id: string) =>
     provider === "anthropic"
-      ? createAnthropic({ apiKey: config.apiKey ?? "" })(id)
+      ? createAnthropic({ apiKey })(id)
       : provider === "openrouter"
         ? // OpenRouter speaks the OpenAI chat API; only the base URL differs.
-          createOpenAI({
-            apiKey: config.apiKey ?? "",
-            baseURL: "https://openrouter.ai/api/v1",
-          })(id)
-        : createOpenAI({ apiKey: config.apiKey ?? "" })(id);
-  return new AiSdkCodingAgent({
+          createOpenAI({ apiKey, baseURL: "https://openrouter.ai/api/v1" })(id)
+        : createOpenAI({ apiKey })(id);
+  return createAiSdkAdapter({
     model: resolveModel(modelId),
-    sandboxProvider,
-    pluginDirectory,
-    instructions: INSTRUCTIONS,
-    effort: config.effort,
-    // Model switches arrive per turn, so live sessions survive them.
     resolveModel,
-    extraTools,
-    mcpServers,
-    mcpServersForSession,
-    ...(onElicit ? { onElicit } : {}),
-    ...(mcpPolicies ? { mcpPolicies } : {}),
-    ...(onToolPermission ? { onToolPermission } : {}),
-    ...(readableRoots ? { readableRoots } : {}),
+    effort: config.effort,
+    instructions: INSTRUCTIONS,
   });
 }

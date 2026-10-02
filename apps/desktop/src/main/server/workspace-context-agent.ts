@@ -1,12 +1,5 @@
 import type { AgentCoordinationStrategy } from "@catamorphic/core";
-import type {
-  AgentEvent,
-  CodingAgentProvider,
-  ProviderSession,
-  StartSessionOpts,
-  TurnContextFragment,
-  TurnOptions,
-} from "@catamorphic/sandbox";
+import type { TurnContextFragment } from "@catamorphic/sandbox";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 
 export interface ProjectSessionContext {
@@ -68,16 +61,9 @@ export function isolationConflictPeerSessionIds(input: {
     .map((peer) => peer.id);
 }
 
-/** Wiring for {@link WorkspaceContextAgent}. */
+/** Where a turn's workspace context comes from. */
 export interface WorkspaceContextOptions {
   bridge: WorkspaceBridge;
-  /** Whether this harness also carries the workspace toolset. */
-  hasTools: boolean;
-  /**
-   * The skills section for this harness (ADR 0049), resolved lazily so
-   * sessions started before the server finishes booting still pick it up.
-   */
-  skillsNote?: () => string | undefined;
   coordination?: AgentCoordinationContext;
   /**
    * Per-project desktop facts: where new private documents go and any
@@ -88,177 +74,125 @@ export interface WorkspaceContextOptions {
     personalFilesDirectory?: string;
     settingsErrors?: string[];
   };
-  bindTurn?: (sessionId: string, options?: TurnOptions) => () => void;
 }
 
 /**
- * Workspace awareness for every harness (ADR 0152): a short, stable Work
- * section appended to the session's system prompt, and each turn's live
- * screen, desktop facts and peers added to the turn's context fragments.
- * The harness delivers fragments beside the user's message through its own
- * channel; the message text is never touched, so neither the stored chat
- * nor the harness history mixes host context into the person's words.
+ * The stable Work section of a desktop agent's instructions (ADR 0152):
+ * the playbook, how it shares the project with other chats, and its
+ * skills (ADR 0049).
  */
-export class WorkspaceContextAgent implements CodingAgentProvider {
-  readonly name: string;
-  /** Forwarded only when the harness supports them (feature-detection). */
-  readonly interrupt?: (providerSessionId: string) => void;
-  readonly hasSession?: (providerSessionId: string) => boolean;
-  readonly retryTurn?: CodingAgentProvider["retryTurn"];
+export function workspaceInstructions({
+  hasTools,
+  strategy,
+  skillsNote,
+}: {
+  /** Whether this harness also carries the workspace toolset. */
+  hasTools: boolean;
+  strategy: AgentCoordinationStrategy;
+  skillsNote?: string;
+}): string {
+  return [workPlaybook({ hasTools }), coordinationNote(strategy), skillsNote]
+    .filter(Boolean)
+    .join("\n\n");
+}
 
-  constructor(
-    private readonly inner: CodingAgentProvider,
-    private readonly opts: WorkspaceContextOptions,
-  ) {
-    this.name = inner.name;
-    if (inner.interrupt) {
-      this.interrupt = (providerSessionId) =>
-        inner.interrupt?.(providerSessionId);
+/**
+ * Workspace awareness for every harness (ADR 0152): each turn's live
+ * screen, desktop facts and peers, as context fragments the harness
+ * delivers beside the person's message through its own channel. The
+ * message text is never touched, so neither the stored chat nor the
+ * harness history mixes host context into the person's words. Every part
+ * is advisory: a failure drops that part, never the turn.
+ */
+export async function workspaceTurnContext({
+  bridge,
+  coordination,
+  desktopFacts,
+  projectId,
+  sessionId,
+}: WorkspaceContextOptions & {
+  projectId: string;
+  sessionId: string;
+}): Promise<TurnContextFragment[]> {
+  const fragments: TurnContextFragment[] = [];
+  try {
+    const overview = await bridge.overview(projectId);
+    const screen = describeScreen(overview, sessionId);
+    if (screen) {
+      const look = await glanceAt(bridge, projectId, screen.focus);
+      fragments.push({
+        source: "workspace",
+        trust: "observed",
+        text: formatScreen(screen, look),
+      });
     }
-    if (inner.hasSession) {
-      this.hasSession = (providerSessionId) =>
-        inner.hasSession?.(providerSessionId) ?? true;
-    }
-    if (inner.retryTurn) {
-      // A retry re-runs history as-is; no fresh context to add.
-      const bindTurn = opts.bindTurn;
-      this.retryTurn = async function* (
-        session: ProviderSession,
-        turn?: TurnOptions,
-      ) {
-        const release = bindTurn?.(session.sessionId, turn);
-        try {
-          if (inner.retryTurn) yield* inner.retryTurn(session, turn);
-        } finally {
-          release?.();
-        }
-      };
-    }
+  } catch {
+    // No window has the project open; the turn runs without a screen.
   }
-
-  async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
-    return this.inner.startSession({
-      ...opts,
-      systemPrompt: [
-        opts.systemPrompt,
-        workPlaybook({ hasTools: this.opts.hasTools }),
-        coordinationNote(this.opts.coordination?.strategy ?? "shared-first"),
-        this.opts.skillsNote?.(),
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
+  const desktop: string[] = [];
+  try {
+    const facts = desktopFacts?.(projectId);
+    if (facts?.personalFilesDirectory) {
+      desktop.push(
+        `New documents the person asks for are private by default: save them in ${facts.personalFilesDirectory} unless they choose another folder.`,
+      );
+    }
+    if (facts?.settingsErrors?.length) {
+      desktop.push(
+        `A Work settings file has errors, so its last valid version is still in effect: ${facts.settingsErrors.join("; ")}`,
+      );
+    }
+  } catch {
+    // Desktop facts are advisory.
+  }
+  try {
+    const notice = await coordination?.checkoutNotice?.(projectId, sessionId);
+    if (notice) desktop.push(notice);
+  } catch {
+    // A recovery notice must not break a turn.
+  }
+  try {
+    const running = bridge
+      .backgroundCommands({ sessionId })
+      .filter((command) => command.status === "running");
+    if (running.length > 0) {
+      desktop.push(
+        [
+          "Your background commands and watches still running (they wake this chat when they finish or see what you asked for):",
+          ...running.map(
+            (command) =>
+              `- ${command.id}: ${command.description} (${command.command.replace(/\s+/g, " ").slice(0, 120)})`,
+          ),
+        ].join("\n"),
+      );
+    }
+  } catch {
+    // Advisory.
+  }
+  if (desktop.length > 0) {
+    fragments.push({
+      source: "desktop",
+      trust: "host",
+      text: desktop.join("\n"),
     });
   }
-
-  async *sendMessage(
-    session: ProviderSession,
-    message: string,
-    opts?: TurnOptions,
-  ): AsyncIterable<AgentEvent> {
-    const fragments = await this.turnContext(session);
-    const release = this.opts.bindTurn?.(session.sessionId, opts);
-    try {
-      yield* this.inner.sendMessage(session, message, {
-        ...opts,
-        context: [...(opts?.context ?? []), ...fragments],
-      });
-    } finally {
-      release?.();
-    }
-  }
-
-  async dispose(session: ProviderSession): Promise<void> {
-    await this.inner.dispose(session);
-  }
-
-  /** Every part is advisory: a failure drops that part, never the turn. */
-  private async turnContext(
-    session: ProviderSession,
-  ): Promise<TurnContextFragment[]> {
-    const fragments: TurnContextFragment[] = [];
-    const { bridge, coordination, desktopFacts } = this.opts;
-    try {
-      const overview = await bridge.overview(session.projectId);
-      const screen = describeScreen(overview, session.sessionId);
-      if (screen) {
-        const look = await glanceAt(bridge, session.projectId, screen.focus);
+  try {
+    if (coordination) {
+      const peers = formatProjectSessionsContext(
+        await coordination.peers(projectId, sessionId),
+      );
+      if (peers) {
         fragments.push({
-          source: "workspace",
+          source: "project_sessions",
           trust: "observed",
-          text: formatScreen(screen, look),
+          text: peers,
         });
       }
-    } catch {
-      // No window has the project open; the turn runs without a screen.
     }
-    const desktop: string[] = [];
-    try {
-      const facts = desktopFacts?.(session.projectId);
-      if (facts?.personalFilesDirectory) {
-        desktop.push(
-          `New documents the person asks for are private by default: save them in ${facts.personalFilesDirectory} unless they choose another folder.`,
-        );
-      }
-      if (facts?.settingsErrors?.length) {
-        desktop.push(
-          `A Work settings file has errors, so its last valid version is still in effect: ${facts.settingsErrors.join("; ")}`,
-        );
-      }
-    } catch {
-      // Desktop facts are advisory.
-    }
-    try {
-      const notice = await coordination?.checkoutNotice?.(
-        session.projectId,
-        session.sessionId,
-      );
-      if (notice) desktop.push(notice);
-    } catch {
-      // A recovery notice must not break a turn.
-    }
-    try {
-      const running = bridge
-        .backgroundCommands({ sessionId: session.sessionId })
-        .filter((command) => command.status === "running");
-      if (running.length > 0) {
-        desktop.push(
-          [
-            "Your background commands and watches still running (they wake this chat when they finish or see what you asked for):",
-            ...running.map(
-              (command) =>
-                `- ${command.id}: ${command.description} (${command.command.replace(/\s+/g, " ").slice(0, 120)})`,
-            ),
-          ].join("\n"),
-        );
-      }
-    } catch {
-      // Advisory.
-    }
-    if (desktop.length > 0) {
-      fragments.push({
-        source: "desktop",
-        trust: "host",
-        text: desktop.join("\n"),
-      });
-    }
-    try {
-      if (coordination) {
-        const peers = formatProjectSessionsContext(
-          await coordination.peers(session.projectId, session.sessionId),
-        );
-        if (peers) {
-          fragments.push({
-            source: "project_sessions",
-            trust: "observed",
-            text: peers,
-          });
-        }
-      }
-    } catch {
-      // Coordination context is advisory.
-    }
-    return fragments;
+  } catch {
+    // Coordination context is advisory.
   }
+  return fragments;
 }
 
 /**

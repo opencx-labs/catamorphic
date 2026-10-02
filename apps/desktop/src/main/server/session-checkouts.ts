@@ -529,6 +529,76 @@ export class SessionCheckouts {
     });
   }
 
+  /** The checkout's current commit, which a rollback of the next turn restores. */
+  async head(input: { workingDirectory: string }): Promise<string | null> {
+    try {
+      const head = (
+        await git(input.workingDirectory, [
+          "rev-parse",
+          "--verify",
+          "--quiet",
+          "HEAD",
+        ])
+      ).trim();
+      return head || null;
+    } catch {
+      // Not a repository, or no commit yet: nothing a rollback could restore.
+      return null;
+    }
+  }
+
+  /**
+   * Put a checkout's files back at `commit` for a rollback (ADR 0195), or
+   * say why not. A worktree the chat owns is restored whatever is in it. A
+   * person's own folder, or a worktree they assigned, only when it is still
+   * where the chat's last turn left it (`expectedHead`, or `commit` when that
+   * turn recorded none) and holds no other changes. Only files move: the
+   * branch keeps every checkpoint, so a synced branch never rewinds, and the
+   * next checkpoint records the rollback as a commit of its own.
+   */
+  async restore(input: {
+    projectId: string;
+    workingDirectory: string;
+    commit: string;
+    expectedHead: string | null;
+    owned: boolean;
+  }): Promise<"restored" | string> {
+    const root = this.requireRoot(input.projectId);
+    await this.assertSameRepository(root, input.workingDirectory);
+    const commonDir = await canonicalCommonDir(input.workingDirectory);
+    return withRepositoryMutationLock(commonDir, async () => {
+      const cwd = input.workingDirectory;
+      if (!(await gitSucceeds(cwd, ["cat-file", "-e", `${input.commit}^{commit}`])))
+        return "The checkpoint this turn started from is no longer in the repository, so the files were left as they are.";
+      const head = await this.head({ workingDirectory: cwd });
+      const status = await git(cwd, [
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+      ]);
+      if (!input.owned) {
+        if (head !== (input.expectedHead ?? input.commit))
+          return "This folder changed since the chat's last turn, so its files were left as they are. Fork the chat from that turn instead.";
+        if (status)
+          return "This folder has changes that are not recorded yet, so its files were left as they are. Record or discard them, then roll back again.";
+      }
+      if (head === input.commit && !status) return "restored";
+      await git(cwd, [
+        "restore",
+        `--source=${input.commit}`,
+        "--staged",
+        "--worktree",
+        "--",
+        ":/",
+      ]);
+      // Files later turns created and never recorded; ignored and personal
+      // files stay.
+      if (input.owned) await git(cwd, ["clean", "-fd", "--", ":/"]);
+      return "restored";
+    });
+  }
+
   private requireRoot(projectId: string): string {
     const root = this.projectRoot(projectId);
     if (!root) throw new Error(`Project '${projectId}' has no folder`);
