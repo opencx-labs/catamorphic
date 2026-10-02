@@ -33,7 +33,7 @@ function attempt(
     systemPrompt: "",
     context: "",
     permissions: {},
-    modelAccess: { kind: "host", env: {} },
+    modelAccess: { kind: "host" },
     toolPolicies: {},
     toolAnnotations: {},
     mcpServers: {},
