@@ -131,7 +131,10 @@ desktop dry run. Verify a published image with
 Installed builds default to Stable for stable versions and Preview for alpha
 versions. The persisted machine-wide choice is available under **Help > Update
 Channel**. Switching channels never installs an older version. The app checks
-the selected feed shortly after launch, every six hours, and after wake. It
+the selected feed shortly after launch, every six hours of wall-clock time
+(sleep counts), a minute after wake, and 15 minutes after a failed check. A
+check that does not answer within two minutes is abandoned. Update activity
+is logged to `~/Library/Logs/Work/updates.log`. It
 asks before downloading and again before restarting, and never restarts while
 an agent or terminal is active. DMG users can still install a newer Work
 app over the existing copy in Applications.

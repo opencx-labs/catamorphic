@@ -3,6 +3,13 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { findPackageJSON } from "node:module";
 import path from "node:path";
+import type { ClaudeCodeInstallStatus } from "../shared/claude-code-install.js";
+import {
+  compareVersions,
+  type InstalledClaudeCodeFinder,
+} from "./installed-claude-code.js";
+
+export type { ClaudeCodeInstallStatus };
 
 export type DownloadableHarness = "claude-code" | "codex";
 export type DownloadableComponent = DownloadableHarness | "bun";
@@ -11,7 +18,11 @@ export interface HarnessExecutable {
   executablePath: string;
   /** Directories the Codex SDK normally prepends when resolving its package. */
   pathEntries: readonly string[];
-  source: "installed" | "downloaded";
+  /**
+   * `system`: the person's own install (ADR 0196); `installed`: a package
+   * beside the app (development); `downloaded`: Work's pinned copy.
+   */
+  source: "system" | "installed" | "downloaded";
 }
 
 /** Environment additions needed beside an explicitly selected executable. */
@@ -45,6 +56,8 @@ interface HarnessComponentStoreOptions {
   artifacts?: Partial<Record<DownloadableComponent, HarnessArtifact>>;
   fetchImpl?: typeof fetch;
   preferInstalled?: boolean;
+  /** The person's own Claude Code, preferred when new enough (ADR 0196). */
+  installedClaudeCode?: Pick<InstalledClaudeCodeFinder, "find" | "update">;
 }
 
 /** One tick of a first-use component download, for "Downloading… 42%" UI. */
@@ -63,7 +76,13 @@ interface PlatformRelease {
   bunIntegrity: `sha512-${string}`;
 }
 
-const CLAUDE_VERSION = "0.3.263";
+const CLAUDE_VERSION = "0.3.287";
+/**
+ * The Claude Code CLI release the bundled Agent SDK ships with: an installed
+ * Claude Code at this version or newer runs instead of Work's own copy
+ * (ADR 0196). scripts/claude-code-bump.ts moves it with CLAUDE_VERSION.
+ */
+export const CLAUDE_CODE_MIN_VERSION = "2.1.287";
 const CODEX_VERSION = "0.153.4";
 const BUN_VERSION = "1.3.14";
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
@@ -72,7 +91,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
   "darwin-arm64": {
     rustTarget: "aarch64-apple-darwin",
     claudeIntegrity:
-      "sha512-H4eLd4Tkx3rJkt739CHb+9AcaKiiOpibU4tYsmma47mV+2zAPjUyFxpuE2N57VSmpAgbLQxu44du0TFN+UH5dg==",
+      "sha512-Ic9GCrPBmMroLi7q+IeQQdtVDQLOaaSxkH1NzPsSRZxSvFcMH6M7zz/LahzlLQTdDyebcyMLk4aBXl4H8NnbFw==",
     codexIntegrity:
       "sha512-B1qhN3fa1ay0R0wGziXqgwSkB5icpYChNKHhtBHff/0UtSTC7z+l8aTtvMlGjH3E8HEvY3+njIJelM9CAAoVWg==",
     bunIntegrity:
@@ -81,7 +100,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
   "darwin-x64": {
     rustTarget: "x86_64-apple-darwin",
     claudeIntegrity:
-      "sha512-jKwmfkem1s/TcK7u83cJf2zLHMz846irV4vqYGUlo74uX2qfX57R4UsrCMlcTUMou/U9vQyNCc/Kk0s+zSxYRg==",
+      "sha512-7BxpyKMkzLQxCdq4OEnrjtLRC3O69l0LSBZYyUPXPTCFTnvzqpELjPRUssyW9auKEtVoh8eTySwC2rwGzuMUqA==",
     codexIntegrity:
       "sha512-vnSbbPzfoDZmmyzsxswsDDXQ06IVFBzkQU7/hroB3ji93Ok2utcsq8Psfk2tjF5r9mEx8RWFJhzuTGHG26/NDA==",
     bunIntegrity:
@@ -90,7 +109,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
   "linux-arm64": {
     rustTarget: "aarch64-unknown-linux-musl",
     claudeIntegrity:
-      "sha512-2KPY1wu1hdjpVsw+Tg3i50uhxhhetO1fB24wjUJAQJ8YPSogqO32UbtYPJ6I3F17lBNHb/Mq3nRYGAuSU5yjtg==",
+      "sha512-CWqO5p3YSBmpi/qHywul0re6fjljbDMZVj45PouNb1Qqws2Wi2h/Wp/ojOnfQAmq4m29pV2qgDnN2UtjaOobKA==",
     codexIntegrity:
       "sha512-QKdjYLYV4hXIuUQDP3P6F4NXuWFoKo9WUoV4nAREIx55kiUyi8UsYdsVobkeXir5n/maEQgYMCKLHVma4rNPiw==",
     bunIntegrity:
@@ -99,7 +118,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
   "linux-x64": {
     rustTarget: "x86_64-unknown-linux-musl",
     claudeIntegrity:
-      "sha512-un7HJzTT+DSQLgM33emQ0qHAwIY3CXIwe8JXoD9PaT7pdLepK4Ffa4r5j84pHTVS5uoGqxcf196tBgqb5/Z7FA==",
+      "sha512-/6Zw5nym4xfc2eFGaIrS7dt7JoBgASsGUnLWMoPV4M1hGH0tOSPzpixfb4OWO6r9iw9Nn/Zk5Ke1KRuMuja2+Q==",
     codexIntegrity:
       "sha512-x1EcwBlY3AObM1VTUHNM2AzAJQsyreGdagpF+qFiYi/Oa30VBktvvG0C6tLtCzqW6hjZNWkGZQWmeVk7MuJKWg==",
     bunIntegrity:
@@ -108,7 +127,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
   "win32-arm64": {
     rustTarget: "aarch64-pc-windows-msvc",
     claudeIntegrity:
-      "sha512-n8owOwNSSi7/KpONb/ut+uXRjBIp9N6EjwADiB+YygPwGRtpWP+PR/qFsGdTVBE5cpPwhgKVAf27xEZEfNvcSQ==",
+      "sha512-6AdDoLnnVG9aRrWoGVQjS3i4+hceCGFEHVPkMBzbVFs76G1WKlY/ZMnELu3X+ZE5QJFT3j4qqmdJ0y+QbrycEg==",
     codexIntegrity:
       "sha512-/FBh42976ltF1kxDoPQBg1Q6+hwChRU5/sm5dfeC8kFVQMvOCGoGeY5d8rRZGVJE8XojlXo74VQb0sHowcfgBw==",
     bunIntegrity:
@@ -117,7 +136,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
   "win32-x64": {
     rustTarget: "x86_64-pc-windows-msvc",
     claudeIntegrity:
-      "sha512-EwqzsOLxIJTX6RIXtQ21ekOKmYBNfwbtGtqaPqdWZGzpMbHaie8kGsM630h9RFaoxeytS/jbg8B3fPCdUKfhPw==",
+      "sha512-fczDcWG2Hu+nYQgxeQEsGn5l+3M06RpJXysIsu/BmHTPl7UceTfTpSYr6O/9GU/sNhU0CADJaIIZNwQTfK0DWw==",
     codexIntegrity:
       "sha512-lMkB43kJZH0VFr+hoXc11qqR7QtQIbkr07ALgj4urKL1osNyUyuy1iXd3Vzz2iCYvBUCSw7I0l/W1cEPGx9euQ==",
     bunIntegrity:
@@ -128,7 +147,8 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
 /**
  * App-owned store for the large native payloads behind the Claude Code and
  * Codex SDKs. The TypeScript SDKs remain packaged and audited with the app;
- * only their exact, platform-specific executables arrive on first use.
+ * only their exact, platform-specific executables arrive on first use, and
+ * Claude Code's not at all when the person's own install is new enough.
  */
 export class HarnessComponentStore {
   private readonly rootDir: string;
@@ -137,6 +157,10 @@ export class HarnessComponentStore {
   >;
   private readonly fetchImpl: typeof fetch;
   private readonly preferInstalled: boolean;
+  private readonly installedClaudeCode?: Pick<
+    InstalledClaudeCodeFinder,
+    "find" | "update"
+  >;
   private readonly pending = new Map<
     DownloadableComponent,
     Promise<HarnessExecutable>
@@ -151,6 +175,41 @@ export class HarnessComponentStore {
     this.artifacts = options.artifacts ?? platformArtifacts();
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.preferInstalled = options.preferInstalled ?? true;
+    this.installedClaudeCode = options.installedClaudeCode;
+  }
+
+  /**
+   * Which Claude Code runs: the person's own when it is at least the
+   * version the bundled SDK ships with, else Work's pinned copy.
+   */
+  async claudeCodeStatus(): Promise<ClaudeCodeInstallStatus> {
+    const installed =
+      (await this.installedClaudeCode?.find().catch(() => null)) ?? null;
+    return {
+      using:
+        installed &&
+        compareVersions(installed.version, CLAUDE_CODE_MIN_VERSION) >= 0
+          ? "installed"
+          : "work",
+      installed,
+      minVersion: CLAUDE_CODE_MIN_VERSION,
+    };
+  }
+
+  /** Update the person's own Claude Code with its updater, when they ask. */
+  async updateInstalledClaudeCode(): Promise<{
+    output: string;
+    status: ClaudeCodeInstallStatus;
+  }> {
+    const before = await this.claudeCodeStatus();
+    if (!before.installed || !this.installedClaudeCode)
+      throw new Error("Claude Code is not installed on this computer.");
+    const output = await this.installedClaudeCode
+      .update(before.installed)
+      .catch((error: unknown) =>
+        error instanceof Error ? error.message : String(error),
+      );
+    return { output, status: await this.claudeCodeStatus() };
   }
 
   /** Watch first-use downloads; silent when the component is already here. */
@@ -167,6 +226,15 @@ export class HarnessComponentStore {
       throw new Error(
         `${displayName(harness)} is unavailable on ${process.platform}-${process.arch}.`,
       );
+    }
+    if (harness === "claude-code") {
+      const status = await this.claudeCodeStatus();
+      if (status.using === "installed" && status.installed)
+        return {
+          executablePath: status.installed.executablePath,
+          pathEntries: [],
+          source: "system",
+        };
     }
     if (this.preferInstalled) {
       const installed = resolveInstalled(artifact);

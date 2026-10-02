@@ -33,12 +33,14 @@ import type { AgentConfig } from "../agents-store.js";
 import { readableAttachments } from "../composer-files.js";
 import type { ConnectorsService } from "../connectors.js";
 import {
+  type ClaudeCodeInstallStatus,
   type DownloadableHarness,
   HarnessComponentStore,
   type HarnessDownloadProgress,
   type HarnessExecutable,
   harnessPathEnvironment,
 } from "../harness-components.js";
+import { InstalledClaudeCodeFinder } from "../installed-claude-code.js";
 import { bestFreeModelId, fetchOpenRouterModels } from "../openrouter.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
@@ -215,7 +217,15 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     this.mcp = new DesktopAgentMcp(deps);
     this.harnessComponents = new HarnessComponentStore({
       rootDir: deps.harnessComponentsDir,
+      // The person's own Claude Code runs when new enough (ADR 0196).
+      // Tests stay on the pinned copy, whatever the host has installed.
+      ...(deps.e2eFake
+        ? {}
+        : { installedClaudeCode: new InstalledClaudeCodeFinder() }),
     });
+    // The first look reads the login shell's PATH (about a second); do it
+    // now rather than in the first chat's turn.
+    if (!deps.e2eFake) void this.harnessComponents.claudeCodeStatus();
     this.workspaceToolkit = deps.workspaceBridge
       ? buildWorkspaceToolkit(deps.workspaceBridge, {
           desktopSettings: (projectId) => this.settingsContext(projectId),
@@ -242,6 +252,16 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     harness: DownloadableHarness,
   ): Promise<HarnessExecutable> {
     return this.harnessComponents.ensure(harness);
+  }
+
+  /** Which Claude Code runs: the person's own install or Work's copy. */
+  claudeCodeStatus(): Promise<ClaudeCodeInstallStatus> {
+    return this.harnessComponents.claudeCodeStatus();
+  }
+
+  /** Run the person's own Claude Code updater, at their request. */
+  updateInstalledClaudeCode() {
+    return this.harnessComponents.updateInstalledClaudeCode();
   }
 
   /** First-use harness downloads, so sign-in UI can show real progress. */

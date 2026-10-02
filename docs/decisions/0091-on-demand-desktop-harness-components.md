@@ -1,6 +1,6 @@
 # 0091: Desktop coding harnesses use verified on-demand components
 
-- **Status:** Accepted
+- **Status:** Accepted (Claude Code: an installed copy at the SDK's version runs first, [0196](0196-installed-claude-code-first.md))
 - **Date:** 2026-09-04
 - **Supersedes:** Claude Code and Codex bundling portion of 0082
 

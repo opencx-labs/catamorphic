@@ -16,13 +16,12 @@ import {
 } from "./update-preferences.js";
 import { createUpdatePreparation } from "./update-preparation.js";
 import { markUpdateRestart } from "./update-restart.js";
+import { UpdateSchedule } from "./update-schedule.js";
 import { DesktopUpdaterController } from "./updater-controller.js";
-
-const INITIAL_CHECK_DELAY_MS = 30_000;
-const CHECK_INTERVAL_MS = 6 * 60 * 60_000;
+import { createUpdaterLog } from "./updater-log.js";
 
 export interface DesktopUpdaterService {
-  check(manual: boolean): Promise<void>;
+  check(manual: boolean): Promise<boolean>;
   channel(): DesktopUpdateChannel;
   setChannel(channel: DesktopUpdateChannel): Promise<boolean>;
   dispose(): void;
@@ -33,7 +32,10 @@ export function registerDesktopUpdater(options: {
   canInstall: () => Promise<boolean>;
 }): DesktopUpdaterService {
   const { autoUpdater } = electronUpdater;
-  autoUpdater.logger = console;
+  const logger = createUpdaterLog(
+    path.join(app.getPath("logs"), "updates.log"),
+  );
+  autoUpdater.logger = logger;
   const preferences = new UpdatePreferencesStore(
     path.join(app.getPath("userData"), "updates.json"),
   );
@@ -51,13 +53,24 @@ export function registerDesktopUpdater(options: {
     currentVersion: app.getVersion(),
     channel,
     supported: app.isPackaged && process.platform === "darwin",
-    updater: autoUpdater,
+    logger,
+    updater: Object.assign(autoUpdater, {
+      // electron-updater returns its in-flight check to every caller until
+      // it settles; a stuck one would block all later checks.
+      abandonCheck: () =>
+        Reflect.set(autoUpdater, "checkForUpdatesPromise", null),
+    }),
     broadcast: (state) =>
       options.broadcast("catamorphic:update-state-changed", state),
   });
 
   ipcMain.handle("catamorphic:update-state", () => controller.current());
-  ipcMain.handle("catamorphic:update-check", () => controller.check(true));
+  const checkNow = async (manual: boolean) => {
+    const answered = await controller.check(manual);
+    schedule.checked(answered);
+    return answered;
+  };
+  ipcMain.handle("catamorphic:update-check", () => checkNow(true));
   ipcMain.handle("catamorphic:update-download", () => controller.download());
   ipcMain.handle("catamorphic:update-install", () => controller.install());
   ipcMain.handle("catamorphic:update-move", () => controller.move());
@@ -69,30 +82,30 @@ export function registerDesktopUpdater(options: {
     markUpdateRestart(app.getPath("userData"));
   if (supported)
     nativeUpdater.on("before-quit-for-update", onBeforeQuitForUpdate);
-  const initialTimer = supported
-    ? setTimeout(() => void controller.check(false), INITIAL_CHECK_DELAY_MS)
-    : null;
-  initialTimer?.unref();
-  const interval = supported
-    ? setInterval(() => void controller.check(false), CHECK_INTERVAL_MS)
-    : null;
-  interval?.unref();
-  const onResume = () => void controller.check(false);
+  // Shortly after launch, every six hours of wall-clock time, a minute
+  // after waking, and again soon after a failure (update-schedule.ts).
+  const schedule = new UpdateSchedule({
+    check: () => {
+      logger.info("[desktop] scheduled update check");
+      return controller.check(false);
+    },
+  });
+  if (supported) schedule.start();
+  const onResume = () => schedule.resumed();
   if (supported) powerMonitor.on("resume", onResume);
 
   return {
-    check: (manual) => controller.check(manual),
+    check: (manual) => checkNow(manual),
     channel: () => controller.current().channel,
     async setChannel(nextChannel) {
       if (!controller.setChannel(nextChannel)) return false;
       preferences.save(nextChannel);
-      await controller.check(true);
+      await checkNow(true);
       return true;
     },
     dispose() {
       preparation.dispose();
-      if (initialTimer) clearTimeout(initialTimer);
-      if (interval) clearInterval(interval);
+      schedule.dispose();
       if (supported) powerMonitor.removeListener("resume", onResume);
       if (supported)
         nativeUpdater.removeListener(

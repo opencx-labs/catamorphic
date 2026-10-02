@@ -71,7 +71,10 @@ confirmation. "Release" alone does not mean Stable.
 4. If Claude Code or Codex dependencies changed, update
    `apps/desktop/src/main/harness-components.ts` together: platform package
    version, tarball URL and SHA-512 integrity for every supported platform. Run
-   its tests. Never ship a floating version or a missing integrity pin.
+   its tests. Never ship a floating version or a missing integrity pin. For
+   Claude Code, `bun scripts/claude-code-bump.ts [version]` moves the SDK,
+   `CLAUDE_CODE_MIN_VERSION` and every integrity together (ADR 0196); the
+   scheduled Claude Code bump workflow opens that pull request daily.
 5. Run `bun run check`, push, open the PR, wait for checks and the required human
    review. Never merge by bypass.
 6. After merge, fetch again and confirm `main` has the intended version and green

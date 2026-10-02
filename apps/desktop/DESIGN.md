@@ -1490,3 +1490,13 @@ title instead of on a row above it. Answers read in history as each question
 with what was picked. A permission request gives way to a message instead of
 staying open. Pasting no longer shifts the dock: preparation spins the attach
 button. See ADR 0195.
+
+### 2026-10-02: Your own Claude Code, and update checks that survive sleep
+
+Claude Code chats run the person's own Claude Code when it is at least the
+version Work was built with, so a current install brings current models with
+no download; otherwise Work downloads its own copy as before. The agent's
+settings say which one runs and, when the installed one is too old, offer to
+update it with its own updater. Work's checks for its own updates now count
+time asleep, wait a minute after waking, retry soon after a failure and keep a
+log. See ADR 0196.

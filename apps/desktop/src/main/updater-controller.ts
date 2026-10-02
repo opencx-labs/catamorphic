@@ -35,6 +35,11 @@ export interface UpdaterAdapter {
   ): this;
   on(event: "error", listener: (error: Error) => void): this;
   checkForUpdates(): Promise<unknown>;
+  /**
+   * Forget a check that never settled, so the next one sends a new request
+   * (electron-updater otherwise hands back the stuck promise forever).
+   */
+  abandonCheck?(): void;
   downloadUpdate(): Promise<unknown>;
   quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void;
 }
@@ -56,6 +61,8 @@ export interface DesktopUpdaterControllerOptions {
   installedInPlace?: () => boolean;
   /** Moves the app into Applications and relaunches; false when declined. */
   moveToApplications?: () => Promise<boolean>;
+  /** How long a check may take before it counts as failed. */
+  checkTimeoutMs?: number;
 }
 
 /** Squirrel.Mac's refusal for a translocated or disk-image copy. */
@@ -79,7 +86,7 @@ export class DesktopUpdaterController {
   private state: DesktopUpdateState;
   private preparing = false;
   private manualCheckId = 0;
-  private checking: Promise<void> | null = null;
+  private checking: Promise<boolean> | null = null;
   private downloading: Promise<void> | null = null;
   private readonly logger: Pick<Console, "error" | "info" | "warn">;
 
@@ -162,7 +169,8 @@ export class DesktopUpdaterController {
     return true;
   }
 
-  async check(manual: boolean): Promise<void> {
+  /** Look for an update; resolves whether the update feed answered. */
+  async check(manual: boolean): Promise<boolean> {
     if (manual) this.manualCheckId += 1;
     if (!this.options.supported || !this.options.updater) {
       this.setState({
@@ -172,11 +180,11 @@ export class DesktopUpdaterController {
         manual,
         message: "Updates are checked by installed macOS builds.",
       });
-      return;
+      return false;
     }
     if (this.options.installedInPlace && !this.options.installedInPlace()) {
       this.moveRequired(manual);
-      return;
+      return false;
     }
     if (
       this.state.phase === "downloading" ||
@@ -185,7 +193,7 @@ export class DesktopUpdaterController {
       (!manual && this.state.phase === "available")
     ) {
       if (manual) this.setState({ ...this.state, manual: true });
-      return;
+      return true;
     }
     if (this.checking) {
       if (manual) {
@@ -199,11 +207,27 @@ export class DesktopUpdaterController {
       channel: this.state.channel,
       manual,
     });
-    this.checking = this.options.updater
-      .checkForUpdates()
-      .then(() => undefined)
-      .catch((error) => this.handleError(error))
+    const updater = this.options.updater;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // A request that never settles (a connection lost across sleep) must
+    // not hold every later check: it fails after a while and is forgotten.
+    const timedOut = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => {
+          updater.abandonCheck?.();
+          reject(new Error("The update service did not answer in time."));
+        },
+        this.options.checkTimeoutMs ?? 2 * 60_000,
+      );
+    });
+    this.checking = Promise.race([updater.checkForUpdates(), timedOut])
+      .then(() => true)
+      .catch((error) => {
+        this.handleError(error);
+        return false;
+      })
       .finally(() => {
+        clearTimeout(timer);
         this.checking = null;
       });
     return this.checking;
