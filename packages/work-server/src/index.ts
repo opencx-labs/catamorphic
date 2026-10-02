@@ -49,6 +49,18 @@ export {
   type WorkServerOptions,
 } from "./server.js";
 export {
+  listMachineSignIns,
+  type MachineSignIn,
+  signInOnMachine,
+  signInRoot,
+  signOutOnMachine,
+} from "./workers/sign-ins.js";
+export {
+  WORKER_PROTOCOL,
+  WORKER_PROTOCOL_HEADER,
+} from "./workers/worker-protocol.js";
+export {
   startWorkWorker,
+  WorkerUpgradeRequiredError,
   type WorkWorkerOptions,
 } from "./workers/worker-runtime.js";

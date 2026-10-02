@@ -280,7 +280,7 @@ Framed content previews transition the workspace margins and corner radius over
 
 A sidebar slides with a 200 ms transform the moment it is toggled, and the
 content beside it settles after it stops: a 200 ms view-transition morph
-from its old layout to its new one (ADR 0197). The content resizes once per
+from its old layout to its new one (ADR 0200). The content resizes once per
 toggle, never while anything moves. New motion beside a page, terminal,
 editor or app frame moves over it rather than animating its size.
 
@@ -1508,6 +1508,25 @@ update it with its own updater. Work's checks for its own updates now count
 time asleep, wait a minute after waking, retry soon after a failure and keep a
 log. See ADR 0196.
 
+### 2026-10-02: A chat is a log every window reads the same way
+
+A chat used to be a placeholder message rewritten on every harness event and
+a transcript polled twice a second; questions and approvals waited in one
+process's memory, so a restart lost them and the phone saw a different chat
+than the Mac. A chat is now an ordered log of turns: every window, the phone
+and the server fold the same events, streamed as they happen, and resume
+where they left off after sleep or a dropped connection. An approval or a
+question is part of the turn, answerable from any of them, and survives a
+restart. When the app quits mid-turn, the turn says it stopped and the agent
+picks up on its own conversation the next time instead of the reply silently
+going missing. Any turn can be undone with the files it changed ("Restore to
+here"), and a fork starts from the agent's own conversation at that point.
+Claude Code and Codex logins no longer leave the Mac: a remote chat on a
+subscription runs only on a machine where the person signed in themselves.
+While the agent works and there is nothing to send, the send button stops
+it, and a message held for editing keeps its place in the queue.
+See ADRs 0197, 0198 and 0199.
+
 ### 2026-10-02: Sidebars move first, the page settles after
 
 Toggling a sidebar over a web page shifted the whole page: opening dragged it
@@ -1517,4 +1536,4 @@ moment it is toggled, and when it stops the page glides into its new place
 instead of snapping, as Safari animates its sidebar: snapshots of the old and
 new layout move so the page's main column travels straight to where it lands,
 and cross-fade. A web page may hold still for a moment between the two while
-it lays out at its new size. See ADR 0197.
+it lays out at its new size. See ADR 0200.

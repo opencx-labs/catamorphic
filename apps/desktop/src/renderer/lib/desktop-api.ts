@@ -53,10 +53,7 @@ import type {
 } from "../../shared/history.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import type { PasskeyRequest } from "../../shared/passkeys.js";
-import type {
-  PersonalEnvironmentView,
-  PersonalHarness,
-} from "../../shared/personal-environment.js";
+import type { PersonalEnvironmentView } from "../../shared/personal-environment.js";
 import type {
   PrComment,
   PrCommentInput,
@@ -985,11 +982,6 @@ export interface CatamorphicDesktopApi {
   personalEnvironmentRemoveFile: (input: {
     projectId: string;
     path: string;
-  }) => Promise<PersonalEnvironmentView>;
-  personalEnvironmentSetLogin: (input: {
-    projectId: string;
-    harness: PersonalHarness;
-    included: boolean;
   }) => Promise<PersonalEnvironmentView>;
   /** Creates the config when absent; returns its project path. */
   personalEnvironmentConfigFile: (projectId: string) => Promise<string>;

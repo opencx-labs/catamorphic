@@ -121,10 +121,22 @@ workflow prefix so both list summaries and singular workflow graphs refresh.
 ### Agent (coding sessions)
 
 - `useAgentSessions(projectId)`
-- `useAgentSession(projectId, sessionId)`
+- `useAgentSession(projectId, sessionId)`: the live session (ADR 0197). It
+  loads the snapshot, streams the events after its sequence over SSE, folds
+  them with `@catamorphic/agent-protocol`'s reducer, resumes from the last
+  applied sequence after a dropped connection, replaces its state on a
+  `reset`, reloads the snapshot after a gap, and pages older items with
+  `loadOlder`.
+- `useAgentChat(projectId, options)`: the chat on top of it: `timeline`
+  (turns of input, work and answer, from `sessionTimeline`), `queue`,
+  `pending` (sent messages shown at once, reconciled with their items),
+  `requests`, and the commands `send`, `sendNow`, `editQueued`,
+  `holdQueued`, `cancelQueued`, `sendQueuedNow`, `interrupt`, `retry`,
+  `respond` and `rollback`. Each command carries a generated `commandId`
+  and is resent with the same id after a timeout or a server error.
 - `useCreateAgentSession(projectId)`
-- `useSendAgentMessage(projectId, sessionId)`
-- `useAgentChat(projectId, options)`
+- `sendSessionCommand({ apiClient, projectId, sessionId, command })`: one
+  command without the hook.
 - `useAcknowledgeAgentSessionAttention(projectId)`
 - `useArchiveAgentSession(projectId)`
 - `useUnarchiveAgentSession(projectId)`

@@ -1,21 +1,29 @@
-import type { AgentMessage } from "@catamorphic/react";
+import type { SessionMessageAuthor, UserMessageItem } from "@catamorphic/react";
 import type { MouseEvent } from "react";
 
 type OpenLink = (url: string, event: MouseEvent<HTMLAnchorElement>) => void;
-/** Compact provenance is shared by desktop, mobile, and embedded chat timelines. */
+/**
+ * Who sent a message a person did not type, with links to where it came
+ * from. Compact provenance is shared by desktop, mobile, and embedded chat
+ * timelines.
+ */
 export function SessionAttribution({
   author,
   metadata,
+  attention = null,
   onOpen,
 }: {
-  author?: AgentMessage["author"];
-  metadata?: unknown;
+  author: SessionMessageAuthor;
+  /** The message's provenance (`UserMessageItem.metadata`). */
+  metadata?: UserMessageItem["metadata"];
+  /** The delivery asked the owner to look (ADR 0090). */
+  attention?: UserMessageItem["attention"];
   onOpen?: OpenLink;
 }) {
   const detail = record(metadata);
   const provenance = record(detail?.provenance);
   const action = record(detail?.sessionAction);
-  if (!author || author.kind === "user") return null;
+  if (author.kind === "user") return null;
   const actor =
     author.kind === "workflow"
       ? (author.displayName ?? readableName(author.workflowName))
@@ -70,7 +78,7 @@ export function SessionAttribution({
       className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-fg-muted"
       data-testid="session-attribution"
     >
-      {detail?.attention === "required" && (
+      {attention === "required" && (
         <span className="font-medium text-accent">Attention requested</span>
       )}
       {typeof provenance?.scheduledFor === "string" && (

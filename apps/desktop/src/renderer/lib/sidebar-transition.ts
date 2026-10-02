@@ -118,7 +118,7 @@ async function anchorShift(
  * snapshots whose old and new images travel so its main column moves
  * straight from where it was to where it lands, and cross-fade. Snapshots
  * are GPU textures, so nothing re-lays out or waits on another process
- * while anything moves (ADR 0197).
+ * while anything moves (ADR 0200).
  *
  * `update` always runs, animated or not. When `wanted` no longer holds by
  * the time the content has been read (the sidebar moved again), it runs

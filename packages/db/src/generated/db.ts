@@ -51,7 +51,7 @@ export interface AgentDelegations {
   id: Generated<string>;
   interrupted_by_external_user_id: string | null;
   project_id: string;
-  result_message_id: string | null;
+  result_item_id: string | null;
   route_id: string;
   source_session_id: string;
   status: Generated<string>;
@@ -60,38 +60,59 @@ export interface AgentDelegations {
   tenant_id: string;
 }
 
-export interface AgentMessages {
-  author_kind: Generated<string>;
-  author_payload: Generated<Json>;
-  commit_sha: string | null;
-  content: string;
+export interface AgentItems {
+  attempt_id: string | null;
+  attention: Generated<boolean>;
+  author_kind: string | null;
+  author_payload: Json | null;
   created_at: Generated<Timestamp>;
-  delivery_mode: Generated<string>;
-  id: Generated<string>;
+  dispatch: string | null;
+  id: string;
   idempotency_key: string | null;
-  metadata: Json | null;
-  role: string;
-  seq: Generated<Int8>;
+  kind: string;
+  parent_item_id: string | null;
+  payload: Json;
+  position: Int8;
   session_id: string;
+  status: string;
+  text: Generated<string>;
+  turn_id: string | null;
+  updated_at: Generated<Timestamp>;
 }
 
-export interface AgentRuntimeEvents {
+export interface AgentProviderThreadEntries {
   created_at: Generated<Timestamp>;
-  event_id: string;
-  event_type: string;
-  occurred_at: Timestamp;
-  payload: Json;
-  provider_payload_ref: string | null;
-  sequence: Int8;
+  entry: Json;
+  entry_uuid: string | null;
+  seq: Int8;
+  subpath: Generated<string>;
+  thread_id: string;
+}
+
+export interface AgentProviderThreads {
+  created_at: Generated<Timestamp>;
+  fork_source: Json | null;
+  harness: string;
+  id: Generated<string>;
+  last_turn_ordinal: number | null;
+  native_ref: Json | null;
+  portable: Generated<boolean>;
   session_id: string;
-  turn_id: string | null;
+  state_path: string | null;
+  status: Generated<string>;
+  updated_at: Generated<Timestamp>;
 }
 
 export interface AgentRuntimeRequests {
+  answerable: Generated<boolean>;
+  attempt_id: string | null;
+  blocking: Generated<boolean>;
   created_at: Timestamp;
   expires_at: Timestamp | null;
+  item_id: string | null;
   kind: string;
   payload: Json;
+  reason: string | null;
   request_id: string;
   resolved_at: Timestamp | null;
   resolved_by_external_user_id: string | null;
@@ -101,6 +122,27 @@ export interface AgentRuntimeRequests {
   status: Generated<string>;
   turn_id: string | null;
   updated_at: Generated<Timestamp>;
+}
+
+export interface AgentSessionCommands {
+  command_id: string;
+  created_at: Generated<Timestamp>;
+  error: Json | null;
+  external_user_id: string | null;
+  result: Json | null;
+  sequence: Int8;
+  session_id: string;
+  status: string;
+  type: string;
+}
+
+export interface AgentSessionEvents {
+  command_id: string | null;
+  created_at: Generated<Timestamp>;
+  payload: Json;
+  sequence: Int8;
+  session_id: string;
+  type: string;
 }
 
 export interface AgentSessions {
@@ -118,20 +160,20 @@ export interface AgentSessions {
   chat_workflows: Generated<Json>;
   created_at: Generated<Timestamp>;
   environment_name: string | null;
+  event_sequence: Generated<Int8>;
   external_user_id: string;
   forked_from_session_id: string | null;
   handoff_destination_host_id: string | null;
   handoff_status: Generated<string>;
   icon: string | null;
   id: Generated<string>;
-  mirror_message_count: Generated<number>;
+  mirror_sequence: Generated<Int8>;
   model: string | null;
   model_effort: string | null;
   parent_session_id: string | null;
   placement: Json | null;
   project_id: string;
-  provider: string;
-  provider_session_id: string | null;
+  rewind_until: Timestamp | null;
   sandbox_id: string | null;
   source: Generated<string>;
   source_action_id: string | null;
@@ -156,24 +198,58 @@ export interface AgentSessionViews {
   visibility: Generated<string>;
 }
 
-export interface AgentTurns {
-  activity: string | null;
-  activity_at: Timestamp | null;
-  attempt: Generated<number>;
-  available_at: Generated<Timestamp>;
-  cancellation_requested_at: Timestamp | null;
+export interface AgentTurnAttempts {
   completed_at: Timestamp | null;
   created_at: Generated<Timestamp>;
-  delivery_mode: string;
-  error: string | null;
+  error: Json | null;
   id: Generated<string>;
+  native_turn_ref: Json | null;
+  ordinal: number;
+  provider_started_at: Timestamp | null;
+  provider_thread_id: string | null;
+  reason: string;
+  runner: Json | null;
+  session_id: string;
+  started_at: Timestamp | null;
+  status: string;
+  turn_id: string;
+}
+
+export interface AgentTurnCommands {
+  acknowledged_at: Timestamp | null;
+  attempt_id: string | null;
+  created_at: Generated<Timestamp>;
+  id: Generated<string>;
+  kind: string;
+  payload: Generated<Json>;
+  sent_at: Timestamp | null;
+  status: Generated<string>;
+  turn_id: string;
+}
+
+export interface AgentTurns {
+  active_attempt_id: string | null;
+  activity: string | null;
+  activity_at: Timestamp | null;
+  attempt_count: Generated<number>;
+  available_at: Generated<Timestamp>;
+  cancellation_requested_at: Timestamp | null;
+  checkpoint_after: string | null;
+  checkpoint_before: string | null;
+  completed_at: Timestamp | null;
+  continuation_of: string | null;
+  created_at: Generated<Timestamp>;
+  dispatch: Generated<string>;
+  error: Json | null;
+  id: Generated<string>;
+  input_item_id: string | null;
   lease_expires_at: Timestamp | null;
   lease_owner: string | null;
   lease_token: string | null;
-  message_id: string;
-  phase: Generated<string>;
+  ordinal: number;
+  outcome: Json | null;
   priority: Generated<number>;
-  result_message_id: string | null;
+  provider_thread_id: string | null;
   session_id: string;
   started_at: Timestamp | null;
   status: Generated<string>;
@@ -816,7 +892,7 @@ export interface SessionMailboxItems {
   destination_host_id: string;
   id: Generated<string>;
   idempotency_key: string | null;
-  message_id: Generated<string>;
+  item_id: Generated<string>;
   metadata: Json | null;
   project_id: string;
   session_id: string;
@@ -826,11 +902,11 @@ export interface SessionMailboxItems {
 
 export interface SessionSyncIntents {
   acknowledged_authority_revision: Int8 | null;
-  acknowledged_message_count: number | null;
+  acknowledged_sequence: Int8 | null;
   attempt_count: Generated<number>;
   created_at: Generated<Timestamp>;
   desired_authority_revision: Int8;
-  desired_message_count: number;
+  desired_sequence: Int8;
   destination_key: string;
   id: Generated<string>;
   last_error: string | null;
@@ -1317,11 +1393,16 @@ export interface DB {
   _migrations: _Migrations;
   active_run_invocations: ActiveRunInvocations;
   agent_delegations: AgentDelegations;
-  agent_messages: AgentMessages;
-  agent_runtime_events: AgentRuntimeEvents;
+  agent_items: AgentItems;
+  agent_provider_thread_entries: AgentProviderThreadEntries;
+  agent_provider_threads: AgentProviderThreads;
   agent_runtime_requests: AgentRuntimeRequests;
+  agent_session_commands: AgentSessionCommands;
+  agent_session_events: AgentSessionEvents;
   agent_session_views: AgentSessionViews;
   agent_sessions: AgentSessions;
+  agent_turn_attempts: AgentTurnAttempts;
+  agent_turn_commands: AgentTurnCommands;
   agent_turns: AgentTurns;
   app_storage: AppStorage;
   app_versions: AppVersions;

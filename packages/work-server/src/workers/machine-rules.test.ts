@@ -10,6 +10,11 @@ import {
   type WorkServer,
 } from "../server.js";
 import { testServerOptions } from "../test-support.js";
+import { WORKER_PROTOCOL, WORKER_PROTOCOL_HEADER } from "./worker-protocol.js";
+
+/** What every worker call states (ADR 0198). */
+const PROTOCOL = { [WORKER_PROTOCOL_HEADER]: String(WORKER_PROTOCOL.server) };
+
 import {
   dedicatedName,
   type MachineProvisioner,
@@ -133,6 +138,7 @@ describe("machine rules", () => {
     const enrolled = await server.app.inject({
       method: "POST",
       url: "/api/workers/enroll",
+      headers: PROTOCOL,
       payload: { code: aliceMachine.code },
     });
     expect(enrolled.statusCode).toBe(200);

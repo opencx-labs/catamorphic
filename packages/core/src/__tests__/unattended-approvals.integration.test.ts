@@ -1,9 +1,17 @@
-import crypto from "node:crypto";
+import crypto, { randomUUID } from "node:crypto";
+import type { RuntimeRequest } from "@catamorphic/agent-protocol";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
+import { FsBackend, ProjectManager } from "@catamorphic/git";
+import type { SandboxProvider } from "@catamorphic/sandbox";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { type Identity, PROJECT_PRINCIPAL_ID } from "../identity.js";
+import { AgentSessionsService } from "../services/agent-sessions-service.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
-import { DurableToolPermissionBroker } from "../services/durable-tool-permission-broker.js";
+import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
+import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
+import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
+import { requestFromRow } from "../services/sessions/session-rows.js";
+import { testEnvironmentProvider } from "./test-environment.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
@@ -19,11 +27,29 @@ const member = (externalUserId: string): Identity => ({
   scope: [],
 });
 const ask = {
-  server: "connection_prod",
-  tool: "query",
-  description: "Needs your approval: production data",
-  input: { sql: "select 1" },
+  title: "Allow query on connection_prod?",
+  origin: { kind: "host" as const, id: "connection_prod" },
+  approval: {
+    action: "connection_prod · query",
+    tool: {
+      server: "connection_prod",
+      name: "query",
+      input: { sql: "select 1" },
+    },
+  },
 };
+const unusedSandbox = new Proxy(
+  { workspaceRoot: "/unused" } as SandboxProvider,
+  {
+    get(target, property) {
+      if (property in target) return target[property as keyof typeof target];
+      return () => {
+        throw new Error(`Unexpected sandbox call: ${String(property)}`);
+      };
+    },
+  },
+);
+let sessions: AgentSessionsService;
 
 async function chat(input: {
   owner: string;
@@ -66,23 +92,47 @@ async function chat(input: {
       id,
       project_id: projectId,
       external_user_id: input.owner,
-      provider: "test",
       title: "Review #42",
       allocation_id: allocationId,
       approvers: input.approvers ? JSON.stringify(input.approvers) : null,
+      authority_host_id: "approvals-host",
+      authority_revision: 1,
     })
+    .execute();
+  // A turn working now, which the approval holds.
+  await db
+    .insertInto("agent_turns")
+    .values({ session_id: id, ordinal: 1, status: "running" })
     .execute();
   return id;
 }
 
-async function pendingFor(broker: DurableToolPermissionBroker, id: string) {
+async function pendingFor(sessionId: string): Promise<RuntimeRequest> {
   for (let attempt = 0; attempt < 100; attempt++) {
-    const [entry] = await broker.list(id);
-    if (entry) return entry;
+    const row = await db
+      .selectFrom("agent_runtime_requests")
+      .selectAll()
+      .where("session_id", "=", sessionId)
+      .where("status", "=", "pending")
+      .executeTakeFirst();
+    if (row) return requestFromRow(row);
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error("The ask never parked");
+  throw new Error("The approval never opened");
 }
+
+const answer = (input: {
+  identity: Identity;
+  sessionId: string;
+  request: RuntimeRequest;
+  decision: "approved" | "denied";
+}) =>
+  sessions.command(input.identity, projectId, input.sessionId, {
+    type: "respond",
+    commandId: randomUUID(),
+    requestId: input.request.id,
+    response: { kind: "approval", decision: input.decision },
+  });
 
 describeIf("unattended approvals (ADR 0176)", () => {
   beforeAll(async () => {
@@ -110,6 +160,21 @@ describeIf("unattended approvals (ADR 0176)", () => {
         },
       ])
       .execute();
+    const projectManager = new ProjectManager(new FsBackend("/unused"));
+    sessions = new AgentSessionsService(db, {
+      hostId: "approvals-host",
+      projectManager,
+      executionEnvironments: new ExecutionEnvironmentsService(
+        new ProjectEnvironmentsService(db, projectManager),
+        testEnvironmentProvider(unusedSandbox),
+      ),
+      executionAllocations: new ExecutionAllocationsService(db),
+      codingAgents: {
+        defaultAgentId: () => undefined,
+        get: () => undefined,
+        list: () => [],
+      },
+    });
   });
 
   afterAll(async () => {
@@ -118,17 +183,16 @@ describeIf("unattended approvals (ADR 0176)", () => {
   });
 
   it("routes a project chat's ask to its approvers, and an approval resumes the call", async () => {
-    const broker = new DurableToolPermissionBroker(db);
     const sessionId = await chat({
       owner: PROJECT_PRINCIPAL_ID,
       approvers: { members: ["alice"], roles: ["reviewer"] },
     });
-    const decision = broker.handlerFor("Reviewer")({ ...ask, sessionId });
-    const pending = await pendingFor(broker, sessionId);
+    const decision = sessions.askApproval({ ...ask, sessionId });
+    const pending = await pendingFor(sessionId);
     expect(pending.approvers).toEqual(["alice", "bob"]);
     // Thirty minutes by default, not five.
     expect(
-      Date.parse(pending.expiresAt) - Date.parse(pending.createdAt),
+      Date.parse(pending.expiresAt ?? "") - Date.parse(pending.createdAt),
     ).toBeGreaterThan(29 * 60_000);
 
     // Approvers are notified right after the request is recorded.
@@ -155,22 +219,35 @@ describeIf("unattended approvals (ADR 0176)", () => {
       ]);
     });
 
-    // Holding the chat is not enough once approvers are named.
+    // Holding the chat is not enough once approvers are named, and someone
+    // who is not an approver cannot answer it.
     await expect(
-      broker.answer(
-        pending.id,
-        { decision: "allow" },
-        { tenantId, externalUserId: "dave" },
-      ),
+      answer({
+        identity: { tenantId, externalUserId: "dave" },
+        sessionId,
+        request: pending,
+        decision: "approved",
+      }),
     ).rejects.toBeInstanceOf(AccessDeniedError);
-    // Someone who is not an approver cannot answer it.
     await expect(
-      broker.answer(pending.id, { decision: "allow" }, member("carol")),
+      answer({
+        identity: member("carol"),
+        sessionId,
+        request: pending,
+        decision: "approved",
+      }),
     ).rejects.toBeInstanceOf(AccessDeniedError);
     expect(
-      await broker.answer(pending.id, { decision: "allow" }, member("bob")),
-    ).toBe(true);
-    await expect(decision).resolves.toEqual({ decision: "allow" });
+      (
+        await answer({
+          identity: member("bob"),
+          sessionId,
+          request: pending,
+          decision: "approved",
+        })
+      ).status,
+    ).toBe("accepted");
+    await expect(decision).resolves.toBe("allow");
     const answered = await db
       .selectFrom("agent_runtime_requests")
       .select("resolved_by_external_user_id")
@@ -180,56 +257,69 @@ describeIf("unattended approvals (ADR 0176)", () => {
   });
 
   it("refuses at once, with a reason, when no one can approve", async () => {
-    const broker = new DurableToolPermissionBroker(db);
     const sessionId = await chat({ owner: PROJECT_PRINCIPAL_ID });
-    const decision = await broker.handlerFor("Reviewer")({ ...ask, sessionId });
-    expect(decision.decision).toBe("deny");
-    expect(decision.decision === "deny" && decision.reason).toContain(
-      "no one watches this chat",
+    await expect(sessions.askApproval({ ...ask, sessionId })).resolves.toBe(
+      "deny",
     );
-    expect(await broker.list(sessionId)).toEqual([]);
+    expect(
+      await db
+        .selectFrom("agent_runtime_requests")
+        .select("request_id")
+        .where("session_id", "=", sessionId)
+        .execute(),
+    ).toEqual([]);
   });
 
   it("denies with a reason when the approvers do not answer in time", async () => {
-    const broker = new DurableToolPermissionBroker(db, {
-      unattendedTimeoutMs: 400,
-    });
     const sessionId = await chat({
       owner: PROJECT_PRINCIPAL_ID,
       approvers: { members: ["alice"] },
     });
-    const decision = await broker.handlerFor("Reviewer")({ ...ask, sessionId });
-    expect(decision).toMatchObject({ decision: "deny" });
-    expect(decision.decision === "deny" && decision.reason).toContain(
-      "No one answered",
-    );
+    await expect(
+      sessions.askApproval({ ...ask, sessionId, timeoutMs: 400 }),
+    ).resolves.toBe("deny");
+    const expired = await db
+      .selectFrom("agent_runtime_requests")
+      .select(["status", "reason"])
+      .where("session_id", "=", sessionId)
+      .executeTakeFirstOrThrow();
+    expect(expired).toEqual({
+      status: "expired",
+      reason: "Nobody answered in time.",
+    });
   });
 
   it("waits as long as the Environment says", async () => {
-    const broker = new DurableToolPermissionBroker(db);
     const sessionId = await chat({
       owner: PROJECT_PRINCIPAL_ID,
       approvers: { members: ["alice"] },
       waitMinutes: 90,
     });
-    const decision = broker.handlerFor("Reviewer")({ ...ask, sessionId });
-    const pending = await pendingFor(broker, sessionId);
+    const decision = sessions.askApproval({ ...ask, sessionId });
+    const pending = await pendingFor(sessionId);
     expect(
       Math.round(
-        (Date.parse(pending.expiresAt) - Date.parse(pending.createdAt)) /
+        (Date.parse(pending.expiresAt ?? "") - Date.parse(pending.createdAt)) /
           60_000,
       ),
     ).toBe(90);
-    await broker.answer(pending.id, { decision: "deny" }, member("alice"));
-    await expect(decision).resolves.toEqual({ decision: "deny" });
+    await answer({
+      identity: member("alice"),
+      sessionId,
+      request: pending,
+      decision: "denied",
+    });
+    await expect(decision).resolves.toBe("deny");
   });
 
   it("leaves a person's own chat to them, with no one else notified", async () => {
-    const broker = new DurableToolPermissionBroker(db, { timeoutMs: 60_000 });
     const sessionId = await chat({ owner: "dana" });
-    const decision = broker.handlerFor("Assistant")({ ...ask, sessionId });
-    const pending = await pendingFor(broker, sessionId);
-    expect(pending.approvers).toBeUndefined();
+    const decision = sessions.askApproval({ ...ask, sessionId });
+    const pending = await pendingFor(sessionId);
+    expect(pending.approvers).toEqual([]);
+    expect(
+      Date.parse(pending.expiresAt ?? "") - Date.parse(pending.createdAt),
+    ).toBeLessThanOrEqual(5 * 60_000);
     expect(
       await db
         .selectFrom("user_notification_events")
@@ -237,11 +327,12 @@ describeIf("unattended approvals (ADR 0176)", () => {
         .where("session_id", "=", sessionId)
         .execute(),
     ).toEqual([]);
-    await broker.answer(
-      pending.id,
-      { decision: "allow" },
-      { tenantId, externalUserId: "dana" },
-    );
-    await expect(decision).resolves.toEqual({ decision: "allow" });
+    await answer({
+      identity: { tenantId, externalUserId: "dana" },
+      sessionId,
+      request: pending,
+      decision: "approved",
+    });
+    await expect(decision).resolves.toBe("allow");
   });
 });

@@ -2,16 +2,18 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { AgentTurnUnsettledError, type Identity } from "@catamorphic/core";
+import type { HarnessAdapter } from "@catamorphic/agent-protocol/runner";
+import {
+  AgentTurnUnsettledError,
+  type Identity,
+  type RegisteredCodingAgent,
+} from "@catamorphic/core";
 import { type DB, DEFAULT_SCHEMA } from "@catamorphic/db";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import {
-  type AgentEvent,
-  type CodingAgentProvider,
   type EnvironmentRuntimeBinding,
   followProcess,
-  type ProviderSession,
-  type StartSessionOpts,
+  type SandboxProvider,
 } from "@catamorphic/sandbox";
 import {
   createCatamorphic,
@@ -25,35 +27,112 @@ import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { expect, it } from "vitest";
+import { replyOf } from "./test-support.js";
 
-class WorkspaceAgent implements CodingAgentProvider {
-  readonly name = "workspace-agent";
-  readonly sessions = new Map<string, StartSessionOpts>();
-  async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
-    this.sessions.set(opts.sessionId, opts);
+/**
+ * A host harness that answers with where it runs: `pwd` in the session's
+ * sandbox, through the provider core hands it (ADR 0198).
+ */
+class WorkspaceAgent {
+  /** The sandbox each session ran in, by session id. */
+  readonly sandboxes = new Map<string, string>();
+  readonly agent: RegisteredCodingAgent = {
+    id: "workspace-agent",
+    topology: "controller",
+    harness: { placement: "host", adapter: this.adapter() },
+  };
+
+  private adapter(): HarnessAdapter {
     return {
-      sessionId: opts.sessionId,
-      providerSessionId: opts.sessionId,
-      projectId: opts.projectId,
-      sandboxId: opts.sandboxId,
-      workingDirectory: opts.workingDirectory,
+      id: "workspace-agent",
+      capabilities: () => ({
+        steer: false,
+        interrupt: true,
+        retry: false,
+        fork: false,
+        rollback: false,
+        questions: false,
+        approvals: false,
+        elicitations: false,
+        subagents: false,
+        streamsText: false,
+        streamsReasoning: false,
+        nativeState: "none",
+        ids: { thread: "strong", turn: "none", item: "none" },
+      }),
+      start: (attempt, host, local) => {
+        const run = async () => {
+          host.emit({
+            type: "thread",
+            ref: { id: attempt.sessionId, strength: "strong" },
+          });
+          const sandbox = local?.sandbox;
+          if (!isSandbox(sandbox))
+            throw new Error("Missing allocated provider");
+          this.sandboxes.set(attempt.sessionId, sandbox.sandboxId);
+          const result = await sandbox.provider.executeCommand(
+            sandbox.sandboxId,
+            "pwd",
+            { cwd: sandbox.workingDirectory },
+          );
+          host.emit({
+            type: "item.started",
+            key: "reply",
+            status: "completed",
+            item: {
+              kind: "assistant_message",
+              text: result.result.trim(),
+              agentId: null,
+            },
+          });
+          host.emit({ type: "turn.completed", status: "completed" });
+        };
+        const finished = run().catch((error: unknown) =>
+          host.emit({
+            type: "turn.completed",
+            status: "failed",
+            error: {
+              message: error instanceof Error ? error.message : String(error),
+            },
+          }),
+        );
+        return { steer: async () => false, interrupt: () => {}, finished };
+      },
     };
   }
-  hasSession(id: string): boolean {
-    return this.sessions.has(id);
-  }
-  async *sendMessage(session: ProviderSession): AsyncIterable<AgentEvent> {
-    const start = this.sessions.get(session.sessionId);
-    if (!start?.sandboxProvider) throw new Error("Missing allocated provider");
-    const result = await start.sandboxProvider.executeCommand(
-      session.sandboxId,
-      "pwd",
-      { cwd: session.workingDirectory },
-    );
-    yield { type: "text", content: result.result.trim() };
-    yield { type: "done" };
-  }
-  async dispose(): Promise<void> {}
+}
+
+function isSandbox(value: unknown): value is {
+  provider: Pick<SandboxProvider, "executeCommand">;
+  sandboxId: string;
+  workingDirectory: string;
+} {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "provider" in value &&
+    "sandboxId" in value &&
+    typeof value.sandboxId === "string" &&
+    "workingDirectory" in value &&
+    typeof value.workingDirectory === "string"
+  );
+}
+
+/** The queued and running turns of a session. */
+async function pendingTurns(db: Kysely<DB>, sessionId: string) {
+  return db
+    .selectFrom("agent_turns")
+    .select("status")
+    .where("session_id", "=", sessionId)
+    .where("status", "not in", [
+      "completed",
+      "failed",
+      "interrupted",
+      "cancelled",
+      "rolled_back",
+    ])
+    .orderBy("ordinal")
+    .execute();
 }
 
 it("an embedded host executes each session on its Allocation and rejects revoked placement", async () => {
@@ -99,7 +178,7 @@ it("an embedded host executes each session on its Allocation and rejects revoked
     },
     // No global sandbox provider: the Environment owns execution.
     environmentProvider: defineStaticEnvironments(runtimes),
-    codingAgent: agent,
+    codingAgent: agent.agent,
     projectSeeds: () => ({}),
     standingAgentPrompt: false,
   });
@@ -137,27 +216,19 @@ it("an embedded host executes each session on its Allocation and rejects revoked
     const onB = await sessions.create(identity, project.id, {
       environment: "b",
     });
-    const resultB = await sessions.sendMessage(
-      identity,
-      project.id,
-      onB.id,
-      "Where am I?",
+    const resultB = replyOf(
+      await sessions.sendMessage(identity, project.id, onB.id, "Where am I?"),
     );
     expect(resultB.content).toContain(path.join(directory, "machine-b"));
     expect(await fs.readdir(path.join(directory, "machine-a"))).toEqual([]);
     const onA = await sessions.create(identity, project.id, {
       environment: "a",
     });
-    const resultA = await sessions.sendMessage(
-      identity,
-      project.id,
-      onA.id,
-      "Where am I?",
+    const resultA = replyOf(
+      await sessions.sendMessage(identity, project.id, onA.id, "Where am I?"),
     );
     expect(resultA.content).toContain(path.join(directory, "machine-a"));
-    expect(agent.sessions.get(onA.id)?.sandboxId).not.toBe(
-      agent.sessions.get(onB.id)?.sandboxId,
-    );
+    expect(agent.sandboxes.get(onA.id)).not.toBe(agent.sandboxes.get(onB.id));
     // A currently scoped admin no longer has permission to execute on B.
     const revoked: Identity = {
       ...identity,
@@ -165,13 +236,10 @@ it("an embedded host executes each session on its Allocation and rejects revoked
       projectPermissions: [{ projectId: project.id, permission: "*" }],
       executionScope: [{ projectId: project.id, name: "a" }],
     };
-    const denied = await sessions.sendMessage(
-      revoked,
-      project.id,
-      onB.id,
-      "Do not run",
+    const denied = replyOf(
+      await sessions.sendMessage(revoked, project.id, onB.id, "Do not run"),
     );
-    expect(denied.metadata?.status).toBe("failed");
+    expect(denied.turn.status).toBe("failed");
     expect(denied.content).toContain("may not use Environment");
     // Changing the Environment's pool cannot move an existing session.
     const changed = await cat.core.projectManager.open(
@@ -187,13 +255,10 @@ it("an embedded host executes each session on its Allocation and rejects revoked
       }),
     );
     await changed.dispose();
-    const rebound = await sessions.sendMessage(
-      identity,
-      project.id,
-      onB.id,
-      "Do not move",
+    const rebound = replyOf(
+      await sessions.sendMessage(identity, project.id, onB.id, "Do not move"),
     );
-    expect(rebound.metadata?.status).toBe("failed");
+    expect(rebound.turn.status).toBe("failed");
     expect(rebound.content).toContain("No machine for Environment 'b'");
   } finally {
     await cat.close();
@@ -226,7 +291,7 @@ it("an authenticated member executes on this machine and loses execution immedia
     },
     environmentProvider: defineStaticEnvironments([]),
     clientExecution: true,
-    codingAgent: agent,
+    codingAgent: agent.agent,
     projectSeeds: () => ({}),
     standingAgentPrompt: false,
   });
@@ -298,11 +363,13 @@ it("an authenticated member executes on this machine and loses execution immedia
     const session = await sessions.create(identity, project.id, {
       environment: "personal",
     });
-    const result = await sessions.sendMessage(
-      identity,
-      project.id,
-      session.id,
-      "Where am I?",
+    const result = replyOf(
+      await sessions.sendMessage(
+        identity,
+        project.id,
+        session.id,
+        "Where am I?",
+      ),
     );
     expect(result.content).toContain(path.join(directory, "employee-machine"));
     // Background processes run on the member's machine, followed through
@@ -320,7 +387,7 @@ it("an authenticated member executes on this machine and loses execution immedia
       "images.build",
     ]);
     const processes = member?.sandboxProvider?.processes;
-    const sandboxId = agent.sessions.get(session.id)?.sandboxId;
+    const sandboxId = agent.sandboxes.get(session.id);
     if (!processes || !sandboxId) throw new Error("Member processes missing");
     const started = await processes.startProcess({
       sandboxId,
@@ -405,9 +472,7 @@ it("an authenticated member executes on this machine and loses execution immedia
       state: "queued",
     });
     expect(
-      (await sessions.turns.listPending({ sessionId: session.id })).map(
-        (turn) => turn.status,
-      ),
+      (await pendingTurns(db, session.id)).map((turn) => turn.status),
     ).toEqual(["queued"]);
     const reconnected = await service.register({
       identity,
@@ -450,11 +515,13 @@ it("an authenticated member executes on this machine and loses execution immedia
         disconnect: () => service.disconnect({ ...reconnected, identity }),
       },
     });
-    const back = await sessions.sendMessage(
-      identity,
-      project.id,
-      session.id,
-      "Where am I?",
+    const back = replyOf(
+      await sessions.sendMessage(
+        identity,
+        project.id,
+        session.id,
+        "Where am I?",
+      ),
     );
     expect(back.content).toContain(path.join(directory, "employee-machine"));
     const ended = await db
@@ -467,9 +534,7 @@ it("an authenticated member executes on this machine and loses execution immedia
       { status: "released", release_reason: "connection_ended" },
       { status: "active", release_reason: null },
     ]);
-    expect(
-      (await sessions.turns.listPending({ sessionId: session.id })).length,
-    ).toBe(0);
+    expect((await pendingTurns(db, session.id)).length).toBe(0);
   } finally {
     await runner?.stop();
     await cat.close();

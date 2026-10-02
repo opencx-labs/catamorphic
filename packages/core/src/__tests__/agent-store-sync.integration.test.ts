@@ -4,17 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
-import type {
-  AgentEvent,
-  CodingAgentProvider,
-  ProviderSession,
-  SandboxProvider,
-  StartSessionOpts,
-} from "@catamorphic/sandbox";
+import type { SandboxProvider } from "@catamorphic/sandbox";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
+import { RecordingAdapter } from "./recording-adapter.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
@@ -42,29 +37,16 @@ const unusedSandboxProvider = new Proxy({} as SandboxProvider, {
 });
 
 /** A host-execution "agent" whose turn writes files into its folder. */
-class WritingProvider implements CodingAgentProvider {
-  readonly name = "writer";
-  writes: Array<{ path: string; text: string }> = [];
-  async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
-    return {
-      providerSessionId: crypto.randomUUID(),
-      sessionId: opts.sessionId,
-      projectId: opts.projectId,
-      sandboxId: opts.sandboxId,
-      workingDirectory: opts.workingDirectory,
-    };
-  }
-  async *sendMessage(session: ProviderSession): AsyncIterable<AgentEvent> {
-    for (const write of this.writes) {
-      const target = path.join(session.workingDirectory, write.path);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, write.text);
-      yield { type: "file_edit", filePath: target };
-    }
-    yield { type: "text", content: "done" };
-    yield { type: "done" };
-  }
-  async dispose(): Promise<void> {}
+function writingAdapter(writes: () => Array<{ path: string; text: string }>) {
+  return new RecordingAdapter({
+    before: async (attempt) => {
+      for (const write of writes()) {
+        const target = path.join(attempt.workingDirectory, write.path);
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.writeFile(target, write.text);
+      }
+    },
+  });
 }
 
 describeIf("store sync around agent turns (ADR 0055)", () => {
@@ -73,7 +55,7 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
   let core: CatamorphicCore;
   let projectId: string;
   let rootPath: string;
-  let provider: WritingProvider;
+  let writes: Array<{ path: string; text: string }> = [];
   let alice: Identity;
 
   beforeAll(async () => {
@@ -84,11 +66,15 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
     const projectManager = new ProjectManager(
       new FsBackend(path.join(tmpDir, "projects"), async () => rootPath),
     );
-    provider = new WritingProvider();
+    const adapter = writingAdapter(() => writes);
     const agentId = "project:pending:csm"; // patched below once we know the id
     db = createDatabase({ connectionString, schema, poolSize: 4 });
     await migrateToLatest({ db, schema });
-    const registered = { id: agentId, provider, topology: "native" as const };
+    const registered = {
+      id: agentId,
+      harness: { placement: "host" as const, adapter },
+      topology: "native" as const,
+    };
     core = new CatamorphicCore({
       hostId: "store-sync-test-host",
       db,
@@ -148,7 +134,7 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
   it("host-execution turns never sync store/: the shared project folder stays clean", async () => {
     const sessions = core.agentSessions;
     if (!sessions) throw new Error("agent sessions not configured");
-    provider.writes = [
+    writes = [
       {
         path: "store/customers/acme/notes.md",
         text: "# Acme\nRenewal in Q4.\n",
@@ -157,13 +143,13 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
     const session = await sessions.create(alice, projectId, {
       agentId: `project:${projectId}:csm`,
     });
-    const reply = await sessions.sendMessage(
+    const { turn } = await sessions.sendMessage(
       alice,
       projectId,
       session.id,
       "take notes",
     );
-    expect(reply.content).toContain("done");
+    expect(turn.status).toBe("completed");
     // Nothing pulled into the shared folder (one folder serves every member)…
     await expect(
       fs.access(
@@ -179,9 +165,7 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
       }),
     ).rejects.toThrow(/not found/);
     const detail = await sessions.get(alice, projectId, session.id);
-    expect(
-      (detail.messages.at(-1)?.metadata as { storeSync?: unknown })?.storeSync,
-    ).toBeUndefined();
+    expect(detail.snapshot.turns.at(-1)?.outcome?.storeSync).toBeUndefined();
   });
 
   it("the caller-bound adapter pulls only what the caller may read and ships as the caller", async () => {

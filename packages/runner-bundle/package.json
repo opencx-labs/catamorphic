@@ -1,0 +1,28 @@
+{
+  "name": "@catamorphic/runner-bundle",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly && bun scripts/build-bundle.ts",
+    "typecheck": "tsgo --project ./tsconfig.json"
+  },
+  "dependencies": {
+    "@catamorphic/agent-protocol": "workspace:*",
+    "@catamorphic/agent-runner": "workspace:*",
+    "@catamorphic/claude-code": "workspace:*",
+    "@catamorphic/codex": "workspace:*",
+    "@catamorphic/sandbox": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1"
+  }
+}

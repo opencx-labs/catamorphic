@@ -19,12 +19,15 @@
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
+    "@catamorphic/agent-protocol": "workspace:*",
+    "@catamorphic/agent-runner": "workspace:*",
     "@catamorphic/app": "workspace:*",
     "@catamorphic/db": "workspace:*",
     "@catamorphic/git": "workspace:*",
     "@catamorphic/otel": "workspace:*",
     "@catamorphic/parser": "workspace:*",
     "@catamorphic/plugins": "workspace:*",
+    "@catamorphic/runner-bundle": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
     "@catamorphic/workflow": "workspace:*",
     "croner": "^10.0.1",
@@ -32,10 +35,11 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@catamorphic/cloudflare": "workspace:*",
+    "@catamorphic/local-process": "workspace:*",
+    "@electric-sql/pglite": "^0.5.4",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/sdk-trace-node": "^2.9.0",
-    "@catamorphic/cloudflare": "workspace:*",
-    "@electric-sql/pglite": "^0.5.4",
     "@types/node": "^26.1.1",
     "@types/pg": "^8.20.0",
     "pg": "^8.22.0"

@@ -1,0 +1,1535 @@
+{
+  "provider": "claude-code",
+  "sdkVersion": "0.3.263",
+  "cliVersion": "2.1.263",
+  "scenario": "subagent-foreground",
+  "source": "recorded",
+  "attempts": [
+    {
+      "outbound": {
+        "prompt": "Delegate the listing (subagent-foreground)",
+        "cwd": "{{cwd}}",
+        "thread": {
+          "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "resume": null,
+          "forkSession": false,
+          "resumeSessionAt": null
+        },
+        "model": "claude-sonnet-4-5",
+        "effort": null,
+        "permissionMode": "acceptEdits",
+        "systemPromptAppend": "You are a Work fixture agent. Keep answers short.",
+        "allowedTools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Monitor",
+          "NotebookEdit",
+          "PowerShell",
+          "Read",
+          "Skill",
+          "SlashCommand",
+          "Task",
+          "TodoWrite",
+          "WebFetch",
+          "WebSearch",
+          "Write"
+        ],
+        "disallowedTools": [
+          "BashOutput",
+          "KillShell",
+          "TaskOutput",
+          "TaskStop"
+        ],
+        "mcpServers": {},
+        "env": {
+          "ANTHROPIC_BASE_URL": "{{model}}",
+          "CLAUDE_CONFIG_DIR": "{{home}}",
+          "WORK_MODEL_KEY_FILE": "{{state}}/model-key",
+          "CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "300000",
+          "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+          "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+          "DISABLE_AUTOUPDATER": "1"
+        },
+        "apiKeyHelper": "cat \"$WORK_MODEL_KEY_FILE\"",
+        "includePartialMessages": true,
+        "sessionStore": true,
+        "hooks": ["PostToolUse", "UserPromptSubmit"]
+      },
+      "messages": [
+        {
+          "type": "replay.input",
+          "uuid": "74c8fed8-1667-4e03-89a5-1c5c99cb1915",
+          "text": "Delegate the listing (subagent-foreground)"
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "74c8fed8-1667-4e03-89a5-1c5c99cb1915",
+          "state": "queued",
+          "uuid": "87b09748-d050-4d81-9ad3-4a8eb58aa0bb",
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928"
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "74c8fed8-1667-4e03-89a5-1c5c99cb1915",
+          "state": "started",
+          "uuid": "04aca248-9fa6-462e-9965-35a0a46cc0b7",
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928"
+        },
+        {
+          "type": "replay.hook",
+          "event": "UserPromptSubmit",
+          "toolUseID": "98068d55-42b8-488e-89a6-245152b8eb92",
+          "input": {
+            "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+            "transcript_path": "{{home}}/projects/{{cwd-key}}/c772b442-af46-44ff-a4b6-d882841f3928.jsonl",
+            "cwd": "{{cwd}}",
+            "prompt_id": "222441b3-f9b8-46d4-b53f-5ca930b88fb7",
+            "permission_mode": "acceptEdits",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Delegate the listing (subagent-foreground)"
+          }
+        },
+        {
+          "type": "system",
+          "subtype": "init",
+          "cwd": "{{cwd}}",
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "tools": [
+            "Task",
+            "AskUserQuestion",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "Edit",
+            "EnterPlanMode",
+            "EnterWorktree",
+            "ExitPlanMode",
+            "ExitWorktree",
+            "Glob",
+            "Grep",
+            "ListAgents",
+            "NotebookEdit",
+            "Read",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskCreate",
+            "TaskGet",
+            "TaskList",
+            "TaskUpdate",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "Write"
+          ],
+          "mcp_servers": [],
+          "model": "claude-sonnet-4-5",
+          "permissionMode": "acceptEdits",
+          "slash_commands": [
+            "deep-research",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "claude-api",
+            "workflow-authoring",
+            "run",
+            "run-skill-generator",
+            "agents",
+            "auto-mode-setup",
+            "autocompact",
+            "clear",
+            "color",
+            "compact",
+            "config",
+            "context",
+            "effort",
+            "fast",
+            "heapdump",
+            "init",
+            "mcp",
+            "model",
+            "__remote-workflow",
+            "workflow-launch-exec",
+            "reload-plugins",
+            "reload-skills",
+            "rename",
+            "security-review",
+            "usage",
+            "insights",
+            "recap",
+            "goal",
+            "list-agents",
+            "team-onboarding"
+          ],
+          "terminal_slash_commands": ["doctor", "color", "reload-plugins"],
+          "apiKeySource": "apiKeyHelper",
+          "claude_code_version": "2.1.263",
+          "output_style": "default",
+          "agents": [
+            "claude",
+            "Explore",
+            "general-purpose",
+            "Plan",
+            "statusline-setup"
+          ],
+          "skills": [
+            "deep-research",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "claude-api",
+            "workflow-authoring",
+            "run",
+            "run-skill-generator"
+          ],
+          "plugins": [],
+          "capabilities": [
+            "interrupt_receipt_v1",
+            "interrupt_cancel_queued_v1",
+            "msg_lifecycle_v1"
+          ],
+          "analytics_disabled": true,
+          "product_feedback_disabled": true,
+          "uuid": "f4d28814-1168-4f03-8df2-3ee3fc76b502",
+          "messaging_socket_path": "/tmp/cc-socks/42042.sock",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required"
+        },
+        {
+          "type": "system",
+          "subtype": "status",
+          "status": "requesting",
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "uuid": "a91dfe5b-0372-4c18-9615-15c41f9353aa"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_scripted_1",
+              "type": "message",
+              "role": "assistant",
+              "model": "claude-sonnet-4-5",
+              "content": [],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "usage": {
+                "input_tokens": 10,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 1
+              }
+            }
+          },
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "parent_tool_use_id": null,
+          "uuid": "c8e35c99-d576-4554-a488-1e142c1a27cf",
+          "ttft_ms": 3,
+          "user_message_uuid": "74c8fed8-1667-4e03-89a5-1c5c99cb1915",
+          "user_message_uuids": ["74c8fed8-1667-4e03-89a5-1c5c99cb1915"]
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "tool_use",
+              "id": "toolu_fixture_task",
+              "name": "Agent",
+              "input": {}
+            }
+          },
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "parent_tool_use_id": null,
+          "uuid": "722c6933-01e2-402d-93a2-1c77c2e6268f"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "input_json_delta",
+              "partial_json": "{\"description\":\"List files\",\"prompt\":\"List the files here and report them.\",\"subagent_type\":\"general-purpose\"}"
+            }
+          },
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "parent_tool_use_id": null,
+          "uuid": "3c06a119-24d4-4553-a88b-5e16e8b2ff4f"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "id": "msg_scripted_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_fixture_task",
+                "name": "Agent",
+                "input": {
+                  "description": "List files",
+                  "prompt": "List the files here and report them.",
+                  "subagent_type": "general-purpose"
+                }
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 1
+            },
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "uuid": "d2961e49-851c-4211-8d9d-3a495d8ea8cb",
+          "timestamp": "2026-10-02T14:13:36.018Z"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 0
+          },
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "parent_tool_use_id": null,
+          "uuid": "0369b4b0-2ff0-49b8-9731-168910eb3c70"
+        },
+        {
+          "type": "system",
+          "subtype": "task_started",
+          "task_id": "abf2091e88f2ed0d3",
+          "tool_use_id": "toolu_fixture_task",
+          "description": "List files",
+          "subagent_type": "general-purpose",
+          "is_backgrounded": false,
+          "spawn_depth": 1,
+          "task_type": "local_agent",
+          "prompt": "List the files here and report them.",
+          "uuid": "eede60d6-b60a-405d-ae8c-0428c552f349",
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928"
+        },
+        {
+          "type": "user",
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "List the files here and report them."
+              }
+            ]
+          },
+          "parent_tool_use_id": "toolu_fixture_task",
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "uuid": "d70d31a2-8cee-4ed8-9153-75ccd391702e",
+          "timestamp": "2026-10-02T14:13:36.021Z",
+          "subagent_type": "general-purpose",
+          "task_description": "List files"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_delta",
+            "delta": {
+              "stop_reason": "tool_use",
+              "stop_sequence": null
+            },
+            "usage": {
+              "output_tokens": 5
+            }
+          },
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "parent_tool_use_id": null,
+          "uuid": "b4301a6f-bf1d-47fe-a94c-3a41aa925305"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_stop"
+          },
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "parent_tool_use_id": null,
+          "uuid": "d1cd40cd-26f8-4749-b87a-8e69cd51b9ae"
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "subpath": "subagents/agent-abf2091e88f2ed0d3",
+          "entries": [
+            {
+              "type": "agent_metadata",
+              "agentType": "general-purpose",
+              "description": "List files",
+              "toolUseId": "toolu_fixture_task",
+              "spawnDepth": 1
+            }
+          ]
+        },
+        {
+          "type": "system",
+          "subtype": "task_progress",
+          "task_id": "abf2091e88f2ed0d3",
+          "tool_use_id": "toolu_fixture_task",
+          "description": "Running List files",
+          "subagent_type": "general-purpose",
+          "usage": {
+            "total_tokens": 21,
+            "tool_uses": 1,
+            "duration_ms": 10
+          },
+          "last_tool_name": "Bash",
+          "uuid": "403d713d-636b-4b6d-80a4-20640d9320cb",
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "id": "msg_scripted_2",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_fixture_sub_ls",
+                "name": "Bash",
+                "input": {
+                  "command": "ls",
+                  "description": "List files"
+                }
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 1
+            },
+            "context_management": null
+          },
+          "parent_tool_use_id": "toolu_fixture_task",
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "uuid": "af3dd612-b8ec-4bdd-a869-c15c77e4e9c9",
+          "timestamp": "2026-10-02T14:13:36.029Z",
+          "subagent_type": "general-purpose",
+          "task_description": "List files"
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "queue-operation",
+              "operation": "enqueue",
+              "timestamp": "2026-10-02T14:13:35.986Z",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+              "content": "Delegate the listing (subagent-foreground)"
+            },
+            {
+              "type": "queue-operation",
+              "operation": "dequeue",
+              "timestamp": "2026-10-02T14:13:35.986Z",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928"
+            },
+            {
+              "parentUuid": null,
+              "isSidechain": false,
+              "promptId": "222441b3-f9b8-46d4-b53f-5ca930b88fb7",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": "Delegate the listing (subagent-foreground)"
+              },
+              "uuid": "74c8fed8-1667-4e03-89a5-1c5c99cb1915",
+              "timestamp": "2026-10-02T14:13:35.997Z",
+              "permissionMode": "acceptEdits",
+              "promptSource": "sdk",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "74c8fed8-1667-4e03-89a5-1c5c99cb1915",
+              "isSidechain": false,
+              "attachment": {
+                "type": "agent_listing_delta",
+                "addedTypes": [
+                  "claude",
+                  "Explore",
+                  "general-purpose",
+                  "Plan",
+                  "statusline-setup"
+                ],
+                "addedLines": [
+                  "- claude: Catch-all for any task that doesn't fit a more specific agent. FleetView's default when no agent name is typed. (Tools: *)",
+                  "- Explore: Fast read-only search agent for locating code. Use it to find files by pattern (eg. \"src/components/**/*.tsx\"), grep for symbols or keywords (eg. \"API endpoints\"), or answer \"where is X defined / which files reference Y.\" Do NOT use it for code review, design-doc auditing, cross-file consistency checks, or open-ended analysis — it reads excerpts rather than whole files and will miss content past its read window. When calling, specify search breadth: \"quick\" for a single targeted lookup, \"medium\" for moderate exploration, or \"very thorough\" to search across multiple locations and naming conventions. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: *)",
+                  "- Plan: Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- statusline-setup: Use this agent to configure the user's Claude Code status line setting. (Tools: Read, Edit)"
+                ],
+                "removedTypes": [],
+                "isInitial": true,
+                "showConcurrencyNote": true
+              },
+              "type": "attachment",
+              "uuid": "b699410b-5591-498b-8fd2-fba1448d835f",
+              "timestamp": "2026-10-02T14:13:35.997Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "b699410b-5591-498b-8fd2-fba1448d835f",
+              "isSidechain": false,
+              "attachment": {
+                "type": "skill_listing",
+                "content": "- dataviz: Use this skill whenever you are about to create ANY chart, graph, plot, dashboard, or data visualization, in ANY output medium — an HTML or React artifact, inline SVG, plotting code in any library (matplotlib, plotly, d3, Recharts, …), an image/PNG you will render and upload, or a chart shared into Slack. Read it BEFORE writing the first line of chart code, choosing chart colors, building a stat tile / meter / KPI row, or laying out a dashboard. When the destination is a first-party document connector (host-designated, never self-described) that renders live charts, hand it the rows (inline, or as an uploaded data file the chart cites) rather than a rendered PNG/SVG — a picture of a chart loses hover, data inspection and per-value comments. Produces visualizations that read as one system — elegant, accessible, consistent in light and dark — using a brand-neutral placeholder palette you swap for your own. Teaches a design-system-agnostic method: a form heuristic, a color formula with a runnable validator, mark specs, and interaction rules. A validated default palette is documented in `references/palette.md` — swap that file's values for your brand's. Triggers on: \"chart\", \"graph\", \"plot\", \"data viz\", \"visualization\", \"dashboard\", \"analytics\", \"visualize data\", \"categorical colors\", \"sequential / diverging palette\", \"stat tile\", \"sparkline\", \"heatmap\", \"legend\", \"axis\", \"tooltip\", \"chart colors\", \"color by series\".\n- update-config: Use this skill to configure the Claude Code harness via settings.json. Automated behaviors (\"from now on when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks configured in settings.json - the harness executes these, not Claude, so memory/preferences cannot fulfill them. Also use for: permissions (\"allow X\", \"add permission\", \"move permission to\"), env vars (\"set X=Y\"), hook troubleshooting, or any changes to settings.json/settings.local.json files. Examples: \"allow npm commands\", \"add bq permission to global settings\", \"move permission to user settings\", \"set DEBUG=true\", \"when claude stops show X\". For simple settings like theme/model, suggest the /config command.\n- keybindings-help: Use when the user wants to customize keyboard shortcuts, rebind keys, add chord bindings, or modify ~/.claude/keybindings.json. Examples: \"rebind ctrl+s\", \"add a chord shortcut\", \"change the submit key\", \"customize keybindings\".\n- code-review: Review the current diff, or a PR number/branch/path target, for correctness bugs and reuse/simplification/efficiency cleanups at the given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings); with no level given, it reuses the level you typed last. Pass --comment to post findings as inline PR comments, or --fix to apply the findings to the working tree after the review.\n- simplify: Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use /code-review for that.\n- fewer-permission-prompts: Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts.\n- loop: Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let the model self-pace. - When the user wants to set up a recurring task, poll for status, or run something repeatedly on an interval (e.g. \"check the deploy every 5 minutes\", \"keep running /babysit-prs\"). Do NOT invoke for one-off tasks.\n- claude-api: Reference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration.\nTRIGGER — read BEFORE opening the target file; don't skip because it \"looks like a one-liner\" — whenever: the prompt names Claude/Anthropic in any form (Claude, Anthropic, Fable, Opus, Sonnet, Haiku, `anthropic`, `@anthropic-ai`, `claude-*`, `us.anthropic.*`, `[1m]`); the user asks about an LLM (pricing/model choice/limits/caching) — never answer from memory; OR the task is LLM-shaped with provider unstated (agent/MCP/tool-definition/multi-agent/RAG/LLM-judge/computer-use; generate/summarize/extract/classify/rewrite/converse over NL; debugging refusals/cutoffs/streaming/tool-calls/tokens).\nSKIP only when another provider is being worked on (overrides all triggers): OpenAI/GPT/Gemini/Llama/Mistral/Cohere/Ollama named in the query; OR `grep -rE 'openai|langchain_openai|google.generativeai|genai|mistralai|cohere|ollama'` over the project hits (run this grep FIRST if no provider named — don't Read the file).\n- workflow-authoring: Reference for writing a Workflow tool script (script API and gotchas, resume, quality patterns, worked examples). Load before authoring a script for a workflow the user already opted into; it does not itself authorize running one.\n- run: Launch and drive this project's app to see a change working. Use when asked to run, start, or screenshot the app, or to confirm a change works in the real app (not just tests). First looks for a project skill that already covers launching the app; otherwise falls back to built-in patterns per project type (CLI, server, TUI, Electron, browser-driven, library).\n- init: Initialize a new CLAUDE.md file with codebase documentation\n- security-review: Complete a security review of the pending changes on the current branch",
+                "skillCount": 12,
+                "isInitial": true,
+                "names": [
+                  "dataviz",
+                  "update-config",
+                  "keybindings-help",
+                  "code-review",
+                  "simplify",
+                  "fewer-permission-prompts",
+                  "loop",
+                  "claude-api",
+                  "workflow-authoring",
+                  "run",
+                  "init",
+                  "security-review"
+                ]
+              },
+              "type": "attachment",
+              "uuid": "298a2968-c445-4011-a2fb-50634da09ddb",
+              "timestamp": "2026-10-02T14:13:35.997Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "298a2968-c445-4011-a2fb-50634da09ddb",
+              "isSidechain": false,
+              "attachment": {
+                "type": "total_tokens_reminder",
+                "text": "<total_tokens>15000000 tokens left</total_tokens>"
+              },
+              "type": "attachment",
+              "uuid": "3a4a6785-cb41-4071-8a51-bcc58c29383f",
+              "timestamp": "2026-10-02T14:13:35.997Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "type": "atis-latch",
+              "atis": "",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928"
+            },
+            {
+              "parentUuid": "3a4a6785-cb41-4071-8a51-bcc58c29383f",
+              "isSidechain": false,
+              "message": {
+                "id": "msg_scripted_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "tool_use",
+                    "id": "toolu_fixture_task",
+                    "name": "Agent",
+                    "input": {
+                      "description": "List files",
+                      "prompt": "List the files here and report them.",
+                      "subagent_type": "general-purpose"
+                    }
+                  }
+                ],
+                "stop_reason": "tool_use",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 0,
+              "type": "assistant",
+              "uuid": "d2961e49-851c-4211-8d9d-3a495d8ea8cb",
+              "timestamp": "2026-10-02T14:13:36.018Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            }
+          ]
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "subpath": "subagents/agent-abf2091e88f2ed0d3",
+          "entries": [
+            {
+              "parentUuid": null,
+              "isSidechain": true,
+              "promptId": "222441b3-f9b8-46d4-b53f-5ca930b88fb7",
+              "agentId": "abf2091e88f2ed0d3",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": "List the files here and report them."
+              },
+              "uuid": "d70d31a2-8cee-4ed8-9153-75ccd391702e",
+              "timestamp": "2026-10-02T14:13:36.021Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "d70d31a2-8cee-4ed8-9153-75ccd391702e",
+              "isSidechain": true,
+              "agentId": "abf2091e88f2ed0d3",
+              "attachment": {
+                "type": "skill_listing",
+                "content": "- dataviz: Use this skill whenever you are about to create ANY chart, graph, plot, dashboard, or data visualization, in ANY output medium — an HTML or React artifact, inline SVG, plotting code in any library (matplotlib, plotly, d3, Recharts, …), an image/PNG you will render and upload, or a chart shared into Slack. Read it BEFORE writing the first line of chart code, choosing chart colors, building a stat tile / meter / KPI row, or laying out a dashboard. When the destination is a first-party document connector (host-designated, never self-described) that renders live charts, hand it the rows (inline, or as an uploaded data file the chart cites) rather than a rendered PNG/SVG — a picture of a chart loses hover, data inspection and per-value comments. Produces visualizations that read as one system — elegant, accessible, consistent in light and dark — using a brand-neutral placeholder palette you swap for your own. Teaches a design-system-agnostic method: a form heuristic, a color formula with a runnable validator, mark specs, and interaction rules. A validated default palette is documented in `references/palette.md` — swap that file's values for your brand's. Triggers on: \"chart\", \"graph\", \"plot\", \"data viz\", \"visualization\", \"dashboard\", \"analytics\", \"visualize data\", \"categorical colors\", \"sequential / diverging palette\", \"stat tile\", \"sparkline\", \"heatmap\", \"legend\", \"axis\", \"tooltip\", \"chart colors\", \"color by series\".\n- update-config: Use this skill to configure the Claude Code harness via settings.json. Automated behaviors (\"from now on when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks configured in settings.json - the harness executes these, not Claude, so memory/preferences cannot fulfill them. Also use for: permissions (\"allow X\", \"add permission\", \"move permission to\"), env vars (\"set X=Y\"), hook troubleshooting, or any changes to settings.json/settings.local.json files. Examples: \"allow npm commands\", \"add bq permission to global settings\", \"move permission to user settings\", \"set DEBUG=true\", \"when claude stops show X\". For simple settings like theme/model, suggest the /config command.\n- keybindings-help: Use when the user wants to customize keyboard shortcuts, rebind keys, add chord bindings, or modify ~/.claude/keybindings.json. Examples: \"rebind ctrl+s\", \"add a chord shortcut\", \"change the submit key\", \"customize keybindings\".\n- code-review: Review the current diff, or a PR number/branch/path target, for correctness bugs and reuse/simplification/efficiency cleanups at the given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings); with no level given, it reuses the level you typed last. Pass --comment to post findings as inline PR comments, or --fix to apply the findings to the working tree after the review.\n- simplify: Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use /code-review for that.\n- fewer-permission-prompts: Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts.\n- loop: Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let the model self-pace. - When the user wants to set up a recurring task, poll for status, or run something repeatedly on an interval (e.g. \"check the deploy every 5 minutes\", \"keep running /babysit-prs\"). Do NOT invoke for one-off tasks.\n- claude-api: Reference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration.\nTRIGGER — read BEFORE opening the target file; don't skip because it \"looks like a one-liner\" — whenever: the prompt names Claude/Anthropic in any form (Claude, Anthropic, Fable, Opus, Sonnet, Haiku, `anthropic`, `@anthropic-ai`, `claude-*`, `us.anthropic.*`, `[1m]`); the user asks about an LLM (pricing/model choice/limits/caching) — never answer from memory; OR the task is LLM-shaped with provider unstated (agent/MCP/tool-definition/multi-agent/RAG/LLM-judge/computer-use; generate/summarize/extract/classify/rewrite/converse over NL; debugging refusals/cutoffs/streaming/tool-calls/tokens).\nSKIP only when another provider is being worked on (overrides all triggers): OpenAI/GPT/Gemini/Llama/Mistral/Cohere/Ollama named in the query; OR `grep -rE 'openai|langchain_openai|google.generativeai|genai|mistralai|cohere|ollama'` over the project hits (run this grep FIRST if no provider named — don't Read the file).\n- workflow-authoring: Reference for writing a Workflow tool script (script API and gotchas, resume, quality patterns, worked examples). Load before authoring a script for a workflow the user already opted into; it does not itself authorize running one.\n- run: Launch and drive this project's app to see a change working. Use when asked to run, start, or screenshot the app, or to confirm a change works in the real app (not just tests). First looks for a project skill that already covers launching the app; otherwise falls back to built-in patterns per project type (CLI, server, TUI, Electron, browser-driven, library).\n- init: Initialize a new CLAUDE.md file with codebase documentation\n- security-review: Complete a security review of the pending changes on the current branch",
+                "skillCount": 12,
+                "isInitial": true,
+                "names": [
+                  "dataviz",
+                  "update-config",
+                  "keybindings-help",
+                  "code-review",
+                  "simplify",
+                  "fewer-permission-prompts",
+                  "loop",
+                  "claude-api",
+                  "workflow-authoring",
+                  "run",
+                  "init",
+                  "security-review"
+                ]
+              },
+              "type": "attachment",
+              "uuid": "a61d858d-bc8c-4825-943e-26cde56e9a16",
+              "timestamp": "2026-10-02T14:13:36.023Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "a61d858d-bc8c-4825-943e-26cde56e9a16",
+              "isSidechain": true,
+              "agentId": "abf2091e88f2ed0d3",
+              "message": {
+                "id": "msg_scripted_2",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "tool_use",
+                    "id": "toolu_fixture_sub_ls",
+                    "name": "Bash",
+                    "input": {
+                      "command": "ls",
+                      "description": "List files"
+                    }
+                  }
+                ],
+                "stop_reason": "tool_use",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 0,
+              "attributionAgent": "general-purpose",
+              "type": "assistant",
+              "uuid": "af3dd612-b8ec-4bdd-a869-c15c77e4e9c9",
+              "timestamp": "2026-10-02T14:13:36.029Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            }
+          ]
+        },
+        {
+          "type": "user",
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "tool_use_id": "toolu_fixture_sub_ls",
+                "type": "tool_result",
+                "content": "README.md",
+                "is_error": false
+              }
+            ]
+          },
+          "parent_tool_use_id": "toolu_fixture_task",
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "uuid": "4f99256b-c7d5-44f1-a5f9-b4c9a8d3fe4c",
+          "timestamp": "2026-10-02T14:13:36.631Z",
+          "subagent_type": "general-purpose",
+          "task_description": "List files"
+        },
+        {
+          "type": "system",
+          "subtype": "task_updated",
+          "task_id": "abf2091e88f2ed0d3",
+          "patch": {
+            "status": "completed",
+            "end_time": 1790950416651
+          },
+          "uuid": "69e93e79-198e-41e7-a81f-c9f9f52e40fe",
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928"
+        },
+        {
+          "type": "system",
+          "subtype": "task_notification",
+          "task_id": "abf2091e88f2ed0d3",
+          "tool_use_id": "toolu_fixture_task",
+          "status": "completed",
+          "output_file": "{{cli-tmp}}/{{cwd-key}}/c772b442-af46-44ff-a4b6-d882841f3928/tasks/abf2091e88f2ed0d3.output",
+          "summary": "Found README.md.",
+          "usage": {
+            "total_tokens": 16,
+            "tool_uses": 1,
+            "duration_ms": 631
+          },
+          "uuid": "ab33c1d0-0925-442f-8fd5-7f81db390f1c",
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928"
+        },
+        {
+          "type": "user",
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "tool_use_id": "toolu_fixture_task",
+                "type": "tool_result",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Found README.md."
+                  },
+                  {
+                    "type": "text",
+                    "text": "agentId: abf2091e88f2ed0d3 (use SendMessage with to: 'abf2091e88f2ed0d3', summary: '<5-10 word recap>' to continue this agent)\n<usage>subagent_tokens: 15\ntool_uses: 1\nduration_ms: 631</usage>"
+                  }
+                ]
+              }
+            ]
+          },
+          "parent_tool_use_id": null,
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "uuid": "8c109eec-71b3-4907-9b88-5e916e01fbe6",
+          "timestamp": "2026-10-02T14:13:36.653Z",
+          "tool_use_result": {
+            "status": "completed",
+            "prompt": "List the files here and report them.",
+            "agentId": "abf2091e88f2ed0d3",
+            "agentType": "general-purpose",
+            "harnessNoteCount": 0,
+            "harnessTailCount": 0,
+            "harnessSectionHash": "ec0d83371e3a9e75",
+            "content": [
+              {
+                "type": "text",
+                "text": "Found README.md."
+              }
+            ],
+            "resolvedModel": "claude-sonnet-4-5",
+            "totalDurationMs": 631,
+            "totalTokens": 15,
+            "totalToolUseCount": 1,
+            "usage": {
+              "input_tokens": 10,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "output_tokens": 5,
+              "output_tokens_details": {
+                "thinking_tokens": 0
+              },
+              "server_tool_use": {
+                "web_search_requests": 0,
+                "web_fetch_requests": 0
+              },
+              "service_tier": "standard",
+              "cache_creation": {
+                "ephemeral_1h_input_tokens": 0,
+                "ephemeral_5m_input_tokens": 0
+              },
+              "inference_geo": "",
+              "iterations": [],
+              "speed": "standard"
+            },
+            "toolStats": {
+              "readCount": 0,
+              "searchCount": 0,
+              "bashCount": 1,
+              "editFileCount": 0,
+              "linesAdded": 0,
+              "linesRemoved": 0,
+              "otherToolCount": 0
+            }
+          }
+        },
+        {
+          "type": "system",
+          "subtype": "status",
+          "status": "requesting",
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "uuid": "a3b321f5-f0b1-4667-9066-564ad4384aa8"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_scripted_4",
+              "type": "message",
+              "role": "assistant",
+              "model": "claude-sonnet-4-5",
+              "content": [],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "usage": {
+                "input_tokens": 10,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 1
+              }
+            }
+          },
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "parent_tool_use_id": null,
+          "uuid": "c77b0b19-630c-4e8e-8422-6fd348e4c4f3",
+          "ttft_ms": 2
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "text",
+              "text": ""
+            }
+          },
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "parent_tool_use_id": null,
+          "uuid": "c5a17992-213c-469e-9783-6c2cd87a76e4"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "text_delta",
+              "text": "The subagent fo"
+            }
+          },
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "parent_tool_use_id": null,
+          "uuid": "3222cd38-001a-48c9-8525-d2be44e234a8"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "text_delta",
+              "text": "und README.md."
+            }
+          },
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "parent_tool_use_id": null,
+          "uuid": "1f304a20-7bec-4397-a775-044d3a9660c6"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "id": "msg_scripted_4",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [
+              {
+                "type": "text",
+                "text": "The subagent found README.md."
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 1
+            },
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "uuid": "7768e441-a520-44bd-8f14-5e6d8383f2fb",
+          "timestamp": "2026-10-02T14:13:36.680Z"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 0
+          },
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "parent_tool_use_id": null,
+          "uuid": "e0a25b2e-58da-4516-9f07-334f0099a428"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_delta",
+            "delta": {
+              "stop_reason": "end_turn",
+              "stop_sequence": null
+            },
+            "usage": {
+              "output_tokens": 5
+            }
+          },
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "parent_tool_use_id": null,
+          "uuid": "70390ba4-832a-4797-b77d-72302937b8ab"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_stop"
+          },
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "parent_tool_use_id": null,
+          "uuid": "8c92e1fb-8d21-40d0-a376-a694e5dc17ee"
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "subpath": "subagents/agent-abf2091e88f2ed0d3",
+          "entries": [
+            {
+              "parentUuid": "af3dd612-b8ec-4bdd-a869-c15c77e4e9c9",
+              "isSidechain": true,
+              "promptId": "222441b3-f9b8-46d4-b53f-5ca930b88fb7",
+              "agentId": "abf2091e88f2ed0d3",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": [
+                  {
+                    "tool_use_id": "toolu_fixture_sub_ls",
+                    "type": "tool_result",
+                    "content": "README.md",
+                    "is_error": false
+                  }
+                ]
+              },
+              "uuid": "4f99256b-c7d5-44f1-a5f9-b4c9a8d3fe4c",
+              "timestamp": "2026-10-02T14:13:36.631Z",
+              "sourceToolAssistantUUID": "af3dd612-b8ec-4bdd-a869-c15c77e4e9c9",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "4f99256b-c7d5-44f1-a5f9-b4c9a8d3fe4c",
+              "isSidechain": true,
+              "agentId": "abf2091e88f2ed0d3",
+              "attachment": {
+                "type": "agent_listing_delta",
+                "addedTypes": [
+                  "claude",
+                  "Explore",
+                  "general-purpose",
+                  "Plan",
+                  "statusline-setup"
+                ],
+                "addedLines": [
+                  "- claude: Catch-all for any task that doesn't fit a more specific agent. FleetView's default when no agent name is typed. (Tools: *)",
+                  "- Explore: Fast read-only search agent for locating code. Use it to find files by pattern (eg. \"src/components/**/*.tsx\"), grep for symbols or keywords (eg. \"API endpoints\"), or answer \"where is X defined / which files reference Y.\" Do NOT use it for code review, design-doc auditing, cross-file consistency checks, or open-ended analysis — it reads excerpts rather than whole files and will miss content past its read window. When calling, specify search breadth: \"quick\" for a single targeted lookup, \"medium\" for moderate exploration, or \"very thorough\" to search across multiple locations and naming conventions. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: *)",
+                  "- Plan: Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- statusline-setup: Use this agent to configure the user's Claude Code status line setting. (Tools: Read, Edit)"
+                ],
+                "removedTypes": [],
+                "isInitial": true,
+                "showConcurrencyNote": true
+              },
+              "type": "attachment",
+              "uuid": "90923c06-b616-46c3-92ef-9e1b5a01a4dd",
+              "timestamp": "2026-10-02T14:13:36.632Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "90923c06-b616-46c3-92ef-9e1b5a01a4dd",
+              "isSidechain": true,
+              "agentId": "abf2091e88f2ed0d3",
+              "attachment": {
+                "type": "total_tokens_reminder",
+                "text": "<total_tokens>14999985 tokens left</total_tokens>"
+              },
+              "type": "attachment",
+              "uuid": "9d5a9faa-29b5-40d7-aa1c-c7bbfdd62943",
+              "timestamp": "2026-10-02T14:13:36.632Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "9d5a9faa-29b5-40d7-aa1c-c7bbfdd62943",
+              "isSidechain": true,
+              "agentId": "abf2091e88f2ed0d3",
+              "message": {
+                "id": "msg_scripted_3",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Found README.md."
+                  }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 0,
+              "attributionAgent": "general-purpose",
+              "type": "assistant",
+              "uuid": "c97c1fa7-8306-49ec-9bac-8bdf48352b92",
+              "timestamp": "2026-10-02T14:13:36.636Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            }
+          ]
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "subpath": null,
+          "entries": [
+            {
+              "parentUuid": "d2961e49-851c-4211-8d9d-3a495d8ea8cb",
+              "isSidechain": false,
+              "promptId": "222441b3-f9b8-46d4-b53f-5ca930b88fb7",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": [
+                  {
+                    "tool_use_id": "toolu_fixture_task",
+                    "type": "tool_result",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Found README.md."
+                      },
+                      {
+                        "type": "text",
+                        "text": "agentId: abf2091e88f2ed0d3 (use SendMessage with to: 'abf2091e88f2ed0d3', summary: '<5-10 word recap>' to continue this agent)\n<usage>subagent_tokens: 15\ntool_uses: 1\nduration_ms: 631</usage>"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "uuid": "8c109eec-71b3-4907-9b88-5e916e01fbe6",
+              "timestamp": "2026-10-02T14:13:36.653Z",
+              "toolUseResult": {
+                "status": "completed",
+                "prompt": "List the files here and report them.",
+                "agentId": "abf2091e88f2ed0d3",
+                "agentType": "general-purpose",
+                "harnessNoteCount": 0,
+                "harnessTailCount": 0,
+                "harnessSectionHash": "ec0d83371e3a9e75",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Found README.md."
+                  }
+                ],
+                "resolvedModel": "claude-sonnet-4-5",
+                "totalDurationMs": 631,
+                "totalTokens": 15,
+                "totalToolUseCount": 1,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "toolStats": {
+                  "readCount": 0,
+                  "searchCount": 0,
+                  "bashCount": 1,
+                  "editFileCount": 0,
+                  "linesAdded": 0,
+                  "linesRemoved": 0,
+                  "otherToolCount": 0
+                }
+              },
+              "sourceToolAssistantUUID": "d2961e49-851c-4211-8d9d-3a495d8ea8cb",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "8c109eec-71b3-4907-9b88-5e916e01fbe6",
+              "isSidechain": false,
+              "attachment": {
+                "type": "total_tokens_reminder",
+                "text": "<total_tokens>14999985 tokens left</total_tokens>"
+              },
+              "type": "attachment",
+              "uuid": "b7f1eb95-fbab-47d5-a75f-cc174a2277aa",
+              "timestamp": "2026-10-02T14:13:36.657Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "b7f1eb95-fbab-47d5-a75f-cc174a2277aa",
+              "isSidechain": false,
+              "message": {
+                "id": "msg_scripted_4",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "The subagent found README.md."
+                  }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 0,
+              "type": "assistant",
+              "uuid": "7768e441-a520-44bd-8f14-5e6d8383f2fb",
+              "timestamp": "2026-10-02T14:13:36.680Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            }
+          ]
+        },
+        {
+          "duration_api_ms": 40,
+          "stop_reason": "end_turn",
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "total_cost_usd": 0.00042,
+          "usage": {
+            "input_tokens": 20,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 10,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "",
+            "iterations": [],
+            "speed": "standard"
+          },
+          "modelUsage": {
+            "claude-sonnet-4-5": {
+              "inputTokens": 40,
+              "outputTokens": 20,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0,
+              "webSearchRequests": 0,
+              "costUSD": 0.00042,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 0,
+              "canonicalModel": "claude-sonnet-4-5",
+              "provider": "firstParty",
+              "costBasis": "list"
+            }
+          },
+          "permission_denials": [],
+          "terminal_reason": "completed",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required",
+          "subagent_stats": {
+            "spawned": 1,
+            "requested": {
+              "background": 0,
+              "foreground": 0,
+              "unset": 1
+            },
+            "started_in_background": 0,
+            "max_depth": 1,
+            "spawned_by_subagents": 0,
+            "completed": 1,
+            "failed": 0,
+            "killed": {
+              "parent": 0,
+              "user": 0,
+              "system": 0
+            },
+            "refused": {
+              "depth_limit": 0,
+              "concurrency_limit": 0,
+              "budget": 0
+            },
+            "by_type": {
+              "general-purpose": 1
+            }
+          },
+          "is_error": false,
+          "num_turns": 2,
+          "subtype": "success",
+          "api_error_status": null,
+          "result": "The subagent found README.md.",
+          "ttft_ms": 30,
+          "type": "result",
+          "duration_ms": 694,
+          "uuid": "e76bc134-fa31-4c7d-8c55-38982851267d",
+          "ttft_stream_ms": 29,
+          "time_to_request_ms": 27,
+          "first_content_frame_ms": 29,
+          "user_message_uuid": "74c8fed8-1667-4e03-89a5-1c5c99cb1915",
+          "user_message_uuids": ["74c8fed8-1667-4e03-89a5-1c5c99cb1915"],
+          "request_sent_wall_ms": 1790950416015,
+          "queued_turn_count": 0
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "74c8fed8-1667-4e03-89a5-1c5c99cb1915",
+          "state": "completed",
+          "uuid": "4d8db262-aeed-4737-8a9b-dfa837cb9d36",
+          "session_id": "c772b442-af46-44ff-a4b6-d882841f3928"
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "last-prompt",
+              "lastPrompt": "Delegate the listing (subagent-foreground)",
+              "leafUuid": "7768e441-a520-44bd-8f14-5e6d8383f2fb",
+              "sessionId": "c772b442-af46-44ff-a4b6-d882841f3928"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "type": "thread",
+          "ref": {
+            "id": "c772b442-af46-44ff-a4b6-d882841f3928",
+            "strength": "strong"
+          }
+        },
+        {
+          "type": "turn.started"
+        },
+        {
+          "type": "item.started",
+          "key": "toolu_fixture_task",
+          "ref": {
+            "id": "toolu_fixture_task",
+            "strength": "strong"
+          },
+          "item": {
+            "kind": "subagent",
+            "title": "List files",
+            "agentType": "general-purpose",
+            "childSessionId": null,
+            "result": null
+          }
+        },
+        {
+          "type": "item.started",
+          "key": "toolu_fixture_sub_ls",
+          "ref": {
+            "id": "toolu_fixture_sub_ls",
+            "strength": "strong"
+          },
+          "item": {
+            "kind": "command",
+            "command": "ls",
+            "description": "List files",
+            "output": "",
+            "exitCode": null,
+            "parentKey": "toolu_fixture_task"
+          }
+        },
+        {
+          "type": "item.completed",
+          "key": "toolu_fixture_sub_ls",
+          "status": "completed",
+          "item": {
+            "output": "README.md",
+            "exitCode": 0
+          }
+        },
+        {
+          "type": "item.completed",
+          "key": "toolu_fixture_task",
+          "status": "completed",
+          "item": {
+            "result": "Found README.md.agentId: abf2091e88f2ed0d3 (use SendMessage with to: 'abf2091e88f2ed0d3', summary: '<5-10 word recap>' to continue this agent)\n<usage>subagent_tokens: 15\ntool_uses: 1\nduration_ms: 631</usage>"
+          }
+        },
+        {
+          "type": "item.started",
+          "key": "msg_scripted_4:0",
+          "ref": {
+            "id": "msg_scripted_4:0",
+            "strength": "strong"
+          },
+          "item": {
+            "kind": "assistant_message",
+            "text": "",
+            "agentId": null
+          }
+        },
+        {
+          "type": "item.delta",
+          "key": "msg_scripted_4:0",
+          "field": "text",
+          "text": "The subagent fo"
+        },
+        {
+          "type": "item.delta",
+          "key": "msg_scripted_4:0",
+          "field": "text",
+          "text": "und README.md."
+        },
+        {
+          "type": "item.completed",
+          "key": "msg_scripted_4:0",
+          "status": "completed",
+          "item": {
+            "text": "The subagent found README.md."
+          }
+        },
+        {
+          "type": "usage",
+          "usage": {
+            "model": "claude-sonnet-4-5",
+            "inputTokens": 20,
+            "cachedInputTokens": 0,
+            "cacheCreationTokens": 0,
+            "outputTokens": 10,
+            "costUsd": 0.00042,
+            "contextTokens": 10,
+            "contextWindow": 200000
+          }
+        },
+        {
+          "type": "turn.completed",
+          "status": "completed",
+          "ref": {
+            "id": "7768e441-a520-44bd-8f14-5e6d8383f2fb",
+            "strength": "strong"
+          }
+        }
+      ]
+    }
+  ]
+}

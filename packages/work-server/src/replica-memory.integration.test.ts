@@ -10,7 +10,11 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "./server.js";
-import { createTestDatabase, testServerOptions } from "./test-support.js";
+import {
+  createTestDatabase,
+  enqueue as enqueueMessage,
+  testServerOptions,
+} from "./test-support.js";
 import { startWorkWorker } from "./workers/worker-runtime.js";
 
 const PUBLIC_URL = "https://memory.example.test";
@@ -171,43 +175,31 @@ it.skipIf(!process.env.DATABASE_URL)(
       const turnRow = (turnId: string) =>
         db
           .selectFrom("agent_turns")
-          .select([
-            "status",
-            "phase",
-            "activity",
-            "lease_owner",
-            "completed_at",
-            "result_message_id",
-          ])
+          .select(["status", "activity", "lease_owner", "completed_at"])
           .where("id", "=", turnId)
           .executeTakeFirstOrThrow();
       const enqueue = async (
         server: WorkServer,
         sessionId: string,
         message: string,
-      ) => {
-        const receipt = await sessions(server).enqueueMessage(
-          await memberOn(server),
+      ) =>
+        enqueueMessage({
+          sessions: sessions(server),
+          identity: await memberOn(server),
           projectId,
           sessionId,
-          message,
-        );
-        if (!receipt.turnId) throw new Error("No turn");
-        return receipt.turnId;
-      };
+          text: message,
+        });
       /**
        * Wait until a replica runs the turn, its harness at work, and name
        * the replica running it and the other one.
        */
       const working = async (turnId: string) => {
         await expect
-          .poll(
-            async () => {
-              const turn = await turnRow(turnId);
-              return turn.status === "running" && turn.phase === "working";
-            },
-            { timeout: 60_000, interval: 50 },
-          )
+          .poll(async () => (await turnRow(turnId)).status === "running", {
+            timeout: 60_000,
+            interval: 50,
+          })
           .toBe(true);
         // The harness is inside its command, not still anchoring.
         await new Promise((resolve) => setTimeout(resolve, 1_500));
@@ -225,15 +217,15 @@ it.skipIf(!process.env.DATABASE_URL)(
             timeout: 60_000,
             interval: 50,
           })
-          .toMatch(/^(completed|failed|cancelled)$/);
+          .toMatch(/^(completed|failed|interrupted|cancelled)$/);
         const turn = await turnRow(turnId);
-        const reply = turn.result_message_id
-          ? await db
-              .selectFrom("agent_messages")
-              .select(["content", "metadata"])
-              .where("id", "=", turn.result_message_id)
-              .executeTakeFirstOrThrow()
-          : undefined;
+        const reply = await db
+          .selectFrom("agent_items")
+          .select("text as content")
+          .where("turn_id", "=", turnId)
+          .where("kind", "=", "assistant_message")
+          .orderBy("position", "desc")
+          .executeTakeFirst();
         return { ...turn, reply };
       };
       const runningOn = async (server: WorkServer, sessionId: string) =>
@@ -268,13 +260,10 @@ it.skipIf(!process.env.DATABASE_URL)(
       );
       // The agent stops working: its harness ended and the turn saves.
       await expect
-        .poll(
-          async () => {
-            const turn = await turnRow(turnId);
-            return turn.status === "running" && turn.phase === "working";
-          },
-          { timeout: 10_000, interval: 20 },
-        )
+        .poll(async () => (await turnRow(turnId)).status === "running", {
+          timeout: 10_000,
+          interval: 20,
+        })
         .toBe(false);
       const stopMs = Date.now() - interruptedAt;
       let result = await settled(turnId);
@@ -284,13 +273,13 @@ it.skipIf(!process.env.DATABASE_URL)(
       );
       // About a second; the margin absorbs a loaded CI machine.
       expect(stopMs).toBeLessThan(5_000);
-      expect(result.reply?.metadata).toMatchObject({ interrupted: true });
+      expect(result.status).toBe("interrupted");
       expect(await runningOn(a, chat.id)).toBe(false);
       expect(await runningOn(b, chat.id)).toBe(false);
 
-      // 3. A question a replica's harness holds waits there, shown as not
-      // running; its answer, sent through either replica, continues where
-      // it was asked, whichever replica polls first.
+      // 3. A question a replica's harness holds waits there; its answer,
+      // sent through either replica, continues where it was asked (ADR
+      // 0198).
       const questions = await sessions(a).create(
         await memberOn(a),
         projectId,
@@ -298,25 +287,37 @@ it.skipIf(!process.env.DATABASE_URL)(
       );
       for (const [index, color] of ["Blue", "Green", "Red"].entries()) {
         const asked = await enqueue(a, questions.id, "ask Which color?");
-        // The turn settled its reply and now waits, still claimed.
+        // The turn waits for its person, still claimed.
         await expect
-          .poll(async () => (await turnRow(asked)).activity, {
+          .poll(async () => (await turnRow(asked)).status, {
             timeout: 60_000,
             interval: 50,
           })
-          .toBe("Waiting for an answer");
-        expect((await turnRow(asked)).phase).toBe("parked");
-        expect((await turnRow(asked)).status).toBe("running");
-        expect(await runningOn(a, questions.id)).toBe(false);
-        expect(await runningOn(b, questions.id)).toBe(false);
-        const answer = await enqueue(
-          index % 2 === 0 ? a : b,
+          .toBe("waiting");
+        const through = index % 2 === 0 ? a : b;
+        const request = (
+          await sessions(through).get(
+            await memberOn(through),
+            projectId,
+            questions.id,
+          )
+        ).snapshot.requests.find((entry) => entry.status === "pending");
+        if (!request) throw new Error("No question");
+        const receipt = await sessions(through).command(
+          await memberOn(through),
+          projectId,
           questions.id,
-          color,
+          {
+            type: "respond",
+            commandId: randomUUID(),
+            requestId: request.id,
+            response: { kind: "question", answers: [color] },
+          },
         );
-        result = await settled(answer);
+        expect(receipt.status).toBe("accepted");
+        result = await settled(asked);
         expect(result.reply?.content).toBe(`Answered where asked: ${color}`);
-        expect((await turnRow(asked)).status).toBe("completed");
+        expect(result.status).toBe("completed");
       }
 
       // 4. Close through the other replica mid-turn: the running turn stops

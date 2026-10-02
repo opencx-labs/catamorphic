@@ -168,7 +168,7 @@ ordinary promises. Chats are reached with one operation, \`deliver\`: by \`sessi
 for a known chat, or by \`key\` for the chat this workflow keeps for that key,
 started on first use (the enabling member's chat, or for a project enablement a
 project chat; see \`session-workflows\`). \`mode: "message_only"\` with
-\`attention: "required"\` alerts without invoking a model; \`next_turn\` (the
+\`attention: "required"\` alerts without invoking a model; \`queue\` (the
 default) has the agent do work.
 
 A run holds no project permission it does not declare. Name the ones it needs

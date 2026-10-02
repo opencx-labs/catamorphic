@@ -1,0 +1,2658 @@
+{
+  "provider": "claude-code",
+  "sdkVersion": "0.3.263",
+  "cliVersion": "2.1.263",
+  "scenario": "fork",
+  "source": "recorded",
+  "attempts": [
+    {
+      "outbound": {
+        "prompt": "First word: apple",
+        "cwd": "{{cwd}}",
+        "thread": {
+          "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "resume": null,
+          "forkSession": false,
+          "resumeSessionAt": null
+        },
+        "model": "claude-sonnet-4-5",
+        "effort": null,
+        "permissionMode": "acceptEdits",
+        "systemPromptAppend": "You are a Work fixture agent. Keep answers short.",
+        "allowedTools": [
+          "Agent",
+          "Bash",
+          "BashOutput",
+          "Edit",
+          "Glob",
+          "Grep",
+          "KillShell",
+          "Monitor",
+          "NotebookEdit",
+          "PowerShell",
+          "Read",
+          "Skill",
+          "SlashCommand",
+          "Task",
+          "TaskOutput",
+          "TaskStop",
+          "TodoWrite",
+          "WebFetch",
+          "WebSearch",
+          "Write"
+        ],
+        "disallowedTools": [],
+        "mcpServers": {},
+        "env": {
+          "ANTHROPIC_BASE_URL": "{{model}}",
+          "CLAUDE_CONFIG_DIR": "{{home}}",
+          "WORK_MODEL_KEY_FILE": "{{state}}/model-key",
+          "CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "300000",
+          "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+          "DISABLE_AUTOUPDATER": "1"
+        },
+        "apiKeyHelper": "cat \"$WORK_MODEL_KEY_FILE\"",
+        "includePartialMessages": true,
+        "sessionStore": true,
+        "hooks": ["PostToolUse", "UserPromptSubmit"]
+      },
+      "messages": [
+        {
+          "type": "replay.input",
+          "uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+          "text": "First word: apple"
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+          "state": "queued",
+          "uuid": "ee7e4430-a2fa-458e-b6f2-721986015e0e",
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+          "state": "started",
+          "uuid": "46d4791d-6d62-488f-a982-f375ac9f7ebe",
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+        },
+        {
+          "type": "replay.hook",
+          "event": "UserPromptSubmit",
+          "toolUseID": "e7767606-cad2-4853-9f22-2bf5b17c0b0e",
+          "input": {
+            "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+            "transcript_path": "{{home}}/projects/{{cwd-key}}/8fb5ec83-ddc9-4340-a616-b67459a7b741.jsonl",
+            "cwd": "{{cwd}}",
+            "prompt_id": "d6296fe1-7035-43e4-b3c8-6cd9d72e73d0",
+            "permission_mode": "acceptEdits",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "First word: apple"
+          }
+        },
+        {
+          "type": "system",
+          "subtype": "init",
+          "cwd": "{{cwd}}",
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "tools": [
+            "Task",
+            "AskUserQuestion",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "Edit",
+            "EnterPlanMode",
+            "EnterWorktree",
+            "ExitPlanMode",
+            "ExitWorktree",
+            "Glob",
+            "Grep",
+            "ListAgents",
+            "NotebookEdit",
+            "Read",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskCreate",
+            "TaskGet",
+            "TaskList",
+            "TaskOutput",
+            "TaskStop",
+            "TaskUpdate",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "Write"
+          ],
+          "mcp_servers": [],
+          "model": "claude-sonnet-4-5",
+          "permissionMode": "acceptEdits",
+          "slash_commands": [
+            "deep-research",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "claude-api",
+            "workflow-authoring",
+            "run",
+            "run-skill-generator",
+            "agents",
+            "auto-mode-setup",
+            "autocompact",
+            "clear",
+            "color",
+            "compact",
+            "config",
+            "context",
+            "effort",
+            "fast",
+            "heapdump",
+            "init",
+            "mcp",
+            "model",
+            "__remote-workflow",
+            "workflow-launch-exec",
+            "reload-plugins",
+            "reload-skills",
+            "rename",
+            "security-review",
+            "usage",
+            "insights",
+            "recap",
+            "goal",
+            "list-agents",
+            "team-onboarding"
+          ],
+          "terminal_slash_commands": ["doctor", "color", "reload-plugins"],
+          "apiKeySource": "apiKeyHelper",
+          "claude_code_version": "2.1.263",
+          "output_style": "default",
+          "agents": [
+            "claude",
+            "Explore",
+            "general-purpose",
+            "Plan",
+            "statusline-setup"
+          ],
+          "skills": [
+            "deep-research",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "claude-api",
+            "workflow-authoring",
+            "run",
+            "run-skill-generator"
+          ],
+          "plugins": [],
+          "capabilities": [
+            "interrupt_receipt_v1",
+            "interrupt_cancel_queued_v1",
+            "msg_lifecycle_v1"
+          ],
+          "analytics_disabled": true,
+          "product_feedback_disabled": true,
+          "uuid": "9b97f157-fc05-43c6-a4b2-7847ff9259a7",
+          "messaging_socket_path": "/tmp/cc-socks/42739.sock",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required"
+        },
+        {
+          "type": "system",
+          "subtype": "status",
+          "status": "requesting",
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "uuid": "680bde85-0b4e-4d11-b598-6627f1750b27"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_scripted_1",
+              "type": "message",
+              "role": "assistant",
+              "model": "claude-sonnet-4-5",
+              "content": [],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "usage": {
+                "input_tokens": 10,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 1
+              }
+            }
+          },
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "parent_tool_use_id": null,
+          "uuid": "991aff93-2c1c-4bed-bc7a-16770a7d9357",
+          "ttft_ms": 3,
+          "user_message_uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+          "user_message_uuids": ["95d2d186-b62e-433e-abd5-141f186c4b7b"]
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "text",
+              "text": ""
+            }
+          },
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "parent_tool_use_id": null,
+          "uuid": "f69eb72f-6447-4ac4-8fc5-54cc754432e4"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "text_delta",
+              "text": "Apple "
+            }
+          },
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "parent_tool_use_id": null,
+          "uuid": "23ddf354-7ad4-470f-b81f-69426c53b66f"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "text_delta",
+              "text": "noted."
+            }
+          },
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "parent_tool_use_id": null,
+          "uuid": "2bc256e3-5926-45e0-945b-df5990e0b800"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "id": "msg_scripted_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [
+              {
+                "type": "text",
+                "text": "Apple noted."
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 1
+            },
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "uuid": "af72ea55-b46b-4d86-9b14-3dd6b72c8f2f",
+          "timestamp": "2026-10-02T14:13:38.115Z"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 0
+          },
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "parent_tool_use_id": null,
+          "uuid": "6eda9c7c-c25f-4a31-baf5-d47a08bb4a8d"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_delta",
+            "delta": {
+              "stop_reason": "end_turn",
+              "stop_sequence": null
+            },
+            "usage": {
+              "output_tokens": 5
+            }
+          },
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "parent_tool_use_id": null,
+          "uuid": "ea994a5d-c2d7-48b7-ac45-33a9ad5b7cfe"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_stop"
+          },
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "parent_tool_use_id": null,
+          "uuid": "425364c5-bb87-401a-bead-c6d46f18ef95"
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "queue-operation",
+              "operation": "enqueue",
+              "timestamp": "2026-10-02T14:13:38.078Z",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "content": "First word: apple"
+            },
+            {
+              "type": "queue-operation",
+              "operation": "dequeue",
+              "timestamp": "2026-10-02T14:13:38.079Z",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+            },
+            {
+              "parentUuid": null,
+              "isSidechain": false,
+              "promptId": "d6296fe1-7035-43e4-b3c8-6cd9d72e73d0",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": "First word: apple"
+              },
+              "uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+              "timestamp": "2026-10-02T14:13:38.092Z",
+              "permissionMode": "acceptEdits",
+              "promptSource": "sdk",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+              "isSidechain": false,
+              "attachment": {
+                "type": "agent_listing_delta",
+                "addedTypes": [
+                  "claude",
+                  "Explore",
+                  "general-purpose",
+                  "Plan",
+                  "statusline-setup"
+                ],
+                "addedLines": [
+                  "- claude: Catch-all for any task that doesn't fit a more specific agent. FleetView's default when no agent name is typed. (Tools: *)",
+                  "- Explore: Fast read-only search agent for locating code. Use it to find files by pattern (eg. \"src/components/**/*.tsx\"), grep for symbols or keywords (eg. \"API endpoints\"), or answer \"where is X defined / which files reference Y.\" Do NOT use it for code review, design-doc auditing, cross-file consistency checks, or open-ended analysis — it reads excerpts rather than whole files and will miss content past its read window. When calling, specify search breadth: \"quick\" for a single targeted lookup, \"medium\" for moderate exploration, or \"very thorough\" to search across multiple locations and naming conventions. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: *)",
+                  "- Plan: Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- statusline-setup: Use this agent to configure the user's Claude Code status line setting. (Tools: Read, Edit)"
+                ],
+                "removedTypes": [],
+                "isInitial": true,
+                "showConcurrencyNote": true
+              },
+              "type": "attachment",
+              "uuid": "5405a168-b56f-4372-bc34-e8dca3058b0a",
+              "timestamp": "2026-10-02T14:13:38.091Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "5405a168-b56f-4372-bc34-e8dca3058b0a",
+              "isSidechain": false,
+              "attachment": {
+                "type": "skill_listing",
+                "content": "- dataviz: Use this skill whenever you are about to create ANY chart, graph, plot, dashboard, or data visualization, in ANY output medium — an HTML or React artifact, inline SVG, plotting code in any library (matplotlib, plotly, d3, Recharts, …), an image/PNG you will render and upload, or a chart shared into Slack. Read it BEFORE writing the first line of chart code, choosing chart colors, building a stat tile / meter / KPI row, or laying out a dashboard. When the destination is a first-party document connector (host-designated, never self-described) that renders live charts, hand it the rows (inline, or as an uploaded data file the chart cites) rather than a rendered PNG/SVG — a picture of a chart loses hover, data inspection and per-value comments. Produces visualizations that read as one system — elegant, accessible, consistent in light and dark — using a brand-neutral placeholder palette you swap for your own. Teaches a design-system-agnostic method: a form heuristic, a color formula with a runnable validator, mark specs, and interaction rules. A validated default palette is documented in `references/palette.md` — swap that file's values for your brand's. Triggers on: \"chart\", \"graph\", \"plot\", \"data viz\", \"visualization\", \"dashboard\", \"analytics\", \"visualize data\", \"categorical colors\", \"sequential / diverging palette\", \"stat tile\", \"sparkline\", \"heatmap\", \"legend\", \"axis\", \"tooltip\", \"chart colors\", \"color by series\".\n- update-config: Use this skill to configure the Claude Code harness via settings.json. Automated behaviors (\"from now on when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks configured in settings.json - the harness executes these, not Claude, so memory/preferences cannot fulfill them. Also use for: permissions (\"allow X\", \"add permission\", \"move permission to\"), env vars (\"set X=Y\"), hook troubleshooting, or any changes to settings.json/settings.local.json files. Examples: \"allow npm commands\", \"add bq permission to global settings\", \"move permission to user settings\", \"set DEBUG=true\", \"when claude stops show X\". For simple settings like theme/model, suggest the /config command.\n- keybindings-help: Use when the user wants to customize keyboard shortcuts, rebind keys, add chord bindings, or modify ~/.claude/keybindings.json. Examples: \"rebind ctrl+s\", \"add a chord shortcut\", \"change the submit key\", \"customize keybindings\".\n- code-review: Review the current diff, or a PR number/branch/path target, for correctness bugs and reuse/simplification/efficiency cleanups at the given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings); with no level given, it reuses the level you typed last. Pass --comment to post findings as inline PR comments, or --fix to apply the findings to the working tree after the review.\n- simplify: Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use /code-review for that.\n- fewer-permission-prompts: Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts.\n- loop: Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let the model self-pace. - When the user wants to set up a recurring task, poll for status, or run something repeatedly on an interval (e.g. \"check the deploy every 5 minutes\", \"keep running /babysit-prs\"). Do NOT invoke for one-off tasks.\n- claude-api: Reference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration.\nTRIGGER — read BEFORE opening the target file; don't skip because it \"looks like a one-liner\" — whenever: the prompt names Claude/Anthropic in any form (Claude, Anthropic, Fable, Opus, Sonnet, Haiku, `anthropic`, `@anthropic-ai`, `claude-*`, `us.anthropic.*`, `[1m]`); the user asks about an LLM (pricing/model choice/limits/caching) — never answer from memory; OR the task is LLM-shaped with provider unstated (agent/MCP/tool-definition/multi-agent/RAG/LLM-judge/computer-use; generate/summarize/extract/classify/rewrite/converse over NL; debugging refusals/cutoffs/streaming/tool-calls/tokens).\nSKIP only when another provider is being worked on (overrides all triggers): OpenAI/GPT/Gemini/Llama/Mistral/Cohere/Ollama named in the query; OR `grep -rE 'openai|langchain_openai|google.generativeai|genai|mistralai|cohere|ollama'` over the project hits (run this grep FIRST if no provider named — don't Read the file).\n- workflow-authoring: Reference for writing a Workflow tool script (script API and gotchas, resume, quality patterns, worked examples). Load before authoring a script for a workflow the user already opted into; it does not itself authorize running one.\n- run: Launch and drive this project's app to see a change working. Use when asked to run, start, or screenshot the app, or to confirm a change works in the real app (not just tests). First looks for a project skill that already covers launching the app; otherwise falls back to built-in patterns per project type (CLI, server, TUI, Electron, browser-driven, library).\n- init: Initialize a new CLAUDE.md file with codebase documentation\n- security-review: Complete a security review of the pending changes on the current branch",
+                "skillCount": 12,
+                "isInitial": true,
+                "names": [
+                  "dataviz",
+                  "update-config",
+                  "keybindings-help",
+                  "code-review",
+                  "simplify",
+                  "fewer-permission-prompts",
+                  "loop",
+                  "claude-api",
+                  "workflow-authoring",
+                  "run",
+                  "init",
+                  "security-review"
+                ]
+              },
+              "type": "attachment",
+              "uuid": "32b7a006-26a3-444d-bc14-4e30fd88b827",
+              "timestamp": "2026-10-02T14:13:38.091Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "32b7a006-26a3-444d-bc14-4e30fd88b827",
+              "isSidechain": false,
+              "attachment": {
+                "type": "total_tokens_reminder",
+                "text": "<total_tokens>15000000 tokens left</total_tokens>"
+              },
+              "type": "attachment",
+              "uuid": "72ed9eab-39b2-4001-b612-b166c7f0fc16",
+              "timestamp": "2026-10-02T14:13:38.091Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "type": "atis-latch",
+              "atis": "",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+            },
+            {
+              "parentUuid": "72ed9eab-39b2-4001-b612-b166c7f0fc16",
+              "isSidechain": false,
+              "message": {
+                "id": "msg_scripted_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Apple noted."
+                  }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 0,
+              "type": "assistant",
+              "uuid": "af72ea55-b46b-4d86-9b14-3dd6b72c8f2f",
+              "timestamp": "2026-10-02T14:13:38.115Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            }
+          ]
+        },
+        {
+          "duration_api_ms": 23,
+          "stop_reason": "end_turn",
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "total_cost_usd": 0.000105,
+          "usage": {
+            "input_tokens": 10,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 5,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "",
+            "iterations": [],
+            "speed": "standard"
+          },
+          "modelUsage": {
+            "claude-sonnet-4-5": {
+              "inputTokens": 10,
+              "outputTokens": 5,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0,
+              "webSearchRequests": 0,
+              "costUSD": 0.000105,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 0,
+              "canonicalModel": "claude-sonnet-4-5",
+              "provider": "firstParty",
+              "costBasis": "list"
+            }
+          },
+          "permission_denials": [],
+          "terminal_reason": "completed",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required",
+          "subagent_stats": {
+            "spawned": 0,
+            "requested": {
+              "background": 0,
+              "foreground": 0,
+              "unset": 0
+            },
+            "started_in_background": 0,
+            "max_depth": 0,
+            "spawned_by_subagents": 0,
+            "completed": 0,
+            "failed": 0,
+            "killed": {
+              "parent": 0,
+              "user": 0,
+              "system": 0
+            },
+            "refused": {
+              "depth_limit": 0,
+              "concurrency_limit": 0,
+              "budget": 0
+            },
+            "by_type": {}
+          },
+          "is_error": false,
+          "num_turns": 1,
+          "subtype": "success",
+          "api_error_status": null,
+          "result": "Apple noted.",
+          "ttft_ms": 34,
+          "type": "result",
+          "duration_ms": 53,
+          "uuid": "8021c769-3819-466a-ba81-6dafc177097b",
+          "ttft_stream_ms": 34,
+          "time_to_request_ms": 31,
+          "first_content_frame_ms": 34,
+          "user_message_uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+          "user_message_uuids": ["95d2d186-b62e-433e-abd5-141f186c4b7b"],
+          "request_sent_wall_ms": 1790950418111,
+          "queued_turn_count": 0
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+          "state": "completed",
+          "uuid": "c17f2aa4-c1b3-4502-85a7-de4002248b55",
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "last-prompt",
+              "lastPrompt": "First word: apple",
+              "leafUuid": "af72ea55-b46b-4d86-9b14-3dd6b72c8f2f",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "type": "thread",
+          "ref": {
+            "id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+            "strength": "strong"
+          }
+        },
+        {
+          "type": "turn.started"
+        },
+        {
+          "type": "item.started",
+          "key": "msg_scripted_1:0",
+          "ref": {
+            "id": "msg_scripted_1:0",
+            "strength": "strong"
+          },
+          "item": {
+            "kind": "assistant_message",
+            "text": "",
+            "agentId": null
+          }
+        },
+        {
+          "type": "item.delta",
+          "key": "msg_scripted_1:0",
+          "field": "text",
+          "text": "Apple "
+        },
+        {
+          "type": "item.delta",
+          "key": "msg_scripted_1:0",
+          "field": "text",
+          "text": "noted."
+        },
+        {
+          "type": "item.completed",
+          "key": "msg_scripted_1:0",
+          "status": "completed",
+          "item": {
+            "text": "Apple noted."
+          }
+        },
+        {
+          "type": "usage",
+          "usage": {
+            "model": "claude-sonnet-4-5",
+            "inputTokens": 10,
+            "cachedInputTokens": 0,
+            "cacheCreationTokens": 0,
+            "outputTokens": 5,
+            "costUsd": 0.000105,
+            "contextTokens": 10,
+            "contextWindow": 200000
+          }
+        },
+        {
+          "type": "turn.completed",
+          "status": "completed",
+          "ref": {
+            "id": "af72ea55-b46b-4d86-9b14-3dd6b72c8f2f",
+            "strength": "strong"
+          }
+        }
+      ]
+    },
+    {
+      "outbound": {
+        "prompt": "Second word: banana",
+        "cwd": "{{cwd}}",
+        "thread": {
+          "sessionId": null,
+          "resume": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "forkSession": false,
+          "resumeSessionAt": null
+        },
+        "model": "claude-sonnet-4-5",
+        "effort": null,
+        "permissionMode": "acceptEdits",
+        "systemPromptAppend": "You are a Work fixture agent. Keep answers short.",
+        "allowedTools": [
+          "Agent",
+          "Bash",
+          "BashOutput",
+          "Edit",
+          "Glob",
+          "Grep",
+          "KillShell",
+          "Monitor",
+          "NotebookEdit",
+          "PowerShell",
+          "Read",
+          "Skill",
+          "SlashCommand",
+          "Task",
+          "TaskOutput",
+          "TaskStop",
+          "TodoWrite",
+          "WebFetch",
+          "WebSearch",
+          "Write"
+        ],
+        "disallowedTools": [],
+        "mcpServers": {},
+        "env": {
+          "ANTHROPIC_BASE_URL": "{{model}}",
+          "CLAUDE_CONFIG_DIR": "{{home}}",
+          "WORK_MODEL_KEY_FILE": "{{state}}/model-key",
+          "CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "300000",
+          "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+          "DISABLE_AUTOUPDATER": "1"
+        },
+        "apiKeyHelper": "cat \"$WORK_MODEL_KEY_FILE\"",
+        "includePartialMessages": true,
+        "sessionStore": true,
+        "hooks": ["PostToolUse", "UserPromptSubmit"]
+      },
+      "messages": [
+        {
+          "type": "replay.store",
+          "op": "load",
+          "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "queue-operation",
+              "operation": "enqueue",
+              "timestamp": "2026-10-02T14:13:38.078Z",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "content": "First word: apple"
+            },
+            {
+              "type": "queue-operation",
+              "operation": "dequeue",
+              "timestamp": "2026-10-02T14:13:38.079Z",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+            },
+            {
+              "parentUuid": null,
+              "isSidechain": false,
+              "promptId": "d6296fe1-7035-43e4-b3c8-6cd9d72e73d0",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": "First word: apple"
+              },
+              "uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+              "timestamp": "2026-10-02T14:13:38.092Z",
+              "permissionMode": "acceptEdits",
+              "promptSource": "sdk",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+              "isSidechain": false,
+              "attachment": {
+                "type": "agent_listing_delta",
+                "addedTypes": [
+                  "claude",
+                  "Explore",
+                  "general-purpose",
+                  "Plan",
+                  "statusline-setup"
+                ],
+                "addedLines": [
+                  "- claude: Catch-all for any task that doesn't fit a more specific agent. FleetView's default when no agent name is typed. (Tools: *)",
+                  "- Explore: Fast read-only search agent for locating code. Use it to find files by pattern (eg. \"src/components/**/*.tsx\"), grep for symbols or keywords (eg. \"API endpoints\"), or answer \"where is X defined / which files reference Y.\" Do NOT use it for code review, design-doc auditing, cross-file consistency checks, or open-ended analysis — it reads excerpts rather than whole files and will miss content past its read window. When calling, specify search breadth: \"quick\" for a single targeted lookup, \"medium\" for moderate exploration, or \"very thorough\" to search across multiple locations and naming conventions. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: *)",
+                  "- Plan: Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- statusline-setup: Use this agent to configure the user's Claude Code status line setting. (Tools: Read, Edit)"
+                ],
+                "removedTypes": [],
+                "isInitial": true,
+                "showConcurrencyNote": true
+              },
+              "type": "attachment",
+              "uuid": "5405a168-b56f-4372-bc34-e8dca3058b0a",
+              "timestamp": "2026-10-02T14:13:38.091Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "5405a168-b56f-4372-bc34-e8dca3058b0a",
+              "isSidechain": false,
+              "attachment": {
+                "type": "skill_listing",
+                "content": "- dataviz: Use this skill whenever you are about to create ANY chart, graph, plot, dashboard, or data visualization, in ANY output medium — an HTML or React artifact, inline SVG, plotting code in any library (matplotlib, plotly, d3, Recharts, …), an image/PNG you will render and upload, or a chart shared into Slack. Read it BEFORE writing the first line of chart code, choosing chart colors, building a stat tile / meter / KPI row, or laying out a dashboard. When the destination is a first-party document connector (host-designated, never self-described) that renders live charts, hand it the rows (inline, or as an uploaded data file the chart cites) rather than a rendered PNG/SVG — a picture of a chart loses hover, data inspection and per-value comments. Produces visualizations that read as one system — elegant, accessible, consistent in light and dark — using a brand-neutral placeholder palette you swap for your own. Teaches a design-system-agnostic method: a form heuristic, a color formula with a runnable validator, mark specs, and interaction rules. A validated default palette is documented in `references/palette.md` — swap that file's values for your brand's. Triggers on: \"chart\", \"graph\", \"plot\", \"data viz\", \"visualization\", \"dashboard\", \"analytics\", \"visualize data\", \"categorical colors\", \"sequential / diverging palette\", \"stat tile\", \"sparkline\", \"heatmap\", \"legend\", \"axis\", \"tooltip\", \"chart colors\", \"color by series\".\n- update-config: Use this skill to configure the Claude Code harness via settings.json. Automated behaviors (\"from now on when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks configured in settings.json - the harness executes these, not Claude, so memory/preferences cannot fulfill them. Also use for: permissions (\"allow X\", \"add permission\", \"move permission to\"), env vars (\"set X=Y\"), hook troubleshooting, or any changes to settings.json/settings.local.json files. Examples: \"allow npm commands\", \"add bq permission to global settings\", \"move permission to user settings\", \"set DEBUG=true\", \"when claude stops show X\". For simple settings like theme/model, suggest the /config command.\n- keybindings-help: Use when the user wants to customize keyboard shortcuts, rebind keys, add chord bindings, or modify ~/.claude/keybindings.json. Examples: \"rebind ctrl+s\", \"add a chord shortcut\", \"change the submit key\", \"customize keybindings\".\n- code-review: Review the current diff, or a PR number/branch/path target, for correctness bugs and reuse/simplification/efficiency cleanups at the given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings); with no level given, it reuses the level you typed last. Pass --comment to post findings as inline PR comments, or --fix to apply the findings to the working tree after the review.\n- simplify: Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use /code-review for that.\n- fewer-permission-prompts: Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts.\n- loop: Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let the model self-pace. - When the user wants to set up a recurring task, poll for status, or run something repeatedly on an interval (e.g. \"check the deploy every 5 minutes\", \"keep running /babysit-prs\"). Do NOT invoke for one-off tasks.\n- claude-api: Reference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration.\nTRIGGER — read BEFORE opening the target file; don't skip because it \"looks like a one-liner\" — whenever: the prompt names Claude/Anthropic in any form (Claude, Anthropic, Fable, Opus, Sonnet, Haiku, `anthropic`, `@anthropic-ai`, `claude-*`, `us.anthropic.*`, `[1m]`); the user asks about an LLM (pricing/model choice/limits/caching) — never answer from memory; OR the task is LLM-shaped with provider unstated (agent/MCP/tool-definition/multi-agent/RAG/LLM-judge/computer-use; generate/summarize/extract/classify/rewrite/converse over NL; debugging refusals/cutoffs/streaming/tool-calls/tokens).\nSKIP only when another provider is being worked on (overrides all triggers): OpenAI/GPT/Gemini/Llama/Mistral/Cohere/Ollama named in the query; OR `grep -rE 'openai|langchain_openai|google.generativeai|genai|mistralai|cohere|ollama'` over the project hits (run this grep FIRST if no provider named — don't Read the file).\n- workflow-authoring: Reference for writing a Workflow tool script (script API and gotchas, resume, quality patterns, worked examples). Load before authoring a script for a workflow the user already opted into; it does not itself authorize running one.\n- run: Launch and drive this project's app to see a change working. Use when asked to run, start, or screenshot the app, or to confirm a change works in the real app (not just tests). First looks for a project skill that already covers launching the app; otherwise falls back to built-in patterns per project type (CLI, server, TUI, Electron, browser-driven, library).\n- init: Initialize a new CLAUDE.md file with codebase documentation\n- security-review: Complete a security review of the pending changes on the current branch",
+                "skillCount": 12,
+                "isInitial": true,
+                "names": [
+                  "dataviz",
+                  "update-config",
+                  "keybindings-help",
+                  "code-review",
+                  "simplify",
+                  "fewer-permission-prompts",
+                  "loop",
+                  "claude-api",
+                  "workflow-authoring",
+                  "run",
+                  "init",
+                  "security-review"
+                ]
+              },
+              "type": "attachment",
+              "uuid": "32b7a006-26a3-444d-bc14-4e30fd88b827",
+              "timestamp": "2026-10-02T14:13:38.091Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "32b7a006-26a3-444d-bc14-4e30fd88b827",
+              "isSidechain": false,
+              "attachment": {
+                "type": "total_tokens_reminder",
+                "text": "<total_tokens>15000000 tokens left</total_tokens>"
+              },
+              "type": "attachment",
+              "uuid": "72ed9eab-39b2-4001-b612-b166c7f0fc16",
+              "timestamp": "2026-10-02T14:13:38.091Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "type": "atis-latch",
+              "atis": "",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+            },
+            {
+              "parentUuid": "72ed9eab-39b2-4001-b612-b166c7f0fc16",
+              "isSidechain": false,
+              "message": {
+                "id": "msg_scripted_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Apple noted."
+                  }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 0,
+              "type": "assistant",
+              "uuid": "af72ea55-b46b-4d86-9b14-3dd6b72c8f2f",
+              "timestamp": "2026-10-02T14:13:38.115Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "type": "last-prompt",
+              "lastPrompt": "First word: apple",
+              "leafUuid": "af72ea55-b46b-4d86-9b14-3dd6b72c8f2f",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+            }
+          ]
+        },
+        {
+          "type": "replay.input",
+          "uuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+          "text": "Second word: banana"
+        },
+        {
+          "type": "replay.store",
+          "op": "list_subkeys",
+          "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "subpath": null,
+          "entries": null
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+          "state": "queued",
+          "uuid": "17ba865d-5e19-4409-bc6b-9a95e515e614",
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+          "state": "started",
+          "uuid": "e8aedd85-68c6-4374-b3ad-9fdee8d8cdc3",
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+        },
+        {
+          "type": "replay.hook",
+          "event": "UserPromptSubmit",
+          "toolUseID": "de9040d4-3cb7-4f46-8bea-bf403620a3c4",
+          "input": {
+            "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+            "transcript_path": "{{tmp}}/claude-resume-3e01df4c-92f5-4a95-bc91-8b046457901e/projects/{{cwd-key}}/8fb5ec83-ddc9-4340-a616-b67459a7b741.jsonl",
+            "cwd": "{{cwd}}",
+            "prompt_id": "2b5e75ce-5803-4b71-8d7a-ab66eec6246b",
+            "permission_mode": "acceptEdits",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Second word: banana"
+          }
+        },
+        {
+          "type": "system",
+          "subtype": "init",
+          "cwd": "{{cwd}}",
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "tools": [
+            "Task",
+            "AskUserQuestion",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "Edit",
+            "EnterPlanMode",
+            "EnterWorktree",
+            "ExitPlanMode",
+            "ExitWorktree",
+            "Glob",
+            "Grep",
+            "ListAgents",
+            "NotebookEdit",
+            "Read",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskCreate",
+            "TaskGet",
+            "TaskList",
+            "TaskOutput",
+            "TaskStop",
+            "TaskUpdate",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "Write"
+          ],
+          "mcp_servers": [],
+          "model": "claude-sonnet-4-5",
+          "permissionMode": "acceptEdits",
+          "slash_commands": [
+            "deep-research",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "claude-api",
+            "workflow-authoring",
+            "run",
+            "run-skill-generator",
+            "agents",
+            "auto-mode-setup",
+            "autocompact",
+            "clear",
+            "color",
+            "compact",
+            "config",
+            "context",
+            "effort",
+            "fast",
+            "heapdump",
+            "init",
+            "mcp",
+            "model",
+            "__remote-workflow",
+            "workflow-launch-exec",
+            "reload-plugins",
+            "reload-skills",
+            "rename",
+            "security-review",
+            "usage",
+            "insights",
+            "recap",
+            "goal",
+            "list-agents",
+            "team-onboarding"
+          ],
+          "terminal_slash_commands": ["doctor", "color", "reload-plugins"],
+          "apiKeySource": "apiKeyHelper",
+          "claude_code_version": "2.1.263",
+          "output_style": "default",
+          "agents": [
+            "claude",
+            "Explore",
+            "general-purpose",
+            "Plan",
+            "statusline-setup"
+          ],
+          "skills": [
+            "deep-research",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "claude-api",
+            "workflow-authoring",
+            "run",
+            "run-skill-generator"
+          ],
+          "plugins": [],
+          "capabilities": [
+            "interrupt_receipt_v1",
+            "interrupt_cancel_queued_v1",
+            "msg_lifecycle_v1"
+          ],
+          "analytics_disabled": true,
+          "product_feedback_disabled": true,
+          "uuid": "54d1fe89-9901-4eb7-86b9-dd423b55bf53",
+          "messaging_socket_path": "/tmp/cc-socks/42770.sock",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required"
+        },
+        {
+          "type": "system",
+          "subtype": "status",
+          "status": "requesting",
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "uuid": "2c6dba35-7677-462b-96d2-759223843eec"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_scripted_2",
+              "type": "message",
+              "role": "assistant",
+              "model": "claude-sonnet-4-5",
+              "content": [],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "usage": {
+                "input_tokens": 10,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 1
+              }
+            }
+          },
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "parent_tool_use_id": null,
+          "uuid": "51b97eab-f5ce-4cbb-824c-52068a02a5c6",
+          "ttft_ms": 4,
+          "user_message_uuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+          "user_message_uuids": ["422fd95d-f002-4b03-9c9e-c7184314d96f"]
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "text",
+              "text": ""
+            }
+          },
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "parent_tool_use_id": null,
+          "uuid": "460642a6-7586-41be-b577-0696cda026c0"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "text_delta",
+              "text": "Banana "
+            }
+          },
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "parent_tool_use_id": null,
+          "uuid": "f4bdae0d-3f84-4ea5-a994-5b734eb4f833"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "text_delta",
+              "text": "noted."
+            }
+          },
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "parent_tool_use_id": null,
+          "uuid": "b7394e54-570e-4314-a203-3c448e9a2241"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "id": "msg_scripted_2",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [
+              {
+                "type": "text",
+                "text": "Banana noted."
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 1
+            },
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "uuid": "b35c55e4-e590-425d-bfd3-65a59d2700b0",
+          "timestamp": "2026-10-02T14:13:38.398Z"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 0
+          },
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "parent_tool_use_id": null,
+          "uuid": "3141c2d4-368d-43b3-9e30-ad2bec96ff2b"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_delta",
+            "delta": {
+              "stop_reason": "end_turn",
+              "stop_sequence": null
+            },
+            "usage": {
+              "output_tokens": 5
+            }
+          },
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "parent_tool_use_id": null,
+          "uuid": "73593647-f626-47a9-ab40-58de8ca13943"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_stop"
+          },
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "parent_tool_use_id": null,
+          "uuid": "0be7845e-dd27-42c5-97ca-13bb8ba12eb8"
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "queue-operation",
+              "operation": "enqueue",
+              "timestamp": "2026-10-02T14:13:38.342Z",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "content": "Second word: banana"
+            },
+            {
+              "type": "queue-operation",
+              "operation": "dequeue",
+              "timestamp": "2026-10-02T14:13:38.343Z",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+            },
+            {
+              "parentUuid": "af72ea55-b46b-4d86-9b14-3dd6b72c8f2f",
+              "isSidechain": false,
+              "promptId": "2b5e75ce-5803-4b71-8d7a-ab66eec6246b",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": "Second word: banana"
+              },
+              "uuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+              "timestamp": "2026-10-02T14:13:38.355Z",
+              "permissionMode": "acceptEdits",
+              "promptSource": "sdk",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+              "isSidechain": false,
+              "attachment": {
+                "type": "total_tokens_reminder",
+                "text": "<total_tokens>15000000 tokens left</total_tokens>"
+              },
+              "type": "attachment",
+              "uuid": "4925c34f-1be1-4e5a-8f15-25c523b82ee3",
+              "timestamp": "2026-10-02T14:13:38.354Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "4925c34f-1be1-4e5a-8f15-25c523b82ee3",
+              "isSidechain": false,
+              "message": {
+                "id": "msg_scripted_2",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Banana noted."
+                  }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 0,
+              "type": "assistant",
+              "uuid": "b35c55e4-e590-425d-bfd3-65a59d2700b0",
+              "timestamp": "2026-10-02T14:13:38.398Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            }
+          ]
+        },
+        {
+          "duration_api_ms": 43,
+          "stop_reason": "end_turn",
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "total_cost_usd": 0.000105,
+          "usage": {
+            "input_tokens": 10,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 5,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "",
+            "iterations": [],
+            "speed": "standard"
+          },
+          "modelUsage": {
+            "claude-sonnet-4-5": {
+              "inputTokens": 10,
+              "outputTokens": 5,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0,
+              "webSearchRequests": 0,
+              "costUSD": 0.000105,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 0,
+              "canonicalModel": "claude-sonnet-4-5",
+              "provider": "firstParty",
+              "costBasis": "list"
+            }
+          },
+          "permission_denials": [],
+          "terminal_reason": "completed",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required",
+          "subagent_stats": {
+            "spawned": 0,
+            "requested": {
+              "background": 0,
+              "foreground": 0,
+              "unset": 0
+            },
+            "started_in_background": 0,
+            "max_depth": 0,
+            "spawned_by_subagents": 0,
+            "completed": 0,
+            "failed": 0,
+            "killed": {
+              "parent": 0,
+              "user": 0,
+              "system": 0
+            },
+            "refused": {
+              "depth_limit": 0,
+              "concurrency_limit": 0,
+              "budget": 0
+            },
+            "by_type": {}
+          },
+          "is_error": false,
+          "num_turns": 1,
+          "subtype": "success",
+          "api_error_status": null,
+          "result": "Banana noted.",
+          "ttft_ms": 54,
+          "type": "result",
+          "duration_ms": 72,
+          "uuid": "ebe1eee6-76bd-4e93-b3eb-1739c1474eae",
+          "ttft_stream_ms": 33,
+          "time_to_request_ms": 30,
+          "first_content_frame_ms": 33,
+          "user_message_uuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+          "user_message_uuids": ["422fd95d-f002-4b03-9c9e-c7184314d96f"],
+          "request_sent_wall_ms": 1790950418374,
+          "queued_turn_count": 0
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+          "state": "completed",
+          "uuid": "414eeb70-0aa6-449f-a422-e425eba94d92",
+          "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "last-prompt",
+              "lastPrompt": "Second word: banana",
+              "leafUuid": "b35c55e4-e590-425d-bfd3-65a59d2700b0",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+            }
+          ]
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "mode",
+              "mode": "normal",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "type": "thread",
+          "ref": {
+            "id": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+            "strength": "strong"
+          }
+        },
+        {
+          "type": "turn.started"
+        },
+        {
+          "type": "item.started",
+          "key": "msg_scripted_2:0",
+          "ref": {
+            "id": "msg_scripted_2:0",
+            "strength": "strong"
+          },
+          "item": {
+            "kind": "assistant_message",
+            "text": "",
+            "agentId": null
+          }
+        },
+        {
+          "type": "item.delta",
+          "key": "msg_scripted_2:0",
+          "field": "text",
+          "text": "Banana "
+        },
+        {
+          "type": "item.delta",
+          "key": "msg_scripted_2:0",
+          "field": "text",
+          "text": "noted."
+        },
+        {
+          "type": "item.completed",
+          "key": "msg_scripted_2:0",
+          "status": "completed",
+          "item": {
+            "text": "Banana noted."
+          }
+        },
+        {
+          "type": "usage",
+          "usage": {
+            "model": "claude-sonnet-4-5",
+            "inputTokens": 10,
+            "cachedInputTokens": 0,
+            "cacheCreationTokens": 0,
+            "outputTokens": 5,
+            "costUsd": 0.000105,
+            "contextTokens": 10,
+            "contextWindow": 200000
+          }
+        },
+        {
+          "type": "turn.completed",
+          "status": "completed",
+          "ref": {
+            "id": "b35c55e4-e590-425d-bfd3-65a59d2700b0",
+            "strength": "strong"
+          }
+        }
+      ]
+    },
+    {
+      "outbound": {
+        "prompt": "Which words have I told you?",
+        "cwd": "{{cwd}}",
+        "thread": {
+          "sessionId": null,
+          "resume": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "forkSession": true,
+          "resumeSessionAt": "af72ea55-b46b-4d86-9b14-3dd6b72c8f2f"
+        },
+        "model": "claude-sonnet-4-5",
+        "effort": null,
+        "permissionMode": "acceptEdits",
+        "systemPromptAppend": "You are a Work fixture agent. Keep answers short.",
+        "allowedTools": [
+          "Agent",
+          "Bash",
+          "BashOutput",
+          "Edit",
+          "Glob",
+          "Grep",
+          "KillShell",
+          "Monitor",
+          "NotebookEdit",
+          "PowerShell",
+          "Read",
+          "Skill",
+          "SlashCommand",
+          "Task",
+          "TaskOutput",
+          "TaskStop",
+          "TodoWrite",
+          "WebFetch",
+          "WebSearch",
+          "Write"
+        ],
+        "disallowedTools": [],
+        "mcpServers": {},
+        "env": {
+          "ANTHROPIC_BASE_URL": "{{model}}",
+          "CLAUDE_CONFIG_DIR": "{{home}}",
+          "WORK_MODEL_KEY_FILE": "{{state}}/model-key",
+          "CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "300000",
+          "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+          "DISABLE_AUTOUPDATER": "1"
+        },
+        "apiKeyHelper": "cat \"$WORK_MODEL_KEY_FILE\"",
+        "includePartialMessages": true,
+        "sessionStore": true,
+        "hooks": ["PostToolUse", "UserPromptSubmit"]
+      },
+      "messages": [
+        {
+          "type": "replay.store",
+          "op": "load",
+          "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "queue-operation",
+              "operation": "enqueue",
+              "timestamp": "2026-10-02T14:13:38.078Z",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "content": "First word: apple"
+            },
+            {
+              "type": "queue-operation",
+              "operation": "dequeue",
+              "timestamp": "2026-10-02T14:13:38.079Z",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+            },
+            {
+              "parentUuid": null,
+              "isSidechain": false,
+              "promptId": "d6296fe1-7035-43e4-b3c8-6cd9d72e73d0",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": "First word: apple"
+              },
+              "uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+              "timestamp": "2026-10-02T14:13:38.092Z",
+              "permissionMode": "acceptEdits",
+              "promptSource": "sdk",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+              "isSidechain": false,
+              "attachment": {
+                "type": "agent_listing_delta",
+                "addedTypes": [
+                  "claude",
+                  "Explore",
+                  "general-purpose",
+                  "Plan",
+                  "statusline-setup"
+                ],
+                "addedLines": [
+                  "- claude: Catch-all for any task that doesn't fit a more specific agent. FleetView's default when no agent name is typed. (Tools: *)",
+                  "- Explore: Fast read-only search agent for locating code. Use it to find files by pattern (eg. \"src/components/**/*.tsx\"), grep for symbols or keywords (eg. \"API endpoints\"), or answer \"where is X defined / which files reference Y.\" Do NOT use it for code review, design-doc auditing, cross-file consistency checks, or open-ended analysis — it reads excerpts rather than whole files and will miss content past its read window. When calling, specify search breadth: \"quick\" for a single targeted lookup, \"medium\" for moderate exploration, or \"very thorough\" to search across multiple locations and naming conventions. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: *)",
+                  "- Plan: Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- statusline-setup: Use this agent to configure the user's Claude Code status line setting. (Tools: Read, Edit)"
+                ],
+                "removedTypes": [],
+                "isInitial": true,
+                "showConcurrencyNote": true
+              },
+              "type": "attachment",
+              "uuid": "5405a168-b56f-4372-bc34-e8dca3058b0a",
+              "timestamp": "2026-10-02T14:13:38.091Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "5405a168-b56f-4372-bc34-e8dca3058b0a",
+              "isSidechain": false,
+              "attachment": {
+                "type": "skill_listing",
+                "content": "- dataviz: Use this skill whenever you are about to create ANY chart, graph, plot, dashboard, or data visualization, in ANY output medium — an HTML or React artifact, inline SVG, plotting code in any library (matplotlib, plotly, d3, Recharts, …), an image/PNG you will render and upload, or a chart shared into Slack. Read it BEFORE writing the first line of chart code, choosing chart colors, building a stat tile / meter / KPI row, or laying out a dashboard. When the destination is a first-party document connector (host-designated, never self-described) that renders live charts, hand it the rows (inline, or as an uploaded data file the chart cites) rather than a rendered PNG/SVG — a picture of a chart loses hover, data inspection and per-value comments. Produces visualizations that read as one system — elegant, accessible, consistent in light and dark — using a brand-neutral placeholder palette you swap for your own. Teaches a design-system-agnostic method: a form heuristic, a color formula with a runnable validator, mark specs, and interaction rules. A validated default palette is documented in `references/palette.md` — swap that file's values for your brand's. Triggers on: \"chart\", \"graph\", \"plot\", \"data viz\", \"visualization\", \"dashboard\", \"analytics\", \"visualize data\", \"categorical colors\", \"sequential / diverging palette\", \"stat tile\", \"sparkline\", \"heatmap\", \"legend\", \"axis\", \"tooltip\", \"chart colors\", \"color by series\".\n- update-config: Use this skill to configure the Claude Code harness via settings.json. Automated behaviors (\"from now on when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks configured in settings.json - the harness executes these, not Claude, so memory/preferences cannot fulfill them. Also use for: permissions (\"allow X\", \"add permission\", \"move permission to\"), env vars (\"set X=Y\"), hook troubleshooting, or any changes to settings.json/settings.local.json files. Examples: \"allow npm commands\", \"add bq permission to global settings\", \"move permission to user settings\", \"set DEBUG=true\", \"when claude stops show X\". For simple settings like theme/model, suggest the /config command.\n- keybindings-help: Use when the user wants to customize keyboard shortcuts, rebind keys, add chord bindings, or modify ~/.claude/keybindings.json. Examples: \"rebind ctrl+s\", \"add a chord shortcut\", \"change the submit key\", \"customize keybindings\".\n- code-review: Review the current diff, or a PR number/branch/path target, for correctness bugs and reuse/simplification/efficiency cleanups at the given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings); with no level given, it reuses the level you typed last. Pass --comment to post findings as inline PR comments, or --fix to apply the findings to the working tree after the review.\n- simplify: Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use /code-review for that.\n- fewer-permission-prompts: Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts.\n- loop: Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let the model self-pace. - When the user wants to set up a recurring task, poll for status, or run something repeatedly on an interval (e.g. \"check the deploy every 5 minutes\", \"keep running /babysit-prs\"). Do NOT invoke for one-off tasks.\n- claude-api: Reference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration.\nTRIGGER — read BEFORE opening the target file; don't skip because it \"looks like a one-liner\" — whenever: the prompt names Claude/Anthropic in any form (Claude, Anthropic, Fable, Opus, Sonnet, Haiku, `anthropic`, `@anthropic-ai`, `claude-*`, `us.anthropic.*`, `[1m]`); the user asks about an LLM (pricing/model choice/limits/caching) — never answer from memory; OR the task is LLM-shaped with provider unstated (agent/MCP/tool-definition/multi-agent/RAG/LLM-judge/computer-use; generate/summarize/extract/classify/rewrite/converse over NL; debugging refusals/cutoffs/streaming/tool-calls/tokens).\nSKIP only when another provider is being worked on (overrides all triggers): OpenAI/GPT/Gemini/Llama/Mistral/Cohere/Ollama named in the query; OR `grep -rE 'openai|langchain_openai|google.generativeai|genai|mistralai|cohere|ollama'` over the project hits (run this grep FIRST if no provider named — don't Read the file).\n- workflow-authoring: Reference for writing a Workflow tool script (script API and gotchas, resume, quality patterns, worked examples). Load before authoring a script for a workflow the user already opted into; it does not itself authorize running one.\n- run: Launch and drive this project's app to see a change working. Use when asked to run, start, or screenshot the app, or to confirm a change works in the real app (not just tests). First looks for a project skill that already covers launching the app; otherwise falls back to built-in patterns per project type (CLI, server, TUI, Electron, browser-driven, library).\n- init: Initialize a new CLAUDE.md file with codebase documentation\n- security-review: Complete a security review of the pending changes on the current branch",
+                "skillCount": 12,
+                "isInitial": true,
+                "names": [
+                  "dataviz",
+                  "update-config",
+                  "keybindings-help",
+                  "code-review",
+                  "simplify",
+                  "fewer-permission-prompts",
+                  "loop",
+                  "claude-api",
+                  "workflow-authoring",
+                  "run",
+                  "init",
+                  "security-review"
+                ]
+              },
+              "type": "attachment",
+              "uuid": "32b7a006-26a3-444d-bc14-4e30fd88b827",
+              "timestamp": "2026-10-02T14:13:38.091Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "32b7a006-26a3-444d-bc14-4e30fd88b827",
+              "isSidechain": false,
+              "attachment": {
+                "type": "total_tokens_reminder",
+                "text": "<total_tokens>15000000 tokens left</total_tokens>"
+              },
+              "type": "attachment",
+              "uuid": "72ed9eab-39b2-4001-b612-b166c7f0fc16",
+              "timestamp": "2026-10-02T14:13:38.091Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "type": "atis-latch",
+              "atis": "",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+            },
+            {
+              "parentUuid": "72ed9eab-39b2-4001-b612-b166c7f0fc16",
+              "isSidechain": false,
+              "message": {
+                "id": "msg_scripted_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Apple noted."
+                  }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 0,
+              "type": "assistant",
+              "uuid": "af72ea55-b46b-4d86-9b14-3dd6b72c8f2f",
+              "timestamp": "2026-10-02T14:13:38.115Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "type": "last-prompt",
+              "lastPrompt": "First word: apple",
+              "leafUuid": "af72ea55-b46b-4d86-9b14-3dd6b72c8f2f",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+            },
+            {
+              "type": "queue-operation",
+              "operation": "enqueue",
+              "timestamp": "2026-10-02T14:13:38.342Z",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "content": "Second word: banana"
+            },
+            {
+              "type": "queue-operation",
+              "operation": "dequeue",
+              "timestamp": "2026-10-02T14:13:38.343Z",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+            },
+            {
+              "parentUuid": "af72ea55-b46b-4d86-9b14-3dd6b72c8f2f",
+              "isSidechain": false,
+              "promptId": "2b5e75ce-5803-4b71-8d7a-ab66eec6246b",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": "Second word: banana"
+              },
+              "uuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+              "timestamp": "2026-10-02T14:13:38.355Z",
+              "permissionMode": "acceptEdits",
+              "promptSource": "sdk",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+              "isSidechain": false,
+              "attachment": {
+                "type": "total_tokens_reminder",
+                "text": "<total_tokens>15000000 tokens left</total_tokens>"
+              },
+              "type": "attachment",
+              "uuid": "4925c34f-1be1-4e5a-8f15-25c523b82ee3",
+              "timestamp": "2026-10-02T14:13:38.354Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "4925c34f-1be1-4e5a-8f15-25c523b82ee3",
+              "isSidechain": false,
+              "message": {
+                "id": "msg_scripted_2",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Banana noted."
+                  }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 0,
+              "type": "assistant",
+              "uuid": "b35c55e4-e590-425d-bfd3-65a59d2700b0",
+              "timestamp": "2026-10-02T14:13:38.398Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "type": "last-prompt",
+              "lastPrompt": "Second word: banana",
+              "leafUuid": "b35c55e4-e590-425d-bfd3-65a59d2700b0",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+            },
+            {
+              "type": "mode",
+              "mode": "normal",
+              "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
+            }
+          ]
+        },
+        {
+          "type": "replay.input",
+          "uuid": "19295f0e-18c8-411d-96c8-ebf6b269f308",
+          "text": "Which words have I told you?"
+        },
+        {
+          "type": "replay.store",
+          "op": "list_subkeys",
+          "sessionId": "8fb5ec83-ddc9-4340-a616-b67459a7b741",
+          "subpath": null,
+          "entries": null
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "19295f0e-18c8-411d-96c8-ebf6b269f308",
+          "state": "queued",
+          "uuid": "285c913c-3d04-4565-ad87-11270779e39c",
+          "session_id": "d387cfb2-4816-42be-a212-cfb49f801858"
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "19295f0e-18c8-411d-96c8-ebf6b269f308",
+          "state": "started",
+          "uuid": "21d82469-957c-49f1-a136-34dee61dcece",
+          "session_id": "d387cfb2-4816-42be-a212-cfb49f801858"
+        },
+        {
+          "type": "replay.hook",
+          "event": "UserPromptSubmit",
+          "toolUseID": "54bff518-41b1-43bb-8597-11b68a8ab20e",
+          "input": {
+            "session_id": "d387cfb2-4816-42be-a212-cfb49f801858",
+            "transcript_path": "{{tmp}}/claude-resume-da54a140-c22c-4248-8b25-f2f7acab797a/projects/{{cwd-key}}/d387cfb2-4816-42be-a212-cfb49f801858.jsonl",
+            "cwd": "{{cwd}}",
+            "prompt_id": "6aba9b0a-66b2-41af-8053-c6110e9b8f60",
+            "permission_mode": "acceptEdits",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Which words have I told you?"
+          }
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "d387cfb2-4816-42be-a212-cfb49f801858",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "mode",
+              "mode": "normal",
+              "sessionId": "d387cfb2-4816-42be-a212-cfb49f801858"
+            },
+            {
+              "type": "atis-latch",
+              "atis": "",
+              "sessionId": "d387cfb2-4816-42be-a212-cfb49f801858"
+            }
+          ]
+        },
+        {
+          "type": "system",
+          "subtype": "init",
+          "cwd": "{{cwd}}",
+          "session_id": "d387cfb2-4816-42be-a212-cfb49f801858",
+          "tools": [
+            "Task",
+            "AskUserQuestion",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "Edit",
+            "EnterPlanMode",
+            "EnterWorktree",
+            "ExitPlanMode",
+            "ExitWorktree",
+            "Glob",
+            "Grep",
+            "ListAgents",
+            "NotebookEdit",
+            "Read",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskCreate",
+            "TaskGet",
+            "TaskList",
+            "TaskOutput",
+            "TaskStop",
+            "TaskUpdate",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "Write"
+          ],
+          "mcp_servers": [],
+          "model": "claude-sonnet-4-5",
+          "permissionMode": "acceptEdits",
+          "slash_commands": [
+            "deep-research",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "claude-api",
+            "workflow-authoring",
+            "run",
+            "run-skill-generator",
+            "agents",
+            "auto-mode-setup",
+            "autocompact",
+            "clear",
+            "color",
+            "compact",
+            "config",
+            "context",
+            "effort",
+            "fast",
+            "heapdump",
+            "init",
+            "mcp",
+            "model",
+            "__remote-workflow",
+            "workflow-launch-exec",
+            "reload-plugins",
+            "reload-skills",
+            "rename",
+            "security-review",
+            "usage",
+            "insights",
+            "recap",
+            "goal",
+            "list-agents",
+            "team-onboarding"
+          ],
+          "terminal_slash_commands": ["doctor", "color", "reload-plugins"],
+          "apiKeySource": "apiKeyHelper",
+          "claude_code_version": "2.1.263",
+          "output_style": "default",
+          "agents": [
+            "claude",
+            "Explore",
+            "general-purpose",
+            "Plan",
+            "statusline-setup"
+          ],
+          "skills": [
+            "deep-research",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "claude-api",
+            "workflow-authoring",
+            "run",
+            "run-skill-generator"
+          ],
+          "plugins": [],
+          "capabilities": [
+            "interrupt_receipt_v1",
+            "interrupt_cancel_queued_v1",
+            "msg_lifecycle_v1"
+          ],
+          "analytics_disabled": true,
+          "product_feedback_disabled": true,
+          "uuid": "b2275e34-2991-4202-93a6-942222307bbb",
+          "messaging_socket_path": "/tmp/cc-socks/42812.sock",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required"
+        },
+        {
+          "type": "system",
+          "subtype": "status",
+          "status": "requesting",
+          "session_id": "d387cfb2-4816-42be-a212-cfb49f801858",
+          "uuid": "621cf61a-1dd2-437c-be6c-5b15b02c1d38"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_scripted_3",
+              "type": "message",
+              "role": "assistant",
+              "model": "claude-sonnet-4-5",
+              "content": [],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "usage": {
+                "input_tokens": 10,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 1
+              }
+            }
+          },
+          "session_id": "d387cfb2-4816-42be-a212-cfb49f801858",
+          "parent_tool_use_id": null,
+          "uuid": "d38b5a72-dd13-47cf-9b7b-515945eab398",
+          "ttft_ms": 3,
+          "user_message_uuid": "19295f0e-18c8-411d-96c8-ebf6b269f308",
+          "user_message_uuids": ["19295f0e-18c8-411d-96c8-ebf6b269f308"]
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "text",
+              "text": ""
+            }
+          },
+          "session_id": "d387cfb2-4816-42be-a212-cfb49f801858",
+          "parent_tool_use_id": null,
+          "uuid": "af9ecf75-056a-44db-86c1-646d411caf65"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "text_delta",
+              "text": "Only a"
+            }
+          },
+          "session_id": "d387cfb2-4816-42be-a212-cfb49f801858",
+          "parent_tool_use_id": null,
+          "uuid": "29a41c64-f9ab-47b2-bab4-1486dbec5ceb"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "text_delta",
+              "text": "pple."
+            }
+          },
+          "session_id": "d387cfb2-4816-42be-a212-cfb49f801858",
+          "parent_tool_use_id": null,
+          "uuid": "7f1865bd-95b5-47e8-8202-0027cb00a0e4"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "id": "msg_scripted_3",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [
+              {
+                "type": "text",
+                "text": "Only apple."
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 1
+            },
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "d387cfb2-4816-42be-a212-cfb49f801858",
+          "uuid": "2b911043-1429-4b6c-9eec-9c9c422d50a1",
+          "timestamp": "2026-10-02T14:13:38.661Z"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 0
+          },
+          "session_id": "d387cfb2-4816-42be-a212-cfb49f801858",
+          "parent_tool_use_id": null,
+          "uuid": "ffb62dbe-f84f-4d28-a454-1abb6c6bb9fd"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_delta",
+            "delta": {
+              "stop_reason": "end_turn",
+              "stop_sequence": null
+            },
+            "usage": {
+              "output_tokens": 5
+            }
+          },
+          "session_id": "d387cfb2-4816-42be-a212-cfb49f801858",
+          "parent_tool_use_id": null,
+          "uuid": "519c88f5-cecd-4ab6-a050-7ca388fdba65"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_stop"
+          },
+          "session_id": "d387cfb2-4816-42be-a212-cfb49f801858",
+          "parent_tool_use_id": null,
+          "uuid": "9c64469f-ebfd-4d03-b1b3-78718b45bc1e"
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "d387cfb2-4816-42be-a212-cfb49f801858",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "queue-operation",
+              "operation": "enqueue",
+              "timestamp": "2026-10-02T14:13:38.626Z",
+              "sessionId": "d387cfb2-4816-42be-a212-cfb49f801858",
+              "content": "Which words have I told you?"
+            },
+            {
+              "type": "queue-operation",
+              "operation": "dequeue",
+              "timestamp": "2026-10-02T14:13:38.626Z",
+              "sessionId": "d387cfb2-4816-42be-a212-cfb49f801858"
+            },
+            {
+              "parentUuid": null,
+              "isSidechain": false,
+              "promptId": "6aba9b0a-66b2-41af-8053-c6110e9b8f60",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": "First word: apple"
+              },
+              "uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+              "timestamp": "2026-10-02T14:13:38.092Z",
+              "permissionMode": "acceptEdits",
+              "promptSource": "sdk",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "d387cfb2-4816-42be-a212-cfb49f801858",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+              "isSidechain": false,
+              "attachment": {
+                "type": "agent_listing_delta",
+                "addedTypes": [
+                  "claude",
+                  "Explore",
+                  "general-purpose",
+                  "Plan",
+                  "statusline-setup"
+                ],
+                "addedLines": [
+                  "- claude: Catch-all for any task that doesn't fit a more specific agent. FleetView's default when no agent name is typed. (Tools: *)",
+                  "- Explore: Fast read-only search agent for locating code. Use it to find files by pattern (eg. \"src/components/**/*.tsx\"), grep for symbols or keywords (eg. \"API endpoints\"), or answer \"where is X defined / which files reference Y.\" Do NOT use it for code review, design-doc auditing, cross-file consistency checks, or open-ended analysis — it reads excerpts rather than whole files and will miss content past its read window. When calling, specify search breadth: \"quick\" for a single targeted lookup, \"medium\" for moderate exploration, or \"very thorough\" to search across multiple locations and naming conventions. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: *)",
+                  "- Plan: Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- statusline-setup: Use this agent to configure the user's Claude Code status line setting. (Tools: Read, Edit)"
+                ],
+                "removedTypes": [],
+                "isInitial": true,
+                "showConcurrencyNote": true
+              },
+              "type": "attachment",
+              "uuid": "5405a168-b56f-4372-bc34-e8dca3058b0a",
+              "timestamp": "2026-10-02T14:13:38.091Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "d387cfb2-4816-42be-a212-cfb49f801858",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "5405a168-b56f-4372-bc34-e8dca3058b0a",
+              "isSidechain": false,
+              "attachment": {
+                "type": "skill_listing",
+                "content": "- dataviz: Use this skill whenever you are about to create ANY chart, graph, plot, dashboard, or data visualization, in ANY output medium — an HTML or React artifact, inline SVG, plotting code in any library (matplotlib, plotly, d3, Recharts, …), an image/PNG you will render and upload, or a chart shared into Slack. Read it BEFORE writing the first line of chart code, choosing chart colors, building a stat tile / meter / KPI row, or laying out a dashboard. When the destination is a first-party document connector (host-designated, never self-described) that renders live charts, hand it the rows (inline, or as an uploaded data file the chart cites) rather than a rendered PNG/SVG — a picture of a chart loses hover, data inspection and per-value comments. Produces visualizations that read as one system — elegant, accessible, consistent in light and dark — using a brand-neutral placeholder palette you swap for your own. Teaches a design-system-agnostic method: a form heuristic, a color formula with a runnable validator, mark specs, and interaction rules. A validated default palette is documented in `references/palette.md` — swap that file's values for your brand's. Triggers on: \"chart\", \"graph\", \"plot\", \"data viz\", \"visualization\", \"dashboard\", \"analytics\", \"visualize data\", \"categorical colors\", \"sequential / diverging palette\", \"stat tile\", \"sparkline\", \"heatmap\", \"legend\", \"axis\", \"tooltip\", \"chart colors\", \"color by series\".\n- update-config: Use this skill to configure the Claude Code harness via settings.json. Automated behaviors (\"from now on when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks configured in settings.json - the harness executes these, not Claude, so memory/preferences cannot fulfill them. Also use for: permissions (\"allow X\", \"add permission\", \"move permission to\"), env vars (\"set X=Y\"), hook troubleshooting, or any changes to settings.json/settings.local.json files. Examples: \"allow npm commands\", \"add bq permission to global settings\", \"move permission to user settings\", \"set DEBUG=true\", \"when claude stops show X\". For simple settings like theme/model, suggest the /config command.\n- keybindings-help: Use when the user wants to customize keyboard shortcuts, rebind keys, add chord bindings, or modify ~/.claude/keybindings.json. Examples: \"rebind ctrl+s\", \"add a chord shortcut\", \"change the submit key\", \"customize keybindings\".\n- code-review: Review the current diff, or a PR number/branch/path target, for correctness bugs and reuse/simplification/efficiency cleanups at the given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings); with no level given, it reuses the level you typed last. Pass --comment to post findings as inline PR comments, or --fix to apply the findings to the working tree after the review.\n- simplify: Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use /code-review for that.\n- fewer-permission-prompts: Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts.\n- loop: Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let the model self-pace. - When the user wants to set up a recurring task, poll for status, or run something repeatedly on an interval (e.g. \"check the deploy every 5 minutes\", \"keep running /babysit-prs\"). Do NOT invoke for one-off tasks.\n- claude-api: Reference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration.\nTRIGGER — read BEFORE opening the target file; don't skip because it \"looks like a one-liner\" — whenever: the prompt names Claude/Anthropic in any form (Claude, Anthropic, Fable, Opus, Sonnet, Haiku, `anthropic`, `@anthropic-ai`, `claude-*`, `us.anthropic.*`, `[1m]`); the user asks about an LLM (pricing/model choice/limits/caching) — never answer from memory; OR the task is LLM-shaped with provider unstated (agent/MCP/tool-definition/multi-agent/RAG/LLM-judge/computer-use; generate/summarize/extract/classify/rewrite/converse over NL; debugging refusals/cutoffs/streaming/tool-calls/tokens).\nSKIP only when another provider is being worked on (overrides all triggers): OpenAI/GPT/Gemini/Llama/Mistral/Cohere/Ollama named in the query; OR `grep -rE 'openai|langchain_openai|google.generativeai|genai|mistralai|cohere|ollama'` over the project hits (run this grep FIRST if no provider named — don't Read the file).\n- workflow-authoring: Reference for writing a Workflow tool script (script API and gotchas, resume, quality patterns, worked examples). Load before authoring a script for a workflow the user already opted into; it does not itself authorize running one.\n- run: Launch and drive this project's app to see a change working. Use when asked to run, start, or screenshot the app, or to confirm a change works in the real app (not just tests). First looks for a project skill that already covers launching the app; otherwise falls back to built-in patterns per project type (CLI, server, TUI, Electron, browser-driven, library).\n- init: Initialize a new CLAUDE.md file with codebase documentation\n- security-review: Complete a security review of the pending changes on the current branch",
+                "skillCount": 12,
+                "isInitial": true,
+                "names": [
+                  "dataviz",
+                  "update-config",
+                  "keybindings-help",
+                  "code-review",
+                  "simplify",
+                  "fewer-permission-prompts",
+                  "loop",
+                  "claude-api",
+                  "workflow-authoring",
+                  "run",
+                  "init",
+                  "security-review"
+                ]
+              },
+              "type": "attachment",
+              "uuid": "32b7a006-26a3-444d-bc14-4e30fd88b827",
+              "timestamp": "2026-10-02T14:13:38.091Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "d387cfb2-4816-42be-a212-cfb49f801858",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "32b7a006-26a3-444d-bc14-4e30fd88b827",
+              "isSidechain": false,
+              "attachment": {
+                "type": "total_tokens_reminder",
+                "text": "<total_tokens>15000000 tokens left</total_tokens>"
+              },
+              "type": "attachment",
+              "uuid": "72ed9eab-39b2-4001-b612-b166c7f0fc16",
+              "timestamp": "2026-10-02T14:13:38.091Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "d387cfb2-4816-42be-a212-cfb49f801858",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "72ed9eab-39b2-4001-b612-b166c7f0fc16",
+              "isSidechain": false,
+              "message": {
+                "id": "msg_scripted_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Apple noted."
+                  }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 0,
+              "type": "assistant",
+              "uuid": "af72ea55-b46b-4d86-9b14-3dd6b72c8f2f",
+              "timestamp": "2026-10-02T14:13:38.115Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "d387cfb2-4816-42be-a212-cfb49f801858",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "af72ea55-b46b-4d86-9b14-3dd6b72c8f2f",
+              "isSidechain": false,
+              "promptId": "6aba9b0a-66b2-41af-8053-c6110e9b8f60",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": "Which words have I told you?"
+              },
+              "uuid": "19295f0e-18c8-411d-96c8-ebf6b269f308",
+              "timestamp": "2026-10-02T14:13:38.639Z",
+              "permissionMode": "acceptEdits",
+              "promptSource": "sdk",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "d387cfb2-4816-42be-a212-cfb49f801858",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "19295f0e-18c8-411d-96c8-ebf6b269f308",
+              "isSidechain": false,
+              "attachment": {
+                "type": "total_tokens_reminder",
+                "text": "<total_tokens>15000000 tokens left</total_tokens>"
+              },
+              "type": "attachment",
+              "uuid": "62bef439-3a97-46f4-9f3c-209d2df4514a",
+              "timestamp": "2026-10-02T14:13:38.639Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "d387cfb2-4816-42be-a212-cfb49f801858",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "62bef439-3a97-46f4-9f3c-209d2df4514a",
+              "isSidechain": false,
+              "message": {
+                "id": "msg_scripted_3",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Only apple."
+                  }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 0,
+              "type": "assistant",
+              "uuid": "2b911043-1429-4b6c-9eec-9c9c422d50a1",
+              "timestamp": "2026-10-02T14:13:38.661Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "d387cfb2-4816-42be-a212-cfb49f801858",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            }
+          ]
+        },
+        {
+          "duration_api_ms": 19,
+          "stop_reason": "end_turn",
+          "session_id": "d387cfb2-4816-42be-a212-cfb49f801858",
+          "total_cost_usd": 0.000105,
+          "usage": {
+            "input_tokens": 10,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 5,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "",
+            "iterations": [],
+            "speed": "standard"
+          },
+          "modelUsage": {
+            "claude-sonnet-4-5": {
+              "inputTokens": 10,
+              "outputTokens": 5,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0,
+              "webSearchRequests": 0,
+              "costUSD": 0.000105,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 0,
+              "canonicalModel": "claude-sonnet-4-5",
+              "provider": "firstParty",
+              "costBasis": "list"
+            }
+          },
+          "permission_denials": [],
+          "terminal_reason": "completed",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required",
+          "subagent_stats": {
+            "spawned": 0,
+            "requested": {
+              "background": 0,
+              "foreground": 0,
+              "unset": 0
+            },
+            "started_in_background": 0,
+            "max_depth": 0,
+            "spawned_by_subagents": 0,
+            "completed": 0,
+            "failed": 0,
+            "killed": {
+              "parent": 0,
+              "user": 0,
+              "system": 0
+            },
+            "refused": {
+              "depth_limit": 0,
+              "concurrency_limit": 0,
+              "budget": 0
+            },
+            "by_type": {}
+          },
+          "is_error": false,
+          "num_turns": 1,
+          "subtype": "success",
+          "api_error_status": null,
+          "result": "Only apple.",
+          "ttft_ms": 33,
+          "type": "result",
+          "duration_ms": 49,
+          "uuid": "6ec3cd5b-a47d-4b5b-9a2b-c6d4ef5c4dd1",
+          "ttft_stream_ms": 32,
+          "time_to_request_ms": 30,
+          "first_content_frame_ms": 33,
+          "user_message_uuid": "19295f0e-18c8-411d-96c8-ebf6b269f308",
+          "user_message_uuids": ["19295f0e-18c8-411d-96c8-ebf6b269f308"],
+          "request_sent_wall_ms": 1790950418658,
+          "queued_turn_count": 0
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "19295f0e-18c8-411d-96c8-ebf6b269f308",
+          "state": "completed",
+          "uuid": "bbde6950-a0ef-47c9-9049-576bcaa72167",
+          "session_id": "d387cfb2-4816-42be-a212-cfb49f801858"
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "d387cfb2-4816-42be-a212-cfb49f801858",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "last-prompt",
+              "lastPrompt": "First word: apple",
+              "leafUuid": "2b911043-1429-4b6c-9eec-9c9c422d50a1",
+              "sessionId": "d387cfb2-4816-42be-a212-cfb49f801858"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "type": "thread",
+          "ref": {
+            "id": "d387cfb2-4816-42be-a212-cfb49f801858",
+            "strength": "strong"
+          }
+        },
+        {
+          "type": "turn.started"
+        },
+        {
+          "type": "item.started",
+          "key": "msg_scripted_3:0",
+          "ref": {
+            "id": "msg_scripted_3:0",
+            "strength": "strong"
+          },
+          "item": {
+            "kind": "assistant_message",
+            "text": "",
+            "agentId": null
+          }
+        },
+        {
+          "type": "item.delta",
+          "key": "msg_scripted_3:0",
+          "field": "text",
+          "text": "Only a"
+        },
+        {
+          "type": "item.delta",
+          "key": "msg_scripted_3:0",
+          "field": "text",
+          "text": "pple."
+        },
+        {
+          "type": "item.completed",
+          "key": "msg_scripted_3:0",
+          "status": "completed",
+          "item": {
+            "text": "Only apple."
+          }
+        },
+        {
+          "type": "usage",
+          "usage": {
+            "model": "claude-sonnet-4-5",
+            "inputTokens": 10,
+            "cachedInputTokens": 0,
+            "cacheCreationTokens": 0,
+            "outputTokens": 5,
+            "costUsd": 0.000105,
+            "contextTokens": 10,
+            "contextWindow": 200000
+          }
+        },
+        {
+          "type": "turn.completed",
+          "status": "completed",
+          "ref": {
+            "id": "2b911043-1429-4b6c-9eec-9c9c422d50a1",
+            "strength": "strong"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -613,7 +613,6 @@ app.whenReady().then(async () => {
 
   const unsubscribeProfileRemoved = profilesStore.onRemoved((id) => {
     void mcpApps.releaseProfile(id);
-    state.current?.agentRegistry.releaseProfile(id);
   });
   disposeProfileResources = async () => {
     unsubscribeProfileRemoved();

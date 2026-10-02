@@ -2,6 +2,10 @@ import {
   type CatamorphicApiClient,
   createCatamorphicClient,
 } from "@catamorphic/api-client";
+import {
+  SESSION_PROTOCOL_MISMATCH_MESSAGE,
+  speaksSessionProtocol,
+} from "@catamorphic/react";
 import { refreshRemoteCredentials } from "./oauth.js";
 import {
   connectionById,
@@ -113,6 +117,41 @@ export interface RemoteMe {
     documents: Array<{ path: string; access: "read" | "write" }>;
   }>;
   features: Record<string, unknown>;
+  /** The agent protocols the server speaks (ADR 0197). */
+  agentProtocol?: { session?: number; runner?: number } | null;
+}
+
+/**
+ * Refuse a server whose agent sessions speak another protocol version
+ * (ADR 0197): its chats cannot be read or continued from this app.
+ */
+export function assertSessionProtocol(me: {
+  agentProtocol?: { session?: number } | null;
+}): void {
+  if (!speaksSessionProtocol(me))
+    throw new Error(SESSION_PROTOCOL_MISMATCH_MESSAGE);
+}
+
+/**
+ * Check a server's protocol with a bearer token before keeping its
+ * connection: pairing and sign-in hold a fresh token, not a stored one.
+ */
+export async function verifySessionProtocol(options: {
+  serverUrl: string;
+  accessToken: string;
+  fetch?: typeof fetch;
+}): Promise<void> {
+  const response = await (options.fetch ?? fetch)(
+    `${options.serverUrl.replace(/\/+$/, "")}/me`,
+    { headers: { authorization: `Bearer ${options.accessToken}` } },
+  );
+  if (!response.ok)
+    throw new Error(
+      `The server could not confirm its version (${response.status}).`,
+    );
+  const me: { agentProtocol?: { session?: number } | null } =
+    await response.json();
+  assertSessionProtocol(me);
 }
 
 export async function fetchMe(
@@ -126,7 +165,9 @@ export async function fetchMe(
         : `The server said ${response.status}.`,
     );
   }
-  return (await response.json()) as RemoteMe;
+  const me = (await response.json()) as RemoteMe;
+  assertSessionProtocol(me);
+  return me;
 }
 
 async function accessToken(options: {

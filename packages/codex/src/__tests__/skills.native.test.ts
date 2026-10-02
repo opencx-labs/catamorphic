@@ -2,7 +2,8 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { CodexAppServer } from "../app-server.js";
+import { listCodexSkills } from "../skills.js";
+import { pinnedCodexCommand } from "../testing/pinned.js";
 
 it("discovers native skills from the requested checkout and refreshes file edits without a thread", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "codex-skills-"));
@@ -12,22 +13,24 @@ it("discovers native skills from the requested checkout and refreshes file edits
   await mkdir(home, { recursive: true });
   await mkdir(dir, { recursive: true });
   const file = path.join(dir, "SKILL.md");
-  const server = new CodexAppServer({
-    env: {
-      CODEX_HOME: home,
-      OPENAI_API_KEY: "",
-      CODEX_API_KEY: "",
-      HTTP_PROXY: "http://127.0.0.1:9",
-      HTTPS_PROXY: "http://127.0.0.1:9",
-    },
-  });
+  const list = () =>
+    listCodexSkills({
+      executable: pinnedCodexCommand(),
+      workingDirectory: cwd,
+      env: {
+        CODEX_HOME: home,
+        OPENAI_API_KEY: "",
+        CODEX_API_KEY: "",
+        HTTP_PROXY: "http://127.0.0.1:9",
+        HTTPS_PROXY: "http://127.0.0.1:9",
+      },
+    });
   try {
     await writeFile(
       file,
       "---\nname: release-notes\ndescription: Original release notes\n---\nWrite release notes.\n",
     );
-    const first = await server.listSkills({ workingDirectory: cwd });
-    expect(first).toContainEqual({
+    expect(await list()).toContainEqual({
       name: "release-notes",
       description: "Original release notes",
       path: await realpath(file),
@@ -36,14 +39,12 @@ it("discovers native skills from the requested checkout and refreshes file edits
       file,
       "---\nname: release-notes\ndescription: Updated release notes\n---\nWrite release notes.\n",
     );
-    const second = await server.listSkills({ workingDirectory: cwd });
-    expect(second).toContainEqual({
+    expect(await list()).toContainEqual({
       name: "release-notes",
       description: "Updated release notes",
       path: await realpath(file),
     });
   } finally {
-    server.close();
     // The native process's final writes can race removal.
     await rm(root, {
       recursive: true,

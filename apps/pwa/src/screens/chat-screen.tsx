@@ -1,10 +1,11 @@
 import {
   CatamorphicProvider,
+  messageWithAttachmentNames,
+  QUESTIONS_DISMISSED_MESSAGE,
+  type RuntimeRequestResponse,
   useAcknowledgeAgentSessionAttention,
   useAgentCatalog,
   useAgentChat,
-  useAnswerAgentQuestion,
-  useToolPermissions,
 } from "@catamorphic/react";
 import {
   AgentEnvironmentControl,
@@ -14,14 +15,8 @@ import type { QueryClient } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUp, Bot, GitFork, ListPlus, Square, X, Zap } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import {
-  AgentQuestionPanel,
-  QUESTIONS_DISMISSED_MESSAGE,
-} from "../components/agent-question-panel.js";
-import {
-  ChatTimeline,
-  toTimeline,
-} from "../components/catamorphic/chat-timeline.js";
+import { AgentQuestionPanel } from "../components/catamorphic/agent-question-panel.js";
+import { ChatTimeline } from "../components/catamorphic/chat-timeline.js";
 import { ToolPermissionCard } from "../components/catamorphic/tool-permission-card.js";
 import { ChatGlyph } from "../components/chat-glyph.js";
 import { ConnectionTrouble } from "../components/connection-trouble.js";
@@ -88,7 +83,6 @@ function Chat({
   const chat = useAgentChat(projectId, {
     source: "mobile",
     sessionId: sessionId ?? undefined,
-    idleRefetchIntervalMs: 3_000,
     agentId,
     environment,
     onSessionCreated: (created) =>
@@ -157,30 +151,78 @@ function Chat({
         acknowledgedRevisionRef.current = session.attentionSeenRevision;
       });
   }, [chat.session, acknowledgeAttention]);
-  const permissions = useToolPermissions(
-    projectId,
-    chat.sessionId ?? undefined,
-    {
-      enabled: chat.isWorking,
-    },
-  );
   const [draft, setDraft] = useState("");
   // Until /me answers we don't know whether a fresh chat must carry the
   // project agent id; hold the first send rather than 403 a scoped user.
   const sendReady = Boolean(
     chat.sessionId || (agent?.available && environment),
   );
-  const answerQuestion = useAnswerAgentQuestion(projectId, chat.sessionId);
-  const { messages, activity, questions } = toTimeline(
-    chat.messages,
-    chat.optimisticMessages,
-    chat.activity,
+  // Questions answer in their panel or in the person's own words through
+  // the composer (ADR 0195); approvals and elicitations on their cards.
+  const questions = chat.requests.filter(
+    (request) =>
+      request.kind === "question" && request.answerable && request.questions,
   );
+  const cards = chat.requests.filter((request) => !questions.includes(request));
+  const [responding, setResponding] = useState<string | null>(null);
+  const respond = async (
+    requestId: string,
+    response: RuntimeRequestResponse,
+  ) => {
+    setResponding(requestId);
+    try {
+      await chat.respond(requestId, response);
+    } finally {
+      setResponding(null);
+    }
+  };
+  // A mirrored chat whose authority is another host refuses sends with
+  // `authority_required`: take it over here, then send the same command
+  // again (ADR 0077).
+  const blockedSend = chat.pending.find(
+    (message) =>
+      message.status === "failed" &&
+      message.error?.status === 409 &&
+      conflictCode(message.error.details) === "authority_required",
+  );
+  const [continuing, setContinuing] = useState(false);
+  const [continueError, setContinueError] = useState<string | null>(null);
+  const continueHere = async (commandId: string) => {
+    const session = chat.session;
+    if (!session || continuing) return;
+    setContinuing(true);
+    setContinueError(null);
+    try {
+      const { response } = await clientFor(connection).POST(
+        "/api/projects/{projectId}/agent/sessions/{sessionId}/resume",
+        {
+          params: { path: { projectId, sessionId: session.id } },
+          body: { expectedAuthorityRevision: session.authorityRevision },
+        },
+      );
+      if (!response.ok)
+        throw new Error(
+          response.status === 409
+            ? "This chat changed on another machine. Try again in a moment."
+            : `The server said ${response.status}.`,
+        );
+      await chat.resendFailed(commandId);
+    } catch (error) {
+      setContinueError(
+        error instanceof Error ? error.message : "Could not continue here.",
+      );
+    } finally {
+      setContinuing(false);
+    }
+  };
+  const agentName = (id: string) =>
+    catalog.data?.items.find(
+      (item) => item.id === id || item.id.endsWith(`:${id}`),
+    )?.name;
 
-  const lastFailed = failedTurn(chat.messages);
-  // Continued on the linked server (ADR 0062): this copy is history —
-  // lock the composer and point at the live fork.
-  const fork = mirrorForkNotice(chat.messages);
+  // Continued on the linked server (ADR 0062): this copy is history. Lock
+  // the composer and point at the live fork.
+  const fork = mirrorForkNotice(chat.state?.items ?? []);
   const forkConnection = fork
     ? findConnection(getState(), fork.serverUrl, fork.remoteProjectId)
     : undefined;
@@ -312,11 +354,19 @@ function Chat({
               window.open(href, "_blank", "noopener,noreferrer");
           }}
           className="min-h-0 flex-1"
-          messages={messages.filter(
-            (message) => message.content !== QUESTIONS_DISMISSED_MESSAGE,
-          )}
-          activity={chat.connectionLost ? undefined : activity}
-          queuedCount={chat.queuedMessageCount}
+          timeline={chat.timeline}
+          pending={chat.pending}
+          activity={chat.activity}
+          onRetry={(turnId) => void chat.retry(turnId)}
+          onInterrupt={(turnId) => void chat.interrupt(turnId)}
+          onCancelQueued={chat.cancelQueued}
+          onResendFailed={(commandId) => void chat.resendFailed(commandId)}
+          onDismissFailed={chat.dismissFailed}
+          hasOlder={chat.hasOlder}
+          isLoadingOlder={chat.isLoadingOlder}
+          onLoadOlder={() => void chat.loadOlder()}
+          resolveRequest={(requestId) => chat.state?.requests[requestId]}
+          resolveAgentName={agentName}
           error={null}
           emptyState="Ask the agent anything about this project."
         />
@@ -460,83 +510,51 @@ function Chat({
                   onAuthorized={chat.resumeAfterAuthentication}
                 />
               ))}
-              {permissions.permissions.map((permission) => (
+              {cards.map((request) => (
                 <ToolPermissionCard
-                  key={permission.id}
-                  permission={permission}
-                  busy={permissions.isAnswering}
-                  onAnswer={(answer) =>
-                    void permissions.answer(permission.id, answer)
+                  key={request.id}
+                  request={request}
+                  busy={responding === request.id}
+                  onRespond={(response) => void respond(request.id, response)}
+                />
+              ))}
+              {questions.map((request) => (
+                <AgentQuestionPanel
+                  key={request.id}
+                  questions={request.questions ?? []}
+                  blocking={request.blocking}
+                  disabled={responding === request.id}
+                  onSubmit={(answers) =>
+                    void respond(request.id, { kind: "question", answers })
+                  }
+                  onDismiss={() =>
+                    void respond(request.id, {
+                      kind: "question",
+                      answers: [QUESTIONS_DISMISSED_MESSAGE],
+                    })
                   }
                 />
               ))}
-              {chat.session?.questions?.map(
-                (request) =>
-                  request.questions && (
-                    <AgentQuestionPanel
-                      key={request.requestId}
-                      questions={request.questions}
-                      blocking={request.blocking !== false}
-                      disabled={answerQuestion.isPending}
-                      onSubmit={(answer) =>
-                        answerQuestion.mutate({
-                          requestId: request.requestId,
-                          answer,
-                        })
-                      }
-                      onDismiss={() =>
-                        answerQuestion.mutate({
-                          requestId: request.requestId,
-                          answer: QUESTIONS_DISMISSED_MESSAGE,
-                        })
-                      }
-                    />
-                  ),
-              )}
-              {answerQuestion.error && (
-                <p role="alert">{answerQuestion.error.message}</p>
-              )}
-              {!chat.session?.questions?.length &&
-                questions &&
-                !chat.isSending && (
-                  <AgentQuestionPanel
-                    questions={questions}
-                    onSubmit={(answer) => void chat.send(answer)}
-                    onDismiss={() =>
-                      void chat.send(QUESTIONS_DISMISSED_MESSAGE)
-                    }
-                  />
-                )}
-              {lastFailed && !chat.isWorking && (
-                <div className="flex items-center justify-between gap-2 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[13px]">
-                  <span className="min-w-0 truncate text-danger">
-                    {lastFailed.retrying
-                      ? "Connection interrupted. Retrying automatically."
-                      : lastFailed.interrupted
-                        ? "The turn was interrupted."
-                        : "The last turn failed."}
+              {blockedSend && (
+                <div
+                  className="flex flex-col gap-2 rounded-lg border border-border bg-bg-inset px-3 py-2 text-[13px]"
+                  data-testid="continue-here"
+                >
+                  <span className="text-fg-muted">
+                    {continueError ??
+                      "This chat is running on another machine. Continue it here to send."}
                   </span>
-                  {lastFailed.retrying ? (
-                    <button
-                      type="button"
-                      onClick={() => void chat.interrupt()}
-                      className="shrink-0 rounded-md border border-border-strong px-2.5 py-1 text-fg"
-                      data-testid="stop-retrying"
-                    >
-                      Stop
-                    </button>
-                  ) : null}
                   <button
                     type="button"
-                    onClick={() => void chat.retry()}
-                    className="shrink-0 cursor-pointer rounded-md border border-border-strong px-2.5 py-1 text-fg active:bg-bg-overlay"
-                    data-testid="chat-retry"
+                    onClick={() => void continueHere(blockedSend.commandId)}
+                    disabled={continuing}
+                    className="h-9 cursor-pointer rounded-md bg-accent text-[13px] font-semibold text-accent-fg disabled:opacity-50"
                   >
-                    Retry
+                    {continuing ? "Continuing" : "Continue here"}
                   </button>
                 </div>
               )}
-              {chat.error && !chat.authenticationRequired && (
+              {chat.error && !chat.authenticationRequired && !blockedSend && (
                 <ConnectionTrouble
                   connection={connection}
                   projectId={projectId}
@@ -548,31 +566,37 @@ function Chat({
                 />
               )}
               {chat.queue.length > 0 && (
-                <ul className="flex flex-col gap-1">
+                <ul className="flex flex-col gap-1" data-testid="chat-queue">
                   {chat.queue.map((queued) => (
                     <li
-                      key={queued.id}
+                      key={queued.turn.id}
                       className="flex items-center gap-2 rounded-lg border border-border bg-bg-inset px-3 py-1.5 text-[13px] text-fg-muted"
+                      data-testid="chat-queued-message"
                     >
                       <span className="min-w-0 flex-1 truncate">
-                        {queued.content}
+                        {messageWithAttachmentNames(
+                          queued.item?.text ?? "",
+                          queued.item?.attachments,
+                        )}
                       </span>
                       <span className="shrink-0 text-[10px] uppercase tracking-wide text-fg-faint">
                         queued
                       </span>
                       <button
                         type="button"
-                        onClick={() => chat.sendQueuedNow(queued.id)}
+                        onClick={() => void chat.sendQueuedNow(queued.turn.id)}
                         className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint active:text-fg"
                         aria-label="Send now"
+                        data-testid="chat-queued-send-now"
                       >
                         <Zap className="size-3.5" />
                       </button>
                       <button
                         type="button"
-                        onClick={() => chat.removeQueued(queued.id)}
+                        onClick={() => void chat.cancelQueued(queued.turn.id)}
                         className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint active:text-fg"
                         aria-label="Remove queued message"
+                        data-testid="chat-queued-delete"
                       >
                         <X className="size-3.5" />
                       </button>
@@ -592,9 +616,7 @@ function Chat({
                   onChange={(event) => setDraft(event.target.value)}
                   placeholder={
                     // Open questions take free-text answers here (ADR 0195).
-                    chat.session?.questions?.some(
-                      (request) => !request.consent,
-                    ) || questions
+                    questions.length > 0
                       ? "Answer in your own words…"
                       : chat.isWorking
                         ? "Message (queues)…"
@@ -646,16 +668,12 @@ function hostOf(serverUrl: string): string {
   }
 }
 
-function failedTurn(
-  messages: ReturnType<typeof useAgentChat>["messages"],
-): { interrupted: boolean; retrying: boolean } | null {
-  const last = messages.at(-1);
-  if (last?.role !== "assistant") return null;
-  const metadata = last.metadata as Record<string, unknown> | null;
-  if (metadata?.status !== "failed") return null;
-  const autoRetry = metadata.autoRetry as { nextAtMs?: number } | undefined;
-  return {
-    interrupted: metadata.interrupted === true,
-    retrying: typeof autoRetry?.nextAtMs === "number",
-  };
+/** The reason a session refused a change, from a 409's body. */
+function conflictCode(details: unknown): string | undefined {
+  return details &&
+    typeof details === "object" &&
+    "code" in details &&
+    typeof details.code === "string"
+    ? details.code
+    : undefined;
 }

@@ -1,17 +1,35 @@
-import { useOnParse } from "@catamorphic/react";
+import { useForkAgentSession, useOnParse } from "@catamorphic/react";
 import { WorkflowEditor } from "@catamorphic/ui";
 import { type ComponentProps, useState } from "react";
 import { AgentChat } from "../agent-chat/agent-chat.js";
 
-/** Mounted under the host's CatamorphicProvider; auth and API base belong to it. */
-export function EmbeddedChat({ projectId }: { projectId: string }) {
+/**
+ * Mounted under the host's CatamorphicProvider; auth and API base belong to
+ * it. The host decides which session is open, so a fork opens the copy.
+ */
+export function EmbeddedChat({
+  projectId,
+  viewerId,
+}: {
+  projectId: string;
+  /** The signed-in person's external user id, from the host's auth. */
+  viewerId?: string;
+}) {
   const [sessionId, setSessionId] = useState<string>();
+  const fork = useForkAgentSession(projectId);
   return (
     <AgentChat
       projectId={projectId}
       sessionId={sessionId}
       onSessionCreated={setSessionId}
       variant="full"
+      viewerId={viewerId}
+      onFork={({ sessionId: source, itemId }) =>
+        fork.mutate(
+          { sessionId: source, messageId: itemId },
+          { onSuccess: (forked) => setSessionId(forked.id) },
+        )
+      }
     />
   );
 }

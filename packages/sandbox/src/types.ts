@@ -73,6 +73,40 @@ export interface CreateSandboxOpts {
   envVars?: Record<string, string>;
   autoStopInterval?: number;
   labels?: Record<string, string>;
+  /**
+   * Members' own harness sign-ins to make available inside the sandbox
+   * (ADR 0199), from the machine's own disk: mounted (or linked) at
+   * {@link signInHomePath}. The machine never sends them anywhere; a
+   * provider without the `sign-ins` capability refuses.
+   */
+  signIns?: ReadonlyArray<{ harness: SignInHarness; member: string }>;
+}
+
+/** A harness a member signs in to with its own flow (ADR 0199). */
+export type SignInHarness = "claude-code" | "codex";
+
+export const SIGN_IN_HARNESSES: readonly SignInHarness[] = [
+  "claude-code",
+  "codex",
+];
+
+/** Where a sandbox sees its owner's sign-in for a harness (ADR 0199). */
+export function signInHomePath(input: {
+  workspaceRoot: string;
+  harness: SignInHarness;
+}): string {
+  return `${input.workspaceRoot}/.work-sign-in/${input.harness}`;
+}
+
+/**
+ * The machine capability saying a member is signed in to a harness on it
+ * (ADR 0199). Machines report only this fact, never a credential.
+ */
+export function signInCapability(input: {
+  harness: SignInHarness;
+  member: string;
+}): string {
+  return `sign-in:${input.harness}:${input.member}`;
 }
 
 export interface ExecOpts {
@@ -389,118 +423,4 @@ export function positiveTokenCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.trunc(value)
     : 0;
-}
-
-export interface AgentEvent {
-  type:
-    | "text"
-    | "tool_call"
-    | "file_edit"
-    | "command"
-    | "question"
-    | "title"
-    | "session"
-    | "subagent"
-    | "status"
-    | "diagnostic"
-    | "usage"
-    | "error"
-    | "done";
-  content?: string;
-  toolName?: string;
-  toolInput?: unknown;
-  /**
-   * On "tool_call" events, when the harness surfaces it: the tool's
-   * result payload and the harness's id for the call. MCP tool results
-   * carry the data an MCP Apps view renders; events for the same
-   * toolUseId are cumulative (a later event may add the result).
-   */
-  toolResult?: unknown;
-  toolUseId?: string;
-  filePath?: string;
-  /** Set on "question" events: the agent is pausing for user input. */
-  questions?: AgentQuestion[];
-  /**
-   * Set on "session" events: the harness's native session id, reported by
-   * providers that only learn it once the first turn starts (Codex). The
-   * host persists it and passes it back on later turns; the event is an
-   * anchoring signal, never turn content.
-   */
-  providerSessionId?: string;
-  /** Set on classified "error" events (see {@link AgentErrorKind}). */
-  errorKind?: AgentErrorKind;
-  /** True only when the provider confirms rejection before any work started. */
-  retrySafe?: boolean;
-  /**
-   * On "subagent" events: the harness's id for the delegated agent (Claude
-   * Code uses the Task tool-use id). Also set on nested activity events
-   * (text/tool_call/command/file_edit) a subagent produced, so the UI can
-   * attribute work to the chip for that subagent.
-   */
-  subagentId?: string;
-  /** On "subagent" events: the harness's agent-type name, when known. */
-  subagentType?: string;
-  /**
-   * Lifecycle marker on "subagent" events, and on "command"/"tool_call"
-   * events from harnesses that report when the call finishes (same
-   * toolUseId; the ending event may carry only the id and the result).
-   */
-  status?: "started" | "ended";
-  /**
-   * A few human words for what a "command"/"tool_call" does, when the
-   * agent wrote one (Claude Code's Bash description, host tools'
-   * `description`). Hosts show it as the step's label and as the turn's
-   * live status. "status" events carry their line in `content`: the
-   * harness's own summary of what the agent is doing right now (a
-   * reasoning summary's heading), never turn content.
-   */
-  description?: string;
-  /**
-   * Set on "usage" events: the turn's accounting snapshot. At most one per
-   * turn, emitted just before "done". Hosts persist it beside the reply;
-   * it is bookkeeping, never step-log activity.
-   */
-  usage?: AgentTurnUsage;
-  /**
-   * When the host received the event, in epoch milliseconds. Hosts stamp
-   * it as events arrive; harnesses leave it unset. A step's duration and a
-   * running step's elapsed time are measured from it.
-   */
-  at?: number;
-}
-
-export interface AgentSession {
-  sessionId: string;
-  threadId: string;
-  projectId: string;
-  userId: string;
-  sandboxId: string;
-}
-
-export interface SessionInfo {
-  sessionId: string;
-  projectId: string;
-  userId: string;
-  status: "active" | "closed";
-  baseCommitSha: string | null;
-  title: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface CodingAgent {
-  startSession(opts: {
-    projectId: string;
-    userId: string;
-    systemPrompt?: string;
-  }): Promise<AgentSession>;
-
-  resumeSession(sessionId: string): Promise<AgentSession>;
-
-  sendMessage(opts: {
-    sessionId: string;
-    message: string;
-  }): AsyncIterable<AgentEvent>;
-
-  getSessionInfo(sessionId: string): Promise<SessionInfo>;
 }

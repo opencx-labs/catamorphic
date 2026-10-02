@@ -9,7 +9,12 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "../server.js";
-import { testServerOptions } from "../test-support.js";
+import { replyOf, testServerOptions } from "../test-support.js";
+import { WORKER_PROTOCOL, WORKER_PROTOCOL_HEADER } from "./worker-protocol.js";
+
+/** What every worker call states (ADR 0198). */
+const PROTOCOL = { [WORKER_PROTOCOL_HEADER]: String(WORKER_PROTOCOL.server) };
+
 import { startWorkWorker } from "./worker-runtime.js";
 
 /**
@@ -194,6 +199,7 @@ describe("remote workers (ADR 0164)", () => {
     const replay = await server.app.inject({
       method: "POST",
       url: "/api/workers/enroll",
+      headers: PROTOCOL,
       payload: { code },
     });
     expect(replay.statusCode).toBe(400);
@@ -203,20 +209,24 @@ describe("remote workers (ADR 0164)", () => {
     const session = await sessions.create(identity, projectId, {
       environment: "build",
     });
-    const result = await sessions.sendMessage(
-      identity,
-      projectId,
-      session.id,
-      "execution-location",
+    const result = replyOf(
+      await sessions.sendMessage(
+        identity,
+        projectId,
+        session.id,
+        "execution-location",
+      ),
     );
-    expect(result.metadata?.status).not.toBe("failed");
+    expect(result.turn.status).not.toBe("failed");
     expect(result.content).toContain(path.join(workerDir, "sandboxes"));
     // A later turn reuses the same workspace on the worker.
-    const again = await sessions.sendMessage(
-      identity,
-      projectId,
-      session.id,
-      "execution-location",
+    const again = replyOf(
+      await sessions.sendMessage(
+        identity,
+        projectId,
+        session.id,
+        "execution-location",
+      ),
     );
     expect(again.content).toContain(path.join(workerDir, "sandboxes"));
     // A restarted worker (an upgrade) keeps the session's workspace.
@@ -230,11 +240,13 @@ describe("remote workers (ADR 0164)", () => {
       }),
     });
     await waitFor(workerAvailable, "the worker to reconnect");
-    const afterRestart = await sessions.sendMessage(
-      identity,
-      projectId,
-      session.id,
-      "execution-location",
+    const afterRestart = replyOf(
+      await sessions.sendMessage(
+        identity,
+        projectId,
+        session.id,
+        "execution-location",
+      ),
     );
     expect(afterRestart.content).toContain(path.join(workerDir, "sandboxes"));
     // The worker holds its credential and sandboxes, nothing else.
@@ -255,8 +267,9 @@ describe("remote workers (ADR 0164)", () => {
       environment: "build",
     });
     const say = async (message: string) =>
-      (await sessions.sendMessage(identity, projectId, session.id, message))
-        .content;
+      replyOf(
+        await sessions.sendMessage(identity, projectId, session.id, message),
+      ).content;
     const [server1, pid1] = (await say("background-start")).split(" ");
     const [server2, pid2] = (await say("background-start")).split(" ");
     expect(server1).toMatch(/^proc-/);
@@ -292,7 +305,7 @@ describe("remote workers (ADR 0164)", () => {
     const response = await server.app.inject({
       method: "POST",
       url: "/api/workers/poll",
-      headers: { authorization: "Worker worker.builder:guess" },
+      headers: { ...PROTOCOL, authorization: "Worker worker.builder:guess" },
       payload: { session: crypto.randomUUID() },
     });
     expect(response.statusCode).toBe(401);
@@ -354,11 +367,13 @@ describe("placement by owner (ADR 0167)", () => {
     if (!sessions) throw new Error("Agent sessions are unavailable");
     const where = async (who: Identity, environment: string) => {
       const session = await sessions.create(who, projectId, { environment });
-      const result = await sessions.sendMessage(
-        who,
-        projectId,
-        session.id,
-        "execution-location",
+      const result = replyOf(
+        await sessions.sendMessage(
+          who,
+          projectId,
+          session.id,
+          "execution-location",
+        ),
       );
       return result.content;
     };
@@ -387,18 +402,17 @@ describe("placement by owner (ADR 0167)", () => {
     const session = await sessions.create(carol, projectId, {
       environment: "compose",
     });
-    const location = await sessions.sendMessage(
-      carol,
-      projectId,
-      session.id,
-      "execution-location",
+    const location = replyOf(
+      await sessions.sendMessage(
+        carol,
+        projectId,
+        session.id,
+        "execution-location",
+      ),
     );
     expect(location.content).toContain(dockerBox);
-    const dockerHost = await sessions.sendMessage(
-      carol,
-      projectId,
-      session.id,
-      "docker-host",
+    const dockerHost = replyOf(
+      await sessions.sendMessage(carol, projectId, session.id, "docker-host"),
     );
     expect(dockerHost.content).toMatch(/^unix:\/\/.*\.sock$/);
   }, 90_000);
@@ -411,12 +425,16 @@ describe("placement by owner (ADR 0167)", () => {
     const enrolled = await server.app.inject({
       method: "POST",
       url: "/api/workers/enroll",
+      headers: PROTOCOL,
       payload: { code: enrollment.json().code },
     });
     const connect = await server.app.inject({
       method: "POST",
       url: "/api/workers/connect",
-      headers: { authorization: `Worker ${enrolled.json().credential}` },
+      headers: {
+        ...PROTOCOL,
+        authorization: `Worker ${enrolled.json().credential}`,
+      },
       payload: {
         // An epoch is a UUIDv7 (ADR 0192).
         session: "01920000-0000-7000-8000-000000000001",
@@ -559,8 +577,12 @@ describe("keyed chats on workers (ADR 0173)", () => {
         ? String(delivered.sessionId)
         : "";
     await waitFor(async () => {
-      const chat = await sessions.get(identity, projectId, sessionId);
-      return chat.messages.some(
+      const transcript = await sessions.transcript(
+        identity,
+        projectId,
+        sessionId,
+      );
+      return transcript.some(
         (message) =>
           message.role === "assistant" && message.content.includes(reviewPool),
       );
@@ -591,8 +613,9 @@ describe("keyed chats on workers (ADR 0173)", () => {
       environment: "chats",
     });
     const say = async (message: string) =>
-      (await sessions.sendMessage(identity, projectId, session.id, message))
-        .content;
+      replyOf(
+        await sessions.sendMessage(identity, projectId, session.id, message),
+      ).content;
     expect(await say("execution-location")).toContain(chatBox);
     await say("write-file notes.md kept across release");
     expect(await say("read-file notes.md")).toBe("kept across release");
@@ -658,7 +681,7 @@ describe("keyed chats on workers (ADR 0173)", () => {
     const closed = await sessions.get(identity, projectId, session.id);
     expect(closed.status).toBe("closed");
     expect(
-      closed.messages.some(
+      (await sessions.transcript(identity, projectId, session.id)).some(
         (message) => message.content === "kept across release",
       ),
     ).toBe(true);
@@ -692,13 +715,15 @@ describe("keyed chats on workers (ADR 0173)", () => {
     const session = await sessions.create(identity, projectId, {
       environment: "chats",
     });
-    const send = (message: string) =>
-      sessions.sendMessage(identity, projectId, session.id, message);
+    const send = async (message: string) =>
+      replyOf(
+        await sessions.sendMessage(identity, projectId, session.id, message),
+      );
     // The work of this turn cannot be read back: the checkout lost its Git.
     const broken = await send(
       "run printf unsaved > keep.md ;; run mv .git .git-hidden",
     );
-    expect(broken.metadata?.workspaceSync).toMatchObject({
+    expect(broken.turn.outcome?.workspaceSync).toMatchObject({
       error: expect.stringContaining("could not be saved"),
     });
     const later = { now: new Date(Date.now() + 10 * 60_000) };
@@ -728,8 +753,9 @@ describe("keyed chats on workers (ADR 0173)", () => {
       agentId: `project:${projectId}:reader`,
     });
     const say = async (message: string) =>
-      (await sessions.sendMessage(identity, projectId, session.id, message))
-        .content;
+      replyOf(
+        await sessions.sendMessage(identity, projectId, session.id, message),
+      ).content;
     await say("write-file scratch.md only-in-the-sandbox");
     expect(await say("read-file scratch.md")).toBe("only-in-the-sandbox");
     const idle = await sessions.get(identity, projectId, session.id);

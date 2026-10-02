@@ -1,12 +1,15 @@
 import { waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { CatamorphicError } from "../../lib/errors.js";
 import { apiUrl, HttpResponse, http } from "../../test/handlers.js";
 import { renderHookWithProviders } from "../../test/render.js";
 import { server } from "../../test/server.js";
-import { useAgentSession } from "../use-agent-session.js";
+import {
+  snapshotRefetchInterval,
+  useAgentSession,
+} from "../use-agent-session.js";
 import { useAgentSessions } from "../use-agent-sessions.js";
 import { useCreateAgentSession } from "../use-create-agent-session.js";
-import { useSendAgentMessage } from "../use-send-agent-message.js";
 
 const SESSION_ID = "00000000-0000-0000-0000-000000000001";
 const PROJECT_ID = "00000000-0000-0000-0000-000000000002";
@@ -55,24 +58,6 @@ describe("useAgentSessions", () => {
 });
 
 describe("useAgentSession", () => {
-  it("returns the session detail", async () => {
-    server.use(
-      http.get(
-        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
-        () =>
-          HttpResponse.json({
-            ...SESSION_BASE,
-            messages: [],
-          }),
-      ),
-    );
-    const { result } = renderHookWithProviders(() =>
-      useAgentSession(PROJECT_ID, SESSION_ID),
-    );
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.id).toBe(SESSION_ID);
-  });
-
   it("maps 404 to not_found", async () => {
     server.use(
       http.get(
@@ -81,14 +66,14 @@ describe("useAgentSession", () => {
       ),
     );
     const { result } = renderHookWithProviders(() =>
-      useAgentSession(PROJECT_ID, SESSION_ID),
+      useAgentSession(PROJECT_ID, SESSION_ID, { live: false }),
     );
-    await waitFor(() => expect(result.current.isError).toBe(true));
+    await waitFor(() => expect(result.current.error).not.toBeNull());
     expect(result.current.error?.code).toBe("not_found");
   });
 });
 
-describe("useCreateAgentSession / useSendAgentMessage", () => {
+describe("useCreateAgentSession", () => {
   it("creates a session", async () => {
     server.use(
       http.post(apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions`), () =>
@@ -100,37 +85,6 @@ describe("useCreateAgentSession / useSendAgentMessage", () => {
     );
     const out = await result.current.mutateAsync({ userId: USER_ID });
     expect(out.id).toBe(SESSION_ID);
-  });
-
-  it("sends a message", async () => {
-    server.use(
-      http.post(
-        apiUrl(
-          `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
-        ),
-        () =>
-          HttpResponse.json(
-            {
-              id: "msg-1",
-              sessionId: SESSION_ID,
-              role: "user" as const,
-              content: "hello",
-              commitSha: null,
-              metadata: null,
-              createdAt: new Date().toISOString(),
-            },
-            { status: 201 },
-          ),
-      ),
-    );
-    const { result } = renderHookWithProviders(() =>
-      useSendAgentMessage(PROJECT_ID),
-    );
-    const out = await result.current.mutateAsync({
-      sessionId: SESSION_ID,
-      message: "hello",
-    });
-    expect(out.content).toBe("hello");
   });
 
   it("maps create 404 to not_found", async () => {
@@ -145,5 +99,45 @@ describe("useCreateAgentSession / useSendAgentMessage", () => {
     await expect(
       result.current.mutateAsync({ userId: USER_ID }),
     ).rejects.toMatchObject({ code: "not_found" });
+  });
+});
+
+describe("snapshotRefetchInterval", () => {
+  const refused = (status: number) =>
+    new CatamorphicError({ code: "unknown", status });
+
+  it("stops reloading a snapshot that was refused", () => {
+    const input = { data: undefined, streaming: false, pollIntervalMs: 1_500 };
+    expect(snapshotRefetchInterval({ ...input, error: refused(404) })).toBe(
+      false,
+    );
+    expect(snapshotRefetchInterval({ ...input, error: refused(403) })).toBe(
+      false,
+    );
+    expect(snapshotRefetchInterval({ ...input, error: refused(503) })).toBe(
+      3_000,
+    );
+    expect(snapshotRefetchInterval({ ...input, error: refused(429) })).toBe(
+      3_000,
+    );
+  });
+
+  it("keeps a chat on screen current while it waits for a stream", () => {
+    const settled = {
+      state: { turns: {} },
+    } as unknown as Parameters<typeof snapshotRefetchInterval>[0]["data"];
+    const input = {
+      error: null,
+      data: settled,
+      streaming: false,
+      pollIntervalMs: 1_500,
+    };
+    // Nothing runs: on screen it still polls (an agent switch, a notice);
+    // off screen it waits for something to run.
+    expect(snapshotRefetchInterval({ ...input, onScreen: true })).toBe(1_500);
+    expect(snapshotRefetchInterval({ ...input, onScreen: false })).toBe(false);
+    expect(
+      snapshotRefetchInterval({ ...input, onScreen: true, streaming: true }),
+    ).toBe(false);
   });
 });

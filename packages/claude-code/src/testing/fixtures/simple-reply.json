@@ -1,0 +1,907 @@
+{
+  "provider": "claude-code",
+  "sdkVersion": "0.3.263",
+  "cliVersion": "2.1.263",
+  "scenario": "simple-reply",
+  "source": "recorded",
+  "attempts": [
+    {
+      "outbound": {
+        "prompt": "Say hello",
+        "cwd": "{{cwd}}",
+        "thread": {
+          "sessionId": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "resume": null,
+          "forkSession": false,
+          "resumeSessionAt": null
+        },
+        "model": "claude-sonnet-4-5",
+        "effort": null,
+        "permissionMode": "acceptEdits",
+        "systemPromptAppend": "You are a Work fixture agent. Keep answers short.",
+        "allowedTools": [
+          "Agent",
+          "Bash",
+          "BashOutput",
+          "Edit",
+          "Glob",
+          "Grep",
+          "KillShell",
+          "Monitor",
+          "NotebookEdit",
+          "PowerShell",
+          "Read",
+          "Skill",
+          "SlashCommand",
+          "Task",
+          "TaskOutput",
+          "TaskStop",
+          "TodoWrite",
+          "WebFetch",
+          "WebSearch",
+          "Write"
+        ],
+        "disallowedTools": [],
+        "mcpServers": {},
+        "env": {
+          "ANTHROPIC_BASE_URL": "{{model}}",
+          "CLAUDE_CONFIG_DIR": "{{home}}",
+          "WORK_MODEL_KEY_FILE": "{{state}}/model-key",
+          "CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "300000",
+          "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+          "DISABLE_AUTOUPDATER": "1"
+        },
+        "apiKeyHelper": "cat \"$WORK_MODEL_KEY_FILE\"",
+        "includePartialMessages": true,
+        "sessionStore": true,
+        "hooks": ["PostToolUse", "UserPromptSubmit"]
+      },
+      "messages": [
+        {
+          "type": "replay.input",
+          "uuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d",
+          "text": "Say hello"
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d",
+          "state": "queued",
+          "uuid": "ef73fdc0-3cad-45c2-84f1-fe4d47e8b3e1",
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2"
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d",
+          "state": "started",
+          "uuid": "8945ba71-9e4b-475d-b380-57960c7de131",
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2"
+        },
+        {
+          "type": "replay.hook",
+          "event": "UserPromptSubmit",
+          "toolUseID": "b6bafb76-4889-4d2b-afc5-bb05bce505a4",
+          "input": {
+            "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+            "transcript_path": "{{home}}/projects/{{cwd-key}}/ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2.jsonl",
+            "cwd": "{{cwd}}",
+            "prompt_id": "11cd117c-47eb-438a-9e56-0dc4e7718f8c",
+            "permission_mode": "acceptEdits",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Say hello"
+          }
+        },
+        {
+          "type": "system",
+          "subtype": "init",
+          "cwd": "{{cwd}}",
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "tools": [
+            "Task",
+            "AskUserQuestion",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "Edit",
+            "EnterPlanMode",
+            "EnterWorktree",
+            "ExitPlanMode",
+            "ExitWorktree",
+            "Glob",
+            "Grep",
+            "ListAgents",
+            "NotebookEdit",
+            "Read",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskCreate",
+            "TaskGet",
+            "TaskList",
+            "TaskOutput",
+            "TaskStop",
+            "TaskUpdate",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "Write"
+          ],
+          "mcp_servers": [],
+          "model": "claude-sonnet-4-5",
+          "permissionMode": "acceptEdits",
+          "slash_commands": [
+            "deep-research",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "claude-api",
+            "workflow-authoring",
+            "run",
+            "run-skill-generator",
+            "agents",
+            "auto-mode-setup",
+            "autocompact",
+            "clear",
+            "color",
+            "compact",
+            "config",
+            "context",
+            "effort",
+            "fast",
+            "heapdump",
+            "init",
+            "mcp",
+            "model",
+            "__remote-workflow",
+            "workflow-launch-exec",
+            "reload-plugins",
+            "reload-skills",
+            "rename",
+            "security-review",
+            "usage",
+            "insights",
+            "recap",
+            "goal",
+            "list-agents",
+            "team-onboarding"
+          ],
+          "terminal_slash_commands": ["doctor", "color", "reload-plugins"],
+          "apiKeySource": "apiKeyHelper",
+          "claude_code_version": "2.1.263",
+          "output_style": "default",
+          "agents": [
+            "claude",
+            "Explore",
+            "general-purpose",
+            "Plan",
+            "statusline-setup"
+          ],
+          "skills": [
+            "deep-research",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "claude-api",
+            "workflow-authoring",
+            "run",
+            "run-skill-generator"
+          ],
+          "plugins": [],
+          "capabilities": [
+            "interrupt_receipt_v1",
+            "interrupt_cancel_queued_v1",
+            "msg_lifecycle_v1"
+          ],
+          "analytics_disabled": true,
+          "product_feedback_disabled": true,
+          "uuid": "80e7a4ff-0546-49a7-b694-9d45a65834ff",
+          "messaging_socket_path": "/tmp/cc-socks/39926.sock",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required"
+        },
+        {
+          "type": "system",
+          "subtype": "status",
+          "status": "requesting",
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "uuid": "b074a2b8-809b-48c9-820d-0a1be6d14802"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_scripted_1",
+              "type": "message",
+              "role": "assistant",
+              "model": "claude-sonnet-4-5",
+              "content": [],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "usage": {
+                "input_tokens": 10,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 1
+              }
+            }
+          },
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "parent_tool_use_id": null,
+          "uuid": "cee27271-679d-4807-a5fc-9eae79a6171d",
+          "ttft_ms": 7,
+          "user_message_uuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d",
+          "user_message_uuids": ["89ba3f0d-6748-4494-9c4a-1bc15533691d"]
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "thinking",
+              "thinking": "",
+              "signature": ""
+            }
+          },
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "parent_tool_use_id": null,
+          "uuid": "16fa9e5f-6ad2-485c-b776-396bafb1fef0"
+        },
+        {
+          "type": "system",
+          "subtype": "thinking_tokens",
+          "estimated_tokens": 9,
+          "estimated_tokens_delta": 9,
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "uuid": "2d4c5d6c-bbb1-42cf-96c5-74648238b936",
+          "user_message_uuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "thinking_delta",
+              "thinking": "**Greeting the person**\nSay hello."
+            }
+          },
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "parent_tool_use_id": null,
+          "uuid": "3e388eee-017b-476a-9232-eb1df4f0bef9"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "signature_delta",
+              "signature": "scripted-signature"
+            }
+          },
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "parent_tool_use_id": null,
+          "uuid": "b37d27f3-d82d-4ba4-8a2d-9f1ad4e6b016"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "id": "msg_scripted_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "**Greeting the person**\nSay hello.",
+                "signature": "scripted-signature"
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 1
+            },
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "uuid": "ec6e4809-2073-4229-ada9-39b8aed1ba1b",
+          "timestamp": "2026-10-02T14:13:28.958Z"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 0
+          },
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "parent_tool_use_id": null,
+          "uuid": "691c628f-6800-4c6b-9cf5-49f7d11a447d"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+              "type": "text",
+              "text": ""
+            }
+          },
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "parent_tool_use_id": null,
+          "uuid": "2f6da14b-91ee-44d9-83ee-c41577944377"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {
+              "type": "text_delta",
+              "text": "Hello from t"
+            }
+          },
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "parent_tool_use_id": null,
+          "uuid": "f23dd790-dcf0-40a6-9533-8f1e360ac81b"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {
+              "type": "text_delta",
+              "text": "he fixture."
+            }
+          },
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "parent_tool_use_id": null,
+          "uuid": "5f7c9c3d-8a5a-40e6-bd6c-01198fac1eb7"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "id": "msg_scripted_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello from the fixture."
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 1
+            },
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "uuid": "22969353-82fe-43af-a297-a09b661a358d",
+          "timestamp": "2026-10-02T14:13:28.959Z"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 1
+          },
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "parent_tool_use_id": null,
+          "uuid": "0890eabc-5db0-4157-965d-711204470d92"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_delta",
+            "delta": {
+              "stop_reason": "end_turn",
+              "stop_sequence": null
+            },
+            "usage": {
+              "output_tokens": 5
+            }
+          },
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "parent_tool_use_id": null,
+          "uuid": "c8923222-4433-4e90-9db7-b7f36ce161e3"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_stop"
+          },
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "parent_tool_use_id": null,
+          "uuid": "e2ef422a-2c94-450e-bcad-04dc36b85682"
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "queue-operation",
+              "operation": "enqueue",
+              "timestamp": "2026-10-02T14:13:28.910Z",
+              "sessionId": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+              "content": "Say hello"
+            },
+            {
+              "type": "queue-operation",
+              "operation": "dequeue",
+              "timestamp": "2026-10-02T14:13:28.911Z",
+              "sessionId": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2"
+            },
+            {
+              "parentUuid": null,
+              "isSidechain": false,
+              "promptId": "11cd117c-47eb-438a-9e56-0dc4e7718f8c",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": "Say hello"
+              },
+              "uuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d",
+              "timestamp": "2026-10-02T14:13:28.925Z",
+              "permissionMode": "acceptEdits",
+              "promptSource": "sdk",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d",
+              "isSidechain": false,
+              "attachment": {
+                "type": "agent_listing_delta",
+                "addedTypes": [
+                  "claude",
+                  "Explore",
+                  "general-purpose",
+                  "Plan",
+                  "statusline-setup"
+                ],
+                "addedLines": [
+                  "- claude: Catch-all for any task that doesn't fit a more specific agent. FleetView's default when no agent name is typed. (Tools: *)",
+                  "- Explore: Fast read-only search agent for locating code. Use it to find files by pattern (eg. \"src/components/**/*.tsx\"), grep for symbols or keywords (eg. \"API endpoints\"), or answer \"where is X defined / which files reference Y.\" Do NOT use it for code review, design-doc auditing, cross-file consistency checks, or open-ended analysis — it reads excerpts rather than whole files and will miss content past its read window. When calling, specify search breadth: \"quick\" for a single targeted lookup, \"medium\" for moderate exploration, or \"very thorough\" to search across multiple locations and naming conventions. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: *)",
+                  "- Plan: Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- statusline-setup: Use this agent to configure the user's Claude Code status line setting. (Tools: Read, Edit)"
+                ],
+                "removedTypes": [],
+                "isInitial": true,
+                "showConcurrencyNote": true
+              },
+              "type": "attachment",
+              "uuid": "7eef711e-4e5a-4c73-9448-4eddfe28d9a4",
+              "timestamp": "2026-10-02T14:13:28.925Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "7eef711e-4e5a-4c73-9448-4eddfe28d9a4",
+              "isSidechain": false,
+              "attachment": {
+                "type": "skill_listing",
+                "content": "- dataviz: Use this skill whenever you are about to create ANY chart, graph, plot, dashboard, or data visualization, in ANY output medium — an HTML or React artifact, inline SVG, plotting code in any library (matplotlib, plotly, d3, Recharts, …), an image/PNG you will render and upload, or a chart shared into Slack. Read it BEFORE writing the first line of chart code, choosing chart colors, building a stat tile / meter / KPI row, or laying out a dashboard. When the destination is a first-party document connector (host-designated, never self-described) that renders live charts, hand it the rows (inline, or as an uploaded data file the chart cites) rather than a rendered PNG/SVG — a picture of a chart loses hover, data inspection and per-value comments. Produces visualizations that read as one system — elegant, accessible, consistent in light and dark — using a brand-neutral placeholder palette you swap for your own. Teaches a design-system-agnostic method: a form heuristic, a color formula with a runnable validator, mark specs, and interaction rules. A validated default palette is documented in `references/palette.md` — swap that file's values for your brand's. Triggers on: \"chart\", \"graph\", \"plot\", \"data viz\", \"visualization\", \"dashboard\", \"analytics\", \"visualize data\", \"categorical colors\", \"sequential / diverging palette\", \"stat tile\", \"sparkline\", \"heatmap\", \"legend\", \"axis\", \"tooltip\", \"chart colors\", \"color by series\".\n- update-config: Use this skill to configure the Claude Code harness via settings.json. Automated behaviors (\"from now on when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks configured in settings.json - the harness executes these, not Claude, so memory/preferences cannot fulfill them. Also use for: permissions (\"allow X\", \"add permission\", \"move permission to\"), env vars (\"set X=Y\"), hook troubleshooting, or any changes to settings.json/settings.local.json files. Examples: \"allow npm commands\", \"add bq permission to global settings\", \"move permission to user settings\", \"set DEBUG=true\", \"when claude stops show X\". For simple settings like theme/model, suggest the /config command.\n- keybindings-help: Use when the user wants to customize keyboard shortcuts, rebind keys, add chord bindings, or modify ~/.claude/keybindings.json. Examples: \"rebind ctrl+s\", \"add a chord shortcut\", \"change the submit key\", \"customize keybindings\".\n- code-review: Review the current diff, or a PR number/branch/path target, for correctness bugs and reuse/simplification/efficiency cleanups at the given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings); with no level given, it reuses the level you typed last. Pass --comment to post findings as inline PR comments, or --fix to apply the findings to the working tree after the review.\n- simplify: Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use /code-review for that.\n- fewer-permission-prompts: Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts.\n- loop: Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let the model self-pace. - When the user wants to set up a recurring task, poll for status, or run something repeatedly on an interval (e.g. \"check the deploy every 5 minutes\", \"keep running /babysit-prs\"). Do NOT invoke for one-off tasks.\n- claude-api: Reference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration.\nTRIGGER — read BEFORE opening the target file; don't skip because it \"looks like a one-liner\" — whenever: the prompt names Claude/Anthropic in any form (Claude, Anthropic, Fable, Opus, Sonnet, Haiku, `anthropic`, `@anthropic-ai`, `claude-*`, `us.anthropic.*`, `[1m]`); the user asks about an LLM (pricing/model choice/limits/caching) — never answer from memory; OR the task is LLM-shaped with provider unstated (agent/MCP/tool-definition/multi-agent/RAG/LLM-judge/computer-use; generate/summarize/extract/classify/rewrite/converse over NL; debugging refusals/cutoffs/streaming/tool-calls/tokens).\nSKIP only when another provider is being worked on (overrides all triggers): OpenAI/GPT/Gemini/Llama/Mistral/Cohere/Ollama named in the query; OR `grep -rE 'openai|langchain_openai|google.generativeai|genai|mistralai|cohere|ollama'` over the project hits (run this grep FIRST if no provider named — don't Read the file).\n- workflow-authoring: Reference for writing a Workflow tool script (script API and gotchas, resume, quality patterns, worked examples). Load before authoring a script for a workflow the user already opted into; it does not itself authorize running one.\n- run: Launch and drive this project's app to see a change working. Use when asked to run, start, or screenshot the app, or to confirm a change works in the real app (not just tests). First looks for a project skill that already covers launching the app; otherwise falls back to built-in patterns per project type (CLI, server, TUI, Electron, browser-driven, library).\n- init: Initialize a new CLAUDE.md file with codebase documentation\n- security-review: Complete a security review of the pending changes on the current branch",
+                "skillCount": 12,
+                "isInitial": true,
+                "names": [
+                  "dataviz",
+                  "update-config",
+                  "keybindings-help",
+                  "code-review",
+                  "simplify",
+                  "fewer-permission-prompts",
+                  "loop",
+                  "claude-api",
+                  "workflow-authoring",
+                  "run",
+                  "init",
+                  "security-review"
+                ]
+              },
+              "type": "attachment",
+              "uuid": "f2e953e3-8dd0-4203-96ef-7962d7a6e2e7",
+              "timestamp": "2026-10-02T14:13:28.925Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "f2e953e3-8dd0-4203-96ef-7962d7a6e2e7",
+              "isSidechain": false,
+              "attachment": {
+                "type": "total_tokens_reminder",
+                "text": "<total_tokens>15000000 tokens left</total_tokens>"
+              },
+              "type": "attachment",
+              "uuid": "3c51a8e8-b916-452f-ba54-f56fa81ac0e5",
+              "timestamp": "2026-10-02T14:13:28.925Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "3c51a8e8-b916-452f-ba54-f56fa81ac0e5",
+              "isSidechain": false,
+              "attachment": {
+                "type": "hook_additional_context",
+                "content": [
+                  "<turn_context>The fixture project is open.</turn_context>"
+                ],
+                "hookName": "UserPromptSubmit",
+                "toolUseID": "hook-ff0f5c8f-407a-490a-9aa2-1f255bec39f6",
+                "hookEvent": "UserPromptSubmit"
+              },
+              "type": "attachment",
+              "uuid": "254e9159-648e-4dd5-9991-e6a36e309be8",
+              "timestamp": "2026-10-02T14:13:28.929Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "type": "atis-latch",
+              "atis": "",
+              "sessionId": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2"
+            },
+            {
+              "parentUuid": "254e9159-648e-4dd5-9991-e6a36e309be8",
+              "isSidechain": false,
+              "message": {
+                "id": "msg_scripted_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "thinking",
+                    "thinking": "**Greeting the person**\nSay hello.",
+                    "signature": "scripted-signature"
+                  }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 0,
+              "type": "assistant",
+              "uuid": "ec6e4809-2073-4229-ada9-39b8aed1ba1b",
+              "timestamp": "2026-10-02T14:13:28.958Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "ec6e4809-2073-4229-ada9-39b8aed1ba1b",
+              "isSidechain": false,
+              "message": {
+                "id": "msg_scripted_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Hello from the fixture."
+                  }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 1,
+              "type": "assistant",
+              "uuid": "22969353-82fe-43af-a297-a09b661a358d",
+              "timestamp": "2026-10-02T14:13:28.959Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            }
+          ]
+        },
+        {
+          "duration_api_ms": 45,
+          "stop_reason": "end_turn",
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "total_cost_usd": 0.000105,
+          "usage": {
+            "input_tokens": 10,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 5,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "",
+            "iterations": [],
+            "speed": "standard"
+          },
+          "modelUsage": {
+            "claude-sonnet-4-5": {
+              "inputTokens": 10,
+              "outputTokens": 5,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0,
+              "webSearchRequests": 0,
+              "costUSD": 0.000105,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 0,
+              "canonicalModel": "claude-sonnet-4-5",
+              "provider": "firstParty",
+              "costBasis": "list"
+            }
+          },
+          "permission_denials": [],
+          "terminal_reason": "completed",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required",
+          "subagent_stats": {
+            "spawned": 0,
+            "requested": {
+              "background": 0,
+              "foreground": 0,
+              "unset": 0
+            },
+            "started_in_background": 0,
+            "max_depth": 0,
+            "spawned_by_subagents": 0,
+            "completed": 0,
+            "failed": 0,
+            "killed": {
+              "parent": 0,
+              "user": 0,
+              "system": 0
+            },
+            "refused": {
+              "depth_limit": 0,
+              "concurrency_limit": 0,
+              "budget": 0
+            },
+            "by_type": {}
+          },
+          "is_error": false,
+          "num_turns": 1,
+          "subtype": "success",
+          "api_error_status": null,
+          "result": "Hello from the fixture.",
+          "ttft_ms": 44,
+          "type": "result",
+          "duration_ms": 80,
+          "uuid": "e4498188-6bc5-4f98-9c10-93deedbc0ba1",
+          "ttft_stream_ms": 44,
+          "time_to_request_ms": 37,
+          "first_content_frame_ms": 44,
+          "user_message_uuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d",
+          "user_message_uuids": ["89ba3f0d-6748-4494-9c4a-1bc15533691d"],
+          "request_sent_wall_ms": 1790950408951,
+          "queued_turn_count": 0
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d",
+          "state": "completed",
+          "uuid": "a4363bb9-e704-4157-ac41-7821bc9774f0",
+          "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2"
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "last-prompt",
+              "lastPrompt": "Say hello",
+              "leafUuid": "22969353-82fe-43af-a297-a09b661a358d",
+              "sessionId": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "type": "thread",
+          "ref": {
+            "id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
+            "strength": "strong"
+          }
+        },
+        {
+          "type": "turn.started"
+        },
+        {
+          "type": "item.started",
+          "key": "msg_scripted_1:0",
+          "ref": {
+            "id": "msg_scripted_1:0",
+            "strength": "strong"
+          },
+          "item": {
+            "kind": "reasoning",
+            "text": ""
+          }
+        },
+        {
+          "type": "item.delta",
+          "key": "msg_scripted_1:0",
+          "field": "text",
+          "text": "**Greeting the person**\nSay hello."
+        },
+        {
+          "type": "status",
+          "text": "Greeting the person"
+        },
+        {
+          "type": "item.completed",
+          "key": "msg_scripted_1:0",
+          "status": "completed",
+          "item": {
+            "text": "**Greeting the person**\nSay hello."
+          }
+        },
+        {
+          "type": "item.started",
+          "key": "msg_scripted_1:1",
+          "ref": {
+            "id": "msg_scripted_1:1",
+            "strength": "strong"
+          },
+          "item": {
+            "kind": "assistant_message",
+            "text": "",
+            "agentId": null
+          }
+        },
+        {
+          "type": "item.delta",
+          "key": "msg_scripted_1:1",
+          "field": "text",
+          "text": "Hello from t"
+        },
+        {
+          "type": "item.delta",
+          "key": "msg_scripted_1:1",
+          "field": "text",
+          "text": "he fixture."
+        },
+        {
+          "type": "item.completed",
+          "key": "msg_scripted_1:1",
+          "status": "completed",
+          "item": {
+            "text": "Hello from the fixture."
+          }
+        },
+        {
+          "type": "usage",
+          "usage": {
+            "model": "claude-sonnet-4-5",
+            "inputTokens": 10,
+            "cachedInputTokens": 0,
+            "cacheCreationTokens": 0,
+            "outputTokens": 5,
+            "costUsd": 0.000105,
+            "contextTokens": 10,
+            "contextWindow": 200000
+          }
+        },
+        {
+          "type": "turn.completed",
+          "status": "completed",
+          "ref": {
+            "id": "22969353-82fe-43af-a297-a09b661a358d",
+            "strength": "strong"
+          }
+        }
+      ]
+    }
+  ]
+}

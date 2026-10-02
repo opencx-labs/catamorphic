@@ -129,10 +129,6 @@ import type { SidebarContentState } from "./components/sidebar-contribution.js";
 import { ConfiguredSection } from "./components/sidebar-navigation.js";
 import { SiteSettingsHost } from "./components/site-settings-modal.js";
 import { TabbedSidebar } from "./components/tabbed-sidebar.js";
-import {
-  type PendingToolPermission,
-  ToolPermissionModal,
-} from "./components/tool-permission-modal";
 import { UpdateBanner } from "./components/update-banner.js";
 import {
   tabKey,
@@ -3316,19 +3312,11 @@ export function App({
   const [elicitations, setElicitation] = useState<PendingElicitation[]>([]);
   const setElicitationRef = useRef(setElicitation);
   setElicitationRef.current = setElicitation;
-  // Pending tool-permission asks (MCP tools whose policy says "ask"). A
-  // QUEUE: harnesses run a step's tool calls concurrently, so two asks can
-  // land together — each must get its own answer, FIFO.
-  const [toolPermissions, setToolPermissions] = useState<
-    PendingToolPermission[]
-  >([]);
   // The site whose settings modal is open by hand (gear, palette, Sites
   // row); page permission requests show the same modal on their own.
   const [siteSettingsOrigin, setSiteSettingsOrigin] = useState<string | null>(
     null,
   );
-  const setToolPermissionsRef = useRef(setToolPermissions);
-  setToolPermissionsRef.current = setToolPermissions;
 
   // Pending request_connection from an agent: the connectors modal opens
   // seeded with the agent's query; closing it settles the tool call with
@@ -4545,50 +4533,6 @@ export function App({
           );
           return { ok: true };
         }
-        case "toolPermission": {
-          // Main sends this to ONE window (focused, else first) — no
-          // focus guard here, or an alt-tabbed user would auto-deny.
-          const request = params.request as
-            | PendingToolPermission["request"]
-            | undefined;
-          if (!request || typeof request.tool !== "string") {
-            return { decision: "deny" };
-          }
-          const label =
-            typeof params.label === "string" ? params.label : undefined;
-          const askId =
-            typeof params.askId === "number" ? params.askId : undefined;
-          return new Promise<unknown>((resolve) => {
-            const id = crypto.randomUUID();
-            setToolPermissionsRef.current((queue) => [
-              ...queue,
-              {
-                id,
-                askId,
-                label,
-                request,
-                resolve: (decision) => {
-                  setToolPermissionsRef.current((current) =>
-                    current.filter((entry) => entry.id !== id),
-                  );
-                  resolve(decision);
-                },
-              },
-            ]);
-          });
-        }
-        case "toolPermissionCancel": {
-          // The ask was answered elsewhere (a remote companion client):
-          // withdraw the card silently — no deny, no answer, no flash.
-          const askId =
-            typeof params.askId === "number" ? params.askId : undefined;
-          if (askId !== undefined) {
-            setToolPermissionsRef.current((current) =>
-              current.filter((entry) => entry.askId !== askId),
-            );
-          }
-          return { ok: true };
-        }
         case "requestConnection": {
           if (projectIdRef.current)
             void desktopApi.workspaceNavigate({
@@ -5551,10 +5495,6 @@ export function App({
           <ElicitationModal
             pending={elicitations[0] ?? null}
             onOpenUrl={(url) => openBrowserTab(url)}
-          />
-          <ToolPermissionModal
-            pending={toolPermissions[0] ?? null}
-            queued={Math.max(0, toolPermissions.length - 1)}
           />
           <SiteSettingsHost
             origin={siteSettingsOrigin}

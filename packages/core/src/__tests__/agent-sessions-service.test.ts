@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { SEED_SKILLS } from "../seeds.js";
 import {
-  activityLabel,
   buildAgentSystemPrompt,
   checkpointMessage,
   liveStatusLine,
   modelVisibleDelivery,
   parsePorcelain,
-  stepLogEvents,
 } from "../services/agent-sessions-service.js";
 
 describe("modelVisibleDelivery", () => {
@@ -41,113 +39,6 @@ describe("liveStatusLine", () => {
     expect(liveStatusLine("   ")).toBeUndefined();
     expect(liveStatusLine(undefined)).toBeUndefined();
     expect(liveStatusLine("x".repeat(200))?.length).toBe(80);
-  });
-});
-
-describe("activityLabel", () => {
-  it("keeps the live line calm: no paths, no raw commands, no tool names", () => {
-    expect(activityLabel({ type: "done" })).toBe("Thinking...");
-    // File names never surface on the live line — the event log has them.
-    expect(
-      activityLabel({ type: "file_edit", filePath: "src/workflow.ts" }),
-    ).toBe("Editing files...");
-    expect(activityLabel({ type: "tool_call", toolName: "read" })).toBe(
-      "Working...",
-    );
-    // Preamble text never rides the live line — it lands as the message
-    // itself when the segment flushes; showing it here would duplicate it.
-    expect(
-      activityLabel({
-        type: "text",
-        content: "I'll start by reviewing the schema.",
-      }),
-    ).toBe("Writing...");
-  });
-
-  it("pretty-prints well-known commands and hides the rest", () => {
-    expect(activityLabel({ type: "command", content: "sleep 5" })).toBe(
-      "Waiting...",
-    );
-    expect(
-      activityLabel({ type: "command", content: "find . -name '*.ts'" }),
-    ).toBe("Searching files...");
-    expect(activityLabel({ type: "command", content: "bun test" })).toBe(
-      "Running scripts...",
-    );
-    // Wrappers and env assignments don't hide the real program.
-    expect(
-      activityLabel({ type: "command", content: "FOO=1 env git status" }),
-    ).toBe("Working with git...");
-    // Compound commands classify by what runs first.
-    expect(
-      activityLabel({ type: "command", content: "ls -la && ./deploy.sh" }),
-    ).toBe("Looking around...");
-    // Unknown programs stay generic instead of leaking the command line.
-    expect(
-      activityLabel({
-        type: "command",
-        content: "./scripts/migrate.sh --force",
-      }),
-    ).toBe("Working...");
-    expect(activityLabel({ type: "command" })).toBe("Working...");
-  });
-});
-
-describe("stepLogEvents", () => {
-  it("times each call from its start to its result", () => {
-    expect(
-      stepLogEvents([
-        { type: "text", content: "Testing.", at: 1 },
-        { type: "command", content: "bun test", toolUseId: "t1", at: 10 },
-        { type: "file_edit", filePath: "a.ts", at: 20 },
-        {
-          type: "command",
-          toolUseId: "t1",
-          status: "ended",
-          toolResult: "ok",
-          at: 57,
-        },
-        { type: "tool_call", toolName: "Read", toolUseId: "t2", at: 60 },
-        { type: "usage", at: 70 },
-      ]),
-    ).toEqual([
-      { type: "text", content: "Testing.", at: 1 },
-      {
-        type: "command",
-        content: "bun test",
-        toolUseId: "t1",
-        status: "ended",
-        toolResult: "ok",
-        at: 10,
-        endedAt: 57,
-      },
-      { type: "file_edit", filePath: "a.ts", at: 20 },
-      { type: "tool_call", toolName: "Read", toolUseId: "t2", at: 60 },
-    ]);
-  });
-
-  it("drops the end of a call that started in an earlier message", () => {
-    expect(
-      stepLogEvents([
-        { type: "command", toolUseId: "t0", status: "ended", at: 5 },
-        {
-          type: "tool_call",
-          toolName: "Read",
-          toolUseId: "t1",
-          toolResult: "x",
-          at: 9,
-        },
-      ]),
-    ).toEqual([
-      {
-        type: "tool_call",
-        toolName: "Read",
-        toolUseId: "t1",
-        toolResult: "x",
-        at: 9,
-        endedAt: 9,
-      },
-    ]);
   });
 });
 

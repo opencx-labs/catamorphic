@@ -20,7 +20,7 @@ import {
   placementOrder,
   poolMatches,
 } from "@catamorphic/sandbox";
-import type { Kysely } from "kysely";
+import { type Kysely, sql } from "kysely";
 import {
   nodeAccess,
   servesOneOwner,
@@ -55,6 +55,12 @@ export async function registerWorkMachine(args: {
   /** What this machine offers beside its sandbox provider (ADR 0184). */
   capabilities?: readonly string[];
   /**
+   * Members' sign-ins on this machine (ADR 0199), read again every few
+   * seconds: a sign-in made or removed here reaches placement without a
+   * restart.
+   */
+  signIns?: () => readonly string[];
+  /**
    * Whose work each worker takes, and who owns a piece of work: an email
    * and directory groups matched against worker access (ADR 0167).
    */
@@ -66,7 +72,8 @@ export async function registerWorkMachine(args: {
   };
 }) {
   const nodes = new WorkerNodesService(args.db);
-  const descriptor: EnvironmentBinding = {
+  let signIns = args.signIns?.() ?? [];
+  const describe = (): EnvironmentBinding => ({
     id: args.nodeId,
     label: args.label,
     description: `Run on ${args.label}`,
@@ -79,6 +86,7 @@ export async function registerWorkMachine(args: {
       "network.egress",
       ...(args.sandboxProvider.capabilities ?? []),
       ...(args.capabilities ?? []),
+      ...signIns,
     ],
     resources: {
       cpuMillis: args.capacity?.cpuMillis,
@@ -86,7 +94,7 @@ export async function registerWorkMachine(args: {
     },
     resourceLimits: args.sandboxProvider.resourceLimits,
     labels: { ...args.labels, node: args.nodeId, plane: "control" },
-  };
+  });
   // A single server that died without releasing its lease restarts into
   // that lease: wait for it to lapse rather than refuse to boot. A
   // disposable node is new at every start, so nothing holds it.
@@ -96,7 +104,7 @@ export async function registerWorkMachine(args: {
       return await nodes.register({
         tenantId: args.tenantId,
         authorityId: args.authorityId,
-        descriptor,
+        descriptor: describe(),
         capacity: args.capacity,
         defaults: args.defaults,
         disposable: args.disposable,
@@ -333,6 +341,30 @@ export async function registerWorkMachine(args: {
       });
   }, 5_000);
   cleanupTimer.unref();
+  // Sign-ins made or removed on this machine update its offer in place,
+  // under the lease it holds.
+  let refreshing: Promise<unknown> | undefined;
+  const signInTimer = setInterval(() => {
+    const next = args.signIns?.() ?? [];
+    if (refreshing || JSON.stringify(next) === JSON.stringify(signIns)) return;
+    signIns = next;
+    refreshing = args.db
+      .updateTable("worker_nodes")
+      .set({ descriptor: JSON.stringify(describe()), updated_at: sql`now()` })
+      .where("id", "=", lease.id)
+      .where("lease_token", "=", lease.token)
+      .execute()
+      .catch((error) =>
+        console.warn(
+          "[catamorphic] Could not refresh this machine's sign-ins",
+          error,
+        ),
+      )
+      .finally(() => {
+        refreshing = undefined;
+      });
+  }, 5_000);
+  signInTimer.unref();
   let stopping: Promise<void> | undefined;
   return {
     lease,
@@ -349,7 +381,8 @@ export async function registerWorkMachine(args: {
       (stopping ??= (async () => {
         clearInterval(timer);
         clearInterval(cleanupTimer);
-        await Promise.all([heartbeat, cleanup]);
+        clearInterval(signInTimer);
+        await Promise.all([heartbeat, cleanup, refreshing]);
         await nodes.release({ lease });
       })()),
   };

@@ -103,11 +103,107 @@ describe.skipIf(!chromeBinary())("pwa PWA", () => {
     );
     await app.eval(CLICK_BY_TEXT("button", "Staging"));
     await app.eval(CLICK_BY_TEXT("button", "Submit"));
-    // The answer goes back as a plain user message.
+    // The answer reads as the question with what was picked.
     await app.waitFor(
-      "[...document.querySelectorAll('article')].some(a => a.innerText.includes('Staging'))",
+      "[...document.querySelectorAll('[data-testid=question-answer]')].some(a => a.innerText.includes('Staging'))",
       { timeoutMs: 20_000, label: "answer in transcript" },
     );
+    await app.waitFor("document.body.innerText.includes('Going with')", {
+      timeoutMs: 20_000,
+      label: "reply to the answer",
+    });
+  });
+
+  it("keeps a question open when the person replies in their own words", async () => {
+    await app.eval(TYPE("[data-testid=chat-input]", "question again"));
+    await app.eval(CLICK("[data-testid=chat-send]"));
+    await app.waitFor(
+      "document.querySelector('[data-testid=chat-input]').placeholder.includes('own words')",
+      { timeoutMs: 20_000, label: "question placeholder" },
+    );
+    await app.eval(TYPE("[data-testid=chat-input]", "what is the difference?"));
+    await app.eval(CLICK("[data-testid=chat-send]"));
+    await app.waitFor(
+      "document.body.innerText.includes('Good question') && document.body.innerText.includes('Answer when ready')",
+      {
+        timeoutMs: 20_000,
+        label: "steered reply with the question still open",
+      },
+    );
+    await app.eval(CLICK_BY_TEXT("button", "Production"));
+    await app.eval(CLICK_BY_TEXT("button", "Submit"));
+    await app.waitFor(
+      "document.body.innerText.includes('Answered: Production')",
+      { timeoutMs: 20_000, label: "late answer as a message" },
+    );
+  });
+
+  it("shows a failed turn and retries it", async () => {
+    await app.eval(TYPE("[data-testid=chat-input]", "fail then work"));
+    await app.eval(CLICK("[data-testid=chat-send]"));
+    await app.waitFor(
+      "!!document.querySelector('[data-testid=chat-error-card]')",
+      { timeoutMs: 20_000, label: "error card" },
+    );
+    await app.eval(CLICK("[data-testid=chat-retry]"));
+    await app.waitFor(
+      "document.body.innerText.includes('You said: then work') && !document.querySelector('[data-testid=chat-error-card]')",
+      { timeoutMs: 20_000, label: "retried turn" },
+    );
+  });
+
+  it("queues a message while the agent works and sends it now", async () => {
+    await app.eval(TYPE("[data-testid=chat-input]", "first long task"));
+    await app.eval(CLICK("[data-testid=chat-send]"));
+    await app.waitFor(
+      "!!document.querySelector('[data-testid=chat-interrupt]')",
+      {
+        timeoutMs: 20_000,
+        label: "working",
+      },
+    );
+    await app.eval(TYPE("[data-testid=chat-input]", "second task"));
+    await app.eval(CLICK("[data-testid=chat-send]"));
+    await app.waitFor(
+      "!!document.querySelector('[data-testid=chat-queued-send-now]')",
+      { timeoutMs: 20_000, label: "queued message" },
+    );
+    await app.eval(CLICK("[data-testid=chat-queued-send-now]"));
+    await app.waitFor(
+      "!!document.querySelector('[data-testid=chat-interrupted]') && document.body.innerText.includes('You said: second task')",
+      { timeoutMs: 20_000, label: "first interrupted, second answered" },
+    );
+  });
+
+  it("keeps following the newest message after a panel below the chat closes", async () => {
+    const atBottom =
+      "(() => { const el = document.querySelector('[role=log] > div'); return el.scrollHeight > el.clientHeight && el.scrollHeight - el.clientHeight - el.scrollTop < 8; })()";
+    await app.waitFor(
+      "!document.querySelector('[data-testid=chat-interrupt]')",
+      { timeoutMs: 20_000, label: "settled" },
+    );
+    await app.waitFor(atBottom, { label: "following before the panel" });
+    // A question or approval panel opens and closes under the chat: the
+    // scroller shrinks, then grows back and pulls its position up.
+    await app.eval(`(async () => {
+      const panel = document.createElement('div');
+      panel.style.height = '300px';
+      document.querySelector('[role=log]').after(panel);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      panel.remove();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return true;
+    })()`);
+    await app.eval(TYPE("[data-testid=chat-input]", "after the panel"));
+    await app.eval(CLICK("[data-testid=chat-send]"));
+    await app.waitFor(
+      "document.body.innerText.includes('You said: after the panel') && !document.querySelector('[data-testid=chat-interrupt]')",
+      { timeoutMs: 20_000, label: "reply after the panel" },
+    );
+    await app.waitFor(atBottom, {
+      timeoutMs: 5_000,
+      label: "chat follows the newest message",
+    });
   });
 
   it("navigates back through the stack to projects", async () => {

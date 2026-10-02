@@ -1,3 +1,4 @@
+import { SESSION_PROTOCOL_MISMATCH_MESSAGE } from "@catamorphic/react";
 import { useQueries } from "@tanstack/react-query";
 import { ChevronRight, FolderGit2, LogIn, Plus } from "lucide-react";
 import { Screen } from "../components/screen.js";
@@ -73,6 +74,11 @@ export function ProjectsScreen({ animation }: { animation?: string }) {
   );
   const loading = results.some((result) => result.isLoading);
   const failed = results.filter((result) => result.isError).length;
+  // A server on another session protocol is reachable but unusable: say
+  // so instead of calling it unreachable (ADR 0197).
+  const outdated = results.some(
+    (result) => result.error?.message === SESSION_PROTOCOL_MISMATCH_MESSAGE,
+  );
 
   return (
     <Screen
@@ -111,9 +117,11 @@ export function ProjectsScreen({ animation }: { animation?: string }) {
           <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
             <FolderGit2 className="size-8 text-fg-faint" />
             <p className="text-sm leading-6 text-fg-muted">
-              {failed > 0
-                ? "Couldn't reach your projects. Pull yourself together, network."
-                : "No projects yet. Connect one with an invite link."}
+              {outdated
+                ? SESSION_PROTOCOL_MISMATCH_MESSAGE
+                : failed > 0
+                  ? "Couldn't reach your projects. Pull yourself together, network."
+                  : "No projects yet. Connect one with an invite link."}
             </p>
             <button
               type="button"
@@ -183,9 +191,11 @@ export function ProjectsScreen({ animation }: { animation?: string }) {
         </ul>
         {failed > 0 && rows.length > 0 && (
           <p className="px-4 py-2 text-xs text-danger">
-            {failed === 1
-              ? "One connection is unreachable."
-              : `${failed} connections are unreachable.`}
+            {outdated
+              ? SESSION_PROTOCOL_MISMATCH_MESSAGE
+              : failed === 1
+                ? "One connection is unreachable."
+                : `${failed} connections are unreachable.`}
           </p>
         )}
       </div>

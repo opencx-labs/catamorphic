@@ -14,12 +14,9 @@ import {
   deliverPersonalEnvironment,
   gitignoreLiteral,
   personalExcludeBlock,
-  personalLoginHome,
   removePersonalEnvironment,
-  sandboxLoginDocument,
 } from "../services/personal-environment-delivery.js";
 import {
-  holdsRefreshToken,
   PersonalEnvironmentInvalidError,
   personalFilePathProblem,
   personalFingerprint,
@@ -70,63 +67,19 @@ describe("personal environment input (ADR 0184)", () => {
       expect(personalFilePathProblem(bad), bad).toBeTruthy();
   });
 
-  it("finds refresh tokens anywhere in a login", () => {
-    expect(holdsRefreshToken({ claudeAiOauth: { accessToken: "a" } })).toBe(
-      false,
-    );
-    expect(
-      holdsRefreshToken({ claudeAiOauth: { refreshToken: "sk-ant-ort" } }),
-    ).toBe(true);
-    expect(holdsRefreshToken({ tokens: { refresh_token: "rt" } })).toBe(true);
-    expect(
-      holdsRefreshToken({ mcpOAuth: { server: [{ refreshToken: "x" }] } }),
-    ).toBe(true);
-    // An empty one is no token.
-    expect(holdsRefreshToken({ tokens: { refresh_token: "" } })).toBe(false);
-  });
-
-  it("validates logins and files and derives expiry", () => {
-    const expiresAt = Date.now() + 3_600_000;
+  it("validates files", () => {
     const entries = validatePersonalEnvironment({
-      logins: {
-        "claude-code": {
-          credentials: JSON.stringify({
-            claudeAiOauth: { accessToken: "at", expiresAt },
-          }),
-        },
-        codex: {
-          auth: JSON.stringify({
-            tokens: {
-              access_token: `x.${Buffer.from(JSON.stringify({ exp: 2_000_000_000 })).toString("base64url")}.y`,
-            },
-          }),
-        },
-      },
       files: [{ path: ".env", content: base64("A=1\n") }],
     });
     expect(entries.map((entry) => [entry.kind, entry.name])).toEqual([
-      ["login", "claude-code"],
-      ["login", "codex"],
       ["file", ".env"],
     ]);
-    expect(entries[0]?.expiresAt?.getTime()).toBe(expiresAt);
-    expect(entries[1]?.expiresAt?.toISOString()).toBe(
-      new Date(2_000_000_000_000).toISOString(),
-    );
-    expect(entries[2]?.content.toString()).toBe("A=1\n");
+    expect(entries[0]?.content.toString()).toBe("A=1\n");
   });
 
   it("refuses the whole set with every reason", () => {
     const issues = refused(() =>
       validatePersonalEnvironment({
-        logins: {
-          "claude-code": {
-            credentials: JSON.stringify({
-              claudeAiOauth: { accessToken: "at", refreshToken: "rt" },
-            }),
-          },
-          codex: { auth: "not json" },
-        },
         files: [
           { path: "../x", content: base64("x") },
           { path: ".env", content: "%%%" },
@@ -136,15 +89,12 @@ describe("personal environment input (ADR 0184)", () => {
         ],
       }),
     );
-    expect(issues).toHaveLength(6);
-    expect(issues.join("\n")).toMatch(/refresh token/);
-    expect(issues.join("\n")).toMatch(/Codex login is not JSON/);
+    expect(issues).toHaveLength(4);
     expect(issues.join("\n")).toMatch(/256 KiB/);
     expect(issues.join("\n")).toMatch(/listed twice/);
     expect(
       refused(() =>
         validatePersonalEnvironment({
-          logins: {},
           files: Array.from({ length: 51 }, (_, index) => ({
             path: `f${index}`,
             content: "",
@@ -239,17 +189,6 @@ describe("gitignore patterns for personal files", () => {
       "# BEGIN Work personal files (ADR 0184)\n/.env\n# END Work personal files\n",
     );
   });
-
-  it("gives Codex's login the refresh field it requires, empty", () => {
-    const auth = JSON.stringify({ tokens: { access_token: "at" } });
-    expect(
-      JSON.parse(sandboxLoginDocument({ kind: "codex", content: auth })),
-    ).toEqual({ tokens: { access_token: "at", refresh_token: "" } });
-    const claude = JSON.stringify({ claudeAiOauth: { accessToken: "at" } });
-    expect(sandboxLoginDocument({ kind: "claude-code", content: claude })).toBe(
-      claude,
-    );
-  });
 });
 
 /** A sandbox that is a directory on this machine, like local-process. */
@@ -302,23 +241,8 @@ function directorySandbox(root: string): SandboxProvider {
 
 function environment(
   files: Record<string, string>,
-  login?: string,
 ): UnsealedPersonalEnvironment {
   return {
-    logins: new Map(
-      login
-        ? [
-            [
-              "claude-code",
-              {
-                content: login,
-                fingerprint: personalFingerprint(login),
-                expiresAt: null,
-              },
-            ],
-          ]
-        : [],
-    ),
     files: Object.entries(files).map(([filePath, content]) => ({
       path: filePath,
       content: Buffer.from(content),
@@ -370,26 +294,21 @@ describe("personal files in a sandbox (ADR 0184)", () => {
   });
 
   it("places files outside everything that leaves the sandbox", async () => {
-    const login = JSON.stringify({ claudeAiOauth: { accessToken: "at" } });
     const result = await deliverPersonalEnvironment({
       provider,
       sandboxId: "s",
       projectDir: "/workspace/project",
-      environment: environment(
-        {
-          ".env": "SECRET=1\n",
-          "apps/api/.env.local": "LOCAL=1\n",
-          "config/tracked.env": "T=mine\n",
-          "odd [name]*.env": "ODD=1\n",
-        },
-        login,
-      ),
+      environment: environment({
+        ".env": "SECRET=1\n",
+        "apps/api/.env.local": "LOCAL=1\n",
+        "config/tracked.env": "T=mine\n",
+        "odd [name]*.env": "ODD=1\n",
+      }),
     });
     expect(result.refused).toEqual(["config/tracked.env"]);
     expect(result.delivered.map((entry) => entry.name).sort()).toEqual([
       ".env",
       "apps/api/.env.local",
-      "claude-code",
       "odd [name]*.env",
     ]);
     expect(await fs.readFile(path.join(project(), ".env"), "utf8")).toBe(
@@ -401,22 +320,6 @@ describe("personal files in a sandbox (ADR 0184)", () => {
     ).toBe("T=1\n");
     const stat = await fs.stat(path.join(project(), ".env"));
     expect(stat.mode & 0o777).toBe(0o600);
-    // The login is beside the project, never in it.
-    const home = personalLoginHome({ provider, kind: "claude-code" });
-    expect(home).toBe("/workspace/.work-session/home/claude");
-    expect(
-      await fs.readFile(
-        path.join(
-          root,
-          "workspace",
-          ".work-session",
-          "home",
-          "claude",
-          ".credentials.json",
-        ),
-        "utf8",
-      ),
-    ).toBe(login);
     // Nothing personal reaches the sync-back snapshot, and an agent's
     // commit of everything leaves them out.
     await fs.writeFile(path.join(project(), "app.ts"), "two\n");
@@ -555,16 +458,7 @@ describe("personal files in a sandbox (ADR 0184)", () => {
     );
   });
 
-  it("takes out a login dropped from the set, and the exclude block on removal", async () => {
-    const login = JSON.stringify({ claudeAiOauth: { accessToken: "at" } });
-    const credentials = path.join(
-      root,
-      "workspace",
-      ".work-session",
-      "home",
-      "claude",
-      ".credentials.json",
-    );
+  it("takes out the exclude block on removal", async () => {
     // Nothing delivered yet: removal leaves the repository alone.
     await removePersonalEnvironment({
       provider,
@@ -575,16 +469,8 @@ describe("personal files in a sandbox (ADR 0184)", () => {
       provider,
       sandboxId: "s",
       projectDir: "/workspace/project",
-      environment: environment({ ".env": "A=1\n" }, login),
-    });
-    expect(await fs.readFile(credentials, "utf8")).toBe(login);
-    await deliverPersonalEnvironment({
-      provider,
-      sandboxId: "s",
-      projectDir: "/workspace/project",
       environment: environment({ ".env": "A=1\n" }),
     });
-    await expect(fs.stat(credentials)).rejects.toThrow();
     expect(await fs.readFile(path.join(project(), ".env"), "utf8")).toBe(
       "A=1\n",
     );

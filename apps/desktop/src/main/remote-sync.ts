@@ -1,5 +1,7 @@
 import { createApiClient, type paths } from "@catamorphic/api-client";
 import type {
+  PersonalEnvironmentInput,
+  PersonalEnvironmentStatus,
   PullRequestComment,
   PullRequestDiscussion,
   PullRequestFile,
@@ -153,21 +155,15 @@ type DeployBody = NonNullable<
 >["content"]["application/json"];
 type DeployResult =
   DeployRoute["post"]["responses"][200]["content"]["application/json"];
-type PersonalEnvironmentRoute =
-  paths["/api/projects/{projectId}/personal-environment"];
-
 /**
  * `PUT /projects/:projectId/personal-environment` (ADR 0184): replaces the
- * caller's own sign-ins and files for the project. Logins carry no refresh
- * token; file contents are base64.
+ * caller's own files for the project, contents as base64. Sign-ins are never
+ * sent (ADR 0199).
  */
-export type RemotePersonalEnvironmentUpload = NonNullable<
-  PersonalEnvironmentRoute["put"]["requestBody"]
->["content"]["application/json"];
+export type RemotePersonalEnvironmentUpload = PersonalEnvironmentInput;
 
 /** `GET /projects/:projectId/personal-environment`: never any contents. */
-export type RemotePersonalEnvironment =
-  PersonalEnvironmentRoute["get"]["responses"][200]["content"]["application/json"];
+export type RemotePersonalEnvironment = PersonalEnvironmentStatus;
 
 /** Reads the status defensively: sync decisions depend on it. */
 export function parseRemotePersonalEnvironment(
@@ -180,21 +176,6 @@ export function parseRemotePersonalEnvironment(
   const body = object(value);
   if (!body || typeof body.allowed !== "boolean")
     throw new Error("The server sent an unreadable remote environment");
-  const logins: RemotePersonalEnvironment["logins"] = {};
-  const rawLogins = object(body.logins) ?? {};
-  for (const harness of ["claude-code", "codex"] as const) {
-    const entry = object(rawLogins[harness]);
-    if (!entry) continue;
-    logins[harness] = {
-      fingerprint:
-        typeof entry.fingerprint === "string" ? entry.fingerprint : "",
-      ...(typeof entry.expiresAt === "string"
-        ? { expiresAt: entry.expiresAt }
-        : {}),
-      updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
-      needsRefresh: entry.needsRefresh === true,
-    };
-  }
   const files = (Array.isArray(body.files) ? body.files : []).flatMap(
     (item) => {
       const entry = object(item);
@@ -210,7 +191,7 @@ export function parseRemotePersonalEnvironment(
       ];
     },
   );
-  return { allowed: body.allowed, logins, files };
+  return { allowed: body.allowed, files };
 }
 
 /** A 401 from the host: the token no longer works. */

@@ -1,0 +1,1111 @@
+{
+  "provider": "claude-code",
+  "sdkVersion": "0.3.263",
+  "cliVersion": "2.1.263",
+  "scenario": "ask-user-question",
+  "source": "recorded",
+  "attempts": [
+    {
+      "outbound": {
+        "prompt": "Pick a theme for me",
+        "cwd": "{{cwd}}",
+        "thread": {
+          "sessionId": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "resume": null,
+          "forkSession": false,
+          "resumeSessionAt": null
+        },
+        "model": "claude-sonnet-4-5",
+        "effort": null,
+        "permissionMode": "acceptEdits",
+        "systemPromptAppend": "You are a Work fixture agent. Keep answers short.",
+        "allowedTools": [
+          "Agent",
+          "Bash",
+          "BashOutput",
+          "Edit",
+          "Glob",
+          "Grep",
+          "KillShell",
+          "Monitor",
+          "NotebookEdit",
+          "PowerShell",
+          "Read",
+          "Skill",
+          "SlashCommand",
+          "Task",
+          "TaskOutput",
+          "TaskStop",
+          "TodoWrite",
+          "WebFetch",
+          "WebSearch",
+          "Write"
+        ],
+        "disallowedTools": [],
+        "mcpServers": {},
+        "env": {
+          "ANTHROPIC_BASE_URL": "{{model}}",
+          "CLAUDE_CONFIG_DIR": "{{home}}",
+          "WORK_MODEL_KEY_FILE": "{{state}}/model-key",
+          "CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "300000",
+          "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+          "DISABLE_AUTOUPDATER": "1"
+        },
+        "apiKeyHelper": "cat \"$WORK_MODEL_KEY_FILE\"",
+        "includePartialMessages": true,
+        "sessionStore": true,
+        "hooks": ["PostToolUse", "UserPromptSubmit"]
+      },
+      "messages": [
+        {
+          "type": "replay.input",
+          "uuid": "e67ea1aa-6f38-4baa-9824-384110f4727f",
+          "text": "Pick a theme for me"
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "e67ea1aa-6f38-4baa-9824-384110f4727f",
+          "state": "queued",
+          "uuid": "51b1cf2b-e6d7-44d6-8cb8-57a4ba93b796",
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5"
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "e67ea1aa-6f38-4baa-9824-384110f4727f",
+          "state": "started",
+          "uuid": "8bfdd23e-4344-4e0b-86c3-3ba8f90cbf05",
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5"
+        },
+        {
+          "type": "replay.hook",
+          "event": "UserPromptSubmit",
+          "toolUseID": "5ea6682a-2730-45b2-a05b-654feedfb248",
+          "input": {
+            "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+            "transcript_path": "{{home}}/projects/{{cwd-key}}/740da134-7690-47bf-ab08-9b4e3bea45f5.jsonl",
+            "cwd": "{{cwd}}",
+            "prompt_id": "539e0ac2-69b2-4329-a4bf-42e4ba07162f",
+            "permission_mode": "acceptEdits",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Pick a theme for me"
+          }
+        },
+        {
+          "type": "system",
+          "subtype": "init",
+          "cwd": "{{cwd}}",
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "tools": [
+            "Task",
+            "AskUserQuestion",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "Edit",
+            "EnterPlanMode",
+            "EnterWorktree",
+            "ExitPlanMode",
+            "ExitWorktree",
+            "Glob",
+            "Grep",
+            "ListAgents",
+            "NotebookEdit",
+            "Read",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskCreate",
+            "TaskGet",
+            "TaskList",
+            "TaskOutput",
+            "TaskStop",
+            "TaskUpdate",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "Write"
+          ],
+          "mcp_servers": [],
+          "model": "claude-sonnet-4-5",
+          "permissionMode": "acceptEdits",
+          "slash_commands": [
+            "deep-research",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "claude-api",
+            "workflow-authoring",
+            "run",
+            "run-skill-generator",
+            "agents",
+            "auto-mode-setup",
+            "autocompact",
+            "clear",
+            "color",
+            "compact",
+            "config",
+            "context",
+            "effort",
+            "fast",
+            "heapdump",
+            "init",
+            "mcp",
+            "model",
+            "__remote-workflow",
+            "workflow-launch-exec",
+            "reload-plugins",
+            "reload-skills",
+            "rename",
+            "security-review",
+            "usage",
+            "insights",
+            "recap",
+            "goal",
+            "list-agents",
+            "team-onboarding"
+          ],
+          "terminal_slash_commands": ["doctor", "color", "reload-plugins"],
+          "apiKeySource": "apiKeyHelper",
+          "claude_code_version": "2.1.263",
+          "output_style": "default",
+          "agents": [
+            "claude",
+            "Explore",
+            "general-purpose",
+            "Plan",
+            "statusline-setup"
+          ],
+          "skills": [
+            "deep-research",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "claude-api",
+            "workflow-authoring",
+            "run",
+            "run-skill-generator"
+          ],
+          "plugins": [],
+          "capabilities": [
+            "interrupt_receipt_v1",
+            "interrupt_cancel_queued_v1",
+            "msg_lifecycle_v1"
+          ],
+          "analytics_disabled": true,
+          "product_feedback_disabled": true,
+          "uuid": "c897708c-9381-4555-9e41-79fb7a62a353",
+          "messaging_socket_path": "/tmp/cc-socks/40507.sock",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required"
+        },
+        {
+          "type": "system",
+          "subtype": "status",
+          "status": "requesting",
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "uuid": "5080ce6e-9bd4-4076-b36e-f4d734a63590"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_scripted_1",
+              "type": "message",
+              "role": "assistant",
+              "model": "claude-sonnet-4-5",
+              "content": [],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "usage": {
+                "input_tokens": 10,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 1
+              }
+            }
+          },
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "parent_tool_use_id": null,
+          "uuid": "a0e3e207-09f8-4a92-b7d4-889703b11d5d",
+          "ttft_ms": 3,
+          "user_message_uuid": "e67ea1aa-6f38-4baa-9824-384110f4727f",
+          "user_message_uuids": ["e67ea1aa-6f38-4baa-9824-384110f4727f"]
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "tool_use",
+              "id": "toolu_fixture_ask",
+              "name": "AskUserQuestion",
+              "input": {}
+            }
+          },
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "parent_tool_use_id": null,
+          "uuid": "0d387a81-ca3c-4fe1-93d9-4fb9a328d87b"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "input_json_delta",
+              "partial_json": "{\"questions\":[{\"question\":\"Which theme?\",\"header\":\"Theme\",\"multiSelect\":false,\"options\":[{\"label\":\"Orange\",\"description\":\"Warm\"},{\"label\":\"Blue\",\"description\":\"Cool\"}]}]}"
+            }
+          },
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "parent_tool_use_id": null,
+          "uuid": "c55abe7a-2537-42c2-a7ce-adb79aef34d8"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "id": "msg_scripted_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_fixture_ask",
+                "name": "AskUserQuestion",
+                "input": {
+                  "questions": [
+                    {
+                      "question": "Which theme?",
+                      "header": "Theme",
+                      "multiSelect": false,
+                      "options": [
+                        {
+                          "label": "Orange",
+                          "description": "Warm"
+                        },
+                        {
+                          "label": "Blue",
+                          "description": "Cool"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 1
+            },
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "uuid": "ae3eaf4c-b87a-4605-9656-791e8e9c0eed",
+          "timestamp": "2026-10-02T14:13:30.657Z"
+        },
+        {
+          "type": "replay.can_use_tool",
+          "toolName": "AskUserQuestion",
+          "input": {
+            "questions": [
+              {
+                "question": "Which theme?",
+                "header": "Theme",
+                "options": [
+                  {
+                    "label": "Orange",
+                    "description": "Warm"
+                  },
+                  {
+                    "label": "Blue",
+                    "description": "Cool"
+                  }
+                ],
+                "multiSelect": false
+              }
+            ]
+          },
+          "toolUseID": "toolu_fixture_ask",
+          "result": {
+            "behavior": "allow",
+            "updatedInput": {
+              "questions": [
+                {
+                  "question": "Which theme?",
+                  "header": "Theme",
+                  "options": [
+                    {
+                      "label": "Orange",
+                      "description": "Warm"
+                    },
+                    {
+                      "label": "Blue",
+                      "description": "Cool"
+                    }
+                  ],
+                  "multiSelect": false
+                }
+              ],
+              "answers": {
+                "Which theme?": "Orange"
+              }
+            }
+          }
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 0
+          },
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "parent_tool_use_id": null,
+          "uuid": "9228e0a2-0f99-44fc-a1d4-ea786d6f60c3"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_delta",
+            "delta": {
+              "stop_reason": "tool_use",
+              "stop_sequence": null
+            },
+            "usage": {
+              "output_tokens": 5
+            }
+          },
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "parent_tool_use_id": null,
+          "uuid": "956bc559-1750-4009-bdfb-e909d7757785"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_stop"
+          },
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "parent_tool_use_id": null,
+          "uuid": "87ec0222-33e6-4bce-a544-a1bdc829d91d"
+        },
+        {
+          "type": "user",
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "content": "Your questions have been answered: \"Which theme?\"=\"Orange\". You can now continue with these answers in mind.",
+                "tool_use_id": "toolu_fixture_ask"
+              }
+            ]
+          },
+          "parent_tool_use_id": null,
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "uuid": "44b712d6-48ec-443c-ab49-56713a6778df",
+          "timestamp": "2026-10-02T14:13:30.662Z",
+          "tool_use_result": {
+            "questions": [
+              {
+                "question": "Which theme?",
+                "header": "Theme",
+                "options": [
+                  {
+                    "label": "Orange",
+                    "description": "Warm"
+                  },
+                  {
+                    "label": "Blue",
+                    "description": "Cool"
+                  }
+                ],
+                "multiSelect": false
+              }
+            ],
+            "answers": {
+              "Which theme?": "Orange"
+            }
+          }
+        },
+        {
+          "type": "system",
+          "subtype": "status",
+          "status": "requesting",
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "uuid": "941afc36-0525-4f60-bf3b-22b5c5206c9a"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_scripted_2",
+              "type": "message",
+              "role": "assistant",
+              "model": "claude-sonnet-4-5",
+              "content": [],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "usage": {
+                "input_tokens": 10,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 1
+              }
+            }
+          },
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "parent_tool_use_id": null,
+          "uuid": "907afae0-acf6-4a6f-ab54-b97371f545b5",
+          "ttft_ms": 2
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "text",
+              "text": ""
+            }
+          },
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "parent_tool_use_id": null,
+          "uuid": "dc07b25d-634b-475a-9d66-8a837b8dd20a"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "text_delta",
+              "text": "Orange "
+            }
+          },
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "parent_tool_use_id": null,
+          "uuid": "0cd297d4-121f-444d-a0e2-5dbac3e64670"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "text_delta",
+              "text": "it is."
+            }
+          },
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "parent_tool_use_id": null,
+          "uuid": "afb029cf-8d41-402e-a847-5db2eeb08757"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "id": "msg_scripted_2",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [
+              {
+                "type": "text",
+                "text": "Orange it is."
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 1
+            },
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "uuid": "9d4ab9f2-3eb3-4d72-8259-01f08ca84be4",
+          "timestamp": "2026-10-02T14:13:30.669Z"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 0
+          },
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "parent_tool_use_id": null,
+          "uuid": "31909f97-6be2-46f8-96ef-ee5eefe59169"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_delta",
+            "delta": {
+              "stop_reason": "end_turn",
+              "stop_sequence": null
+            },
+            "usage": {
+              "output_tokens": 5
+            }
+          },
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "parent_tool_use_id": null,
+          "uuid": "90c02e7b-dc47-47e7-bba0-74207fea23bb"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_stop"
+          },
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "parent_tool_use_id": null,
+          "uuid": "e158a0fa-691e-49c1-a5b1-46cbcd6b1de8"
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "queue-operation",
+              "operation": "enqueue",
+              "timestamp": "2026-10-02T14:13:30.618Z",
+              "sessionId": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+              "content": "Pick a theme for me"
+            },
+            {
+              "type": "queue-operation",
+              "operation": "dequeue",
+              "timestamp": "2026-10-02T14:13:30.618Z",
+              "sessionId": "740da134-7690-47bf-ab08-9b4e3bea45f5"
+            },
+            {
+              "parentUuid": null,
+              "isSidechain": false,
+              "promptId": "539e0ac2-69b2-4329-a4bf-42e4ba07162f",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": "Pick a theme for me"
+              },
+              "uuid": "e67ea1aa-6f38-4baa-9824-384110f4727f",
+              "timestamp": "2026-10-02T14:13:30.635Z",
+              "permissionMode": "acceptEdits",
+              "promptSource": "sdk",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "e67ea1aa-6f38-4baa-9824-384110f4727f",
+              "isSidechain": false,
+              "attachment": {
+                "type": "agent_listing_delta",
+                "addedTypes": [
+                  "claude",
+                  "Explore",
+                  "general-purpose",
+                  "Plan",
+                  "statusline-setup"
+                ],
+                "addedLines": [
+                  "- claude: Catch-all for any task that doesn't fit a more specific agent. FleetView's default when no agent name is typed. (Tools: *)",
+                  "- Explore: Fast read-only search agent for locating code. Use it to find files by pattern (eg. \"src/components/**/*.tsx\"), grep for symbols or keywords (eg. \"API endpoints\"), or answer \"where is X defined / which files reference Y.\" Do NOT use it for code review, design-doc auditing, cross-file consistency checks, or open-ended analysis — it reads excerpts rather than whole files and will miss content past its read window. When calling, specify search breadth: \"quick\" for a single targeted lookup, \"medium\" for moderate exploration, or \"very thorough\" to search across multiple locations and naming conventions. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: *)",
+                  "- Plan: Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- statusline-setup: Use this agent to configure the user's Claude Code status line setting. (Tools: Read, Edit)"
+                ],
+                "removedTypes": [],
+                "isInitial": true,
+                "showConcurrencyNote": true
+              },
+              "type": "attachment",
+              "uuid": "16953a6f-1def-4547-b456-0455a57bee36",
+              "timestamp": "2026-10-02T14:13:30.634Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "16953a6f-1def-4547-b456-0455a57bee36",
+              "isSidechain": false,
+              "attachment": {
+                "type": "skill_listing",
+                "content": "- dataviz: Use this skill whenever you are about to create ANY chart, graph, plot, dashboard, or data visualization, in ANY output medium — an HTML or React artifact, inline SVG, plotting code in any library (matplotlib, plotly, d3, Recharts, …), an image/PNG you will render and upload, or a chart shared into Slack. Read it BEFORE writing the first line of chart code, choosing chart colors, building a stat tile / meter / KPI row, or laying out a dashboard. When the destination is a first-party document connector (host-designated, never self-described) that renders live charts, hand it the rows (inline, or as an uploaded data file the chart cites) rather than a rendered PNG/SVG — a picture of a chart loses hover, data inspection and per-value comments. Produces visualizations that read as one system — elegant, accessible, consistent in light and dark — using a brand-neutral placeholder palette you swap for your own. Teaches a design-system-agnostic method: a form heuristic, a color formula with a runnable validator, mark specs, and interaction rules. A validated default palette is documented in `references/palette.md` — swap that file's values for your brand's. Triggers on: \"chart\", \"graph\", \"plot\", \"data viz\", \"visualization\", \"dashboard\", \"analytics\", \"visualize data\", \"categorical colors\", \"sequential / diverging palette\", \"stat tile\", \"sparkline\", \"heatmap\", \"legend\", \"axis\", \"tooltip\", \"chart colors\", \"color by series\".\n- update-config: Use this skill to configure the Claude Code harness via settings.json. Automated behaviors (\"from now on when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks configured in settings.json - the harness executes these, not Claude, so memory/preferences cannot fulfill them. Also use for: permissions (\"allow X\", \"add permission\", \"move permission to\"), env vars (\"set X=Y\"), hook troubleshooting, or any changes to settings.json/settings.local.json files. Examples: \"allow npm commands\", \"add bq permission to global settings\", \"move permission to user settings\", \"set DEBUG=true\", \"when claude stops show X\". For simple settings like theme/model, suggest the /config command.\n- keybindings-help: Use when the user wants to customize keyboard shortcuts, rebind keys, add chord bindings, or modify ~/.claude/keybindings.json. Examples: \"rebind ctrl+s\", \"add a chord shortcut\", \"change the submit key\", \"customize keybindings\".\n- code-review: Review the current diff, or a PR number/branch/path target, for correctness bugs and reuse/simplification/efficiency cleanups at the given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings); with no level given, it reuses the level you typed last. Pass --comment to post findings as inline PR comments, or --fix to apply the findings to the working tree after the review.\n- simplify: Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use /code-review for that.\n- fewer-permission-prompts: Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts.\n- loop: Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let the model self-pace. - When the user wants to set up a recurring task, poll for status, or run something repeatedly on an interval (e.g. \"check the deploy every 5 minutes\", \"keep running /babysit-prs\"). Do NOT invoke for one-off tasks.\n- claude-api: Reference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration.\nTRIGGER — read BEFORE opening the target file; don't skip because it \"looks like a one-liner\" — whenever: the prompt names Claude/Anthropic in any form (Claude, Anthropic, Fable, Opus, Sonnet, Haiku, `anthropic`, `@anthropic-ai`, `claude-*`, `us.anthropic.*`, `[1m]`); the user asks about an LLM (pricing/model choice/limits/caching) — never answer from memory; OR the task is LLM-shaped with provider unstated (agent/MCP/tool-definition/multi-agent/RAG/LLM-judge/computer-use; generate/summarize/extract/classify/rewrite/converse over NL; debugging refusals/cutoffs/streaming/tool-calls/tokens).\nSKIP only when another provider is being worked on (overrides all triggers): OpenAI/GPT/Gemini/Llama/Mistral/Cohere/Ollama named in the query; OR `grep -rE 'openai|langchain_openai|google.generativeai|genai|mistralai|cohere|ollama'` over the project hits (run this grep FIRST if no provider named — don't Read the file).\n- workflow-authoring: Reference for writing a Workflow tool script (script API and gotchas, resume, quality patterns, worked examples). Load before authoring a script for a workflow the user already opted into; it does not itself authorize running one.\n- run: Launch and drive this project's app to see a change working. Use when asked to run, start, or screenshot the app, or to confirm a change works in the real app (not just tests). First looks for a project skill that already covers launching the app; otherwise falls back to built-in patterns per project type (CLI, server, TUI, Electron, browser-driven, library).\n- init: Initialize a new CLAUDE.md file with codebase documentation\n- security-review: Complete a security review of the pending changes on the current branch",
+                "skillCount": 12,
+                "isInitial": true,
+                "names": [
+                  "dataviz",
+                  "update-config",
+                  "keybindings-help",
+                  "code-review",
+                  "simplify",
+                  "fewer-permission-prompts",
+                  "loop",
+                  "claude-api",
+                  "workflow-authoring",
+                  "run",
+                  "init",
+                  "security-review"
+                ]
+              },
+              "type": "attachment",
+              "uuid": "2180f079-7840-4c1b-a3c7-f450bd4ae247",
+              "timestamp": "2026-10-02T14:13:30.634Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "2180f079-7840-4c1b-a3c7-f450bd4ae247",
+              "isSidechain": false,
+              "attachment": {
+                "type": "total_tokens_reminder",
+                "text": "<total_tokens>15000000 tokens left</total_tokens>"
+              },
+              "type": "attachment",
+              "uuid": "83483c62-223c-44ec-95e0-d69c5053e98f",
+              "timestamp": "2026-10-02T14:13:30.634Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "type": "atis-latch",
+              "atis": "",
+              "sessionId": "740da134-7690-47bf-ab08-9b4e3bea45f5"
+            },
+            {
+              "parentUuid": "83483c62-223c-44ec-95e0-d69c5053e98f",
+              "isSidechain": false,
+              "message": {
+                "id": "msg_scripted_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "tool_use",
+                    "id": "toolu_fixture_ask",
+                    "name": "AskUserQuestion",
+                    "input": {
+                      "questions": [
+                        {
+                          "question": "Which theme?",
+                          "header": "Theme",
+                          "multiSelect": false,
+                          "options": [
+                            {
+                              "label": "Orange",
+                              "description": "Warm"
+                            },
+                            {
+                              "label": "Blue",
+                              "description": "Cool"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "stop_reason": "tool_use",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 0,
+              "type": "assistant",
+              "uuid": "ae3eaf4c-b87a-4605-9656-791e8e9c0eed",
+              "timestamp": "2026-10-02T14:13:30.657Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "ae3eaf4c-b87a-4605-9656-791e8e9c0eed",
+              "isSidechain": false,
+              "promptId": "539e0ac2-69b2-4329-a4bf-42e4ba07162f",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "tool_result",
+                    "content": "Your questions have been answered: \"Which theme?\"=\"Orange\". You can now continue with these answers in mind.",
+                    "tool_use_id": "toolu_fixture_ask"
+                  }
+                ]
+              },
+              "uuid": "44b712d6-48ec-443c-ab49-56713a6778df",
+              "timestamp": "2026-10-02T14:13:30.662Z",
+              "toolUseResult": {
+                "questions": [
+                  {
+                    "question": "Which theme?",
+                    "header": "Theme",
+                    "options": [
+                      {
+                        "label": "Orange",
+                        "description": "Warm"
+                      },
+                      {
+                        "label": "Blue",
+                        "description": "Cool"
+                      }
+                    ],
+                    "multiSelect": false
+                  }
+                ],
+                "answers": {
+                  "Which theme?": "Orange"
+                }
+              },
+              "sourceToolAssistantUUID": "ae3eaf4c-b87a-4605-9656-791e8e9c0eed",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "44b712d6-48ec-443c-ab49-56713a6778df",
+              "isSidechain": false,
+              "attachment": {
+                "type": "total_tokens_reminder",
+                "text": "<total_tokens>14999985 tokens left</total_tokens>"
+              },
+              "type": "attachment",
+              "uuid": "b67d32ad-4983-4d48-bf97-d0b2c54338e6",
+              "timestamp": "2026-10-02T14:13:30.664Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "b67d32ad-4983-4d48-bf97-d0b2c54338e6",
+              "isSidechain": false,
+              "message": {
+                "id": "msg_scripted_2",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Orange it is."
+                  }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 0,
+              "type": "assistant",
+              "uuid": "9d4ab9f2-3eb3-4d72-8259-01f08ca84be4",
+              "timestamp": "2026-10-02T14:13:30.669Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            }
+          ]
+        },
+        {
+          "duration_api_ms": 28,
+          "stop_reason": "end_turn",
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "total_cost_usd": 0.00021,
+          "usage": {
+            "input_tokens": 20,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 10,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "",
+            "iterations": [],
+            "speed": "standard"
+          },
+          "modelUsage": {
+            "claude-sonnet-4-5": {
+              "inputTokens": 20,
+              "outputTokens": 10,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0,
+              "webSearchRequests": 0,
+              "costUSD": 0.00021,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 0,
+              "canonicalModel": "claude-sonnet-4-5",
+              "provider": "firstParty",
+              "costBasis": "list"
+            }
+          },
+          "permission_denials": [],
+          "terminal_reason": "completed",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required",
+          "subagent_stats": {
+            "spawned": 0,
+            "requested": {
+              "background": 0,
+              "foreground": 0,
+              "unset": 0
+            },
+            "started_in_background": 0,
+            "max_depth": 0,
+            "spawned_by_subagents": 0,
+            "completed": 0,
+            "failed": 0,
+            "killed": {
+              "parent": 0,
+              "user": 0,
+              "system": 0
+            },
+            "refused": {
+              "depth_limit": 0,
+              "concurrency_limit": 0,
+              "budget": 0
+            },
+            "by_type": {}
+          },
+          "is_error": false,
+          "num_turns": 2,
+          "subtype": "success",
+          "api_error_status": null,
+          "result": "Orange it is.",
+          "ttft_ms": 37,
+          "type": "result",
+          "duration_ms": 65,
+          "uuid": "6de0b819-dbd7-4728-bcb0-89236b6a86ac",
+          "ttft_stream_ms": 37,
+          "time_to_request_ms": 33,
+          "first_content_frame_ms": 37,
+          "user_message_uuid": "e67ea1aa-6f38-4baa-9824-384110f4727f",
+          "user_message_uuids": ["e67ea1aa-6f38-4baa-9824-384110f4727f"],
+          "request_sent_wall_ms": 1790950410654,
+          "queued_turn_count": 0
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "e67ea1aa-6f38-4baa-9824-384110f4727f",
+          "state": "completed",
+          "uuid": "328be6d5-c1c3-4ad5-bedd-3ba7e09ac0b1",
+          "session_id": "740da134-7690-47bf-ab08-9b4e3bea45f5"
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "last-prompt",
+              "lastPrompt": "Pick a theme for me",
+              "leafUuid": "9d4ab9f2-3eb3-4d72-8259-01f08ca84be4",
+              "sessionId": "740da134-7690-47bf-ab08-9b4e3bea45f5"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "type": "thread",
+          "ref": {
+            "id": "740da134-7690-47bf-ab08-9b4e3bea45f5",
+            "strength": "strong"
+          }
+        },
+        {
+          "type": "turn.started"
+        },
+        {
+          "type": "request.opened",
+          "key": "question:toolu_fixture_ask",
+          "request": {
+            "kind": "question",
+            "blocking": true,
+            "title": "Theme",
+            "origin": {
+              "kind": "tool",
+              "id": "AskUserQuestion",
+              "displayName": "Ask User"
+            },
+            "questions": [
+              {
+                "question": "Which theme?",
+                "header": "Theme",
+                "multiSelect": false,
+                "options": [
+                  {
+                    "label": "Orange",
+                    "description": "Warm"
+                  },
+                  {
+                    "label": "Blue",
+                    "description": "Cool"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "item.started",
+          "key": "msg_scripted_2:0",
+          "ref": {
+            "id": "msg_scripted_2:0",
+            "strength": "strong"
+          },
+          "item": {
+            "kind": "assistant_message",
+            "text": "",
+            "agentId": null
+          }
+        },
+        {
+          "type": "item.delta",
+          "key": "msg_scripted_2:0",
+          "field": "text",
+          "text": "Orange "
+        },
+        {
+          "type": "item.delta",
+          "key": "msg_scripted_2:0",
+          "field": "text",
+          "text": "it is."
+        },
+        {
+          "type": "item.completed",
+          "key": "msg_scripted_2:0",
+          "status": "completed",
+          "item": {
+            "text": "Orange it is."
+          }
+        },
+        {
+          "type": "usage",
+          "usage": {
+            "model": "claude-sonnet-4-5",
+            "inputTokens": 20,
+            "cachedInputTokens": 0,
+            "cacheCreationTokens": 0,
+            "outputTokens": 10,
+            "costUsd": 0.00021,
+            "contextTokens": 10,
+            "contextWindow": 200000
+          }
+        },
+        {
+          "type": "turn.completed",
+          "status": "completed",
+          "ref": {
+            "id": "9d4ab9f2-3eb3-4d72-8259-01f08ca84be4",
+            "strength": "strong"
+          }
+        }
+      ]
+    }
+  ]
+}

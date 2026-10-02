@@ -2,7 +2,7 @@
   "$schema": "https://ui.shadcn.com/schema/registry-item.json",
   "name": "chat-queue",
   "type": "registry:component",
-  "description": "Server-owned outgoing queue with editing, removal and send-now callbacks. Optional host content and hints.",
+  "description": "The session's turn queue as ghost bubbles: edit (holds the turn), cancel and send now, keyed by turn id. Feed it from useAgentChat().queue. Optional host content and hints.",
   "dependencies": ["@catamorphic/react", "lucide-react"],
   "registryDependencies": [],
   "files": [

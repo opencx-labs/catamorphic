@@ -49,7 +49,10 @@ take over a surface at any moment, inspect diffs when a change deserves your
 eyes, or trust routine work to continue.
 
 Projects are ordinary folders and git repositories. Every agent turn that
-changes files creates a checkpoint commit. Local execution uses an embedded
+changes files creates a checkpoint commit, and any turn can be undone with
+its files. A session is a durable log of turns that every client folds the
+same way, so a turn whose machine stopped continues elsewhere on the agent's
+own conversation. Local execution uses an embedded
 database and local sandboxes, so the desktop does not depend on a hosted
 Catamorphic service.
 
@@ -355,15 +358,18 @@ Supporting packages (consumed through the surface above, importable directly for
 | `@catamorphic/git` | Git-backed project storage (`isomorphic-git`): members' drafts as refs in the project origin (ADR 0191), local folder checkouts, pluggable origin remotes (`RemoteBackend`), and the remote sync engine (`syncWithNetworkRemote`: fetch and fast-forward; merge, push, and rescue branches only for repositories Work created), with the one push guard every network push passes (`work/` branches only on attached repositories). |
 | `@catamorphic/github` | GitHub mechanics: OAuth + device-flow helpers, GitHub App auth (app JWTs, installation tokens, manifest registration), and the REST API client. The server SDK builds the `github` connection provider and code host on it. |
 | `@catamorphic/parser` | ts-morph AST → `WorkflowGraph` parser + dagre layout; also powers the seeded project `check` script. |
-| `@catamorphic/sandbox` | Vendor-neutral sandbox + coding-agent contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`, `CodingAgentProvider`), the stdio supervisor transport, OTel instrumentation. |
+| `@catamorphic/sandbox` | Vendor-neutral sandbox contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`), the stdio supervisor transport, OTel instrumentation, and plugin-doc staging and tool-policy helpers for harnesses. |
+| `@catamorphic/agent-protocol` | The agent session log (turns, attempts, items, requests, provider threads), its events, commands and shared reducer, and the runner protocol every harness adapter speaks (`HarnessAdapter`). |
+| `@catamorphic/agent-runner` | The harness-agnostic runner that drives one attempt of a turn on an adapter, in-process or over stdio. |
+| `@catamorphic/runner-bundle` | The runner and its Claude Code and Codex adapters as one hash-addressed file a sandbox runs with Bun or Node. |
 | `@catamorphic/microsandbox` | Local sandbox provider over the microsandbox SDK: the desktop's default execution. |
 | `@catamorphic/local-process` | Sandboxless execution as plain subprocesses with an explicit env. Trusted single-tenant hosts only (ADR 0047). |
 | `@catamorphic/cloudflare` | Cloudflare backend plugin: `CloudflareSandboxProvider` (execution via Bridge Worker) + `ArtifactsRemoteBackend` (Cloudflare-native code storage when available). |
 | `@catamorphic/s3` | S3-compatible git origin backend for Cloudflare R2, AWS S3, MinIO, and similar stores. |
 | `@catamorphic/daytona` | Daytona backend plugin: `DaytonaSandboxProvider` + experimental Daytona git storage. |
-| `@catamorphic/ai-sdk` | Built-in coding-agent harness: Vercel AI SDK tool loop on any API model, running in the host and driving the dev sandbox remotely. |
-| `@catamorphic/claude-code` | Coding-agent harness backed by the Claude Code (Claude Agent SDK) CLI, with per-session MCP servers and full settings-source fidelity. |
-| `@catamorphic/codex` | Coding-agent harness backed by the OpenAI Codex SDK. |
+| `@catamorphic/ai-sdk` | Built-in harness adapter: Vercel AI SDK tool loop on any API model, running in the host and driving the session's sandbox through its tools. |
+| `@catamorphic/claude-code` | Harness adapter backed by the Claude Code (Claude Agent SDK) CLI, with per-turn MCP servers, portable native state and full settings-source fidelity. |
+| `@catamorphic/codex` | Harness adapter backed by the pinned OpenAI Codex app-server protocol. |
 | `@catamorphic/mcp` | MCP client infrastructure: both protocol generations with auto-negotiation, elicitation, the official MCP registry search, and plugin-marketplace install. |
 | `@catamorphic/otel` | Tiny OpenTelemetry helpers (`@opentelemetry/api` only: the host owns the SDK/exporters). |
 | `@catamorphic/runtime` | Execution harness that runs *inside* the sandbox and reports step results. |

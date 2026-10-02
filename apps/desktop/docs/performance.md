@@ -60,7 +60,7 @@ showing, a width-animated Cmd+B toggle ran 4–7 frames of 40–55 ms (a
 terminal: 6 of 53–67 ms) while the renderer's main thread was nearly idle.
 
 Sidebars therefore move first and the content settles after them
-(`lib/sidebar-motion.ts`, ADR 0197). The panel slides with a transform the
+(`lib/sidebar-motion.ts`, ADR 0200). The panel slides with a transform the
 moment it is toggled, over the content when opening and away from it when
 closing; the compositor runs it without layout. Once it is still, the
 content takes or gives back the space in a view transition

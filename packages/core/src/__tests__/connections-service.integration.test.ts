@@ -564,7 +564,6 @@ describe("credential connections", () => {
         id: sessionId,
         project_id: projectId,
         external_user_id: member.externalUserId,
-        provider: "test",
         source: "api",
         status: "active",
         authority_host_id: "test-host",
@@ -731,14 +730,9 @@ describe("credential connections", () => {
         ],
         // The host sets how long a guard may take (ADR 0183).
         guardTimeoutMs: 50,
-        approvals: {
-          handlerFor: () => async (request) => {
-            asked.push(`${request.sessionId}:${request.description}`);
-            return { decision: answer };
-          },
-          list: () => [],
-          get: () => undefined,
-          answer: () => false,
+        approve: async (request) => {
+          asked.push(`${request.sessionId}:${request.description}`);
+          return answer;
         },
         sessionOwner: async () => "member",
       },

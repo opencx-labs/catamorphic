@@ -64,4 +64,54 @@ describe("ProjectAuthorityProvider", () => {
       vi.clearAllMocks();
     }
   });
+
+  it("refuses a server that speaks another session protocol", async () => {
+    vi.mocked(desktopApi.remoteAuthority).mockResolvedValue({
+      connectionId: "connection-2",
+      credentialEpoch: "epoch",
+      remoteProjectId: "remote-project",
+      serverUrl: "https://brain.example/api",
+    });
+    const mount = vi.fn();
+    function Chat() {
+      useEffect(mount, []);
+      return <p>Remote transcript</p>;
+    }
+    const queries = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => {
+        root.render(
+          <CatamorphicProvider
+            apiClient={createApiClient({
+              baseUrl: "http://localhost",
+              fetch: async () =>
+                Response.json({
+                  projects: [],
+                  agentProtocol: { session: 2, runner: 1 },
+                }),
+            })}
+            queryClient={queries}
+          >
+            <ProjectAuthorityProvider projectId="local-project">
+              <Chat />
+            </ProjectAuthorityProvider>
+          </CatamorphicProvider>,
+        );
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(container.textContent).toContain("Update Work to continue");
+    } finally {
+      act(() => root.unmount());
+      queries.clear();
+      container.remove();
+      vi.clearAllMocks();
+    }
+  });
 });

@@ -4,14 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
-import type {
-  AgentEvent,
-  CodingAgentProvider,
-  ProviderSession,
-  SandboxProvider,
-  StartSessionOpts,
-  TurnOptions,
-} from "@catamorphic/sandbox";
+import type { SandboxProvider } from "@catamorphic/sandbox";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -26,6 +19,7 @@ import { ExecutionAllocationsService } from "../services/execution-allocations-s
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
+import { RecordingAdapter } from "./recording-adapter.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
@@ -55,38 +49,12 @@ const unusedSandboxProvider = new Proxy({} as SandboxProvider, {
   },
 });
 
-class RecordingProvider implements CodingAgentProvider {
-  readonly name = "recording";
-  readonly starts: StartSessionOpts[] = [];
-  readonly turns: Array<TurnOptions | undefined> = [];
-  async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
-    this.starts.push(opts);
-    return {
-      providerSessionId: crypto.randomUUID(),
-      sessionId: opts.sessionId,
-      projectId: opts.projectId,
-      sandboxId: opts.sandboxId,
-      workingDirectory: opts.workingDirectory,
-    };
-  }
-  async *sendMessage(
-    _session: ProviderSession,
-    message: string,
-    opts?: TurnOptions,
-  ): AsyncIterable<AgentEvent> {
-    this.turns.push(opts);
-    yield { type: "text", content: `echo: ${message}` };
-    yield { type: "done" };
-  }
-  async dispose(): Promise<void> {}
-}
-
 describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
   let tmpDir: string;
   let sessions: AgentSessionsService;
   let capabilities: AgentCapabilitiesService;
   let projectId: string;
-  const provider = new RecordingProvider();
+  const adapter = new RecordingAdapter();
   const executed: string[] = [];
 
   beforeAll(async () => {
@@ -148,7 +116,11 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
       get: () => undefined,
       list: () => [],
       // The host declares neither sandboxing nor policies: core applies both.
-      projectAgent: ({ id }) => ({ id, provider, topology: "native" }),
+      projectAgent: ({ id }) => ({
+        id,
+        harness: { placement: "host", adapter },
+        topology: "native",
+      }),
     };
     const executionAllocations = new ExecutionAllocationsService(db);
     const executionEnvironments = new ExecutionEnvironmentsService(
@@ -212,16 +184,15 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
       agentId: `project:${projectId}:reviewer`,
     });
     await sessions.sendMessage(root, projectId, session.id, "review");
-    const start = provider.starts.at(-1);
+    const start = adapter.attempts.at(-1);
     expect(start?.toolPolicies?.connection_prod).toEqual([
       { default: "ask", tools: { query: "allow" } },
     ]);
     expect(start?.toolPolicies?.catamorphic).toEqual([{ default: "deny" }]);
-    expect(provider.turns.at(-1)?.toolPolicies).toEqual(start?.toolPolicies);
     expect(
       await sessions.agentSandboxing({ projectId, sessionId: session.id }),
     ).toBe("contained");
-    expect(provider.turns.at(-1)?.harnessPermissions).toBeUndefined();
+    expect(adapter.attempts.at(-1)?.permissions).toEqual({});
   });
 
   it("hands the definition's harness permission mode to the harness per turn", async () => {
@@ -229,7 +200,7 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
       agentId: `project:${projectId}:publisher`,
     });
     await sessions.sendMessage(root, projectId, session.id, "ship it");
-    expect(provider.turns.at(-1)?.harnessPermissions).toEqual({
+    expect(adapter.attempts.at(-1)?.permissions).toEqual({
       permissionMode: "bypassPermissions",
     });
     expect(

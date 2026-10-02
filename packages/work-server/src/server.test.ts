@@ -1,11 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { SessionMirrorDivergedError } from "@catamorphic/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { projectAssistantId } from "./agents.js";
-import { createWorkServer, type WorkServer } from "./server.js";
+import {
+  createWorkServer,
+  SERVER_TENANT_ID,
+  type WorkServer,
+} from "./server.js";
 import {
   oauthAccessToken as oauthAccessTokenFor,
+  say,
   testServerOptions,
 } from "./test-support.js";
 
@@ -70,32 +76,6 @@ const inject = (
     },
     ...(body !== undefined ? { payload: JSON.stringify(body) } : {}),
   });
-
-async function waitForSessionContents({
-  sessionId,
-  token,
-  includes,
-}: {
-  sessionId: string;
-  token: string;
-  includes: string;
-}): Promise<string[]> {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const detail = await inject(
-      "GET",
-      `/api/projects/${projectId}/agent/sessions/${sessionId}`,
-      token,
-    );
-    expect(detail.statusCode).toBe(200);
-    const contents = detail
-      .json()
-      .messages.map((message: { content: string }) => message.content);
-    if (contents.includes(includes)) return contents;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error(`Timed out waiting for session message: ${includes}`);
-}
 
 const operatorInject = (url: string, token?: string, body?: unknown) =>
   server.operatorApp.inject({
@@ -408,157 +388,159 @@ describe("Work server", () => {
     ).toBe(403);
   });
 
-  it("a scoped member starts with the permitted project default", async () => {
-    const bare = await inject(
-      "POST",
-      `/api/projects/${projectId}/agent/sessions`,
-      memberToken,
-      {},
+  /** The member as the server resolves them: scoped by their roles. */
+  const member = async () => {
+    const identity = await server.catamorphic.core.memberships.identityForUser({
+      tenantId: SERVER_TENANT_ID,
+      externalUserId: memberUserId,
+    });
+    if (!identity) throw new Error("The member is not a member");
+    return identity;
+  };
+  const sessions = () => {
+    const service = server.catamorphic.core.agentSessions;
+    if (!service) throw new Error("Agent sessions are unavailable");
+    return service;
+  };
+  /** A chat as people read it, in order. */
+  const contentsOf = async (sessionId: string) =>
+    (await sessions().transcript(await member(), projectId, sessionId)).map(
+      (message) => message.content,
     );
-    expect(bare.statusCode).toBe(201);
-    expect(bare.json().agentId).toBe(projectAssistantId(projectId));
+
+  it("a scoped member starts with the permitted project default", async () => {
+    const bare = await sessions().create(await member(), projectId, {});
+    expect(bare.agentId).toBe(projectAssistantId(projectId));
   });
 
   it("the member chats with the assistant end to end", async () => {
-    const created = await inject(
-      "POST",
-      `/api/projects/${projectId}/agent/sessions`,
-      memberToken,
-      { agentId: projectAssistantId(projectId) },
-    );
-    expect(created.statusCode).toBe(201);
-    const sessionId = created.json().id;
-    const sent = await inject(
-      "POST",
-      `/api/projects/${projectId}/agent/sessions/${sessionId}/messages`,
-      memberToken,
-      { message: "hello server" },
-    );
-    expect(sent.statusCode).toBe(202);
-    const contents = await waitForSessionContents({
-      sessionId,
-      token: memberToken,
-      includes: "Echo: hello server",
+    const identity = await member();
+    const created = await sessions().create(identity, projectId, {
+      agentId: projectAssistantId(projectId),
     });
-    expect(contents).toContain("hello server");
-    expect(contents).toContain("Echo: hello server");
+    const answer = await say({
+      sessions: sessions(),
+      identity,
+      projectId,
+      sessionId: created.id,
+      text: "hello server",
+    });
+    expect(answer.content).toBe("Echo: hello server");
+    expect(await contentsOf(created.id)).toEqual([
+      "hello server",
+      "Echo: hello server",
+    ]);
   }, 60_000);
 
   it("mirrors a desktop session and continues it server-side (ADR 0061)", async () => {
-    const sessionId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
-    const messages = [
-      {
-        id: "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        role: "user",
-        content: "hello from the desktop",
-        metadata: null,
-        author: { kind: "user", externalUserId: memberUserId },
-        deliveryMode: "next_turn",
-        idempotencyKey: null,
-        createdAt: new Date().toISOString(),
-      },
-      {
-        id: "22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-        role: "assistant",
-        content: "desktop assistant reply",
-        metadata: {
-          status: "completed",
-          events: [],
-          usage: {
-            inputTokens: 100,
-            cachedInputTokens: 40,
-            outputTokens: 25,
-            costUsd: 0.012,
-            model: "claude-opus-5",
-          },
+    // The member's desktop: another host with its own copy of the chat.
+    const desktopDir = fs.mkdtempSync(path.join(os.tmpdir(), "work-desktop-"));
+    const desktop = await createWorkServer(
+      testServerOptions({
+        dataDir: desktopDir,
+        env: { WORK_FAKE_AGENT: "1", PATH: process.env.PATH },
+      }),
+    );
+    try {
+      const local = {
+        tenantId: SERVER_TENANT_ID,
+        externalUserId: memberUserId,
+      };
+      const desktopSessions = desktop.catamorphic.core.agentSessions;
+      if (!desktopSessions) throw new Error("Desktop chat is unavailable");
+      const desktopProject = await desktop.catamorphic.core.projects.create(
+        local,
+        { name: "Desktop" },
+      );
+      const chat = await desktopSessions.create(local, desktopProject.id, {});
+      await say({
+        sessions: desktopSessions,
+        identity: local,
+        projectId: desktopProject.id,
+        sessionId: chat.id,
+        text: "hello from the desktop",
+      });
+      const todos = [
+        {
+          id: "33333333-cccc-4ccc-8ccc-cccccccccccc",
+          title: "Continue on the server",
+          description:
+            "Verify that the mirrored task can continue on another host.",
+          status: "in_progress" as const,
         },
-        author: {
-          kind: "agent",
-          sessionId,
-          agentId: projectAssistantId(projectId),
-        },
-        deliveryMode: "message_only",
-        idempotencyKey: null,
-        createdAt: new Date().toISOString(),
-      },
-    ];
-    const todos = [
-      {
-        id: "33333333-cccc-4ccc-8ccc-cccccccccccc",
-        title: "Continue on the server",
-        description:
-          "Verify that the mirrored task can continue on another host.",
-        status: "in_progress" as const,
-      },
-    ];
-    const mirrorUrl = `/api/projects/${projectId}/agent/sessions/${sessionId}/mirror`;
-    const first = await inject("PUT", mirrorUrl, memberToken, {
-      authority: { hostId: "desktop:test-host", revision: 1 },
-      title: "Desktop chat",
-      icon: "sparkles:orange",
-      provider: "ai-sdk",
-      todos,
-      messages,
-    });
-    expect(first.statusCode).toBe(200);
-    // Idempotent re-push: same payload, no duplicates.
-    expect(
-      (
-        await inject("PUT", mirrorUrl, memberToken, {
-          authority: { hostId: "desktop:test-host", revision: 1 },
-          todos,
-          messages,
-        })
-      ).statusCode,
-    ).toBe(200);
+      ];
+      const push = async (after: number | null) => ({
+        authority: { hostId: "desktop:test-host", revision: 1 },
+        title: "Desktop chat",
+        icon: "sparkles:orange",
+        source: "desktop" as const,
+        todos,
+        ...(await desktopSessions.mirrorExport({
+          identity: local,
+          projectId: desktopProject.id,
+          sessionId: chat.id,
+          after,
+        })),
+      });
+      const identity = await member();
+      const first = await sessions().mirror(
+        identity,
+        projectId,
+        chat.id,
+        await push(null),
+      );
+      // Pushing again from where the copy is adds nothing.
+      const again = await sessions().mirror(
+        identity,
+        projectId,
+        chat.id,
+        await push(first.sequence),
+      );
+      expect(again.sequence).toBe(first.sequence);
+      expect(
+        (await sessions().get(identity, projectId, chat.id)).todos,
+      ).toEqual(todos);
+      expect(await contentsOf(chat.id)).toEqual([
+        "hello from the desktop",
+        "Echo: hello from the desktop",
+      ]);
 
-    const list = await inject(
-      "GET",
-      `/api/projects/${projectId}/agent/sessions`,
-      memberToken,
-    );
-    const mirroredSession = list
-      .json()
-      .items.find((session: { id: string }) => session.id === sessionId);
-    expect(mirroredSession?.todos).toEqual(todos);
+      // Continuing is explicit: claim authority first, then send.
+      const resumed = await sessions().resume(identity, projectId, chat.id, {
+        expectedAuthorityRevision: 1,
+      });
+      expect(resumed.authorityRevision).toBe(2);
+      const answer = await say({
+        sessions: sessions(),
+        identity,
+        projectId,
+        sessionId: chat.id,
+        text: "continue here",
+      });
+      // The server's agent was handed what happened on the desktop.
+      expect(answer.content).toMatch(
+        /^Echo: .*hello from the desktop.*continue here$/,
+      );
+      expect(await contentsOf(chat.id)).toEqual([
+        "hello from the desktop",
+        "Echo: hello from the desktop",
+        "continue here",
+        answer.content,
+      ]);
 
-    // Continuing is explicit: claim authority first, then send. The mirrored
-    // transcript seeds the server-side anchor.
-    const resumed = await inject(
-      "POST",
-      `/api/projects/${projectId}/agent/sessions/${sessionId}/resume`,
-      memberToken,
-      { expectedAuthorityRevision: 1 },
-    );
-    expect(resumed.statusCode).toBe(200);
-    expect(resumed.json().authorityRevision).toBe(2);
-    const sent = await inject(
-      "POST",
-      `/api/projects/${projectId}/agent/sessions/${sessionId}/messages`,
-      memberToken,
-      { message: "continue here" },
-    );
-    expect(sent.statusCode).toBe(202);
-    const contents = await waitForSessionContents({
-      sessionId,
-      token: memberToken,
-      includes: "Echo: continue here",
-    });
-    expect(contents).toEqual([
-      "hello from the desktop",
-      "desktop assistant reply",
-      "continue here",
-      "Echo: continue here",
-    ]);
-
-    // The desktop pushes again without the server-side turns → diverged.
-    const stale = await inject("PUT", mirrorUrl, memberToken, {
-      authority: { hostId: "desktop:test-host", revision: 1 },
-      todos,
-      messages,
-    });
-    expect(stale.statusCode).toBe(409);
-    expect(stale.json().diverged).toBe(true);
+      // The desktop pushes again without the server-side turns: diverged.
+      await expect(
+        sessions().mirror(
+          identity,
+          projectId,
+          chat.id,
+          await push(first.sequence),
+        ),
+      ).rejects.toBeInstanceOf(SessionMirrorDivergedError);
+    } finally {
+      await desktop.shutdown();
+      fs.rmSync(desktopDir, { recursive: true, force: true });
+    }
   }, 60_000);
 
   it("project administration belongs to the manager role", async () => {

@@ -106,7 +106,6 @@ describe("temporary watchers", () => {
         id: sessionId,
         project_id: projectId,
         external_user_id: identity.externalUserId,
-        provider: "test",
         agent_id: `project:${projectId}:reviewer`,
       })
       .execute();
@@ -817,7 +816,6 @@ describe("temporary watchers", () => {
           id: targetId,
           project_id: projectId,
           external_user_id: identity.externalUserId,
-          provider: "test",
           authority_host_id: host,
           environment_name: "default",
         })
@@ -863,7 +861,6 @@ describe("temporary watchers", () => {
           id: targetId,
           project_id: projectId,
           external_user_id: identity.externalUserId,
-          provider: "test",
         })
         .execute();
       beforeEnablementCreate = async () => {

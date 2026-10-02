@@ -6,6 +6,7 @@ import {
   type ExecOpts,
   type ExecResult,
   type GitCloneOpts,
+  refuseSignIns,
   type SandboxHandle,
   type SandboxProvider,
   type SandboxStatus,
@@ -47,6 +48,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
   async createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle> {
     assertSandboxResources(opts.resources, []);
+    refuseSignIns({ signIns: opts.signIns, provider: "Daytona" });
     const sandbox = await this.client.create({
       language: opts.language ?? "typescript",
       snapshot: opts.snapshotName,
