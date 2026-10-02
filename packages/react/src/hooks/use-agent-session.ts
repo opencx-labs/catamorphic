@@ -158,6 +158,7 @@ export function useAgentSession(
         error: current.state.error,
         data: current.state.data,
         streaming,
+        onScreen: live,
         pollIntervalMs,
       }),
   });
@@ -355,22 +356,27 @@ export function useAgentSession(
 /**
  * When to load the snapshot again. A failed load retries every 3s unless
  * it was refused (gone, access removed): that answers the same way again.
- * Without a stream it polls while anything is unsettled: a turn running,
- * waiting to start, or waiting to retry.
+ * Without a stream, a reader on screen (waiting for a stream slot) polls,
+ * so nothing it shows goes stale; one off screen polls only while
+ * anything is unsettled: a turn running, waiting to start, or waiting to
+ * retry.
  */
 export function snapshotRefetchInterval({
   error,
   data,
   streaming,
+  onScreen = false,
   pollIntervalMs,
 }: {
   error: unknown;
   data: AgentSessionData | undefined;
   streaming: boolean;
+  onScreen?: boolean;
   pollIntervalMs: number;
 }): number | false {
   if (error) return isPermanentFailure(error) ? false : 3_000;
   if (streaming || !data) return false;
+  if (onScreen) return pollIntervalMs;
   return Object.values(data.state.turns).some(
     (turn) => !isSettledTurnStatus(turn.status),
   )

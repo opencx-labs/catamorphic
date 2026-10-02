@@ -121,4 +121,23 @@ describe("snapshotRefetchInterval", () => {
       3_000,
     );
   });
+
+  it("keeps a chat on screen current while it waits for a stream", () => {
+    const settled = {
+      state: { turns: {} },
+    } as unknown as Parameters<typeof snapshotRefetchInterval>[0]["data"];
+    const input = {
+      error: null,
+      data: settled,
+      streaming: false,
+      pollIntervalMs: 1_500,
+    };
+    // Nothing runs: on screen it still polls (an agent switch, a notice);
+    // off screen it waits for something to run.
+    expect(snapshotRefetchInterval({ ...input, onScreen: true })).toBe(1_500);
+    expect(snapshotRefetchInterval({ ...input, onScreen: false })).toBe(false);
+    expect(
+      snapshotRefetchInterval({ ...input, onScreen: true, streaming: true }),
+    ).toBe(false);
+  });
 });
