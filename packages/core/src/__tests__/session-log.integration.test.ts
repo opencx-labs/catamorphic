@@ -700,6 +700,52 @@ describe("session log", () => {
     ]);
   });
 
+  it("switches the agent right after a reply, while the turn only finalizes", async () => {
+    const { projectId, sessionId } = await chat("SwitchAfterReply");
+    const { turn } = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "hello",
+    );
+    // As on a slow machine: the reply is in, the checkpoint still saving.
+    const holdAs = (status: string) =>
+      db
+        .updateTable("agent_turns")
+        .set({
+          status,
+          lease_expires_at: sql<Date>`now() + interval '1 minute'`,
+        })
+        .where("id", "=", turn.id)
+        .execute();
+    await holdAs("finalizing");
+    const settle = setTimeout(() => {
+      void db
+        .updateTable("agent_turns")
+        .set({ status: "completed", lease_expires_at: null })
+        .where("id", "=", turn.id)
+        .execute();
+    }, 300);
+    try {
+      const updated = await sessions.update(identity, projectId, sessionId, {
+        agentId: "guarded",
+      });
+      expect(updated.agentId).toBe("guarded");
+    } finally {
+      clearTimeout(settle);
+    }
+    // A turn still working is refused at once, as before.
+    await holdAs("running");
+    await expect(
+      sessions.update(identity, projectId, sessionId, { agentId: "echo" }),
+    ).rejects.toThrow("in progress");
+    await db
+      .updateTable("agent_turns")
+      .set({ status: "completed", lease_expires_at: null })
+      .where("id", "=", turn.id)
+      .execute();
+  });
+
   it("streams the gap after a cursor, then live events, in order", async () => {
     const { projectId, sessionId } = await chat("Stream");
     await sessions.sendMessage(identity, projectId, sessionId, "first");

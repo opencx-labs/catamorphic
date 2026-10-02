@@ -862,6 +862,9 @@ const ASK_USER_HOST_TOOL: ExtraTool = {
   },
 };
 
+/** How long a change waits for a finalizing turn before it is refused. */
+const FINALIZING_WAIT_MS = 20_000;
+
 export class AgentSessionsService {
   readonly mailboxes: SessionMailboxesService;
   /** The session event log (ADR 0197). */
@@ -1253,6 +1256,34 @@ export class AgentSessionsService {
       ...(input.executor ? { executor: input.executor } : {}),
     });
     if (running.size > 0) throw new AgentTurnInProgressError(input.sessionId);
+  }
+
+  /**
+   * Wait, briefly, for a turn that only finalizes (its checkpoint and sync
+   * after the reply) to settle, so a change made right after a reply is not
+   * refused. A turn still working is not waited for.
+   */
+  private async settleFinalizing(
+    sessionId: string,
+    timeoutMs = FINALIZING_WAIT_MS,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const active = await this.db
+        .selectFrom("agent_turns")
+        .select("status")
+        .where("session_id", "=", sessionId)
+        .where("status", "in", [...ACTIVE_TURN_STATUSES])
+        .where("lease_expires_at", ">", sql<Date>`now()`)
+        .execute();
+      if (
+        active.length === 0 ||
+        active.some((turn) => turn.status !== "finalizing") ||
+        Date.now() > deadline
+      )
+        return;
+      await delay(100);
+    }
   }
 
   /**
@@ -6073,7 +6104,9 @@ export class AgentSessionsService {
     }
     // Changing a chat mid-turn would drop the anchor the turn runs on. The
     // turn may run on any replica: its lease decides, here and again in the
-    // transaction that writes the change (ADR 0193).
+    // transaction that writes the change (ADR 0193). A turn whose reply is
+    // in and is only finalizing settles in moments: the change waits for it.
+    await this.settleFinalizing(sessionId);
     await this.assertNoRunningTurn({ sessionId });
 
     const updates: Partial<{
