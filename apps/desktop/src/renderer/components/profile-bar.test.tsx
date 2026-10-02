@@ -6,22 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProfileBar } from "./profile-bar";
 
 vi.mock("../lib/desktop-api.js", () => ({
-  desktopApi: { profilesCreate: vi.fn() },
-}));
-
-const projects = [
-  {
-    id: "project-1",
-    name: "Alpha",
-    storageType: "managed" as const,
-    remoteUrl: null,
-    remoteOwnership: null,
-    remoteDivergedAt: null,
-    defaultBranch: "main",
-    createdAt: "2026-08-29T00:00:00.000Z",
-    updatedAt: "2026-08-29T00:00:00.000Z",
+  desktopApi: {
+    profilesCreate: vi.fn(),
+    profileConnections: vi.fn(async () => []),
   },
-];
+}));
 
 describe("ProfileBar", () => {
   let container: HTMLDivElement;
@@ -58,7 +47,6 @@ describe("ProfileBar", () => {
               },
             ],
           }}
-          projects={projects}
           activeProfileId="profile-1"
           onSwitch={() => undefined}
           onOpenSettings={() => undefined}
@@ -93,7 +81,6 @@ describe("ProfileBar", () => {
               },
             ],
           }}
-          projects={projects}
           activeProfileId="profile-1"
           onSwitch={() => undefined}
           onOpenSettings={() => undefined}

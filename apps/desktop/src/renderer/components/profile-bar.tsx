@@ -1,8 +1,8 @@
-import type { ProjectSummary } from "@catamorphic/react/types";
 import { Check, ChevronDown, Plus, Star } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Profile, ProfilesData } from "../lib/desktop-api.js";
 import { desktopApi } from "../lib/desktop-api.js";
+import { ProfileAvatar } from "./profile-avatar";
 import { ProfileInspector } from "./profile-inspector";
 import { ResourceInspector } from "./resource-inspector";
 
@@ -14,13 +14,11 @@ import { ResourceInspector } from "./resource-inspector";
  */
 export function ProfileBar({
   data,
-  projects,
   activeProfileId,
   onSwitch,
   onOpenSettings,
 }: {
   data: ProfilesData;
-  projects: ProjectSummary[];
   activeProfileId: string;
   onSwitch: (profile: Profile) => void;
   onOpenSettings: (profileId: string) => void;
@@ -113,18 +111,17 @@ export function ProfileBar({
             <ResourceInspector
               key={profile.id}
               label={`${profile.name} profile details`}
-              content={
+              content={(dismiss) => (
                 <ProfileInspector
                   profile={profile}
                   data={data}
-                  projects={projects}
-                  current={isActive}
                   onOpenSettings={() => {
+                    dismiss();
                     setOpen(false);
                     onOpenSettings(profile.id);
                   }}
                 />
-              }
+              )}
             >
               {(inspectorProps) => (
                 <button
@@ -136,10 +133,7 @@ export function ProfileBar({
                   }}
                   className={`flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${isActive ? "text-fg" : "text-fg-muted hover:bg-bg-raised hover:text-fg"}`}
                 >
-                  <span
-                    className="size-2.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: profile.color }}
-                  />
+                  <ProfileAvatar profile={profile} size="sm" />
                   <span className="min-w-0 flex-1 truncate">
                     {profile.name}
                   </span>
@@ -190,15 +184,16 @@ export function ProfileBar({
         label={`${active.name} profile details`}
         // The open menu already shows every profile; its preview would cover it.
         disabled={open}
-        content={
+        content={(dismiss) => (
           <ProfileInspector
             profile={active}
             data={data}
-            projects={projects}
-            current
-            onOpenSettings={() => onOpenSettings(active.id)}
+            onOpenSettings={() => {
+              dismiss();
+              onOpenSettings(active.id);
+            }}
           />
-        }
+        )}
       >
         {(inspectorProps) => (
           <button
@@ -221,15 +216,7 @@ export function ProfileBar({
             aria-haspopup="menu"
             aria-expanded={open}
           >
-            <span
-              className="grid size-5 shrink-0 place-items-center rounded-full text-xs font-medium ring-1 ring-fg/10"
-              style={{
-                color: active.color,
-                backgroundColor: `color-mix(in srgb, ${active.color} 12%, var(--color-bg-raised))`,
-              }}
-            >
-              {active.name.slice(0, 1).toUpperCase()}
-            </span>
+            <ProfileAvatar profile={active} />
             <span className="min-w-0 flex-1 truncate text-left">
               {active.name}
             </span>

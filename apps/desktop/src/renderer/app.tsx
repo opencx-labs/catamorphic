@@ -5701,7 +5701,6 @@ export function App({
                 {profilesData && activeProfile && (
                   <ProfileBar
                     data={profilesData}
-                    projects={allProjects}
                     activeProfileId={activeProfile.id}
                     onSwitch={switchProfile}
                     onOpenSettings={(profileId) =>

@@ -200,6 +200,8 @@ const api = {
     invoke("catamorphic:window-set-profile", profileId),
   openProfileWindow: (profileId: string): Promise<void> =>
     invoke("catamorphic:open-profile-window", profileId),
+  profileConnections: (profileId: string): Promise<unknown> =>
+    invoke("catamorphic:profile-connections", profileId),
 
   // --- per-profile agents ---
   agentsList: (): Promise<unknown> => invoke("catamorphic:agents-list"),

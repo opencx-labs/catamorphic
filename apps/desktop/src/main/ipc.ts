@@ -47,6 +47,7 @@ import {
   prCommentInputSchema,
   prDecisionInputSchema,
 } from "../shared/pr-details.js";
+import type { ProfileConnection } from "../shared/profile-connections.js";
 import { writesProgram } from "../shared/project-experience.js";
 import type { SettingsPatch, SettingsScope } from "../shared/settings.js";
 import type { UsageSummary, UsageWindowDays } from "../shared/usage.js";
@@ -916,6 +917,14 @@ export function registerIpcHandlers(
 
   ipcMain.handle("catamorphic:connections-list", (event) =>
     storesFor(event).connections.list().map(toPublicConnection),
+  );
+
+  // A profile's connections for its preview card: read for any profile,
+  // not only the calling window's (ProfileConfigManager.connectionPreviews).
+  ipcMain.handle(
+    "catamorphic:profile-connections",
+    (_event, profileId: string): ProfileConnection[] =>
+      profileConfig.connectionPreviews(profileId),
   );
 
   ipcMain.handle(

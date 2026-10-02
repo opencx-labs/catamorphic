@@ -17,7 +17,7 @@ import {
   resolveToolPermission,
   stricterPermission as stricter,
 } from "../lib/tool-policy.js";
-import { ConnectorIcon } from "./connectors-modal.js";
+import { ConnectorIcon } from "./connector-icon.js";
 import { Segmented } from "./segmented.js";
 
 /**
@@ -167,6 +167,7 @@ export function AgentToolPolicyField({
             icon={
               <ConnectorIcon
                 iconUrl={connection.iconUrl}
+                url={connection.url}
                 name={connection.name}
               />
             }

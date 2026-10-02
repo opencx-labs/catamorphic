@@ -3,7 +3,6 @@ import {
   ExternalLink,
   Loader2,
   Plug,
-  Puzzle,
   ShieldCheck,
   Trash2,
 } from "lucide-react";
@@ -23,6 +22,7 @@ import {
   PERMISSION_LABELS,
   resolveAcross,
 } from "../lib/tool-policy";
+import { ConnectorIcon } from "./connector-icon";
 import { Modal } from "./modal";
 import { PendingButton } from "./pending-button";
 import { Segmented } from "./segmented";
@@ -499,6 +499,7 @@ export function ConnectorsModal({
                       <div className="flex items-center gap-2">
                         <ConnectorIcon
                           iconUrl={connection.iconUrl}
+                          url={connection.url}
                           name={connection.name}
                         />
                         <div className="min-w-0 flex-1">
@@ -1034,38 +1035,4 @@ function normalizePolicy(policy: McpToolPolicy): McpToolPolicy | null {
     ...(Object.keys(tools).length > 0 ? { tools } : {}),
   };
   return Object.keys(next).length > 0 ? next : null;
-}
-
-/**
- * Registry icons when present (spec `icons` field, favicon-ish sizes) with
- * a neutral plug glyph when the server exposes none. Only https/data urls
- * reach here (validated server-side per the spec's security rules).
- */
-export function ConnectorIcon({
-  iconUrl,
-  name,
-  kind = "mcp",
-}: {
-  iconUrl?: string;
-  name: string;
-  /** Glyph when there's no icon: plug for MCP servers, puzzle for plugins. */
-  kind?: "mcp" | "plugin";
-}) {
-  const Fallback = kind === "plugin" ? Puzzle : Plug;
-  return (
-    <span className="grid size-6 shrink-0 place-items-center overflow-hidden rounded border border-border bg-bg-inset">
-      {iconUrl ? (
-        <img
-          src={iconUrl}
-          alt=""
-          className="size-full object-contain"
-          onError={(event) => {
-            event.currentTarget.style.display = "none";
-          }}
-        />
-      ) : (
-        <Fallback className="size-3 text-fg-faint" aria-label={name} />
-      )}
-    </span>
-  );
 }
