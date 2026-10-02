@@ -518,6 +518,8 @@ export interface RuntimeRequest {
   reason: string | null;
   createdAt: string;
   resolvedAt: string | null;
+  /** The runner's own key for the request: how an answer finds its harness. */
+  runnerKey?: string;
 }
 
 // ---------------------------------------------------------------------------

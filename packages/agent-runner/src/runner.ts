@@ -130,6 +130,9 @@ export class AttemptRunner {
           return;
         }
         case "interrupt":
+          // Whatever the harness waits on ends with it: an interrupted
+          // turn's question or approval has nobody left to answer it.
+          this.closeRequests("The turn was interrupted before it was answered.");
           this.control?.interrupt(command.reason);
           this.ack(frame.id);
           return;
@@ -217,12 +220,17 @@ export class AttemptRunner {
   private stop(): void {
     if (this.abort.signal.aborted) return;
     this.abort.abort();
-    for (const [key, pending] of this.requests) {
-      this.requests.delete(key);
-      pending.reject(new RequestClosedError("The turn stopped."));
-    }
+    this.closeRequests("The turn stopped.");
     if (this.control) this.control.interrupt("stopped");
     else this.exit();
+  }
+
+  private closeRequests(reason: string): void {
+    for (const [key, pending] of this.requests) {
+      this.requests.delete(key);
+      this.emitEvent({ type: "request.closed", key, reason });
+      pending.reject(new RequestClosedError(reason));
+    }
   }
 
   private exit(): void {
@@ -237,6 +245,14 @@ export class AttemptRunner {
   }
 
   private call(call: HostCall): Promise<JsonValue | undefined> {
+    // A call is never shortened (stored native state would be corrupted):
+    // one too large to send is refused, and the adapter sends smaller ones.
+    if (JSON.stringify(call).length > MAX_FRAME_CHARS)
+      return Promise.reject(
+        new Error(
+          `This host call is larger than ${MAX_FRAME_CHARS} characters; send it in smaller parts.`,
+        ),
+      );
     this.callCounter += 1;
     const callId = `c${this.callCounter}`;
     return new Promise((resolve, reject) => {
@@ -328,12 +344,15 @@ export class AttemptRunner {
               ? (input.input as Record<string, unknown>)
               : {},
           layers: attempt.toolPolicies[input.server],
-          ...(attempt.toolAnnotations[input.server]?.[input.tool]
+          ...((input.annotations ??
+          attempt.toolAnnotations[input.server]?.[input.tool])
             ? {
                 annotations:
+                  input.annotations ??
                   attempt.toolAnnotations[input.server]?.[input.tool],
               }
             : {}),
+          ...(input.description ? { description: input.description } : {}),
           sessionId: attempt.sessionId,
           abortSignal: this.abort.signal,
         }),
@@ -382,7 +401,8 @@ const TRUNCATED_STRING_CHARS = 16 * 1024;
  * completes, and says it was shortened.
  */
 export function boundFrame(frame: RunnerFrame): RunnerFrame {
-  if (JSON.stringify(frame).length <= MAX_FRAME_CHARS) return frame;
+  if (frame.type === "call" || JSON.stringify(frame).length <= MAX_FRAME_CHARS)
+    return frame;
   const cut = (value: unknown): unknown => {
     if (typeof value === "string")
       return value.length > TRUNCATED_STRING_CHARS

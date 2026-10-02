@@ -9,12 +9,15 @@ export interface HeldTurnLease {
   onLost(): void;
   /** Someone asked the turn to stop, through any replica. Called once. */
   onCancel(): void;
+  /** Commands wait for the turn's runner (ADR 0196). Called on every renewal that sees them. */
+  onCommands?(): void;
 }
 
 /** A renewal the database granted, and whether the turn should stop. */
 export interface RenewedTurnLease {
   turnId: string;
   cancellationRequested: boolean;
+  commands?: boolean;
 }
 
 /**
@@ -86,6 +89,7 @@ export function startTurnLeaseRenewal(input: {
             entry.cancelled = true;
             entry.turn.onCancel();
           }
+          if (answer.commands) entry.turn.onCommands?.();
         }
       })
       // A brief database outage is not proof of lost ownership: the next

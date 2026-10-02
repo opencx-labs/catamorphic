@@ -19,6 +19,8 @@
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
+    "@catamorphic/agent-protocol": "workspace:*",
+    "@catamorphic/agent-runner": "workspace:*",
     "@catamorphic/app": "workspace:*",
     "@catamorphic/db": "workspace:*",
     "@catamorphic/git": "workspace:*",

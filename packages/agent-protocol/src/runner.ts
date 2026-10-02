@@ -453,6 +453,9 @@ export interface AttemptHost {
     tool: string;
     input: JsonValue;
     itemKey?: string;
+    /** What the server says about the tool, for `auto` policies. */
+    annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
+    description?: string;
   }): Promise<AuthorizeResult>;
   /** Open a question, approval or elicitation and wait for its answer. */
   request(key: string, request: RequestDraft): Promise<RuntimeRequestResponse>;

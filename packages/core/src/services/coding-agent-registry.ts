@@ -1,10 +1,18 @@
+import type { JsonObject } from "@catamorphic/agent-protocol";
+import type { HarnessAdapter } from "@catamorphic/agent-protocol/runner";
 import type {
+  AgentEffort,
   AgentExecutionTopology,
-  CodingAgentProvider,
+  AgentMcpServerConfig,
+  AgentPluginConfig,
+  ExtraTool,
+  ExtraToolContext,
+  HarnessPermissions,
   McpToolPolicyLayers,
-  PersonalLoginKind,
   Sandboxing,
-  TurnOptions,
+  SignInHarness,
+  ToolPolicyAnnotations,
+  TurnContextFragment,
 } from "@catamorphic/sandbox";
 import type {
   AgentDelegationPolicy,
@@ -13,6 +21,46 @@ import type {
 } from "./agent-definitions-service.js";
 import type { ConnectionRequirement } from "./connection-types.js";
 
+/** What a host hook knows about the turn it serves. */
+export interface AgentTurnContext extends ExtraToolContext {
+  /** The turn the hook serves. */
+  turnId: string;
+}
+
+/**
+ * The harness an agent runs on and where its runner runs (ADR 0196).
+ * `host`: an adapter in this process, beside a checkout on this machine or
+ * driving a sandbox through its tools (the desktop's harnesses, the
+ * built-in agent). `sandbox`: the runner bundle inside the session's
+ * sandbox, where the harness's CLI is.
+ */
+export type AgentHarness =
+  | {
+      placement: "host";
+      adapter: HarnessAdapter;
+      /** Host objects the adapter needs (never serialized). */
+      local?: (context: AgentTurnContext) => Record<string, unknown>;
+      /** Environment of the harness process: the host's own settings (CLAUDE_CONFIG_DIR). */
+      env?: Record<string, string>;
+      /** Tools this host serves the agent beside Work's capability tools. */
+      hostTools?: readonly ExtraTool[];
+      /** MCP servers this host adds, read at every turn so rotated tokens apply. */
+      mcpServers?: (context: AgentTurnContext) => Record<string, AgentMcpServerConfig>;
+      /** The host's own policy layers per server, read live (ADR 0054). */
+      toolPolicies?: () => Record<string, McpToolPolicyLayers>;
+      toolAnnotations?: () => Record<string, Record<string, ToolPolicyAnnotations>>;
+      plugins?: readonly AgentPluginConfig[];
+      /** Facts for this turn, beside the person's message (ADR 0152). */
+      context?: (context: AgentTurnContext) => Promise<TurnContextFragment[]>;
+      /** Standing instructions this host adds (a playbook, a persona). */
+      instructions?: string;
+    }
+  | {
+      placement: "sandbox";
+      /** The bundled adapter, e.g. `claude-code`, `codex`. */
+      id: string;
+    };
+
 export interface RegisteredCodingAgent {
   /** Stable registry key persisted on sessions (`agent_sessions.agent_id`). */
   id: string;
@@ -20,13 +68,17 @@ export interface RegisteredCodingAgent {
   name?: string;
   /** One line for pickers. */
   description?: string;
-  provider: CodingAgentProvider;
+  harness: AgentHarness;
+  /**
+   * `native`: the agent works in a checkout on this machine (the desktop).
+   * `controller`: it works in the session's sandbox.
+   */
   topology: AgentExecutionTopology;
+  /** Settings handed to the harness on every attempt (`AttemptStart.options`). */
+  options?: JsonObject;
   /**
    * What may leave the agent's sandbox (ADR 0176, named in ADR 0182),
-   * enforced by core at every boundary: `contained` lets nothing leave,
-   * `propose` may propose, `publish` may deploy and publish. Also ranks
-   * delegation. Undefined: the host declared none, and nothing is narrowed.
+   * enforced by core at every boundary.
    */
   sandboxing?: Sandboxing;
   /**
@@ -39,37 +91,49 @@ export interface RegisteredCodingAgent {
   /** Brokered connection aliases required before this agent can start. */
   connectionRequirements?: readonly (string | ConnectionRequirement)[];
   /**
-   * The Environment alias of the model connection a sandbox-resident
-   * harness reaches through the gateway (ADR 0180). Core hands the harness
-   * that alias's gateway URL and grant file on every sandbox turn.
+   * The Environment alias of the model connection a sandbox harness
+   * reaches through the gateway (ADR 0180).
    */
   modelConnection?: string;
   /**
-   * The harness login this sandbox-resident agent runs with: the chat
-   * owner's own (ADR 0184). Core admits it only to Environments that allow
-   * personal credentials for that owner, delivers the login into the
-   * sandbox on every turn, and hands the harness its location.
+   * The harness runs on the chat owner's own sign-in, made on the machine
+   * that runs it (ADR 0197). Placement takes only machines that report it.
    */
-  personalLogin?: PersonalLoginKind;
+  signIn?: SignInHarness;
   /** Per-turn defaults applied when the session carries no override. */
-  defaults?: TurnOptions;
+  defaults?: {
+    model?: string;
+    effort?: AgentEffort;
+    harnessPermissions?: HarnessPermissions;
+  };
   /** Committed persona instructions supplied by a project harness factory. */
   systemPrompt?: string;
   /** Explicit source-to-target grants for first-class subsessions. */
   delegation?: AgentDelegationPolicy;
+  /**
+   * What a turn whose machine stopped does (ADR 0196): `continue` queues a
+   * continuation when the native thread can resume exactly; `stop` leaves
+   * it interrupted. Default `continue`.
+   */
+  recovery?: "continue" | "stop";
+}
+
+/** The harness id an agent runs on. */
+export function harnessIdOf(agent: Pick<RegisteredCodingAgent, "harness">): string {
+  return agent.harness.placement === "host"
+    ? agent.harness.adapter.id
+    : agent.harness.id;
 }
 
 /**
  * The host app's roster of configured coding agents. Implementations may be
- * dynamic — the desktop app resolves agents from per-profile config files, so
+ * dynamic: the desktop app resolves agents from per-profile config files, so
  * an agent added in Settings is usable without a server restart.
  */
 export interface CodingAgentRegistry {
   /**
    * Registry key of the agent used when a session does not name one.
-   * Layered when the host supports it (ADR 0056): with a `projectId` the
-   * host may answer with the caller's per-project choice or the project's
-   * own committed default before falling back to the global default.
+   * Layered when the host supports it (ADR 0056).
    */
   defaultAgentId(projectId?: string): string | undefined;
   get(id: string): RegisteredCodingAgent | undefined;
@@ -84,18 +148,10 @@ export interface CodingAgentRegistry {
     | undefined;
 }
 
-/**
- * Wrap one sandbox-execution provider as a one-entry registry — the shape
- * hosts with a single flagship agent (and tests) pass to core.
- */
+/** Wrap one agent as a one-entry registry: hosts with a single agent, and tests. */
 export function singleAgentRegistry(
-  provider: CodingAgentProvider,
+  agent: RegisteredCodingAgent,
 ): CodingAgentRegistry {
-  const agent: RegisteredCodingAgent = {
-    id: provider.name,
-    provider,
-    topology: "controller",
-  };
   return {
     defaultAgentId: () => agent.id,
     get: (id) => (id === agent.id ? agent : undefined),
@@ -104,7 +160,7 @@ export function singleAgentRegistry(
 }
 
 export function isCodingAgentRegistry(
-  value: CodingAgentProvider | CodingAgentRegistry,
+  value: RegisteredCodingAgent | CodingAgentRegistry,
 ): value is CodingAgentRegistry {
   return typeof (value as CodingAgentRegistry).defaultAgentId === "function";
 }
