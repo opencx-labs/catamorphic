@@ -86,10 +86,12 @@ export const catamorphic = createCatamorphic({
   `@catamorphic/microsandbox` (`MicrosandboxSandboxProvider`), or
   `@catamorphic/local-process` (`LocalProcessSandboxProvider`, trusted
   single-tenant hosts only, ADR 0047).
-- Agent sessions: pass `codingAgent` (one `CodingAgentProvider` such as
-  `AiSdkCodingAgent`, or a `CodingAgentRegistry` of named agents) plus
-  `hostId`. Registry entries with `topology: "native"` (Claude Code, Codex)
-  also need `nativeAgentCheckout`.
+- Agent sessions: pass `codingAgent` (one `RegisteredCodingAgent`, whose
+  `harness` is `{ placement: "host", adapter }` such as `createAiSdkAdapter(...)`
+  or `{ placement: "sandbox", id }` for the runner bundle's `claude-code` and
+  `codex`, or a `CodingAgentRegistry` of named agents) plus `hostId` (ADR
+  0198). Registry entries with `topology: "native"` (the desktop's Claude
+  Code and Codex) also need `nativeAgentCheckout`.
 - Other host hooks (`triggerKinds`, `plugins`, `capabilityProviders`,
   `projectHooks`, `projectSeeds`, `hostSkills`, `standingAgentPrompt`,
   `github`, `pluginResolver`, `credentialVault`, `clientExecution`, and more)
@@ -282,7 +284,7 @@ const apiClient = createApiClient({
 | Package | Key exports |
 | --- | --- |
 | `@catamorphic/server-sdk` | `createCatamorphic`, `Catamorphic`, `ScopedClient`, `defineStaticEnvironments`, `defineTriggerKind`, `webhook`, `schedule`, `definePlugin`, `defineCapability`, `startClientRunner`, typed errors, re-exported db/git/plugin building blocks |
-| `@catamorphic/core` | `CatamorphicCore`, `createCatamorphicCore`, `CodingAgentRegistry`, `resolveRoles`, `startEventDispatcher`, `ToolPermissionBroker` |
+| `@catamorphic/core` | `CatamorphicCore`, `createCatamorphicCore`, `CodingAgentRegistry`, `RegisteredCodingAgent`, `singleAgentRegistry`, `resolveRoles`, `startEventDispatcher` |
 | `@catamorphic/db` | `createDatabase`, `migrateToLatest`, `DB` types, `catamorphic-db` CLI |
 | `@catamorphic/git` | `ProjectManager`, `FsBackend`, `FsRemoteBackend`, `ObjectRemoteBackend` |
 | `@catamorphic/s3` | `S3ObjectStore` (use with `ObjectRemoteBackend`) |
@@ -290,8 +292,10 @@ const apiClient = createApiClient({
 | `@catamorphic/daytona` | `DaytonaSandboxProvider` (and experimental git storage) |
 | `@catamorphic/microsandbox` | `MicrosandboxSandboxProvider` |
 | `@catamorphic/local-process` | `LocalProcessSandboxProvider` |
-| `@catamorphic/sandbox` | `SandboxProvider`, `CodingAgentProvider` contracts |
-| `@catamorphic/ai-sdk`, `claude-code`, `codex` | `AiSdkCodingAgent`, `ClaudeCodeAgent`, `CodexAgent` |
+| `@catamorphic/sandbox` | `SandboxProvider` contract, plugin-doc staging and tool-policy helpers |
+| `@catamorphic/agent-protocol` | Session log model, events, commands and the shared reducer; `/runner`: `HarnessAdapter`, `AttemptStart`, runner frames and commands |
+| `@catamorphic/agent-runner` | `AttemptRunner`, `InProcessRunner`, `runStdioRunner` |
+| `@catamorphic/ai-sdk`, `claude-code`, `codex` | `createAiSdkAdapter`, `createClaudeCodeAdapter`, `createCodexAdapter` (harness adapters), model and skill catalogs, `/testing` replay |
 | `@catamorphic/plugins` | `LocalPluginResolver`, `PluginManifestSchema` |
 | `@catamorphic/fastify-plugin` | `catamorphicPlugin`, `createApp`, `identityFromBearer`, `identityFromHeaders` |
 | `@catamorphic/otel` | `getTracer`, `withSpan` (the host owns the OpenTelemetry SDK) |

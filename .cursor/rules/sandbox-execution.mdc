@@ -29,7 +29,7 @@ alwaysApply: false
 - **Deployment runtime:** the immutable, verified capability snapshot under `.work/` for its artifact (`executionFiles` in `@catamorphic/parser`). Never clone the whole imported repository for execution.
 - **Coding-agent workspace:** the selected checkout or managed allocation with the complete project. Preserve its root files; capability scaffolding stays in `.work/`.
 - **Project data:** a local host may give its provider `projectDataDirectory`; deployment runtimes then see it as `WORK_APP_DATA_DIR`, separate from immutable source. Build sandboxes do not get this mount, and cloud execution does not imply data sync (ADR 0142, `INTEGRATION.md`).
-- Plugin references and other staging live in host storage; every agent harness accepts the host's `pluginDirectory`.
+- Attached plugin docs are staged by core under `_plugins/<slug>/` in the agent's working directory (uploaded for a sandbox) and named in the attempt's system prompt (`buildPluginsPreamble`).
 
 ## Step instrumentation
 
@@ -37,4 +37,4 @@ alwaysApply: false
 
 ## Coding agents
 
-Agents implement `CodingAgentProvider`; hosts pass one provider or a `CodingAgentRegistry` as `createCatamorphic({ codingAgent })`, which enables agent sessions and routes (ADR 0038, 0050). Harnesses: `@catamorphic/ai-sdk` (in the host process, any API model; model keys never enter the sandbox), `@catamorphic/claude-code`, and `@catamorphic/codex` (pinned Codex app-server protocol). Sessions record `base_commit_sha`. Project agent definitions and skills live under `.work/`; imported projects get missing framework skills through the host tier without writes. See `.agents/skills/sandbox-agent-integration/SKILL.md` for details.
+Harnesses implement `HarnessAdapter` (`@catamorphic/agent-protocol/runner`), and the agent runner (`@catamorphic/agent-runner`) runs one adapter per attempt beside the workspace it edits (ADR 0198). Hosts pass one `RegisteredCodingAgent` or a `CodingAgentRegistry` as `createCatamorphic({ codingAgent })`, which enables agent sessions and routes (ADR 0038, 0050); each agent's `harness` is `{ placement: "host", adapter }` (in-process) or `{ placement: "sandbox", id }` (the `@catamorphic/runner-bundle` runner inside the session's sandbox). Adapters: `@catamorphic/ai-sdk` (`createAiSdkAdapter`, in the host process, any API model; model keys never enter the sandbox), `@catamorphic/claude-code` (`createClaudeCodeAdapter`), and `@catamorphic/codex` (`createCodexAdapter`, pinned Codex app-server protocol). Sessions are an event log of turns (ADR 0197). Sessions record `base_commit_sha`. Project agent definitions and skills live under `.work/`; imported projects get missing framework skills through the host tier without writes. See `.agents/skills/sandbox-agent-integration/SKILL.md` for details.

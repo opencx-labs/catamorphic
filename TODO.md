@@ -64,7 +64,7 @@
   source of truth and still has the old behavior.
 - **ACP harness.** Project agent definitions (ADR 0050) accept
   `kind: "acp"` today but resolve it to a fail-fast "not built yet"
-  entry. Build the real ACP client harness: a `CodingAgentProvider`
+  entry. Build the real ACP client harness: a `HarnessAdapter` (ADR 0198)
   speaking the Agent Client Protocol over both transports — a local
   command (`acp.command`, stdio) and a remote endpoint (`acp.endpoint`).
   The remote-Catamorphic-server agent story rides the endpoint transport:

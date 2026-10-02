@@ -4,7 +4,7 @@
 - **Date:** 2026-10-02
 - **Supersedes:** [0061](0061-session-mirroring.md) (mirror transport), the
   event and command half of [0095](0095-authoritative-agent-execution.md)
-- **Amends:** [0074](0074-durable-session-inbox.md), [0090](0090-first-class-subsessions-and-delegation.md), [0193](0193-no-cross-replica-state-in-replica-memory.md)
+- **Amends:** [0074](0074-temporary-watchers-and-session-delivery.md), [0090](0090-first-class-subsessions-and-delegation.md), [0193](0193-no-cross-replica-state-in-replica-memory.md), [0195](0195-conversation-continues-around-agent-questions.md)
 
 ## Context
 
