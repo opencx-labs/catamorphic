@@ -1,6 +1,6 @@
 # 0180: Harnesses run in the sandbox; models through the gateway
 
-- **Status:** Accepted (control loop placement superseded by [0196](0196-agent-runners-run-harnesses-beside-their-workspace.md); amended by [0184](0184-personal-credentials-reach-a-members-own-sessions.md) and [0197](0197-subscription-sign-ins-stay-on-the-machine.md))
+- **Status:** Accepted (control loop placement superseded by [0197](0197-agent-runners-run-harnesses-beside-their-workspace.md); amended by [0184](0184-personal-credentials-reach-a-members-own-sessions.md) and [0198](0198-subscription-sign-ins-stay-on-the-machine.md))
 - **Date:** 2026-09-27
 - **Refines:** 0050, 0057, 0162, 0164, 0174, 0175, 0176
 

@@ -16748,6 +16748,9 @@
                           "blocking": {
                             "type": "boolean"
                           },
+                          "consent": {
+                            "type": "boolean"
+                          },
                           "questions": {
                             "type": "array",
                             "items": {

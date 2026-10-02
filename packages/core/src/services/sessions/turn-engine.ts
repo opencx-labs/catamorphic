@@ -26,7 +26,13 @@ import {
   type ThreadBinding,
 } from "@catamorphic/agent-protocol/runner";
 import type { DB, Json } from "@catamorphic/db";
-import { getTracer, withSpan } from "@catamorphic/otel";
+import {
+  getTracer,
+  setSpanCorrelation,
+  withSpan,
+  withTelemetryContext,
+} from "@catamorphic/otel";
+import type { Span } from "@opentelemetry/api";
 import { type Kysely, sql, type Transaction } from "kysely";
 import type { Identity } from "../../identity.js";
 import {
@@ -51,6 +57,11 @@ import {
   turnFromRow,
 } from "./session-rows.js";
 import { derivedId, ingestHarnessEvents } from "./turn-ingest.js";
+import {
+  type ApprovalPolicy,
+  approvalPolicy,
+  governApproval,
+} from "./request-policy.js";
 import type { ClaimedTurn, TurnCommandKind, TurnQueue } from "./turn-queue.js";
 
 const tracer = getTracer("@catamorphic/core");
@@ -151,6 +162,8 @@ export interface TurnEngineHost {
     reply: Item | null;
     retrying: boolean;
   }): Promise<void>;
+  /** Approvals that opened and wait on approvers, after they committed. */
+  approvalsOpened?(input: { session: SessionRow; requests: RuntimeRequest[] }): Promise<void>;
 }
 
 /** The model-facing text of an input item (a delivery's provenance included). */
@@ -177,7 +190,7 @@ function unanswered(local: LocalTurn, attemptId: string, runner: RunnerState): R
   return { ...runner, calls };
 }
 
-/** The text a continuation turn gives the agent (ADR 0196). */
+/** The text a continuation turn gives the agent (ADR 0197). */
 export const CONTINUATION_PROMPT =
   "Your previous turn was interrupted because the machine running it stopped. Continue where you left off. First check what was already done (files, commands, messages) so you do not repeat anything that had side effects.";
 
@@ -186,7 +199,7 @@ const MAX_TRANSIENT_RETRIES = 5;
 const INTERRUPT_GRACE_MS = 30_000;
 
 /**
- * Drives claimed turns (ADR 0196): prepares an attempt, starts its runner
+ * Drives claimed turns (ADR 0197): prepares an attempt, starts its runner
  * (or finds it again after a takeover), ingests its frames, answers its
  * host calls, delivers commands, and settles the turn. Every step that
  * matters to another replica is in Postgres; this process's memory holds
@@ -335,17 +348,21 @@ export class TurnEngine {
       onCommands: () => local.wake(),
     });
     try {
-      await withSpan(
-        {
-          tracer,
-          name: "agent.turn",
-          attributes: {
-            "catamorphic.agent.turn.id": claim.turn.id,
-            "catamorphic.agent.session.id": claim.turn.sessionId,
-            "catamorphic.agent.turn.recovered": claim.recovered,
+      // A turn is its own operation: nothing of the drainer's (a workflow
+      // run, a queue job) carries into it.
+      await withTelemetryContext({ attributes: {}, reset: true }, () =>
+        withSpan(
+          {
+            tracer,
+            name: "agent.turn",
+            attributes: {
+              "catamorphic.agent.turn.id": claim.turn.id,
+              "catamorphic.agent.session.id": claim.turn.sessionId,
+              "catamorphic.agent.turn.recovered": claim.recovered,
+            },
           },
-        },
-        () => this.drive(local, rearm),
+          (span) => this.drive(local, rearm, span),
+        ),
       );
     } catch (error) {
       // Losing the lease mid-step is losing the turn, not a failure of it.
@@ -374,7 +391,7 @@ export class TurnEngine {
 
   // -------------------------------------------------------------------------
 
-  private async drive(local: LocalTurn, rearm: () => void): Promise<void> {
+  private async drive(local: LocalTurn, rearm: () => void, span?: Span): Promise<void> {
     const { db } = this.deps;
     const turnId = local.claim.turn.id;
     const session = await db
@@ -391,6 +408,17 @@ export class TurnEngine {
       });
       return;
     }
+    if (span)
+      setSpanCorrelation({
+        span,
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": session.project_id,
+          "catamorphic.agent.session.id": session.id,
+          "catamorphic.agent.turn.id": turnId,
+        },
+      });
     let turn = await this.loadTurn(turnId);
     for (;;) {
       if (local.abort.signal.aborted) return;
@@ -671,7 +699,7 @@ export class TurnEngine {
   }
 
   /**
-   * The native thread this attempt runs on (ADR 0196): the session's
+   * The native thread this attempt runs on (ADR 0197): the session's
    * thread for this harness, resumed (or restored from stored state); a
    * fork of a source thread for a forked session's first turn; else a fresh
    * one, told what it missed by a recorded handoff.
@@ -1028,6 +1056,12 @@ export class TurnEngine {
         if (command.attemptId && command.attemptId !== attemptId) return null;
         return { id, command: { kind: "respond", requestKey, response } };
       }
+      case "release": {
+        const requestKey = typeof command.payload.requestKey === "string" ? command.payload.requestKey : "";
+        const reason = typeof command.payload.reason === "string" ? command.payload.reason : "";
+        if (!requestKey || (command.attemptId && command.attemptId !== attemptId)) return null;
+        return { id, command: { kind: "release", requestKey, reason } };
+      }
     }
   }
 
@@ -1054,7 +1088,10 @@ export class TurnEngine {
     completion?: { status: "completed" | "failed" | "interrupted"; error?: TurnError; ref?: NativeRef };
   }> {
     const { db, log, queue } = this.deps;
-    return db.transaction().execute(async (trx) => {
+    let policy: ApprovalPolicy | undefined;
+    let refused = false;
+    const opened: RuntimeRequest[] = [];
+    const applied = await db.transaction().execute(async (trx) => {
       await this.assertOwned(local, trx);
       let runner: RunnerState = { ...input.runner, cursor: input.cursor };
       const events = input.frames.flatMap((frame) => (frame.type === "event" ? [frame.event] : []));
@@ -1119,7 +1156,36 @@ export class TurnEngine {
         };
         extra.push({ type: "attempt.changed", attempt });
       }
-      await log.append(trx, { sessionId: input.turn.sessionId, events: [...ingested.events, ...extra] });
+      // Approvals open under their chat's policy (ADR 0176): its approvers
+      // and wait, or a refusal at once when no one can answer.
+      const governed: SessionEvent[] = [];
+      for (const event of ingested.events) {
+        if (
+          event.type !== "request.changed" ||
+          event.request.kind !== "approval" ||
+          event.request.status !== "pending" ||
+          event.request.expiresAt !== null
+        ) {
+          governed.push(event);
+          continue;
+        }
+        policy ??= await approvalPolicy(trx, input.turn.sessionId);
+        const outcome = governApproval({ request: event.request, policy, now: Date.now() });
+        governed.push({ type: "request.changed", request: outcome.request });
+        if (outcome.refusal && event.request.runnerKey) {
+          refused = true;
+          await queue.enqueueCommand(trx, {
+            turnId: input.turn.id,
+            attemptId: input.attempt.id,
+            kind: "respond",
+            payload: {
+              requestKey: event.request.runnerKey,
+              response: { kind: "approval", decision: "denied", reason: outcome.refusal },
+            },
+          });
+        } else if (outcome.request.approvers.length > 0) opened.push(outcome.request);
+      }
+      await log.append(trx, { sessionId: input.turn.sessionId, events: [...governed, ...extra] });
       if (ingested.statePath)
         await trx
           .updateTable("agent_provider_threads")
@@ -1144,6 +1210,12 @@ export class TurnEngine {
         ...(ingested.completed ? { completion: ingested.completed } : {}),
       };
     });
+    if (refused) local.wake();
+    if (opened.length > 0)
+      await this.deps.host
+        .approvalsOpened?.({ session: input.session, requests: opened })
+        .catch((error) => console.warn("[catamorphic] Could not tell approvers", error));
+    return applied;
   }
 
   private async saveRunner(local: LocalTurn, attemptId: string, runner: RunnerState): Promise<void> {
@@ -1161,7 +1233,7 @@ export class TurnEngine {
    * Answer host calls. Native state is Postgres-only, so it is answered in
    * one transaction with forgetting the call: never applied twice. A host
    * tool runs outside it; one found taken after a takeover is answered
-   * with the uncertainty, never run twice (ADR 0196).
+   * with the uncertainty, never run twice (ADR 0197).
    */
   private async answerCalls(
     local: LocalTurn,
@@ -1416,7 +1488,7 @@ export class TurnEngine {
   }
 
   /**
-   * An attempt whose runner is gone (ADR 0196): it is lost, its turn is
+   * An attempt whose runner is gone (ADR 0197): it is lost, its turn is
    * interrupted with the reason, open requests can no longer be answered,
    * and a continuation is queued once when the agent recovers by
    * continuing and its native thread can be resumed exactly.
@@ -1709,6 +1781,7 @@ const QUEUED_COMMAND_KINDS: ReadonlySet<string> = new Set<TurnCommandKind>([
   "steer",
   "interrupt",
   "respond",
+  "release",
   "stop",
 ]);
 
@@ -1744,6 +1817,20 @@ async function closeOpenWork(
   input: { turn: Turn; attemptId: string; reason: string; now: string },
 ): Promise<SessionEvent[]> {
   const events: SessionEvent[] = [];
+  const requests = await trx
+    .selectFrom("agent_runtime_requests")
+    .selectAll()
+    .where("session_id", "=", input.turn.sessionId)
+    .where("turn_id", "=", input.turn.id)
+    .where("status", "=", "pending")
+    .execute();
+  // A non-blocking question outlives its turn: its answer becomes a message.
+  const outliving = new Set(
+    requests
+      .map(requestFromRow)
+      .filter((request) => !request.blocking && request.kind === "question")
+      .map((request) => request.id),
+  );
   const items = await trx
     .selectFrom("agent_items")
     .select("payload")
@@ -1752,22 +1839,15 @@ async function closeOpenWork(
     .execute();
   for (const row of items) {
     const item = itemFromRow(row);
+    if (item.kind === "request" && outliving.has(item.requestId)) continue;
     events.push({
       type: "item.changed",
       item: { ...item, status: "cancelled", endedAt: input.now, updatedAt: input.now } as Item,
     });
   }
-  const requests = await trx
-    .selectFrom("agent_runtime_requests")
-    .selectAll()
-    .where("session_id", "=", input.turn.sessionId)
-    .where("turn_id", "=", input.turn.id)
-    .where("status", "=", "pending")
-    .execute();
   for (const row of requests) {
     const request: RuntimeRequest = requestFromRow(row);
-    // A non-blocking question outlives its turn: its answer becomes a message.
-    if (!request.blocking && request.kind === "question") continue;
+    if (outliving.has(request.id)) continue;
     events.push({
       type: "request.changed",
       request: { ...request, status: "expired", answerable: false, reason: input.reason, resolvedAt: input.now },

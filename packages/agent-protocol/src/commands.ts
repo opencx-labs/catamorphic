@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Commands a person's client sends to a session (ADR 0195). Each carries a
+ * Commands a person's client sends to a session (ADR 0196). Each carries a
  * client-generated `commandId`: sending the same command again returns the
  * first receipt and runs nothing.
  */
@@ -95,6 +95,7 @@ export const runtimeRequestResponseSchema = z.union([
     kind: z.literal("approval"),
     decision: z.enum(["approved", "denied"]),
     remember: z.literal("always").optional(),
+    reason: z.string().max(2_000).optional(),
   }),
   z.object({
     kind: z.literal("question"),

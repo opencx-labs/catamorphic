@@ -151,7 +151,7 @@ function exitCodeOf(input: {
 }
 
 /**
- * Claude Code's SDK messages as Work transcript items (ADR 0195). Text and
+ * Claude Code's SDK messages as Work transcript items (ADR 0196). Text and
  * thinking stream into `assistant_message` and `reasoning` items keyed by
  * their API message id and block index; tool uses become command,
  * file change, subagent, plan or tool call items keyed by their tool-use

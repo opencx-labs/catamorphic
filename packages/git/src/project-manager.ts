@@ -480,7 +480,7 @@ export class ProjectManager {
 
   /**
    * Put a session's copy back at one of its own commits, discarding what
-   * came after (a rollback, ADR 0195), and publish it as the session's
+   * came after (a rollback, ADR 0196), and publish it as the session's
    * branch so its next sandbox is seeded from there.
    */
   async resetSession(args: {

@@ -54,6 +54,13 @@ function TimelineLink({
 }
 const LINK_COMPONENTS = { a: TimelineLink };
 
+/**
+ * Sent as the answer when the user dismisses the question panel. The
+ * timeline recognizes it and renders a muted note instead of an answer.
+ */
+export const QUESTIONS_DISMISSED_MESSAGE =
+  "The user dismissed these questions without answering them. Continue without their input, using your best judgment.";
+
 export interface ChatTimelineMessage {
   id: string;
   role: "user" | "assistant" | "system";
@@ -285,6 +292,39 @@ function Message({
   const humanUserMessage =
     message.role === "user" &&
     (!message.author || message.author.kind === "user");
+
+  // An answer from the question panel reads as the questions and what
+  // was picked, not as the text the agent receives.
+  const answered =
+    message.role === "user"
+      ? questionAnswer(asRecord(message.metadata))
+      : undefined;
+  if (answered === "dismissed")
+    return (
+      <div className="text-center text-xs italic text-fg-faint">
+        Questions dismissed
+      </div>
+    );
+  if (answered)
+    return (
+      <article
+        data-testid="question-answer"
+        className="ml-auto max-w-[85%] rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2 text-sm"
+      >
+        <dl className="flex flex-col gap-1.5">
+          {answered.map((row) => (
+            <div key={row.question} className="min-w-0">
+              <dt className="whitespace-pre-wrap break-words text-xs leading-5 text-fg-muted">
+                {row.question}
+              </dt>
+              <dd className="whitespace-pre-wrap break-words font-medium leading-6">
+                {row.answer}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </article>
+    );
 
   return (
     <article
@@ -735,6 +775,42 @@ function changedFiles(message: ChatTimelineMessage): string[] {
     const entry = asRecord(change);
     return typeof entry?.path === "string" ? [entry.path] : [];
   });
+}
+
+/**
+ * The question rows of a question panel answer (core stores the batch and
+ * the raw answer beside the text the agent receives). Multi-question
+ * answers are "<question>\n→ <answer>" blocks; anything else shows whole.
+ */
+function questionAnswer(
+  metadata: Record<string, unknown> | undefined,
+): "dismissed" | { question: string; answer: string }[] | undefined {
+  const entry = asRecord(metadata?.question);
+  if (typeof entry?.answer !== "string" || !Array.isArray(entry.questions))
+    return undefined;
+  const answer = entry.answer;
+  if (answer === QUESTIONS_DISMISSED_MESSAGE) return "dismissed";
+  const questions = entry.questions.flatMap((raw) => {
+    const question = asRecord(raw)?.question;
+    return typeof question === "string" ? [question] : [];
+  });
+  const [only] = questions;
+  if (!only) return undefined;
+  if (questions.length === 1) return [{ question: only, answer }];
+  const rows = questions.map((question) => {
+    const marker = `${question}\n→ `;
+    const index = answer.indexOf(marker);
+    if (index === -1) return undefined;
+    const start = index + marker.length;
+    const end = answer.indexOf("\n\n", start);
+    return {
+      question,
+      answer: answer.slice(start, end === -1 ? undefined : end).trim(),
+    };
+  });
+  return rows.every((row) => row !== undefined)
+    ? rows
+    : [{ question: questions.join("\n"), answer }];
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

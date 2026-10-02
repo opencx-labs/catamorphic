@@ -292,6 +292,13 @@ interface FakeTurn {
   pause(ms: number): Promise<void>;
   /** A workspace tool, served as a host tool or a discovered capability. */
   tool(name: string, input: Record<string, unknown>): Promise<unknown>;
+  /** A host tool's result as the harness receives it, images included. */
+  toolResult(
+    name: string,
+    input: Record<string, unknown>,
+  ): Promise<HostToolResult>;
+  /** The next message the person sends into this turn. */
+  nextSteer(): Promise<{ text: string; attachments: AgentAttachment[] }>;
   discover(query: string): Promise<{ items: Array<{ name: string }> }>;
   /** Discovers the capability by name, then invokes it. */
   capability(name: string, input: Record<string, unknown>): Promise<unknown>;
@@ -311,6 +318,11 @@ interface FakeTurn {
  *
  * - "ask me ... questions" → a preamble, then a question the next
  *   message answers ("Got it, noted").
+ * - "blocking question" → a blocking question; a chat message sent while
+ *   it waits is answered in the same turn and the question stays open
+ *   (ADR 0195).
+ * - "look at my screen" → read_tab's window screenshot.
+ * - "close my questions" → the close_questions tool core gives every agent.
  * - "preamble" → two preamble segments split by tool work, then a summary.
  * - "edit a file" → writes a file (changed-file chips).
  * - "subagent" → a delegated worker with nested activity.
@@ -341,7 +353,10 @@ export class E2eFakeAdapter implements HarnessAdapter {
   start(attempt: AttemptStart, host: AttemptHost): AttemptControl {
     let interrupted = false;
     const wakers = new Set<() => void>();
+    /** Messages sent into the turn that no step took, echoed at its end. */
     const steered: string[] = [];
+    type Steer = { text: string; attachments: AgentAttachment[] };
+    const steerWaiters: Array<(input: Steer) => void> = [];
     const pause = (ms: number) =>
       new Promise<void>((resolve) => {
         if (interrupted) return resolve();
@@ -376,6 +391,12 @@ export class E2eFakeAdapter implements HarnessAdapter {
                 .callTool({ name, input: toJson(input) })
                 .then(toolValue)
             : turn.capability(`workspace.${name}`, input),
+        toolResult: (name, input) =>
+          host.callTool({ name, input: toJson(input) }),
+        nextSteer: () =>
+          new Promise<Steer>((resolve) => {
+            steerWaiters.push(resolve);
+          }),
         discover: async (query) =>
           z
             .object({ items: z.array(z.object({ name: z.string() })) })
@@ -444,7 +465,9 @@ export class E2eFakeAdapter implements HarnessAdapter {
     });
     return {
       steer: async (input) => {
-        steered.push(input.text);
+        const waiter = steerWaiters.shift();
+        if (waiter) waiter(input);
+        else steered.push(input.text);
         host.emit({ type: "input.consumed", itemIds: [input.itemId] });
         return true;
       },
@@ -663,6 +686,76 @@ function elicitationAction(
 async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
   const message = turn.message;
   const prompt = message.toLowerCase();
+
+  // A message the person sends while the question waits releases it (core
+  // keeps it open beside the chat) and steers this turn (ADR 0195).
+  if (prompt.includes("blocking question") && !prompt.includes("nonblocking")) {
+    const reply = turn.nextSteer();
+    try {
+      const response = await turn.request({
+        kind: "question",
+        blocking: true,
+        title: "Question",
+        origin: { kind: "tool", id: "ask_user", displayName: "Ask User" },
+        questions: [
+          {
+            question: "Which layout should I use?",
+            header: "Layout",
+            multiSelect: false,
+            options: [
+              { label: "Grid", description: "Cards in columns." },
+              { label: "List", description: "One row per item." },
+            ],
+          },
+        ],
+      });
+      yield {
+        type: "text",
+        content: `Using the ${response.kind === "question" ? response.answers.join(", ") : "default"} layout.`,
+      };
+    } catch (error) {
+      if (!(error instanceof RequestClosedError)) throw error;
+      const input = await Promise.race([
+        reply,
+        turn.pause(10_000).then(() => undefined),
+      ]);
+      if (input)
+        yield {
+          type: "text",
+          content: `Replying before you answer: ${input.text}${
+            input.attachments.length
+              ? ` (attachments: ${input.attachments.map((item) => item.name).join(", ")})`
+              : ""
+          }`,
+        };
+    }
+    return;
+  }
+
+  if (prompt.includes("look at my screen")) {
+    const result = await turn.toolResult("read_tab", { key: "window" });
+    const images = result.content.filter((part) => part.type === "image");
+    const text = result.content.find((part) => part.type === "text");
+    yield {
+      type: "tool_call",
+      toolName: "read_tab",
+      toolInput: { key: "window" },
+    };
+    yield {
+      type: "text",
+      content: `Saw ${images.length} window image: ${text?.type === "text" ? text.text : "nothing"}`,
+    };
+    return;
+  }
+
+  if (prompt.includes("close my questions")) {
+    const report = await turn.tool("close_questions", {});
+    yield {
+      type: "text",
+      content: `Questions: ${typeof report === "string" ? report : JSON.stringify(report)}`,
+    };
+    return;
+  }
 
   if (prompt.includes("nonblocking question")) {
     let answer: string[] | undefined;

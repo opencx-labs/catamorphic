@@ -89,7 +89,6 @@ describe("project events", () => {
         id: sessionId,
         project_id: projectId,
         external_user_id: "builder",
-        provider: "test",
       })
       .execute();
     await db

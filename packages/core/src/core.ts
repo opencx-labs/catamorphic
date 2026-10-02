@@ -217,8 +217,8 @@ export interface CatamorphicCoreConfig {
    * Pluggable coding agent(s): one {@link RegisteredCodingAgent}, or a
    * {@link CodingAgentRegistry} when the host offers several (the desktop
    * registers one per profile agent). Each names a harness that runs in
-   * this process or beside its workspace (ADR 0196). Questions and
-   * approvals are session requests every client answers (ADR 0195).
+   * this process or beside its workspace (ADR 0197). Questions and
+   * approvals are session requests every client answers (ADR 0196).
    */
   codingAgent?: RegisteredCodingAgent | CodingAgentRegistry;
   /**

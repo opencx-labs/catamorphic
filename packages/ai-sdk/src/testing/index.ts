@@ -1,5 +1,5 @@
 /**
- * Replay harness for the built-in agent (ADR 0196: tests replay real
+ * Replay harness for the built-in agent (ADR 0197: tests replay real
  * transcripts). A {@link ModelTranscript} is what the model provider
  * streamed, call by call, as AI SDK provider stream parts; {@link replayModel}
  * plays it back as a `LanguageModel`, so a test replaces only the model

@@ -1477,3 +1477,16 @@ answers "which profile is this" at a glance, not what it holds. Main reads
 the connections for any profile straight from its file: it decrypts
 nothing, starts no watchers and needs no unlocking. The menu rows and the
 button wear the same avatar as the card.
+
+### 2026-10-02: Keep talking while a question is open
+
+A question used to stop the chat: a message sent while it waited sat in the
+queue, and the panel's "Other" row was a second composer that could not take
+a pasted screenshot. Now a message reaches the agent at once and the question
+stays open as "Answer when ready", so the person can ask about the options
+before choosing. The composer is the free-text answer ("Answer in your own
+words…"), the panel keeps only options, and its waiting status sits beside the
+title instead of on a row above it. Answers read in history as each question
+with what was picked. A permission request gives way to a message instead of
+staying open. Pasting no longer shifts the dock: preparation spins the attach
+button. See ADR 0195.

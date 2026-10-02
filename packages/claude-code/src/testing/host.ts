@@ -22,7 +22,7 @@ export interface RunnerLike {
 }
 
 /**
- * Native thread state the way a host keeps it (ADR 0196): entries per
+ * Native thread state the way a host keeps it (ADR 0197): entries per
  * provider thread and subpath. A call that names a native thread reads
  * that thread (a fork reading its source); one that names none is the
  * attempt's own.

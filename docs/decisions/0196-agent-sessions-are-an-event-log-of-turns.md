@@ -1,4 +1,4 @@
-# 0195 — Agent sessions are an event log of turns
+# 0196 — Agent sessions are an event log of turns
 
 - **Status:** Accepted
 - **Date:** 2026-10-02
@@ -67,7 +67,7 @@ turn, then run this), or `message_only` (attributed delivery, no turn).
 pushing events after the remote's acknowledged sequence; the remote applies
 them through the same projector. Authority still moves only by the 0077
 compare-and-swap, so a mirror never dispatches. A remote copy continuing a
-session first resolves its provider thread (ADR 0196).
+session first resolves its provider thread (ADR 0197).
 
 **Rollback and fork use the same records.** Each turn records the
 checkpoint before and after it. `rollback({ turnId })` restores the
@@ -81,11 +81,18 @@ Considered: keeping messages and adding a log beside them (two sources of
 truth); domain events reduced into projections by a separate process (a
 second consistency boundary for no gain at our scale).
 
+**Replies around questions (0195) are dispatch rules.** A person's message
+sent while the turn waits on a question steers into that turn: the waiting
+call is released with a reason (the runner's `release` command) and the
+question stays open as non-blocking, whose answer later arrives as a
+message; a waiting approval is withdrawn as declined. `close_questions` is a
+Work tool every agent gets.
+
 ## Consequences
 
 Clients stream instead of polling and resume after any disconnect. Mirrors
 send deltas. Every behavior is testable from recorded provider transcripts
-through real persistence (ADR 0196). `agent_messages` and the old turn
+through real persistence (ADR 0197). `agent_messages` and the old turn
 queue columns are gone; a forward migration converts existing sessions.
 The session service splits into the log, the turn queue, the turn driver,
 preparation, finalization, provider threads and read models.

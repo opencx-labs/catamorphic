@@ -43,6 +43,8 @@ export function desktopSettingsContext({
         personal: preferences.personal,
       },
       shortcuts: stores.keybindings.file,
+      // Bookmarks: byProject[projectId] and pinnedByProfile[profileId].
+      bookmarks: config.bookmarksFile(),
       workspace: {
         profile: stores.workspace.file,
         personal: projectLocalWorkspaceFile(

@@ -1,6 +1,6 @@
 # @catamorphic/codex
 
-The Codex harness adapter (`codex`) for the agent runner (ADR 0196). It runs
+The Codex harness adapter (`codex`) for the agent runner (ADR 0197). It runs
 one pinned `codex app-server` process per attempt, beside the workspace it
 edits: inside the session's sandbox on a server (in the runner bundle), or
 in the host's own process on the desktop.
@@ -24,7 +24,7 @@ The adapter takes no per-agent settings. Everything arrives with each
   sandbox is the boundary. Approvals default to `on-request`.
 - `modelAccess`: `gateway` is the `work` model provider (Responses API, a
   key command reading `keyFile`) with `CODEX_HOME` in the state directory;
-  `sign_in` runs with `CODEX_HOME` at the member's own home (ADR 0197);
+  `sign_in` runs with `CODEX_HOME` at the member's own home (ADR 0198);
   `host` runs Codex as the host configured it (`env`, including an optional
   `CODEX_API_KEY`).
 - `mcpServers` become Codex `mcp_servers`. A server with a tool policy asks
