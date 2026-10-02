@@ -21,12 +21,13 @@ import {
   type Turn,
   type TurnError,
 } from "@catamorphic/agent-protocol";
-import type {
-  AttemptStart,
-  HostToolDescriptor,
-  HostToolResult,
-  McpServerSpec,
-  PolicyLayer,
+import {
+  ASK_USER_TOOL,
+  type AttemptStart,
+  type HostToolDescriptor,
+  type HostToolResult,
+  type McpServerSpec,
+  type PolicyLayer,
 } from "@catamorphic/agent-protocol/runner";
 import type { DB, Json, JsonObject } from "@catamorphic/db";
 import { moveCheckoutBase, type ProjectManager } from "@catamorphic/git";
@@ -40,6 +41,8 @@ import {
   type AttachedPluginForAgent,
   agentCapabilityTools,
   buildPluginsPreamble,
+  agentQuestionDescription,
+  agentQuestionInputSchema,
   closeQuestionsDescription,
   closeQuestionsInputSchema,
   type ExtraTool,
@@ -838,6 +841,19 @@ export interface ArchiveSessionResourcesHandler {
  *    edits land in place, so no sync step and no draft.
  * 3. The conversation persists to `agent_sessions` / `agent_messages`.
  */
+/**
+ * Work's question tool (ADR 0195), offered to every agent beside its own:
+ * the runner answers it through the request protocol, so it never runs here.
+ */
+const ASK_USER_HOST_TOOL: ExtraTool = {
+  name: ASK_USER_TOOL,
+  description: agentQuestionDescription,
+  parameters: agentQuestionInputSchema.shape,
+  execute: async () => {
+    throw new Error("Work's runner answers ask_user");
+  },
+};
+
 export class AgentSessionsService {
   readonly mailboxes: SessionMailboxesService;
   /** The session event log (ADR 0196). */
@@ -3777,6 +3793,7 @@ export class AgentSessionsService {
       ...(input.agent.harness.placement === "host"
         ? (input.agent.harness.hostTools ?? [])
         : []),
+      ASK_USER_HOST_TOOL,
       this.closeQuestionsTool(input.session.id),
     ];
     if (!this.agentCapabilities) return own;

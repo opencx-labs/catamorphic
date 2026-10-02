@@ -85,6 +85,12 @@ export const NO_CAPABILITIES: HarnessCapabilities = {
 // Starting an attempt
 
 /** A tool the host serves; the runner offers it and calls the host to run it. */
+/**
+ * Work's question tool (ADR 0195): offered among an attempt's host tools,
+ * and answered by the runner itself through the request protocol.
+ */
+export const ASK_USER_TOOL = "ask_user";
+
 export interface HostToolDescriptor {
   name: string;
   description: string;

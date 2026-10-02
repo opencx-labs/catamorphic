@@ -3,6 +3,7 @@ import type {
   RuntimeRequestResponse,
 } from "@catamorphic/agent-protocol";
 import {
+  ASK_USER_TOOL,
   type AttemptControl,
   type AttemptHost,
   type AttemptStart,
@@ -18,6 +19,7 @@ import {
   type RunnerFrame,
 } from "@catamorphic/agent-protocol/runner";
 import { ToolGate } from "@catamorphic/sandbox";
+import { askUser } from "./ask-user.js";
 
 /** A frame before the runner numbers it. */
 type UnsequencedFrame = RunnerFrame extends infer F
@@ -355,9 +357,12 @@ export class AttemptRunner {
             ...(response.reason ? { reason: response.reason } : {}),
           };
     });
-    return {
+    const api: AttemptHost = {
       emit: (event) => this.emitEvent(event),
       callTool: async (input) => {
+        // Work's own question tool is answered here, through the request
+        // protocol, whichever harness calls it.
+        if (input.name === ASK_USER_TOOL) return askUser(api, input);
         const result = await this.call({
           kind: "tool",
           name: input.name,
@@ -427,6 +432,7 @@ export class AttemptRunner {
       },
       signal: this.abort.signal,
     };
+    return api;
   }
 }
 
