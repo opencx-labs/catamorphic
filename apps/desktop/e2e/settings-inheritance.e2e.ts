@@ -135,6 +135,10 @@ it("keeps checkbox rows and neighboring controls stable while changing and reset
   await app.eval(
     `[...document.querySelectorAll('[aria-label="Collapse right sidebar"]')].find(button => !button.closest('[inert]'))?.click()`,
   );
+  await app.waitFor(
+    "[...document.querySelectorAll('[data-sidebar]')].every(side => side.dataset.settled === 'true') && !document.getAnimations().some(animation => animation.effect?.pseudoElement?.startsWith('::view-transition'))",
+    { label: "sidebars settled" },
+  );
   for (const width of [720, 900]) {
     await app.eval(
       `window.catamorphicDesktop.setSettings({projectId:${JSON.stringify(projectId)},scope:'profile',patch:{contentFrame:true}})`,
@@ -258,7 +262,7 @@ it("edits workspace padding, rounding and dividers independently and persists th
   );
   expect(
     await run(
-      "return getComputedStyle($('[data-sidebar=right]')).borderLeftWidth",
+      "return getComputedStyle($('[data-sidebar=right] > .sidebar-inner')).borderLeftWidth",
     ),
   ).toBe("0px");
   expect(
@@ -283,7 +287,7 @@ it("edits workspace padding, rounding and dividers independently and persists th
   );
   await run("$('input[name=sidebarDividers]').click()");
   await app.waitFor(
-    "getComputedStyle(document.querySelector('[data-sidebar=right]')).borderLeftWidth === '1px'",
+    "getComputedStyle(document.querySelector('[data-sidebar=right] > .sidebar-inner')).borderLeftWidth === '1px'",
   );
   await app.reload();
   // Until preferences load, the workspace draws an unframed main: a 0px

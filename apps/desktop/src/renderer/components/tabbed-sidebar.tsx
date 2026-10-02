@@ -18,6 +18,7 @@ import type {
 import { matchesSidebarSurface } from "../../shared/sidebar.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
 import { motionMs } from "../lib/motion.js";
+import { type SidebarMotion, useSidebarMotion } from "../lib/sidebar-motion.js";
 import { Collapsible } from "./collapsible.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 import type { SidebarContentState } from "./sidebar-contribution.js";
@@ -62,10 +63,12 @@ export function TabbedSidebar({
   footer,
   error,
   onCustomize,
+  onMotionChange,
   renderSection,
 }: {
   side: SidebarSide;
   sidebarRef?: Ref<HTMLElement>;
+  /** Open over the content instead of beside it. */
   overlay?: boolean;
   revealed?: boolean;
   tabs: SidebarTabConfig[];
@@ -77,6 +80,8 @@ export function TabbedSidebar({
   footer?: ReactNode;
   error?: string;
   onCustomize: () => void;
+  /** Where the sidebar is in its slide, as laid out. */
+  onMotionChange?: (motion: SidebarMotion) => void;
   renderSection: (
     section: SidebarSectionConfig,
     visible: boolean,
@@ -93,6 +98,13 @@ export function TabbedSidebar({
   const [tabMotion, setTabMotion] = useState(false);
   const root = useRef<HTMLElement>(null);
   const id = useId();
+  const panel = useRef<HTMLDivElement>(null);
+  const motion = useSidebarMotion({ open, dock: !overlay, panel });
+  // Before paint, so chrome that follows the sidebar (its toggle, the room
+  // made for it) changes in the same frame as the sidebar.
+  useLayoutEffect(() => {
+    onMotionChange?.({ phase: motion.phase, docked: motion.docked });
+  }, [motion.phase, motion.docked, onMotionChange]);
   const [content, setContent] = useState<
     ReadonlyMap<string, SidebarContentState>
   >(new Map());
@@ -183,21 +195,23 @@ export function TabbedSidebar({
           );
       }}
       data-sidebar={side}
-      data-layout-transition
+      data-motion={motion.phase}
+      data-docked={motion.docked}
+      data-settled={motion.settled}
       data-tab-motion={tabMotion}
       data-resizing={resizing || undefined}
       data-sidebar-revealed={revealed}
-      data-overlay={overlay || undefined}
-      className={`tabbed-sidebar ${overlay ? "absolute inset-y-0 left-0 z-40 rounded-r-xl shadow-xl" : ""}`}
+      className="tabbed-sidebar"
       aria-label={`${side === "left" ? "Left" : "Right"} sidebar`}
       aria-hidden={!open}
       inert={!open}
-      style={{
-        width: open ? layout.width : 0,
-        viewTransitionName: open ? `sidebar-${side}` : "none",
-      }}
+      style={{ width: motion.docked ? layout.width : 0 }}
     >
-      <div className="sidebar-inner" style={{ width: layout.width }}>
+      <div
+        ref={panel}
+        className={`sidebar-inner ${overlay ? "rounded-r-xl shadow-xl" : ""}`}
+        style={{ width: layout.width }}
+      >
         {header}
         {(tabs.length > 1 || headerActions) && (
           <div className="flex h-10 shrink-0 items-center gap-2 px-2">
@@ -310,55 +324,55 @@ export function TabbedSidebar({
           )}
         </div>
         {footer}
-      </div>
-      {/* biome-ignore lint/a11y/useSemanticElements: interactive resize separator, not a thematic break */}
-      <div
-        role="separator"
-        aria-label={`Resize ${side} sidebar`}
-        aria-orientation="vertical"
-        aria-valuemin={220}
-        aria-valuemax={520}
-        aria-valuenow={layout.width}
-        tabIndex={open ? 0 : -1}
-        className="sidebar-resizer"
-        onKeyDown={(event) => {
-          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-          event.preventDefault();
-          const delta =
-            (event.key === "ArrowRight" ? 20 : -20) *
-            (side === "left" ? 1 : -1);
-          setLayout((current) => ({
-            ...current,
-            width: Math.max(220, Math.min(520, current.width + delta)),
-          }));
-        }}
-        onPointerDown={(event) => {
-          event.currentTarget.setPointerCapture(event.pointerId);
-          setResizing(true);
-        }}
-        onPointerMove={(event) => {
-          if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-          const rect = root.current?.getBoundingClientRect();
-          if (rect)
+        {/* biome-ignore lint/a11y/useSemanticElements: interactive resize separator, not a thematic break */}
+        <div
+          role="separator"
+          aria-label={`Resize ${side} sidebar`}
+          aria-orientation="vertical"
+          aria-valuemin={220}
+          aria-valuemax={520}
+          aria-valuenow={layout.width}
+          tabIndex={open ? 0 : -1}
+          className="sidebar-resizer"
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            event.preventDefault();
+            const delta =
+              (event.key === "ArrowRight" ? 20 : -20) *
+              (side === "left" ? 1 : -1);
             setLayout((current) => ({
               ...current,
-              width: Math.max(
-                220,
-                Math.min(
-                  520,
-                  side === "left"
-                    ? event.clientX - rect.left
-                    : rect.right - event.clientX,
-                ),
-              ),
+              width: Math.max(220, Math.min(520, current.width + delta)),
             }));
-        }}
-        onPointerUp={(event) => {
-          event.currentTarget.releasePointerCapture(event.pointerId);
-          setResizing(false);
-        }}
-        onLostPointerCapture={() => setResizing(false)}
-      />
+          }}
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId);
+            setResizing(true);
+          }}
+          onPointerMove={(event) => {
+            if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+            const rect = root.current?.getBoundingClientRect();
+            if (rect)
+              setLayout((current) => ({
+                ...current,
+                width: Math.max(
+                  220,
+                  Math.min(
+                    520,
+                    side === "left"
+                      ? event.clientX - rect.left
+                      : rect.right - event.clientX,
+                  ),
+                ),
+              }));
+          }}
+          onPointerUp={(event) => {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+            setResizing(false);
+          }}
+          onLostPointerCapture={() => setResizing(false)}
+        />
+      </div>
     </aside>
   );
 }

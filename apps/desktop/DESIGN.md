@@ -278,6 +278,12 @@ the animation is wrong, not the test.
 Framed content previews transition the workspace margins and corner radius over
 200 ms with the standard easing. Reduced motion applies the frame immediately.
 
+A sidebar slides with a 200 ms transform the moment it is toggled, and the
+content beside it settles after it stops: a 200 ms view-transition morph
+from its old layout to its new one (ADR 0200). The content resizes once per
+toggle, never while anything moves. New motion beside a page, terminal,
+editor or app frame moves over it rather than animating its size.
+
 ### Current motion inventory
 
 | Animation | Duration | Pairs with |
@@ -291,6 +297,7 @@ Framed content previews transition the workspace margins and corner radius over
 | `profile-veil-in` / `profile-veil-out` (in-place profile switch) | 200ms | each other (exact mirror) |
 | `question-in` (ask_user panel) | 260ms | — |
 | `pane-in-left` / `pane-in-right` (keyboard tab cycling) | 200ms | — (content-changed signal on a persistent wrapper; no exit to pair) |
+| `content-out` / `content-in` (content settling beside a still sidebar, view transition) | 200ms | each other (the old snapshot leaves as the new one arrives) |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
 | `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
 | `activity-leave` / `activity-arrive` (agent activity line swap) | 150ms / 200ms | — (one beat of the working pulse carries a content swap on a persistent line: the old text dims up and away, the new rises in, then `animate-pulse` resumes) |
@@ -1519,3 +1526,14 @@ subscription runs only on a machine where the person signed in themselves.
 While the agent works and there is nothing to send, the send button stops
 it, and a message held for editing keeps its place in the queue.
 See ADRs 0197, 0198 and 0199.
+
+### 2026-10-02: Sidebars move first, the page settles after
+
+Toggling a sidebar over a web page shifted the whole page: opening dragged it
+along with the sidebar's edge and snapped it back when it resized, and closing
+reflowed it on the first frame, then slid it. Now the sidebar slides the
+moment it is toggled, and when it stops the page glides into its new place
+instead of snapping, as Safari animates its sidebar: snapshots of the old and
+new layout move so the page's main column travels straight to where it lands,
+and cross-fade. A web page may hold still for a moment between the two while
+it lays out at its new size. See ADR 0200.

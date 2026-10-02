@@ -83,7 +83,7 @@ describe("configurable browser workspace", () => {
     ).toBe("sidebar");
     expect(
       await run(
-        "return getComputedStyle($('aside')).backgroundColor !== getComputedStyle($('main')).backgroundColor",
+        "return getComputedStyle($('aside .sidebar-inner')).backgroundColor !== getComputedStyle($('main')).backgroundColor",
       ),
     ).toBe(false);
   });
@@ -91,7 +91,7 @@ describe("configurable browser workspace", () => {
   it("keeps the header title-only while the sidebar is collapsed", async () => {
     await run("$('button[aria-label=\"Collapse sidebar\"]').click()");
     await app.waitFor(
-      "!!document.querySelector('button[aria-label=\"Expand sidebar\"]')",
+      "document.querySelector('aside').dataset.motion === 'closed' && document.querySelector('aside').dataset.settled === 'true'",
     );
     expect(await run("return !!$('main [data-tab-orientation]')")).toBe(false);
     expect(
@@ -104,12 +104,12 @@ describe("configurable browser workspace", () => {
     ).toBe("0px");
     expect(
       await run(
-        "return getComputedStyle($('main')).backgroundColor === getComputedStyle($('aside')).backgroundColor",
+        "return getComputedStyle($('main')).backgroundColor === getComputedStyle($('aside .sidebar-inner')).backgroundColor",
       ),
     ).toBe(true);
     await run("$('button[aria-label=\"Expand sidebar\"]').click()");
     await app.waitFor(
-      "!!document.querySelector('aside [data-tab-orientation=vertical]')",
+      "document.querySelector('aside').dataset.motion === 'open' && document.querySelector('aside').dataset.settled === 'true' && !!document.querySelector('aside [data-tab-orientation=vertical]')",
     );
   });
 
@@ -330,8 +330,9 @@ describe("configurable browser workspace", () => {
     );
     expect(await run("return $('webview').getWebContentsId()")).toBe(guest);
     await run("$('button[aria-label=\"Collapse sidebar\"]').click()");
+    // The sidebar's own toggle slides away with it; measure the one left.
     await app.waitFor(
-      "!!document.querySelector('button[aria-label=\"Expand sidebar\"]')",
+      "document.querySelector('aside').dataset.motion === 'closed' && document.querySelector('aside').dataset.settled === 'true'",
     );
     await app.waitFor(
       "document.querySelector('[data-tab-orientation=horizontal]').getAnimations({subtree:true}).every(animation => animation.animationName !== 'tab-in' || animation.playState === 'finished')",
@@ -368,8 +369,13 @@ describe("configurable browser workspace", () => {
     const tabCount = await run<number>(
       "return document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])').length",
     );
+    // The sidebar settles after it moves; the row is reachable once it has.
+    await app.waitFor(
+      "document.querySelector('aside').dataset.settled === 'true' && (() => { const row = document.querySelector('button[aria-label=\"New tab\"]').closest('[data-tab-orientation]').lastElementChild; const r = row.getBoundingClientRect(); return !!document.elementFromPoint(r.right-6,r.y+r.height/2)?.closest('button[aria-label=\"New tab\"]') })()",
+      { label: "New Tab fills its row" },
+    );
     await run(
-      "const row = $('button[aria-label=\"New tab\"]').closest('[data-tab-orientation]').lastElementChild; const r = row.getBoundingClientRect(); const target = document.elementFromPoint(r.right-6,r.y+r.height/2); if (!target?.closest('button[aria-label=\"New tab\"]')) throw new Error('New Tab does not fill its row'); target.click()",
+      "const row = $('button[aria-label=\"New tab\"]').closest('[data-tab-orientation]').lastElementChild; const r = row.getBoundingClientRect(); document.elementFromPoint(r.right-6,r.y+r.height/2).click()",
     );
     await app.waitFor(
       "document.activeElement?.matches('textarea[placeholder*=\"Search or ask\"]')",
@@ -389,7 +395,7 @@ describe("configurable browser workspace", () => {
     expect(await run("return $('webview').getWebContentsId()")).toBe(guest);
     await run("$('button[aria-label=\"Collapse sidebar\"]').click()");
     await app.waitFor(
-      "document.querySelector('aside').getBoundingClientRect().width === 0",
+      "document.querySelector('aside').dataset.motion === 'closed' && document.querySelector('aside').dataset.settled === 'true' && document.querySelector('aside').getBoundingClientRect().width === 0",
     );
     expect(
       await run(
@@ -419,12 +425,13 @@ describe("configurable browser workspace", () => {
       { label: "native pointer reveals collapsed sidebar" },
     );
     // The compositor may still send guest entry events while the sidebar
-    // animates over it. Those coordinates remain inside the revealed panel.
+    // slides over it. Those coordinates remain inside where it lands.
     await run(
       "$('webview').dispatchEvent(new PointerEvent('pointerover', {bubbles:true,clientX:3,clientY:innerHeight/2})); $('webview').dispatchEvent(new PointerEvent('pointerover', {bubbles:true,clientX:200,clientY:innerHeight/2}))",
     );
+    // Over the page, not beside it: the aside takes no space.
     await app.waitFor(
-      "document.querySelector('aside').getBoundingClientRect().width === 260",
+      "(() => { const aside = document.querySelector('aside'); const panel = aside.firstElementChild.getBoundingClientRect(); return aside.dataset.motion === 'open' && aside.dataset.docked === 'false' && aside.getBoundingClientRect().width === 0 && panel.left === 0 && panel.width === 260 })()",
     );
     expect(await run("return $('aside').dataset.sidebarRevealed")).toBe("true");
     expect(
@@ -455,6 +462,11 @@ describe("configurable browser workspace", () => {
     await run("$('button[aria-label=\"Show sidebar\"]').focus()");
     await app.waitFor(
       "document.querySelector('aside').dataset.sidebarRevealed === 'true'",
+    );
+    // A keyboard reveal hands focus to the sidebar it revealed.
+    await app.waitFor(
+      "document.activeElement?.closest('aside') && document.activeElement.getAttribute('aria-label') === 'Expand sidebar'",
+      { label: "focus moves into the revealed sidebar" },
     );
     await run("$('button[aria-label=\"Expand sidebar\"]').click()");
     await app.waitFor(

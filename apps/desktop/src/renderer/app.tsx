@@ -163,6 +163,7 @@ import {
 } from "./lib/keybindings.js";
 import { notifyDesktop, playChime } from "./lib/notify.js";
 import { sessionLabel } from "./lib/session-label.js";
+import type { SidebarMotion } from "./lib/sidebar-motion.js";
 import { skillInvocation } from "./lib/skills.js";
 import {
   EMPTY_SURFACE_HISTORY,
@@ -524,7 +525,18 @@ export function App({
     null,
   );
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // A sidebar moves first and takes or gives back its space once still;
+  // its toggles, and the room the chrome makes for it, follow the motion
+  // rather than the setting.
+  const [sidebarMotion, setSidebarMotion] = useState<SidebarMotion>({
+    phase: "open",
+    docked: true,
+  });
   const [savedRightSidebarOpen, setSavedRightSidebarOpen] = useState(false);
+  const [rightSidebarMotion, setRightSidebarMotion] = useState<SidebarMotion>({
+    phase: "closed",
+    docked: false,
+  });
   // Opening an empty sidebar is a temporary customization affordance, scoped
   // to this profile/project. It must not replace the populated-sidebar choice.
   const [emptyRightSidebar, setEmptyRightSidebar] = useState<{
@@ -5466,7 +5478,9 @@ export function App({
           data-workspace-ready={
             workspaceReady && bootRevealed && runtime.visible ? "" : undefined
           }
-          className="relative flex h-full bg-sidebar"
+          // Clip, not hide: a closed right sidebar waits past the right edge,
+          // and a scroll container here would let scrollIntoView shift the app.
+          className="relative flex h-full overflow-clip bg-sidebar"
         >
           {/* Agent pointers: glow + scroll on data-point-key elements. The
           workspace object is the re-resolve trigger — a pointed tab may
@@ -5602,10 +5616,11 @@ export function App({
             revealed={revealed}
             error={workspaceError}
             onCustomize={() => customizeSidebar("left")}
+            onMotionChange={setSidebarMotion}
             header={
               <>
                 <div className="app-drag flex h-10 shrink-0 items-center justify-end gap-1 pl-[86px] pr-3">
-                  {sidebarVisible && sidebarToggle}
+                  {sidebarMotion.phase !== "closed" && sidebarToggle}
                   {headerInSidebar && (
                     <div
                       ref={setBrowserNavigationHost}
@@ -5699,7 +5714,6 @@ export function App({
           frame) rather than push the document taller than the window. */}
           <main
             data-workspace-content
-            data-layout-transition
             data-tab-layout={tabsInSidebar ? "sidebar" : "top"}
             data-header-placement={headerInSidebar ? "sidebar" : "top"}
             data-content-frame={prefs?.contentFrame ? "on" : "off"}
@@ -5709,7 +5723,7 @@ export function App({
             }}
             className={`workspace-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${tabsInSidebar ? "bg-sidebar" : "bg-bg"}`}
           >
-            {headerInSidebar && !rightSidebarOpen && (
+            {headerInSidebar && !rightSidebarMotion.docked && (
               <ShortcutHint
                 label="Expand right sidebar"
                 shortcut={formatBinding(keybindings["toggle-right-sidebar"])}
@@ -5722,6 +5736,7 @@ export function App({
                       : "Expand right sidebar"
                   }
                   onClick={() => actionHandlers["toggle-right-sidebar"]()}
+                  inert={rightSidebarMotion.phase !== "closed"}
                   className="app-no-drag absolute right-2 top-2 z-20 grid size-7 place-items-center rounded-md bg-sidebar text-fg-muted hover:text-fg"
                 >
                   <PanelRight className="size-4" />
@@ -5742,8 +5757,13 @@ export function App({
             )}
             {!headerInSidebar && (
               <div className="workspace-chrome app-drag relative z-20 flex h-10 shrink-0 items-center gap-1 pl-2 pr-3">
-                {!sidebarOpen && (
-                  <span className="app-no-drag ml-[70px] flex shrink-0 items-center">
+                {!sidebarMotion.docked && (
+                  <span
+                    // Under the panel until the content makes room; the
+                    // panel's own toggle is the live one.
+                    inert={sidebarMotion.phase !== "closed"}
+                    className="app-no-drag ml-[70px] flex shrink-0 items-center"
+                  >
                     {sidebarToggle}
                   </span>
                 )}
@@ -5754,7 +5774,7 @@ export function App({
                   tabsInSidebar &&
                   !headerInSidebar &&
                   workspaceTitle}
-                {!rightSidebarOpen && (
+                {!rightSidebarMotion.docked && (
                   <ShortcutHint
                     label="Expand right sidebar"
                     shortcut={formatBinding(
@@ -5770,6 +5790,7 @@ export function App({
                           : "Expand right sidebar"
                       }
                       aria-expanded={rightSidebarOpen}
+                      inert={rightSidebarMotion.phase !== "closed"}
                       className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:text-fg"
                       onClick={() => actionHandlers["toggle-right-sidebar"]?.()}
                     >
@@ -5783,7 +5804,6 @@ export function App({
             {projectId ? (
               <div
                 data-workspace-chat-region
-                data-layout-transition
                 className={`workspace-content relative flex min-h-0 flex-1 flex-col bg-bg ${tabsInSidebar ? "overflow-hidden" : ""}`}
               >
                 {/* Every tab pane lives in this wrapper so keyboard cycling
@@ -6654,6 +6674,7 @@ export function App({
             open={rightSidebarOpen}
             error={workspaceError}
             onCustomize={() => customizeSidebar("right")}
+            onMotionChange={setRightSidebarMotion}
             renderSection={renderSidebarSection}
           />
 

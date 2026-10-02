@@ -11,7 +11,6 @@ import {
   registerSelectionReader,
   stampSelectionOnClipboard,
 } from "../lib/editor-selection.js";
-import { useSteadyWidthDuringLayoutTransitions } from "../lib/layout-transition.js";
 import { localEditorPath } from "../lib/local-project-files.js";
 import { useMonacoTheme } from "../lib/monaco-setup.js";
 import { useTheme } from "../lib/theme.js";
@@ -150,11 +149,6 @@ export function EditorScreen({
     });
   };
 
-  // Monaco lays out on every container resize; a sidebar transition would
-  // relayout it on every frame.
-  const editorBoxRef = useRef<HTMLDivElement>(null);
-  const editorContentRef = useRef<HTMLDivElement>(null);
-  useSteadyWidthDuringLayoutTransitions(editorContentRef, editorBoxRef);
   const saveRef = useRef(() => {});
   saveRef.current = () => {
     if (!filePath) return;
@@ -363,29 +357,25 @@ export function EditorScreen({
             />
           </Suspense>
         ) : savedContent !== undefined ? (
-          <div ref={editorBoxRef} className="h-full min-w-0 overflow-hidden">
-            <div ref={editorContentRef} className="h-full w-full">
-              <Editor
-                height="100%"
-                path={`catamorphic-editor://${encodeURIComponent(projectId)}/${encodeURIComponent(filePath)}`}
-                theme={editorTheme}
-                value={draft ?? savedContent}
-                onChange={(value) => handleChange(value ?? "")}
-                onMount={handleMount}
-                options={{
-                  lineNumbers: "on",
-                  minimap: { enabled: false },
-                  fontSize: 13,
-                  fontFamily: theme?.fonts.mono,
-                  tabSize: 2,
-                  scrollBeyondLastLine: false,
-                  automaticLayout: true,
-                  padding: { top: 12 },
-                  fixedOverflowWidgets: true,
-                }}
-              />
-            </div>
-          </div>
+          <Editor
+            height="100%"
+            path={`catamorphic-editor://${encodeURIComponent(projectId)}/${encodeURIComponent(filePath)}`}
+            theme={editorTheme}
+            value={draft ?? savedContent}
+            onChange={(value) => handleChange(value ?? "")}
+            onMount={handleMount}
+            options={{
+              lineNumbers: "on",
+              minimap: { enabled: false },
+              fontSize: 13,
+              fontFamily: theme?.fonts.mono,
+              tabSize: 2,
+              scrollBeyondLastLine: false,
+              automaticLayout: true,
+              padding: { top: 12 },
+              fixedOverflowWidgets: true,
+            }}
+          />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-sm text-fg-muted">
             <p>{fileQuery.isError ? fileQuery.error.message : "Loading…"}</p>

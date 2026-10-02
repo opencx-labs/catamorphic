@@ -51,28 +51,36 @@ server with fixed latency and load it in a plain Electron window with and
 without the change, cold (a new partition) and warm, while blocking the
 main thread on a schedule. Internet sites vary too much between runs.
 
-## Layout transitions over heavy content
+## Sidebar motion over heavy content
 
-A sidebar opening or closing, or the workspace frame insetting, changes the
-content area's size on every frame. A web page renders in its own process and
-the embedder waits for it on each resize; a terminal refits and Monaco
-relayouts. With a GitHub tab showing, a Cmd+B toggle ran 4–7 frames of
-40–55 ms (a terminal: 6 of 53–67 ms) while the renderer's main thread was
-nearly idle; with Settings showing it ran at 14 ms.
+A sidebar that animates its width changes the content area's size on every
+frame. A web page renders in its own process and the embedder waits for it
+on each resize; a terminal refits and Monaco relayouts. With a GitHub tab
+showing, a width-animated Cmd+B toggle ran 4–7 frames of 40–55 ms (a
+terminal: 6 of 53–67 ms) while the renderer's main thread was nearly idle.
 
-Elements whose own width, margins or padding animate carry
-`data-layout-transition`. `lib/layout-transition.ts` hears their
-`transitionrun` and holds heavy content (`useSteadyWidthDuringLayoutTransitions`:
-the browser page, terminal, code editor and app frame) at one width wide
-enough for both ends, clipped by its container, until the transition ends. The
-content resizes once instead of on every frame: afterwards the same toggle ran
-at 14 ms with at most one or two longer frames at an edge. Add the attribute to
-any new element that animates layout, and the hook to any new content that
-resizes expensively.
+Sidebars therefore move first and the content settles after them
+(`lib/sidebar-motion.ts`, ADR 0200). The panel slides with a transform the
+moment it is toggled, over the content when opening and away from it when
+closing; the compositor runs it without layout. Once it is still, the
+content takes or gives back the space in a view transition
+(`lib/sidebar-transition.ts`): GPU snapshots of its old and new layout
+travel and cross-fade while the real content lays out once behind them. A
+page cannot resize without the window waiting for it to repaint (40–300 ms
+by page), so that wait falls in the short hold between the slide and the
+morph, while nothing moves. Do not animate the size of anything beside a
+page, terminal, editor or app frame. The one remaining size animation is
+the content frame's padding preview in Settings, which resizes a page shown
+beside Settings for its 200 ms.
 
-Measure with rAF gaps and `long-animation-frame` entries in the workspace
-window over CDP while toggling. Long frames with no script and no layout time
-are waiting on another process, not the renderer.
+rAF gaps measure the renderer's main thread, not what reaches the screen:
+a main-thread task during a compositor slide does not drop its frames.
+Judge motion by `DrawFrame` intervals in a CDP trace (`cc` and
+`disabled-by-default-devtools.timeline.frame` categories), and use rAF
+gaps and `long-animation-frame` entries to find main-thread work. Long
+frames with no script and no layout time are waiting on another process.
+`Page.startScreencast` misses compositor-only motion; film with
+`Page.captureScreenshot` and `Animation.setPlaybackRate`.
 
 ## Development timing retention
 
