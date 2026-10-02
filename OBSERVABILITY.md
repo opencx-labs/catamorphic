@@ -160,7 +160,7 @@ error log and exception type. Sandbox nonzero exit codes are errors even when
 the provider returns normally. Successful callbacks never overwrite an error
 status set by the operation.
 
-Both `AiSdkCodingAgent` and `AiSdkAgentRuntime` use the OpenTelemetry GenAI
+The AI SDK harness adapter (`createAiSdkAdapter`) uses the OpenTelemetry GenAI
 Development conventions: `invoke_agent`, `chat`, and `execute_tool`, with
 `gen_ai.*` attributes. Metrics cover model duration, input/output tokens,
 time to first output, agent duration, model/tool call counts, and tool duration.

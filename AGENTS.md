@@ -110,15 +110,18 @@ Internal packages:
 - `packages/git` — vendor-neutral git-backed project storage (isomorphic-git): `StorageBackend`/`RemoteBackend` contracts, `ProjectManager`, the remote sync engine (`syncWithNetworkRemote` — fetch/merge/push/rescue branches, ADR 0044), filesystem backends.
 - `packages/github` — **`@catamorphic/github`**: GitHub OAuth + device-flow helpers, GitHub App auth and manifest registration, REST API client. The server SDK builds the `github` connection provider and `githubCodeHost` on it (ADR 0177).
 - `packages/parser` — ts-morph AST-to-WorkflowGraph parser; also the engine behind each capability workspace's `.work/scripts/check.ts`.
-- `packages/sandbox` — vendor-neutral sandbox + coding-agent contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`, `CodingAgentProvider`), the stdio supervisor transport, `instrumentSandboxProvider`, plugin-doc staging helpers. No vendor SDKs here.
+- `packages/sandbox` — vendor-neutral sandbox contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`), the stdio supervisor transport, `instrumentSandboxProvider`, plugin-doc staging and tool-policy helpers for harnesses. No vendor SDKs here.
+- `packages/agent-protocol` — **`@catamorphic/agent-protocol`**: the session log model (turns, attempts, items, requests, provider threads), events, commands and the pure reducer clients and server share (ADR 0197); `/runner` is the runner protocol: `HarnessAdapter`, `HarnessCapabilities`, `AttemptStart`, frames and commands (ADR 0198).
+- `packages/agent-runner` — **`@catamorphic/agent-runner`**: the harness-agnostic runner that drives one attempt on an adapter (`AttemptRunner`, `InProcessRunner` for host harnesses, `runStdioRunner` for sandboxes).
+- `packages/runner-bundle` — **`@catamorphic/runner-bundle`**: the runner and its sandbox adapters (`claude-code`, `codex`) as one hash-addressed file a sandbox runs with Bun or Node (`loadRunnerBundle`).
 - `packages/microsandbox` — **`@catamorphic/microsandbox`**: local sandbox provider (the desktop's default execution).
 - `packages/local-process` — **`@catamorphic/local-process`**: sandboxless subprocess execution with an explicit env; trusted single-tenant hosts only (ADR 0047).
 - `packages/cloudflare` — **`@catamorphic/cloudflare`** backend plugin: `CloudflareSandboxProvider` (Bridge Worker client), `ArtifactsClient` + `ArtifactsRemoteBackend`.
 - `packages/s3` — **`@catamorphic/s3`** backend plugin: `S3ObjectStore` with the generic `ObjectRemoteBackend` from `@catamorphic/git` store project origins in any S3-compatible bucket (ADR 0012).
 - `packages/daytona` — **`@catamorphic/daytona`** backend plugin: `DaytonaSandboxProvider`, experimental Daytona git storage.
-- `packages/ai-sdk` — **`@catamorphic/ai-sdk`** coding-agent harness: `AiSdkCodingAgent` (Vercel AI SDK tool loop, any API model) running in the host process; the desktop's built-in harness.
-- `packages/claude-code` — **`@catamorphic/claude-code`** coding-agent harness backed by the Claude Agent SDK / Claude Code CLI: preset system prompt + settings-source fidelity (ADR 0045), `ask_user`, background-task events, per-session MCP servers (`mcpServersForSession`).
-- `packages/codex` — **`@catamorphic/codex`** coding-agent harness using the pinned OpenAI Codex app-server protocol.
+- `packages/ai-sdk` — **`@catamorphic/ai-sdk`** harness adapter: `createAiSdkAdapter` (Vercel AI SDK tool loop, any API model) running in the host process; the desktop's and Work server's built-in agent.
+- `packages/claude-code` — **`@catamorphic/claude-code`** harness adapter backed by the Claude Agent SDK / Claude Code CLI (`createClaudeCodeAdapter`): preset system prompt + settings-source fidelity (ADR 0045), `ask_user`, subagents and background-task events, native state through the SDK's `SessionStore`, model and slash-command catalogs. Hosts add MCP servers per turn through the harness's `mcpServers(context)`.
+- `packages/codex` — **`@catamorphic/codex`** harness adapter using the pinned OpenAI Codex app-server protocol (`createCodexAdapter`), with its rollout file as portable native state.
 - `packages/mcp` — **`@catamorphic/mcp`**: MCP client infrastructure — both protocol generations with auto-negotiation, elicitation (form + URL), official MCP registry search, plugin-marketplace fetch/install.
 - `packages/otel` — OpenTelemetry helpers (`getTracer`, `withSpan`) over `@opentelemetry/api`.
 - `packages/runtime` — workflow execution harness (runs inside the sandbox).
@@ -137,7 +140,7 @@ How the three connect (setting up / troubleshooting, read in this order):
 2. **Invites are credential-free locators**: `work://connect?server=<api base incl. /api>&project=…&invitation=…`. The desktop or PWA discovers the server's OAuth endpoints, signs in, and redeems admission. The desktop then creates a synced local project (ADR 0044/0055).
 3. **QR pairing** (ADR 0060, palette → "Continue on mobile"): the desktop's LAN listener serves the built `apps/pwa/dist` at its root, exchanges a single-use 2-minute code for a device token, and proxies `/api/*` to the loopback embedded server (bearer required). The claim also hands the phone the profile's remote-project links + mirror map, and the focused chat's project/session (deep-link). The QR ships the **built** PWA — rebuild `apps/pwa` after UI changes.
 4. **Scoped members address agents as `project:<projectId>:<slug>`** — a bare session create starts on the member's permitted project default; the PWA derives the id from `GET /me`.
-5. **Sessions mirror to the linked remote** (ADR 0061): after every settled turn on a remote-linked project the desktop pushes the transcript to `PUT …/agent/sessions/:id/mirror`; the server's copy is continuable there (history-seeded re-anchor), and a `409 diverged` means the server owns the fork — the desktop stops pushing and stamps its copy with a `mirror_fork` marker clients use to lock the stale copy and link the live one. When the focused project has a remote, the pairing QR defaults to the REMOTE origin with a `session` deep-link.
+5. **Sessions mirror to the linked remote** (ADR 0197): on a remote-linked project the desktop pushes the session's event log after the remote's acknowledged sequence to `PUT …/agent/sessions/:id/mirror` (a full base when the remote has no copy; a `409 behind` names the sequence to resend from), and the remote applies it through the same projector. The server's copy is continuable there on a fresh provider thread handed the history (ADR 0198). A `409 diverged` means the server owns the fork: the desktop stops pushing and records a `mirror_fork` notice clients use to lock the stale copy and link the live one. When the focused project has a remote, the pairing QR defaults to the REMOTE origin with a `session` deep-link.
 6. **Session privacy** (ADR 0062): incognito is a DESKTOP-LOCAL concept — a session-id set in `<userData>/incognito-sessions.json` the mirror pusher skips; it never touches core's schema or any wire (palette "New incognito chat", Ghost badge on the dock). `.work/project.json` `"allowIncognito": false` is the committed team policy hiding the affordance. Connected projects always hide incognito, and restored incognito tabs never mount remote chats (ADR 0098).
 
 ## Skills
@@ -377,6 +380,12 @@ Use `@catamorphic/otel` (`getTracer("@catamorphic/<package>")` + `withSpan`). At
 ```
 db → core → fastify-plugin → api-client
 otel → sandbox → core
+agent-protocol → agent-runner → core
+sandbox → agent-runner → runner-bundle
+agent-protocol → claude-code → runner-bundle → core
+agent-protocol → codex → runner-bundle
+agent-protocol → ai-sdk
+agent-protocol → react
 otel → core
 workflow → git
 workflow → parser
@@ -393,7 +402,6 @@ workflow → runtime → sandbox → core
 runtime → microsandbox
 runtime → local-process
 mcp → ai-sdk
-core → claude-code
 core → server-sdk
 server-sdk → work-server → apps/server
 api-client → react → ui → registry

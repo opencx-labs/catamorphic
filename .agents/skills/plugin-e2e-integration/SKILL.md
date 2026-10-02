@@ -32,9 +32,10 @@ plugin host halves").
    loads attached payloads per run; they are part of the deployment artifact
    digest and are uploaded to `node_modules/<packageName>/` in the runtime.
 5. **Agent context.** `GET /api/projects/:projectId/agent-context` returns a
-   prompt suffix for host-side builders. Harnesses stage each plugin's README
-   and types under `<pluginDirectory>/_plugins/<slug>/` with
-   `stagedPluginFiles` and prepend `buildPluginsPreamble()`.
+   prompt suffix for host-side builders. Before each agent attempt, core
+   stages each plugin's README and types under `_plugins/<slug>/` in the
+   agent's working directory with `stagedPluginFiles` and appends
+   `buildPluginsPreamble()` to the attempt's system prompt.
 
 ## First debug stops
 

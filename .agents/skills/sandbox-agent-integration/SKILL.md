@@ -5,11 +5,12 @@ description: Use when changing sandbox providers, workflow execution runtimes, c
 
 # Sandbox and agent integration
 
-Two vendor-neutral contracts live in `@catamorphic/sandbox` (no vendor SDKs):
+Two vendor-neutral contracts, neither with vendor SDKs:
 
-- `SandboxProvider` (`src/types.ts`): where workflow code and controller-agent
-  commands execute.
-- `CodingAgentProvider` (`src/coding-agent/types.ts`): a coding-agent harness.
+- `SandboxProvider` (`@catamorphic/sandbox`, `src/types.ts`): where workflow
+  code and controller-agent commands execute.
+- `HarnessAdapter` (`@catamorphic/agent-protocol/runner`): a coding-agent
+  harness, run by the agent runner for one attempt of a turn (ADR 0198).
 
 Hosts construct concrete providers explicitly at boot and pass them to
 `createCatamorphic`. There is no env-var switch inside the libraries.
@@ -21,10 +22,12 @@ Hosts construct concrete providers explicitly at boot and pass them to
 | Provider, runtime, resource types | `packages/sandbox/src/types.ts`, `execution-environment.ts` |
 | OTel wrapper | `packages/sandbox/src/instrumented-provider.ts` |
 | Warm deployment runtimes | `packages/sandbox/src/command-deployment-runtime.ts` (HTTP supervisor), `stdio-deployment-runtime.ts` |
-| Harness contract and helpers | `packages/sandbox/src/coding-agent/` (`types.ts`, `plugin-staging.ts`, `tool-policy.ts`, `runtime-provider.ts`, `runtime-conformance.ts`) |
+| Session log and runner protocol | `packages/agent-protocol/src/` (`model.ts`, `events.ts`, `commands.ts`, `state.ts` reducer, `runner.ts`: `HarnessAdapter`, `AttemptStart`, frames and commands) |
+| Agent runner | `packages/agent-runner/src/` (`runner.ts` `AttemptRunner`, `in-process.ts`, `stdio.ts`, `echo-adapter.ts`); `packages/runner-bundle` (the sandbox bundle and its adapters) |
+| Harness helpers | `packages/sandbox/src/coding-agent/` (`types.ts`, `plugin-staging.ts`, `tool-policy.ts`, `harness-permissions.ts`, `questions.ts`) |
 | Supervisor inside the runtime | `packages/runtime/src/` (`supervisor-http.ts`, `supervisor-stdio.ts`, `supervisor-dispatcher.ts`, `bun-worker.ts`) |
-| Core services | `packages/core/src/services/`: `deployment-runtime-service.ts`, `execution-worker-service.ts`, `dev-sandbox-service.ts`, `execution-environments-service.ts`, `execution-allocations-service.ts`, `worker-nodes-service.ts`, `client-runners-service.ts`, `coding-agent-registry.ts`, `agent-sessions-service.ts`, `agent-capabilities-service.ts` |
-| Harnesses | `packages/ai-sdk` (`AiSdkCodingAgent`), `packages/claude-code` (`ClaudeCodeAgent`), `packages/codex` (`CodexAgent`) |
+| Core services | `packages/core/src/services/`: `deployment-runtime-service.ts`, `execution-worker-service.ts`, `dev-sandbox-service.ts`, `execution-environments-service.ts`, `execution-allocations-service.ts`, `worker-nodes-service.ts`, `client-runners-service.ts`, `coding-agent-registry.ts`, `agent-sessions-service.ts`, `sessions/` (`session-log.ts`, `turn-queue.ts`, `turn-engine.ts`, `turn-ingest.ts`, `native-state.ts`, `context-handoff.ts`), `agent-capabilities-service.ts` |
+| Harness adapters | `packages/ai-sdk` (`createAiSdkAdapter`), `packages/claude-code` (`createClaudeCodeAdapter`), `packages/codex` (`createCodexAdapter`); each has a `/testing` subpath for recorded-transcript replay |
 | Providers | `packages/microsandbox` (desktop default), `packages/local-process` (trusted single-tenant, ADR 0047), `packages/cloudflare` (+ `packages/cloudflare-sandbox-bridge` Worker), `packages/daytona` |
 
 ## Sandbox providers
@@ -87,33 +90,57 @@ host-resolved local checkout through `createCatamorphic({ nativeAgentCheckout })
 
 ## Coding-agent harnesses
 
-`createCatamorphic({ hostId, codingAgent })` accepts one `CodingAgentProvider`
-or a `CodingAgentRegistry` (`packages/core/src/services/coding-agent-registry.ts`).
-`hostId` is required when `codingAgent` is set; without `codingAgent`, session
-routes answer 503. A `RegisteredCodingAgent` carries `id`, `provider`,
-`topology`, `privilege`, `environment`, `connectionRequirements`, `defaults`,
-`systemPrompt`, and `delegation`. Session orchestration, persistence, checkout
-selection, serialized delivery, and checkpointing stay in
-`AgentSessionsService`, never in a harness.
+`createCatamorphic({ hostId, codingAgent })` accepts one `RegisteredCodingAgent`
+or a `CodingAgentRegistry` (`packages/core/src/services/coding-agent-registry.ts`;
+`singleAgentRegistry` wraps one agent). `hostId` is required when `codingAgent`
+is set; without `codingAgent`, session routes answer 503. A
+`RegisteredCodingAgent` carries `id`, `harness`, `topology`, `options`,
+`sandboxing`, `toolPolicies`, `environment`, `connectionRequirements`,
+`modelConnection`, `signIn`, `defaults`, `systemPrompt`, `delegation`, and
+`recovery`. `harness` says where the runner runs:
+
+- `{ placement: "host", adapter }`: an adapter in this process (the desktop's
+  harnesses, the built-in agent). Only a host harness takes host hooks:
+  `local(context)` (host objects, never serialized), `env`, `hostTools`,
+  `mcpServers(context)` (read every turn so rotated tokens apply),
+  `toolPolicies()`, `toolAnnotations()`, `plugins`, `context(context)` (per-turn
+  facts, ADR 0152), and `instructions`.
+- `{ placement: "sandbox", id }`: the runner bundle inside the session's
+  sandbox runs the bundled adapter `id` (`claude-code`, `codex`) beside its CLI.
 
 ```typescript
-import { AiSdkCodingAgent } from "@catamorphic/ai-sdk";
+import { createAiSdkAdapter } from "@catamorphic/ai-sdk";
 
-const agent = new AiSdkCodingAgent({ model, sandboxProvider, resolveModel });
+const agent: RegisteredCodingAgent = {
+  id: "assistant",
+  harness: { placement: "host", adapter: createAiSdkAdapter({ model, resolveModel }) },
+  topology: "controller",
+};
 ```
 
-To add a harness, implement `CodingAgentProvider`: `startSession` (no model
-call), `sendMessage` (an `AsyncIterable<AgentEvent>`), `dispose`, and optionally
-`interrupt`, `hasSession`, `retryTurn`. Stage plugin docs with
-`stagedPluginFiles` / `buildPluginsPreamble`.
+Sessions are an event log of turns (ADR 0197): `SessionLog.append` is the one
+writer of `agent_session_events` and its projections (turns, attempts, items,
+runtime requests, provider threads), and every mutating command carries a
+client `commandId`. The turn engine drives each turn from Postgres through
+`queued → preparing → running ⇄ waiting → finalizing → settled` under a lease
+(ADR 0198); orchestration, persistence, checkout selection, checkpointing, and
+recovery stay in core, never in a harness.
 
-**Runtime cutover in progress.** ADRs 0067 and 0095 accept
-`AgentRuntimeProvider` (`coding-agent/runtime-provider.ts`: sequenced events,
-resumable sessions, `AgentLoopPlacement` instead of topology).
-`AiSdkAgentRuntime` and `ClaudeCodeAgentRuntime` implement it and
-`runtime-conformance.ts` tests it, but core still drives sessions through
-`CodingAgentProvider`. When you change harness behavior, keep both paths
-consistent.
+To add a harness, implement `HarnessAdapter`: `id`, `capabilities()` (a
+`HarnessCapabilities`: native steer, interrupt, retry, fork, rollback,
+questions, approvals, elicitations, subagents, streamed text, `nativeState`, and
+id strengths), and `start(attempt, host, local?)` returning `AttemptControl`
+(`steer`, `interrupt`, `finished`). The adapter emits `HarnessEvent`s through
+`host.emit` (`thread` as soon as it knows the native thread, items as they
+happen, exactly one `turn.completed`), runs host tools with `host.callTool`,
+decides tool calls with `host.authorize` (policy arrives as data in
+`AttemptStart.toolPolicies`; only `ask` leaves the runner), opens questions and
+approvals with `host.request`, and stores portable native state with
+`host.nativeState`. Core picks fallbacks by capability, never by harness name.
+Register a sandbox adapter in `packages/runner-bundle/src/sandbox-main.ts`, and
+test it against the real `AttemptRunner` with recorded provider transcripts.
+Core stages plugin docs (`stagedPluginFiles` / `stagePluginDocs`) in the working
+directory and appends `buildPluginsPreamble` to the attempt's system prompt.
 
 Rules that hold across harnesses:
 
@@ -138,13 +165,22 @@ Rules that hold across harnesses:
   hidden models, and report errors without starting a turn.
 - **Shell budget.** The built-in harness runs a foreground command as a
   process it waits on when the sandbox has `processes`, bounded by the
-  Allocation's `commandTimeoutSeconds` (`StartSessionOpts`), and offers
+  Allocation's `commandTimeoutSeconds` (handed to the adapter as
+  `local.sandbox.commandBudgetSeconds`), and offers
   `run_background_command` / `read_background_output` / `stop_background_command`
-  there. Disposing a session kills its background commands. Desktop host
-  background commands (ADR 0155) stay host terminals for every harness.
-- **Codex** keeps its app-server process and MCP children alive for the
-  session and closes them on disposal, transport failure, or an abandoned
-  stream. Pending approvals are cancelled when their turn ends (ADR 0112).
+  there. A host may keep the chat's shell (`local.shell`) across attempts, so
+  a command started in one turn is read or stopped in the next, and then ends
+  its background commands with `stopBackgroundCommands` when the chat closes
+  (the desktop does).
+  Desktop host background commands (ADR 0155) stay host terminals for every
+  harness.
+- **Codex** runs one pinned `codex app-server` process per attempt and
+  closes it, with its MCP children, when the attempt ends or its transport
+  fails. Its native state is the rollout file the runner mirrors. Pending
+  approvals are cancelled when their turn ends (ADR 0112).
+- **Sign-ins** stay on the machine they were made on (ADR 0199): an agent with
+  `signIn` places only on a machine reporting the chat owner's sign-in, and
+  Work never reads or moves the credential.
 
 ## Placement, Environments, and machines
 
