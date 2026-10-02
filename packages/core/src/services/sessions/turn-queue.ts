@@ -181,97 +181,110 @@ export class TurnQueue {
     trx: Transaction<DB>,
     input: { sessionId: string; localNode?: { id: string; token: string } },
   ) {
-    return trx
-      .selectFrom("agent_turns as turn")
-      .selectAll("turn")
-      .where("turn.session_id", "=", input.sessionId)
-      .where(({ exists, not, selectFrom }) =>
-        not(
-          exists(
-            selectFrom("agent_sessions as session")
-              .innerJoin(
-                "execution_allocations as allocation",
-                "allocation.id",
-                "session.allocation_id",
-              )
-              .select("session.id")
-              .whereRef("session.id", "=", "turn.session_id")
-              .where((blocked) =>
-                blocked.or([
-                  blocked(
-                    "allocation.maintenance_claimed_until",
-                    ">",
-                    sql<Date>`now()`,
-                  ),
-                  blocked.and([
-                    blocked("allocation.worker_node_id", "is not", null),
-                    blocked.or([
-                      blocked("allocation.status", "!=", "active"),
+    return (
+      trx
+        .selectFrom("agent_turns as turn")
+        .selectAll("turn")
+        .where("turn.session_id", "=", input.sessionId)
+        // A rollback is rewinding the chat's files: nothing starts on them.
+        .where(({ exists, not, selectFrom }) =>
+          not(
+            exists(
+              selectFrom("agent_sessions as rewinding")
+                .select("rewinding.id")
+                .whereRef("rewinding.id", "=", "turn.session_id")
+                .where("rewinding.rewind_until", ">", sql<Date>`now()`),
+            ),
+          ),
+        )
+        .where(({ exists, not, selectFrom }) =>
+          not(
+            exists(
+              selectFrom("agent_sessions as session")
+                .innerJoin(
+                  "execution_allocations as allocation",
+                  "allocation.id",
+                  "session.allocation_id",
+                )
+                .select("session.id")
+                .whereRef("session.id", "=", "turn.session_id")
+                .where((blocked) =>
+                  blocked.or([
+                    blocked(
+                      "allocation.maintenance_claimed_until",
+                      ">",
+                      sql<Date>`now()`,
+                    ),
+                    blocked.and([
+                      blocked("allocation.worker_node_id", "is not", null),
+                      blocked.or([
+                        blocked("allocation.status", "!=", "active"),
+                        blocked.not(
+                          blocked.exists(
+                            blocked
+                              .selectFrom("worker_nodes as node")
+                              .select("node.id")
+                              .whereRef(
+                                "node.id",
+                                "=",
+                                "allocation.worker_node_id",
+                              )
+                              .where("node.enabled", "=", true)
+                              .where(
+                                "node.lease_expires_at",
+                                ">",
+                                sql<Date>`now()`,
+                              )
+                              .where((node) =>
+                                node.or([
+                                  node("node.remote", "is not", null),
+                                  ...(input.localNode
+                                    ? [
+                                        node.and([
+                                          node(
+                                            "node.id",
+                                            "=",
+                                            input.localNode.id,
+                                          ),
+                                          node(
+                                            "node.lease_token",
+                                            "=",
+                                            input.localNode.token,
+                                          ),
+                                        ]),
+                                      ]
+                                    : []),
+                                ]),
+                              ),
+                          ),
+                        ),
+                      ]),
+                    ]),
+                    blocked.and([
+                      blocked("allocation.worker_node_id", "is", null),
+                      blocked("allocation.binding_id", "like", "client:%"),
                       blocked.not(
                         blocked.exists(
                           blocked
-                            .selectFrom("worker_nodes as node")
-                            .select("node.id")
-                            .whereRef(
-                              "node.id",
-                              "=",
-                              "allocation.worker_node_id",
-                            )
-                            .where("node.enabled", "=", true)
+                            .selectFrom("client_runners as runner")
+                            .select("runner.id")
                             .where(
-                              "node.lease_expires_at",
+                              sql<boolean>`runner.id::text = split_part(allocation.binding_id, ':', 2)`,
+                            )
+                            .where(
+                              "runner.lease_expires_at",
                               ">",
                               sql<Date>`now()`,
-                            )
-                            .where((node) =>
-                              node.or([
-                                node("node.remote", "is not", null),
-                                ...(input.localNode
-                                  ? [
-                                      node.and([
-                                        node(
-                                          "node.id",
-                                          "=",
-                                          input.localNode.id,
-                                        ),
-                                        node(
-                                          "node.lease_token",
-                                          "=",
-                                          input.localNode.token,
-                                        ),
-                                      ]),
-                                    ]
-                                  : []),
-                              ]),
                             ),
                         ),
                       ),
                     ]),
                   ]),
-                  blocked.and([
-                    blocked("allocation.worker_node_id", "is", null),
-                    blocked("allocation.binding_id", "like", "client:%"),
-                    blocked.not(
-                      blocked.exists(
-                        blocked
-                          .selectFrom("client_runners as runner")
-                          .select("runner.id")
-                          .where(
-                            sql<boolean>`runner.id::text = split_part(allocation.binding_id, ':', 2)`,
-                          )
-                          .where(
-                            "runner.lease_expires_at",
-                            ">",
-                            sql<Date>`now()`,
-                          ),
-                      ),
-                    ),
-                  ]),
-                ]),
-              ),
+                ),
+            ),
           ),
-        ),
-      );
+        )
+    );
   }
 
   /**

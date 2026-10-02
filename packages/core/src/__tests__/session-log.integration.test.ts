@@ -78,17 +78,15 @@ describe("session log", () => {
       harness: { placement: "host", adapter: new EchoAdapter() },
       topology: "native",
     };
-    // Refuses a steer on its first attempt, as a harness that cannot take
+    // Refuses a steer on a turn's first attempt, as a harness that cannot take
     // input mid-turn: the turn restarts with it.
     const inner = new EchoAdapter();
-    let started = 0;
     const stubbornAdapter: HarnessAdapter = {
       id: "echo",
       capabilities: () => inner.capabilities(),
       start: (attempt, host) => {
-        started += 1;
         const control = inner.start(attempt, host);
-        const first = started === 1;
+        const first = attempt.reason === "initial";
         return {
           ...control,
           steer: (input) =>
@@ -499,6 +497,46 @@ describe("session log", () => {
     });
   }, 30_000);
 
+  it("takes an answer to an owner-only turn's question from its owner alone", async () => {
+    const { projectId, sessionId } = await chat("OwnerAnswers");
+    const admin: Identity = { ...identity, externalUserId: "admin" };
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[ask Ship it?]]",
+    });
+    const pending = async () =>
+      (
+        await sessions.get(identity, projectId, sessionId)
+      ).snapshot.requests.find((request) => request.status === "pending");
+    await vi.waitFor(async () => expect(await pending()).toBeDefined(), {
+      timeout: 10_000,
+    });
+    const request = await pending();
+    await db
+      .updateTable("agent_turn_attempts")
+      .set({ runner: sql`runner || '{"ownerOnly": true}'::jsonb` })
+      .where("id", "=", request?.attemptId ?? "")
+      .execute();
+    const refused = await sessions.command(admin, projectId, sessionId, {
+      type: "respond",
+      commandId: randomUUID(),
+      requestId: request?.id ?? "",
+      response: { kind: "question", answers: ["Yes"] },
+    });
+    expect(refused).toMatchObject({
+      status: "rejected",
+      error: { code: "owner_only" },
+    });
+    const answered = await sessions.command(identity, projectId, sessionId, {
+      type: "respond",
+      commandId: randomUUID(),
+      requestId: request?.id ?? "",
+      response: { kind: "question", answers: ["Yes"] },
+    });
+    expect(answered.status).toBe("accepted");
+  }, 30_000);
+
   it("keeps a held message's place: what was queued after it waits", async () => {
     const { projectId, sessionId } = await chat("Held");
     const send = (text: string) =>
@@ -553,6 +591,62 @@ describe("session log", () => {
       Date.parse(last?.startedAt ?? ""),
     );
   }, 30_000);
+
+  it("ends a turn stopped while it restarts for a refused steer, and runs the steer after it", async () => {
+    const project = await projects.create(identity, { name: "StopRestart" });
+    const session = await sessions.create(identity, project.id, {
+      agentId: "stubborn",
+    });
+    const projectId = project.id;
+    const sessionId = session.id;
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[wait 1500]]",
+    });
+    await vi.waitFor(
+      async () => {
+        const detail = await sessions.get(identity, projectId, sessionId);
+        expect(detail.snapshot.turns[0]?.status).toBe("running");
+      },
+      { timeout: 10_000 },
+    );
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "steered while stopping",
+      dispatch: "steer",
+    });
+    await sessions.command(identity, projectId, sessionId, {
+      type: "interrupt",
+      commandId: randomUUID(),
+    });
+    await vi.waitFor(
+      async () => {
+        const detail = await sessions.get(identity, projectId, sessionId);
+        const turns = detail.snapshot.turns
+          .slice()
+          .sort((a, b) => a.ordinal - b.ordinal);
+        expect(turns.map((turn) => turn.status)).toEqual([
+          "interrupted",
+          "completed",
+        ]);
+      },
+      { timeout: 20_000 },
+    );
+    const attempts = await db
+      .selectFrom("agent_turn_attempts")
+      .innerJoin("agent_turns", "agent_turns.id", "agent_turn_attempts.turn_id")
+      .select(["agent_turns.ordinal", "agent_turn_attempts.reason"])
+      .where("agent_turn_attempts.session_id", "=", sessionId)
+      .orderBy("agent_turns.ordinal")
+      .execute();
+    // No restart of the stopped turn; the steer ran as a turn of its own.
+    expect(attempts.map((attempt) => attempt.reason)).toEqual([
+      "initial",
+      "initial",
+    ]);
+  }, 40_000);
 
   it("streams the gap after a cursor, then live events, in order", async () => {
     const { projectId, sessionId } = await chat("Stream");
@@ -619,8 +713,19 @@ describe("session log", () => {
       fork.id,
       "three",
     );
+    // The fork's own conversation starts from the source's, through the
+    // fork point: one turn, so this is its second.
     expect(reply?.kind === "assistant_message" && reply.text).toBe(
-      "Echo: three",
+      "Echo: three (turn 2)",
+    );
+    const { reply: next } = await sessions.sendMessage(
+      identity,
+      projectId,
+      fork.id,
+      "four",
+    );
+    expect(next?.kind === "assistant_message" && next.text).toBe(
+      "Echo: four (turn 3)",
     );
     // The source is untouched.
     const after = await sessions.get(identity, projectId, sessionId);

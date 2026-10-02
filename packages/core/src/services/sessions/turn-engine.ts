@@ -195,7 +195,7 @@ interface LocalTurn {
   channel?: RunnerChannel;
   /** This process is stopping: hand reattachable work back instead. */
   handingBack: boolean;
-  /** Host call results sent and not acknowledged yet, by call: sent again. */
+  /** Host call results sent and not acknowledged yet, by frame id: sent again. */
   results: Map<string, RunnerCommandFrame>;
   resultsSentAt: number;
 }
@@ -665,7 +665,7 @@ export class TurnEngine {
           .where("id", "=", turn.inputItemId)
           .executeTakeFirst()
       : undefined;
-    const input = await this.attemptInput({
+    const { input, steered } = await this.attemptInput({
       turn,
       attempt,
       reason,
@@ -702,8 +702,9 @@ export class TurnEngine {
       hello: null,
       calls: {},
       restartWith: [],
-      consumed:
-        reason === "steer_restart" ? await this.steeredItemIds(turn) : [],
+      // Exactly what the prompt carries: a steer arriving after it was read
+      // is sent to the new attempt instead.
+      consumed: steered,
       interruptSentAt: null,
       ...(prepared.ownerOnly ? { ownerOnly: true } : {}),
     };
@@ -746,8 +747,8 @@ export class TurnEngine {
     reason: AttemptReason;
     inputItem: Item | null;
     handoff: string | null;
-  }): Promise<AttemptStart["input"]> {
-    const steered =
+  }): Promise<{ input: AttemptStart["input"]; steered: string[] }> {
+    const steeredRows =
       input.reason === "steer_restart"
         ? await this.deps.db
             .selectFrom("agent_items")
@@ -760,11 +761,10 @@ export class TurnEngine {
             .orderBy("position")
             .execute()
         : [];
-    const steerTexts = steered
-      .map((row) => itemFromRow(row))
-      .flatMap((item) =>
-        item.kind === "user_message" ? [this.deps.inputText(item)] : [],
-      );
+    const steeredItems = steeredRows.map((row) => itemFromRow(row));
+    const steerTexts = steeredItems.flatMap((item) =>
+      item.kind === "user_message" ? [this.deps.inputText(item)] : [],
+    );
     const base = input.inputItem;
     const text =
       base?.kind === "user_message"
@@ -782,9 +782,12 @@ export class TurnEngine {
         : text;
     const full = input.handoff ? `${input.handoff}\n\n---\n\n${body}` : body;
     return {
-      itemId: base?.id ?? derivedId(input.attempt.id, "input"),
-      text: full,
-      attachments,
+      input: {
+        itemId: base?.id ?? derivedId(input.attempt.id, "input"),
+        text: full,
+        attachments,
+      },
+      steered: steerTexts.length > 0 ? steeredItems.map((item) => item.id) : [],
     };
   }
 
@@ -1100,6 +1103,11 @@ export class TurnEngine {
         Date.now() - local.resultsSentAt > RESULT_RESEND_MS
       ) {
         local.resultsSentAt = Date.now();
+        // Only this attempt's: an earlier attempt's runner is gone, and its
+        // call ids mean other calls to this one.
+        const own = `result:${attempt.id}:`;
+        for (const id of local.results.keys())
+          if (!id.startsWith(own)) local.results.delete(id);
         await channel
           .send([...local.results.values()])
           .catch((error) =>
@@ -1179,8 +1187,21 @@ export class TurnEngine {
             activity: "Taking in your message",
             updatedAt: new Date().toISOString(),
           };
+          let stopped = false;
           await db.transaction().execute(async (trx) => {
             await this.assertOwned(local, trx);
+            // A person's stop (or send now) meanwhile ends the turn instead:
+            // its steered messages then run as turns of their own.
+            await log.lock(trx, turn.sessionId);
+            const current = await trx
+              .selectFrom("agent_turns")
+              .select("cancellation_requested_at")
+              .where("id", "=", turn.id)
+              .executeTakeFirstOrThrow();
+            if (current.cancellation_requested_at !== null) {
+              stopped = true;
+              return;
+            }
             // The new attempt's prompt carries every steered message, so
             // no steer is sent again, and the interrupt has done its work.
             await queue.markCommands({
@@ -1205,19 +1226,16 @@ export class TurnEngine {
                 },
               ],
             });
-            // The interrupt that ended the attempt was the restart's own.
-            await trx
-              .updateTable("agent_turns")
-              .set({ cancellation_requested_at: null })
-              .where("id", "=", turn.id)
-              .execute();
           });
-          await this.stopRunner(local, channel);
-          local.channel = undefined;
-          return {
-            kind: "restart",
-            turn: { ...preparing, cancellationRequested: false },
-          };
+          if (!stopped) {
+            await this.stopRunner(local, channel);
+            local.channel = undefined;
+            local.results.clear();
+            return {
+              kind: "restart",
+              turn: { ...preparing, cancellationRequested: false },
+            };
+          }
         }
         await this.stopRunner(local, channel);
         local.channel = undefined;
@@ -1524,7 +1542,7 @@ export class TurnEngine {
         .execute();
       for (const callId of delivered) {
         await this.forgetCall(trx, attempt.id, callId);
-        local.results.delete(callId);
+        local.results.delete(`result:${attempt.id}:${callId}`);
         const { [callId]: _done, ...rest } = runner.calls;
         runner = { ...runner, calls: rest };
       }
@@ -1591,6 +1609,9 @@ export class TurnEngine {
         if (call.kind === "native_state.append") {
           await this.deps.db.transaction().execute(async (trx) => {
             await this.assertOwned(local, trx);
+            // The session first, as ingest takes it before the thread and
+            // the attempt.
+            await this.deps.log.lock(trx, ctx.turn.sessionId);
             const row = await trx
               .selectFrom("agent_turn_attempts")
               .select("runner")
@@ -1650,7 +1671,7 @@ export class TurnEngine {
             : { error: { message: error } }),
         },
       };
-      local.results.set(callId, frame);
+      local.results.set(frame.id, frame);
       local.resultsSentAt = Date.now();
       await channel
         .send([frame])
@@ -1699,15 +1720,17 @@ export class TurnEngine {
     );
     if (match) return match.id;
     // A fork reads its source thread, which belongs to the source session,
-    // only to begin: once a turn of its own settled, never again.
+    // only to begin: once a turn of its own settled (its last turn is no
+    // longer the one it was born at), never again.
     const ownRow = rows.find((row) => row.id === own);
     const source =
       (ownRow?.fork_source as unknown as {
         threadId?: string;
         source?: NativeRef;
+        bornAtOrdinal?: number | null;
       } | null) ?? null;
     if (
-      ownRow?.last_turn_ordinal === null &&
+      ownRow?.last_turn_ordinal === (source?.bornAtOrdinal ?? null) &&
       source?.threadId &&
       source.source?.id === call.thread
     )

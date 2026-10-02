@@ -71,7 +71,9 @@ export class EchoAdapter implements HarnessAdapter {
       const seen =
         attempt.thread.mode === "fresh"
           ? []
-          : ((await host.nativeState.load({})) ?? []);
+          : attempt.thread.mode === "fork"
+            ? await forkedFrom(host, attempt.thread)
+            : ((await host.nativeState.load({})) ?? []);
       const turnNumber = seen.length + 1;
       host.emit({
         type: "turn.started",
@@ -296,4 +298,20 @@ function parseJson(text: string): JsonValue {
   } catch {
     return text;
   }
+}
+
+/**
+ * A fork's history: the source thread's turns through the fork point, read
+ * from the source and kept as this thread's own, as a native fork does.
+ */
+async function forkedFrom(
+  host: AttemptHost,
+  thread: Extract<AttemptStart["thread"], { mode: "fork" }>,
+): Promise<JsonValue[]> {
+  const source =
+    (await host.nativeState.load({ thread: thread.source.id })) ?? [];
+  const through = Number(thread.throughTurnRef?.id.split(":").at(-1));
+  const kept = Number.isFinite(through) ? source.slice(0, through) : source;
+  if (kept.length > 0) await host.nativeState.append({ entries: kept });
+  return kept;
 }

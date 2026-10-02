@@ -477,6 +477,14 @@ export class AgentSessionAuthorityRequiredError extends Error {
   }
 }
 
+/** A rollback of this chat is rewinding its files; try again shortly. */
+export class AgentSessionRewindingError extends Error {
+  constructor(readonly sessionId: string) {
+    super(`Agent session '${sessionId}' is rolling back`);
+    this.name = "AgentSessionRewindingError";
+  }
+}
+
 export class AgentSessionHandoffPendingError extends Error {
   constructor(readonly sessionId: string) {
     super(`Agent session '${sessionId}' is moving to another server`);
@@ -2431,98 +2439,111 @@ export class AgentSessionsService {
     const commandId = `user:${identity.externalUserId}:${command.commandId}`;
     // A rollback rewinds the files before its transaction: restoring them
     // reaches the host and the database on its own connections.
-    let rewound: { lastTurnId: string | null } | undefined;
-    const receipt = await this.log.command({
-      sessionId,
-      commandId,
-      type: command.type,
-      externalUserId: identity.externalUserId,
-      ...(command.type === "rollback"
-        ? {
-            before: async () => {
-              rewound = await this.rewindFiles({
-                identity,
-                session,
-                turnId: command.turnId,
+    let rewound: { undo: string[] } | undefined;
+    let rewindHeld = false;
+    const receipt = await this.log
+      .command({
+        sessionId,
+        commandId,
+        type: command.type,
+        externalUserId: identity.externalUserId,
+        ...(command.type === "rollback"
+          ? {
+              before: async () => {
+                // No turn of the chat starts until the rollback is recorded.
+                await this.beginRewind(sessionId);
+                rewindHeld = true;
+                rewound = await this.rewindFiles({
+                  identity,
+                  session,
+                  turnId: command.turnId,
+                });
+              },
+            }
+          : {}),
+        run: async (trx) => {
+          const locked = await trx
+            .selectFrom("agent_sessions")
+            .selectAll()
+            .where("id", "=", sessionId)
+            .executeTakeFirstOrThrow();
+          switch (command.type) {
+            case "send": {
+              this.assertAcceptsInput(locked);
+              const active = await trx
+                .selectFrom("agent_turns")
+                .select("id")
+                .where("session_id", "=", sessionId)
+                .where("status", "in", [...ACTIVE_TURN_STATUSES])
+                .executeTakeFirst();
+              const dispatch: DispatchMode =
+                command.dispatch ??
+                (locked.parent_session_id && active ? "steer" : "queue");
+              const delivered = await this.deliverIn(trx, {
+                session: locked,
+                text: command.text,
+                author: {
+                  kind: "user",
+                  externalUserId: identity.externalUserId,
+                },
+                dispatch,
+                ...(command.attachments
+                  ? { attachments: command.attachments as AgentAttachment[] }
+                  : {}),
+                idempotencyKey: commandId,
+                commandId,
+                metadata: { deliveredBy: identity.externalUserId },
               });
-            },
+              return {
+                itemId: delivered.messageId,
+                turnId: delivered.turnId,
+                mode: delivered.mode,
+              };
+            }
+            case "interrupt":
+              return this.interruptIn(trx, {
+                identity,
+                session: locked,
+                turnId: command.turnId,
+                commandId,
+              });
+            case "retry":
+              return this.retryIn(trx, {
+                session: locked,
+                turnId: command.turnId,
+                commandId,
+              });
+            case "edit_queued":
+            case "cancel_queued":
+            case "send_now":
+              return this.changeQueuedIn(trx, {
+                identity,
+                session: locked,
+                command,
+                commandId,
+              });
+            case "respond":
+              return this.respondIn(trx, {
+                identity,
+                session: locked,
+                command,
+                commandId,
+              });
+            case "rollback":
+              return this.rollbackIn(trx, {
+                session: locked,
+                turnId: command.turnId,
+                commandId,
+                undo: rewound?.undo ?? [],
+              });
           }
-        : {}),
-      run: async (trx) => {
-        const locked = await trx
-          .selectFrom("agent_sessions")
-          .selectAll()
-          .where("id", "=", sessionId)
-          .executeTakeFirstOrThrow();
-        switch (command.type) {
-          case "send": {
-            this.assertAcceptsInput(locked);
-            const active = await trx
-              .selectFrom("agent_turns")
-              .select("id")
-              .where("session_id", "=", sessionId)
-              .where("status", "in", [...ACTIVE_TURN_STATUSES])
-              .executeTakeFirst();
-            const dispatch: DispatchMode =
-              command.dispatch ??
-              (locked.parent_session_id && active ? "steer" : "queue");
-            const delivered = await this.deliverIn(trx, {
-              session: locked,
-              text: command.text,
-              author: { kind: "user", externalUserId: identity.externalUserId },
-              dispatch,
-              ...(command.attachments
-                ? { attachments: command.attachments as AgentAttachment[] }
-                : {}),
-              idempotencyKey: commandId,
-              commandId,
-              metadata: { deliveredBy: identity.externalUserId },
-            });
-            return {
-              itemId: delivered.messageId,
-              turnId: delivered.turnId,
-              mode: delivered.mode,
-            };
-          }
-          case "interrupt":
-            return this.interruptIn(trx, {
-              identity,
-              session: locked,
-              turnId: command.turnId,
-              commandId,
-            });
-          case "retry":
-            return this.retryIn(trx, {
-              session: locked,
-              turnId: command.turnId,
-              commandId,
-            });
-          case "edit_queued":
-          case "cancel_queued":
-          case "send_now":
-            return this.changeQueuedIn(trx, {
-              identity,
-              session: locked,
-              command,
-              commandId,
-            });
-          case "respond":
-            return this.respondIn(trx, {
-              identity,
-              session: locked,
-              command,
-              commandId,
-            });
-          case "rollback":
-            return this.rollbackIn(trx, {
-              session: locked,
-              turnId: command.turnId,
-              commandId,
-              lastTurnId: rewound?.lastTurnId ?? null,
-            });
-        }
-      },
-    });
+        },
+      })
+      .finally(async () => {
+        if (!rewindHeld) return;
+        await this.endRewind(sessionId);
+        this.kick(sessionId);
+      });
     if (receipt.status === "accepted") {
       if (command.type === "send") {
         if (session.parent_session_id)
@@ -3320,6 +3341,26 @@ export class AgentSessionsService {
         "wrong_kind",
         `This request needs a ${request.kind} answer.`,
       );
+    // An answer reaches the attempt as the agent's input: one on its
+    // owner's sign-in or files takes only the owner's words (ADR 0199).
+    // An approval is an approver's decision, not words.
+    if (
+      request.kind !== "approval" &&
+      request.attemptId &&
+      input.identity.externalUserId !== input.session.external_user_id
+    ) {
+      const attempt = await trx
+        .selectFrom("agent_turn_attempts")
+        .select("runner")
+        .where("id", "=", request.attemptId)
+        .executeTakeFirst();
+      if ((attempt?.runner as { ownerOnly?: boolean } | null)?.ownerOnly)
+        throw new SessionCommandRejectedError(
+          "owner_only",
+          "This chat runs on its owner's own sign-in, so only they can answer it.",
+          403,
+        );
+    }
     const now = new Date().toISOString();
     const response = input.command.response as RuntimeRequestResponse;
     const resolved: RuntimeRequest = {
@@ -3474,7 +3515,7 @@ export class AgentSessionsService {
     identity: Identity;
     session: SessionRow;
     turnId: string;
-  }): Promise<{ lastTurnId: string | null }> {
+  }): Promise<{ undo: string[] }> {
     const { target, later } = await this.rollbackPlan(this.db, input);
     const last = later.at(-1);
     const restore = target.checkpoint.before;
@@ -3496,7 +3537,35 @@ export class AgentSessionsService {
           restored,
         );
     }
-    return { lastTurnId: last?.id ?? null };
+    return { undo: later.map((row) => row.id) };
+  }
+
+  /**
+   * Hold the chat's turns while a rollback rewinds its files (no claim
+   * takes one). A second rollback meanwhile waits and is sent again.
+   */
+  private async beginRewind(sessionId: string): Promise<void> {
+    const held = await this.db
+      .updateTable("agent_sessions")
+      .set({ rewind_until: sql<Date>`now() + interval '2 minutes'` })
+      .where("id", "=", sessionId)
+      .where((eb) =>
+        eb.or([
+          eb("rewind_until", "is", null),
+          eb("rewind_until", "<=", sql<Date>`now()`),
+        ]),
+      )
+      .returning("id")
+      .executeTakeFirst();
+    if (!held) throw new AgentSessionRewindingError(sessionId);
+  }
+
+  private async endRewind(sessionId: string): Promise<void> {
+    await this.db
+      .updateTable("agent_sessions")
+      .set({ rewind_until: null })
+      .where("id", "=", sessionId)
+      .execute();
   }
 
   private async rollbackIn(
@@ -3505,13 +3574,17 @@ export class AgentSessionsService {
       session: SessionRow;
       turnId: string;
       commandId: string;
-      /** The last turn when the files were rewound. */
-      lastTurnId: string | null;
+      /** The turns whose files were rewound: exactly these roll back. */
+      undo: readonly string[];
     },
   ): Promise<JsonObject> {
     const { session } = input;
-    const { target, later } = await this.rollbackPlan(trx, input);
-    if ((later.at(-1)?.id ?? null) !== input.lastTurnId)
+    const plan = await this.rollbackPlan(trx, input);
+    const { target } = plan;
+    // A message sent while the files were rewound stays queued, and runs
+    // on the rewound files.
+    const later = plan.later.filter((row) => input.undo.includes(row.id));
+    if (later.length !== input.undo.length)
       throw new SessionCommandRejectedError(
         "chat_moved_on",
         "The chat moved on while its files were rewound. Roll back again.",
@@ -3586,6 +3659,7 @@ export class AgentSessionsService {
               source: sourceRef,
               throughTurnRef: endRef,
               threadId: threadRow.id,
+              bornAtOrdinal: previous ? previous.ordinal : null,
               ...(threadRow.state_path
                 ? { statePath: threadRow.state_path }
                 : {}),
@@ -6312,6 +6386,7 @@ export class AgentSessionsService {
                 fork_source: protocolJson({
                   threadId: copy.forkPoint.threadId,
                   source: copy.forkPoint.source,
+                  bornAtOrdinal: copy.snapshot.turns.at(-1)?.ordinal ?? null,
                   ...(copy.forkPoint.throughTurnRef
                     ? { throughTurnRef: copy.forkPoint.throughTurnRef }
                     : {}),

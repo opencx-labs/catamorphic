@@ -173,6 +173,7 @@ export interface AgentSessions {
   parent_session_id: string | null;
   placement: Json | null;
   project_id: string;
+  rewind_until: Timestamp | null;
   sandbox_id: string | null;
   source: Generated<string>;
   source_action_id: string | null;

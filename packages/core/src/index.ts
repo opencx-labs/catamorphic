@@ -105,6 +105,7 @@ export {
   AgentSessionHandoffPendingError,
   AgentSessionNotFoundError,
   type AgentSessionPeer,
+  AgentSessionRewindingError,
   type AgentSessionSource,
   AgentSessionsService,
   type AgentSubsession,

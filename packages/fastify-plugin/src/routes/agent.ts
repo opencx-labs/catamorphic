@@ -8,6 +8,7 @@ import {
   AgentSessionClosedError,
   AgentSessionHandoffPendingError,
   AgentSessionNotFoundError,
+  AgentSessionRewindingError,
   AgentTurnInProgressError,
   AuthenticationRequiredError,
   EnvironmentAccessDeniedError,
@@ -489,6 +490,10 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           return reply.status(404).send({ error: "Session not found" });
         const conflict = sessionConflict(err);
         if (conflict) return reply.status(409).send(conflict);
+        // Another rollback is rewinding the files: the same command, sent
+        // again shortly, answers with its receipt.
+        if (err instanceof AgentSessionRewindingError)
+          return reply.status(503).send({ error: err.message });
         if (err instanceof UnsupportedAgentTopologyError)
           return reply.status(422).send({
             error: err.message,
