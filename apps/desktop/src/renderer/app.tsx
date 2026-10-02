@@ -167,6 +167,7 @@ import {
 } from "./lib/keybindings.js";
 import { notifyDesktop, playChime } from "./lib/notify.js";
 import { sessionLabel } from "./lib/session-label.js";
+import type { SidebarMotion } from "./lib/sidebar-motion.js";
 import { skillInvocation } from "./lib/skills.js";
 import {
   EMPTY_SURFACE_HISTORY,
@@ -528,6 +529,13 @@ export function App({
     null,
   );
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // The left sidebar takes its space only after sliding in and gives it back
+  // before sliding away; chrome that makes room for it, and its toggle,
+  // follow the slide rather than the setting.
+  const [sidebarMotion, setSidebarMotion] = useState<SidebarMotion>({
+    phase: "open",
+    docked: true,
+  });
   const [savedRightSidebarOpen, setSavedRightSidebarOpen] = useState(false);
   // Opening an empty sidebar is a temporary customization affordance, scoped
   // to this profile/project. It must not replace the populated-sidebar choice.
@@ -5522,7 +5530,9 @@ export function App({
           data-workspace-ready={
             workspaceReady && bootRevealed && runtime.visible ? "" : undefined
           }
-          className="relative flex h-full bg-sidebar"
+          // Clip, not hide: a closed right sidebar waits past the right edge,
+          // and a scroll container here would let scrollIntoView shift the app.
+          className="relative flex h-full overflow-clip bg-sidebar"
         >
           {/* Agent pointers: glow + scroll on data-point-key elements. The
           workspace object is the re-resolve trigger — a pointed tab may
@@ -5662,10 +5672,14 @@ export function App({
             revealed={revealed}
             error={workspaceError}
             onCustomize={() => customizeSidebar("left")}
+            onMotionChange={setSidebarMotion}
             header={
               <>
                 <div className="app-drag flex h-10 shrink-0 items-center justify-end gap-1 pl-[86px] pr-3">
-                  {sidebarVisible && sidebarToggle}
+                  {/* With the sidebar while it shows; a keyboard reveal moves
+                      focus here in the commit that reveals it. */}
+                  {(sidebarVisible || sidebarMotion.phase !== "closed") &&
+                    sidebarToggle}
                   {headerInSidebar && (
                     <div
                       ref={setBrowserNavigationHost}
@@ -5759,7 +5773,6 @@ export function App({
           frame) rather than push the document taller than the window. */}
           <main
             data-workspace-content
-            data-layout-transition
             data-tab-layout={tabsInSidebar ? "sidebar" : "top"}
             data-header-placement={headerInSidebar ? "sidebar" : "top"}
             data-content-frame={prefs?.contentFrame ? "on" : "off"}
@@ -5802,8 +5815,12 @@ export function App({
             )}
             {!headerInSidebar && (
               <div className="workspace-chrome app-drag relative z-20 flex h-10 shrink-0 items-center gap-1 pl-2 pr-3">
-                {!sidebarOpen && (
-                  <span className="app-no-drag ml-[70px] flex shrink-0 items-center">
+                {!sidebarMotion.docked && (
+                  <span
+                    // Under the sliding panel, whose own toggle is the live one.
+                    inert={sidebarMotion.phase === "opening"}
+                    className="app-no-drag ml-[70px] flex shrink-0 items-center"
+                  >
                     {sidebarToggle}
                   </span>
                 )}
@@ -5843,7 +5860,6 @@ export function App({
             {projectId ? (
               <div
                 data-workspace-chat-region
-                data-layout-transition
                 className={`workspace-content relative flex min-h-0 flex-1 flex-col bg-bg ${tabsInSidebar ? "overflow-hidden" : ""}`}
               >
                 {/* Every tab pane lives in this wrapper so keyboard cycling

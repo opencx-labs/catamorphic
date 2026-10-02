@@ -51,14 +51,15 @@ export function useSidebarReveal(enabled: boolean) {
     const trackPointer = (event: PointerEvent) => {
       if (nativePointerAvailable.current) return;
       const sidebar = sidebarRef.current;
-      const bounds = sidebar?.firstElementChild?.getBoundingClientRect();
-      if (!bounds) return;
-      // While the overlay opens, Chromium can still target the webview
-      // underneath it. Use the full-width sidebar body's geometry so that
-      // stale guest entry events cannot immediately cancel the reveal.
+      const body = sidebar?.firstElementChild;
+      if (!sidebar || !(body instanceof HTMLElement)) return;
+      // While the overlay slides in, Chromium can still target the webview
+      // underneath it. Use where the body lands, not where its transform
+      // has it now, so stale guest entry events cannot cancel the reveal.
+      const bounds = sidebar.getBoundingClientRect();
       pointerInside.current =
         event.clientX >= bounds.left &&
-        event.clientX < bounds.right &&
+        event.clientX < bounds.left + body.offsetWidth &&
         event.clientY >= bounds.top &&
         event.clientY < bounds.bottom;
       dismiss();

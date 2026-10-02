@@ -51,28 +51,31 @@ server with fixed latency and load it in a plain Electron window with and
 without the change, cold (a new partition) and warm, while blocking the
 main thread on a schedule. Internet sites vary too much between runs.
 
-## Layout transitions over heavy content
+## Sidebar motion over heavy content
 
-A sidebar opening or closing, or the workspace frame insetting, changes the
-content area's size on every frame. A web page renders in its own process and
-the embedder waits for it on each resize; a terminal refits and Monaco
-relayouts. With a GitHub tab showing, a Cmd+B toggle ran 4–7 frames of
-40–55 ms (a terminal: 6 of 53–67 ms) while the renderer's main thread was
-nearly idle; with Settings showing it ran at 14 ms.
+A sidebar that animates its width changes the content area's size on every
+frame. A web page renders in its own process and the embedder waits for it
+on each resize; a terminal refits and Monaco relayouts. With a GitHub tab
+showing, a width-animated Cmd+B toggle ran 4–7 frames of 40–55 ms (a
+terminal: 6 of 53–67 ms) while the renderer's main thread was nearly idle.
 
-Elements whose own width, margins or padding animate carry
-`data-layout-transition`. `lib/layout-transition.ts` hears their
-`transitionrun` and holds heavy content (`useSteadyWidthDuringLayoutTransitions`:
-the browser page, terminal, code editor and app frame) at one width wide
-enough for both ends, clipped by its container, until the transition ends. The
-content resizes once instead of on every frame: afterwards the same toggle ran
-at 14 ms with at most one or two longer frames at an edge. Add the attribute to
-any new element that animates layout, and the hook to any new content that
-resizes expensively.
+Sidebars therefore slide over the content with a transform and take their
+place only at rest (`lib/sidebar-motion.ts`, ADR 0197): opening slides in,
+then docks; closing undocks, lets the content paint at its new size under
+the still panel for two frames, then slides away. The content resizes once
+per toggle while nothing moves, and the slide runs on the compositor. On the
+same GitHub tab a toggle has no long animation frames and one 33–50 ms frame
+at rest; a terminal toggle has none. Do not animate the size of anything
+beside a page, terminal, editor or app frame; slide over it and resize once.
+The one remaining size animation is the content frame's padding preview in
+Settings, which resizes a page shown beside Settings for its 200 ms.
 
 Measure with rAF gaps and `long-animation-frame` entries in the workspace
-window over CDP while toggling. Long frames with no script and no layout time
-are waiting on another process, not the renderer.
+window over CDP while toggling, and record which phase each long frame falls
+in (`aside[data-motion]`). Long frames with no script and no layout time are
+waiting on another process, not the renderer. `Page.startScreencast` misses
+compositor-only motion; film slides with `Page.captureScreenshot` and
+`Animation.setPlaybackRate`.
 
 ## Development timing retention
 

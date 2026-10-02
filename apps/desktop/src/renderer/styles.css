@@ -1443,31 +1443,52 @@ kbd {
   }
 }
 
-/* Bare icon tabs. Both sidebars share the same quiet chrome and motion. */
+/* Bare icon tabs. Both sidebars share the same quiet chrome and motion: the
+   aside holds the sidebar's place beside the content (its width, once
+   docked) and the panel inside slides over the content with a transform
+   (lib/sidebar-motion.ts), so the content resizes once per toggle and never
+   while anything moves. */
 .tabbed-sidebar {
   position: relative;
   flex-shrink: 0;
-  overflow: hidden;
-  background: var(--color-sidebar);
-  transition: width 200ms var(--ease-standard);
 }
-[data-sidebar-dividers="on"] .tabbed-sidebar[data-sidebar="left"] {
-  border-right: 1px solid var(--color-border);
-}
-[data-sidebar-dividers="on"] .tabbed-sidebar[data-sidebar="right"] {
-  border-left: 1px solid var(--color-border);
-}
-.tabbed-sidebar[aria-hidden="true"] {
-  border-width: 0;
+.tabbed-sidebar:not([data-docked="true"]) {
+  z-index: 40;
 }
 .tabbed-sidebar[data-resizing] {
-  transition: none;
   user-select: none;
 }
 .sidebar-inner {
+  position: absolute;
+  inset-block: 0;
   display: flex;
   flex-direction: column;
-  height: 100%;
+  overflow: hidden;
+  background: var(--color-sidebar);
+  transition: transform 200ms var(--ease-standard);
+}
+[data-sidebar="left"] > .sidebar-inner {
+  left: 0;
+}
+[data-sidebar="right"] > .sidebar-inner {
+  right: 0;
+}
+[data-sidebar="left"]:is([data-motion="closed"], [data-motion="closing"])
+  > .sidebar-inner {
+  transform: translateX(-100%);
+}
+[data-sidebar="right"]:is([data-motion="closed"], [data-motion="closing"])
+  > .sidebar-inner {
+  transform: translateX(100%);
+}
+[data-motion="closed"] > .sidebar-inner {
+  visibility: hidden;
+}
+[data-sidebar-dividers="on"] [data-sidebar="left"] > .sidebar-inner {
+  border-right: 1px solid var(--color-border);
+}
+[data-sidebar-dividers="on"] [data-sidebar="right"] > .sidebar-inner {
+  border-left: 1px solid var(--color-border);
 }
 .sidebar-tab {
   display: grid;
@@ -1544,10 +1565,10 @@ kbd {
   cursor: col-resize;
   touch-action: none;
 }
-[data-sidebar="left"] > .sidebar-resizer {
+[data-sidebar="left"] .sidebar-resizer {
   right: 0;
 }
-[data-sidebar="right"] > .sidebar-resizer {
+[data-sidebar="right"] .sidebar-resizer {
   left: 0;
 }
 .sidebar-resizer:hover,
@@ -1572,7 +1593,6 @@ kbd {
   pointer-events: none;
 }
 @media (prefers-reduced-motion: reduce) {
-  .tabbed-sidebar,
   .sidebar-tab,
   .sidebar-tab-panel {
     transition: none;
@@ -1653,10 +1673,6 @@ kbd {
    Windows. Keep the header aligned while retaining trackpad/key scrolling. */
 [data-tab-orientation="horizontal"] {
   scrollbar-width: none;
-}
-
-.tabbed-sidebar[data-overlay="true"] {
-  position: absolute;
 }
 
 /* Keep disclosure labels and their marker on one clear, keyboard-focusable row,
