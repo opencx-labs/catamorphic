@@ -8,7 +8,7 @@ import {
 import { AttemptRunner, errorMessage } from "./runner.js";
 
 /**
- * The runner as a process (ADR 0196): commands arrive on standard input,
+ * The runner as a process (ADR 0197): commands arrive on standard input,
  * frames leave on standard output, each one marked so a sandbox's combined
  * output keeps them apart from anything a harness prints. Exits once its
  * attempt has exited and its frames are flushed.

@@ -81,6 +81,17 @@ Collapsing a question preserves its draft. The existing inbox delivers answers t
 the current harness or starts a continuation if the turn has already ended.
 See ADR 0122 and the question schemas in `@catamorphic/sandbox`.
 
+A message sent while a blocking question waits reaches the agent in the same
+turn, attachments included, and the question stays open as "Answer when ready"
+(ADR 0195). A permission request is withdrawn instead. Panels have no "Other"
+row: free text goes through the composer, whose placeholder says so while a
+question is open. The waiting status sits in the panel header. Answers render in
+history as the questions and what was picked, from the message's `question`
+metadata. Agents close questions a reply settled with `close_questions`.
+
+Attachment preparation shows on the composer's attach button. Never add a row
+above the composer for transient state: it moves the dock and any open question.
+
 ## Consent belongs to the conversation
 
 Session tool approvals and native app-access consent are durable blocking agent

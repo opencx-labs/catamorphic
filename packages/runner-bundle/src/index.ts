@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 
 /**
  * The runner as one self-contained file that a sandbox runs with Bun or
- * Node (ADR 0196). Hosts upload it by content hash, so a sandbox never
+ * Node (ADR 0197). Hosts upload it by content hash, so a sandbox never
  * runs a runner older than its host.
  */
 export async function loadRunnerBundle(): Promise<{

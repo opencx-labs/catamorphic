@@ -476,7 +476,7 @@ export function registerBrowserSupport(
     siteSettings.releaseProfile(profileId);
     preparedSessions.delete(partitionFor(profileId));
   });
-  const bookmarks = new BookmarksStore(path.join(userData, "bookmarks.json"));
+  const bookmarks = new BookmarksStore(profileConfig.bookmarksFile());
   const appCommandListeners = new Map<
     BrowserWindow,
     (event: Electron.Event, command: string) => void
@@ -2171,6 +2171,19 @@ export function registerBrowserSupport(
       pinned: bookmarks.pinned(profileId),
       library: bookmarks.library(profileId),
     });
+  // An agent (or the person) editing bookmarks.json shows up live.
+  const unwatchBookmarks = bookmarks.watch(({ projectIds, profileIds }) => {
+    for (const projectId of projectIds)
+      bookmarksChanged(projectId, profiles.profileForProject(projectId).id);
+    for (const profileId of profileIds)
+      broadcast("catamorphic:bookmarks-changed", {
+        projectId: null,
+        project: null,
+        profileId,
+        pinned: bookmarks.pinned(profileId),
+        library: bookmarks.library(profileId),
+      });
+  });
 
   ipcMain.handle(
     "catamorphic:bookmarks-get",
@@ -2546,6 +2559,7 @@ export function registerBrowserSupport(
   return {
     history,
     dispose: () => {
+      unwatchBookmarks();
       disposeSidebarSources();
       disposePasskeys();
       disposeSleep();

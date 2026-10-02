@@ -261,7 +261,12 @@ export class SessionActionsService {
                     .selectFrom("agent_turns")
                     .select("id")
                     .where("session_id", "=", args.sessionId)
-                    .where("status", "=", "running")
+                    .where("status", "in", [
+                      "preparing",
+                      "running",
+                      "waiting",
+                      "finalizing",
+                    ])
                     .limit(1)
                 : null,
             actor: json({

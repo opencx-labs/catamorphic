@@ -401,6 +401,15 @@ it("discovers only matching authorized schemas and rechecks visibility after rev
   ).rejects.toThrow();
   expect(executions).toBe(1);
 });
+it("narrows by every word and falls back to any word for descriptive queries", async () => {
+  const names = async (query: string) =>
+    (await gateway.discover({ query })).items.map((item) => item.name);
+  expect(await names("people search")).toEqual(["people.search"]);
+  // No capability matches all three words; the one that matches any does.
+  expect(await names("find people photographs")).toContain("people.search");
+  expect(await names("photographs")).toEqual([]);
+});
+
 it("rejects malformed and identity-spoofing input before executing", async () => {
   await expect(
     gateway.invoke({

@@ -123,3 +123,14 @@ checkout could not see the person's files or localhost. `watch_command` runs a
 check where the agent's commands run and wakes the chat like a background command.
 Its schema costs about 1.3 KB; the eager budget rose to 8.3 KB.
 
+
+## Seeing Work itself (ADR 0195)
+
+A real Claude Code run asked the person what two sidebar sections showed:
+discovery for "screenshot window capture sidebar" returned nothing, and no tool
+could see Work's own window. `read_tab` now takes the key `window` and returns
+a screenshot of the project's window as model media, with no new schema, and
+discovery falls back to any word when no capability matches every word of a
+descriptive query. The playbook and the desktop-workspace skill say to look
+before asking. The question adapters gained `close_questions`, which withdraws
+the agent's own open questions after a chat reply settled them.

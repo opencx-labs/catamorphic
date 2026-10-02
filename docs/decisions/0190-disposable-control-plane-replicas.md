@@ -1,6 +1,6 @@
 # 0190 — Disposable control-plane replicas
 
-- **Status:** Accepted (amended by [0196](0196-agent-runners-run-harnesses-beside-their-workspace.md))
+- **Status:** Accepted (amended by [0197](0197-agent-runners-run-harnesses-beside-their-workspace.md))
 - **Date:** 2026-09-30
 - **Supersedes:** 0099's "local checkouts and runtime files are instance-owned working state" for control-plane replicas
 - **Refines:** 0100, 0164, 0167, 0173

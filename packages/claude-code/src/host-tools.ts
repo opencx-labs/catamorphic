@@ -44,7 +44,7 @@ function toCallToolResult(result: HostToolResult): CallToolResult {
 }
 
 /**
- * Host tools (ADR 0196) as in-process MCP servers, one per server key
+ * Host tools (ADR 0197) as in-process MCP servers, one per server key
  * (`workspace` unless a tool names its own; tool ids
  * `mcp__<server>__<name>`). Their input schemas are JSON Schema from the
  * host, listed verbatim; a call runs through the host. `toolUseId` names

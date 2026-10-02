@@ -43,7 +43,7 @@ const MODEL_URL = "http://127.0.0.1:9";
 
 /**
  * Every recorded scenario through the real adapter on a real runner, with
- * only the SDK transport replaced (ADR 0196): the scenario's own checks
+ * only the SDK transport replaced (ADR 0197): the scenario's own checks
  * pass, and the adapter emits exactly what it emitted against the real CLI.
  */
 describe.each(

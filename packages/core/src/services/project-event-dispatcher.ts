@@ -7,7 +7,13 @@ import type { TriggersService } from "./triggers-service.js";
 import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
 
 const tracer = getTracer("@catamorphic/core");
-/** One durable event dispatcher for permanent and session-owned enablements. */
+const LEASE_SECONDS = 60;
+/**
+ * One durable event dispatcher for permanent and session-owned enablements.
+ * Receipts become due at the database's `now()`, so every due, lease and
+ * backoff instant reads the same clock: a host clock behind it (or Date's
+ * millisecond truncation) never defers a receipt written moments earlier.
+ */
 export class ProjectEventDispatcher {
   private readonly workerId = randomUUID();
   constructor(
@@ -47,7 +53,7 @@ export class ProjectEventDispatcher {
             .where(({ or, eb }) =>
               or([
                 eb("enablement.expires_at", "is", null),
-                eb("enablement.expires_at", ">", new Date()),
+                eb("enablement.expires_at", ">", sql<Date>`now()`),
               ]),
             )
             .where(({ not, exists, selectFrom }) =>
@@ -96,11 +102,11 @@ export class ProjectEventDispatcher {
             or([
               and([
                 eb("receipt.status", "=", "pending"),
-                eb("receipt.next_attempt_at", "<=", new Date()),
+                eb("receipt.next_attempt_at", "<=", sql<Date>`now()`),
               ]),
               and([
                 eb("receipt.status", "=", "leased"),
-                eb("receipt.lease_expires_at", "<=", new Date()),
+                eb("receipt.lease_expires_at", "<=", sql<Date>`now()`),
               ]),
             ]),
           )
@@ -115,7 +121,7 @@ export class ProjectEventDispatcher {
             .set({
               status: "leased",
               lease_owner: this.workerId,
-              lease_expires_at: new Date(Date.now() + 60_000),
+              lease_expires_at: sql<Date>`now() + make_interval(secs => ${LEASE_SECONDS})`,
               attempt_count: row.attempt_count + 1,
             })
             .where("activation_id", "=", row.activation_id)
@@ -128,7 +134,9 @@ export class ProjectEventDispatcher {
       const heartbeat = setInterval(() => {
         void this.db
           .updateTable("project_event_deliveries")
-          .set({ lease_expires_at: new Date(Date.now() + 60_000) })
+          .set({
+            lease_expires_at: sql<Date>`now() + make_interval(secs => ${LEASE_SECONDS})`,
+          })
           .where("lease_owner", "=", this.workerId)
           .where("status", "=", "leased")
           .execute()
@@ -242,9 +250,10 @@ export class ProjectEventDispatcher {
               .set({
                 status: row.attempt_count >= 9 ? "failed" : "pending",
                 error: message,
-                next_attempt_at: new Date(
-                  Date.now() + Math.min(300_000, 1000 * 2 ** row.attempt_count),
-                ),
+                next_attempt_at: sql<Date>`now() + make_interval(secs => ${Math.min(
+                  300,
+                  2 ** row.attempt_count,
+                )})`,
                 lease_owner: null,
                 lease_expires_at: null,
               })

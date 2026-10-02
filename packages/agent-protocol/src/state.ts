@@ -12,7 +12,7 @@ import {
 /**
  * A client's view of one session: a snapshot with every later event
  * applied. The same reducer runs in every client and in the server's tests,
- * which fold the log and compare it with the projections (ADR 0195).
+ * which fold the log and compare it with the projections (ADR 0196).
  */
 export interface SessionState {
   sequence: number;

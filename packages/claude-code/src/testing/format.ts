@@ -3,7 +3,7 @@ import type { JsonObject, JsonValue } from "@catamorphic/agent-protocol";
 import type { HarnessEvent } from "@catamorphic/agent-protocol/runner";
 
 /**
- * A recorded Claude Code transcript (ADR 0196, "Tests replay real
+ * A recorded Claude Code transcript (ADR 0197, "Tests replay real
  * transcripts"): what the adapter sent the Agent SDK and everything the SDK
  * did back, in the order the adapter observed it. Replaying it replaces
  * only the SDK transport; the adapter, runner and host run for real.

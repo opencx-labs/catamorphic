@@ -7235,6 +7235,7 @@ export interface paths {
                             decision: "approved" | "denied";
                             /** @enum {string} */
                             remember?: "always";
+                            reason?: string;
                         } | {
                             /** @enum {string} */
                             kind: "question";
@@ -16900,6 +16901,7 @@ export interface components {
                 decision: "approved" | "denied";
                 /** @enum {string} */
                 remember?: "always";
+                reason?: string;
             } | {
                 /** @enum {string} */
                 kind: "question";
@@ -17562,6 +17564,7 @@ export interface components {
                 decision: "approved" | "denied";
                 /** @enum {string} */
                 remember?: "always";
+                reason?: string;
             } | {
                 /** @enum {string} */
                 kind: "question";

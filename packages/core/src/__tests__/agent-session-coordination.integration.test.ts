@@ -12,6 +12,7 @@ import type {
   StartSessionOpts,
   TurnOptions,
 } from "@catamorphic/sandbox";
+import { isQuestionReply } from "@catamorphic/sandbox";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
@@ -578,6 +579,193 @@ describe("agent session coordination", () => {
         answer: "Allow once",
       }),
     ).rejects.toThrow();
+  });
+
+  it("gives way to a chat message: the question stays open, the message steers in order, and a later answer still arrives (ADR 0196)", async () => {
+    const project = await projects.create(identity, {
+      name: "Replies during questions",
+    });
+    const session = await sessions.create(identity, project.id);
+    const steered: Array<{ content: string; attachments?: unknown }> = [];
+    let reply: string | undefined;
+    provider.questionTurn = async function* (options) {
+      try {
+        await options.askQuestion?.({
+          requestId: "layout",
+          blocking: true,
+          questions: [
+            {
+              question: "Grid or list?",
+              header: "Layout",
+              multiSelect: false,
+              options: [
+                { label: "Grid", description: "" },
+                { label: "List", description: "" },
+              ],
+            },
+          ],
+        });
+      } catch (error) {
+        if (!isQuestionReply(error)) throw error;
+        reply = error.message;
+      }
+      const input = (await options.readPendingMessages?.()) ?? [];
+      steered.push(
+        ...input.map(({ content, attachments }) => ({ content, attachments })),
+      );
+      await options.acknowledgeMessages?.({
+        ids: input.map((entry) => entry.id),
+      });
+      yield { type: "text", content: "Grid packs more in." };
+      yield { type: "done" };
+    };
+    const turn = sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "questions: reply",
+    );
+    await vi.waitFor(async () =>
+      expect(
+        (await sessions.get(identity, project.id, session.id)).questions,
+      ).toHaveLength(1),
+    );
+    const attachment = {
+      kind: "text" as const,
+      name: "notes.md",
+      text: "Context",
+      source: { type: "paste" as const },
+    };
+    await sessions.enqueueMessage(
+      identity,
+      project.id,
+      session.id,
+      "What is the difference?",
+      { attachments: [attachment] },
+    );
+    await turn;
+    expect(reply).toContain("stays open");
+    expect(steered).toEqual([
+      { content: "What is the difference?", attachments: [attachment] },
+    ]);
+    const detail = await sessions.get(identity, project.id, session.id);
+    expect(detail.pendingTurns).toEqual([]);
+    expect(detail.questions).toEqual([
+      expect.objectContaining({ blocking: false }),
+    ]);
+    // The reply reads after the message it answers.
+    const contents = detail.messages.map((message) => message.content);
+    expect(contents.indexOf("What is the difference?")).toBeLessThan(
+      contents.indexOf("Grid packs more in."),
+    );
+    const requestId = detail.questions?.[0]?.requestId ?? "";
+    const receipt = await sessions.answerQuestion({
+      identity,
+      projectId: project.id,
+      sessionId: session.id,
+      requestId,
+      answer: "Grid",
+    });
+    expect(receipt.turnId).not.toBeNull();
+    const answer = await db
+      .selectFrom("agent_messages")
+      .select("metadata")
+      .where("idempotency_key", "=", `question-answer:${requestId}`)
+      .executeTakeFirstOrThrow();
+    expect(answer.metadata).toMatchObject({
+      inTurn: true,
+      question: {
+        answer: "Grid",
+        questions: [expect.objectContaining({ question: "Grid or list?" })],
+      },
+    });
+    await vi.waitFor(async () =>
+      expect(
+        (await sessions.get(identity, project.id, session.id)).pendingTurns,
+      ).toEqual([]),
+    );
+  });
+
+  it("withdraws a consent request a chat message arrives during, and closes only the agent's own questions", async () => {
+    const project = await projects.create(identity, {
+      name: "Replies during consent",
+    });
+    const session = await sessions.create(identity, project.id);
+    const outcomes: string[] = [];
+    let closed: string | undefined;
+    provider.questionTurn = async function* (options) {
+      await options.askQuestion?.({
+        requestId: "later",
+        blocking: false,
+        questions: [
+          {
+            question: "Any naming preference?",
+            header: "Naming",
+            multiSelect: false,
+            options: [],
+          },
+        ],
+      });
+      try {
+        await options.askQuestion?.({
+          requestId: "permission",
+          blocking: true,
+          consent: true,
+          questions: [
+            {
+              question: "May I delete the branch?",
+              header: "Permission",
+              multiSelect: false,
+              options: [{ label: "Allow once", description: "" }],
+            },
+          ],
+        });
+        outcomes.push("answered");
+      } catch (error) {
+        outcomes.push(isQuestionReply(error) ? "withdrawn" : "failed");
+      }
+      closed = await options.closeQuestions?.({});
+      yield { type: "done" };
+    };
+    const turn = sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "questions: consent reply",
+    );
+    await vi.waitFor(async () =>
+      expect(
+        (await sessions.get(identity, project.id, session.id)).questions,
+      ).toHaveLength(2),
+    );
+    expect(
+      (await sessions.get(identity, project.id, session.id)).questions?.map(
+        (request) => request.consent === true,
+      ),
+    ).toEqual([false, true]);
+    await sessions.enqueueMessage(
+      identity,
+      project.id,
+      session.id,
+      "Keep the branch",
+    );
+    await turn;
+    expect(outcomes).toEqual(["withdrawn"]);
+    expect(closed).toMatch(/^Closed .*:later\.$/);
+    expect(
+      (await sessions.get(identity, project.id, session.id)).questions,
+    ).toEqual([]);
+    // The message the consent gave way to still runs as its own turn.
+    await vi.waitFor(async () =>
+      expect(
+        (await sessions.get(identity, project.id, session.id)).pendingTurns,
+      ).toEqual([]),
+    );
+    expect(
+      (await sessions.get(identity, project.id, session.id)).messages.some(
+        (message) => message.content === "Keep the branch",
+      ),
+    ).toBe(true);
   });
 
   afterAll(async () => {

@@ -45,7 +45,7 @@ export class SessionMirrorBehindError extends Error {
 }
 
 /**
- * One mirror push (ADR 0195): the source's log after this copy's last
+ * One mirror push (ADR 0196): the source's log after this copy's last
  * sequence, or, for a copy that does not exist yet, a full snapshot to
  * start from and the events after it.
  */

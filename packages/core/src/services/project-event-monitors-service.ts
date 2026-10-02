@@ -139,12 +139,12 @@ export class ProjectEventMonitorsService {
               .where(({ or, eb }) =>
                 or([
                   eb("watcher.expires_at", "is", null),
-                  eb("watcher.expires_at", ">", new Date()),
+                  eb("watcher.expires_at", ">", sql<Date>`now()`),
                 ]),
               ),
           ),
         )
-        .where("monitor.next_poll_at", "<=", new Date())
+        .where("monitor.next_poll_at", "<=", sql<Date>`now()`)
         .where((expression) =>
           expression.or([
             expression("monitor.placement", "=", input.placement),
@@ -154,7 +154,7 @@ export class ProjectEventMonitorsService {
         .where((expression) =>
           expression.or([
             expression("monitor.lease_expires_at", "is", null),
-            expression("monitor.lease_expires_at", "<", new Date()),
+            expression("monitor.lease_expires_at", "<", sql<Date>`now()`),
           ]),
         )
         .orderBy("monitor.next_poll_at")
@@ -167,7 +167,7 @@ export class ProjectEventMonitorsService {
         .set({
           lease_owner: input.workerId,
           lease_token: leaseToken,
-          lease_expires_at: new Date(Date.now() + leaseSeconds * 1_000),
+          lease_expires_at: sql<Date>`now() + make_interval(secs => ${leaseSeconds})`,
           updated_at: new Date(),
         })
         .where("id", "=", candidate.id)
@@ -208,7 +208,7 @@ export class ProjectEventMonitorsService {
     await this.db
       .updateTable("project_event_monitors")
       .set({
-        next_poll_at: new Date(Date.now() + 60_000),
+        next_poll_at: sql<Date>`now() + interval '60 seconds'`,
         lease_owner: null,
         lease_token: null,
         lease_expires_at: null,

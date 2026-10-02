@@ -60,7 +60,7 @@ export interface ConnectionGateway {
   guardTimeoutMs?: number;
   /**
    * Ask an agent session's person to approve an escalated action, as a
-   * request on the session's working turn (ADR 0195).
+   * request on the session's working turn (ADR 0196).
    */
   approve?: (input: {
     sessionId: string;

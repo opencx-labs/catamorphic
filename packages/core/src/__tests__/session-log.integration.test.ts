@@ -29,7 +29,7 @@ import { ProjectsService } from "../services/projects-service.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /*
- * The session log end to end (ADRs 0195, 0196): a real AgentSessionsService
+ * The session log end to end (ADRs 0196, 0197): a real AgentSessionsService
  * on PGlite driving the deterministic echo harness in this process.
  */
 
@@ -73,6 +73,12 @@ describe("session log", () => {
       harness: { placement: "host", adapter: new EchoAdapter() },
       topology: "native",
     };
+    // Its tools on `prod` ask the person first (ADR 0054).
+    const guarded: RegisteredCodingAgent = {
+      ...echo,
+      id: "guarded",
+      toolPolicies: { prod: [{ default: "ask" }] },
+    };
     makeService = () => new AgentSessionsService(db, {
       hostId: "session-log-host",
       projectManager,
@@ -83,8 +89,8 @@ describe("session log", () => {
       executionAllocations: new ExecutionAllocationsService(db),
       codingAgents: {
         defaultAgentId: () => "echo",
-        get: (id) => (id === "echo" ? echo : undefined),
-        list: () => [echo],
+        get: (id) => (id === "echo" ? echo : id === "guarded" ? guarded : undefined),
+        list: () => [echo, guarded],
       },
       nativeAgentCheckout: {
         resolve: async ({ projectId }) => {
@@ -489,5 +495,96 @@ describe("session log", () => {
       type: "interrupt",
       commandId: randomUUID(),
     });
+  });
+
+  it("asks the chat's person before a guarded tool, and the harness goes on with the answer", async () => {
+    const project = await projects.create(identity, { name: "Guarded" });
+    const session = await sessions.create(identity, project.id, { agentId: "guarded" });
+    const running = sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "[[approve prod query]]",
+    );
+    const request = await vi.waitFor(
+      async () => {
+        const detail = await sessions.get(identity, project.id, session.id);
+        const [pending] = pendingRequests(sessionStateFromSnapshot(detail.snapshot));
+        expect(pending?.kind).toBe("approval");
+        return pending;
+      },
+      { timeout: 10_000 },
+    );
+    // A person's own chat: they answer, within minutes.
+    expect(request?.approvers).toEqual([]);
+    expect(request?.expiresAt).not.toBeNull();
+    await sessions.command(identity, project.id, session.id, {
+      type: "respond",
+      commandId: randomUUID(),
+      requestId: request?.id ?? "",
+      response: { kind: "approval", decision: "approved" },
+    });
+    await running;
+    const transcript = await sessions.transcript(identity, project.id, session.id);
+    expect(transcript.map((message) => message.content)).toContain("Allowed query.");
+  });
+
+  it("takes a reply sent while a question waits into the same turn, and keeps the question open (ADR 0195)", async () => {
+    const { projectId, sessionId } = await chat("Reply while asked");
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[ask Which theme?]]",
+    });
+    const question = await vi.waitFor(
+      async () => {
+        const detail = await sessions.get(identity, projectId, sessionId);
+        const state = sessionStateFromSnapshot(detail.snapshot);
+        expect(orderedTurns(state)[0]?.status).toBe("waiting");
+        const [pending] = pendingRequests(state);
+        expect(pending?.blocking).toBe(true);
+        return pending;
+      },
+      { timeout: 10_000 },
+    );
+    // A plain message, not an answer: it steers the waiting turn.
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "What is the difference?",
+    });
+    await vi.waitFor(
+      async () => {
+        const detail = await sessions.get(identity, projectId, sessionId);
+        const state = sessionStateFromSnapshot(detail.snapshot);
+        expect(orderedTurns(state).map((turn) => turn.status)).toEqual(["completed"]);
+        const [open] = pendingRequests(state);
+        expect(open?.id).toBe(question?.id);
+        expect(open?.blocking).toBe(false);
+      },
+      { timeout: 15_000 },
+    );
+    // The answer that comes later reaches the agent as a message.
+    await sessions.command(identity, projectId, sessionId, {
+      type: "respond",
+      commandId: randomUUID(),
+      requestId: question?.id ?? "",
+      response: { kind: "question", answers: ["Dark"] },
+    });
+    await vi.waitFor(
+      async () => {
+        const detail = await sessions.get(identity, projectId, sessionId);
+        const turns = orderedTurns(sessionStateFromSnapshot(detail.snapshot));
+        expect(turns.map((turn) => turn.status)).toEqual(["completed", "completed"]);
+        const answer = detail.snapshot.items.find(
+          (item) => item.kind === "user_message" && item.text.includes("User answer:"),
+        );
+        expect(answer?.kind === "user_message" && answer.metadata.question).toEqual({
+          questions: question?.questions,
+          answers: ["Dark"],
+        });
+      },
+      { timeout: 15_000 },
+    );
   });
 });

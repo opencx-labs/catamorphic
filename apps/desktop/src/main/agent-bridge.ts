@@ -2,9 +2,10 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import type { ElicitRequest, ElicitResult } from "@catamorphic/mcp";
-import type {
-  ToolPermissionDecision,
-  ToolPermissionRequest,
+import {
+  agentToolResult,
+  type ToolPermissionDecision,
+  type ToolPermissionRequest,
 } from "@catamorphic/sandbox";
 import { BrowserWindow, ipcMain, webContents } from "electron";
 import {
@@ -59,6 +60,8 @@ export interface WorkspaceBridge {
   ): Promise<unknown>;
   /** Expand a tab from the overview: page text, terminal buffer, file. */
   readTab(projectId: string, key: string): Promise<unknown>;
+  /** A picture of the project's window as the person sees it. */
+  screenshotWindow(projectId: string): Promise<unknown>;
   openBrowser(
     projectId: string,
     sessionId: string,
@@ -567,6 +570,39 @@ export function registerAgentBridge(
       const result = await rpc("readTab", { projectId, key });
       if (!result) throw new Error(`Nothing readable behind ${key}`);
       return result;
+    },
+
+    async screenshotWindow(projectId) {
+      const target = targetFor(projectId);
+      if (!target || target.isDestroyed())
+        throw new Error(
+          "No window has this project open, so the workspace is not visible.",
+        );
+      const image = await target.capturePage(undefined, {
+        stayHidden: true,
+        stayAwake: true,
+      });
+      if (image.isEmpty())
+        throw new Error("The window has not rendered yet. Try again shortly.");
+      const scaled =
+        image.getSize().width > 1600 ? image.resize({ width: 1600 }) : image;
+      return agentToolResult({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              kind: "window",
+              image: scaled.getSize(),
+              note: "Work's window as the person sees it: sidebars, tabs, and open chats.",
+            }),
+          },
+          {
+            type: "image",
+            mimeType: "image/png",
+            data: scaled.toPNG().toString("base64"),
+          },
+        ],
+      });
     },
 
     async openBrowser(projectId, sessionId, url) {

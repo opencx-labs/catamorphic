@@ -82,7 +82,7 @@ export const CLAUDE_CODE_CAPABILITIES: HarnessCapabilities = {
 };
 
 /**
- * Claude Code as a harness adapter (ADR 0196). The CLI runs beside the
+ * Claude Code as a harness adapter (ADR 0197). The CLI runs beside the
  * runner, so beside the workspace: in the session's sandbox on a server,
  * on the host for the desktop. The adapter is built once with no agent
  * settings; everything per agent arrives in the attempt

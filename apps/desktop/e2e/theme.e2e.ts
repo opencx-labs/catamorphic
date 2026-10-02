@@ -70,18 +70,26 @@ it("applies font edits to body and utility text, preserves them across presets, 
   await app.waitFor(
     `getComputedStyle(document.body).fontFamily === 'Georgia, serif'`,
   );
+  // A pointer press on a preset blurs the focused font field first, so the
+  // font save and the preset save leave back to back. The preset save starts
+  // from the font edit still in flight and must keep it (#177).
   await app.eval(`(() => {
     const input = [...document.querySelectorAll('label')].find(
       el => el.textContent.includes('Monospace font')).querySelector('input');
     input.focus();
     input.value = 'Menlo, monospace';
     input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    [...document.querySelectorAll('button')].find(
+      el => el.textContent.includes('Work Light')).click();
   })()`);
+  // The system appearance may already be light, so wait for the saved
+  // selection rather than the rendered appearance.
+  await app.waitFor(
+    `window.catamorphicDesktop.getTheme().then(theme => theme.selection === 'light')`,
+  );
   await app.waitFor(
     `getComputedStyle(document.querySelector('.font-mono')).fontFamily === 'Menlo, monospace'`,
   );
-  await app.eval(`[...document.querySelectorAll('button')].find(
-    el => el.textContent.includes('Work Light')).click()`);
   await app.waitFor(`document.documentElement.dataset.theme === 'light'`);
   expect(
     await app.eval(
@@ -101,6 +109,31 @@ it("applies font edits to body and utility text, preserves them across presets, 
       `window.catamorphicDesktop.getTheme().then(theme => theme.fonts)`,
     ),
   ).toEqual(DEFAULT_THEME_FONTS);
+});
+
+it("keeps both fonts when they are edited before the first save returns", async () => {
+  await app.eval(`(() => {
+    const edit = (label, value) => {
+      const input = [...document.querySelectorAll('label')].find(
+        el => el.textContent.includes(label)).querySelector('input');
+      input.focus();
+      input.value = value;
+      input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    };
+    edit('Interface font', 'Georgia, serif');
+    edit('Monospace font', 'Menlo, monospace');
+  })()`);
+  await app.waitFor(
+    `window.catamorphicDesktop.getTheme().then((theme) => theme.fonts.sans === 'Georgia, serif' && theme.fonts.mono === 'Menlo, monospace')`,
+    { label: "both fonts saved" },
+  );
+  await app.waitFor(
+    `(() => { const reset = [...document.querySelectorAll('button')].find((el) => el.textContent.trim() === 'Reset fonts'); reset?.click(); return !!reset; })()`,
+    { label: "fonts reset" },
+  );
+  await app.waitFor(
+    `window.catamorphicDesktop.getTheme().then((theme) => theme.fonts.sans === ${JSON.stringify(DEFAULT_THEME_FONTS.sans)})`,
+  );
 });
 
 it("applies external theme file edits live and restores defaults when keys are removed", async () => {

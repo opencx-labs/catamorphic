@@ -8,7 +8,7 @@ import { isSettledTurnStatus } from "@catamorphic/agent-protocol";
 
 /**
  * A session's settled history through one item, rebased onto another
- * session (ADR 0195): every turn, attempt, item, request and thread gets a
+ * session (ADR 0196): every turn, attempt, item, request and thread gets a
  * fresh id, and every reference to an old id follows it. What a fork
  * starts from.
  */

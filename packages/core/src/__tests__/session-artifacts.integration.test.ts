@@ -64,7 +64,6 @@ suite("session artifact source lifecycle", () => {
         id: sessionId,
         project_id: projectId,
         external_user_id: identity.externalUserId,
-        provider: "test",
       })
       .execute();
     directory = await fs.mkdtemp(

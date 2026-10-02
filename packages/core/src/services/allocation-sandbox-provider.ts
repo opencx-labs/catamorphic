@@ -1,3 +1,4 @@
+import { ACTIVE_TURN_STATUSES } from "@catamorphic/agent-protocol";
 import { randomUUID } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
@@ -260,7 +261,7 @@ export async function claimAllocationMaintenance(args: {
         .selectFrom("agent_turns")
         .select("id")
         .where("session_id", "=", args.sessionId)
-        .where("status", "in", ["queued", "held", "running"])
+        .where("status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES])
         .executeTakeFirst();
       if (busy) return undefined;
     }
@@ -409,7 +410,7 @@ export async function cleanupWorkerAllocations(args: {
                   "=",
                   "execution_allocations.id",
                 )
-                .where("turn.status", "=", "running")
+                .where("turn.status", "in", [...ACTIVE_TURN_STATUSES])
                 .where("turn.lease_expires_at", ">", sql<Date>`now()`),
             ),
           ),

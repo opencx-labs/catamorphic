@@ -9,7 +9,7 @@ import type {
 } from "./model.js";
 
 /**
- * One change to a session (ADR 0195). Events carry the changed entity
+ * One change to a session (ADR 0196). Events carry the changed entity
  * whole, so applying one never needs the entity's history; streamed text
  * is the exception and arrives as appends.
  */
@@ -68,7 +68,7 @@ export type SessionStreamMessage =
   | { type: "reset"; snapshot: SessionSnapshot }
   | { type: "heartbeat"; sequence: number };
 
-/** A command's durable receipt (ADR 0195). */
+/** A command's durable receipt (ADR 0196). */
 export interface CommandReceipt {
   commandId: string;
   status: "accepted" | "rejected";

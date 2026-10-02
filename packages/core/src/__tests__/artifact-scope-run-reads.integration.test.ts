@@ -263,7 +263,6 @@ describeIf("scoped identity run reads", () => {
         id: sessionId,
         project_id: projectId,
         external_user_id: builder.externalUserId,
-        provider: "test",
       })
       .execute();
     await db

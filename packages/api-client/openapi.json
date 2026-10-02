@@ -1843,6 +1843,9 @@
                   "remember": {
                     "type": "string",
                     "enum": ["always"]
+                  },
+                  "reason": {
+                    "type": "string"
                   }
                 },
                 "required": ["kind", "decision"]
@@ -4399,6 +4402,9 @@
                   "remember": {
                     "type": "string",
                     "enum": ["always"]
+                  },
+                  "reason": {
+                    "type": "string"
                   }
                 },
                 "required": ["kind", "decision"],
@@ -21232,6 +21238,10 @@
                               "remember": {
                                 "type": "string",
                                 "enum": ["always"]
+                              },
+                              "reason": {
+                                "type": "string",
+                                "maxLength": 2000
                               }
                             },
                             "required": ["kind", "decision"]

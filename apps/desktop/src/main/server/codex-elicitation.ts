@@ -1,6 +1,6 @@
 import type { CodexAgentOpts } from "@catamorphic/codex";
 import { parseElicitRequest } from "@catamorphic/mcp";
-import type { TurnOptions } from "@catamorphic/sandbox";
+import { isQuestionReply, type TurnOptions } from "@catamorphic/sandbox";
 import { z } from "zod";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 
@@ -50,6 +50,7 @@ export function createCodexElicitation({
       const answer = await ask({
         requestId: `consent:${crypto.randomUUID()}`,
         blocking: true,
+        consent: true,
         signal,
         questions: [
           {
@@ -73,6 +74,10 @@ export function createCodexElicitation({
             ],
           },
         ],
+        // Writing in the chat instead withdraws the request (ADR 0195).
+      }).catch((error: unknown) => {
+        if (isQuestionReply(error)) return undefined;
+        throw error;
       });
       if (signal?.aborted) return { action: "cancel" };
       if (answer === "Allow once") return { action: "accept", content: {} };

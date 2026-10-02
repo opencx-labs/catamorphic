@@ -1297,13 +1297,22 @@ export const EnvironmentErrorSchema = z.object({
 // its protocol type with `describes`, so a change on either side that the
 // other does not follow fails the typecheck here.
 
+/** Every member's keys, across a union. */
+type KeysOf<T> = T extends unknown ? `${Exclude<keyof T, symbol>}` : never;
+
 /**
  * Bind a schema to the protocol type it describes: the schema's output must
- * be assignable to the type and the type to the schema's output.
+ * be assignable to the type, the type to the schema's output, and both name
+ * the same fields (so a new optional field is not silently stripped).
  */
 function describes<T>() {
   return <S extends z.ZodType<T>>(
-    schema: S & ([T] extends [z.output<S>] ? unknown : never),
+    schema: S &
+      ([T] extends [z.output<S>]
+        ? [KeysOf<T>] extends [KeysOf<z.output<S>>]
+          ? unknown
+          : never
+        : never),
   ): S => schema;
 }
 
@@ -1563,6 +1572,8 @@ const RuntimeRequestResponseSchema = describes<RuntimeRequestResponse>()(
       kind: z.literal("approval"),
       decision: z.enum(["approved", "denied"]),
       remember: z.literal("always").optional(),
+      /** Why Work denied it when no person did: told to the agent. */
+      reason: z.string().optional(),
     }),
     z.object({ kind: z.literal("question"), answers: z.array(z.string()) }),
     z.object({

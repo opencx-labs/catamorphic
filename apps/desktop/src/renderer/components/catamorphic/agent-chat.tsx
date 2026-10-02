@@ -9,7 +9,11 @@ import {
 import { ArrowUp, Bot, Maximize2, Minimize2, Plus } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, useState } from "react";
 import { AgentQuestionPanel } from "./agent-question-panel";
-import { ChatTimeline, toTimeline } from "./chat-timeline";
+import {
+  ChatTimeline,
+  QUESTIONS_DISMISSED_MESSAGE,
+  toTimeline,
+} from "./chat-timeline";
 import { TodoProgress } from "./todo-progress";
 import { ToolPermissionCard } from "./tool-permission-card";
 
@@ -190,8 +194,7 @@ export function AgentChat({
                   onDismiss={() =>
                     answerQuestion.mutate({
                       requestId: request.requestId,
-                      answer:
-                        "The user dismissed these questions. Continue with the available information.",
+                      answer: QUESTIONS_DISMISSED_MESSAGE,
                     })
                   }
                 />

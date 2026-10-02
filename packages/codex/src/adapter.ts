@@ -43,7 +43,7 @@ import {
 import type { CodexTransportFactory } from "./transport.js";
 
 /**
- * What the Codex adapter can do (ADR 0196). Rollback is a fork through the
+ * What the Codex adapter can do (ADR 0197). Rollback is a fork through the
  * turn to keep; native state is the thread's rollout file.
  */
 export const CODEX_CAPABILITIES: HarnessCapabilities = {
@@ -72,7 +72,7 @@ export interface CodexAdapterOptions {
 
 /**
  * The Codex harness adapter (`codex`): one pinned `codex app-server`
- * process per attempt, beside the workspace it edits (ADR 0196). Per-agent
+ * process per attempt, beside the workspace it edits (ADR 0197). Per-agent
  * settings arrive with each attempt, never here.
  */
 export function createCodexAdapter(
@@ -1051,7 +1051,7 @@ class CodexAttempt {
     };
   }
 
-  /** A host tool Codex called as a dynamic tool (ADR 0196: a host call). */
+  /** A host tool Codex called as a dynamic tool (ADR 0197: a host call). */
   private async toolCall(params: JsonObject): Promise<JsonValue> {
     const name = String(params.tool ?? "");
     const callId =
