@@ -4,6 +4,7 @@ import {
   type AgentTurnUsage,
   answerRows,
   type ContextHandoffItem,
+  isActiveTurnStatus,
   messageWithAttachmentNames,
   type NoticeItem,
   type PendingAgentMessage,
@@ -14,6 +15,7 @@ import {
   type Turn,
   type UserMessageItem,
   type WorkItem,
+  waitsToRun,
 } from "@catamorphic/react";
 import {
   ArrowDown,
@@ -104,10 +106,13 @@ export interface ChatTimelineProps {
   onCancelQueued?: (turnId: string) => ActionResult;
   onSendQueuedNow?: (turnId: string) => ActionResult;
   onHoldQueued?: (turnId: string | null) => ActionResult;
-  /** Run a failed turn again. */
+  /** Run a failed or interrupted turn again. */
   onRetry?: (turnId: string) => void;
-  /** Stop the agent; also cancels a turn waiting to retry. */
-  onInterrupt?: () => void;
+  /**
+   * Stop the agent. A turn waiting to retry names itself, so its Stop
+   * never stops another turn.
+   */
+  onInterrupt?: (turnId?: string) => void;
   /** Undo a turn and every later one: files and conversation. */
   onRollback?: (turnId: string) => ActionResult;
   /** Fork the conversation through a message (the item id). */
@@ -199,6 +204,13 @@ export function ChatTimeline({
   resolveToolIcon,
 }: ChatTimelineProps) {
   const lastTurnId = timeline.filter((entry) => entry.turn).at(-1)?.turn?.id;
+  // The message about to start reads in the conversation, still withdrawable.
+  const starting = timeline.find(
+    (entry) => entry.turn && waitsToRun(entry.turn),
+  )?.turn;
+  const working = timeline.some(
+    (entry) => entry.turn && isActiveTurnStatus(entry.turn.status),
+  );
   const empty =
     timeline.length === 0 &&
     pending.length === 0 &&
@@ -217,6 +229,7 @@ export function ChatTimeline({
     onRollback,
     onFork,
     focusMessageId,
+    working,
   };
   return (
     <StickToBottom
@@ -269,6 +282,9 @@ export function ChatTimeline({
           <div className="flex items-center gap-2 text-xs text-fg-muted">
             <LoaderCircle className="size-4 animate-spin" />
             <span className="animate-pulse">{activity}</span>
+            {starting && onCancelQueued && (
+              <CancelStarting turnId={starting.id} onCancel={onCancelQueued} />
+            )}
           </div>
         )}
         {queue && queue.length > 0 && (
@@ -313,7 +329,10 @@ interface TurnContext
     | "onRollback"
     | "onFork"
     | "focusMessageId"
-  > {}
+  > {
+  /** A turn runs now: undo waits until it settles (the server refuses it). */
+  working: boolean;
+}
 
 function entryId(entry: TimelineEntry): string | undefined {
   switch (entry.kind) {
@@ -442,19 +461,64 @@ function TurnEnding({
       </article>
     );
   if (turn.status === "interrupted")
-    return <Divider testId="chat-interrupted">Interrupted</Divider>;
+    return (
+      <div className="flex flex-col items-center gap-1">
+        <Divider testId="chat-interrupted">Interrupted</Divider>
+        {latest && context.onRetry && (
+          <button
+            type="button"
+            onClick={() => context.onRetry?.(turn.id)}
+            className="flex cursor-pointer items-center gap-1 rounded-md px-2 py-0.5 text-[11px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+            data-testid="chat-retry"
+          >
+            <RotateCcw className="size-3" /> Retry
+          </button>
+        )}
+      </div>
+    );
   if (
     (turn.status === "queued" || turn.status === "held") &&
     turn.attemptCount > 0
-  )
+  ) {
+    const { onInterrupt } = context;
     return (
       <RetryCountdown
         retryAt={turn.retryAt}
         error={turn.error?.message}
-        onStop={context.onInterrupt}
+        onStop={onInterrupt ? () => onInterrupt(turn.id) : undefined}
       />
     );
+  }
   return null;
+}
+
+/** Withdraw the message about to start, before the agent picks it up. */
+function CancelStarting({
+  turnId,
+  onCancel,
+}: {
+  turnId: string;
+  onCancel: (turnId: string) => ActionResult;
+}) {
+  const [cancelling, setCancelling] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        setCancelling(true);
+        try {
+          await onCancel(turnId);
+        } finally {
+          setCancelling(false);
+        }
+      }}
+      disabled={cancelling}
+      className="ml-1 shrink-0 cursor-pointer rounded-md border border-border-strong px-2 py-0.5 text-fg disabled:cursor-default disabled:opacity-50"
+      data-testid="chat-cancel-starting"
+    >
+      Cancel
+    </button>
+  );
 }
 
 /** A turn that ran and waits to run again on its own. */
@@ -831,7 +895,8 @@ function TurnFooter({
   }, [copied]);
   const usage = usageLabel(turn.outcome?.usage);
   const { onFork, onRollback } = context;
-  const canRollback = Boolean(onRollback) && turn.status !== "cancelled";
+  const canRollback =
+    Boolean(onRollback) && turn.status !== "cancelled" && !context.working;
   const rollback = async () => {
     if (!onRollback || rolling) return;
     setRolling(true);
@@ -854,7 +919,7 @@ function TurnFooter({
         files={turn.outcome?.changedFiles.map((file) => file.path) ?? []}
         onFileClick={context.onFileClick}
       />
-      {confirming ? (
+      {confirming && canRollback ? (
         <div
           className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-bg-raised px-2.5 py-1.5 text-xs"
           data-testid="chat-rollback-confirm"

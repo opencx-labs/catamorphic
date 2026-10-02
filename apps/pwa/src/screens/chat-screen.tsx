@@ -358,7 +358,8 @@ function Chat({
           pending={chat.pending}
           activity={chat.activity}
           onRetry={(turnId) => void chat.retry(turnId)}
-          onInterrupt={() => void chat.interrupt()}
+          onInterrupt={(turnId) => void chat.interrupt(turnId)}
+          onCancelQueued={chat.cancelQueued}
           onResendFailed={(commandId) => void chat.resendFailed(commandId)}
           onDismissFailed={chat.dismissFailed}
           hasOlder={chat.hasOlder}

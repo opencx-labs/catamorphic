@@ -2565,7 +2565,7 @@ function ChatDockContent({
               onSendQueuedNow={chat.sendQueuedNow}
               onHoldQueued={chat.holdQueued}
               onRetry={(turnId) => void chat.retry(turnId)}
-              onStopRetrying={() => void chat.interrupt()}
+              onStopRetrying={(turnId) => void chat.interrupt(turnId)}
               onRollback={rollback}
               onResendFailed={(commandId) => void chat.resendFailed(commandId)}
               onDismissFailed={chat.dismissFailed}

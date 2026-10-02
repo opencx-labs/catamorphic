@@ -264,3 +264,98 @@ it("shows failed sends with resend and dismiss", async () => {
   );
   expect(resend).toHaveBeenCalledWith("c1");
 });
+
+it("offers retry on the latest interrupted turn", async () => {
+  const retry = vi.fn();
+  const node = await render(
+    [
+      {
+        key: "t1",
+        turn: turn("t1", { status: "interrupted" }),
+        entries: [{ kind: "input", item: input("t1", "stopped") }],
+      },
+    ],
+    { onRetry: retry },
+  );
+  expect(node.querySelector("[data-testid=chat-interrupted]")).not.toBeNull();
+  await act(async () =>
+    node.querySelector<HTMLButtonElement>("[data-testid=chat-retry]")?.click(),
+  );
+  expect(retry).toHaveBeenCalledWith("t1");
+});
+
+it("stops the turn waiting to retry, not the one running", async () => {
+  const interrupt = vi.fn();
+  const node = await render(
+    [
+      {
+        key: "t1",
+        turn: turn("t1", {
+          status: "queued",
+          retryAt: after(30),
+          error: { message: "Rate limited" },
+        }),
+        entries: [{ kind: "input", item: input("t1", "first") }],
+      },
+      {
+        key: "t2",
+        turn: turn("t2", { status: "running", ordinal: 2 }),
+        entries: [{ kind: "input", item: input("t2", "second") }],
+      },
+    ],
+    { onInterrupt: interrupt },
+  );
+  await act(async () =>
+    node
+      .querySelector<HTMLButtonElement>("[data-testid=chat-stop-retrying]")
+      ?.click(),
+  );
+  expect(interrupt).toHaveBeenCalledWith("t1");
+});
+
+it("withdraws the message about to start", async () => {
+  const cancel = vi.fn(() => true);
+  const node = await render(
+    [
+      {
+        key: "t1",
+        turn: turn("t1", { status: "queued", attemptCount: 0 }),
+        entries: [{ kind: "input", item: input("t1", "go") }],
+      },
+    ],
+    { activity: "Waiting for agent", onCancelQueued: cancel },
+  );
+  expect(node.textContent).toContain("Waiting for agent");
+  await act(async () =>
+    node
+      .querySelector<HTMLButtonElement>("[data-testid=chat-cancel-starting]")
+      ?.click(),
+  );
+  expect(cancel).toHaveBeenCalledWith("t1");
+});
+
+it("offers undo only while nothing runs", async () => {
+  const settled: TimelineTurn = {
+    key: "t1",
+    turn: turn("t1"),
+    entries: [
+      { kind: "input", item: input("t1", "hello") },
+      { kind: "reply", item: reply("t1", "Done."), steps: [] },
+    ],
+  };
+  const idle = await render([settled], { onRollback: vi.fn() });
+  expect(idle.querySelector("[data-testid=chat-rollback]")).not.toBeNull();
+  act(() => root?.unmount());
+  const busy = await render(
+    [
+      settled,
+      {
+        key: "t2",
+        turn: turn("t2", { status: "running", ordinal: 2 }),
+        entries: [{ kind: "input", item: input("t2", "more") }],
+      },
+    ],
+    { onRollback: vi.fn() },
+  );
+  expect(busy.querySelector("[data-testid=chat-rollback]")).toBeNull();
+});

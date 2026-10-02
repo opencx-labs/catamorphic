@@ -75,6 +75,16 @@ describe("SessionEventStream", () => {
     sse.end();
   });
 
+  it("says it is open at once when nothing waited", () => {
+    const raw = new FakeResponse();
+    const sse = stream(raw, 7);
+    sse.open({});
+    expect(raw.chunks).toEqual([
+      `data: ${JSON.stringify({ type: "heartbeat", sequence: 7 })}\n\n`,
+    ]);
+    sse.end();
+  });
+
   it("reports a buffering socket so slow readers are closed", () => {
     const raw = new FakeResponse();
     const sse = stream(raw);
@@ -97,7 +107,8 @@ describe("SessionEventStream", () => {
     );
     sse.end();
     vi.advanceTimersByTime(5_000);
-    expect(raw.chunks).toHaveLength(2);
+    // The heartbeat on opening, the event, the interval's heartbeat.
+    expect(raw.chunks).toHaveLength(3);
   });
 
   it("releases the subscription when the client goes away", () => {
