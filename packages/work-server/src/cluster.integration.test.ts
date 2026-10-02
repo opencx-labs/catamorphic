@@ -504,7 +504,7 @@ it("a Postgres deployment requires the operator credential every replica shares"
 });
 
 it.skipIf(!process.env.DATABASE_URL)(
-  "stopping a replica lets a running chat turn settle before its sandbox goes",
+  "stopping a replica settles its running chat turn before its sandbox goes",
   async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "work-sigterm-"));
     const database = await createTestDatabase("work_sigterm");
@@ -563,16 +563,13 @@ it.skipIf(!process.env.DATABASE_URL)(
       await server.shutdown();
       stopped = true;
       await admin.connect();
+      // A runner in this process stops with it (ADR 0197): its turn is
+      // settled as interrupted, never left running for nobody.
       const turn = await admin.query(
-        "SELECT status FROM catamorphic.agent_turns WHERE session_id = $1",
+        "SELECT status FROM catamorphic.agent_turns WHERE session_id = $1 ORDER BY ordinal LIMIT 1",
         [session.id],
       );
-      expect(turn.rows).toEqual([{ status: "completed" }]);
-      const reply = await admin.query(
-        "SELECT text AS content FROM catamorphic.agent_items WHERE session_id = $1 AND kind = 'assistant_message'",
-        [session.id],
-      );
-      expect(reply.rows[0]?.content).toContain("finished");
+      expect(turn.rows).toEqual([{ status: "interrupted" }]);
       // Only then did the machine go, and the chat's workspace with it.
       const allocation = await admin.query(
         "SELECT a.status, a.release_reason FROM catamorphic.agent_sessions s JOIN catamorphic.execution_allocations a ON a.id = s.allocation_id WHERE s.id = $1",

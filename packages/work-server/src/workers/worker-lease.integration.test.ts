@@ -340,7 +340,9 @@ it.skipIf(!process.env.DATABASE_URL)(
           WORK_MACHINE_NAME: "crashable",
         },
       });
-      await sessions(a).stopLocalTurns({ timeoutMs: 0 });
+      const live = servers.get("a");
+      if (!live) throw new Error("Replica a is not running");
+      await sessions(live).stopLocalTurns({ timeoutMs: 0 });
       since = new Date();
       const crashed = await enqueue(chat.id, SLOW_TURN);
       await sleeping(since);

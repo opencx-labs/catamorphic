@@ -27,7 +27,7 @@ interface FakeSandbox {
  * and what:
  *
  * - `execution-location`, `docker-host`
- * - `write-file <name> <text>`, `read-file <name>`
+ * - `write-file <name> <text>` (answers `Wrote <name>`), `read-file <name>`
  * - `run <shell>`: `exit=<code>` then the output (` ;; ` chains steps)
  * - `mcp <alias> <tool> <json>`: one tool of the chat's connection server
  * - `background-start`, `background-list`, `background-stop <id>`
@@ -212,7 +212,10 @@ async function answer(input: {
           : command === "read-file" && name
             ? `cat '${name}' 2>/dev/null || printf missing`
             : undefined;
-  if (workspaceCommand) return (await exec(workspaceCommand)).result.trim();
+  if (workspaceCommand) {
+    const output = (await exec(workspaceCommand)).result.trim();
+    return command === "write-file" ? `Wrote ${name}` : output;
+  }
   return background({ sandbox, command, processId: name });
 }
 

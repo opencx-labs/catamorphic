@@ -3547,7 +3547,8 @@ export class AgentSessionsService {
     );
     // The host resolves members again, so revoked access stops their work;
     // a root caller (no scope) is nobody the host could resolve.
-    if (known && (!this.resolveOwner || known.scope === undefined)) return known;
+    if (known && (!this.resolveOwner || known.scope === undefined))
+      return known;
     return (
       (await this.resolveOwner?.({
         tenantId: project.tenant_id,
