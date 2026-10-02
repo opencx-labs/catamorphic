@@ -11,7 +11,14 @@ import { AttemptRunner } from "./runner.js";
  * Its frames live only in memory, so the attempt ends with the process.
  */
 export class InProcessRunner {
+  /**
+   * Frames not yet released, in order. A read's `afterSeq` is its reader's
+   * stored cursor, so everything up to it was applied and is let go: memory
+   * holds what the reader has not caught up on, not the whole attempt.
+   */
   private readonly frames: RunnerFrame[] = [];
+  private released = 0;
+  private wroteExit = false;
   private readonly waiters = new Set<() => void>();
   private readonly runner: AttemptRunner;
   private killed = false;
@@ -29,6 +36,7 @@ export class InProcessRunner {
         // after reaches anyone.
         if (this.killed) return;
         this.frames.push(frame);
+        if (frame.type === "exit") this.wroteExit = true;
         for (const wake of this.waiters) wake();
         this.waiters.clear();
       },
@@ -42,15 +50,28 @@ export class InProcessRunner {
     this.runner.handle(JSON.parse(JSON.stringify(frame)) as RunnerCommandFrame);
   }
 
-  /** Frames after `afterSeq`, waiting up to `waitMs` for the first. */
+  /**
+   * Frames after `afterSeq`, waiting up to `waitMs` for the first. Frames up
+   * to `afterSeq` are released: a later read from before it is refused,
+   * never answered with a gap.
+   */
   async read(input: {
     afterSeq: number;
     waitMs: number;
   }): Promise<RunnerFrame[]> {
-    const pending = () =>
-      this.frames.filter((frame) => frame.seq > input.afterSeq);
-    let ready = pending();
-    if (ready.length > 0 || input.waitMs <= 0) return ready;
+    if (input.afterSeq < this.released)
+      throw new Error(
+        `This runner already released its frames up to ${this.released}, so it cannot be read from ${input.afterSeq}.`,
+      );
+    this.released = input.afterSeq;
+    let count = 0;
+    while (count < this.frames.length) {
+      const frame = this.frames[count];
+      if (!frame || frame.seq > input.afterSeq) break;
+      count += 1;
+    }
+    this.frames.splice(0, count);
+    if (this.frames.length > 0 || input.waitMs <= 0) return [...this.frames];
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
         this.waiters.delete(wake);
@@ -62,8 +83,12 @@ export class InProcessRunner {
       };
       this.waiters.add(wake);
     });
-    ready = pending();
-    return ready;
+    return [...this.frames];
+  }
+
+  /** Frames kept for the reader: those it has not read past yet. */
+  get heldFrames(): number {
+    return this.frames.length;
   }
 
   /**
@@ -79,6 +104,6 @@ export class InProcessRunner {
   }
 
   get exited(): boolean {
-    return this.killed || this.frames.at(-1)?.type === "exit";
+    return this.killed || this.wroteExit;
   }
 }

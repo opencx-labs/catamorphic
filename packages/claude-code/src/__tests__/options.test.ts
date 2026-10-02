@@ -234,7 +234,7 @@ describe("threads", () => {
     });
   });
 
-  it("stores a transcript in call order, in bounded batches, naming only foreign threads", async () => {
+  it("stores a transcript in call order, naming only foreign threads", async () => {
     const calls: Array<{ thread?: string; entries: number }> = [];
     const store = hostSessionStore({
       nativeState: {
@@ -256,7 +256,7 @@ describe("threads", () => {
     await store.append({ projectKey: "p", sessionId: "own" }, [
       { type: "last-prompt" },
     ]);
-    expect(calls).toEqual([{ entries: 1 }, { entries: 1 }, { entries: 1 }]);
+    expect(calls).toEqual([{ entries: 2 }, { entries: 1 }]);
     expect(await store.load({ projectKey: "p", sessionId: "source" })).toEqual([
       { type: "user" },
     ]);

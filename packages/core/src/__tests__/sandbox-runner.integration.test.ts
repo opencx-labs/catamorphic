@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { JsonValue } from "@catamorphic/agent-protocol";
 import {
   type AttemptStart,
   type HarnessEvent,
@@ -54,6 +55,8 @@ async function readUntil(input: {
   cursor: number;
   frames: RunnerFrame[];
   done: (frames: RunnerFrame[]) => boolean;
+  /** What a native state load answers; nothing stored by default. */
+  loaded?: JsonValue[];
 }): Promise<number> {
   let cursor = input.cursor;
   const answered = new Set<string>();
@@ -73,7 +76,10 @@ async function readUntil(input: {
             command: {
               kind: "host_result",
               callId: frame.callId,
-              result: frame.call.kind === "native_state.load" ? [] : null,
+              result:
+                frame.call.kind === "native_state.load"
+                  ? (input.loaded ?? [])
+                  : null,
             },
           },
         ]);
@@ -211,6 +217,68 @@ describe("sandbox runner", () => {
     const frames: RunnerFrame[] = [];
     await readUntil({ channel, cursor: 0, frames, done: completed });
     expect(replyText(frames)).toContain("Echo: still mine");
+    await channel.kill();
+  }, 60_000);
+
+  it("carries frames and commands larger than one read or write whole", async () => {
+    const sandbox = await provider.createSandbox({});
+    const channel = await startSandboxRunner({
+      provider,
+      allocationId: "allocation",
+      sandboxId: sandbox.id,
+      stateDirectory: "/workspace/.work-session",
+    });
+    // 400 000 three-byte characters: 1.2 MB of UTF-8, more than the 1 MiB
+    // one process read returns or one input write carries.
+    const big = "界".repeat(400_000);
+    await channel.send([
+      {
+        id: "start",
+        command: {
+          kind: "start",
+          attempt: {
+            ...attempt("[[big 400000]] done"),
+            thread: {
+              mode: "resume",
+              providerThreadId: "thread",
+              nativeRef: { id: "native", strength: "strong" },
+            },
+          },
+        },
+      },
+    ]);
+    const frames: RunnerFrame[] = [];
+    await readUntil({
+      channel,
+      cursor: 0,
+      frames,
+      done: completed,
+      loaded: [{ turn: 1, text: big }],
+    });
+    // The loaded state arrived whole over several writes: turn 2 follows it.
+    expect(replyText(frames)).toContain("Echo: done (turn 2)");
+    // A call is never shortened: the stored entry was read across reads.
+    const stored = frames.flatMap((frame) =>
+      frame.type === "call" &&
+      frame.call.kind === "native_state.append" &&
+      frame.call.subpath === "big"
+        ? frame.call.entries
+        : [],
+    );
+    expect(stored).toEqual([{ big }]);
+    // An event is shortened, by its bytes, to fit one read.
+    const said = events(frames).flatMap((event) =>
+      event.type === "item.started" &&
+      event.key.startsWith("big:") &&
+      event.item.kind === "assistant_message"
+        ? [event.item.text]
+        : [],
+    );
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain("[Shortened: ");
+    expect(frames.map((frame) => frame.seq)).toEqual(
+      frames.map((_, index) => index + 1),
+    );
     await channel.kill();
   }, 60_000);
 });

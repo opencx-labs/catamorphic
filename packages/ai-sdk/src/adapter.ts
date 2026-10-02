@@ -203,9 +203,6 @@ interface OpenSegment {
   started: boolean;
 }
 
-/** Native state entries per append: frames stay well below a chunk. */
-const APPEND_BUDGET_CHARS = 384 * 1024;
-
 class AiSdkAttempt {
   /** Interrupts and runner stops. */
   private readonly abort = new AbortController();
@@ -436,29 +433,15 @@ class AiSdkAttempt {
     return entries ? parseThreadEntries(entries) : null;
   }
 
-  /** Store entries in appends that stay well below a frame's limit. */
+  /** Store entries; the runner sends a large append as several calls. */
   private async append(entries: readonly ThreadEntry[]): Promise<void> {
     if (this.host.signal.aborted) return;
-    let batch: JsonValue[] = [];
-    let size = 0;
-    const flush = async () => {
-      if (batch.length === 0) return;
-      const sending = batch;
-      batch = [];
-      size = 0;
-      await untilAborted(
-        this.host.nativeState.append({ entries: sending }),
-        this.host.signal,
-      );
-    };
-    for (const entry of entries)
-      for (const stored of storedEntries(entry)) {
-        const length = JSON.stringify(stored).length;
-        if (size + length > APPEND_BUDGET_CHARS) await flush();
-        batch.push(stored);
-        size += length;
-      }
-    await flush();
+    const stored = entries.flatMap(storedEntries);
+    if (stored.length === 0) return;
+    await untilAborted(
+      this.host.nativeState.append({ entries: stored }),
+      this.host.signal,
+    );
   }
 
   // -------------------------------------------------------------------------

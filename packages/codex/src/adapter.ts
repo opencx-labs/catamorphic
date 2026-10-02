@@ -31,7 +31,6 @@ import { CodexItems } from "./items.js";
 import {
   ancestorFile,
   ancestorSubpath,
-  appendRollout,
   fileSize,
   ROLLOUT_SUBPATH,
   RolloutMirror,
@@ -271,7 +270,7 @@ class CodexAttempt {
     });
     // A fork keeps its ancestors' rollouts, so it restores anywhere.
     for (const ancestor of this.ancestors)
-      await appendRollout({ host: this.host, ...ancestor });
+      await this.host.nativeState.append(ancestor);
     if (thread.path)
       this.mirror = new RolloutMirror({
         file: thread.path,

@@ -36,6 +36,7 @@ const CAPABILITIES: HarnessCapabilities = {
  * - `[[hang]]` works until interrupted
  * - `[[fail <message>]]` fails the turn
  * - `[[title <text>]]` sets the chat title
+ * - `[[big <n>]]` says, and stores under subpath `big`, n three-byte characters
  *
  * Its native state is the list of turns it saw, stored with Work, so a
  * restored thread remembers ("turn 3") wherever it resumes.
@@ -172,6 +173,15 @@ export class EchoAdapter implements HarnessAdapter {
           return;
         } else if (name === "title") {
           host.emit({ type: "title", text: argument });
+        } else if (name === "big") {
+          // Larger than one host read in UTF-8: the message is shortened,
+          // the stored entry must arrive whole.
+          const big = "界".repeat(Number(argument) || 400_000);
+          say(host, `big:${randomUUID()}`, big);
+          await host.nativeState.append({
+            subpath: "big",
+            entries: [{ big }],
+          });
         }
       }
       if (interrupted) {

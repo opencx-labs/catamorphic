@@ -85,7 +85,7 @@ export function storedEntries(entry: ThreadEntry): JsonValue[] {
   return [withoutLargeMedia(encoded)];
 }
 
-/** An entry's limit: a runner frame carries up to 512 KiB of characters. */
+/** An entry's limit, which keeps the stored conversation small to reload. */
 const STORED_ENTRY_CHARS = 256 * 1024;
 const STORED_MEDIA_CHARS = 64 * 1024;
 const MEDIA_PART_TYPES = new Set(["image", "file", "image-data", "file-data"]);

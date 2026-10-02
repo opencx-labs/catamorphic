@@ -6,13 +6,6 @@ import type {
 import type { JsonValue } from "@catamorphic/agent-protocol";
 import type { AttemptHost } from "@catamorphic/agent-protocol/runner";
 
-/**
- * Largest serialized batch one append sends. A runner frame must stay well
- * under the host's 512 KiB read bound, or the runner shortens its strings
- * (which would corrupt transcript entries).
- */
-const APPEND_BATCH_CHARS = 256 * 1024;
-
 function isStoreEntry(value: unknown): value is SessionStoreEntry {
   return (
     typeof value === "object" &&
@@ -25,25 +18,6 @@ function isStoreEntry(value: unknown): value is SessionStoreEntry {
 function toJson(value: unknown): JsonValue {
   const parsed: JsonValue = JSON.parse(JSON.stringify(value ?? null));
   return parsed;
-}
-
-/** Entries in batches whose serialized size stays under the bound. */
-function batches(entries: JsonValue[]): JsonValue[][] {
-  const result: JsonValue[][] = [];
-  let current: JsonValue[] = [];
-  let size = 0;
-  for (const entry of entries) {
-    const length = JSON.stringify(entry).length;
-    if (current.length > 0 && size + length > APPEND_BATCH_CHARS) {
-      result.push(current);
-      current = [];
-      size = 0;
-    }
-    current.push(entry);
-    size += length;
-  }
-  if (current.length > 0) result.push(current);
-  return result;
 }
 
 /**
@@ -72,10 +46,10 @@ export function hostSessionStore(input: {
   return {
     append: (key: SessionKey, entries: SessionStoreEntry[]) => {
       const json = entries.map(toJson);
-      const next = chain.then(async () => {
-        for (const batch of batches(json))
-          await input.nativeState.append({ ...address(key), entries: batch });
-      });
+      // The runner sends a large append as several bounded calls.
+      const next = chain.then(() =>
+        input.nativeState.append({ ...address(key), entries: json }),
+      );
       chain = next.catch(() => {});
       return next;
     },
