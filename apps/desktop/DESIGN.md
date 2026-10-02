@@ -1490,3 +1490,20 @@ title instead of on a row above it. Answers read in history as each question
 with what was picked. A permission request gives way to a message instead of
 staying open. Pasting no longer shifts the dock: preparation spins the attach
 button. See ADR 0195.
+
+### 2026-10-02: A chat is a log every window reads the same way
+
+A chat used to be a placeholder message rewritten on every harness event and
+a transcript polled twice a second; questions and approvals waited in one
+process's memory, so a restart lost them and the phone saw a different chat
+than the Mac. A chat is now an ordered log of turns: every window, the phone
+and the server fold the same events, streamed as they happen, and resume
+where they left off after sleep or a dropped connection. An approval or a
+question is part of the turn, answerable from any of them, and survives a
+restart. When the app quits mid-turn, the turn says it stopped and the agent
+picks up on its own conversation the next time instead of the reply silently
+going missing. Any turn can be undone with the files it changed ("Restore to
+here"), and a fork starts from the agent's own conversation at that point.
+Claude Code and Codex logins no longer leave the Mac: a remote chat on a
+subscription runs only on a machine where the person signed in themselves.
+See ADRs 0196, 0197 and 0198.
