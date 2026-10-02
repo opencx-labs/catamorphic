@@ -18,6 +18,8 @@ const responseSchema = z.object({
 });
 /** How often a subscribed source checks its module for edits the watch missed. */
 const MODULE_POLL_MS = 2_000;
+/** How long a worker may take to start and load its module. */
+const START_TIMEOUT_MS = 30_000;
 /** A shared, lazy process per module. Idle sources cost no process or polling. */
 export class SidebarSourceRuntime {
   /** Reported by the worker once its module loads; false until then. */
@@ -35,7 +37,8 @@ export class SidebarSourceRuntime {
     {
       resolve: (value: unknown) => void;
       reject: (error: Error) => void;
-      timer: ReturnType<typeof setTimeout>;
+      /** Set once the request reaches a loaded worker. */
+      timer?: ReturnType<typeof setTimeout>;
     }
   >();
   constructor(
@@ -49,79 +52,42 @@ export class SidebarSourceRuntime {
     },
   ) {}
 
+  /** Resolves once the worker has loaded the module and can serve requests. */
   private async start(): Promise<ChildProcess> {
     if (this.disposed) throw new Error("Sidebar source was closed.");
     clearTimeout(this.idle);
-    if (this.child) return this.child;
     if (this.starting) return this.starting;
+    if (this.child) return this.child;
     const generation = this.generation;
     const starting = this.opts.executable().then((executable) => {
       if (this.disposed || generation !== this.generation)
         throw new Error("Sidebar source changed. Retry loading it.");
-      const child = spawn(
-        executable,
-        [this.opts.workerPath, this.opts.modulePath],
-        {
-          cwd: this.opts.projectRoot,
-          stdio: ["pipe", "ignore", "pipe", "pipe"],
-        },
-      );
-      this.child = child;
-      child.stdin?.on("error", () => {});
-      const output = child.stdio[3];
-      if (!output || !("readable" in output))
-        throw new Error("Missing sidebar source output.");
-      let stderr = "";
-      child.stderr?.on("data", (data) => {
-        stderr = `${stderr}${data}`.slice(-4000);
-      });
-      const lines = createInterface({ input: output });
-      lines.on("line", (line) => {
-        // A retired worker can still flush output during graceful shutdown.
-        // Its responses and subscription errors cannot affect its replacement.
-        if (this.child !== child) return;
-        try {
-          const message = responseSchema.parse(JSON.parse(line));
-          if (message.type === "capabilities") {
-            this.capabilities = {
-              move: message.move === true,
-              drop: message.drop === true,
-            };
-          } else if (message.type === "subscription-error") {
-            this.stop(
-              new Error(message.error ?? "Source subscription failed."),
-              true,
-            );
-          } else if (message.type === "invalidate") {
-            for (const listener of this.listeners) listener();
-          } else if (message.id) {
-            const pending = this.pending.get(message.id);
-            if (!pending) return;
-            clearTimeout(pending.timer);
-            this.pending.delete(message.id);
-            if (message.error) pending.reject(new Error(message.error));
-            else pending.resolve(message.result);
-            this.scheduleIdle();
-          }
-        } catch {
-          this.stop(new Error("Invalid sidebar source response."), true);
-        }
-      });
-      child.once("error", (error) => {
-        if (this.child === child) this.stop(error, true);
-      });
-      child.once("exit", () => {
-        lines.close();
-        if (this.child !== child) return;
-        this.stop(
-          new Error(
-            stderr.trim() || "Sidebar source stopped. Retry to reload it.",
-          ),
-          true,
+      return new Promise<ChildProcess>((resolve, reject) => {
+        const child = spawn(
+          executable,
+          [this.opts.workerPath, this.opts.modulePath],
+          {
+            cwd: this.opts.projectRoot,
+            stdio: ["pipe", "ignore", "pipe", "pipe"],
+          },
         );
+        this.child = child;
+        // A module whose import never finishes cannot hold requests forever.
+        const startup = setTimeout(() => {
+          const error = new Error(
+            "Sidebar source took too long to start. Retry to reload it.",
+          );
+          reject(error);
+          if (this.child === child) this.stop(error, true);
+        }, START_TIMEOUT_MS);
+        const started = (error?: Error) => {
+          clearTimeout(startup);
+          if (error) reject(error);
+          else resolve(child);
+        };
+        this.attach(child, started);
+        if (this.listeners.size) this.send({ method: "subscribe" });
       });
-      if (this.listeners.size) this.send({ method: "subscribe" });
-      return child;
     });
     this.starting = starting;
     try {
@@ -129,6 +95,66 @@ export class SidebarSourceRuntime {
     } finally {
       if (this.starting === starting) this.starting = undefined;
     }
+  }
+  private attach(child: ChildProcess, started: (error?: Error) => void) {
+    child.stdin?.on("error", () => {});
+    const output = child.stdio[3];
+    if (!output || !("readable" in output)) {
+      const error = new Error("Missing sidebar source output.");
+      started(error);
+      this.stop(error, true);
+      return;
+    }
+    let stderr = "";
+    child.stderr?.on("data", (data) => {
+      stderr = `${stderr}${data}`.slice(-4000);
+    });
+    const lines = createInterface({ input: output });
+    lines.on("line", (line) => {
+      // A retired worker can still flush output during graceful shutdown.
+      // Its responses and subscription errors cannot affect its replacement.
+      if (this.child !== child) return;
+      try {
+        const message = responseSchema.parse(JSON.parse(line));
+        if (message.type === "capabilities") {
+          // Sent once the module has loaded: the worker can serve requests.
+          this.capabilities = {
+            move: message.move === true,
+            drop: message.drop === true,
+          };
+          started();
+        } else if (message.type === "subscription-error") {
+          this.stop(
+            new Error(message.error ?? "Source subscription failed."),
+            true,
+          );
+        } else if (message.type === "invalidate") {
+          for (const listener of this.listeners) listener();
+        } else if (message.id) {
+          const pending = this.pending.get(message.id);
+          if (!pending) return;
+          clearTimeout(pending.timer);
+          this.pending.delete(message.id);
+          if (message.error) pending.reject(new Error(message.error));
+          else pending.resolve(message.result);
+          this.scheduleIdle();
+        }
+      } catch {
+        this.stop(new Error("Invalid sidebar source response."), true);
+      }
+    });
+    child.once("error", (error) => {
+      started(error);
+      if (this.child === child) this.stop(error, true);
+    });
+    child.once("exit", () => {
+      lines.close();
+      const error = new Error(
+        stderr.trim() || "Sidebar source stopped. Retry to reload it.",
+      );
+      started(error);
+      if (this.child === child) this.stop(error, true);
+    });
   }
   private send(value: unknown) {
     this.child?.stdin?.write(`${JSON.stringify(value)}\n`);
@@ -164,20 +190,30 @@ export class SidebarSourceRuntime {
   }
   request(input: SidebarSourceRequest): Promise<unknown> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(
-        () =>
-          this.stop(
-            new Error("Sidebar source took too long. Retry to reload it."),
-            true,
-          ),
-        this.opts.timeoutMs ?? 30_000,
-      );
-      this.pending.set(input.requestId, { resolve, reject, timer });
+      this.pending.set(input.requestId, { resolve, reject });
       void this.start()
         .then(() => {
-          if (this.pending.has(input.requestId))
-            this.send({ ...input, id: input.requestId });
-          else this.scheduleIdle();
+          const pending = this.pending.get(input.requestId);
+          if (!pending) return this.scheduleIdle();
+          // The budget is the source's own work, so it starts when a loaded
+          // worker receives the request; process startup has its own guard.
+          const timer: ReturnType<typeof setTimeout> = setTimeout(
+            // Timers run before I/O in each event-loop turn. After a stall,
+            // an answer or exit the worker already delivered settles first.
+            () =>
+              setImmediate(() => {
+                if (this.pending.get(input.requestId)?.timer !== timer) return;
+                this.stop(
+                  new Error(
+                    "Sidebar source took too long. Retry to reload it.",
+                  ),
+                  true,
+                );
+              }),
+            this.opts.timeoutMs ?? 30_000,
+          );
+          pending.timer = timer;
+          this.send({ ...input, id: input.requestId });
         })
         .catch((error: unknown) => {
           const pending = this.pending.get(input.requestId);
