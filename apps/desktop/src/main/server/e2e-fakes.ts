@@ -377,7 +377,10 @@ export class E2eFakeAdapter implements HarnessAdapter {
           : null;
       host.emit({ type: "turn.started" });
       const turn: FakeTurn = {
-        message: attempt.input?.text ?? "",
+        // The person's words: a context handoff before them (what the
+        // agent missed) never decides what the script does.
+        message:
+          (attempt.input?.text ?? "").split(HANDOFF_SEPARATOR).at(-1) ?? "",
         attachments: attempt.input?.attachments ?? [],
         projectId: attempt.projectId,
         sessionId: attempt.sessionId,
@@ -679,6 +682,9 @@ function elicitationAction(
 ): string {
   return response?.kind === "elicitation" ? response.action : "decline";
 }
+
+/** What separates a context handoff from the input it precedes (core's turn engine). */
+const HANDOFF_SEPARATOR = "\n\n---\n\n";
 
 async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
   const message = turn.message;

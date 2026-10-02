@@ -92,7 +92,10 @@ export async function buildContextHandoff(input: {
   ]
     .filter(Boolean)
     .join("\n\n");
-  const range = `${turns[0]?.ordinal}${turns.length > 1 ? ` to ${turns.at(-1)?.ordinal}` : ""}`;
+  const range =
+    turns.length > 1
+      ? `turns ${turns[0]?.ordinal} to ${turns.at(-1)?.ordinal}`
+      : `turn ${turns[0]?.ordinal}`;
   return {
     strategy: input.strategy,
     coveredTurnOrdinals: {
@@ -108,8 +111,8 @@ export async function buildContextHandoff(input: {
     ],
     text: [
       input.strategy === "delta"
-        ? `While you were away from this conversation, it continued (turns ${range}). This is what happened, so you can pick up from here:`
-        : `This conversation started before you joined it (turns ${range}). This is what happened so far:`,
+        ? `While you were away from this conversation, it continued (${range}). This is what happened, so you can pick up from here:`
+        : `This conversation started before you joined it (${range}). This is what happened so far:`,
       body,
     ].join("\n\n"),
   };
