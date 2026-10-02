@@ -39,9 +39,10 @@ it** (`lib/sidebar-motion.ts`).
   behind the snapshots; the old and new snapshots then move with the
   content's box and cross-fade over 200 ms. Inside the box they travel by
   how far the content's main column moves: measured for our own content,
-  and for a page read before the toggle (a column centered between margins
-  moves by half the change; anything else keeps its left edge, since a page
-  cannot report its new layout while the transition holds rendering).
+  and for a page read just before the content resizes (a column centered
+  between margins moves by half the change; anything else keeps its left
+  edge, since a page cannot report its new layout while the transition holds
+  rendering). A page that cannot answer within 100 ms counts as centered.
   Snapshots are not scaled, so text never stretches.
 - Any page resize waits for the page to repaint, so that wait falls in a
   short hold between the slide and the morph, while nothing moves.
@@ -49,10 +50,12 @@ it** (`lib/sidebar-motion.ts`).
   never moves.
 - The phase follows the panel's own transform transition
   (`getAnimations`), so an interrupted toggle reverses from where it is and
-  a cancelled slide ends at once. A morph reads where the content belongs
-  when it applies and leaves it alone if the panel has started moving
-  again. Only the visible workspace's sidebars morph or carry view
-  transition names, which must be unique across the window.
+  a cancelled slide ends at once. One morph runs at a time; it always
+  applies, without a transition if the panel has started moving again, and
+  then leaves the content alone. The sidebar's toggles and the room the
+  chrome makes for it follow the motion, not the setting. Only the visible
+  workspace's sidebars morph or carry view transition names, which must be
+  unique across the window.
 
 `lib/layout-transition.ts`, `data-layout-transition` and the per-screen
 width-holding wrappers are removed.

@@ -227,7 +227,7 @@ describe("tabbed sidebars", () => {
     );
     await app.waitFor(`(() => {
       const sides = [...document.querySelectorAll('[data-sidebar]')];
-      return sides.length === 2 && sides.every(side => side.dataset.settled === 'true' && side.getAnimations({subtree:true}).every(a => a.playState !== 'running'));
+      return sides.length === 2 && sides.every(side => side.dataset.settled === 'true' && side.getAnimations({subtree:true}).every(a => a.playState !== 'running')) && !document.getAnimations().some(a => a.effect?.pseudoElement?.startsWith('::view-transition'));
     })()`);
     if (process.env.CATAMORPHIC_SIDEBAR_SCREENSHOT)
       await app.screenshot(process.env.CATAMORPHIC_SIDEBAR_SCREENSHOT);

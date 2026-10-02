@@ -109,7 +109,7 @@ describe("configurable browser workspace", () => {
     ).toBe(true);
     await run("$('button[aria-label=\"Expand sidebar\"]').click()");
     await app.waitFor(
-      "!!document.querySelector('aside [data-tab-orientation=vertical]')",
+      "document.querySelector('aside').dataset.motion === 'open' && document.querySelector('aside').dataset.settled === 'true' && !!document.querySelector('aside [data-tab-orientation=vertical]')",
     );
   });
 

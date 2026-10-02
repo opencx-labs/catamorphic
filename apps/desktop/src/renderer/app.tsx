@@ -529,14 +529,18 @@ export function App({
     null,
   );
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  // The left sidebar takes its space only after sliding in and gives it back
-  // before sliding away; chrome that makes room for it, and its toggle,
-  // follow the slide rather than the setting.
+  // A sidebar moves first and takes or gives back its space once still;
+  // its toggles, and the room the chrome makes for it, follow the motion
+  // rather than the setting.
   const [sidebarMotion, setSidebarMotion] = useState<SidebarMotion>({
     phase: "open",
     docked: true,
   });
   const [savedRightSidebarOpen, setSavedRightSidebarOpen] = useState(false);
+  const [rightSidebarMotion, setRightSidebarMotion] = useState<SidebarMotion>({
+    phase: "closed",
+    docked: false,
+  });
   // Opening an empty sidebar is a temporary customization affordance, scoped
   // to this profile/project. It must not replace the populated-sidebar choice.
   const [emptyRightSidebar, setEmptyRightSidebar] = useState<{
@@ -5676,10 +5680,7 @@ export function App({
             header={
               <>
                 <div className="app-drag flex h-10 shrink-0 items-center justify-end gap-1 pl-[86px] pr-3">
-                  {/* With the sidebar while it shows; a keyboard reveal moves
-                      focus here in the commit that reveals it. */}
-                  {(sidebarVisible || sidebarMotion.phase !== "closed") &&
-                    sidebarToggle}
+                  {sidebarMotion.phase !== "closed" && sidebarToggle}
                   {headerInSidebar && (
                     <div
                       ref={setBrowserNavigationHost}
@@ -5782,7 +5783,7 @@ export function App({
             }}
             className={`workspace-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${tabsInSidebar ? "bg-sidebar" : "bg-bg"}`}
           >
-            {headerInSidebar && !rightSidebarOpen && (
+            {headerInSidebar && !rightSidebarMotion.docked && (
               <ShortcutHint
                 label="Expand right sidebar"
                 shortcut={formatBinding(keybindings["toggle-right-sidebar"])}
@@ -5795,6 +5796,7 @@ export function App({
                       : "Expand right sidebar"
                   }
                   onClick={() => actionHandlers["toggle-right-sidebar"]()}
+                  inert={rightSidebarMotion.phase !== "closed"}
                   className="app-no-drag absolute right-2 top-2 z-20 grid size-7 place-items-center rounded-md bg-sidebar text-fg-muted hover:text-fg"
                 >
                   <PanelRight className="size-4" />
@@ -5817,8 +5819,9 @@ export function App({
               <div className="workspace-chrome app-drag relative z-20 flex h-10 shrink-0 items-center gap-1 pl-2 pr-3">
                 {!sidebarMotion.docked && (
                   <span
-                    // Under the sliding panel, whose own toggle is the live one.
-                    inert={sidebarMotion.phase === "opening"}
+                    // Under the panel until the content makes room; the
+                    // panel's own toggle is the live one.
+                    inert={sidebarMotion.phase !== "closed"}
                     className="app-no-drag ml-[70px] flex shrink-0 items-center"
                   >
                     {sidebarToggle}
@@ -5831,7 +5834,7 @@ export function App({
                   tabsInSidebar &&
                   !headerInSidebar &&
                   workspaceTitle}
-                {!rightSidebarOpen && (
+                {!rightSidebarMotion.docked && (
                   <ShortcutHint
                     label="Expand right sidebar"
                     shortcut={formatBinding(
@@ -5847,6 +5850,7 @@ export function App({
                           : "Expand right sidebar"
                       }
                       aria-expanded={rightSidebarOpen}
+                      inert={rightSidebarMotion.phase !== "closed"}
                       className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:text-fg"
                       onClick={() => actionHandlers["toggle-right-sidebar"]?.()}
                     >
@@ -6730,6 +6734,7 @@ export function App({
             open={rightSidebarOpen}
             error={workspaceError}
             onCustomize={() => customizeSidebar("right")}
+            onMotionChange={setRightSidebarMotion}
             renderSection={renderSidebarSection}
           />
 

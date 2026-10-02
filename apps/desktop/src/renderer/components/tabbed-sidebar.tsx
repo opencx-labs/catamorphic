@@ -100,13 +100,11 @@ export function TabbedSidebar({
   const id = useId();
   const panel = useRef<HTMLDivElement>(null);
   const motion = useSidebarMotion({ open, dock: !overlay, panel });
-  const onMotionChangeRef = useRef(onMotionChange);
-  onMotionChangeRef.current = onMotionChange;
   // Before paint, so chrome that follows the sidebar (its toggle, the room
   // made for it) changes in the same frame as the sidebar.
   useLayoutEffect(() => {
-    onMotionChangeRef.current?.({ phase: motion.phase, docked: motion.docked });
-  }, [motion.phase, motion.docked]);
+    onMotionChange?.({ phase: motion.phase, docked: motion.docked });
+  }, [motion.phase, motion.docked, onMotionChange]);
   const [content, setContent] = useState<
     ReadonlyMap<string, SidebarContentState>
   >(new Map());
@@ -203,7 +201,6 @@ export function TabbedSidebar({
       data-tab-motion={tabMotion}
       data-resizing={resizing || undefined}
       data-sidebar-revealed={revealed}
-      data-overlay={overlay || undefined}
       className="tabbed-sidebar"
       aria-label={`${side === "left" ? "Left" : "Right"} sidebar`}
       aria-hidden={!open}

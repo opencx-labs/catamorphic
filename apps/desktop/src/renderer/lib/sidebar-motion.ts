@@ -5,14 +5,14 @@ import {
   useRef,
   useState,
 } from "react";
-import { transitionSidebarToggle } from "./sidebar-transition.js";
+import { settleSidebarContent } from "./sidebar-transition.js";
 
 /**
  * A sidebar moves the moment it is toggled and the content settles after it
  * (ADR 0197). The panel slides over the content with a transform, so the
  * compositor runs it without layout. Once it has stopped, the content takes
  * or gives back the sidebar's space in a view transition that morphs it
- * from its old layout to its new one (`transitionSidebarToggle`): the
+ * from its old layout to its new one (`settleSidebarContent`): the
  * content (a web page in its own process, a terminal, the editor) lays out
  * at its new size once, behind snapshots, and never while anything moves.
  *
@@ -23,7 +23,8 @@ import { transitionSidebarToggle } from "./sidebar-transition.js";
  * - `closing`: sliding away.
  *
  * `docked` is whether the content makes room for the panel. It changes only
- * at rest: after a docking sidebar opens, and after one closes.
+ * while the panel is still: after a docking sidebar opens or closes, and
+ * when an open overlay becomes a docked sidebar.
  */
 export type SidebarPhase = "closed" | "opening" | "open" | "closing";
 
@@ -109,8 +110,9 @@ export function useSidebarMotion({
   useEffect(() => {
     if (!atRest || morphing || docked === place) return;
     setMorphing(true);
-    transitionSidebarToggle({
+    settleSidebarContent({
       sidebar: panel.current?.parentElement ?? null,
+      wanted: () => latest.current.atRest,
       update: () => {
         if (latest.current.atRest) setDocked(latest.current.place);
         setMorphing(false);

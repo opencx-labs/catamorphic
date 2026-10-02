@@ -135,6 +135,10 @@ it("keeps checkbox rows and neighboring controls stable while changing and reset
   await app.eval(
     `[...document.querySelectorAll('[aria-label="Collapse right sidebar"]')].find(button => !button.closest('[inert]'))?.click()`,
   );
+  await app.waitFor(
+    "[...document.querySelectorAll('[data-sidebar]')].every(side => side.dataset.settled === 'true') && !document.getAnimations().some(animation => animation.effect?.pseudoElement?.startsWith('::view-transition'))",
+    { label: "sidebars settled" },
+  );
   for (const width of [720, 900]) {
     await app.eval(
       `window.catamorphicDesktop.setSettings({projectId:${JSON.stringify(projectId)},scope:'profile',patch:{contentFrame:true}})`,

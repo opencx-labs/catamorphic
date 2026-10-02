@@ -8,7 +8,7 @@ import { useSidebarMotion } from "./sidebar-motion.js";
 /** Content morphs wait here until a test lets them apply. */
 const morphs: Array<() => void> = [];
 vi.mock("./sidebar-transition.js", () => ({
-  transitionSidebarToggle: ({ update }: { update: () => void }) => {
+  settleSidebarContent: ({ update }: { update: () => void }) => {
     morphs.push(update);
   },
 }));
@@ -34,9 +34,9 @@ let runsSlides = true;
 
 function Sidebar({ open, dock }: { open: boolean; dock: boolean }) {
   const panel = useRef<HTMLDivElement>(null);
-  const { phase, docked } = useSidebarMotion({ open, dock, panel });
+  const { phase, docked, settled } = useSidebarMotion({ open, dock, panel });
   return (
-    <div data-phase={phase} data-docked={docked}>
+    <div data-phase={phase} data-docked={docked} data-settled={settled}>
       <div
         data-panel
         ref={(element) => {
@@ -82,10 +82,14 @@ describe("useSidebarMotion", () => {
     act(async () => {
       slides.at(-1)?.slide.finish();
     });
-  const applyMorph = () =>
-    act(() => {
-      morphs.shift()?.();
-    });
+  const settled = () =>
+    container.querySelector<HTMLElement>("[data-phase]")?.dataset.settled ===
+    "true";
+  const applyMorph = () => {
+    const morph = morphs.shift();
+    if (!morph) throw new Error("no morph is waiting");
+    act(morph);
+  };
 
   beforeEach(() => {
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
@@ -119,12 +123,15 @@ describe("useSidebarMotion", () => {
     render(true);
     // Moving at once; the content keeps its place while it moves.
     expect(state()).toEqual({ phase: "opening", docked: false });
+    expect(settled()).toBe(false);
     expect(morphs).toHaveLength(0);
     await finishSlide();
     expect(state()).toEqual({ phase: "open", docked: false });
+    expect(settled()).toBe(false);
     expect(morphs).toHaveLength(1);
     applyMorph();
     expect(state()).toEqual({ phase: "open", docked: true });
+    expect(settled()).toBe(true);
   });
 
   it("slides away from the content's side, then the content takes the space", async () => {
@@ -217,5 +224,6 @@ describe("useSidebarMotion", () => {
     expect(state().phase).toBe("closed");
     applyMorph();
     expect(state()).toEqual({ phase: "closed", docked: false });
+    expect(settled()).toBe(true);
   });
 });
