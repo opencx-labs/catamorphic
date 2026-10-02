@@ -1948,6 +1948,20 @@ describe("agent session coordination", () => {
     expect(settled.some((event) => event.kind === "session.work-changed")).toBe(
       false,
     );
+    // A reply the harness adds already settled (no stream) is sent once too.
+    await sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "Run command with progress",
+    );
+    const sent = (await exportEvents(session.id)).filter(
+      (event) => event.kind === "session.message-sent",
+    );
+    expect(sent.map((event) => event.payload.detail)).toMatchObject([
+      { status: "completed" },
+      { content: "Tests passed", status: "completed" },
+    ]);
   });
 
   it("retains message attention without push subscriptions, respects scope, and never acknowledges unseen revisions", async () => {
@@ -2517,5 +2531,73 @@ describe("agent session coordination", () => {
       parent_session_id: null,
     });
     expect(row.agent_id).not.toBe("builder");
+  });
+
+  it("replaces a mirror that logged nothing with its source's base, and never one with a log of its own", async () => {
+    const project = await projects.create(identity, {
+      name: "Converted mirror",
+    });
+    const source = await sessions.create(identity, project.id);
+    await sessions.sendMessage(identity, project.id, source.id, "Before");
+    const sessionId = randomUUID();
+    const baseOf = async () => {
+      const copy = copySettledHistory({
+        snapshot: await readFullSnapshot({ db, sessionId: source.id }),
+        sessionId,
+      });
+      if (!copy) throw new Error("Expected a copy");
+      return copy.snapshot;
+    };
+    const authority = { hostId: "desktop-origin", revision: 1 };
+    await sessions.mirror(identity, project.id, sessionId, {
+      authority,
+      todos: [],
+      base: await baseOf(),
+      events: [],
+    });
+    // As migration 045 leaves a mirror: its history and a sequence that
+    // means nothing to the source, with nothing logged.
+    await db
+      .updateTable("agent_sessions")
+      .set({ event_sequence: 1_000 })
+      .where("id", "=", sessionId)
+      .execute();
+    await sessions.sendMessage(identity, project.id, source.id, "After");
+    const base = await baseOf();
+    expect(base.sequence).toBeLessThan(1_000);
+    const change = (sequence: number, title: string) => ({
+      sessionId,
+      sequence,
+      at: new Date().toISOString(),
+      commandId: null,
+      event: { type: "session.changed" as const, session: { title } },
+    });
+
+    // The base replaces the converted copy whole; the log continues from it.
+    const replaced = await sessions.mirror(identity, project.id, sessionId, {
+      authority,
+      base,
+      events: [change(base.sequence + 1, "Continued")],
+    });
+    expect(replaced).toMatchObject({
+      sequence: base.sequence + 1,
+      title: "Continued",
+    });
+    const texts = (await snapshot(sessionId, project.id)).items.flatMap(
+      (item) => (item.kind === "user_message" ? [item.text] : []),
+    );
+    expect(texts).toEqual(["Before", "After"]);
+
+    // Now it has a log of its own: a stale base changes nothing.
+    await sessions.mirror(identity, project.id, sessionId, {
+      authority,
+      base: { ...base, items: [] },
+      events: [],
+    });
+    expect(
+      (await snapshot(sessionId, project.id)).items.flatMap((item) =>
+        item.kind === "user_message" ? [item.text] : [],
+      ),
+    ).toEqual(["Before", "After"]);
   });
 });
