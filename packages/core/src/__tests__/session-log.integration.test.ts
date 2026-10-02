@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   applySessionEvents,
   itemsOfTurn,
+  type SessionEvent,
   orderedTurns,
   pendingRequests,
   type SessionStreamMessage,
@@ -21,6 +22,7 @@ import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
+import { readFullSnapshot } from "../services/sessions/session-reads.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
@@ -629,5 +631,61 @@ describe("session log", () => {
       },
       { timeout: 15_000 },
     );
+  });
+
+  it("folds its log into exactly the rows it projected", async () => {
+    const { projectId, sessionId } = await chat("Fold");
+    await sessions.sendMessage(identity, projectId, sessionId, "one");
+    const asked = sessions.sendMessage(identity, projectId, sessionId, "[[ask Which?]]");
+    const request = await vi.waitFor(
+      async () => {
+        const detail = await sessions.get(identity, projectId, sessionId);
+        const [pending] = pendingRequests(sessionStateFromSnapshot(detail.snapshot));
+        if (!pending) throw new Error("No question yet");
+        return pending;
+      },
+      { timeout: 10_000 },
+    );
+    await sessions.command(identity, projectId, sessionId, {
+      type: "respond",
+      commandId: randomUUID(),
+      requestId: request.id,
+      response: { kind: "question", answers: ["This"] },
+    });
+    await asked;
+    await sessions.sendMessage(identity, projectId, sessionId, "[[fail on purpose]]");
+    const full = await readFullSnapshot({ db, sessionId });
+    const rows = await db
+      .selectFrom("agent_session_events")
+      .select(["sequence", "payload", "command_id", "created_at"])
+      .where("session_id", "=", sessionId)
+      .orderBy("sequence")
+      .execute();
+    const folded = applySessionEvents(
+      sessionStateFromSnapshot({
+        ...full,
+        sequence: 0,
+        turns: [],
+        attempts: [],
+        items: [],
+        requests: [],
+        providerThreads: [],
+      }),
+      rows.map((row) => ({
+        sessionId,
+        sequence: Number(row.sequence),
+        at: row.created_at.toISOString(),
+        commandId: row.command_id,
+        event: row.payload as unknown as SessionEvent,
+      })),
+    );
+    const projected = sessionStateFromSnapshot(full);
+    expect(folded.stale).toBe(false);
+    expect(folded.sequence).toBe(full.sequence);
+    expect(folded.items).toEqual(projected.items);
+    expect(folded.turns).toEqual(projected.turns);
+    expect(folded.attempts).toEqual(projected.attempts);
+    expect(folded.requests).toEqual(projected.requests);
+    expect(folded.providerThreads).toEqual(projected.providerThreads);
   });
 });

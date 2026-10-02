@@ -36,11 +36,12 @@ in `agent_session_events` with a per-session `sequence`, allocated under
 the session row lock. The events and the tables they project
 (`agent_turns`, `agent_turn_attempts`, `agent_items`,
 `agent_runtime_requests`, `agent_provider_threads`) commit in one
-transaction through one writer, `SessionLog.commit`. Events carry the
+transaction through one writer, `SessionLog.append`. Events carry the
 changed entity, plus `item.text_appended` for streamed text, so a client
 applies them with a pure reducer shared with the server
-(`@catamorphic/agent-protocol`). Projections can be rebuilt by folding the
-log, and tests assert that they equal it.
+(`@catamorphic/agent-protocol`). Events carry only protocol fields: engine
+state such as a runner's location stays in its own columns. Folding the log
+gives the projections exactly, and a test asserts it.
 
 **Commands are idempotent.** Every mutating turn operation (send, steer,
 queue edits, send now, interrupt, retry, answer, respond, roll back) carries
@@ -66,16 +67,18 @@ turn, then run this), or `message_only` (attributed delivery, no turn).
 **Replication is the log.** A desktop mirrors a session to its remote by
 pushing events after the remote's acknowledged sequence; the remote applies
 them through the same projector. Authority still moves only by the 0077
-compare-and-swap, so a mirror never dispatches. A remote copy continuing a
-session first resolves its provider thread (ADR 0197).
+compare-and-swap, so a mirror never dispatches. The source's provider
+threads arrive as unavailable (their native state lives on the source's
+machine), so a copy that continues the session starts a thread of its own
+and is handed the history (ADR 0197).
 
 **Rollback and fork use the same records.** Each turn records the
 checkpoint before and after it. `rollback({ turnId })` restores the
 workspace to before that turn in a checkout the session owns, marks it and
 later turns `rolled_back`, and rewinds the provider thread natively or
-replaces it with a handoff. A fork copies items through a turn, stands its
-workspace on that turn's commit, and resolves its provider thread lazily
-on its first turn.
+replaces it with a handoff. A fork copies the settled turns and items
+through a message into a session of its own, with fresh ids, and its first
+turn forks the native thread through that turn when the harness can.
 
 Considered: keeping messages and adding a log beside them (two sources of
 truth); domain events reduced into projections by a separate process (a

@@ -24,8 +24,8 @@ the host (the desktop, the built-in agent). The runner knows no harness;
 `@catamorphic/runner-bundle` registers the adapters a sandbox runs, so
 adapters test against the real runner without a package cycle. It speaks one protocol: sequenced
 NDJSON frames out (events, host calls, acknowledgements, exit) and
-commands in (start, steer, interrupt, respond, stop), each command
-deduplicated by id. A sandbox runner's output is addressed by byte cursor,
+commands in (start, steer, interrupt, respond, release, host results,
+stop), each command deduplicated by id. A sandbox runner's output is addressed by byte cursor,
 so any replica can read it.
 
 **The control plane drives turns from Postgres.** A turn moves through
@@ -59,18 +59,21 @@ request records whether it is still answerable. No replica polls for
 answers or holds a turn open in memory, and the `parked` phase is gone.
 
 **Host calls.** Tools the host serves (the capability gateway, desktop
-workspace tools) are host calls. The lease holder runs one, recording
-`tool.started` before and its result after; a call found started without a
-result after a takeover answers that the host stopped while it ran and it
-may have completed. Tool policy travels to the runner as data and is
+workspace tools) are host calls. The lease holder records each call in the
+attempt's runner state with the output cursor and forgets it once answered;
+a tool call still recorded after a takeover answers that the host stopped
+while it ran and it may have completed, and is never run again. Native
+state calls are simply answered again. Tool policy travels to the runner as data and is
 decided there; only `ask` leaves it, as an approval.
 
 **Adapters declare capabilities.** Each adapter reports what it can do
 natively (steer, interrupt, retry, fork, rollback, structured questions
 and approvals, subagents, streamed text, native state export) and the
 strength of its ids. Core chooses the fallback by capability, never by
-harness name: steer by restart, retry by resend, fork and rollback by
-handoff.
+harness name: a steer the harness refuses restarts the attempt with the
+input, a retry resends the input, and a fork or rollback binds the native
+thread through the right turn, falling back to a fresh thread with a
+handoff where no native state exists.
 
 **Provider threads are portable.** A provider thread's native state is
 stored as entries in Postgres (`agent_provider_thread_entries`): Claude
@@ -81,9 +84,11 @@ unsupported harness, a switch of harness), the next turn records a
 `context_handoff` item: an auditable, budgeted summary of the turns the
 target thread has not seen, delta when returning to an earlier thread.
 
-**Versions are checked, not assumed.** Runners, workers and member runners
-state a protocol version on connect; a mismatch answers 426 naming which
-side to update. Clients read the server's protocol from `GET /server`.
+**Versions are checked, not assumed.** A runner's hello states its protocol
+and an attempt of another protocol is refused. Workers state their protocol
+on connect; a mismatch answers 426 naming which side to update. Clients read
+the server's `agentProtocol` from `GET /me` and refuse one they cannot
+speak.
 
 **Tests replay real transcripts.** Recorded provider transcripts (Claude
 SDK messages, Codex app-server frames) replace only the provider transport;

@@ -88,7 +88,7 @@ export class SessionLog {
     const positions = new Map<string, number>();
     const stored = input.events.map((event, index): StoredSessionEvent => {
       const sequence = first + index;
-      let placed = event;
+      let placed = protocolEvent(event);
       if (event.type === "item.added") {
         positions.set(event.item.id, sequence);
         placed = { ...event, item: { ...event.item, position: sequence } };
@@ -686,4 +686,53 @@ async function projectSession(
     .set(set)
     .where("id", "=", sessionId)
     .execute();
+}
+
+/**
+ * An event as the protocol defines it, whatever a writer spread into its
+ * entity: engine state (a runner's location, its cursor) stays in its own
+ * columns and never reaches the log or a client.
+ */
+function protocolEvent(event: SessionEvent): SessionEvent {
+  switch (event.type) {
+    case "attempt.changed": {
+      const a = event.attempt;
+      return {
+        type: "attempt.changed",
+        attempt: {
+          id: a.id,
+          turnId: a.turnId,
+          sessionId: a.sessionId,
+          ordinal: a.ordinal,
+          reason: a.reason,
+          status: a.status,
+          providerThreadId: a.providerThreadId,
+          nativeTurnRef: a.nativeTurnRef,
+          error: a.error,
+          createdAt: a.createdAt,
+          startedAt: a.startedAt,
+          completedAt: a.completedAt,
+        },
+      };
+    }
+    case "provider_thread.changed": {
+      const t = event.thread;
+      return {
+        type: "provider_thread.changed",
+        thread: {
+          id: t.id,
+          sessionId: t.sessionId,
+          harness: t.harness,
+          nativeRef: t.nativeRef,
+          status: t.status,
+          lastTurnOrdinal: t.lastTurnOrdinal,
+          portable: t.portable,
+          createdAt: t.createdAt,
+          updatedAt: t.updatedAt,
+        },
+      };
+    }
+    default:
+      return event;
+  }
 }
