@@ -2397,6 +2397,16 @@ export const ErrorSchema = z.object({
   error: z.string(),
 });
 
+/**
+ * Why a session refused a change (409): closed, held by another host (take
+ * it over with `/resume` at `authorityRevision`), or moving between hosts.
+ */
+export const SessionConflictSchema = z.object({
+  error: z.string(),
+  code: z.enum(["session_closed", "authority_required", "handoff_pending"]),
+  authorityRevision: z.number().int().optional(),
+});
+
 /** A 403 may be project scope denial or a structured Environment denial. */
 export const EnvironmentAccessErrorSchema = z.union([
   ErrorSchema,

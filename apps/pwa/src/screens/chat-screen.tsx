@@ -176,14 +176,15 @@ function Chat({
       setResponding(null);
     }
   };
-  // A mirrored chat whose authority is another host refuses sends (409):
-  // take it over here, then send the same command again (ADR 0077).
-  const blockedSend = chat.session?.resumable
-    ? chat.pending.find(
-        (message) =>
-          message.status === "failed" && message.error?.status === 409,
-      )
-    : undefined;
+  // A mirrored chat whose authority is another host refuses sends with
+  // `authority_required`: take it over here, then send the same command
+  // again (ADR 0077).
+  const blockedSend = chat.pending.find(
+    (message) =>
+      message.status === "failed" &&
+      message.error?.status === 409 &&
+      conflictCode(message.error.details) === "authority_required",
+  );
   const [continuing, setContinuing] = useState(false);
   const [continueError, setContinueError] = useState<string | null>(null);
   const continueHere = async (commandId: string) => {
@@ -664,4 +665,14 @@ function hostOf(serverUrl: string): string {
   } catch {
     return serverUrl;
   }
+}
+
+/** The reason a session refused a change, from a 409's body. */
+function conflictCode(details: unknown): string | undefined {
+  return details &&
+    typeof details === "object" &&
+    "code" in details &&
+    typeof details.code === "string"
+    ? details.code
+    : undefined;
 }

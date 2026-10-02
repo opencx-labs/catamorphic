@@ -6944,6 +6944,11 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            /** @enum {string} */
+                            code: "session_closed" | "authority_required" | "handoff_pending";
+                            authorityRevision?: number;
+                        } | {
+                            error: string;
                         };
                     };
                 };
@@ -7284,6 +7289,9 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            /** @enum {string} */
+                            code: "session_closed" | "authority_required" | "handoff_pending";
+                            authorityRevision?: number;
                         };
                     };
                 };
@@ -10101,6 +10109,11 @@ export interface paths {
                                     labels?: {
                                         [key: string]: string;
                                     };
+                                    readonly signIns?: {
+                                        /** @enum {string} */
+                                        harness: "claude-code" | "codex";
+                                        member: string;
+                                    }[];
                                 };
                             } | {
                                 /** @enum {string} */

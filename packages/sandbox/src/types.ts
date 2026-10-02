@@ -424,4 +424,3 @@ export function positiveTokenCount(value: unknown): number {
     ? Math.trunc(value)
     : 0;
 }
-

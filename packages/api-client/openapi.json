@@ -19804,14 +19804,41 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "session_closed",
+                            "authority_required",
+                            "handoff_pending"
+                          ]
+                        },
+                        "authorityRevision": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": ["error", "code"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"],
+                      "additionalProperties": false
                     }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
+                  ]
                 }
               }
             }
@@ -21371,9 +21398,22 @@
                   "properties": {
                     "error": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "session_closed",
+                        "authority_required",
+                        "handoff_pending"
+                      ]
+                    },
+                    "authorityRevision": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
                     }
                   },
-                  "required": ["error"],
+                  "required": ["error", "code"],
                   "additionalProperties": false
                 }
               }
@@ -28551,6 +28591,25 @@
                                     "type": "object",
                                     "additionalProperties": {
                                       "type": "string"
+                                    }
+                                  },
+                                  "signIns": {
+                                    "readOnly": true,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "harness": {
+                                          "type": "string",
+                                          "enum": ["claude-code", "codex"]
+                                        },
+                                        "member": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": ["harness", "member"],
+                                      "additionalProperties": false
                                     }
                                   }
                                 },

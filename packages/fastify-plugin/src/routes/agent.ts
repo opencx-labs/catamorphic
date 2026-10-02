@@ -63,6 +63,7 @@ import {
   ProjectIdParamsSchema,
   ResumeAgentSessionSchema,
   SessionCommandSchema,
+  SessionConflictSchema,
   SessionEventsQuerySchema,
   SessionItemsPageSchema,
   SessionItemsQuerySchema,
@@ -193,7 +194,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         400: ErrorSchema,
         403: EnvironmentAccessErrorSchema,
         404: ErrorSchema,
-        409: ErrorSchema,
+        409: z.union([SessionConflictSchema, ErrorSchema]),
         422: EnvironmentErrorSchema,
         428: AuthenticationRequiredSchema,
         503: ErrorSchema,
@@ -230,15 +231,8 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
             requirements: [...err.requirements],
           });
         }
-        if (err instanceof AgentSessionClosedError) {
-          return reply.status(409).send({ error: "Session is closed" });
-        }
-        if (
-          err instanceof AgentSessionAuthorityRequiredError ||
-          err instanceof AgentSessionHandoffPendingError
-        ) {
-          return reply.status(409).send({ error: err.message });
-        }
+        const conflict = sessionConflict(err);
+        if (conflict) return reply.status(409).send(conflict);
         if (err instanceof AgentTurnInProgressError) {
           return reply.status(409).send({
             error: "A turn is in progress; try again when it settles",
@@ -469,7 +463,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
       response: {
         200: CommandReceiptSchema,
         404: ErrorSchema,
-        409: ErrorSchema,
+        409: SessionConflictSchema,
         422: EnvironmentErrorSchema,
         503: ErrorSchema,
       },
@@ -493,13 +487,8 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           err instanceof AgentSessionNotFoundError
         )
           return reply.status(404).send({ error: "Session not found" });
-        if (err instanceof AgentSessionClosedError)
-          return reply.status(409).send({ error: "Session is closed" });
-        if (
-          err instanceof AgentSessionAuthorityRequiredError ||
-          err instanceof AgentSessionHandoffPendingError
-        )
-          return reply.status(409).send({ error: err.message });
+        const conflict = sessionConflict(err);
+        if (conflict) return reply.status(409).send(conflict);
         if (err instanceof UnsupportedAgentTopologyError)
           return reply.status(422).send({
             error: err.message,
@@ -1408,6 +1397,23 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
  * A stored JSON object as wire JSON: members holding `undefined` are
  * dropped, as serializing would drop them.
  */
+/** A session's refusal of a change, as a 409 body; null when it is not one. */
+function sessionConflict(
+  err: unknown,
+): z.infer<typeof SessionConflictSchema> | null {
+  if (err instanceof AgentSessionClosedError)
+    return { error: "Session is closed", code: "session_closed" };
+  if (err instanceof AgentSessionAuthorityRequiredError)
+    return {
+      error: err.message,
+      code: "authority_required",
+      authorityRevision: err.authorityRevision,
+    };
+  if (err instanceof AgentSessionHandoffPendingError)
+    return { error: err.message, code: "handoff_pending" };
+  return null;
+}
+
 function wireObject(value: object): JsonObject {
   return Object.fromEntries(
     Object.entries(value)
