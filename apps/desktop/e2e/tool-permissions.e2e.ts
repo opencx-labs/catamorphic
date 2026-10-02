@@ -232,16 +232,16 @@ it("shows concurrent connector requests together and settles each independently"
   await run(
     `requestCard('First app').querySelector('[data-testid="elicitation-accept"]').click();`,
   );
-  await runWait(`return !requestCard('First app') && !!requestCard('Second app');`);
+  await runWait(
+    `return !requestCard('First app') && !!requestCard('Second app');`,
+  );
   await run(
     `requestCard('Second app').querySelector('[data-testid="elicitation-decline"]').click();`,
   );
   await runWait(
     `return timeline().includes('elicitation decisions: accept,decline');`,
   );
-  expect(await run(`return !!$('[data-testid="approval-card"]');`)).toBe(
-    false,
-  );
+  expect(await run(`return !!$('[data-testid="approval-card"]');`)).toBe(false);
 });
 it("withdraws a connector request on cancellation", async () => {
   await run(`send('elicitation: cancel');`);
