@@ -32,6 +32,7 @@ export async function readSessionStream({
   sessionId,
   after,
   signal,
+  onOpen,
   onMessage,
 }: {
   apiClient: CatamorphicApiClient;
@@ -40,6 +41,8 @@ export async function readSessionStream({
   /** The last sequence the client applied. */
   after: number;
   signal: AbortSignal;
+  /** The server accepted the stream: it is live before its first message. */
+  onOpen?: () => void;
   onMessage: (message: SessionStreamMessage) => void;
 }): Promise<void> {
   const result = await apiClient.GET(
@@ -58,16 +61,20 @@ export async function readSessionStream({
       fallbackMessage: "The session stream could not be opened",
     });
   }
+  onOpen?.();
   const reader = result.data.pipeThrough(new TextDecoderStream()).getReader();
+  // Not every fetch errors a body already streaming when its signal aborts.
+  const cancel = () => void reader.cancel().catch(() => undefined);
+  signal.addEventListener("abort", cancel, { once: true });
   let buffer = "";
   try {
     for (;;) {
       const { value, done } = await reader.read();
-      if (done) break;
+      if (done || signal.aborted) break;
       buffer += value;
       for (;;) {
         const boundary = frameBoundary(buffer);
-        if (!boundary) break;
+        if (!boundary || signal.aborted) break;
         const frame = buffer.slice(0, boundary.index);
         buffer = buffer.slice(boundary.index + boundary.length);
         const message = parseFrame(frame);
@@ -75,6 +82,7 @@ export async function readSessionStream({
       }
     }
   } finally {
+    signal.removeEventListener("abort", cancel);
     reader.releaseLock();
   }
 }
@@ -107,52 +115,103 @@ export function parseFrame(frame: string): SessionStreamMessage | undefined {
 }
 
 /**
- * How many session streams one API client keeps open at once. A browser
- * gives an HTTP/1.1 origin six connections and every open stream holds
- * one, so a host with many chats mounted would starve its own requests.
- * Readers past the limit poll instead until a slot frees.
+ * Whether a failed request will fail the same way when repeated: a 4xx
+ * other than a timeout (408) or a rate limit (429). A deleted session or
+ * revoked access is said, not retried behind "Connection lost". A refused
+ * command (a 200 receipt) is not a failed request.
+ */
+export function isPermanentFailure(error: unknown): boolean {
+  if (!(error instanceof CatamorphicError)) return false;
+  const status = error.status;
+  if (status === undefined || status < 400 || status >= 500) return false;
+  return status !== 408 && status !== 429;
+}
+
+/**
+ * How many session streams one origin keeps open at once. A browser gives
+ * an HTTP/1.1 origin six connections and every open stream holds one, so
+ * a host with many chats mounted would starve its own requests. Readers
+ * past the limit poll instead until a slot frees.
  */
 export const MAX_SESSION_STREAMS = 4;
 
-interface StreamSlots {
-  used: number;
-  waiting: Set<() => void>;
+/**
+ * What stream slots are counted by: the origin of an API base URL, since
+ * the browser's connection limit is per origin however many API clients
+ * (one per project, one per dock) reach it.
+ */
+export function streamSlotKey(baseUrl: string): string {
+  try {
+    const origin = new URL(baseUrl, globalThis.location?.href).origin;
+    return origin === "null" ? baseUrl : origin;
+  } catch {
+    return baseUrl;
+  }
 }
 
-const streamSlots = new WeakMap<object, StreamSlots>();
+/** One reader's claim on a stream slot. */
+export interface StreamSlot {
+  /** The slot is this reader's now; false while it waits for one. */
+  readonly held: boolean;
+  /**
+   * Give the slot up, or stop waiting for one. A held slot passes to the
+   * reader that has waited longest. Safe to call more than once.
+   */
+  release: () => void;
+}
+
+interface StreamSlots {
+  used: number;
+  waiting: Array<() => void>;
+}
+
+const streamSlots = new Map<string, StreamSlots>();
 
 /**
- * Take one of `client`'s stream slots. Returns its release, or null when
- * all are taken: `onFree` then runs once one frees, to try again, unless
- * `cancel` ran first.
+ * Take one of `key`'s stream slots (see {@link streamSlotKey}). When all
+ * are taken the reader waits: a freed slot passes straight to the reader
+ * that has waited longest, and `onGranted` tells it. A reader handed a
+ * slot it no longer needs releases it, so it passes on again and no
+ * waiting reader is left polling beside a free slot.
  */
 export function acquireStreamSlot(
-  client: object,
-  onFree: () => void,
-): { release: (() => void) | null; cancel: () => void } {
-  let slots = streamSlots.get(client);
+  key: string,
+  onGranted: () => void,
+): StreamSlot {
+  let slots = streamSlots.get(key);
   if (!slots) {
-    slots = { used: 0, waiting: new Set() };
-    streamSlots.set(client, slots);
+    slots = { used: 0, waiting: [] };
+    streamSlots.set(key, slots);
   }
   const owned = slots;
-  if (owned.used >= MAX_SESSION_STREAMS) {
-    owned.waiting.add(onFree);
-    return { release: null, cancel: () => owned.waiting.delete(onFree) };
-  }
-  owned.used += 1;
-  let released = false;
+  let held = false;
+  let done = false;
+  const grant = () => {
+    held = true;
+    onGranted();
+  };
+  if (owned.used < MAX_SESSION_STREAMS) {
+    owned.used += 1;
+    held = true;
+  } else owned.waiting.push(grant);
   return {
-    release: () => {
-      if (released) return;
-      released = true;
-      owned.used -= 1;
-      const [next] = owned.waiting;
-      if (next) {
-        owned.waiting.delete(next);
-        next();
-      }
+    get held() {
+      return held && !done;
     },
-    cancel: () => {},
+    release: () => {
+      if (done) return;
+      done = true;
+      if (!held) {
+        owned.waiting = owned.waiting.filter((entry) => entry !== grant);
+        return;
+      }
+      const next = owned.waiting.shift();
+      if (next) {
+        next();
+        return;
+      }
+      owned.used -= 1;
+      if (owned.used === 0) streamSlots.delete(key);
+    },
   };
 }

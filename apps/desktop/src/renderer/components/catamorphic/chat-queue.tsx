@@ -17,6 +17,8 @@ export interface QueuedChatMessage {
   id: string;
   content: string;
   attachments: AgentAttachment[];
+  /** Held for editing (here or on another device): later messages wait. */
+  held?: boolean;
 }
 
 /** How many queued messages stay visible while collapsed. */
@@ -278,7 +280,7 @@ function QueuedBubble({
           </p>
         )}
         <div className="mt-1 flex items-center justify-end gap-0.5 text-[10px] uppercase tracking-wider text-fg-faint">
-          Queued
+          {queued.held && !editing ? "Held" : "Queued"}
           <span className="ml-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/queued:opacity-100 group-focus-within/queued:opacity-100">
             {!editing && (
               <Hint label="Edit before it sends">

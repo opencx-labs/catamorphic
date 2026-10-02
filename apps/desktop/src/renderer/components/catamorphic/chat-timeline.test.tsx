@@ -178,6 +178,82 @@ describe("ChatTimeline queue editing", () => {
     await act(async () => link.click());
     expect(opens).toHaveBeenCalledWith(2, "file:source.ts");
   });
+
+  it("says a held message is held, not queued", async () => {
+    await act(async () => {
+      root.render(
+        <ChatTimeline
+          turns={[]}
+          queue={[
+            {
+              turn: turn("held-1", 2, { status: "held", attemptCount: 0 }),
+              item: input("held-1", "being edited elsewhere"),
+            },
+            {
+              turn: turn("queued-2", 3, { status: "queued", attemptCount: 0 }),
+              item: input("queued-2", "after it"),
+            },
+          ]}
+        />,
+      );
+    });
+    const labels = [
+      ...container.querySelectorAll('[data-testid="chat-queued-message"]'),
+    ].map((bubble) => bubble.textContent ?? "");
+    expect(labels[0]).toContain("Held");
+    expect(labels[1]).toContain("Queued");
+  });
+
+  it("stops the turn waiting to retry by name", async () => {
+    const stopped = vi.fn();
+    await act(async () => {
+      root.render(
+        <ChatTimeline
+          turns={timelineOf({
+            turns: [
+              turn("t1", 1, {
+                status: "queued",
+                retryAt: new Date(Date.now() + 30_000).toISOString(),
+                error: { message: "Rate limited" },
+              }),
+            ],
+            items: [input("t1", "first")],
+          })}
+          onStopRetrying={stopped}
+        />,
+      );
+    });
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[data-testid="stop-retrying"]')
+        ?.click(),
+    );
+    expect(stopped).toHaveBeenCalledWith("t1");
+  });
+
+  it("withdraws the message about to start", async () => {
+    const cancelled = vi.fn(() => true);
+    await act(async () => {
+      root.render(
+        <ChatTimeline
+          turns={timelineOf({
+            turns: [turn("t1", 1, { status: "queued", attemptCount: 0 })],
+            items: [input("t1", "go")],
+          })}
+          activity="Waiting for agent"
+          onCancelQueued={cancelled}
+        />,
+      );
+    });
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="chat-cancel-starting"]',
+        )
+        ?.click(),
+    );
+    expect(cancelled).toHaveBeenCalledWith("t1");
+  });
 });
 
 describe("note step labels", () => {

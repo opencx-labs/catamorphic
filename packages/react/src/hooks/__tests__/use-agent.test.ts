@@ -1,9 +1,13 @@
 import { waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { CatamorphicError } from "../../lib/errors.js";
 import { apiUrl, HttpResponse, http } from "../../test/handlers.js";
 import { renderHookWithProviders } from "../../test/render.js";
 import { server } from "../../test/server.js";
-import { useAgentSession } from "../use-agent-session.js";
+import {
+  snapshotRefetchInterval,
+  useAgentSession,
+} from "../use-agent-session.js";
 import { useAgentSessions } from "../use-agent-sessions.js";
 import { useCreateAgentSession } from "../use-create-agent-session.js";
 
@@ -95,5 +99,26 @@ describe("useCreateAgentSession", () => {
     await expect(
       result.current.mutateAsync({ userId: USER_ID }),
     ).rejects.toMatchObject({ code: "not_found" });
+  });
+});
+
+describe("snapshotRefetchInterval", () => {
+  const refused = (status: number) =>
+    new CatamorphicError({ code: "unknown", status });
+
+  it("stops reloading a snapshot that was refused", () => {
+    const input = { data: undefined, streaming: false, pollIntervalMs: 1_500 };
+    expect(snapshotRefetchInterval({ ...input, error: refused(404) })).toBe(
+      false,
+    );
+    expect(snapshotRefetchInterval({ ...input, error: refused(403) })).toBe(
+      false,
+    );
+    expect(snapshotRefetchInterval({ ...input, error: refused(503) })).toBe(
+      3_000,
+    );
+    expect(snapshotRefetchInterval({ ...input, error: refused(429) })).toBe(
+      3_000,
+    );
   });
 });

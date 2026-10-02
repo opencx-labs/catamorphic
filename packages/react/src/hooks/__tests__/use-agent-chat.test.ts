@@ -190,8 +190,112 @@ describe("useAgentSession", () => {
       expect(result.current.session?.title).toBe("From the snapshot"),
     );
     expect(result.current.state?.stale).toBe(false);
-    expect(result.current.state?.sequence).toBe(12);
     expect(served.snapshots()).toBe(2);
+    // It streams again from the fresh snapshot, so what was sent while it
+    // loaded arrives again instead of opening another gap.
+    await waitFor(() => expect(served.cursors).toEqual([4, 12]));
+    act(() =>
+      served.latest()?.send({
+        type: "events",
+        events: [
+          stored(13, { type: "session.changed", session: { title: "Live" } }),
+        ],
+      }),
+    );
+    await waitFor(() => expect(result.current.session?.title).toBe("Live"));
+    expect(result.current.state?.sequence).toBe(13);
+    expect(served.snapshots()).toBe(2);
+  });
+
+  it("ignores what the old stream sends once it saw a gap", async () => {
+    const served = serveSession(settledSnapshot());
+    const { result } = renderHookWithProviders(() =>
+      useAgentSession(PROJECT_ID, SESSION_ID),
+    );
+    await waitFor(() => expect(served.cursors).toEqual([4]));
+    const first = served.latest();
+    served.setSnapshot(snapshot({ ...settledSnapshot(), sequence: 10 }));
+    act(() =>
+      first?.send({
+        type: "events",
+        events: [
+          stored(9, { type: "session.changed", session: { title: "Gap" } }),
+        ],
+      }),
+    );
+    await waitFor(() => expect(served.cursors).toEqual([4, 10]));
+    // The resumed stream replays 11 onward; the abandoned one is not read.
+    act(() => {
+      first?.send({
+        type: "events",
+        events: [
+          stored(11, { type: "session.changed", session: { title: "Old" } }),
+        ],
+      });
+      served.latest()?.send({
+        type: "events",
+        events: [
+          stored(11, { type: "session.changed", session: { title: "New" } }),
+          stored(12, { type: "session.changed", session: { icon: "bolt" } }),
+        ],
+      });
+    });
+    await waitFor(() => expect(result.current.state?.sequence).toBe(12));
+    expect(result.current.session?.title).toBe("New");
+    expect(result.current.state?.stale).toBe(false);
+  });
+
+  it("reads as live as soon as the stream opens", async () => {
+    const served = serveSession(settledSnapshot());
+    const { result } = renderHookWithProviders(() =>
+      useAgentSession(PROJECT_ID, SESSION_ID),
+    );
+    await waitFor(() => expect(served.cursors).toEqual([4]));
+    // Nothing was sent: an idle chat is still connected.
+    await waitFor(() => expect(result.current.connection).toBe("live"));
+  });
+
+  it("stops and says why when the stream is refused", async () => {
+    const served = serveSession(settledSnapshot());
+    let attempts = 0;
+    server.use(
+      http.get(apiUrl(`${BASE}/events`), () => {
+        attempts += 1;
+        return HttpResponse.json(
+          { error: "Session not found" },
+          { status: 404 },
+        );
+      }),
+    );
+    const { result } = renderHookWithProviders(() =>
+      useAgentChat(PROJECT_ID, { sessionId: SESSION_ID }),
+    );
+    await waitFor(() => expect(result.current.error?.code).toBe("not_found"));
+    expect(result.current.error?.message).toBe("Session not found");
+    expect(result.current.connection).toBe("idle");
+    expect(result.current.connectionLost).toBe(false);
+    // Past the first reconnect delays: it did not try again.
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    expect(attempts).toBe(1);
+    expect(served.snapshots()).toBe(1);
+  });
+
+  it("keeps reconnecting after a rate limit", async () => {
+    serveSession(settledSnapshot());
+    let attempts = 0;
+    server.use(
+      http.get(apiUrl(`${BASE}/events`), () => {
+        attempts += 1;
+        return HttpResponse.json({ error: "Slow down" }, { status: 429 });
+      }),
+    );
+    const { result } = renderHookWithProviders(() =>
+      useAgentSession(PROJECT_ID, SESSION_ID),
+    );
+    await waitFor(() => expect(attempts).toBeGreaterThanOrEqual(2), {
+      timeout: 3_000,
+    });
+    expect(result.current.error).toBeNull();
   });
 
   it("pages older items into the state", async () => {
@@ -401,6 +505,9 @@ describe("useAgentChat commands", () => {
       await result.current.cancelQueued("t2");
       await result.current.retry();
       await result.current.rollback("t1");
+      await result.current.interrupt();
+      // A turn waiting to retry is stopped by name, not the running one.
+      await result.current.interrupt("t1");
     });
     expect(
       bodies.map(({ commandId: _commandId, ...command }) => command),
@@ -411,8 +518,10 @@ describe("useAgentChat commands", () => {
       { type: "cancel_queued", turnId: "t2" },
       { type: "retry", turnId: "t1" },
       { type: "rollback", turnId: "t1" },
+      { type: "interrupt", turnId: "t3" },
+      { type: "interrupt", turnId: "t1" },
     ]);
-    expect(new Set(bodies.map((body) => body.commandId)).size).toBe(6);
+    expect(new Set(bodies.map((body) => body.commandId)).size).toBe(8);
   });
 
   it("creates the session on the first message", async () => {

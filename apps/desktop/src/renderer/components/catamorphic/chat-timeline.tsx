@@ -13,6 +13,7 @@ import {
   type Turn,
   type UserMessageItem,
   type WorkItem,
+  waitsToRun,
 } from "@catamorphic/react";
 import {
   ArrowDown,
@@ -194,8 +195,8 @@ export interface ChatTimelineProps {
   workDisplay?: WorkDisplay;
   /** Run a failed or interrupted turn again. */
   onRetry?: (turnId: string) => void;
-  /** Stop a turn that waits to retry. */
-  onStopRetrying?: () => void;
+  /** Stop a turn that waits to retry: that turn, never another. */
+  onStopRetrying?: (turnId: string) => void;
   /**
    * Re-connect the agent's account (auth failures). Only offered when the
    * host can actually run a login flow for the current agent.
@@ -336,7 +337,12 @@ export function ChatTimeline({
     id: entry.turn.id,
     content: entry.item?.text ?? "",
     attachments: entry.item?.attachments ?? [],
+    held: entry.turn.status === "held",
   }));
+  // The message about to start reads in the conversation, still withdrawable.
+  const starting = turns.find(
+    (group) => group.turn && waitsToRun(group.turn),
+  )?.turn;
   const context: RowContext = {
     requests: requests ?? {},
     resolveAgentName,
@@ -453,6 +459,12 @@ export function ChatTimeline({
                 startedAt={activityStartedAt}
                 updatedAt={activityUpdatedAt}
               />
+              {starting && !activeTurnId && onCancelQueued && (
+                <CancelStarting
+                  turnId={starting.id}
+                  onCancel={onCancelQueued}
+                />
+              )}
             </div>
           )}
           {queued.length > 0 && (
@@ -1239,7 +1251,7 @@ function TurnOutcome({
   group: TimelineTurn;
   latest: boolean;
   onRetry?: (turnId: string) => void;
-  onStopRetrying?: () => void;
+  onStopRetrying?: (turnId: string) => void;
   onReauth?: () => void;
   reauthLabel?: string;
 }) {
@@ -1257,7 +1269,9 @@ function TurnOutcome({
         actionable={latest}
         retryAt={retrying ? turn.retryAt : null}
         onRetry={!retrying && onRetry ? () => onRetry(turn.id) : undefined}
-        onStop={retrying ? onStopRetrying : undefined}
+        onStop={
+          retrying && onStopRetrying ? () => onStopRetrying(turn.id) : undefined
+        }
         onReauth={onReauth}
         reauthLabel={reauthLabel}
       />
@@ -1779,6 +1793,35 @@ function markRunning(steps: TurnStep[]): TurnStep[] {
     !step.finished && (step.awaitsEnd || index === steps.length - 1)
       ? { ...step, running: true }
       : step,
+  );
+}
+
+/** Withdraw the message about to start, before the agent picks it up. */
+function CancelStarting({
+  turnId,
+  onCancel,
+}: {
+  turnId: string;
+  onCancel: QueueAction<[turnId: string]>;
+}) {
+  const [cancelling, setCancelling] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        setCancelling(true);
+        try {
+          await onCancel(turnId);
+        } finally {
+          setCancelling(false);
+        }
+      }}
+      disabled={cancelling}
+      className="cursor-pointer rounded-md px-2 py-0.5 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-50"
+      data-testid="chat-cancel-starting"
+    >
+      Cancel
+    </button>
   );
 }
 

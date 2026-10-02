@@ -21,8 +21,15 @@ import {
   assertApiOk,
   type CatamorphicError,
   runWithCatamorphicError,
+  toCatamorphicError,
 } from "../lib/errors.js";
-import { acquireStreamSlot, readSessionStream } from "../lib/session-stream.js";
+import {
+  acquireStreamSlot,
+  isPermanentFailure,
+  readSessionStream,
+  type StreamSlot,
+  streamSlotKey,
+} from "../lib/session-stream.js";
 import { useCatamorphic } from "../provider.js";
 import type { AgentSessionDetail } from "../types.js";
 
@@ -92,7 +99,9 @@ export function reconnectDelayMs(failures: number): number {
  * events after it, and folds them with the protocol's reducer. A dropped
  * stream resumes from the last applied sequence with backoff; a `reset`
  * replaces the state; a gap (the reducer marks the state stale) reloads
- * the snapshot. Every mounted reader of a session shares one cache entry.
+ * the snapshot and streams again from its sequence. A refusal (a 4xx other
+ * than 408 or 429) stops the stream and is reported as `error`. Every
+ * mounted reader of a session shares one cache entry.
  */
 export function useAgentSession(
   projectId: string | undefined,
@@ -144,34 +153,23 @@ export function useAgentSession(
     // The stream keeps it current; a refetch is a resync, not a poll.
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
-    refetchInterval: (current) => {
-      if (current.state.error) return 3_000;
-      if (streaming) return false;
-      const data = current.state.data;
-      // Poll while anything is unsettled: a turn running, waiting to
-      // start, or waiting to retry.
-      return data &&
-        Object.values(data.state.turns).some(
-          (turn) => !isSettledTurnStatus(turn.status),
-        )
-        ? pollIntervalMs
-        : false;
-    },
+    refetchInterval: (current) =>
+      snapshotRefetchInterval({
+        error: current.state.error,
+        data: current.state.data,
+        streaming,
+        pollIntervalMs,
+      }),
   });
 
   const loaded = query.data !== undefined;
-  const stale = query.data?.state.stale === true;
   const [connection, setConnection] = useState<AgentSessionConnection>("idle");
-  // Resync after a gap: one snapshot reload per stale episode.
-  useEffect(() => {
-    if (stale)
-      void queryClient.invalidateQueries({
-        queryKey: agentSessionQueryKey(projectId, sessionId),
-        exact: true,
-      });
-  }, [stale, queryClient, projectId, sessionId]);
+  // Why the stream stopped for good (the session is gone, access removed).
+  const [streamError, setStreamError] = useState<CatamorphicError | null>(null);
+  const slotKey = streamSlotKey(apiClient.baseUrl);
 
   useEffect(() => {
+    setStreamError(null);
     if (!live || !loaded || !projectId || !sessionId) {
       setConnection("idle");
       setStreaming(false);
@@ -181,18 +179,34 @@ export function useAgentSession(
     const key = agentSessionQueryKey(projectId, sessionId);
     let failures = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let slot: ReturnType<typeof acquireStreamSlot> | undefined;
-    const sequence = () =>
-      queryClient.getQueryData<AgentSessionData>(key)?.state.sequence;
+    let slot: StreamSlot | undefined;
+    const current = () =>
+      queryClient.getQueryData<AgentSessionData>(key)?.state;
+    const retryLater = () => {
+      failures += 1;
+      if (failures > 1) setConnection("reconnecting");
+      timer = setTimeout(connect, reconnectDelayMs(failures));
+    };
+    const stop = (error: CatamorphicError) => {
+      // Reconnecting would be refused the same way: say why instead.
+      slot?.release();
+      setStreaming(false);
+      setConnection("idle");
+      setStreamError(error);
+    };
     const start = () => {
       if (controller.signal.aborted) return;
-      slot = acquireStreamSlot(apiClient, () => {
-        // A slot freed: catch up, then stream from there.
+      slot = acquireStreamSlot(slotKey, () => {
+        // A slot passed to this reader: catch up, then stream from there.
         void queryClient
           .invalidateQueries({ queryKey: key, exact: true })
-          .finally(start);
+          .finally(() => {
+            if (controller.signal.aborted) return;
+            setStreaming(true);
+            connect();
+          });
       });
-      if (!slot.release) {
+      if (!slot.held) {
         setStreaming(false);
         setConnection("idle");
         return;
@@ -201,47 +215,76 @@ export function useAgentSession(
       connect();
     };
     const connect = () => {
-      const after = sequence();
-      if (after === undefined || controller.signal.aborted) return;
+      const state = current();
+      if (!state || controller.signal.aborted) return;
+      if (state.stale) {
+        // A gap: load a fresh snapshot, then stream from its sequence, so
+        // events sent while it loaded arrive again instead of being lost.
+        void queryClient
+          .invalidateQueries({ queryKey: key, exact: true })
+          .finally(() => {
+            if (controller.signal.aborted) return;
+            if (current()?.stale !== false) retryLater();
+            else connect();
+          });
+        return;
+      }
       // One quick retry is not news; a second failure is.
       setConnection(
         failures === 0 ? "connecting" : failures > 1 ? "reconnecting" : "live",
       );
+      const reading = new AbortController();
+      const signal = AbortSignal.any([controller.signal, reading.signal]);
+      let resync = false;
       void readSessionStream({
         apiClient,
         projectId,
         sessionId,
-        after,
-        signal: controller.signal,
+        after: state.sequence,
+        signal,
+        onOpen: () => setConnection("live"),
         onMessage: (message) => {
+          if (resync) return;
           failures = 0;
           setConnection("live");
           applyStreamMessage({ queryClient, key, message });
+          if (current()?.stale) {
+            resync = true;
+            reading.abort();
+          }
         },
       })
-        .catch(() => undefined)
-        .then(() => {
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        )
+        .then((error) => {
           if (controller.signal.aborted) return;
+          if (resync) {
+            connect();
+            return;
+          }
+          if (isPermanentFailure(error)) {
+            stop(toCatamorphicError({ cause: error }));
+            return;
+          }
           // A clean end (the server closed a slow reader) resumes soon.
-          failures += 1;
-          if (failures > 1) setConnection("reconnecting");
-          timer = setTimeout(connect, reconnectDelayMs(failures));
+          retryLater();
         });
     };
     start();
     return () => {
       controller.abort();
       if (timer) clearTimeout(timer);
-      slot?.cancel();
-      if (slot?.release) {
-        slot.release();
+      const held = slot?.held === true;
+      slot?.release();
+      if (held)
         // Events may have landed since the last one applied: whoever
         // reads next (a poll, another stream) starts from a fresh snapshot.
         void queryClient.invalidateQueries({ queryKey: key, exact: true });
-      }
       setStreaming(false);
     };
-  }, [live, loaded, projectId, sessionId, apiClient, queryClient]);
+  }, [live, loaded, projectId, sessionId, apiClient, slotKey, queryClient]);
 
   const [isLoadingOlder, setLoadingOlder] = useState(false);
   const olderRequest = useRef<Promise<void> | null>(null);
@@ -301,12 +344,38 @@ export function useAgentSession(
       : null,
     state: data?.state ?? null,
     isLoading: query.isLoading,
-    error: query.error ?? null,
+    error: query.error ?? streamError,
     connection: enabled ? connection : "idle",
     hasOlder: data ? data.state.olderBefore !== null : false,
     isLoadingOlder,
     loadOlder,
   };
+}
+
+/**
+ * When to load the snapshot again. A failed load retries every 3s unless
+ * it was refused (gone, access removed): that answers the same way again.
+ * Without a stream it polls while anything is unsettled: a turn running,
+ * waiting to start, or waiting to retry.
+ */
+export function snapshotRefetchInterval({
+  error,
+  data,
+  streaming,
+  pollIntervalMs,
+}: {
+  error: unknown;
+  data: AgentSessionData | undefined;
+  streaming: boolean;
+  pollIntervalMs: number;
+}): number | false {
+  if (error) return isPermanentFailure(error) ? false : 3_000;
+  if (streaming || !data) return false;
+  return Object.values(data.state.turns).some(
+    (turn) => !isSettledTurnStatus(turn.status),
+  )
+    ? pollIntervalMs
+    : false;
 }
 
 /** Fold one stream message into the cached session. */

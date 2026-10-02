@@ -86,6 +86,11 @@ export class SessionEventStream {
       this.raw.end();
       return;
     }
+    // A quiet session says it is there now, not at the first heartbeat:
+    // clients mark a stream live on a message, and some fetches resolve
+    // only once a body byte arrives.
+    if (frames.length === 0)
+      this.send({ type: "heartbeat", sequence: this.sequence });
     this.heartbeat = setInterval(() => {
       this.send({ type: "heartbeat", sequence: this.sequence });
     }, this.heartbeatMs);

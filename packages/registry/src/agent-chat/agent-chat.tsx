@@ -191,7 +191,7 @@ export function AgentChat({
           onSendQueuedNow={chat.sendQueuedNow}
           onHoldQueued={chat.holdQueued}
           onRetry={(turnId) => void chat.retry(turnId)}
-          onInterrupt={() => void chat.interrupt()}
+          onInterrupt={(turnId) => void chat.interrupt(turnId)}
           onRollback={chat.rollback}
           onFork={
             onFork && chat.sessionId

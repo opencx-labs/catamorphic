@@ -151,7 +151,11 @@ export interface UseAgentChatResult {
   cancelQueued: (turnId: string) => Promise<boolean>;
   /** Run a queued turn now: it goes next and stops the active one. */
   sendQueuedNow: (turnId: string) => Promise<boolean>;
-  interrupt: () => Promise<boolean>;
+  /**
+   * Stop a turn: the active one by default, or the turn named (one
+   * waiting to retry stops as interrupted).
+   */
+  interrupt: (turnId?: string) => Promise<boolean>;
   /** Run a failed or interrupted turn again; default the latest one. */
   retry: (turnId?: string) => Promise<boolean>;
   /** Answer a question, an approval or an elicitation. */
@@ -525,11 +529,15 @@ export function useAgentChat(
       if (heldRef.current === turnId) heldRef.current = null;
       return (await run({ type: "send_now", turnId })) !== null;
     },
-    interrupt: async () =>
-      (await run({
-        type: "interrupt",
-        ...(active ? { turnId: active.id } : {}),
-      })) !== null,
+    interrupt: async (turnId) => {
+      const target = turnId ?? active?.id;
+      return (
+        (await run({
+          type: "interrupt",
+          ...(target ? { turnId: target } : {}),
+        })) !== null
+      );
+    },
     retry: async (turnId) => {
       const target = turnId ?? latestRetryable?.id;
       if (!target) return false;
