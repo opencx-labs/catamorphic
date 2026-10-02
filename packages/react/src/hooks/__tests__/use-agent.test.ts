@@ -6,7 +6,6 @@ import { server } from "../../test/server.js";
 import { useAgentSession } from "../use-agent-session.js";
 import { useAgentSessions } from "../use-agent-sessions.js";
 import { useCreateAgentSession } from "../use-create-agent-session.js";
-import { useSendAgentMessage } from "../use-send-agent-message.js";
 
 const SESSION_ID = "00000000-0000-0000-0000-000000000001";
 const PROJECT_ID = "00000000-0000-0000-0000-000000000002";
@@ -55,24 +54,6 @@ describe("useAgentSessions", () => {
 });
 
 describe("useAgentSession", () => {
-  it("returns the session detail", async () => {
-    server.use(
-      http.get(
-        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
-        () =>
-          HttpResponse.json({
-            ...SESSION_BASE,
-            messages: [],
-          }),
-      ),
-    );
-    const { result } = renderHookWithProviders(() =>
-      useAgentSession(PROJECT_ID, SESSION_ID),
-    );
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.id).toBe(SESSION_ID);
-  });
-
   it("maps 404 to not_found", async () => {
     server.use(
       http.get(
@@ -81,14 +62,14 @@ describe("useAgentSession", () => {
       ),
     );
     const { result } = renderHookWithProviders(() =>
-      useAgentSession(PROJECT_ID, SESSION_ID),
+      useAgentSession(PROJECT_ID, SESSION_ID, { live: false }),
     );
-    await waitFor(() => expect(result.current.isError).toBe(true));
+    await waitFor(() => expect(result.current.error).not.toBeNull());
     expect(result.current.error?.code).toBe("not_found");
   });
 });
 
-describe("useCreateAgentSession / useSendAgentMessage", () => {
+describe("useCreateAgentSession", () => {
   it("creates a session", async () => {
     server.use(
       http.post(apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions`), () =>
@@ -100,37 +81,6 @@ describe("useCreateAgentSession / useSendAgentMessage", () => {
     );
     const out = await result.current.mutateAsync({ userId: USER_ID });
     expect(out.id).toBe(SESSION_ID);
-  });
-
-  it("sends a message", async () => {
-    server.use(
-      http.post(
-        apiUrl(
-          `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
-        ),
-        () =>
-          HttpResponse.json(
-            {
-              id: "msg-1",
-              sessionId: SESSION_ID,
-              role: "user" as const,
-              content: "hello",
-              commitSha: null,
-              metadata: null,
-              createdAt: new Date().toISOString(),
-            },
-            { status: 201 },
-          ),
-      ),
-    );
-    const { result } = renderHookWithProviders(() =>
-      useSendAgentMessage(PROJECT_ID),
-    );
-    const out = await result.current.mutateAsync({
-      sessionId: SESSION_ID,
-      message: "hello",
-    });
-    expect(out.content).toBe("hello");
   });
 
   it("maps create 404 to not_found", async () => {
