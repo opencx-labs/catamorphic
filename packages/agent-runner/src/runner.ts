@@ -12,6 +12,7 @@ import {
   type HostToolResult,
   RequestClosedError,
   type RequestDraft,
+  RUNNER_LINE_MAX_BYTES,
   RUNNER_PROTOCOL_VERSION,
   type RunnerCommandFrame,
   type RunnerFrame,
@@ -267,20 +268,34 @@ export class AttemptRunner {
   }
 
   private call(call: HostCall): Promise<JsonValue | undefined> {
-    // A call is never shortened (stored native state would be corrupted):
-    // one too large to send is refused, and the adapter sends smaller ones.
-    if (JSON.stringify(call).length > MAX_FRAME_CHARS)
-      return Promise.reject(
-        new Error(
-          `This host call is larger than ${MAX_FRAME_CHARS} characters; send it in smaller parts.`,
-        ),
-      );
+    // A call is never shortened (stored native state would be corrupted).
+    const bytes = callLineBytes(call);
+    if (bytes > RUNNER_LINE_MAX_BYTES) {
+      const message = `${call.kind === "tool" ? `The call to ${call.name}` : "A native state entry"} is ${mebibytes(bytes)} MiB, more than the ${mebibytes(RUNNER_LINE_MAX_BYTES)} MiB an agent runner can send.`;
+      // Native state without it would be incomplete, and an adapter may not
+      // notice a refused write: the attempt fails, saying why.
+      if (call.kind === "native_state.append")
+        this.failAttempt(
+          `${message} The conversation could not be stored, so the turn stopped.`,
+        );
+      return Promise.reject(new Error(message));
+    }
     this.callCounter += 1;
     const callId = `c${this.callCounter}`;
     return new Promise((resolve, reject) => {
       this.calls.set(callId, { resolve, reject });
       this.emitFrame({ type: "call", callId, call });
     });
+  }
+
+  /** End the attempt as failed, for a reason the harness cannot recover from. */
+  private failAttempt(message: string): void {
+    this.emitEvent({
+      type: "turn.completed",
+      status: "failed",
+      error: { message },
+    });
+    this.stop();
   }
 
   private openRequest(
@@ -379,13 +394,16 @@ export class AttemptRunner {
       request: (key, request, options) =>
         this.openRequest(key, request, options?.signal),
       nativeState: {
+        // One append may be several calls, in order, each small enough for
+        // a host to read at once: adapters append whatever they have.
         append: async ({ thread, subpath, entries }) => {
-          await this.call({
-            kind: "native_state.append",
-            ...(thread ? { thread } : {}),
-            ...(subpath ? { subpath } : {}),
-            entries,
-          });
+          for (const batch of appendBatches(entries))
+            await this.call({
+              kind: "native_state.append",
+              ...(thread ? { thread } : {}),
+              ...(subpath ? { subpath } : {}),
+              entries: batch,
+            });
         },
         load: async ({ thread, subpath }) => {
           const result = await this.call({
@@ -414,31 +432,90 @@ export class AttemptRunner {
 
 const WITHDRAWN = "The harness withdrew the request.";
 
-/** Largest frame, in characters: a host reads frames in 1 MiB chunks. */
-export const MAX_FRAME_CHARS = 512 * 1024;
-const TRUNCATED_STRING_CHARS = 16 * 1024;
+/**
+ * Largest frame other than a call, in UTF-8 bytes of its line: well under
+ * one 1 MiB host read, so such a frame arrives whole in one.
+ */
+export const MAX_FRAME_BYTES = 512 * 1024;
+/** Appends are sent in calls of about this many bytes of entries. */
+export const APPEND_BATCH_BYTES = 256 * 1024;
+/** Ever harsher cuts: characters kept per string, items kept per array. */
+const SHORTENINGS: ReadonlyArray<readonly [number, number]> = [
+  [16 * 1024, 200],
+  [2 * 1024, 50],
+  [256, 10],
+];
+
+/** A frame's encoded line, in bytes: its mark, its JSON and a newline. */
+export function lineBytes(frame: RunnerFrame): number {
+  return Buffer.byteLength(JSON.stringify(frame), "utf8") + 2;
+}
+
+/** A call's line, in bytes, allowing for its frame's envelope. */
+function callLineBytes(call: HostCall): number {
+  return Buffer.byteLength(JSON.stringify(call), "utf8") + 128;
+}
 
 /**
  * A frame small enough to read in one chunk. A huge tool result or command
  * output is cut, string by string, rather than dropped: the item still
- * completes, and says it was shortened.
+ * completes, and says it was shortened. Calls are never cut.
  */
 export function boundFrame(frame: RunnerFrame): RunnerFrame {
-  if (frame.type === "call" || JSON.stringify(frame).length <= MAX_FRAME_CHARS)
+  if (frame.type === "call" || lineBytes(frame) <= MAX_FRAME_BYTES)
     return frame;
-  const cut = (value: unknown): unknown => {
-    if (typeof value === "string")
-      return value.length > TRUNCATED_STRING_CHARS
-        ? `${value.slice(0, TRUNCATED_STRING_CHARS)}\n[Shortened: ${value.length - TRUNCATED_STRING_CHARS} more characters]`
-        : value;
-    if (Array.isArray(value)) return value.slice(0, 200).map(cut);
-    if (value && typeof value === "object")
-      return Object.fromEntries(
-        Object.entries(value).map(([key, inner]) => [key, cut(inner)]),
-      );
-    return value;
-  };
-  return cut(frame) as RunnerFrame;
+  let shortened: RunnerFrame = frame;
+  for (const [chars, items] of SHORTENINGS) {
+    shortened = shorten(frame, chars, items) as RunnerFrame;
+    if (lineBytes(shortened) <= MAX_FRAME_BYTES) break;
+  }
+  return shortened;
+}
+
+function shorten(value: unknown, chars: number, items: number): unknown {
+  if (typeof value === "string") {
+    if (value.length <= chars) return value;
+    // Never end on the first half of a surrogate pair.
+    const code = value.charCodeAt(chars - 1);
+    const end = code >= 0xd800 && code <= 0xdbff ? chars - 1 : chars;
+    return `${value.slice(0, end)}\n[Shortened: ${value.length - end} more characters]`;
+  }
+  if (Array.isArray(value))
+    return value.slice(0, items).map((inner) => shorten(inner, chars, items));
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value).map(([key, inner]) => [
+        key,
+        shorten(inner, chars, items),
+      ]),
+    );
+  return value;
+}
+
+/**
+ * Entries in batches of about {@link APPEND_BATCH_BYTES}, in order. An
+ * entry larger than that goes alone; an empty append is one empty batch.
+ */
+export function* appendBatches(
+  entries: readonly JsonValue[],
+): Generator<JsonValue[]> {
+  let batch: JsonValue[] = [];
+  let size = 0;
+  for (const entry of entries) {
+    const bytes = Buffer.byteLength(JSON.stringify(entry), "utf8") + 1;
+    if (batch.length > 0 && size + bytes > APPEND_BATCH_BYTES) {
+      yield batch;
+      batch = [];
+      size = 0;
+    }
+    batch.push(entry);
+    size += bytes;
+  }
+  if (batch.length > 0 || entries.length === 0) yield batch;
+}
+
+function mebibytes(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(1);
 }
 
 function toolResult(value: JsonValue | undefined): HostToolResult {

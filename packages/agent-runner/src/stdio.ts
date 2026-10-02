@@ -28,11 +28,18 @@ export async function runStdioRunner(input: {
       stdout.write(encodeLine(frame));
     },
   });
-  let buffer = "";
+  // A long command (a large host result) arrives over many chunks: its
+  // pieces are kept until its newline, not rescanned with every chunk.
+  let pieces: string[] = [];
   stdin.setEncoding?.("utf8");
   stdin.on("data", (chunk: string | Buffer) => {
-    const split = splitLines(buffer + chunk.toString());
-    buffer = split.rest;
+    const text = chunk.toString();
+    if (!text.includes("\n")) {
+      pieces.push(text);
+      return;
+    }
+    const split = splitLines(pieces.join("") + text);
+    pieces = split.rest ? [split.rest] : [];
     for (const line of split.lines) {
       const payload = framePayload(line);
       if (payload === undefined) continue;

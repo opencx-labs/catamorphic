@@ -7,6 +7,13 @@ import {
 import { describe, expect, it } from "vitest";
 import { EchoAdapter } from "../echo-adapter.js";
 import { InProcessRunner } from "../in-process.js";
+import {
+  APPEND_BATCH_BYTES,
+  appendBatches,
+  boundFrame,
+  lineBytes,
+  MAX_FRAME_BYTES,
+} from "../runner.js";
 
 /*
  * The attempt runner's protocol (ADR 0197): sequenced frames out, commands
@@ -276,6 +283,154 @@ describe("attempt runner", () => {
     await until(() => frames.some((frame) => frame.type === "ack"));
     const ack = frames.find((frame) => frame.type === "ack");
     expect(ack?.type === "ack" && ack.error).toBe("not_running");
+  });
+
+  it("bounds frames by their UTF-8 bytes, not their characters", () => {
+    const frame = (text: string): RunnerFrame => ({
+      seq: 1,
+      type: "event",
+      event: {
+        type: "item.started",
+        key: "reply",
+        item: { kind: "assistant_message", text, agentId: null },
+      },
+    });
+    // 300 000 characters is under the old character limit, but 900 KB.
+    const wide = boundFrame(frame("界".repeat(300_000)));
+    expect(lineBytes(wide)).toBeLessThanOrEqual(MAX_FRAME_BYTES);
+    expect(JSON.stringify(wide)).toContain("[Shortened: ");
+    // As many ASCII characters fit, and are left alone.
+    const narrow = frame("a".repeat(300_000));
+    expect(boundFrame(narrow)).toBe(narrow);
+    // Ever harsher cuts until it fits, whatever its shape.
+    const many = boundFrame({
+      seq: 1,
+      type: "event",
+      event: {
+        type: "item.started",
+        key: "tool",
+        item: {
+          kind: "tool_call",
+          tool: "t",
+          server: "s",
+          description: null,
+          input: Array.from({ length: 150 }, () => "界".repeat(16_000)),
+          result: null,
+          error: null,
+        },
+      },
+    });
+    expect(lineBytes(many)).toBeLessThanOrEqual(MAX_FRAME_BYTES);
+  });
+
+  it("stores a large entry whole, in its own call, and shortens what it says", async () => {
+    const { runner, until, events, calls, answerCalls } = harness();
+    runner.send({
+      id: "start",
+      command: { kind: "start", attempt: attempt("[[big 400000]]") },
+    });
+    await until(() => {
+      answerCalls();
+      return events().some((event) => event.type === "turn.completed");
+    });
+    const stored = calls().filter(
+      (frame) =>
+        frame.call.kind === "native_state.append" &&
+        frame.call.subpath === "big",
+    );
+    expect(stored).toHaveLength(1);
+    expect(lineBytes(stored[0] as RunnerFrame)).toBeGreaterThan(
+      MAX_FRAME_BYTES,
+    );
+    expect(JSON.stringify(stored[0])).toContain("界".repeat(400_000));
+    expect(JSON.stringify(events())).toContain("[Shortened: ");
+    expect(
+      events().find((event) => event.type === "turn.completed"),
+    ).toMatchObject({ status: "completed" });
+  });
+
+  it("splits an append into bounded calls, in order", () => {
+    const entries = Array.from({ length: 9 }, (_, index) => ({
+      index,
+      text: "界".repeat(30_000),
+    }));
+    const batches = [...appendBatches(entries)];
+    expect(batches.length).toBeGreaterThan(1);
+    for (const batch of batches)
+      expect(
+        Buffer.byteLength(JSON.stringify(batch), "utf8"),
+      ).toBeLessThanOrEqual(APPEND_BATCH_BYTES);
+    expect(batches.flat()).toEqual(entries);
+    expect([...appendBatches([])]).toEqual([[]]);
+  });
+
+  it("fails the attempt, saying why, when an entry is too large to send", async () => {
+    const { runner, frames, until, events, calls, answerCalls } = harness();
+    runner.send({
+      id: "start",
+      command: { kind: "start", attempt: attempt("[[big 3000000]]") },
+    });
+    await until(() => {
+      answerCalls();
+      return frames.some((frame) => frame.type === "exit");
+    });
+    expect(
+      calls().some(
+        (frame) =>
+          frame.call.kind === "native_state.append" &&
+          frame.call.subpath === "big",
+      ),
+    ).toBe(false);
+    const completed = events().filter(
+      (event) => event.type === "turn.completed",
+    );
+    expect(completed).toHaveLength(1);
+    expect(completed[0]).toMatchObject({ status: "failed" });
+    expect(JSON.stringify(completed[0])).toContain(
+      "The conversation could not be stored",
+    );
+  });
+
+  it("lets go of frames its reader has read past, and refuses to read before them", async () => {
+    const runner = new InProcessRunner({
+      adapters: { echo: new EchoAdapter() },
+      version: "test",
+    });
+    runner.send({
+      id: "start",
+      command: { kind: "start", attempt: attempt("[[wait 50]] hello") },
+    });
+    let cursor = 0;
+    const seen: RunnerFrame[] = [];
+    while (!runner.exited) {
+      const read = await runner.read({ afterSeq: cursor, waitMs: 100 });
+      seen.push(...read);
+      for (const frame of read)
+        if (frame.type === "call")
+          runner.send({
+            id: `result:${frame.callId}`,
+            command: {
+              kind: "host_result",
+              callId: frame.callId,
+              result: frame.call.kind === "native_state.load" ? [] : null,
+            },
+          });
+      cursor = read.at(-1)?.seq ?? cursor;
+    }
+    // Reading the same cursor again is fine: nothing past it was released.
+    const again = await runner.read({ afterSeq: cursor, waitMs: 0 });
+    seen.push(...again);
+    cursor = again.at(-1)?.seq ?? cursor;
+    expect(seen.map((frame) => frame.seq)).toEqual(
+      seen.map((_, index) => index + 1),
+    );
+    expect(seen.at(-1)?.type).toBe("exit");
+    // Read past the last frame, nothing of the attempt is held any more.
+    expect(await runner.read({ afterSeq: cursor, waitMs: 0 })).toEqual([]);
+    expect(runner.heldFrames).toBe(0);
+    await expect(runner.read({ afterSeq: 1, waitMs: 0 })).rejects.toThrow(
+      /already released/,
+    );
   });
 
   it("a killed runner falls silent, like a process that died", async () => {

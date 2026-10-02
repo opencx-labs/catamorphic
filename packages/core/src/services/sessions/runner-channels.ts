@@ -4,6 +4,7 @@ import {
   framePayload,
   type HarnessAdapter,
   parseFrame,
+  RUNNER_LINE_MAX_BYTES,
   type RunnerCommandFrame,
   type RunnerFrame,
   splitLines,
@@ -13,7 +14,13 @@ import {
   InProcessRunner,
 } from "@catamorphic/agent-runner";
 import { loadRunnerBundle } from "@catamorphic/runner-bundle";
-import type { SandboxProvider } from "@catamorphic/sandbox";
+import {
+  PROCESS_READ_MAX_BYTES,
+  PROCESS_READ_MAX_WAIT_MS,
+  PROCESS_WRITE_MAX_BYTES,
+  type ProcessOutput,
+  type SandboxProvider,
+} from "@catamorphic/sandbox";
 
 /**
  * Where an attempt's runner is (ADR 0197), persisted on the attempt so any
@@ -33,7 +40,10 @@ export interface RunnerRead {
   frames: RunnerFrame[];
   /** Lines that were not frames: what a harness printed, a crash trace. */
   diagnostics: string[];
-  /** Where the next read starts: never past an incomplete line. */
+  /**
+   * Where the next read starts: never past an incomplete line, except one
+   * already too long to be a frame, which is skipped.
+   */
   cursor: number;
   /** The runner process is gone and everything it wrote was read. */
   exited: boolean;
@@ -180,47 +190,132 @@ export function sandboxChannel(input: {
   const { provider, location } = input;
   const processes = provider.processes;
   if (!processes) throw new Error("This sandbox cannot run processes");
+  /**
+   * A line longer than any frame, being skipped: where this channel's last
+   * read left off inside it. Only such a line ever leaves a cursor mid-line;
+   * a holder that reattaches there reads its tail as a diagnostic.
+   */
+  let skipping: { cursor: number; bytes: number } | undefined;
+  /** Sends in order: one send may take several writes. */
+  let sending: Promise<void> = Promise.resolve();
   return {
     location,
-    send: async (frames) => {
-      if (frames.length === 0) return;
-      await processes.writeProcessInput({
-        sandboxId: location.sandboxId,
-        processId: location.processId,
-        data: frames.map((frame) => encodeLine(frame)).join(""),
+    send: (frames) => {
+      if (frames.length === 0) return Promise.resolve();
+      // The leading newline ends whatever a failed earlier send left half
+      // written, so it never runs into this send's first command.
+      const data = `\n${frames.map((frame) => encodeLine(frame)).join("")}`;
+      const next = sending.then(async () => {
+        for (const piece of utf8Pieces(data, WRITE_PIECE_BYTES))
+          await processes.writeProcessInput({
+            sandboxId: location.sandboxId,
+            processId: location.processId,
+            data: piece,
+          });
       });
+      sending = next.catch(() => {});
+      return next;
     },
     read: async ({ cursor, waitMs }) => {
-      const output = await processes.readProcessOutput({
-        sandboxId: location.sandboxId,
-        processId: location.processId,
-        cursor,
-        // Frames stay below this (the runner bounds them), so a read always
-        // holds at least one whole line.
-        maxBytes: 1024 * 1024,
-        waitMs: Math.min(waitMs, 20_000),
-      });
-      const split = splitLines(output.chunk);
       const frames: RunnerFrame[] = [];
       const diagnostics: string[] = [];
-      for (const line of split.lines) {
+      const take = (line: string) => {
         const payload = framePayload(line);
         if (payload === undefined) {
-          if (line.trim()) diagnostics.push(line);
-          continue;
+          if (line.trim()) diagnostics.push(diagnostic(line));
+          return;
         }
         try {
           frames.push(parseFrame(payload));
         } catch {
-          diagnostics.push(line);
+          diagnostics.push(diagnostic(line));
         }
+      };
+      const deadline = Date.now() + Math.min(waitMs, PROCESS_READ_MAX_WAIT_MS);
+      // Where the next page starts, and the incomplete line just before it:
+      // a line longer than one page is read on across pages.
+      let position = cursor;
+      let partial: string[] = [];
+      let partialBytes = 0;
+      let skipped = skipping?.cursor === cursor ? skipping.bytes : undefined;
+      let wait = Math.max(0, deadline - Date.now());
+      let pages = 0;
+      let output: ProcessOutput;
+      for (;;) {
+        output = await processes.readProcessOutput({
+          sandboxId: location.sandboxId,
+          processId: location.processId,
+          cursor: position,
+          maxBytes: PROCESS_READ_MAX_BYTES,
+          waitMs: wait,
+        });
+        position = output.nextCursor;
+        let text = output.chunk;
+        if (skipped !== undefined) {
+          const end = text.indexOf("\n");
+          if (end < 0) {
+            skipped += Buffer.byteLength(text, "utf8");
+            text = "";
+          } else {
+            skipped += Buffer.byteLength(text.slice(0, end), "utf8");
+            diagnostics.push(skippedLine(skipped));
+            skipped = undefined;
+            text = text.slice(end + 1);
+          }
+        }
+        if (text) {
+          const split = splitLines(text);
+          const [first, ...lines] = split.lines;
+          if (first !== undefined) {
+            take(partial.join("") + first);
+            partial = [];
+            partialBytes = 0;
+            for (const line of lines) take(line);
+          }
+          if (split.rest) {
+            partial.push(split.rest);
+            partialBytes += Buffer.byteLength(split.rest, "utf8");
+          }
+        }
+        // No runner writes a line this long: it is skipped, not held.
+        if (partialBytes > RUNNER_LINE_MAX_BYTES) {
+          skipped = partialBytes;
+          partial = [];
+          partialBytes = 0;
+        }
+        if (output.status === "exited" && !output.more) {
+          // The last line has no newline, and never will.
+          if (skipped !== undefined) diagnostics.push(skippedLine(skipped));
+          skipped = undefined;
+          if (partialBytes > 0) take(partial.join(""));
+          partial = [];
+          partialBytes = 0;
+          break;
+        }
+        const incomplete = partialBytes > 0 || skipped !== undefined;
+        if (output.more) {
+          // A skipped line is passed over a few pages per read at most.
+          pages += 1;
+          if (!incomplete || (skipped !== undefined && pages > SKIP_PAGES))
+            break;
+          wait = 0;
+          continue;
+        }
+        // Nothing more yet: answer with what was read, or wait on for the
+        // rest of a line rather than answer with nothing.
+        if (frames.length > 0 || diagnostics.length > 0 || !incomplete) break;
+        wait = deadline - Date.now();
+        if (!output.chunk || wait <= 0) break;
       }
-      // An incomplete last line is read again with the next chunk.
-      const next = output.nextCursor - Buffer.byteLength(split.rest, "utf8");
+      skipping =
+        skipped === undefined
+          ? undefined
+          : { cursor: position, bytes: skipped };
+      // An incomplete line is read again from its start by the next read.
+      const next = skipped === undefined ? position - partialBytes : position;
       const exited =
         output.status === "exited" &&
         !output.more &&
-        split.rest.length === 0 &&
         next >= output.outputBytes;
       return { frames, diagnostics, cursor: next, exited };
     },
@@ -234,6 +329,39 @@ export function sandboxChannel(input: {
         .catch(() => {});
     },
   };
+}
+
+/** Each input write stays well under what one write may carry. */
+const WRITE_PIECE_BYTES = Math.floor(PROCESS_WRITE_MAX_BYTES / 2);
+/** Pages one read passes over inside a skipped line before answering. */
+const SKIP_PAGES = 8;
+/** Characters of one diagnostic line kept for the log. */
+const DIAGNOSTIC_CHARS = 4_000;
+
+function diagnostic(line: string): string {
+  return line.length > DIAGNOSTIC_CHARS
+    ? `${line.slice(0, DIAGNOSTIC_CHARS)} [${line.length - DIAGNOSTIC_CHARS} more characters]`
+    : line;
+}
+
+function skippedLine(bytes: number): string {
+  return `[A ${bytes}-byte line of output, longer than any runner frame, was skipped]`;
+}
+
+/** `text` in pieces of at most `maxBytes` UTF-8 bytes, never inside a character. */
+export function utf8Pieces(text: string, maxBytes: number): string[] {
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= maxBytes) return [text];
+  const pieces: string[] = [];
+  let start = 0;
+  while (start < bytes.length) {
+    let end = Math.min(start + maxBytes, bytes.length);
+    // Back up over continuation bytes to the start of a character.
+    while (end > start + 1 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end -= 1;
+    pieces.push(bytes.subarray(start, end).toString("utf8"));
+    start = end;
+  }
+  return pieces;
 }
 
 function shellQuote(value: string): string {

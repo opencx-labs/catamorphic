@@ -6,9 +6,6 @@ import type { AttemptHost } from "@catamorphic/agent-protocol/runner";
 /** The native state subpath a Codex thread's rollout lines are stored under. */
 export const ROLLOUT_SUBPATH = "rollout";
 
-/** Appends stay well under a runner frame's size limit. */
-const APPEND_BATCH_CHARS = 256 * 1024;
-
 /**
  * Mirrors a thread's rollout file into Work's native state (ADR 0197): each
  * poll appends the complete lines written since the last one. Codex writes
@@ -16,8 +13,8 @@ const APPEND_BATCH_CHARS = 256 * 1024;
  * Polls run one at a time, in order.
  */
 export class RolloutMirror {
+  /** Bytes taken: always the end of a complete line. */
   private offset: number;
-  private rest = "";
   private chain: Promise<void> = Promise.resolve();
 
   constructor(
@@ -44,7 +41,7 @@ export class RolloutMirror {
     } catch {
       return;
     }
-    let text = "";
+    let complete: Buffer | undefined;
     try {
       const { size } = await handle.stat();
       if (size <= this.offset) return;
@@ -55,41 +52,41 @@ export class RolloutMirror {
         buffer.length,
         this.offset,
       );
-      this.offset += bytesRead;
-      text = buffer.subarray(0, bytesRead).toString("utf8");
+      complete = completeLines(buffer.subarray(0, bytesRead));
     } finally {
       await handle.close();
     }
-    const lines = (this.rest + text).split("\n");
-    this.rest = lines.pop() ?? "";
-    await appendRollout({
-      host: this.input.host,
-      subpath: ROLLOUT_SUBPATH,
-      entries: lines.filter((line) => line.trim()).map(rolloutEntry),
-    });
+    if (!complete) return;
+    this.offset += complete.length;
+    const entries = rolloutLines(complete.toString("utf8"));
+    if (entries.length > 0)
+      await this.input.host.nativeState.append({
+        subpath: ROLLOUT_SUBPATH,
+        entries,
+      });
   }
 }
 
-/** Store entries in batches that stay well under a runner frame. */
-export async function appendRollout(input: {
-  host: AttemptHost;
-  subpath: string;
-  entries: JsonValue[];
-}): Promise<void> {
-  for (const batch of batches(input.entries))
-    await input.host.nativeState.append({
-      subpath: input.subpath,
-      entries: batch,
-    });
+/**
+ * The complete lines at the start of `bytes`, through the last newline.
+ * Split on the newline byte before decoding, which never occurs inside a
+ * multi-byte character: a line still being written stays undecoded.
+ */
+export function completeLines(bytes: Buffer): Buffer | undefined {
+  const end = bytes.lastIndexOf(0x0a);
+  return end < 0 ? undefined : bytes.subarray(0, end + 1);
 }
 
-/** A rollout file's lines as stored entries. */
-export async function readRollout(file: string): Promise<JsonValue[]> {
-  const text = await readFile(file, "utf8");
+function rolloutLines(text: string): JsonValue[] {
   return text
     .split("\n")
     .filter((line) => line.trim())
     .map(rolloutEntry);
+}
+
+/** A rollout file's lines as stored entries. */
+export async function readRollout(file: string): Promise<JsonValue[]> {
+  return rolloutLines(await readFile(file, "utf8"));
 }
 
 /**
@@ -124,22 +121,6 @@ function rolloutEntry(line: string): JsonValue {
   } catch {
     return line;
   }
-}
-
-function* batches(entries: JsonValue[]): Generator<JsonValue[]> {
-  let batch: JsonValue[] = [];
-  let size = 0;
-  for (const entry of entries) {
-    const length = JSON.stringify(entry).length;
-    if (batch.length > 0 && size + length > APPEND_BATCH_CHARS) {
-      yield batch;
-      batch = [];
-      size = 0;
-    }
-    batch.push(entry);
-    size += length;
-  }
-  if (batch.length > 0) yield batch;
 }
 
 /** Write stored rollout entries back to a file Codex can resume from. */

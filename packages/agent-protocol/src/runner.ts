@@ -353,6 +353,14 @@ export type RunnerFrame = { seq: number } & (
  */
 export const FRAME_MARK = "\u001e";
 
+/**
+ * The longest frame line a runner writes, in UTF-8 bytes with its mark and
+ * newline: a host reads lines up to this, across as many reads as it takes.
+ * A host call is never shortened, so one this large is sent whole (or the
+ * runner refuses it); every other frame is shortened far below it.
+ */
+export const RUNNER_LINE_MAX_BYTES = 8 * 1024 * 1024;
+
 /** Encode a frame or command as one marked NDJSON line. */
 export function encodeLine(value: RunnerFrame | RunnerCommandFrame): string {
   return `${FRAME_MARK}${JSON.stringify(value)}\n`;
