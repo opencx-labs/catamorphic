@@ -794,7 +794,11 @@ describe("ai-sdk adapter: steering and interrupts", () => {
     host.send({ kind: "interrupt" });
     await host.done;
     expect(host.of("request.closed")).toEqual([
-      { type: "request.closed", key: "ask:ask-1", reason: "The turn stopped." },
+      {
+        type: "request.closed",
+        key: "ask:ask-1",
+        reason: "The turn was interrupted before it was answered.",
+      },
     ]);
     expect(completed(host).status).toBe("interrupted");
   });

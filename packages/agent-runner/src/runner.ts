@@ -81,8 +81,10 @@ export class AttemptRunner {
     // on it stops waiting.
     if (event.type === "request.closed") {
       const pending = this.requests.get(event.key);
+      // Closed already (or released, which leaves it open in Work).
+      if (!pending) return;
       this.requests.delete(event.key);
-      pending?.reject(new RequestClosedError(event.reason));
+      pending.reject(new RequestClosedError(event.reason));
     }
     this.emitFrame({ type: "event", event });
   }
