@@ -1112,9 +1112,19 @@ export class AgentSessionsService {
   private async expireRequests(): Promise<void> {
     const rows = await this.db
       .selectFrom("agent_runtime_requests")
-      .selectAll()
-      .where("status", "=", "pending")
-      .where("expires_at", "<=", sql<Date>`now()`)
+      .selectAll("agent_runtime_requests")
+      // A mirrored copy's requests are its source's to expire.
+      .innerJoin(
+        "agent_sessions",
+        "agent_sessions.id",
+        "agent_runtime_requests.session_id",
+      )
+      .where("agent_sessions.authority_host_id", "in", [
+        this.hostId,
+        "unassigned",
+      ])
+      .where("agent_runtime_requests.status", "=", "pending")
+      .where("agent_runtime_requests.expires_at", "<=", sql<Date>`now()`)
       .limit(50)
       .execute();
     for (const candidate of rows) {
@@ -1124,6 +1134,7 @@ export class AgentSessionsService {
         const row = await trx
           .selectFrom("agent_runtime_requests")
           .selectAll()
+          .where("session_id", "=", candidate.session_id)
           .where("request_id", "=", candidate.request_id)
           .where("status", "=", "pending")
           .executeTakeFirst();
@@ -1711,6 +1722,8 @@ export class AgentSessionsService {
     // the next harness event is a long command away.
     const current = todos.find((item) => item.status === "in_progress");
     await this.db.transaction().execute(async (trx) => {
+      // The running turn as it stands: it may settle meanwhile.
+      await this.log.lock(trx, sessionId);
       const events: SessionEvent[] = [
         { type: "session.changed", session: { todos } },
       ];
@@ -2429,13 +2442,6 @@ export class AgentSessionsService {
         Number(session.authority_revision),
       );
     await this.claimLocalAuthority(session);
-    if (command.type === "send" && command.workspace)
-      await this.requestWorkspace(
-        identity,
-        projectId,
-        sessionId,
-        command.workspace,
-      );
     const commandId = `user:${identity.externalUserId}:${command.commandId}`;
     // A rollback rewinds the files before its transaction: restoring them
     // reaches the host and the database on its own connections.
@@ -2447,20 +2453,27 @@ export class AgentSessionsService {
         commandId,
         type: command.type,
         externalUserId: identity.externalUserId,
-        ...(command.type === "rollback"
-          ? {
-              before: async () => {
-                // No turn of the chat starts until the rollback is recorded.
-                await this.beginRewind(sessionId);
-                rewindHeld = true;
-                rewound = await this.rewindFiles({
-                  identity,
-                  session,
-                  turnId: command.turnId,
-                });
-              },
-            }
-          : {}),
+        // Work outside the transaction, once per new command: a repeated
+        // command moves no workspace and rewinds no files.
+        before: async () => {
+          if (command.type === "send" && command.workspace)
+            await this.requestWorkspace(
+              identity,
+              projectId,
+              sessionId,
+              command.workspace,
+            );
+          if (command.type === "rollback") {
+            // No turn of the chat starts until the rollback is recorded.
+            await this.beginRewind(sessionId);
+            rewindHeld = true;
+            rewound = await this.rewindFiles({
+              identity,
+              session,
+              turnId: command.turnId,
+            });
+          }
+        },
         run: async (trx) => {
           const locked = await trx
             .selectFrom("agent_sessions")
@@ -3216,6 +3229,7 @@ export class AgentSessionsService {
       const row = await this.db
         .selectFrom("agent_runtime_requests")
         .selectAll()
+        .where("session_id", "=", opened.sessionId)
         .where("request_id", "=", opened.id)
         .executeTakeFirst();
       const request = row ? requestFromRow(row) : null;
@@ -3232,6 +3246,7 @@ export class AgentSessionsService {
       const row = await trx
         .selectFrom("agent_runtime_requests")
         .selectAll()
+        .where("session_id", "=", opened.sessionId)
         .where("request_id", "=", opened.id)
         .forUpdate()
         .executeTakeFirst();
@@ -3342,10 +3357,11 @@ export class AgentSessionsService {
         `This request needs a ${request.kind} answer.`,
       );
     // An answer reaches the attempt as the agent's input: one on its
-    // owner's sign-in or files takes only the owner's words (ADR 0199).
-    // An approval is an approver's decision, not words.
+    // owner's sign-in or files takes only the owner's words (ADR 0199). An
+    // approval is an approver's decision; its reason, words the agent
+    // would read, stays with the owner too.
+    let response = input.command.response as RuntimeRequestResponse;
     if (
-      request.kind !== "approval" &&
       request.attemptId &&
       input.identity.externalUserId !== input.session.external_user_id
     ) {
@@ -3354,15 +3370,18 @@ export class AgentSessionsService {
         .select("runner")
         .where("id", "=", request.attemptId)
         .executeTakeFirst();
-      if ((attempt?.runner as { ownerOnly?: boolean } | null)?.ownerOnly)
-        throw new SessionCommandRejectedError(
-          "owner_only",
-          "This chat runs on its owner's own sign-in, so only they can answer it.",
-          403,
-        );
+      if ((attempt?.runner as { ownerOnly?: boolean } | null)?.ownerOnly) {
+        if (response.kind !== "approval")
+          throw new SessionCommandRejectedError(
+            "owner_only",
+            "This chat runs on its owner's own sign-in, so only they can answer it.",
+            403,
+          );
+        const { reason: _reason, ...decision } = response;
+        response = decision;
+      }
     }
     const now = new Date().toISOString();
-    const response = input.command.response as RuntimeRequestResponse;
     const resolved: RuntimeRequest = {
       ...request,
       status: "resolved",
@@ -3407,6 +3426,7 @@ export class AgentSessionsService {
       const itemRow = await trx
         .selectFrom("agent_items")
         .select("payload")
+        .where("session_id", "=", input.session.id)
         .where("id", "=", request.itemId)
         .executeTakeFirst();
       if (itemRow) {
@@ -3917,6 +3937,7 @@ export class AgentSessionsService {
         const requestIds = closeQuestionsInputSchema.parse(args).requestIds;
         if (requestIds?.length === 0) return "No open questions matched.";
         const closed = await this.db.transaction().execute(async (trx) => {
+          await this.log.lock(trx, sessionId);
           const rows = await trx
             .selectFrom("agent_runtime_requests")
             .selectAll()
@@ -7568,6 +7589,10 @@ export class AgentSessionsService {
     input: { sessionIds: readonly string[]; reason: string },
   ): Promise<void> {
     if (input.sessionIds.length === 0) return;
+    // Under the sessions' locks, in one order: a turn settling meanwhile is
+    // read settled, never written back as running.
+    for (const sessionId of [...input.sessionIds].sort())
+      await this.log.lock(trx, sessionId);
     const rows = await trx
       .selectFrom("agent_turns")
       .selectAll()

@@ -3,6 +3,7 @@ import {
   type CommandReceipt,
   type Item,
   type JsonObject,
+  SETTLED_TURN_STATUSES,
   type SessionEvent,
   type SessionFields,
   type SessionSnapshot,
@@ -85,6 +86,20 @@ export class SessionLog {
     },
   ): Promise<StoredSessionEvent[]> {
     if (input.events.length === 0) return [];
+    await this.lock(trx, input.sessionId);
+    const events = await currentTurns(trx, input);
+    if (events.length === 0) return [];
+    return this.appendLocked(trx, { ...input, events });
+  }
+
+  private async appendLocked(
+    trx: Transaction<DB>,
+    input: {
+      sessionId: string;
+      events: readonly SessionEvent[];
+      commandId?: string | null;
+    },
+  ): Promise<StoredSessionEvent[]> {
     const allocated = await trx
       .updateTable("agent_sessions")
       .set(({ ref }) => ({
@@ -877,6 +892,50 @@ const COPIED_SESSION_FIELDS = new Set([
 ]);
 
 /**
+ * Turn changes as they apply to the turns as they stand, read under the
+ * session lock: a writer that read a turn before it settled never puts it
+ * back to work, and one that read it before a stop never withdraws it. The
+ * log then folds into exactly what the projection holds.
+ */
+async function currentTurns(
+  trx: Transaction<DB>,
+  input: { sessionId: string; events: readonly SessionEvent[] },
+): Promise<SessionEvent[]> {
+  const ids = input.events.flatMap((event) =>
+    event.type === "turn.changed" ? [event.turn.id] : [],
+  );
+  if (ids.length === 0) return [...input.events];
+  const rows = await trx
+    .selectFrom("agent_turns")
+    .select(["id", "status", "cancellation_requested_at"])
+    .where("session_id", "=", input.sessionId)
+    .where("id", "in", ids)
+    .execute();
+  const current = new Map(rows.map((row) => [row.id, row]));
+  const active = (status: string) =>
+    (ACTIVE_TURN_STATUSES as readonly string[]).includes(status);
+  return input.events.flatMap((event): SessionEvent[] => {
+    if (event.type !== "turn.changed") return [event];
+    const row = current.get(event.turn.id);
+    if (!row) return [event];
+    if (
+      (SETTLED_TURN_STATUSES as readonly string[]).includes(row.status) &&
+      active(event.turn.status)
+    )
+      return [];
+    if (
+      active(event.turn.status) &&
+      !event.turn.cancellationRequested &&
+      row.cancellation_requested_at !== null
+    )
+      return [
+        { ...event, turn: { ...event.turn, cancellationRequested: true } },
+      ];
+    return [event];
+  });
+}
+
+/**
  * Events another copy sent (a mirror's push or base, ADR 0197), checked
  * before anything is projected: every record they carry belongs to this
  * session and to no other, every turn they name is this session's, and a
@@ -894,6 +953,7 @@ async function ownEvents(
     threads: new Set<string>(),
   };
   const turnRefs = new Set<string>();
+  const requests = new Set<string>();
   const foreign = () => new ForeignSessionEventError(input.sessionId);
   const own = input.events.map((event): SessionEvent => {
     switch (event.type) {
@@ -926,7 +986,10 @@ async function ownEvents(
         return event;
       case "request.changed":
         if (event.request.sessionId !== input.sessionId) throw foreign();
+        requests.add(event.request.id);
         if (event.request.turnId) turnRefs.add(event.request.turnId);
+        if (event.request.attemptId) ids.attempts.add(event.request.attemptId);
+        if (event.request.itemId) ids.items.add(event.request.itemId);
         return event;
       case "provider_thread.changed":
         if (event.thread.sessionId !== input.sessionId) throw foreign();
@@ -956,7 +1019,14 @@ async function ownEvents(
     (await elsewhere("agent_turns", ids.turns)) ||
     (await elsewhere("agent_turn_attempts", ids.attempts)) ||
     (await elsewhere("agent_items", ids.items)) ||
-    (await elsewhere("agent_provider_threads", ids.threads))
+    (await elsewhere("agent_provider_threads", ids.threads)) ||
+    (requests.size > 0 &&
+      (await trx
+        .selectFrom("agent_runtime_requests")
+        .select("request_id")
+        .where("request_id", "in", [...requests])
+        .where("session_id", "!=", input.sessionId)
+        .executeTakeFirst()) !== undefined)
   )
     throw foreign();
   return own;

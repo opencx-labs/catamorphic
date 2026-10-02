@@ -26,7 +26,14 @@ export function machineSignInHome(input: {
  */
 export function signInMemberDirectory(member: string): string {
   const encoded = encodeURIComponent(member);
-  if (!member || encoded.length > 255 || encoded === "." || encoded === "..")
+  // Also a capability (`sign-in:<harness>:<member>`) a worker offers, which
+  // holds no whitespace and fits in 255 characters.
+  if (
+    !/^\S{1,200}$/.test(member) ||
+    encoded.length > 255 ||
+    encoded === "." ||
+    encoded === ".."
+  )
     throw new Error(`'${member}' is not a member id a sign-in can belong to`);
   return encoded;
 }

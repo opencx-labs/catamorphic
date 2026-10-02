@@ -6,6 +6,7 @@ import {
   type Item,
   orderedTurns,
   pendingRequests,
+  type RuntimeRequest,
   sessionStateFromSnapshot,
   type Turn,
 } from "@catamorphic/agent-protocol";
@@ -42,6 +43,7 @@ import {
   SessionActionsService,
 } from "../services/session-actions-service.js";
 import { copySettledHistory } from "../services/sessions/session-copy.js";
+import { SessionLog } from "../services/sessions/session-log.js";
 import { readFullSnapshot } from "../services/sessions/session-reads.js";
 import { sessionLogFixture } from "./session-fixtures.js";
 import { testEnvironmentProvider } from "./test-environment.js";
@@ -2498,6 +2500,55 @@ describe("agent session coordination", () => {
     expect((await snapshot(victim.id, project.id)).items[0]).toMatchObject({
       text: victimItem.kind === "user_message" ? victimItem.text : "",
     });
+    // A request under another session's request id: lookups by that id
+    // must never find the copy's instead.
+    const now = new Date().toISOString();
+    const victimRequest: RuntimeRequest = {
+      id: randomUUID(),
+      sessionId: victim.id,
+      turnId: null,
+      attemptId: null,
+      itemId: null,
+      kind: "approval",
+      status: "pending",
+      answerable: true,
+      blocking: true,
+      title: "Deploy?",
+      description: null,
+      origin: { kind: "host", id: "gateway", displayName: "Gateway" },
+      questions: null,
+      approval: { action: "deploy" },
+      elicitation: null,
+      approvers: [],
+      expiresAt: null,
+      response: null,
+      resolvedBy: null,
+      reason: null,
+      createdAt: now,
+      resolvedAt: null,
+    };
+    await db.transaction().execute((trx) =>
+      new SessionLog(db).append(trx, {
+        sessionId: victim.id,
+        events: [{ type: "request.changed", request: victimRequest }],
+      }),
+    );
+    await expect(
+      sessions.mirror(identity, project.id, sessionId, {
+        ...push,
+        base: {
+          ...copy.snapshot,
+          requests: [
+            {
+              ...victimRequest,
+              sessionId,
+              status: "resolved",
+              response: { kind: "approval", decision: "approved" },
+            },
+          ],
+        },
+      }),
+    ).rejects.toThrow("another session");
     // A clean copy, then a session change naming another agent and host.
     const first = await sessions.mirror(identity, project.id, sessionId, push);
     await sessions.mirror(identity, project.id, sessionId, {

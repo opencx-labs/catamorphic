@@ -1518,6 +1518,42 @@ export class TurnEngine {
         } else if (outcome.request.approvers.length > 0)
           opened.push(outcome.request);
       }
+      // A refusal at once may leave nothing to wait on: the turn works on.
+      if (refused && turn.status === "waiting") {
+        const batch = governed.flatMap((event) =>
+          event.type === "request.changed" ? [event.request] : [],
+        );
+        const waitsHere = batch.some(
+          (request) => request.status === "pending" && request.blocking,
+        );
+        const waitsElsewhere =
+          !waitsHere &&
+          (await trx
+            .selectFrom("agent_runtime_requests")
+            .select("request_id")
+            .where("session_id", "=", input.turn.sessionId)
+            .where("turn_id", "=", turn.id)
+            .where("status", "=", "pending")
+            .where("blocking", "=", true)
+            .$if(batch.length > 0, (query) =>
+              query.where(
+                "request_id",
+                "not in",
+                batch.map((request) => request.id),
+              ),
+            )
+            .executeTakeFirst()) !== undefined;
+        if (!waitsHere && !waitsElsewhere) {
+          turn = {
+            ...turn,
+            status: "running",
+            activity: "Working",
+            activityAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          governed.push({ type: "turn.changed", turn });
+        }
+      }
       await log.append(trx, {
         sessionId: input.turn.sessionId,
         events: [...governed, ...extra],
@@ -1830,7 +1866,7 @@ export class TurnEngine {
   ): Promise<void> {
     const { db, log, queue } = this.deps;
     const now = new Date().toISOString();
-    const transient =
+    let transient =
       input.status === "failed" &&
       input.error?.retrySafe === true &&
       (input.error.kind === "rate_limit" ||
@@ -1843,7 +1879,7 @@ export class TurnEngine {
     const retryAt = transient
       ? new Date(Date.now() + delay + Math.floor(Math.random() * delay * 0.2))
       : null;
-    const settled: Turn = {
+    let settled: Turn = {
       ...input.turn,
       status: transient ? "queued" : input.status,
       activity: null,
@@ -1862,6 +1898,24 @@ export class TurnEngine {
     let reply: Item | null = null;
     await db.transaction().execute(async (trx) => {
       await this.assertOwned(local, trx);
+      // A person's stop stands: a turn they stopped is not tried again.
+      if (transient) {
+        await log.lock(trx, input.turn.sessionId);
+        const stop = await trx
+          .selectFrom("agent_turns")
+          .select("cancellation_requested_at")
+          .where("id", "=", input.turn.id)
+          .executeTakeFirst();
+        if (stop?.cancellation_requested_at) {
+          transient = false;
+          settled = {
+            ...settled,
+            status: "interrupted",
+            retryAt: null,
+            completedAt: now,
+          };
+        }
+      }
       const events: SessionEvent[] = [];
       if (
         input.attempt.status === "preparing" ||
@@ -2078,6 +2132,9 @@ export class TurnEngine {
         !newer &&
         requeued.length === 0 &&
         !alreadyContinued &&
+        // A continuation that is lost too is not continued again: a machine
+        // that keeps dying would chain them without end.
+        turn.continuationOf === null &&
         !turn.cancellationRequested &&
         ctx.session.status === "active"
       ) {

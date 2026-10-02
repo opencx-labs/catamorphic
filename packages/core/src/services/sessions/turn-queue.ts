@@ -103,23 +103,34 @@ export class TurnQueue {
       const head = await this.eligible(trx, input)
         .where("turn.status", "=", "queued")
         .where("turn.available_at", "<=", sql<Date>`now()`)
-        // A message held for editing keeps its place: what was queued
-        // after it waits, unless it interrupts, or the hold was left
-        // untouched long enough to be abandoned.
+        // A message held for editing, or waiting to be tried again, keeps
+        // its place: what was queued after it waits, unless it interrupts,
+        // or the hold was left untouched long enough to be abandoned.
         .where((eb) =>
           eb.not(
             eb.exists(
               eb
-                .selectFrom("agent_turns as held")
-                .select("held.id")
-                .whereRef("held.session_id", "=", "turn.session_id")
-                .where("held.status", "=", "held")
-                .whereRef("held.ordinal", "<", "turn.ordinal")
-                .whereRef("held.priority", ">=", "turn.priority")
-                .where(
-                  "held.updated_at",
-                  ">",
-                  sql<Date>`now() - make_interval(secs => ${HOLD_BLOCKS_QUEUE_SECONDS})`,
+                .selectFrom("agent_turns as before")
+                .select("before.id")
+                .whereRef("before.session_id", "=", "turn.session_id")
+                .whereRef("before.ordinal", "<", "turn.ordinal")
+                .whereRef("before.priority", ">=", "turn.priority")
+                .where((waits) =>
+                  waits.or([
+                    waits.and([
+                      waits("before.status", "=", "held"),
+                      waits(
+                        "before.updated_at",
+                        ">",
+                        sql<Date>`now() - make_interval(secs => ${HOLD_BLOCKS_QUEUE_SECONDS})`,
+                      ),
+                    ]),
+                    waits.and([
+                      waits("before.status", "=", "queued"),
+                      waits("before.attempt_count", ">", 0),
+                      waits("before.available_at", ">", sql<Date>`now()`),
+                    ]),
+                  ]),
                 ),
             ),
           ),

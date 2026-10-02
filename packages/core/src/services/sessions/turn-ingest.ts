@@ -172,7 +172,9 @@ export async function ingestHarnessEvents(input: {
       }
       case "item.started": {
         const id = derivedId(attemptId, event.key);
-        if (items.has(id)) break;
+        // A harness reports its own work; people's messages, notices,
+        // handoffs and requests are Work's to write.
+        if (items.has(id) || !HARNESS_ITEM_KINDS.has(event.item.kind)) break;
         const item = newItem({
           id,
           draft: event.item,
@@ -323,6 +325,10 @@ export async function ingestHarnessEvents(input: {
       .where("turn_id", "=", turn.id)
       .where("status", "=", "pending")
       .where("blocking", "=", true)
+      // This batch's own requests are known above, closed ones included.
+      .$if(requests.size > 0, (query) =>
+        query.where("request_id", "not in", [...requests.keys()]),
+      )
       .executeTakeFirst();
     if (!open) emitTurn({ ...turn, status: "running" });
   }
@@ -333,6 +339,20 @@ export async function ingestHarnessEvents(input: {
 }
 
 /** What Work owns of an item, which a harness's update never changes. */
+/**
+ * The items a harness may start: its own work in the turn.
+ * Replica memory (c): a constant, the same on every replica.
+ */
+const HARNESS_ITEM_KINDS: ReadonlySet<string> = new Set<Item["kind"]>([
+  "assistant_message",
+  "reasoning",
+  "tool_call",
+  "command",
+  "file_change",
+  "plan",
+  "subagent",
+]);
+
 const WORK_OWNED_ITEM_FIELDS = [
   "id",
   "sessionId",
@@ -391,7 +411,8 @@ function newItem(input: {
     startedAt: input.at,
     endedAt: input.status === "in_progress" ? null : input.at,
   };
-  const item = { ...common, ...payload } as Item;
+  // What Work owns of an item wins over anything the harness sent.
+  const item = { ...payload, ...common } as Item;
   if (item.kind === "assistant_message" && item.agentId === null)
     return { ...item, agentId: input.state.agentId };
   return item;

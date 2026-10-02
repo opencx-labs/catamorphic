@@ -133,6 +133,15 @@ export async function writeSessionMirror({
       current !== undefined &&
       Number(current.mirror_sequence) > 0 &&
       !(await log.hasLogged(trx, sessionId));
+    // This copy logged events of its own past what was mirrored to it: the
+    // source's next events would land on them, so the copies diverged.
+    if (
+      current &&
+      !unlogged &&
+      Number(current.mirror_sequence) > 0 &&
+      Number(current.event_sequence) > Number(current.mirror_sequence)
+    )
+      throw new SessionMirrorDivergedError(sessionId);
     const allocation =
       !current && mirrorAdmission
         ? await executionAllocations.create({
@@ -250,6 +259,12 @@ export async function writeSessionMirror({
           occurred_at: new Date(event.occurredAt),
           payload: {
             ...event.payload,
+            // Automations act on who did it: only the pusher, this chat's
+            // own agent or Work may be named; anyone else is the pusher.
+            actor: mirroredActor(event.payload.actor, {
+              sessionId,
+              externalUserId: identity.externalUserId,
+            }),
             sessionId,
             externalUserId: identity.externalUserId,
             agentId: session.agent_id,
@@ -266,4 +281,24 @@ export async function writeSessionMirror({
     }
     return { session, sequence };
   });
+}
+
+/** A mirrored event's actor, as far as the pushing copy may claim it. */
+function mirroredActor(
+  actor: unknown,
+  own: { sessionId: string; externalUserId: string },
+): JsonObject {
+  const pusher: JsonObject = {
+    kind: "user",
+    externalUserId: own.externalUserId,
+  };
+  if (!actor || typeof actor !== "object" || Array.isArray(actor))
+    return pusher;
+  const claimed = actor as JsonObject;
+  if (claimed.kind === "system") return claimed;
+  if (claimed.kind === "user" && claimed.externalUserId === own.externalUserId)
+    return claimed;
+  if (claimed.kind === "agent" && claimed.sessionId === own.sessionId)
+    return claimed;
+  return pusher;
 }

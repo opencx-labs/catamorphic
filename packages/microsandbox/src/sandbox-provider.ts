@@ -121,7 +121,10 @@ const DEFAULT_SETUP_COMMAND =
   "{ command -v bun >/dev/null 2>&1 || command -v node >/dev/null 2>&1 || apt-get install -y -qq nodejs; }; " +
   "elif command -v apk >/dev/null 2>&1; then apk add --no-cache -q git bash && " +
   "{ command -v bun >/dev/null 2>&1 || command -v node >/dev/null 2>&1 || apk add --no-cache -q nodejs; }; " +
-  "else echo 'The image has neither git nor a known package manager' >&2; exit 1; fi";
+  "else echo 'The image has neither git nor a known package manager' >&2; exit 1; fi; " +
+  // The runner needs Bun, or Node 20 or later; a distribution's Node can be older.
+  "command -v bun >/dev/null 2>&1 || node -e 'process.exit(Number(process.versions.node.split(\".\")[0]) >= 20 ? 0 : 1)' || " +
+  "{ echo 'The agent runner needs Bun, or Node 20 or later, and this image has an older Node: use an image with Bun or Node 20+' >&2; exit 1; }";
 
 /** Start the image's Docker daemon unless it already answers. */
 const ENSURE_DOCKER = [

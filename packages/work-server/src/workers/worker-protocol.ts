@@ -1,16 +1,17 @@
-import { RUNNER_PROTOCOL_VERSION } from "@catamorphic/agent-protocol/runner";
-
 /**
- * The protocol a worker states on every call (ADR 0198): the runner
- * protocol its sandboxes run, since the control plane drives their
- * runners through it.
+ * The protocol a worker states on every call (ADR 0198): the remote
+ * operations the control plane asks of it (sandboxes, processes, files).
+ * Not the runner's: the control plane uploads its own runner bundle into
+ * every sandbox, so a worker never constrains it. Bump `server` when an
+ * operation changes; raise `minimum` only when older workers can no longer
+ * be driven.
  */
 export const WORKER_PROTOCOL_HEADER = "work-protocol";
 
 /** The protocol this control plane speaks, and the oldest it still drives. */
 export const WORKER_PROTOCOL = {
-  server: RUNNER_PROTOCOL_VERSION,
-  minimum: RUNNER_PROTOCOL_VERSION,
+  server: 1,
+  minimum: 1,
 } as const;
 
 /** What a control plane answers a worker it cannot drive, with status 426. */
