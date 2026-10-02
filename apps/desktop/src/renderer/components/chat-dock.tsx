@@ -971,15 +971,21 @@ function ChatDockContent({
   // pointed at Settings by the error text itself. A successful reconnect
   // retries the failed turn on its own — the user already said what they
   // wanted; fixing the credentials shouldn't cost them a re-send.
-  const awaitingReauthRef = useRef<string | null>(null);
+  // The agent being reconnected and the turn its failure stopped: that
+  // turn is the one to run again, whatever else arrived meanwhile.
+  const awaitingReauthRef = useRef<{
+    agentId: string;
+    turnId: string | undefined;
+  } | null>(null);
   const retryRef = useRef(chat.retry);
   retryRef.current = chat.retry;
   useEffect(
     () =>
       desktopApi.onAgentLoginFinished((result) => {
-        if (result.agentId !== awaitingReauthRef.current) return;
+        const awaiting = awaitingReauthRef.current;
+        if (result.agentId !== awaiting?.agentId) return;
         awaitingReauthRef.current = null;
-        if (result.ok) void retryRef.current();
+        if (result.ok) void retryRef.current(awaiting.turnId);
       }),
     [],
   );
@@ -1269,7 +1275,10 @@ function ChatDockContent({
               ? "Reconnect OpenRouter"
               : `Re-login ${activeAgent.name}`,
           run: () => {
-            awaitingReauthRef.current = activeAgent.id;
+            awaitingReauthRef.current = {
+              agentId: activeAgent.id,
+              turnId: latestAuthFailure(chat.timeline),
+            };
             void desktopApi.agentLogin(activeAgent.id).then((result) => {
               // Login never started (e.g. key-auth agent): stop waiting.
               if (!result.started) awaitingReauthRef.current = null;
@@ -3158,4 +3167,16 @@ function sessionHarness(state: SessionState | null): string | undefined {
     b.updatedAt.localeCompare(a.updatedAt),
   );
   return threads[0]?.harness;
+}
+
+/** The latest turn that failed on the agent's sign-in. */
+function latestAuthFailure(
+  turns: ReturnType<typeof useAgentChat>["timeline"],
+): string | undefined {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index]?.turn;
+    if (turn?.status === "failed" && turn.error?.kind === "auth")
+      return turn.id;
+  }
+  return undefined;
 }

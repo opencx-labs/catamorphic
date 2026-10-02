@@ -839,10 +839,35 @@ describe("agents and profiles", () => {
       return true;
     `);
     // The failure surfaces as a friendly card WITH the auto-retry ticker…
-    await runWait(`return window.__retryTickerSeen === true;`, {
-      timeoutMs: 30_000,
-      label: "rate-limit card with auto-retry ticker",
-    });
+    try {
+      await runWait(`return window.__retryTickerSeen === true;`, {
+        timeoutMs: 30_000,
+        label: "rate-limit card with auto-retry ticker",
+      });
+    } catch (error) {
+      console.log(
+        "rate-limit-debug:",
+        JSON.stringify(
+          await app.eval<unknown>(`(async () => { ${helpers}
+            const { url } = await window.catamorphicDesktop.getServerState();
+            const { items: projects } = await fetch(url + '/api/projects').then((r) => r.json());
+            const turns = [];
+            for (const project of projects) {
+              const { items } = await fetch(url + '/api/projects/' + project.id + '/agent/sessions').then((r) => r.json());
+              for (const session of items) {
+                const detail = await fetch(url + '/api/projects/' + project.id + '/agent/sessions/' + session.id).then((r) => r.json());
+                for (const turn of detail.snapshot.turns) {
+                  const input = detail.snapshot.items.find((item) => item.id === turn.inputItemId);
+                  turns.push([session.title, turn.ordinal, turn.status, turn.attemptCount, turn.retryAt, input?.text?.slice(0, 40), turn.error?.message?.slice(0, 60), turn.updatedAt]);
+                }
+              }
+            }
+            return { turns, dock: visibleDock()?.querySelector('[role="log"]')?.textContent.slice(-1500), now: new Date().toISOString() };
+          })()`),
+        ),
+      );
+      throw error;
+    }
     // …and the scheduled retry (5s backoff) recovers without user action.
     await runWait(
       `return $$('[role="log"] article')
