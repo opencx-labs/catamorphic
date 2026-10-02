@@ -1873,6 +1873,11 @@ export const MirrorConflictSchema = z.discriminatedUnion("code", [
   z.object({ error: z.string(), code: z.literal("turn_in_progress") }),
 ]);
 
+/** Continue a mirrored chat here, taking its authority (ADR 0077). */
+export const ResumeAgentSessionSchema = z.object({
+  expectedAuthorityRevision: z.number().int().positive(),
+});
+
 export const ForkAgentSessionSchema = z.object({
   /**
    * Fork point: the item (ADR 0196) the transcript is copied through,

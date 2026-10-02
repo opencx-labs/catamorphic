@@ -55,6 +55,7 @@ import {
   ListSchema,
   MirrorAgentSessionResultSchema,
   MirrorAgentSessionSchema,
+  ResumeAgentSessionSchema,
   MirrorConflictSchema,
   MirrorExportSchema,
   OkSchema,
@@ -512,6 +513,53 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   // pushes the session's log after this copy's sequence, so members see it
   // here and can continue it when the source is gone. A copy that does not
   // exist yet starts from the push's `base` snapshot.
+  // A mirrored chat is continued here: this host takes its authority, if
+  // the source still holds the revision the caller saw (ADR 0077).
+  typed.route({
+    method: "POST",
+    url: "/projects/:projectId/agent/sessions/:sessionId/resume",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      body: ResumeAgentSessionSchema,
+      response: {
+        200: AgentSessionSchema,
+        404: ErrorSchema,
+        409: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions) {
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      }
+      try {
+        return reply.send(
+          await agentSessions.resume(
+            resolveIdentity(request),
+            request.params.projectId,
+            request.params.sessionId,
+            request.body,
+          ),
+        );
+      } catch (error) {
+        if (
+          error instanceof ProjectNotFoundError ||
+          error instanceof AgentSessionNotFoundError
+        ) {
+          return reply.status(404).send({ error: "Session not found" });
+        }
+        if (
+          error instanceof AgentSessionClosedError ||
+          error instanceof SessionMirrorDivergedError
+        ) {
+          return reply.status(409).send({ error: error.message });
+        }
+        throw error;
+      }
+    },
+  });
+
   typed.route({
     method: "PUT",
     url: "/projects/:projectId/agent/sessions/:sessionId/mirror",
