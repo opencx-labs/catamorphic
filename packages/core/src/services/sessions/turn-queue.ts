@@ -42,6 +42,9 @@ export interface TurnCommand {
  * holder's lease lapsed, and one statement a second renews every turn a
  * process holds (ADR 0193).
  */
+/** How long a held message keeps the messages after it waiting. */
+const HOLD_BLOCKS_QUEUE_SECONDS = 10 * 60;
+
 export class TurnQueue {
   constructor(
     private readonly db: Kysely<DB>,
@@ -100,6 +103,27 @@ export class TurnQueue {
       const head = await this.eligible(trx, input)
         .where("turn.status", "=", "queued")
         .where("turn.available_at", "<=", sql<Date>`now()`)
+        // A message held for editing keeps its place: what was queued
+        // after it waits, unless it interrupts, or the hold was left
+        // untouched long enough to be abandoned.
+        .where((eb) =>
+          eb.not(
+            eb.exists(
+              eb
+                .selectFrom("agent_turns as held")
+                .select("held.id")
+                .whereRef("held.session_id", "=", "turn.session_id")
+                .where("held.status", "=", "held")
+                .whereRef("held.ordinal", "<", "turn.ordinal")
+                .whereRef("held.priority", ">=", "turn.priority")
+                .where(
+                  "held.updated_at",
+                  ">",
+                  sql<Date>`now() - make_interval(secs => ${HOLD_BLOCKS_QUEUE_SECONDS})`,
+                ),
+            ),
+          ),
+        )
         .orderBy("turn.priority", "desc")
         .orderBy("turn.created_at")
         .orderBy("turn.ordinal")

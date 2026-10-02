@@ -1516,4 +1516,6 @@ going missing. Any turn can be undone with the files it changed ("Restore to
 here"), and a fork starts from the agent's own conversation at that point.
 Claude Code and Codex logins no longer leave the Mac: a remote chat on a
 subscription runs only on a machine where the person signed in themselves.
+While the agent works and there is nothing to send, the send button stops
+it, and a message held for editing keeps its place in the queue.
 See ADRs 0197, 0198 and 0199.

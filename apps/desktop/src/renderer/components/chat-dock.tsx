@@ -29,6 +29,7 @@ import {
   PictureInPicture2,
   Radio,
   Server,
+  Square,
   X,
 } from "lucide-react";
 import {
@@ -3077,30 +3078,49 @@ function ChatDockContent({
                 {/* Context ring (ADR 0057): quiet until a harness reports
                   occupancy and window size; danger red past 90%. */}
                 <ContextMeter turns={chat.timeline} />
-                <ShortcutHint
-                  label={
-                    // A message during a blocking question reaches the
-                    // agent at once (ADR 0195); otherwise it queues.
-                    chat.isWorking && !awaitingInput
-                      ? `Queue (${/Mac/.test(navigator.platform) ? "⌘↵" : "Ctrl+Enter"} sends now)`
-                      : "Send"
-                  }
-                  shortcut="↵"
-                >
-                  <button
-                    type="submit"
-                    className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-fg transition-opacity duration-150 disabled:opacity-35"
-                    disabled={
-                      pendingTransfers > 0 ||
-                      commandResolutionBlocked ||
-                      (!draft.trim() && pillCount === 0)
+                {/* Nothing to send while the agent works: the button stops
+                  the running turn instead. */}
+                {chat.isWorking &&
+                !awaitingInput &&
+                !draft.trim() &&
+                pillCount === 0 ? (
+                  <ShortcutHint label="Stop">
+                    <button
+                      type="button"
+                      className="grid size-8 shrink-0 place-items-center rounded-lg bg-fg text-bg transition-opacity duration-150"
+                      onClick={() => void chat.interrupt()}
+                      aria-label="Stop the agent"
+                      data-testid="chat-stop"
+                    >
+                      <Square className="size-3 fill-current" />
+                    </button>
+                  </ShortcutHint>
+                ) : (
+                  <ShortcutHint
+                    label={
+                      // A message during a blocking question reaches the
+                      // agent at once (ADR 0195); otherwise it queues.
+                      chat.isWorking && !awaitingInput
+                        ? `Queue (${/Mac/.test(navigator.platform) ? "⌘↵" : "Ctrl+Enter"} sends now)`
+                        : "Send"
                     }
-                    data-disabled-reason="Write a message or attach a file first"
-                    aria-label="Send message"
+                    shortcut="↵"
                   >
-                    <ArrowUp className="size-4" />
-                  </button>
-                </ShortcutHint>
+                    <button
+                      type="submit"
+                      className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-fg transition-opacity duration-150 disabled:opacity-35"
+                      disabled={
+                        pendingTransfers > 0 ||
+                        commandResolutionBlocked ||
+                        (!draft.trim() && pillCount === 0)
+                      }
+                      data-disabled-reason="Write a message or attach a file first"
+                      aria-label="Send message"
+                    >
+                      <ArrowUp className="size-4" />
+                    </button>
+                  </ShortcutHint>
+                )}
               </div>
             </form>
           </div>

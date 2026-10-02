@@ -63,6 +63,9 @@ cursor. Older history pages by item sequence.
 `steer` (into the active turn: natively when the harness can, else as a
 `steer_restart` attempt of the same turn), `interrupt` (stop the active
 turn, then run this), or `message_only` (attributed delivery, no turn).
+A queued message held for editing keeps its place: messages queued after
+it wait, except an interrupt, until it is released or its hold goes ten
+minutes untouched.
 
 **Replication is the log.** A desktop mirrors a session to its remote by
 pushing events after the remote's acknowledged sequence; the remote applies

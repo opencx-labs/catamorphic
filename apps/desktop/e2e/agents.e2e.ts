@@ -1052,6 +1052,30 @@ describe("agents and profiles", () => {
     );
   });
 
+  it("the send button stops a running turn when there is nothing to send", async () => {
+    const interrupted = `return $$('[role="log"] div')
+      .filter((el) => el.textContent.trim() === 'Interrupted').length;`;
+    const before = await run<number>(interrupted);
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'respond slowly and wait for interruption');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return $('[role="log"] [data-testid="activity-text"]')?.textContent.trim() === 'Waiting...';`,
+      { timeoutMs: 30_000, label: "slow turn running" },
+    );
+    await runWait(`return !!$('[data-testid="chat-stop"]');`, {
+      label: "stop button while the agent works",
+    });
+    await run(`$('[data-testid="chat-stop"]').click(); return true;`);
+    await runWait(
+      `return (() => { ${interrupted} })() > ${before} && !$('[data-testid="chat-stop"]');`,
+      { timeoutMs: 30_000, label: "turn stopped, send button back" },
+    );
+  });
+
   it("pastes an image as an attachment and sends it", async () => {
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');

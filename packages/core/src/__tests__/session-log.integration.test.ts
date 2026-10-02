@@ -499,6 +499,61 @@ describe("session log", () => {
     });
   }, 30_000);
 
+  it("keeps a held message's place: what was queued after it waits", async () => {
+    const { projectId, sessionId } = await chat("Held");
+    const send = (text: string) =>
+      sessions.command(identity, projectId, sessionId, {
+        type: "send",
+        commandId: randomUUID(),
+        text,
+      });
+    await send("[[wait 800]] first");
+    await send("second");
+    await send("third");
+    const turns = async () =>
+      (await sessions.get(identity, projectId, sessionId)).snapshot.turns
+        .slice()
+        .sort((a, b) => a.ordinal - b.ordinal);
+    const second = (await turns())[1];
+    await sessions.command(identity, projectId, sessionId, {
+      type: "edit_queued",
+      commandId: randomUUID(),
+      turnId: second?.id ?? "",
+      held: true,
+    });
+    await vi.waitFor(
+      async () => expect((await turns())[0]?.status).toBe("completed"),
+      { timeout: 10_000 },
+    );
+    // The first turn is done; the third still waits behind the held one.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect((await turns()).map((turn) => turn.status)).toEqual([
+      "completed",
+      "held",
+      "queued",
+    ]);
+    await sessions.command(identity, projectId, sessionId, {
+      type: "edit_queued",
+      commandId: randomUUID(),
+      turnId: second?.id ?? "",
+      text: "second, edited",
+      held: false,
+    });
+    await vi.waitFor(
+      async () =>
+        expect((await turns()).map((turn) => turn.status)).toEqual([
+          "completed",
+          "completed",
+          "completed",
+        ]),
+      { timeout: 10_000 },
+    );
+    const [, edited, last] = await turns();
+    expect(Date.parse(edited?.startedAt ?? "")).toBeLessThan(
+      Date.parse(last?.startedAt ?? ""),
+    );
+  }, 30_000);
+
   it("streams the gap after a cursor, then live events, in order", async () => {
     const { projectId, sessionId } = await chat("Stream");
     await sessions.sendMessage(identity, projectId, sessionId, "first");
