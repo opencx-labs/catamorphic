@@ -1,24 +1,39 @@
-import { ChatQueue } from "./chat-queue.js";
+"use client";
 
-("use client");
-
-import type { AgentMessage, PendingAgentTurn } from "@catamorphic/react";
+import {
+  type AssistantMessageItem,
+  answerRows,
+  type ContextHandoffItem,
+  type NoticeItem,
+  type PendingAgentMessage,
+  type QueuedMessage,
+  type RuntimeRequest,
+  type TimelineEntry,
+  type TimelineTurn,
+  type Turn,
+  type UserMessageItem,
+  type WorkItem,
+} from "@catamorphic/react";
 import {
   ArrowDown,
   ArrowUp,
   Bot,
+  Brain,
   Check,
   ChevronRight,
   Copy,
   GitFork,
   KeyRound,
+  ListChecks,
   LoaderCircle,
+  MessageCircleQuestionMark,
   MessageSquareText,
   Pencil,
   Radio,
   RotateCcw,
   SquareTerminal,
   Timer,
+  Undo2,
   Wrench,
 } from "lucide-react";
 import {
@@ -39,14 +54,18 @@ import { splitAttachmentMarkers } from "../../lib/composer-serialize";
 import { formatElapsed, useNow } from "../../lib/elapsed";
 import {
   DEFAULT_WORK_DISPLAY,
-  groupTurns,
-  type TimelineItem,
+  type StepSource,
+  type TurnRow,
+  turnRows,
   type WorkDisplay,
 } from "../../lib/turn-groups";
 import { ActivityText } from "../activity-text";
 import { ContextPill } from "../context-pill";
 import { ShortcutHint } from "../shortcut-hint";
+import { ChatQueue } from "./chat-queue.js";
 import { SessionAttribution } from "./session-attribution.js";
+
+export type { AgentQuestion, AgentQuestionOption } from "@catamorphic/react";
 
 const REMARK_PLUGINS = [remarkGfm];
 
@@ -114,35 +133,6 @@ export type ChatAttachmentView =
       source: ChatTextSourceView;
     };
 
-export interface ChatTimelineMessage {
-  id: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  author?: AgentMessage["author"];
-  metadata?: unknown;
-  attachments?: ChatAttachmentView[];
-}
-
-/**
- * Sent as the ask_user tool result when the user dismisses the question
- * panel. The timeline recognizes it by content and renders a muted note
- * instead of a user bubble.
- */
-export const QUESTIONS_DISMISSED_MESSAGE =
-  "The user dismissed these questions without answering them. Continue without their input, using your best judgment.";
-
-export interface AgentQuestionOption {
-  label: string;
-  description: string;
-}
-
-export interface AgentQuestion {
-  question: string;
-  header: string;
-  multiSelect: boolean;
-  options: AgentQuestionOption[];
-}
-
 /**
  * A background command's live state (ADR 0155): the host's view of the
  * process a `run_background_command` step started.
@@ -156,6 +146,17 @@ export interface ChatBackgroundCommand {
   exitCode: number | null;
 }
 
+type QueueAction<Args extends unknown[]> = (
+  ...args: Args
+) => undefined | boolean | Promise<undefined | boolean>;
+
+type LinkModifiers = {
+  metaKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+};
+
 export interface ChatTimelineProps {
   focusMessageId?: string;
   /**
@@ -163,9 +164,13 @@ export interface ChatTimelineProps {
    * they run and say how they ended.
    */
   backgroundCommands?: ChatBackgroundCommand[];
-  /** Persisted + optimistic messages, in order. */
-  messages: ChatTimelineMessage[];
-  /** Live activity line ("Thinking...", tool progress) shown under messages. */
+  /** The conversation as turns, oldest first (`useAgentChat().timeline`). */
+  turns: TimelineTurn[];
+  /** The session's runtime requests by id: request steps say how they ended. */
+  requests?: Readonly<Record<string, RuntimeRequest>>;
+  /** Messages this client sent that the session does not show yet. */
+  pending?: PendingAgentMessage[];
+  /** Live activity line ("Thinking...", tool progress) shown under the turns. */
   activity?: string;
   /** When the running turn started (ISO); the activity line counts from it. */
   activityStartedAt?: string | null;
@@ -175,40 +180,42 @@ export interface ChatTimelineProps {
    * silence is then said on the activity line.
    */
   activityUpdatedAt?: string | null;
-  /** @deprecated superseded by `queue`; kept for simple hosts. */
-  queuedCount?: number;
-  /** Messages waiting behind the in-flight turn (editable until sent). */
-  queue?: PendingAgentTurn[];
-  onUpdateQueued?: (
-    id: string,
-    content: string,
-  ) => undefined | boolean | Promise<undefined | boolean>;
-  onRemoveQueued?: (
-    id: string,
-  ) => undefined | boolean | Promise<undefined | boolean>;
-  /** Promote a queued message: front of the line + interrupt the turn. */
-  onSendQueuedNow?: (
-    id: string,
-  ) => undefined | boolean | Promise<undefined | boolean>;
+  /** Turns waiting to run, editable until they start. */
+  queue?: QueuedMessage[];
+  onEditQueued?: QueueAction<[turnId: string, text: string]>;
+  onCancelQueued?: QueueAction<[turnId: string]>;
+  /** Run a queued turn now: it goes next and stops the active one. */
+  onSendQueuedNow?: QueueAction<[turnId: string]>;
   /** A queued message entered/left inline editing (null = none). */
-  onHoldQueued?: (
-    id: string | null,
-  ) => undefined | boolean | Promise<undefined | boolean>;
-  /**
-   * The turn at the end of the log is still running. Defaults to whether
-   * an activity line is showing.
-   */
-  working?: boolean;
+  onHoldQueued?: QueueAction<[turnId: string | null]>;
+  /** The turn the agent works on now; its work reads as live. */
+  activeTurnId?: string | null;
   /** How a turn's work (notes and steps) reads; see lib/turn-groups. */
   workDisplay?: WorkDisplay;
-  /** Re-run the last failed turn in place. */
-  onRetry?: () => void;
+  /** Run a failed or interrupted turn again. */
+  onRetry?: (turnId: string) => void;
+  /** Stop a turn that waits to retry. */
+  onStopRetrying?: () => void;
   /**
    * Re-connect the agent's account (auth failures). Only offered when the
    * host can actually run a login flow for the current agent.
    */
   onReauth?: () => void;
   reauthLabel?: string;
+  /**
+   * Undo a turn and every later one, files included. Offered on a settled
+   * turn's message once nothing is running; resolves true once undone.
+   */
+  onRollback?: (
+    turnId: string,
+    item: UserMessageItem,
+  ) => undefined | boolean | Promise<boolean>;
+  onResendFailed?: (commandId: string) => void;
+  onDismissFailed?: (commandId: string) => void;
+  /** Older history exists before the loaded turns. */
+  hasOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => void;
   error?: string | null;
   emptyState?: string;
   className?: string;
@@ -217,7 +224,7 @@ export interface ChatTimelineProps {
    * max-width column while the scrollbar hugs the container edge.
    */
   contentClassName?: string;
-  /** Names an agent id (agent-change markers); falls back to the id. */
+  /** Names an agent id (agent-change notices); falls back to the notice text. */
   resolveAgentName?: (agentId: string) => string | undefined;
   /** Host-owned previews for sanitized Markdown links. */
   renderLink?: (props: {
@@ -225,39 +232,23 @@ export interface ChatTimelineProps {
     children: ReactNode;
     onOpen: NonNullable<ChatTimelineProps["onLinkClick"]>;
   }) => ReactNode;
-  onLinkClick?: (
-    url: string,
-    modifiers: {
-      metaKey: boolean;
-      ctrlKey: boolean;
-      shiftKey: boolean;
-      altKey: boolean;
-    },
-  ) => void;
+  onLinkClick?: (url: string, modifiers: LinkModifiers) => void;
   /**
    * A file path in the turn-step log was clicked ("Edited docs/plan.md").
    * Hosts open the file in an editor surface; without it the rows stay
    * inert text.
    */
-  onFileClick?: (
-    path: string,
-    modifiers?: {
-      metaKey: boolean;
-      ctrlKey: boolean;
-      shiftKey: boolean;
-      altKey: boolean;
-    },
-  ) => void;
+  onFileClick?: (path: string, modifiers?: LinkModifiers) => void;
   /**
    * Icon URL for a tool name (MCP tools are `server/tool`; the host maps
    * the server key to its connector icon). Undefined → generic glyph.
    */
   resolveToolIcon?: (toolName: string) => string | undefined;
   /**
-   * Fork the conversation from an assistant message (hover action on the
-   * message). The host opens the fork as its own chat surface.
+   * Fork the conversation from one of the agent's replies (hover action):
+   * the fork carries the transcript through that item.
    */
-  onFork?: (messageId: string) => void;
+  onFork?: (itemId: string) => void;
   /**
    * Hands the host the "jump to my previous message" scroll action, so a
    * composer shortcut (PageUp) triggers the same move as the button.
@@ -265,31 +256,47 @@ export interface ChatTimelineProps {
   registerJumpToPreviousUserMessage?: (jump: () => void) => void;
 }
 
+/** A turn's rows, worked out once per render. */
+interface TurnView {
+  group: TimelineTurn;
+  rows: TurnRow[];
+  /** The turn is still running: its work reads live. */
+  live: boolean;
+}
+
 /**
- * Presentational conversation log: message bubbles (user right, agent left
- * — no name tags), media attachments, agent/effort change markers, error
- * cards with recovery actions, the editable outgoing queue, live activity,
- * stick-to-bottom scrolling. Owns no chat state — feed it from
- * `useAgentChat` (see `AgentChat`) or any other source.
+ * Presentational conversation log (ADR 0196): each turn reads as its
+ * input, its work, then its answer; notices as quiet dividers; failed and
+ * interrupted turns close with their outcome; the editable outgoing queue,
+ * live activity and stick-to-bottom scrolling. Owns no chat state: feed
+ * it from `useAgentChat`.
  */
 export function ChatTimeline({
   focusMessageId,
   backgroundCommands,
-  messages,
+  turns,
+  requests,
+  pending = [],
   activity,
   activityStartedAt,
   activityUpdatedAt,
-  queuedCount = 0,
   queue,
-  onUpdateQueued,
-  onRemoveQueued,
+  onEditQueued,
+  onCancelQueued,
   onSendQueuedNow,
   onHoldQueued,
-  working,
+  activeTurnId,
   workDisplay = DEFAULT_WORK_DISPLAY,
   onRetry,
+  onStopRetrying,
   onReauth,
   reauthLabel,
+  onRollback,
+  onResendFailed,
+  onDismissFailed,
+  hasOlder = false,
+  loadingOlder = false,
+  onLoadOlder,
   error,
   emptyState = "Ask the agent to build or change your project.",
   className = "",
@@ -302,26 +309,119 @@ export function ChatTimeline({
   onFork,
   registerJumpToPreviousUserMessage,
 }: ChatTimelineProps) {
-  const lastConversationId = [...messages]
-    .reverse()
-    .find((message) => message.role !== "system")?.id;
-  const hasUserMessages = messages.some(
-    (message) =>
-      message.role === "user" &&
-      message.content !== QUESTIONS_DISMISSED_MESSAGE,
-  );
-  // Retry re-runs the conversation's last user turn; a timeline with no
-  // user turn at all has nothing to re-run (the button would be dead).
-  const hasRetryableTurn = messages.some((message) => message.role === "user");
+  const views: TurnView[] = turns.map((group) => {
+    const live = Boolean(group.turn && group.turn.id === activeTurnId);
+    return {
+      group,
+      live,
+      rows: turnRows(group, { live, display: workDisplay }),
+    };
+  });
+  const latestTurnId = [...turns].reverse().find((group) => group.turn)
+    ?.turn?.id;
+  const working = Boolean(activeTurnId);
+  const hasUserMessages =
+    pending.length > 0 ||
+    turns.some((group) =>
+      group.entries.some(
+        (entry) => entry.kind === "input" && isPersonsMessage(entry.item),
+      ),
+    );
   const backgroundStates = assignBackgroundCommands(
-    messages,
+    views,
     backgroundCommands ?? [],
   );
-  const items = groupTurns(messages, {
-    working: working ?? Boolean(activity),
-    display: workDisplay,
+  const folding = useFoldingNotes(views);
+  const queued = (queue ?? []).map((entry) => ({
+    id: entry.turn.id,
+    content: entry.item?.text ?? "",
+    attachments: entry.item?.attachments ?? [],
+  }));
+  const context: RowContext = {
+    requests: requests ?? {},
+    resolveAgentName,
+    onLinkClick,
+    renderLink,
+    onFileClick,
+    resolveToolIcon,
+    onFork,
+    focusMessageId,
+  };
+  const empty = turns.length === 0 && pending.length === 0 && !activity;
+  // One keyed list for the whole conversation, so a message sent from here
+  // keeps its node when its item takes over from the pending bubble.
+  const conversation: ReactNode[] = [];
+  const shownSends = new Set<string>();
+  views.forEach((view, index) => {
+    const turn = view.group.turn;
+    const undone = turn?.status === "rolled_back";
+    if (undone && views[index - 1]?.group.turn?.status !== "rolled_back")
+      conversation.push(<UndoneDivider key={`undone:${view.group.key}`} />);
+    for (const row of view.rows) {
+      const key = rowKey(view.group, row);
+      if (key.startsWith("send:")) shownSends.add(key);
+      conversation.push(
+        <div
+          key={key}
+          className={undone ? "flex flex-col gap-3 opacity-50" : "contents"}
+          data-turn-undone={undone || undefined}
+        >
+          {row.kind === "entry" && row.entry.kind === "input" ? (
+            // Rendered here, not through the row view, so a pending
+            // message's node and its item's are the same element.
+            <UserMessage
+              item={row.entry.item}
+              context={context}
+              rollback={
+                onRollback &&
+                turn &&
+                !working &&
+                !undone &&
+                row.entry.item.id === turn.inputItemId
+                  ? rollbackOf(onRollback, turn.id, row.entry.item)
+                  : undefined
+              }
+            />
+          ) : (
+            <TurnRowView
+              row={row}
+              view={view}
+              context={context}
+              folding={folding}
+            />
+          )}
+        </div>,
+      );
+    }
+    if (turn)
+      conversation.push(
+        <TurnOutcome
+          key={`outcome:${turn.id}`}
+          turn={turn}
+          group={view.group}
+          latest={turn.id === latestTurnId}
+          onRetry={onRetry}
+          onStopRetrying={onStopRetrying}
+          onReauth={onReauth}
+          reauthLabel={reauthLabel}
+        />,
+      );
   });
-  const folding = useFoldingNotes(items);
+  for (const message of pending) {
+    const key = `send:${message.commandId}`;
+    // Its item is already on screen: the item's row is this message now.
+    if (shownSends.has(key)) continue;
+    conversation.push(
+      <div key={key} className="contents">
+        <UserMessage
+          pending={message}
+          context={context}
+          onResend={onResendFailed}
+          onDismiss={onDismissFailed}
+        />
+      </div>,
+    );
+  }
   return (
     <BackgroundStates.Provider value={backgroundStates}>
       <StickToBottom
@@ -333,78 +433,15 @@ export function ChatTimeline({
         <StickToBottom.Content
           className={`flex min-h-full flex-col gap-3 p-5 ${contentClassName}`}
         >
-          {messages.length === 0 && !activity && (
+          {hasOlder && onLoadOlder && (
+            <LoadOlder loading={loadingOlder} onLoad={onLoadOlder} />
+          )}
+          {empty && (
             <div className="m-auto max-w-sm text-center text-sm leading-6 text-fg-muted">
               {emptyState}
             </div>
           )}
-          {(() => {
-            const keys = timelineKeys(messages);
-            const keyOf = new Map(
-              messages.map((message, index) => [message, keys[index]]),
-            );
-            const row = (
-              message: ChatTimelineMessage,
-              working: boolean | undefined,
-              foldedWork?: ChatTimelineMessage[],
-              foldingAway?: boolean,
-            ) => (
-              // A folding note keeps its row key, so the same message
-              // closes up in place rather than being replaced.
-              <div
-                key={keyOf.get(message)}
-                data-message-id={foldingAway ? undefined : message.id}
-                tabIndex={-1}
-                aria-hidden={foldingAway || undefined}
-                inert={foldingAway}
-                className={
-                  foldingAway
-                    ? "animate-fold-away"
-                    : message.id === focusMessageId
-                      ? "rounded-md outline outline-1 outline-accent/50"
-                      : "contents"
-                }
-              >
-                <Message
-                  message={message}
-                  working={working}
-                  foldedWork={foldedWork}
-                  // A focused note inside the fold has to be on screen.
-                  openWork={foldedWork?.some(
-                    (folded) => folded.id === focusMessageId,
-                  )}
-                  isLast={message.id === lastConversationId}
-                  resolveAgentName={resolveAgentName}
-                  onLinkClick={onLinkClick}
-                  renderLink={renderLink}
-                  onFileClick={onFileClick}
-                  resolveToolIcon={resolveToolIcon}
-                  // Retry re-runs the last user turn; without one there is
-                  // nothing to re-run — hide the button, never show a dead one.
-                  onRetry={hasRetryableTurn ? onRetry : undefined}
-                  onReauth={onReauth}
-                  reauthLabel={reauthLabel}
-                  onFork={onFork}
-                />
-              </div>
-            );
-            return items.flatMap((item) =>
-              item.kind === "message"
-                ? [row(item.message, item.working)]
-                : [
-                    ...item.folded
-                      .filter((message) => folding.has(message.id))
-                      .map((message) => row(message, false, undefined, true)),
-                    ...item.shown.map((message, index) =>
-                      row(
-                        message,
-                        item.working,
-                        index === 0 ? item.folded : undefined,
-                      ),
-                    ),
-                  ],
-            );
-          })()}
+          {conversation}
           {activity && (
             <div
               className="flex animate-fade-in items-center gap-2 text-xs text-fg-muted"
@@ -416,31 +453,26 @@ export function ChatTimeline({
                 startedAt={activityStartedAt}
                 updatedAt={activityUpdatedAt}
               />
-              {!queue && queuedCount > 0 && (
-                <span className="ml-auto text-fg-faint">
-                  {queuedCount} queued
-                </span>
-              )}
             </div>
           )}
-          {queue && queue.length > 0 && (
+          {queued.length > 0 && (
             <ChatQueue
-              queue={queue}
-              onUpdate={onUpdateQueued}
-              onRemove={onRemoveQueued}
+              queue={queued}
+              onUpdate={onEditQueued}
+              onRemove={onCancelQueued}
               onSendNow={onSendQueuedNow}
               onHold={onHoldQueued}
               Hint={ShortcutHint}
-              renderContent={(queued) => (
+              renderContent={(entry) => (
                 <InlineMessage
-                  content={queued.content}
-                  attachments={queued.attachments}
+                  content={entry.content}
+                  attachments={entry.attachments}
                 />
               )}
-              renderAttachments={(queued) => (
+              renderAttachments={(entry) => (
                 <AttachmentStrip
-                  attachments={queued.attachments.slice(
-                    inlineMarkerCount(queued.content, queued.attachments),
+                  attachments={entry.attachments.slice(
+                    inlineMarkerCount(entry.content, entry.attachments),
                   )}
                 />
               )}
@@ -459,12 +491,184 @@ export function ChatTimeline({
         )}
         <FocusMessage
           messageId={focusMessageId}
-          ready={messages.some((message) => message.id === focusMessageId)}
+          ready={Boolean(
+            focusMessageId &&
+              turns.some((group) =>
+                group.entries.some(
+                  (entry) => entryId(entry) === focusMessageId,
+                ),
+              ),
+          )}
         />
         <ScrollToLatest />
       </StickToBottom>
     </BackgroundStates.Provider>
   );
+}
+
+/** What every row needs from the timeline, passed once. */
+interface RowContext {
+  requests: Readonly<Record<string, RuntimeRequest>>;
+  resolveAgentName?: (agentId: string) => string | undefined;
+  onLinkClick?: ChatTimelineProps["onLinkClick"];
+  renderLink?: ChatTimelineProps["renderLink"];
+  onFileClick?: ChatTimelineProps["onFileClick"];
+  resolveToolIcon?: (toolName: string) => string | undefined;
+  onFork?: (itemId: string) => void;
+  focusMessageId?: string;
+}
+
+/** The item id an entry reads at, for focus and deep links. */
+function entryId(entry: TimelineEntry): string {
+  switch (entry.kind) {
+    case "answer":
+      return entry.id;
+    case "steps":
+      return entry.steps[0]?.id ?? "";
+    default:
+      return entry.item.id;
+  }
+}
+
+/**
+ * Rows key by an identity that survives their changes: a person's message
+ * by the command that sent it (so its pending bubble and its item are one
+ * node), the agent's writing by its first own step (live steps gain their
+ * prose in place) or its own id.
+ */
+function rowKey(group: TimelineTurn, row: TurnRow): string {
+  if (row.kind === "steps")
+    return `work:${row.steps.find((step) => step.kind === "work")?.item.id ?? group.key}`;
+  if (row.kind === "reply") {
+    // Its own work: what follows the last folded note.
+    let own = 0;
+    row.steps.forEach((step, index) => {
+      if (step.kind === "note") own = index + 1;
+    });
+    const first = row.steps.slice(own).find((step) => step.kind === "work");
+    return first ? `work:${first.item.id}` : `id:${row.item.id}`;
+  }
+  if (row.entry.kind === "input") return userKey(row.entry.item);
+  return `id:${entryId(row.entry)}`;
+}
+
+/** A person's message keys by its command, matching its pending bubble. */
+function userKey(item: UserMessageItem): string {
+  const commandId = sentWith(item);
+  return commandId ? `send:${commandId}` : `id:${item.id}`;
+}
+
+/** The command a person's message was sent with, from its idempotency key. */
+function sentWith(item: UserMessageItem): string | undefined {
+  return item.idempotencyKey?.match(/^user:[^:]*:(.+)$/)?.[1];
+}
+
+function isPersonsMessage(item: UserMessageItem): boolean {
+  return item.author.kind === "user";
+}
+
+/** "Load earlier messages": pages older history in at the top. */
+function LoadOlder({
+  loading,
+  onLoad,
+}: {
+  loading: boolean;
+  onLoad: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onLoad}
+      disabled={loading}
+      className="mx-auto flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-bg-inset px-3 py-1 text-[11px] text-fg-muted transition-colors duration-150 hover:text-fg disabled:cursor-default"
+      data-testid="chat-load-older"
+    >
+      {loading && <LoaderCircle className="size-3 animate-spin" />}
+      {loading ? "Loading earlier messages" : "Load earlier messages"}
+    </button>
+  );
+}
+
+/** Where undone turns begin: a calm divider, the turns below dimmed. */
+function UndoneDivider() {
+  return (
+    <div
+      className="flex items-center gap-3 py-1 text-[11px] text-fg-faint"
+      data-testid="chat-undone-divider"
+    >
+      <span className="h-px flex-1 bg-border" />
+      <span className="flex items-center gap-1">
+        <Undo2 className="size-3" />
+        Undone: the files went back to how they were before this
+      </span>
+      <span className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
+
+/** Undo a turn from its message, bound for the button. */
+function rollbackOf(
+  onRollback: NonNullable<ChatTimelineProps["onRollback"]>,
+  turnId: string,
+  item: UserMessageItem,
+) {
+  return () => onRollback(turnId, item);
+}
+
+function TurnRowView({
+  row,
+  view,
+  context,
+  folding,
+}: {
+  row: TurnRow;
+  view: TurnView;
+  context: RowContext;
+  folding: Set<string>;
+}) {
+  // Live work and the reply it becomes render alike, so the node that
+  // showed the steps gains the prose in place instead of remounting.
+  if (row.kind === "steps" || row.kind === "reply") {
+    const reply = row.kind === "reply" ? row : undefined;
+    return (
+      <>
+        {(reply?.folded ?? [])
+          .filter((note) => folding.has(note.id))
+          .map((note) => (
+            <div
+              key={`folding:${note.id}`}
+              aria-hidden
+              inert
+              className="animate-fold-away"
+            >
+              <AgentMessage item={note} steps={[]} context={context} />
+            </div>
+          ))}
+        <AgentMessage
+          item={reply?.item}
+          steps={row.steps}
+          live={view.live}
+          answer={reply?.answer ?? false}
+          openWork={
+            reply?.folded.some((note) => note.id === context.focusMessageId) ??
+            false
+          }
+          context={context}
+        />
+      </>
+    );
+  }
+  const entry = row.entry;
+  switch (entry.kind) {
+    case "input":
+      return <UserMessage item={entry.item} context={context} />;
+    case "answer":
+      return <AnswerCard entry={entry} />;
+    case "notice":
+      return <NoticeLine item={entry.item} context={context} />;
+    case "handoff":
+      return <HandoffLine item={entry.item} />;
+  }
 }
 
 /** How long a folding note stays on screen: its fold-away animation. */
@@ -474,30 +678,26 @@ const FOLD_AWAY_MS = 220;
  * Notes that were in place a moment ago and have just folded into their
  * answer's steps (the turn settled, or the setting changed). They stay on
  * screen for the fold-away animation, so settling closes them up instead
- * of snapping the conversation shorter. Keyed by the note itself: a settle
- * can land over two renders, and the answer they fold under may change
- * between them.
+ * of snapping the conversation shorter.
  */
-function useFoldingNotes(
-  items: TimelineItem<ChatTimelineMessage>[],
-): Set<string> {
+function useFoldingNotes(views: TurnView[]): Set<string> {
   const inPlace = useRef<Set<string>>(new Set());
   const timers = useRef<Set<number>>(new Set());
   const [folding, setFolding] = useState<Set<string>>(() => new Set());
-  // Before paint: the notes never leave the screen for a frame.
-  useLayoutEffect(() => {
-    const now = new Set<string>();
-    const arrived: string[] = [];
-    for (const item of items) {
-      if (item.kind === "message") {
-        now.add(item.message.id);
-        continue;
-      }
-      for (const message of item.shown) now.add(message.id);
-      for (const message of item.folded)
-        if (inPlace.current.has(message.id)) arrived.push(message.id);
+  const shownIds: string[] = [];
+  const foldedIds: string[] = [];
+  for (const view of views)
+    for (const row of view.rows) {
+      if (row.kind !== "reply") continue;
+      shownIds.push(row.item.id);
+      for (const note of row.folded) foldedIds.push(note.id);
     }
-    inPlace.current = now;
+  const signature = `${shownIds.join(",")}|${foldedIds.join(",")}`;
+  // Before paint: the notes never leave the screen for a frame.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the signature carries the ids
+  useLayoutEffect(() => {
+    const arrived = foldedIds.filter((id) => inPlace.current.has(id));
+    inPlace.current = new Set(shownIds);
     if (arrived.length === 0) return;
     setFolding((current) => new Set([...current, ...arrived]));
     const timer = window.setTimeout(() => {
@@ -509,7 +709,7 @@ function useFoldingNotes(
       });
     }, FOLD_AWAY_MS);
     timers.current.add(timer);
-  }, [items]);
+  }, [signature]);
   useEffect(() => {
     const pending = timers.current;
     return () => {
@@ -593,130 +793,12 @@ function JumpToPreviousUserMessage({
   );
 }
 
-/**
- * User messages key by content position instead of message.id: when an
- * optimistic user message is replaced by its persisted twin, the id flips
- * (uuid → db id) but the rendered content is identical. A content-based key
- * keeps the same DOM node, so the settle is invisible instead of a remount
- * (fade-in replay).
- *
- * Everything else keys by id. Only the server writes those rows, and a
- * running turn's row rewrites its content on every event (the activity
- * line, then the note it becomes): a content key would remount it, and
- * replay every step it holds, each time the agent does anything.
- *
- * The content is HASHED (cached per message object): using the raw text
- * as the React key made key comparison itself scale with transcript
- * bytes, and the old per-message occurrence scan was O(n²).
- */
-const contentHashCache = new WeakMap<object, string>();
-
-function contentHash(message: ChatTimelineMessage): string {
-  const cached = contentHashCache.get(message);
-  if (cached !== undefined) return cached;
-  let hash = 0;
-  const text = message.content;
-  for (let i = 0; i < text.length; i += 1) {
-    hash = (hash * 31 + text.charCodeAt(i)) | 0;
-  }
-  const result = `${text.length.toString(36)}:${(hash >>> 0).toString(36)}`;
-  contentHashCache.set(message, result);
-  return result;
-}
-
-/** One pass over the list; duplicate contents get occurrence suffixes. */
-export function timelineKeys(messages: ChatTimelineMessage[]): string[] {
-  const seen = new Map<string, number>();
-  return messages.map((message) => {
-    if (message.role !== "user") return `id:${message.id}`;
-    const base = `${message.role}:${contentHash(message)}`;
-    const occurrence = seen.get(base) ?? 0;
-    seen.set(base, occurrence + 1);
-    return `${base}:${occurrence}`;
-  });
-}
-
-/**
- * Memoized on data props only: persisted messages never change content
- * (react-query's structural sharing keeps their object identity stable),
- * so a 500ms streaming poll re-renders just the tail instead of
- * re-parsing every message's markdown. Handler props are deliberately
- * excluded from the comparison — hosts recreate those closures every
- * render, but their behavior is stable across renders.
- */
-const Message = memo(
-  MessageImpl,
-  (previous, next) =>
-    // System (marker) rows always re-render: their text derives from
-    // resolveAgentName, whose roster resolves asynchronously — freezing
-    // them shows "Switched to another agent" forever. They're plain
-    // one-line rows; re-rendering them is free.
-    next.message.role !== "system" &&
-    previous.message === next.message &&
-    previous.working === next.working &&
-    previous.openWork === next.openWork &&
-    (previous.foldedWork?.length ?? 0) === (next.foldedWork?.length ?? 0) &&
-    (next.foldedWork ?? []).every(
-      (folded, index) => previous.foldedWork?.[index] === folded,
-    ) &&
-    previous.isLast === next.isLast &&
-    previous.reauthLabel === next.reauthLabel,
-);
-
-function MessageImpl({
-  message,
-  working,
-  foldedWork,
-  openWork,
-  isLast,
-  resolveAgentName,
-  onLinkClick,
-  renderLink,
-  onFileClick,
-  resolveToolIcon,
-  onRetry,
-  onReauth,
-  reauthLabel,
-  onFork,
-}: {
-  message: ChatTimelineMessage;
-  /** Part of the turn that is still running: its steps stay open. */
-  working?: boolean;
-  /** Earlier notes of this turn, folded into this message's steps. */
-  foldedWork?: ChatTimelineMessage[];
-  openWork?: boolean;
-  isLast: boolean;
-  resolveAgentName?: (agentId: string) => string | undefined;
-  renderLink?: ChatTimelineProps["renderLink"];
-  onLinkClick?: ChatTimelineProps["onLinkClick"];
-  onFileClick?: (
-    path: string,
-    modifiers?: {
-      metaKey: boolean;
-      ctrlKey: boolean;
-      shiftKey: boolean;
-      altKey: boolean;
-    },
-  ) => void;
-  resolveToolIcon?: (toolName: string) => string | undefined;
-  onRetry?: () => void;
-  onReauth?: () => void;
-  reauthLabel?: string;
-  onFork?: (messageId: string) => void;
-}) {
-  const metadata = asRecord(message.metadata);
-  const [entered, setEntered] = useState(false);
-  // Live steps become a note in place: the same message gains its prose.
-  const [bornLive] = useState(
-    () => message.role === "assistant" && metadata?.status === "in_progress",
-  );
-
+/** The entrance every message plays once: a short rise and fade. */
+function useEntered(already = false): string {
+  const [entered, setEntered] = useState(already);
   // Double rAF: the first frame aligns with the commit, the second
-  // guarantees the browser resolved the hidden pose before it flips —
-  // a single rAF can fire before the mount frame ever paints (React
-  // flushes effects pre-paint under load, e.g. the 500ms streaming
-  // poll), collapsing both poses into one style recalc and skipping
-  // the entrance transition entirely.
+  // guarantees the browser resolved the hidden pose before it flips; a
+  // single rAF can fire before the mount frame ever paints.
   useEffect(() => {
     let second: number | undefined;
     const first = requestAnimationFrame(() => {
@@ -727,203 +809,239 @@ function MessageImpl({
       if (second !== undefined) cancelAnimationFrame(second);
     };
   }, []);
+  return `motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"}`;
+}
 
-  // Agent/effort switches render as a centered divider, not a message.
-  const marker = asRecord(metadata?.marker);
-  if (message.role === "system" && marker) {
-    const text =
-      marker.kind === "agent_change" && typeof marker.agentId === "string"
-        ? `Switched to ${resolveAgentName?.(marker.agentId) ?? "another agent"}`
-        : message.content;
-    return (
-      <div className="flex items-center gap-3 py-1 text-[11px] text-fg-faint">
-        <span className="h-px flex-1 bg-border" />
-        <span>{text}</span>
-        <span className="h-px flex-1 bg-border" />
-      </div>
-    );
-  }
-
-  // Host notices (a background command finished) read as one quiet line;
-  // the agent gets the full message and answers below it.
-  const notice =
-    typeof metadata?.notice === "string" ? metadata.notice : undefined;
-  if (message.author?.kind === "system" && notice) {
-    return (
-      <div
-        className="flex items-center justify-center gap-1.5 text-center text-xs text-fg-faint"
-        data-testid="chat-notice"
-      >
-        <Radio className="size-3 shrink-0" />
-        <span className="truncate">{notice}</span>
-      </div>
-    );
-  }
-
-  if (
-    message.role === "user" &&
-    message.content === QUESTIONS_DISMISSED_MESSAGE
-  ) {
-    return (
-      <div className="text-center text-xs italic text-fg-faint">
-        Questions dismissed
-      </div>
-    );
-  }
-
-  const attachments = message.attachments ?? attachmentsFromMetadata(metadata);
-  // Pills the prose references inline (composer markers) render in place;
-  // the rest — older messages, other clients — sit in a strip above.
-  const stripAttachments =
-    message.role === "user"
-      ? attachments.slice(inlineMarkerCount(message.content, attachments))
-      : attachments;
-  const failed = metadata?.status === "failed";
-  const humanUserMessage =
-    message.role === "user" &&
-    (!message.author || message.author.kind === "user");
-
-  const enterClasses = `motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"}`;
-
-  // An answer from the question panel reads as the questions and what
-  // was picked, not as the text the agent receives.
-  const answered =
-    message.role === "user" ? questionAnswer(metadata) : undefined;
-  if (answered === "dismissed")
-    return (
-      <div className="text-center text-xs italic text-fg-faint">
-        Questions dismissed
-      </div>
-    );
-  if (answered)
-    return (
-      <article
-        data-user-message
-        data-testid="question-answer"
-        className={`ml-auto max-w-[85%] rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2 text-sm ${enterClasses}`}
-      >
-        <dl className="flex flex-col gap-1.5">
-          {answered.map((row) => (
-            <div key={row.question} className="min-w-0">
-              <dt className="whitespace-pre-wrap break-words text-xs leading-5 text-fg-muted">
-                {row.question}
-              </dt>
-              <dd className="whitespace-pre-wrap break-words font-medium leading-6">
-                {row.answer}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      </article>
-    );
-
-  // Failed turns render as an error card with recovery actions (the
-  // actions only on the latest message — older failures are history).
-  if (message.role === "assistant" && failed) {
-    if (metadata?.interrupted === true) {
-      // An interrupted turn keeps whatever it had said (partial text, or
-      // the orphaned-turn explanation) and closes with a quiet divider —
-      // it's a user action, not a failure worth a red card.
-      const partial = message.content.trim();
-      const showPartial = partial && !/^interrupted\.?$/i.test(partial);
-      const steps = turnSteps(message);
-      const stopped = interruptedStep(message, steps);
-      const changed = changedPaths(metadata);
+/**
+ * A message into the session: the person's own (right), or one an agent,
+ * a workflow or a watcher delivered (left, with where it came from). A
+ * host notice (a background command finished) reads as one quiet line.
+ */
+const UserMessage = memo(
+  function UserMessage({
+    item,
+    pending,
+    context,
+    rollback,
+    onResend,
+    onDismiss,
+  }: {
+    /** The message as the session holds it. */
+    item?: UserMessageItem;
+    /** Sent from here and not in the session yet: shown at once. */
+    pending?: PendingAgentMessage;
+    context: RowContext;
+    /** Undo this message's turn and every later one. */
+    rollback?: () => undefined | boolean | Promise<boolean>;
+    onResend?: (commandId: string) => void;
+    onDismiss?: (commandId: string) => void;
+  }) {
+    const enterClasses = useEntered();
+    const notice =
+      typeof item?.metadata.notice === "string"
+        ? item.metadata.notice
+        : undefined;
+    if (item?.author.kind === "system" && notice)
       return (
-        <div className={`flex flex-col gap-2 ${enterClasses}`}>
-          {(showPartial || steps.length > 0) && (
-            <article className="mr-auto max-w-[85%] whitespace-pre-wrap break-words text-sm leading-6">
-              <TurnSteps
-                steps={steps}
-                resolveToolIcon={resolveToolIcon}
-                onFileClick={onFileClick}
-              />
-              {showPartial && partial}
-            </article>
-          )}
-          <div
-            // The running steps above become this summary in place; it fades
-            // in rather than snapping over them.
-            className="flex animate-fade-in flex-col items-center gap-0.5 text-center text-xs text-fg-faint"
-            data-testid="chat-interrupted"
-          >
-            <div className="italic">Interrupted</div>
-            {stopped && (
-              <span data-testid="chat-interrupted-step">
-                {`While: ${stopped.label}${stopped.ran ? ` (${stopped.ran})` : ""}`}
-              </span>
-            )}
-            {changed.length > 0 && (
-              <span data-testid="chat-interrupted-files">
-                {`Left ${changed.length === 1 ? "1 changed file" : `${changed.length} changed files`}: ${changedFileNames(changed)}`}
-              </span>
-            )}
-          </div>
+        <div
+          className="flex items-center justify-center gap-1.5 text-center text-xs text-fg-faint"
+          data-testid="chat-notice"
+          data-message-id={item.id}
+        >
+          <Radio className="size-3 shrink-0" />
+          <span className="truncate">{notice}</span>
         </div>
       );
-    }
-    const partialContent =
-      typeof metadata?.partialContent === "string"
-        ? metadata.partialContent.trim()
-        : "";
+    const text = item?.text ?? pending?.text ?? "";
+    const attachments = item?.attachments ?? pending?.attachments ?? [];
+    const own = item ? isPersonsMessage(item) : true;
+    const failed = pending?.status === "failed";
+    const strip = attachments.slice(inlineMarkerCount(text, attachments));
     return (
-      <div className={`flex flex-col gap-2 ${enterClasses}`}>
-        {partialContent && (
-          <article
-            className="mr-auto max-w-[85%] text-sm"
-            data-testid="chat-partial-response"
-          >
-            <div className="cat-markdown min-w-0 break-words leading-6">
-              <Markdown remarkPlugins={REMARK_PLUGINS}>
-                {partialContent}
-              </Markdown>
-            </div>
-          </article>
+      <article
+        data-message-id={item?.id}
+        tabIndex={-1}
+        data-user-message={own || undefined}
+        data-pending-message={pending?.status}
+        className={`group/msg relative max-w-[85%] text-sm ${enterClasses} ${
+          failed
+            ? "ml-auto rounded-xl rounded-br-sm border border-danger/40 bg-danger/5 px-3 py-2"
+            : own
+              ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2"
+              : "mr-auto rounded-xl rounded-bl-sm border border-border bg-bg-raised px-3 py-2"
+        } ${item && item.id === context.focusMessageId ? "outline outline-1 outline-accent/50" : ""}`}
+      >
+        {item && (
+          <SessionAttribution
+            author={item.author}
+            metadata={item.metadata}
+            attention={item.attention}
+            onOpen={context.onLinkClick}
+          />
         )}
-        <ErrorCard
-          message={message}
-          actionable={isLast}
-          onRetry={onRetry}
-          onReauth={onReauth}
-          reauthLabel={reauthLabel}
-        />
+        {strip.length > 0 && <AttachmentStrip attachments={strip} />}
+        <div className="whitespace-pre-wrap break-words leading-6">
+          <InlineMessage content={text} attachments={attachments} />
+        </div>
+        {pending && failed && (
+          <div
+            className="mt-1.5 flex flex-wrap items-center gap-2 border-t border-danger/20 pt-1.5 text-[11px]"
+            data-failed-delivery={pending.commandId}
+            aria-live="polite"
+          >
+            <span className="min-w-0 flex-1 text-danger">
+              {pending.error?.message
+                ? `Not sent: ${pending.error.message}`
+                : "Not sent"}
+            </span>
+            {onResend && (
+              <button
+                type="button"
+                onClick={() => onResend(pending.commandId)}
+                className="cursor-pointer text-accent hover:underline"
+              >
+                Send again
+              </button>
+            )}
+            {onDismiss && (
+              <button
+                type="button"
+                onClick={() => onDismiss(pending.commandId)}
+                className="cursor-pointer text-fg-muted hover:text-fg"
+              >
+                Dismiss
+              </button>
+            )}
+          </div>
+        )}
+        {rollback && <RestoreToHere onConfirm={rollback} />}
+      </article>
+    );
+  },
+  (previous, next) =>
+    previous.item === next.item &&
+    previous.pending === next.pending &&
+    Boolean(previous.rollback) === Boolean(next.rollback) &&
+    previous.context.focusMessageId === next.context.focusMessageId,
+);
+
+/**
+ * "Restore to here": undo this message's turn and everything after it,
+ * files included. Confirms in place first: it cannot be redone.
+ */
+function RestoreToHere({
+  onConfirm,
+}: {
+  onConfirm: () => undefined | boolean | Promise<boolean>;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  if (confirming)
+    return (
+      <div
+        className="mt-2 flex flex-wrap items-center gap-2 border-t border-info/20 pt-2 text-xs"
+        data-testid="chat-restore-confirm"
+      >
+        <span className="min-w-0 flex-1 text-fg-muted">
+          Undo this message and everything after it? The files it changed go
+          back too.
+        </span>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            void Promise.resolve(onConfirm()).finally(() => {
+              setBusy(false);
+              setConfirming(false);
+            });
+          }}
+          className="flex cursor-pointer items-center gap-1 rounded-md bg-accent px-2 py-1 font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:opacity-50"
+          data-testid="chat-restore-confirm-button"
+        >
+          {busy && <LoaderCircle className="size-3 animate-spin" />}
+          Restore
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => setConfirming(false)}
+          className="cursor-pointer rounded-md px-2 py-1 text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+        >
+          Cancel
+        </button>
       </div>
     );
-  }
+  return (
+    // The pr-2 bridges the gap to the button so the hover never blinks.
+    <span className="absolute bottom-0 right-full flex items-center pr-2 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/msg:opacity-100">
+      <ShortcutHint label="Restore to here: undo this message and everything after it">
+        <button
+          type="button"
+          onClick={() => setConfirming(true)}
+          className="grid size-6 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+          aria-label="Restore to here"
+          data-testid="chat-restore"
+        >
+          <Undo2 className="size-3" />
+        </button>
+      </ShortcutHint>
+    </span>
+  );
+}
 
-  // The steps taken since the latest note, while the turn runs: only the
-  // steps; the prose is the activity line's, below.
-  const liveWork =
-    message.role === "assistant" && metadata?.status === "in_progress";
-  const ownSteps =
-    message.role === "assistant" ? turnSteps(message) : ([] as TurnStep[]);
+/**
+ * What the agent wrote, under the steps that led to it: a note along the
+ * way, or the turn's answer. Without an item it is the work after the
+ * latest note, which gains its prose in place when the agent writes.
+ */
+interface AgentMessageProps {
+  item?: AssistantMessageItem;
+  steps: StepSource[];
+  /** Part of the turn that is still running: its steps stay open. */
+  live?: boolean;
+  answer?: boolean;
+  openWork?: boolean;
+  context: RowContext;
+}
+
+const AgentMessage = memo(function AgentMessage({
+  item,
+  steps,
+  live = false,
+  answer = false,
+  openWork = false,
+  context,
+}: AgentMessageProps) {
+  const enterClasses = useEntered();
+  const [bornLive] = useState(() => !item || item.status === "in_progress");
+  const built = turnStepsOf(steps, context.requests);
+  const shown = live && !item ? markRunning(built) : built;
+  const text = item?.text ?? "";
+  const writing = item?.status === "in_progress";
   return (
     <article
-      data-user-message={humanUserMessage || undefined}
-      data-live-work={liveWork || undefined}
-      className={`group/msg relative max-w-[85%] text-sm ${enterClasses} ${humanUserMessage ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : message.role === "user" ? "mr-auto rounded-xl rounded-bl-sm border border-border bg-bg-raised px-3 py-2" : "mr-auto"}`}
+      data-message-id={item?.id}
+      tabIndex={item ? -1 : undefined}
+      data-live-work={!item || undefined}
+      data-answer={answer || undefined}
+      className={`group/msg relative mr-auto max-w-[85%] text-sm ${enterClasses} ${
+        item && item.id === context.focusMessageId
+          ? "rounded-md outline outline-1 outline-accent/50"
+          : ""
+      }`}
     >
-      <SessionAttribution
-        author={message.role === "assistant" ? undefined : message.author}
-        metadata={message.metadata}
-        onOpen={onLinkClick}
-      />
-      {stripAttachments.length > 0 && (
-        <AttachmentStrip attachments={stripAttachments} />
-      )}
-      {/* Fork the conversation from this reply: everything up to here is
-          copied into a new chat that goes off on a tangent. */}
-      {/* The pl-2 bridges the gap between the message edge and the
-          button: without it the pointer leaves the group mid-crossing
-          and the reveal fades out and back in — a visible blink. */}
-      {message.role === "assistant" && !liveWork && (
+      {/* Copy and fork from this reply. The pl-2 bridges the gap between
+          the message edge and the buttons: without it the pointer leaves
+          the group mid-crossing and the reveal blinks. */}
+      {item && !writing && text.trim() && (
         <span className="absolute bottom-0 left-full flex items-center gap-0.5 pl-2 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/msg:opacity-100">
-          <CopyMessageButton content={message.content} />
-          {onFork && (
+          <CopyMessageButton content={text} />
+          {context.onFork && (
             <ShortcutHint label="Fork the chat from here">
               <button
                 type="button"
-                onClick={() => onFork(message.id)}
+                onClick={() => context.onFork?.(item.id)}
                 className="grid size-6 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
                 aria-label="Fork the conversation from this message"
                 data-testid="chat-fork"
@@ -934,36 +1052,27 @@ function MessageImpl({
           )}
         </span>
       )}
-      {message.role === "assistant" && (
-        <TurnSteps
-          steps={[
-            // Work happens before the note that reports it: each folded
-            // note follows its own steps, and this message's steps close.
-            ...(foldedWork ?? []).flatMap((folded) => [
-              ...turnSteps(folded),
-              noteStep(folded),
-            ]),
-            ...(liveWork && working ? markRunning(ownSteps) : ownSteps),
-          ]}
-          live={working}
-          defaultExpanded={openWork}
-          resolveToolIcon={resolveToolIcon}
-          onFileClick={onFileClick}
-        />
-      )}
-      {liveWork ? null : message.role === "user" ? (
-        <div className="whitespace-pre-wrap break-words leading-6">
-          <InlineMessage content={message.content} attachments={attachments} />
-        </div>
-      ) : (
+      <TurnSteps
+        steps={shown}
+        live={live}
+        defaultExpanded={openWork}
+        resolveToolIcon={context.resolveToolIcon}
+        onFileClick={context.onFileClick}
+      />
+      {text.trim() && (
         <div
           className={`cat-markdown min-w-0 break-words leading-6 ${bornLive ? "animate-fade-in" : ""}`}
         >
-          <LinkContext.Provider value={{ onLinkClick, renderLink }}>
+          <LinkContext.Provider
+            value={{
+              onLinkClick: context.onLinkClick,
+              renderLink: context.renderLink,
+            }}
+          >
             <Markdown
               remarkPlugins={REMARK_PLUGINS}
               urlTransform={(url, key) =>
-                onLinkClick &&
+                context.onLinkClick &&
                 key === "href" &&
                 /^(?:file|workflow|app|artifact|chat|browser|terminal|editor|diff|mcpapp):/i.test(
                   url,
@@ -971,51 +1080,305 @@ function MessageImpl({
                   ? url
                   : defaultUrlTransform(url)
               }
-              components={onLinkClick ? LINK_COMPONENTS : undefined}
+              components={context.onLinkClick ? LINK_COMPONENTS : undefined}
             >
-              {message.content}
+              {text}
             </Markdown>
           </LinkContext.Provider>
         </div>
       )}
     </article>
   );
+}, sameAgentMessage);
+
+/**
+ * Re-render a message only when what it shows changed: items keep their
+ * identity across events unless they changed (the reducer replaces only
+ * what an event names), so a streaming turn re-renders just its tail
+ * instead of re-parsing every reply's Markdown. Handlers are deliberately
+ * not compared: hosts recreate them every render, with the same behavior.
+ */
+function sameAgentMessage(
+  previous: AgentMessageProps,
+  next: AgentMessageProps,
+): boolean {
+  return (
+    previous.item === next.item &&
+    previous.live === next.live &&
+    previous.answer === next.answer &&
+    previous.openWork === next.openWork &&
+    previous.context.requests === next.context.requests &&
+    previous.context.focusMessageId === next.context.focusMessageId &&
+    previous.steps.length === next.steps.length &&
+    previous.steps.every((step, index) => step.item === next.steps[index]?.item)
+  );
+}
+
+/** Answered questions: each question with what was picked. */
+function AnswerCard({
+  entry,
+}: {
+  entry: Extract<TimelineEntry, { kind: "answer" }>;
+}) {
+  const enterClasses = useEntered();
+  if (entry.dismissed)
+    return (
+      <div
+        className="text-center text-xs italic text-fg-faint"
+        data-message-id={entry.id}
+      >
+        Questions dismissed
+      </div>
+    );
+  return (
+    <article
+      data-user-message
+      data-testid="question-answer"
+      data-message-id={entry.id}
+      className={`ml-auto max-w-[85%] rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2 text-sm ${enterClasses}`}
+    >
+      <dl className="flex flex-col gap-1.5">
+        {answerRows(entry).map((row) => (
+          <div key={row.question} className="min-w-0">
+            {row.question && (
+              <dt className="whitespace-pre-wrap break-words text-xs leading-5 text-fg-muted">
+                {row.question}
+              </dt>
+            )}
+            <dd className="whitespace-pre-wrap break-words font-medium leading-6">
+              {row.answer}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </article>
+  );
+}
+
+/** A line Work wrote (an agent change, a fork, a continued turn): a divider. */
+function NoticeLine({
+  item,
+  context,
+}: {
+  item: NoticeItem;
+  context: RowContext;
+}) {
+  const agentId = item.data.agentId;
+  const text =
+    item.code === "agent_changed"
+      ? typeof agentId === "string"
+        ? `Switched to ${context.resolveAgentName?.(agentId) ?? "another agent"}`
+        : "Agent changed"
+      : item.text;
+  return (
+    <div
+      className="flex items-center gap-3 py-1 text-[11px] text-fg-faint"
+      data-testid="chat-divider"
+      data-notice-code={item.code}
+      data-message-id={item.id}
+    >
+      <span className="h-px flex-1 bg-border" />
+      <span className="max-w-[80%] text-center">{text}</span>
+      <span className="h-px flex-1 bg-border" />
+    </div>
+  );
 }
 
 /**
- * The question rows of a question panel answer (core stores the batch and
- * the raw answer beside the text the agent receives). Multi-question
- * answers are "<question>\n→ <answer>" blocks; anything else shows whole.
+ * What an agent was told about turns its own conversation had not seen
+ * (a switch of agent, a fork): collapsed, opens to the text it read.
  */
-function questionAnswer(
-  metadata: Record<string, unknown> | undefined,
-): "dismissed" | { question: string; answer: string }[] | undefined {
-  const entry = asRecord(metadata?.question);
-  if (typeof entry?.answer !== "string" || !Array.isArray(entry.questions))
-    return undefined;
-  const answer = entry.answer;
-  if (answer === QUESTIONS_DISMISSED_MESSAGE) return "dismissed";
-  const questions = entry.questions.flatMap((raw) => {
-    const question = asRecord(raw)?.question;
-    return typeof question === "string" ? [question] : [];
-  });
-  const [only] = questions;
-  if (!only) return undefined;
-  if (questions.length === 1) return [{ question: only, answer }];
-  const rows = questions.map((question) => {
-    const marker = `${question}\n→ `;
-    const index = answer.indexOf(marker);
-    if (index === -1) return undefined;
-    const start = index + marker.length;
-    const end = answer.indexOf("\n\n", start);
-    return {
-      question,
-      answer: answer.slice(start, end === -1 ? undefined : end).trim(),
-    };
-  });
-  return rows.every((row) => row !== undefined)
-    ? rows
-    : [{ question: questions.join("\n"), answer }];
+function HandoffLine({ item }: { item: ContextHandoffItem }) {
+  const [open, setOpen] = useState(false);
+  const { from, to } = item.coveredTurnOrdinals;
+  const count = Math.max(0, to - from + 1);
+  return (
+    <div className="flex flex-col gap-1" data-testid="chat-handoff">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        className="mx-auto flex cursor-pointer items-center gap-1 text-[11px] text-fg-faint transition-colors duration-150 hover:text-fg-muted"
+      >
+        <ChevronRight
+          className={`size-3 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+        />
+        {count === 1
+          ? "Caught up on 1 earlier turn"
+          : `Caught up on ${count} earlier turns`}
+      </button>
+      <div
+        className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}
+      >
+        <div className="overflow-hidden" inert={!open}>
+          <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 font-sans text-[11px] leading-4 text-fg-muted">
+            {item.text}
+          </pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * How a turn ended, when that is worth a line: a failed turn's card with
+ * what gets the person unstuck, a quiet divider for an interruption, and
+ * the countdown of a turn waiting to retry.
+ */
+function TurnOutcome({
+  turn,
+  group,
+  latest,
+  onRetry,
+  onStopRetrying,
+  onReauth,
+  reauthLabel,
+}: {
+  turn: Turn;
+  group: TimelineTurn;
+  latest: boolean;
+  onRetry?: (turnId: string) => void;
+  onStopRetrying?: () => void;
+  onReauth?: () => void;
+  reauthLabel?: string;
+}) {
+  const retrying =
+    (turn.status === "queued" || turn.status === "held") &&
+    turn.attemptCount > 0;
+  if (turn.status === "failed" || retrying)
+    return (
+      <ErrorCard
+        message={
+          turn.error?.message ??
+          (retrying ? "The last attempt did not finish." : "The turn failed.")
+        }
+        kind={turn.error?.kind}
+        actionable={latest}
+        retryAt={retrying ? turn.retryAt : null}
+        onRetry={!retrying && onRetry ? () => onRetry(turn.id) : undefined}
+        onStop={retrying ? onStopRetrying : undefined}
+        onReauth={onReauth}
+        reauthLabel={reauthLabel}
+      />
+    );
+  if (turn.status !== "interrupted") return null;
+  const stopped = interruptedStep(turn, group);
+  const changed = (turn.outcome?.changedFiles ?? []).map(
+    (change) => change.path,
+  );
+  return (
+    <div
+      // The running steps above become this summary in place; it fades in
+      // rather than snapping over them.
+      className="flex animate-fade-in flex-col items-center gap-0.5 text-center text-xs text-fg-faint"
+      data-testid="chat-interrupted"
+    >
+      <div className="italic">Interrupted</div>
+      {turn.error?.message && (
+        // Not a person's stop: say what happened (the machine went away).
+        <span className="italic" data-testid="chat-interrupted-reason">
+          {turn.error.message}
+        </span>
+      )}
+      {stopped && (
+        <span data-testid="chat-interrupted-step">
+          {`While: ${stopped.label}${stopped.ran ? ` (${stopped.ran})` : ""}`}
+        </span>
+      )}
+      {changed.length > 0 && (
+        <span data-testid="chat-interrupted-files">
+          {`Left ${changed.length === 1 ? "1 changed file" : `${changed.length} changed files`}: ${changedFileNames(changed)}`}
+        </span>
+      )}
+      {latest && onRetry && (
+        <button
+          type="button"
+          onClick={() => onRetry(turn.id)}
+          className="mt-1 flex cursor-pointer items-center gap-1 rounded-md px-2 py-0.5 not-italic text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+          data-testid="chat-retry"
+        >
+          <RotateCcw className="size-3" />
+          Retry
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A failed turn: the friendly explanation plus whatever gets the person
+ * unstuck: Retry (in place, no re-typing), a re-connect flow for auth
+ * failures, and the countdown while a transient failure retries itself.
+ */
+function ErrorCard({
+  message,
+  kind,
+  actionable,
+  retryAt,
+  onRetry,
+  onStop,
+  onReauth,
+  reauthLabel,
+}: {
+  message: string;
+  kind?: string;
+  actionable: boolean;
+  retryAt: string | null;
+  onRetry?: () => void;
+  onStop?: () => void;
+  onReauth?: () => void;
+  reauthLabel?: string;
+}) {
+  const nextAtMs = retryAt ? Date.parse(retryAt) : undefined;
+  return (
+    <article
+      className="mr-auto max-w-[85%] animate-fade-in rounded-xl border border-danger/40 bg-danger/5 px-3 py-2.5 text-sm"
+      data-testid="chat-error-card"
+    >
+      <div className="whitespace-pre-wrap break-words leading-6 text-fg">
+        {message}
+      </div>
+      {actionable && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-bg-raised px-2.5 py-1 text-xs font-medium text-fg transition-colors duration-100 hover:border-border-strong"
+              data-testid="chat-retry"
+            >
+              <RotateCcw className="size-3" />
+              Retry
+            </button>
+          )}
+          {kind === "auth" && onReauth && (
+            <button
+              type="button"
+              onClick={onReauth}
+              className="flex cursor-pointer items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-accent-fg transition-opacity duration-100 hover:opacity-90"
+              data-testid="chat-reauth"
+            >
+              <KeyRound className="size-3" />
+              {reauthLabel ?? "Reconnect"}
+            </button>
+          )}
+          {nextAtMs !== undefined && Number.isFinite(nextAtMs) && (
+            <AutoRetryCountdown nextAtMs={nextAtMs} />
+          )}
+          {onStop && (
+            <button
+              type="button"
+              onClick={onStop}
+              className="cursor-pointer rounded-md px-2 py-1 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+              data-testid="stop-retrying"
+            >
+              Stop
+            </button>
+          )}
+        </div>
+      )}
+    </article>
+  );
 }
 
 /**
@@ -1063,7 +1426,16 @@ interface TurnStep {
    * earlier work folds in above it, so its row is never relabeled.
    */
   key: string;
-  kind: "command" | "file_edit" | "tool" | "subagent" | "background" | "note";
+  kind:
+    | "command"
+    | "file_edit"
+    | "tool"
+    | "subagent"
+    | "background"
+    | "note"
+    | "reasoning"
+    | "plan"
+    | "request";
   /** A folded note's message id, so focus and deep links still find it. */
   messageId?: string;
   /** Notes expand to rendered Markdown instead of a preformatted payload. */
@@ -1091,7 +1463,7 @@ interface TurnStep {
   endedAt?: number;
   /** Its result has arrived, or it has none to wait for. */
   finished?: boolean;
-  /** A call whose end the harness reports (it carries a call id). */
+  /** A step whose end is reported (every work item says when it ends). */
   awaitsEnd?: boolean;
   /** Still going: the turn runs and its result has not arrived. */
   running?: boolean;
@@ -1104,6 +1476,9 @@ const STEP_ICONS = {
   subagent: Bot,
   background: Radio,
   note: MessageSquareText,
+  reasoning: Brain,
+  plan: ListChecks,
+  request: MessageCircleQuestionMark,
 } as const;
 
 /**
@@ -1394,110 +1769,6 @@ function toolStepDetail(
 }
 
 /**
- * The turn's steps, from the persisted per-message event log
- * (`metadata.events`). The chat keeps its prose calm — this is where the
- * full commands, file paths, and tool payloads live, on demand.
- */
-function turnSteps(message: ChatTimelineMessage): TurnStep[] {
-  const events = asRecord(message.metadata)?.events;
-  if (!Array.isArray(events)) return [];
-  const steps: TurnStep[] = [];
-  for (const [index, entry] of events.entries()) {
-    const event = asRecord(entry);
-    if (!event) continue;
-    const timing = stepTiming(event);
-    const content = typeof event.content === "string" ? event.content : "";
-    const firstLine = content.split("\n", 1)[0]?.trim() ?? "";
-    const description =
-      typeof event.description === "string" ? event.description.trim() : "";
-    if (event.type === "command") {
-      // The agent's own words lead; the command itself is one click away.
-      steps.push({
-        ...timing,
-        key: `${message.id}:${index}`,
-        kind: "command",
-        label: description || `$ ${firstLine || "(command)"}`,
-        mono: !description,
-        detail: stepDetailText(
-          [
-            description || content.includes("\n") ? content : undefined,
-            stepDetailText(event.toolResult),
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-        ),
-        detailMono: true,
-      });
-    } else if (event.type === "file_edit") {
-      const path = typeof event.filePath === "string" ? event.filePath : "";
-      steps.push({
-        ...timing,
-        key: `${message.id}:${index}`,
-        finished: true,
-        kind: "file_edit",
-        label: `Edited ${path || "a file"}`,
-        mono: true,
-        filePath: path || undefined,
-      });
-    } else if (event.type === "tool_call") {
-      const toolName =
-        typeof event.toolName === "string" ? event.toolName : "tool";
-      if (HIDDEN_STEP_TOOLS.has(toolName)) continue;
-      const started = backgroundStart(event);
-      if (started) {
-        steps.push({
-          ...timing,
-          key: `${message.id}:${index}`,
-          finished: true,
-          kind: "background",
-          label: started.description,
-          background: { ref: `${message.id}:${index}`, ...started },
-          detail: started.command,
-          detailMono: true,
-        });
-        continue;
-      }
-      const pretty = toolStepLabel(toolName, event.toolInput);
-      steps.push({
-        ...timing,
-        key: `${message.id}:${index}`,
-        kind: "tool",
-        label: pretty.label,
-        mono: pretty.mono,
-        toolName,
-        detail: toolStepDetail(toolName, event.toolInput, event.toolResult),
-        detailMono: !DESKTOP_STEP_TOOLS.has(toolName),
-      });
-    } else if (event.type === "subagent" && event.status !== "ended") {
-      steps.push({
-        ...timing,
-        key: `${message.id}:${index}`,
-        kind: "subagent",
-        label: `Subagent: ${firstLine || "delegated work"}`,
-      });
-    }
-  }
-  return steps;
-}
-
-/** When a logged event started and ended, and whether it has finished. */
-function stepTiming(
-  event: Record<string, unknown>,
-): Pick<TurnStep, "startedAt" | "endedAt" | "finished" | "awaitsEnd"> {
-  const startedAt = typeof event.at === "number" ? event.at : undefined;
-  const endedAt = typeof event.endedAt === "number" ? event.endedAt : undefined;
-  return {
-    startedAt,
-    endedAt,
-    finished:
-      endedAt !== undefined ||
-      event.status === "ended" ||
-      event.toolResult !== undefined,
-    awaitsEnd: typeof event.toolUseId === "string",
-  };
-}
-
-/**
  * Marks the live steps still going. A call the harness reports the end of
  * runs until that end arrives; any other step runs only while it is the
  * latest, because nothing will say when it finished.
@@ -1508,58 +1779,6 @@ function markRunning(steps: TurnStep[]): TurnStep[] {
       ? { ...step, running: true }
       : step,
   );
-}
-
-/**
- * The step an interruption stopped, and how long it had run: the latest
- * still running by the same rule as a live turn's, timed to the
- * interruption (the log's last event).
- */
-function interruptedStep(
-  message: ChatTimelineMessage,
-  steps: TurnStep[],
-): { label: string; ran?: string } | undefined {
-  const step = markRunning(steps)
-    .reverse()
-    .find((each) => each.running && !each.background);
-  if (!step) return undefined;
-  const events = asRecord(message.metadata)?.events;
-  const stoppedAt = Array.isArray(events)
-    ? events.reduce<number | undefined>((latest, entry) => {
-        const at = asRecord(entry)?.at;
-        return typeof at === "number" && (latest === undefined || at > latest)
-          ? at
-          : latest;
-      }, undefined)
-    : undefined;
-  const ran =
-    step.startedAt !== undefined && stoppedAt !== undefined
-      ? stoppedAt - step.startedAt
-      : undefined;
-  return {
-    label: step.label,
-    ...(ran !== undefined && ran >= 1000 ? { ran: formatElapsed(ran) } : {}),
-  };
-}
-
-/** The workspace paths a settled turn reported changing. */
-function changedPaths(metadata: Record<string, unknown> | undefined): string[] {
-  const changes = metadata?.changedFiles;
-  if (!Array.isArray(changes)) return [];
-  return changes.flatMap((change) => {
-    const path = asRecord(change)?.path;
-    return typeof path === "string" && path ? [path] : [];
-  });
-}
-
-/** Up to three file names, then how many more. */
-function changedFileNames(paths: string[]): string {
-  const names = paths
-    .slice(0, 3)
-    .map((path) => path.slice(path.lastIndexOf("/") + 1));
-  return paths.length > 3
-    ? `${names.join(", ")} and ${paths.length - 3} more`
-    : names.join(", ");
 }
 
 /**
@@ -1610,17 +1829,352 @@ function TurnClock({
 /** Silence long enough to say so on the activity line. */
 const STALL_AFTER_MS = 30_000;
 
+/**
+ * A tool's name as the steps read it: host tools by their own name (the
+ * same on every harness), a connector's as `server/tool`. Harnesses name
+ * MCP tools `mcp__server__tool`.
+ */
+export function stepToolName(item: { tool: string; server: string | null }) {
+  const mcp = /^mcp__(.+?)__(.+)$/.exec(item.tool);
+  const tool = mcp?.[2] ?? item.tool;
+  const server = item.server ?? mcp?.[1] ?? null;
+  return server && server !== "workspace" && !DESKTOP_STEP_TOOLS.has(tool)
+    ? `${server}/${tool}`
+    : tool;
+}
+
+const epoch = (iso: string | null): number | undefined => {
+  if (!iso) return undefined;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : undefined;
+};
+
+/** When an item started and ended, and whether it has finished. */
+function itemTiming(
+  item: WorkItem,
+): Pick<TurnStep, "startedAt" | "endedAt" | "finished" | "awaitsEnd"> {
+  return {
+    startedAt: epoch(item.startedAt ?? item.createdAt),
+    endedAt: epoch(item.endedAt),
+    finished: item.status !== "in_progress",
+    // Every item says when it ends: an unfinished one is still running.
+    awaitsEnd: true,
+  };
+}
+
+const firstLineOf = (text: string): string =>
+  text.split("\n", 1)[0]?.trim() ?? "";
+
+/**
+ * The turn's steps, from its work items. The chat keeps its prose calm:
+ * this is where the full commands, file paths and tool payloads live, on
+ * demand. Work a harness's private subagent did reads under its step.
+ */
+function turnStepsOf(
+  sources: StepSource[],
+  requests: Readonly<Record<string, RuntimeRequest>>,
+): TurnStep[] {
+  const nested = new Map<string, WorkItem[]>();
+  for (const source of sources) {
+    if (source.kind !== "work" || !source.item.parentItemId) continue;
+    const list = nested.get(source.item.parentItemId) ?? [];
+    list.push(source.item);
+    nested.set(source.item.parentItemId, list);
+  }
+  const steps: TurnStep[] = [];
+  for (const source of sources) {
+    if (source.kind === "note") {
+      steps.push(noteStep(source.item));
+      continue;
+    }
+    if (source.item.parentItemId) continue;
+    const step = stepOf(source.item, {
+      requests,
+      nested: nested.get(source.item.id) ?? [],
+    });
+    if (step) steps.push(step);
+  }
+  return steps;
+}
+
+function stepOf(
+  item: WorkItem,
+  context: {
+    requests: Readonly<Record<string, RuntimeRequest>>;
+    nested: WorkItem[];
+  },
+): TurnStep | undefined {
+  const timing = itemTiming(item);
+  const key = item.id;
+  switch (item.kind) {
+    case "command": {
+      const description = item.description?.trim() ?? "";
+      const first = firstLineOf(item.command);
+      // The agent's own words lead; the command itself is one click away.
+      return {
+        ...timing,
+        key,
+        kind: "command",
+        label: description || `$ ${first || "(command)"}`,
+        mono: !description,
+        detail: stepDetailText(
+          [
+            description || item.command.includes("\n")
+              ? item.command
+              : undefined,
+            stepDetailText(item.output || undefined),
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
+        ),
+        detailMono: true,
+      };
+    }
+    case "file_change": {
+      const verb =
+        item.change === "created"
+          ? "Created"
+          : item.change === "deleted"
+            ? "Deleted"
+            : item.change === "renamed"
+              ? "Renamed"
+              : "Edited";
+      return {
+        ...timing,
+        key,
+        kind: "file_edit",
+        label: `${verb} ${item.path || "a file"}`,
+        mono: true,
+        filePath:
+          item.path && item.change !== "deleted" ? item.path : undefined,
+      };
+    }
+    case "tool_call": {
+      const toolName = stepToolName(item);
+      if (HIDDEN_STEP_TOOLS.has(toolName)) return undefined;
+      const started = backgroundStart(toolName, item.input);
+      if (started)
+        return {
+          ...timing,
+          key,
+          finished: true,
+          kind: "background",
+          label: started.description,
+          background: { ref: item.id, ...started },
+          detail: started.command,
+          detailMono: true,
+        };
+      const pretty = toolStepLabel(toolName, item.input);
+      return {
+        ...timing,
+        key,
+        kind: "tool",
+        label: item.description?.trim() || pretty.label,
+        mono: !item.description?.trim() && pretty.mono,
+        toolName,
+        detail: toolStepDetail(
+          toolName,
+          item.input,
+          item.error ? { error: item.error } : item.result,
+        ),
+        detailMono: !DESKTOP_STEP_TOOLS.has(toolName),
+      };
+    }
+    case "subagent":
+      return {
+        ...timing,
+        key,
+        kind: "subagent",
+        label: `Subagent: ${firstLineOf(item.title) || "delegated work"}`,
+        detail: stepDetailText(
+          [
+            context.nested
+              .map((child) => nestedLine(child))
+              .filter(Boolean)
+              .join("\n"),
+            item.result ?? undefined,
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
+        ),
+      };
+    case "reasoning": {
+      const text = item.text.trim();
+      if (!text) return undefined;
+      return {
+        ...timing,
+        key,
+        kind: "reasoning",
+        label: plainLine(firstLineOf(text)) || "Thinking",
+        detail: text.includes("\n") ? text : undefined,
+        markdown: true,
+      };
+    }
+    case "plan":
+      return {
+        ...timing,
+        key,
+        kind: "plan",
+        label: "Updated the plan",
+        detail: item.steps
+          .map(
+            (step) =>
+              `${step.status === "completed" ? "✓" : step.status === "in_progress" ? "●" : "○"} ${step.text}`,
+          )
+          .join("\n"),
+      };
+    case "request":
+      return requestStep(item.id, context.requests[item.requestId], timing);
+  }
+}
+
+/** A request the agent made, and how it ended. */
+function requestStep(
+  key: string,
+  request: RuntimeRequest | undefined,
+  timing: Pick<TurnStep, "startedAt" | "endedAt" | "finished" | "awaitsEnd">,
+): TurnStep {
+  const pending = request?.status === "pending";
+  const base = {
+    ...timing,
+    key,
+    kind: "request" as const,
+    finished: !pending,
+  };
+  if (request?.kind === "approval") {
+    const tool = request.approval?.tool;
+    const what = tool
+      ? stepToolName({ tool: tool.name, server: tool.server })
+      : (request.approval?.action ?? request.title);
+    const answer = request.response;
+    const outcome =
+      answer?.kind === "approval"
+        ? answer.decision === "approved"
+          ? answer.remember === "always"
+            ? "always allowed"
+            : "allowed"
+          : "denied"
+        : request.status === "pending"
+          ? "waiting"
+          : "withdrawn";
+    return {
+      ...base,
+      label: `Asked to use ${what} (${outcome})`,
+      detail: stepDetailText(
+        [
+          request.reason ?? undefined,
+          tool ? stepDetailText(tool.input) : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+      ),
+      detailMono: true,
+    };
+  }
+  if (request?.kind === "elicitation")
+    return {
+      ...base,
+      label: request.elicitation?.message
+        ? `Asked: ${firstLineOf(request.elicitation.message)}`
+        : "Asked for your input",
+    };
+  return {
+    ...base,
+    label:
+      request && request.status !== "pending" && request.status !== "resolved"
+        ? "Asked you a question (closed)"
+        : "Asked you a question",
+    detail: request?.questions?.map((question) => question.question).join("\n"),
+  };
+}
+
+/** One line of a subagent's own activity, for its step's detail. */
+function nestedLine(item: WorkItem): string {
+  switch (item.kind) {
+    case "command":
+      return `$ ${firstLineOf(item.command)}`;
+    case "file_change":
+      return `Edited ${item.path}`;
+    case "tool_call":
+      return `Used ${stepToolName(item)}`;
+    default:
+      return "";
+  }
+}
+
+/** A note the agent wrote mid-turn, as a row of the turn's steps. */
+function noteStep(item: AssistantMessageItem): TurnStep {
+  const text = item.text.trim();
+  const firstLine =
+    text
+      .split("\n")
+      .map((line) => plainLine(line.replace(/^[#>*\-\s]+/, "")))
+      .find(Boolean) ?? "Note";
+  return {
+    key: `${item.id}:note`,
+    kind: "note",
+    label: firstLine,
+    messageId: item.id,
+    // A one-line note is fully read from its row; nothing to expand.
+    detail: text === firstLine ? undefined : text,
+    markdown: true,
+  };
+}
+
+/**
+ * The step an interruption stopped, and how long it had run: the latest
+ * that never finished, timed to when the turn stopped.
+ */
+function interruptedStep(
+  turn: Turn,
+  group: TimelineTurn,
+): { label: string; ran?: string } | undefined {
+  const work = group.entries.flatMap((entry) =>
+    entry.kind === "reply" || entry.kind === "steps" ? entry.steps : [],
+  );
+  const stopped = [...work]
+    .reverse()
+    .find(
+      (item) =>
+        !item.parentItemId &&
+        (item.status === "in_progress" || item.status === "cancelled"),
+    );
+  if (!stopped) return undefined;
+  const step = stepOf(stopped, { requests: {}, nested: [] });
+  if (!step || step.background) return undefined;
+  const stoppedAt = epoch(turn.completedAt ?? turn.updatedAt);
+  const ran =
+    step.startedAt !== undefined && stoppedAt !== undefined
+      ? stoppedAt - step.startedAt
+      : undefined;
+  return {
+    label: step.label,
+    ...(ran !== undefined && ran >= 1000 ? { ran: formatElapsed(ran) } : {}),
+  };
+}
+
+/** Up to three file names, then how many more. */
+function changedFileNames(paths: string[]): string {
+  const names = paths
+    .slice(0, 3)
+    .map((path) => path.slice(path.lastIndexOf("/") + 1));
+  return paths.length > 3
+    ? `${names.join(", ")} and ${paths.length - 3} more`
+    : names.join(", ");
+}
+
 /** A run_background_command or watch_command call's command and words. */
-function backgroundStart(event: Record<string, unknown>):
+function backgroundStart(
+  toolName: string,
+  toolInput: unknown,
+):
   | {
       kind: ChatBackgroundCommand["kind"];
       command: string;
       description: string;
     }
   | undefined {
-  if (event.type !== "tool_call") return undefined;
-  const name = typeof event.toolName === "string" ? event.toolName : "";
-  const tool = name.slice(name.lastIndexOf("/") + 1);
+  const tool = toolName.slice(toolName.lastIndexOf("/") + 1);
   const kind =
     tool === "run_background_command"
       ? "command"
@@ -1628,7 +2182,7 @@ function backgroundStart(event: Record<string, unknown>):
         ? "watch"
         : undefined;
   if (!kind) return undefined;
-  const input = asRecord(event.toolInput);
+  const input = asRecord(toolInput);
   // Normalized the way the host records the process, so the two pair up.
   const command =
     typeof input?.command === "string" ? input.command.trim() : "";
@@ -1645,7 +2199,7 @@ function backgroundStart(event: Record<string, unknown>):
  * for a command and description matches the n-th process for them.
  */
 function assignBackgroundCommands(
-  messages: ChatTimelineMessage[],
+  views: TurnView[],
   commands: ChatBackgroundCommand[],
 ): Map<string, ChatBackgroundCommand> {
   const assigned = new Map<string, ChatBackgroundCommand>();
@@ -1655,15 +2209,18 @@ function assignBackgroundCommands(
     const key = `${command.kind}\u0000${command.command}\u0000${command.description}`;
     queues.set(key, [...(queues.get(key) ?? []), command]);
   }
-  for (const message of messages) {
-    if (message.role !== "assistant") continue;
-    for (const step of turnSteps(message)) {
-      if (!step.background || !step.detail) continue;
-      const key = `${step.background.kind}\u0000${step.detail}\u0000${step.background.description}`;
-      const match = queues.get(key)?.shift();
-      if (match) assigned.set(step.background.ref, match);
+  for (const view of views)
+    for (const entry of view.group.entries) {
+      if (entry.kind !== "reply" && entry.kind !== "steps") continue;
+      for (const item of entry.steps) {
+        if (item.kind !== "tool_call") continue;
+        const started = backgroundStart(stepToolName(item), item.input);
+        if (!started) continue;
+        const key = `${started.kind}\u0000${started.command}\u0000${started.description}`;
+        const match = queues.get(key)?.shift();
+        if (match) assigned.set(item.id, match);
+      }
     }
-  }
   return assigned;
 }
 
@@ -1689,7 +2246,6 @@ function backgroundLabel(
   return "Ran command in background";
 }
 
-/** A note the agent wrote mid-turn, as a row of the turn's steps. */
 /** A note's first line reads as plain text in its row: no `**`, backticks or link syntax. */
 export function plainLine(line: string): string {
   return line
@@ -1697,24 +2253,6 @@ export function plainLine(line: string): string {
     .replace(/(\*\*|__|`)/g, "")
     .replace(/(^|[^\w*])[*_]([^*_\n]+)[*_](?=[^\w*]|$)/g, "$1$2")
     .trim();
-}
-
-function noteStep(message: ChatTimelineMessage): TurnStep {
-  const text = message.content.trim();
-  const firstLine =
-    text
-      .split("\n")
-      .map((line) => plainLine(line.replace(/^[#>*\-\s]+/, "")))
-      .find(Boolean) ?? "Note";
-  return {
-    key: `${message.id}:note`,
-    kind: "note",
-    label: firstLine,
-    messageId: message.id,
-    // A one-line note is fully read from its row; nothing to expand.
-    detail: text === firstLine ? undefined : text,
-    markdown: true,
-  };
 }
 
 /**
@@ -2074,71 +2612,6 @@ function AttachmentStrip({
   );
 }
 
-/**
- * A failed turn: the friendly explanation plus whatever gets the user
- * unstuck — Retry (in place, no re-typing), a re-connect flow for auth
- * failures, and the auto-retry countdown for transient provider trouble.
- */
-function ErrorCard({
-  message,
-  actionable,
-  onRetry,
-  onReauth,
-  reauthLabel,
-  className,
-}: {
-  message: ChatTimelineMessage;
-  actionable: boolean;
-  onRetry?: () => void;
-  onReauth?: () => void;
-  reauthLabel?: string;
-  className?: string;
-}) {
-  const metadata = asRecord(message.metadata);
-  const kind =
-    typeof metadata?.errorKind === "string" ? metadata.errorKind : undefined;
-  const autoRetry = asRecord(metadata?.autoRetry);
-  const nextAtMs =
-    typeof autoRetry?.nextAtMs === "number" ? autoRetry.nextAtMs : undefined;
-  return (
-    <article
-      className={`mr-auto max-w-[85%] rounded-xl border border-danger/40 bg-danger/5 px-3 py-2.5 text-sm ${className ?? ""}`}
-      data-testid="chat-error-card"
-    >
-      <div className="whitespace-pre-wrap break-words leading-6 text-fg">
-        {message.content}
-      </div>
-      {actionable && (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          {onRetry && (
-            <button
-              type="button"
-              onClick={onRetry}
-              className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-bg-raised px-2.5 py-1 text-xs font-medium text-fg transition-colors duration-100 hover:border-border-strong"
-              data-testid="chat-retry"
-            >
-              <RotateCcw className="size-3" />
-              {nextAtMs ? "Retry now" : "Retry"}
-            </button>
-          )}
-          {kind === "auth" && onReauth && (
-            <button
-              type="button"
-              onClick={onReauth}
-              className="flex cursor-pointer items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-accent-fg transition-opacity duration-100 hover:opacity-90"
-              data-testid="chat-reauth"
-            >
-              <KeyRound className="size-3" />
-              {reauthLabel ?? "Reconnect"}
-            </button>
-          )}
-          {nextAtMs !== undefined && <AutoRetryCountdown nextAtMs={nextAtMs} />}
-        </div>
-      )}
-    </article>
-  );
-}
-
 /** "Retrying in Ns" that live-ticks; flips to a spinner when due. */
 function AutoRetryCountdown({ nextAtMs }: { nextAtMs: number }) {
   const [now, setNow] = useState(() => Date.now());
@@ -2160,171 +2633,6 @@ function AutoRetryCountdown({ nextAtMs }: { nextAtMs: number }) {
       {seconds > 0 ? `Retrying in ${seconds}s` : "Retrying…"}
     </span>
   );
-}
-
-/**
- * Derive the visible timeline from raw agent-session messages: an
- * in-progress assistant placeholder shows only once it carries steps.
- * Activity comes from execution state.
- * When the latest assistant message is awaiting user input, its parsed
- * questions are exposed so hosts can render an answer UI.
- */
-export function toTimeline(
-  persisted: AgentMessage[],
-  optimistic: ChatTimelineMessage[],
-  activity: string | undefined,
-): {
-  messages: ChatTimelineMessage[];
-  activity: string | undefined;
-  questions: AgentQuestion[] | undefined;
-} {
-  const messages = [...persisted, ...optimistic].filter(isConversationMessage);
-  return { messages, activity, questions: pendingQuestions(persisted) };
-}
-
-/**
- * Questions from the latest assistant turn, but only while they are still
- * unanswered — i.e. the awaiting-input assistant message is the last one.
- */
-function pendingQuestions(
-  persisted: AgentMessage[],
-): AgentQuestion[] | undefined {
-  const last = persisted.at(-1);
-  if (last?.role !== "assistant") return undefined;
-  const metadata = asRecord(last.metadata);
-  if (metadata?.status !== "awaiting_input") return undefined;
-  const raw = metadata.questions;
-  if (!Array.isArray(raw)) return undefined;
-  const questions = raw.flatMap((entry): AgentQuestion[] => {
-    const question = asRecord(entry);
-    if (typeof question?.question !== "string") return [];
-    const options = Array.isArray(question.options)
-      ? question.options.flatMap((option): AgentQuestionOption[] => {
-          const record = asRecord(option);
-          return typeof record?.label === "string"
-            ? [
-                {
-                  label: record.label,
-                  description:
-                    typeof record.description === "string"
-                      ? record.description
-                      : "",
-                },
-              ]
-            : [];
-        })
-      : [];
-    return [
-      {
-        question: question.question,
-        header:
-          typeof question.header === "string" && question.header.length > 0
-            ? question.header
-            : "Question",
-        multiSelect: question.multiSelect === true,
-        options,
-      },
-    ];
-  });
-  return questions.length > 0 ? questions : undefined;
-}
-
-function isConversationMessage(message: ChatTimelineMessage): boolean {
-  if (message.role === "system") {
-    // Markers and host notices render; other system rows are plumbing.
-    const metadata = asRecord(message.metadata);
-    return (
-      asRecord(metadata?.marker) !== undefined ||
-      typeof metadata?.notice === "string"
-    );
-  }
-  if (message.role !== "assistant") return true;
-  // The in-progress message carries the steps since the latest note.
-  if (asRecord(message.metadata)?.status === "in_progress")
-    return turnSteps(message).length > 0;
-  // Question-only turns have no prose; the question panel is the content.
-  return message.content.trim().length > 0;
-}
-
-function textSourceFromMetadata(value: unknown): ChatTextSourceView | null {
-  const record = asRecord(value);
-  switch (record?.type) {
-    case "paste":
-      return { type: "paste" };
-    case "selection":
-      return typeof record.filePath === "string"
-        ? {
-            type: "selection",
-            filePath: record.filePath,
-            ...(typeof record.startLine === "number"
-              ? { startLine: record.startLine }
-              : {}),
-            ...(typeof record.endLine === "number"
-              ? { endLine: record.endLine }
-              : {}),
-          }
-        : null;
-    case "url":
-      return typeof record.url === "string"
-        ? { type: "url", url: record.url }
-        : null;
-    case "path":
-      return typeof record.path === "string"
-        ? { type: "path", path: record.path }
-        : null;
-    case "tab":
-      return typeof record.key === "string" &&
-        typeof record.kind === "string" &&
-        typeof record.title === "string"
-        ? {
-            type: "tab",
-            key: record.key,
-            kind: record.kind,
-            title: record.title,
-            ...(typeof record.url === "string" ? { url: record.url } : {}),
-            ...(typeof record.filePath === "string"
-              ? { filePath: record.filePath }
-              : {}),
-          }
-        : null;
-    default:
-      return null;
-  }
-}
-
-/** Attachments a persisted message carries in its metadata. */
-export function attachmentsFromMetadata(
-  metadata: Record<string, unknown> | undefined,
-): ChatAttachmentView[] {
-  const raw = metadata?.attachments;
-  if (!Array.isArray(raw)) return [];
-  return raw.flatMap((entry): ChatAttachmentView[] => {
-    const record = asRecord(entry);
-    if (record?.kind === "text" && typeof record.text === "string") {
-      const source = textSourceFromMetadata(record.source);
-      return source
-        ? [
-            {
-              kind: "text",
-              name: typeof record.name === "string" ? record.name : "Text",
-              text: record.text,
-              source,
-            } satisfies ChatAttachmentView,
-          ]
-        : [];
-    }
-    return typeof record?.dataBase64 === "string" &&
-      typeof record?.mediaType === "string"
-      ? [
-          {
-            kind: record.kind === "document" ? "document" : "image",
-            name: typeof record.name === "string" ? record.name : "attachment",
-            mediaType: record.mediaType,
-            dataBase64: record.dataBase64,
-          } satisfies ChatAttachmentView,
-        ]
-      : [];
-  });
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

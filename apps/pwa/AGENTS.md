@@ -1,8 +1,12 @@
 # Pwa (mobile PWA)
 
 Phone-sized client for a Catamorphic server (ADR 0058): projects →
-sessions → chat. Reply, nudge (queue / send-now + interrupt), answer
-agent questions and tool-permission asks, start simple chats. The session list
+sessions → chat. A chat is the session's event log of turns (ADR 0196):
+the screen renders `useAgentChat().timeline` and sends every action as a
+session command. Reply, nudge (queue / send-now + interrupt), retry failed
+turns, answer agent questions (or reply in your own words, ADR 0195) and
+tool approvals, start simple chats. Servers whose `/me` reports another
+`agentProtocol.session` are refused with an "update Work" message. The session list
 shows promoted sessions only; latent delegated children remain with their
 parent and archived trees stay out of ordinary mobile navigation. Remote auth uses
 OAuth authorization code with S256 PKCE (ADR 0072); profiles are local people
@@ -17,14 +21,18 @@ before changing architecture.
   `node scripts/dev-server.mjs`; it prints a credential-free connect link and
   serves the same OAuth discovery, authorization, refresh, and bearer shape as
   a remote host. Use desktop QR pairing to exercise the desktop connection.
-  The fake's scripted agent: `ask …` parks a tool-permission ask,
-  `question …` asks a question, `fail …` fails the turn.
+  It speaks the session routes (`GET …/sessions/:id` with `snapshot`,
+  `GET …/events` SSE, `POST …/commands` receipts, `GET …/items`). The
+  fake's scripted agent: `ask …` parks an approval request, `question …`
+  asks a blocking question (a plain reply steers and leaves it open),
+  `fail …` fails the turn (Retry then works).
 
 ## Verify
 
 - `bun run typecheck && bun run test` (unit: parsers, theme, nav)
 - `bun run test:e2e` — builds, then drives headless Chrome (CDP) against
-  the fake server: connect → chat → permission → question → back-stack.
+  the fake server: connect → chat → approval → question → reply around a
+  question → retry → queue and send now → back-stack.
   Needs a local Chrome; suite skips without one.
 - `bun scripts/shots.ts <dir>` — screenshot tour for design review.
 - Repo root: `bun run lint` (Biome) before calling anything done.

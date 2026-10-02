@@ -780,6 +780,11 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
         },
         () => {},
       );
+    // A non-blocking question's answer reaches the agent as a message
+    // steered into the turn still working (ADR 0195).
+    void turn.nextSteer().then((input) => {
+      answer ??= [input.text.split("User answer:\n").pop() ?? input.text];
+    });
     yield {
       type: "text",
       content: "I am continuing independent work while you decide.",
@@ -1473,7 +1478,20 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
       .parse(JSON.parse(message.slice("E2E workspace tool ".length)));
     let body: string;
     try {
-      const result = await turn.tool(request.name, request.input);
+      // A page image is the result's content itself; anything else reads
+      // as the tool's value.
+      const result =
+        request.name === "browser_snapshot" && request.input.format === "image"
+          ? {
+              content: (
+                await turn.toolResult("invoke_capability", {
+                  name: "workspace.browser_snapshot",
+                  input: request.input,
+                  requestId: randomUUID(),
+                })
+              ).content,
+            }
+          : await turn.tool(request.name, request.input);
       body = JSON.stringify(result, (key, value) =>
         key === "data" && typeof value === "string" && value.length > 1000
           ? `<${value.length} base64 characters>`

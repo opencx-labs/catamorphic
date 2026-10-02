@@ -1896,7 +1896,14 @@ export class TurnEngine {
             attentionRevision: Number(input.session.attention_revision) + 1,
           },
         });
-      if (input.session.title === null && input.turn.inputItemId) {
+      // The title as it stands now: the harness may have set one during
+      // the turn, after `input.session` was read.
+      const current = await trx
+        .selectFrom("agent_sessions")
+        .select("title")
+        .where("id", "=", input.turn.sessionId)
+        .executeTakeFirst();
+      if ((current?.title ?? null) === null && input.turn.inputItemId) {
         const row = await trx
           .selectFrom("agent_items")
           .select("payload")

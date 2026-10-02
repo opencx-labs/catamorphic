@@ -1,16 +1,24 @@
 "use client";
 
+import type { AgentQuestion } from "@catamorphic/react";
 import { Check, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { AgentQuestion } from "../chat-timeline/chat-timeline.js";
 
 export interface AgentQuestionPanelProps {
   questions: AgentQuestion[];
-  /** Sending the composed answer text back to the agent. */
-  onSubmit: (answer: string) => void;
-  /** Dismissing the questions without answering (X button or Escape). */
+  /**
+   * The answers, one per question (picked labels joined with ", "): send
+   * them as `respond(id, { kind: "question", answers })`.
+   */
+  onSubmit: (answers: string[]) => void;
+  /**
+   * Dismissing blocking questions without answering (X button or Escape):
+   * answer with `QUESTIONS_DISMISSED_MESSAGE`. A non-blocking panel only
+   * collapses to "Answer when ready" instead.
+   */
   onDismiss: () => void;
   disabled?: boolean;
+  /** `RuntimeRequest.blocking`: whether the agent waits on the answer. */
   blocking?: boolean;
   renderDismiss?: (button: React.ReactNode, label: string) => React.ReactNode;
 }
@@ -361,11 +369,12 @@ function OptionRow({
   );
 }
 
-/** Compose the user's selections into the text sent back to the agent. */
-function formatAnswers(questions: AgentQuestion[], answers: Answer[]): string {
-  const lines = questions.map((question, index) => {
-    const value = (answers[index] ?? emptyAnswer()).selected.join(", ");
-    return questions.length > 1 ? `${question.question}\n→ ${value}` : value;
-  });
-  return lines.join("\n\n");
+/** One answer per question: the picked labels, comma separated. */
+function formatAnswers(
+  questions: AgentQuestion[],
+  answers: Answer[],
+): string[] {
+  return questions.map((_question, index) =>
+    (answers[index] ?? emptyAnswer()).selected.join(", "),
+  );
 }

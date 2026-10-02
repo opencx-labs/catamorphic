@@ -2,7 +2,7 @@
   "$schema": "https://ui.shadcn.com/schema/registry-item.json",
   "name": "tool-permission-card",
   "type": "registry:component",
-  "description": "Consent card for an agent's MCP tool call whose permission policy says ask (ADR 0054): Allow once / Always allow / Deny. Feed it from useToolPermissions.",
+  "description": "Card for an agent's runtime request that is not a question (ADR 0196): a tool approval (Allow once, Always allow, Deny) or an MCP elicitation. Shows who it waits for and why it can no longer be answered. Feed it from useAgentChat().requests and answer with respond.",
   "dependencies": ["@catamorphic/react", "lucide-react"],
   "registryDependencies": [],
   "files": [

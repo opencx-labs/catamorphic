@@ -1,11 +1,15 @@
 import {
   type AgentChatAttachment,
-  type AgentChatTextAttachment,
+  type AgentTextAttachment,
+  type Item,
   messageWithAttachmentNames,
+  QUESTIONS_DISMISSED_MESSAGE,
+  type RuntimeRequestResponse,
+  type SessionState,
+  type UserMessageItem,
   useAcknowledgeAgentSessionAttention,
   useAgentCatalog,
   useAgentChat,
-  useAnswerAgentQuestion,
   useEnvironments,
   useWatchers,
 } from "@catamorphic/react";
@@ -80,13 +84,8 @@ import type { ChatMode } from "../lib/workspace-types.js";
 import { ActivityText } from "./activity-text";
 import { AgentQuestionPanel } from "./agent-question-panel";
 import { AuthenticationRequiredCard } from "./authentication-required-card.js";
-import { ChatDeliveryRecovery } from "./catamorphic/agent-chat.js";
-import {
-  attachmentsFromMetadata,
-  ChatTimeline,
-  QUESTIONS_DISMISSED_MESSAGE,
-  toTimeline,
-} from "./catamorphic/chat-timeline";
+import { ApprovalCard } from "./catamorphic/approval-card.js";
+import { ChatTimeline, stepToolName } from "./catamorphic/chat-timeline";
 import { TodoProgress } from "./catamorphic/todo-progress.js";
 import { SurfacesRail } from "./chat-surface-rail.js";
 import { FilePreviewProjectContext } from "./file-preview";
@@ -160,7 +159,7 @@ const MAX_ATTACHMENTS = 32;
 /** A workspace tab dropped on the chat becomes a tab pill. */
 function tabPillFromDrag(
   data: DataTransfer | null,
-): AgentChatTextAttachment | null {
+): AgentTextAttachment | null {
   const raw = data?.getData(TAB_DRAG_TYPE);
   if (!raw) return null;
   try {
@@ -176,7 +175,7 @@ function tabPillFromDrag(
         : parsed.kind;
     const detail =
       typeof parsed.detail === "string" ? parsed.detail : undefined;
-    const source: AgentChatTextAttachment["source"] = {
+    const source: AgentTextAttachment["source"] = {
       type: "tab",
       key: parsed.key,
       kind: parsed.kind,
@@ -257,20 +256,6 @@ function filesFrom(data: DataTransfer | null): File[] {
     .filter((file): file is File => file !== null);
 }
 
-/** Structural view of one persisted turn event (metadata.events entries). */
-interface TurnEvent {
-  type?: string;
-  content?: string;
-  status?: string;
-  subagentId?: string;
-  subagentType?: string;
-  toolName?: string;
-  toolInput?: unknown;
-  toolResult?: unknown;
-  toolUseId?: string;
-  filePath?: string;
-}
-
 const APP_SOURCE_PATTERN = new RegExp(
   `(?:^|/)${PROJECT_APPS_DIR.replaceAll(".", "\\.")}/([a-z0-9][a-z0-9-]*)/`,
 );
@@ -282,117 +267,91 @@ const appNameFromPath = (filePath: string | undefined): string | undefined =>
 const firstLine = (value: string | undefined): string =>
   (value ?? "").split("\n", 1)[0]?.trim() ?? "";
 
-const activityLine = (event: TurnEvent): string => {
-  if (event.type === "command") return `$ ${firstLine(event.content)}`;
-  if (event.type === "file_edit") return `Edited ${event.filePath ?? "a file"}`;
-  if (event.type === "tool_call") return `Used ${event.toolName ?? "a tool"}`;
-  return firstLine(event.content);
+/** One line of what a subagent did, for its chip. */
+const activityLine = (item: Item): string => {
+  if (item.kind === "command") return `$ ${firstLine(item.command)}`;
+  if (item.kind === "file_change") return `Edited ${item.path || "a file"}`;
+  if (item.kind === "tool_call") return `Used ${stepToolName(item)}`;
+  return "";
 };
 
 /**
- * Chips derived from the chat's own turn events (not workspace tabs):
- * subagents from the latest turn that delegated work — spinning while the
- * turn runs, inspectable after. Background commands are terminals, and
- * their chips come with the workspace's terminal surfaces.
+ * Chips derived from the chat's own work (not workspace tabs): subagents
+ * from the latest turn that delegated work, spinning while it runs and
+ * inspectable after; apps the agent worked on; MCP Apps views its tool
+ * calls opened. Background commands are terminals, and their chips come
+ * with the workspace's terminal surfaces.
  */
 function activityChips(
-  messages: Array<{ role: string; metadata?: unknown }>,
-  working: boolean,
+  state: SessionState | null,
+  activeTurnId: string | null,
   uiTools: Record<string, string>,
 ): ChatSurface[] {
-  let lastSubagentEvents: TurnEvent[] | undefined;
-  let currentTurnEvents: TurnEvent[] = [];
-  let currentTurnHasSubagents = false;
-  // Apps the agent worked on (file edits under .work/apps/<name>/); active while
-  // the CURRENT turn touches them.
+  if (!state) return [];
+  const turns = Object.values(state.turns);
+  const ordinalOf = new Map(turns.map((turn) => [turn.id, turn.ordinal]));
+  let latestDelegation: string | undefined;
+  for (const item of state.items) {
+    if (item.kind !== "subagent" || !item.turnId) continue;
+    const ordinal = ordinalOf.get(item.turnId) ?? 0;
+    const current = latestDelegation
+      ? (ordinalOf.get(latestDelegation) ?? 0)
+      : -1;
+    if (ordinal >= current) latestDelegation = item.turnId;
+  }
+  // Apps the agent worked on (file changes under .work/apps/<name>/);
+  // active while the running turn touches them.
   const apps = new Map<string, { active: boolean }>();
-  // Tool calls whose tool declares an MCP Apps view; later events with the
-  // same toolUseId merge in the result.
   const mcpApps = new Map<string, McpAppRef>();
-  for (const message of messages) {
-    if (message.role === "user") {
-      currentTurnEvents = [];
-      currentTurnHasSubagents = false;
-    }
-    if (message.role !== "assistant") continue;
-    const metadata = message.metadata as {
-      events?: TurnEvent[];
-      status?: string;
-    } | null;
-    const events = metadata?.events;
-    if (!Array.isArray(events)) continue;
-    const inProgress = metadata?.status === "in_progress";
-    currentTurnEvents.push(...events);
-    if (events.some((event) => event.type === "subagent")) {
-      currentTurnHasSubagents = true;
-    }
-    // Preambles split a turn into several persisted assistant messages.
-    // Keep the start, nested activity, and end together across those segments.
-    if (currentTurnHasSubagents) lastSubagentEvents = [...currentTurnEvents];
-    for (const event of events) {
-      if (event.type === "file_edit") {
-        const appName = appNameFromPath(event.filePath);
-        if (appName) apps.set(appName, { active: inProgress && working });
-        continue;
-      }
-      if (
-        event.type === "tool_call" &&
-        event.toolUseId &&
-        event.toolName &&
-        uiTools[event.toolName] !== undefined
-      ) {
-        const existing = mcpApps.get(event.toolUseId);
-        mcpApps.set(event.toolUseId, {
-          toolKey: event.toolName,
-          toolUseId: event.toolUseId,
-          title: event.toolName.split("/").pop() ?? event.toolName,
-          toolInput: event.toolInput ?? existing?.toolInput,
-          toolResult:
-            event.toolResult !== undefined
-              ? event.toolResult
-              : existing?.toolResult,
+  const subagents = new Map<
+    string,
+    { label: string; ended: boolean; info: string[] }
+  >();
+  for (const item of state.items) {
+    const live = item.turnId !== null && item.turnId === activeTurnId;
+    if (item.kind === "file_change") {
+      const appName = appNameFromPath(item.path);
+      if (appName)
+        apps.set(appName, {
+          active: (apps.get(appName)?.active ?? false) || live,
         });
-      }
+    }
+    if (item.kind === "tool_call") {
+      const toolKey = stepToolName(item);
+      if (uiTools[toolKey] !== undefined)
+        mcpApps.set(item.id, {
+          toolKey,
+          toolUseId: item.id,
+          title: toolKey.split("/").pop() ?? toolKey,
+          toolInput: item.input ?? undefined,
+          toolResult: item.result ?? undefined,
+        });
+    }
+    if (!latestDelegation || item.turnId !== latestDelegation) continue;
+    if (item.kind === "subagent") {
+      subagents.set(item.id, {
+        label: firstLine(item.title) || item.agentType || "subagent",
+        ended: item.status !== "in_progress",
+        info: subagents.get(item.id)?.info ?? [],
+      });
+    } else if (item.parentItemId) {
+      const line = activityLine(item);
+      const entry = subagents.get(item.parentItemId);
+      if (line && entry) entry.info.push(line);
     }
   }
-
   const chips: ChatSurface[] = [];
-  if (lastSubagentEvents) {
-    const subagents = new Map<
-      string,
-      { label: string; ended: boolean; info: string[] }
-    >();
-    for (const event of lastSubagentEvents) {
-      if (!event.subagentId) continue;
-      if (event.type === "subagent") {
-        const entry = subagents.get(event.subagentId) ?? {
-          label: "subagent",
-          ended: false,
-          info: [],
-        };
-        if (event.status === "ended") entry.ended = true;
-        else {
-          entry.label =
-            firstLine(event.content) || event.subagentType || "subagent";
-        }
-        subagents.set(event.subagentId, entry);
-      } else {
-        const line = activityLine(event);
-        if (line) subagents.get(event.subagentId)?.info.push(line);
-      }
-    }
-    for (const [id, entry] of subagents) {
-      chips.push({
-        key: `subagent:${id}`,
-        kind: "subagent",
-        label: entry.label,
-        active: !entry.ended && working && currentTurnHasSubagents,
-        info:
-          entry.info.length > 0
-            ? entry.info.slice(-20)
-            : ["No visible activity yet."],
-      });
-    }
+  for (const [id, entry] of subagents) {
+    chips.push({
+      key: `subagent:${id}`,
+      kind: "subagent",
+      label: entry.label,
+      active: !entry.ended && latestDelegation === activeTurnId,
+      info:
+        entry.info.length > 0
+          ? entry.info.slice(-20)
+          : ["No visible activity yet."],
+    });
   }
   for (const [name, app] of apps) {
     chips.push({
@@ -534,7 +493,9 @@ function ChatDockContent({
     effort: entry.effort,
     environment: selectedEnvironment,
     source: "desktop",
-    idleRefetchIntervalMs: refreshWhileIdle ? 3_000 : false,
+    // Only a chat on screen streams; minimized ones poll while they work,
+    // so a window of chats never runs out of connections.
+    live: entry.mode === "partial" || (entry.mode === "tab" && tabActive),
     onSessionCreated: (sessionId) => {
       // Desktop-local privacy flag (ADR 0062): recorded the moment the
       // lazy session gets its id, well before the first turn can settle
@@ -749,15 +710,20 @@ function ChatDockContent({
   const slashToken = /^\/(\S*)$/.exec(draft)?.[1];
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [slashSelection, setSlashSelection] = useState<string>();
-  const answerQuestion = useAnswerAgentQuestion(projectId, chat.sessionId);
-  const pendingQuestion =
-    chat.session?.questions?.find((entry) => entry.blocking !== false) ??
-    chat.session?.questions?.[0];
-  const { messages, activity, questions } = toTimeline(
-    chat.messages,
-    chat.optimisticMessages,
-    chat.activity,
+  // Questions, approvals and elicitations waiting on this person; any
+  // client answers them, and the chat survives a restart around them.
+  const questionRequests = chat.requests.filter(
+    (request) => request.kind === "question" && request.questions,
   );
+  const otherRequests = chat.requests.filter(
+    (request) => request.kind !== "question",
+  );
+  const [responding, setResponding] = useState(false);
+  const respond = (requestId: string, response: RuntimeRequestResponse) => {
+    setResponding(true);
+    void chat.respond(requestId, response).finally(() => setResponding(false));
+  };
+  const activity = chat.activity;
 
   // Which connection tools carry an MCP Apps view — chips for those tool
   // calls open the embedded app.
@@ -801,14 +767,15 @@ function ChatDockContent({
   // the chat's own turn events (every harness reports them through the
   // common event model); workspace-tab chips arrive via the surfaces
   // prop. One rail, all of them.
+  const activeTurnId = chat.activeTurn?.id ?? null;
   const chatActivityChips = useMemo(
     () =>
       activityChips(
-        chat.messages,
-        chat.isWorking && !chat.connectionLost,
+        chat.state,
+        chat.connectionLost ? null : activeTurnId,
         uiTools,
       ),
-    [chat.messages, chat.isWorking, chat.connectionLost, uiTools],
+    [chat.state, activeTurnId, chat.connectionLost, uiTools],
   );
   const railSurfaces = useMemo(() => {
     // One chip per key: a surface known to both the host and the turn
@@ -837,28 +804,19 @@ function ChatDockContent({
   // Typing anything exits recall mode.
   // Recalled text names its pills — "fix [sel.md · 3–10]" — since the
   // pills themselves belong to the message that was sent.
-  const sentHistory = messages
+  const sentHistory = (chat.state?.items ?? [])
     .filter(
-      (message) =>
-        message.role === "user" &&
-        message.content !== QUESTIONS_DISMISSED_MESSAGE &&
-        !(
-          typeof message.metadata === "object" &&
-          message.metadata !== null &&
-          "questionRequestId" in message.metadata
-        ) &&
-        message.content.trim() !== "",
+      (item) =>
+        item.kind === "user_message" &&
+        item.author.kind === "user" &&
+        item.text !== QUESTIONS_DISMISSED_MESSAGE &&
+        !("questionRequestId" in item.metadata) &&
+        item.text.trim() !== "",
     )
-    .map((message) =>
-      messageWithAttachmentNames(
-        message.content,
-        message.attachments ??
-          attachmentsFromMetadata(
-            typeof message.metadata === "object" && message.metadata !== null
-              ? (message.metadata as Record<string, unknown>)
-              : undefined,
-          ),
-      ),
+    .map((item) =>
+      item.kind === "user_message"
+        ? messageWithAttachmentNames(item.text, item.attachments)
+        : "",
     );
   const [recall, setRecall] = useState<{ index: number; stash: string } | null>(
     null,
@@ -993,7 +951,7 @@ function ChatDockContent({
   });
   const selectedModel =
     (chat.session ? chat.session.model : entry.model) || activeAgent?.model;
-  const reportedModel = latestReportedModel(chat.messages);
+  const reportedModel = latestReportedModel(chat.timeline);
   // Nothing pinned: the harness runs its own default. Ask it which one, for
   // a new chat right away (that is when the question matters) and for any
   // other chat once its inspector opens.
@@ -1013,15 +971,21 @@ function ChatDockContent({
   // pointed at Settings by the error text itself. A successful reconnect
   // retries the failed turn on its own — the user already said what they
   // wanted; fixing the credentials shouldn't cost them a re-send.
-  const awaitingReauthRef = useRef<string | null>(null);
+  // The agent being reconnected and the turn its failure stopped: that
+  // turn is the one to run again, whatever else arrived meanwhile.
+  const awaitingReauthRef = useRef<{
+    agentId: string;
+    turnId: string | undefined;
+  } | null>(null);
   const retryRef = useRef(chat.retry);
   retryRef.current = chat.retry;
   useEffect(
     () =>
       desktopApi.onAgentLoginFinished((result) => {
-        if (result.agentId !== awaitingReauthRef.current) return;
+        const awaiting = awaitingReauthRef.current;
+        if (result.agentId !== awaiting?.agentId) return;
         awaitingReauthRef.current = null;
-        if (result.ok) void retryRef.current();
+        if (result.ok) void retryRef.current(awaiting.turnId);
       }),
     [],
   );
@@ -1311,7 +1275,10 @@ function ChatDockContent({
               ? "Reconnect OpenRouter"
               : `Re-login ${activeAgent.name}`,
           run: () => {
-            awaitingReauthRef.current = activeAgent.id;
+            awaitingReauthRef.current = {
+              agentId: activeAgent.id,
+              turnId: latestAuthFailure(chat.timeline),
+            };
             void desktopApi.agentLogin(activeAgent.id).then((result) => {
               // Login never started (e.g. key-auth agent): stop waiting.
               if (!result.started) awaitingReauthRef.current = null;
@@ -1330,9 +1297,9 @@ function ChatDockContent({
   // a combined effect's cleanup would fire on every dep change, flapping
   // working false→true and producing phantom "finished" notifications.
   const hasDraft = draft.trim().length > 0 || pillCount > 0;
-  const awaitingInput =
-    Boolean(pendingQuestion && pendingQuestion.blocking !== false) ||
-    (Boolean(questions) && !chat.isWorking);
+  const awaitingInput = chat.requests.some(
+    (request) => request.blocking && request.answerable,
+  );
   useEffect(() => {
     onSignalsChange(entry.localId, {
       working: chat.isWorking,
@@ -1426,9 +1393,10 @@ function ChatDockContent({
   // or the minimize button) closes it instead of parking an empty bubble.
   // A typed-but-unsent draft counts as worth keeping.
   const isEmpty =
-    messages.length === 0 &&
+    chat.timeline.length === 0 &&
+    chat.pending.length === 0 &&
     !chat.isSending &&
-    chat.queuedMessageCount === 0 &&
+    chat.queue.length === 0 &&
     draft.trim() === "" &&
     pillCount === 0;
   const isEmptyRef = useRef(isEmpty);
@@ -1641,7 +1609,7 @@ function ChatDockContent({
    * (or where it was dropped); capped like the server.
    */
   const addTextPill = (
-    pill: AgentChatTextAttachment,
+    pill: AgentTextAttachment,
     at?: { x: number; y: number },
   ) => {
     const composer = composerRef.current;
@@ -1942,6 +1910,27 @@ function ChatDockContent({
       internalAutofocusDepthRef.current -= 1;
     }
   }, []);
+  // Restore to here (ADR 0196): undo the turn and every later one, files
+  // included, then hand the person their words back in the composer so
+  // they can say it differently straight away.
+  const rollback = async (
+    turnId: string,
+    item: UserMessageItem,
+  ): Promise<boolean> => {
+    const done = await chat.rollback(turnId);
+    if (!done) return false;
+    const current = composerRef.current?.read({ trim: false });
+    if (
+      current &&
+      current.text.trim() === "" &&
+      current.attachments.length === 0
+    ) {
+      rewriteText(messageWithAttachmentNames(item.text, item.attachments));
+      setRecall(null);
+    }
+    focusComposerInternally();
+    return true;
+  };
   useEffect(() => {
     if (!expanded) return;
     if (watchBackdropInteractionRef.current === userInteractionRef.current)
@@ -2022,7 +2011,7 @@ function ChatDockContent({
     expanded &&
     (backdropTab || nativeBackdrop) &&
     chat.isWorking &&
-    !questions &&
+    !awaitingInput &&
     !dockHovered &&
     (!dockEngaged || nativeBackdrop) &&
     !dropActive;
@@ -2138,7 +2127,7 @@ function ChatDockContent({
         inert={!expanded ? true : undefined}
       >
         <span className="sr-only" aria-live="polite">
-          {activity ?? messages.at(-1)?.content}
+          {activity ?? lastReplyText(chat.timeline)}
         </span>
         {/* Drop cue: an accent dashed veil while files hover the chat. */}
         {dropActive && (
@@ -2206,7 +2195,7 @@ function ChatDockContent({
                 awaitingInput={awaitingInput}
                 session={chat.session}
                 fallbackTitle={title}
-                harness={activeAgent?.harness ?? chat.session?.provider}
+                harness={activeAgent?.harness ?? sessionHarness(chat.state)}
                 provider={activeAgent?.provider}
                 environmentControl={
                   authority &&
@@ -2554,29 +2543,34 @@ function ChatDockContent({
               backgroundCommands={backgroundCommands}
               className={lurking ? "hidden" : "min-h-0 flex-1"}
               contentClassName={isTab ? "mx-auto w-full max-w-4xl pt-12" : ""}
-              messages={messages}
+              turns={chat.timeline}
+              requests={chat.state?.requests}
+              pending={chat.pending}
+              activeTurnId={activeTurnId}
               activity={
                 chat.connectionLost || awaitingInput ? undefined : activity
               }
-              activityStartedAt={
-                chat.isWorking ? chat.session?.execution?.startedAt : undefined
-              }
+              activityStartedAt={chat.activeTurn?.startedAt}
               activityUpdatedAt={
-                chat.isWorking &&
-                chat.session?.execution?.phase === "working" &&
-                chat.session.execution.executorHealthy &&
-                !chat.session.execution.cancellationRequested
-                  ? chat.session.execution.activityAt
+                chat.activeTurn?.status === "running" &&
+                !chat.activeTurn.cancellationRequested
+                  ? (chat.activeTurn.activityAt ?? chat.activeTurn.startedAt)
                   : undefined
               }
-              working={chat.isWorking}
               workDisplay={workDisplay}
               queue={chat.queue}
-              onUpdateQueued={chat.updateQueued}
-              onRemoveQueued={chat.removeQueued}
+              onEditQueued={chat.editQueued}
+              onCancelQueued={chat.cancelQueued}
               onSendQueuedNow={chat.sendQueuedNow}
               onHoldQueued={chat.holdQueued}
-              onRetry={() => void chat.retry()}
+              onRetry={(turnId) => void chat.retry(turnId)}
+              onStopRetrying={() => void chat.interrupt()}
+              onRollback={rollback}
+              onResendFailed={(commandId) => void chat.resendFailed(commandId)}
+              onDismissFailed={chat.dismissFailed}
+              hasOlder={chat.hasOlder}
+              loadingOlder={chat.isLoadingOlder}
+              onLoadOlder={() => void chat.loadOlder()}
               onReauth={reauth?.run}
               reauthLabel={reauth?.label}
               resolveAgentName={(agentId) =>
@@ -2616,7 +2610,6 @@ function ChatDockContent({
               />
             </div>
           )}
-          <ChatDeliveryRecovery chat={chat} />
           {runtimeSettingsError ? (
             <p
               role="alert"
@@ -2884,43 +2877,37 @@ function ChatDockContent({
               />
             ))}
             <div className="max-h-[50vh] overflow-y-auto">
-              {chat.session?.questions?.map(
+              {otherRequests.map((request) => (
+                <ApprovalCard
+                  key={request.id}
+                  request={request}
+                  viewerId={authority?.externalUserId}
+                  busy={!expanded || responding}
+                  onRespond={(response) => respond(request.id, response)}
+                  onOpenUrl={(url) => onLinkClick?.(url, "tab")}
+                />
+              ))}
+              {questionRequests.map(
                 (request) =>
                   request.questions && (
                     <AgentQuestionPanel
-                      key={request.requestId}
+                      key={request.id}
                       questions={request.questions}
-                      blocking={request.blocking !== false}
-                      onSubmit={(answer) =>
-                        answerQuestion.mutate({
-                          requestId: request.requestId,
-                          answer,
-                        })
+                      blocking={request.blocking}
+                      onSubmit={(answers) =>
+                        respond(request.id, { kind: "question", answers })
                       }
                       onDismiss={() =>
-                        answerQuestion.mutate({
-                          requestId: request.requestId,
-                          answer: QUESTIONS_DISMISSED_MESSAGE,
+                        respond(request.id, {
+                          kind: "question",
+                          answers: [QUESTIONS_DISMISSED_MESSAGE],
                         })
                       }
-                      disabled={!expanded || answerQuestion.isPending}
+                      disabled={!expanded || responding}
                     />
                   ),
               )}
             </div>
-            {answerQuestion.error && (
-              <p role="alert" className="mx-3 text-xs text-danger">
-                {answerQuestion.error.message}
-              </p>
-            )}
-            {!pendingQuestion && questions && !chat.isSending && (
-              <AgentQuestionPanel
-                questions={questions}
-                onSubmit={(answer) => void chat.send(answer)}
-                onDismiss={() => void chat.send(QUESTIONS_DISMISSED_MESSAGE)}
-                disabled={!expanded}
-              />
-            )}
             <form
               ref={composerFormRef}
               className="field relative m-3 mt-1 flex shrink-0 flex-col rounded-xl bg-bg-raised p-1.5"
@@ -3079,10 +3066,7 @@ function ChatDockContent({
                     // An open question takes free-text answers here: the
                     // panel has no "Other" row (ADR 0195).
                     // A permission request is no question: typing declines it.
-                    chat.session?.questions?.some(
-                      (request) => !request.consent,
-                    ) ||
-                    (questions && !chat.isSending)
+                    questionRequests.length > 0
                       ? "Answer in your own words…"
                       : accepts.length > 0
                         ? composerPlaceholder
@@ -3092,7 +3076,7 @@ function ChatDockContent({
                 />
                 {/* Context ring (ADR 0057): quiet until a harness reports
                   occupancy and window size; danger red past 90%. */}
-                <ContextMeter messages={chat.messages} />
+                <ContextMeter turns={chat.timeline} />
                 <ShortcutHint
                   label={
                     // A message during a blocking question reaches the
@@ -3159,4 +3143,40 @@ function ChatDockContent({
       </Modal>
     </div>
   );
+}
+
+/** The latest thing the agent wrote, for the screen reader's live line. */
+function lastReplyText(
+  turns: ReturnType<typeof useAgentChat>["timeline"],
+): string | undefined {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const entries = turns[index]?.entries ?? [];
+    for (let at = entries.length - 1; at >= 0; at -= 1) {
+      const entry = entries[at];
+      if (entry?.kind === "reply" && entry.item.text.trim())
+        return entry.item.text;
+    }
+  }
+  return undefined;
+}
+
+/** The harness of the conversation the session last ran on. */
+function sessionHarness(state: SessionState | null): string | undefined {
+  if (!state) return undefined;
+  const threads = Object.values(state.providerThreads).sort((a, b) =>
+    b.updatedAt.localeCompare(a.updatedAt),
+  );
+  return threads[0]?.harness;
+}
+
+/** The latest turn that failed on the agent's sign-in. */
+function latestAuthFailure(
+  turns: ReturnType<typeof useAgentChat>["timeline"],
+): string | undefined {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index]?.turn;
+    if (turn?.status === "failed" && turn.error?.kind === "auth")
+      return turn.id;
+  }
+  return undefined;
 }

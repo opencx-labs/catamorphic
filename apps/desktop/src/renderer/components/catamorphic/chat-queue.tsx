@@ -1,5 +1,5 @@
 "use client";
-import type { PendingAgentTurn } from "@catamorphic/react";
+import type { AgentAttachment } from "@catamorphic/react";
 import { ChevronUp, Pencil, Trash2, Zap } from "lucide-react";
 import {
   type ComponentType,
@@ -12,6 +12,13 @@ import {
 function DefaultHint({ children }: { label: string; children: ReactNode }) {
   return <>{children}</>;
 }
+/** A message waiting in the session's queue: its turn id, text and pills. */
+export interface QueuedChatMessage {
+  id: string;
+  content: string;
+  attachments: AgentAttachment[];
+}
+
 /** How many queued messages stay visible while collapsed. */
 const QUEUE_COLLAPSE_THRESHOLD = 2;
 
@@ -31,7 +38,7 @@ export function ChatQueue({
   renderAttachments,
   Hint = DefaultHint,
 }: {
-  queue: PendingAgentTurn[];
+  queue: QueuedChatMessage[];
   onUpdate?: (
     id: string,
     content: string,
@@ -43,8 +50,8 @@ export function ChatQueue({
   onHold?: (
     id: string | null,
   ) => undefined | boolean | Promise<undefined | boolean>;
-  renderContent?: (turn: PendingAgentTurn) => ReactNode;
-  renderAttachments?: (turn: PendingAgentTurn) => ReactNode;
+  renderContent?: (turn: QueuedChatMessage) => ReactNode;
+  renderAttachments?: (turn: QueuedChatMessage) => ReactNode;
   Hint?: ComponentType<{ label: string; children: ReactNode }>;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -94,7 +101,7 @@ function QueuedBubble({
   renderAttachments,
   Hint = DefaultHint,
 }: {
-  queued: PendingAgentTurn;
+  queued: QueuedChatMessage;
   onUpdate?: (
     id: string,
     content: string,
@@ -106,8 +113,8 @@ function QueuedBubble({
   onHold?: (
     id: string | null,
   ) => undefined | boolean | Promise<undefined | boolean>;
-  renderContent?: (turn: PendingAgentTurn) => ReactNode;
-  renderAttachments?: (turn: PendingAgentTurn) => ReactNode;
+  renderContent?: (turn: QueuedChatMessage) => ReactNode;
+  renderAttachments?: (turn: QueuedChatMessage) => ReactNode;
   Hint?: ComponentType<{ label: string; children: ReactNode }>;
 }) {
   const savingRef = useRef(false);

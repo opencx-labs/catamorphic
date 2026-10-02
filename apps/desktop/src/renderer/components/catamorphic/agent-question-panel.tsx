@@ -1,13 +1,13 @@
 "use client";
 
+import type { AgentQuestion } from "@catamorphic/react";
 import { Check, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { AgentQuestion } from "./chat-timeline";
 
 export interface AgentQuestionPanelProps {
   questions: AgentQuestion[];
-  /** Sending the composed answer text back to the agent. */
-  onSubmit: (answer: string) => void;
+  /** Sending the answers back: one per question, its picks joined. */
+  onSubmit: (answers: string[]) => void;
   /** Dismissing the questions without answering (X button or Escape). */
   onDismiss: () => void;
   disabled?: boolean;
@@ -77,7 +77,7 @@ export function AgentQuestionPanel({
 
   const submit = () => {
     if (!allAnswered || disabled) return;
-    onSubmit(formatAnswers(questions, answers));
+    onSubmit(formatAnswers(answers));
   };
 
   const advanceTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -361,11 +361,7 @@ function OptionRow({
   );
 }
 
-/** Compose the user's selections into the text sent back to the agent. */
-function formatAnswers(questions: AgentQuestion[], answers: Answer[]): string {
-  const lines = questions.map((question, index) => {
-    const value = (answers[index] ?? emptyAnswer()).selected.join(", ");
-    return questions.length > 1 ? `${question.question}\n→ ${value}` : value;
-  });
-  return lines.join("\n\n");
+/** Each question's picks as one answer, in question order. */
+function formatAnswers(answers: Answer[]): string[] {
+  return answers.map((answer) => answer.selected.join(", "));
 }

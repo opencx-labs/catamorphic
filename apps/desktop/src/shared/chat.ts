@@ -1,4 +1,4 @@
-import type { AgentChatTextAttachment } from "@catamorphic/react";
+import type { AgentTextAttachment } from "@catamorphic/react";
 import type { OpenMode, OpenModifiers } from "./open-mode.js";
 
 /**
@@ -8,7 +8,7 @@ import type { OpenMode, OpenModifiers } from "./open-mode.js";
  */
 export interface PendingChatMessage {
   text: string;
-  attachments?: AgentChatTextAttachment[];
+  attachments?: AgentTextAttachment[];
 }
 
 export interface ChatSignals {

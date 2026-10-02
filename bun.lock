@@ -521,6 +521,7 @@
       "name": "@catamorphic/react",
       "version": "0.0.1",
       "dependencies": {
+        "@catamorphic/agent-protocol": "workspace:*",
         "@catamorphic/api-client": "workspace:*",
         "@catamorphic/parser": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
