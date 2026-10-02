@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql } from "kysely";
@@ -14,6 +16,11 @@ import { migrateToLatest } from "../migrate.js";
  */
 
 const schema = "session_log_migration";
+/** 045 and every migration after it, which run on the converted schema. */
+const FROM_045 = fs
+  .readdirSync(path.join(import.meta.dirname, "../../migrations"))
+  .filter((name) => name.endsWith(".sql") && name >= "045")
+  .sort();
 const pglite = new PGlite({ extensions: { pgcrypto } });
 const db = new Kysely<unknown>({ dialect: new PGliteDialect({ pglite }) });
 
@@ -49,7 +56,7 @@ describe("migration 045", () => {
     await sql.raw(`CREATE SCHEMA IF NOT EXISTS ${schema}`).execute(db);
     await pglite.exec(
       `CREATE TABLE ${schema}._migrations (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL UNIQUE, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());
-       INSERT INTO ${schema}._migrations (name) VALUES ('045_agent_session_log.sql');`,
+       INSERT INTO ${schema}._migrations (name) VALUES ${FROM_045.map((name) => `('${name}')`).join(", ")};`,
     );
     await migrateToLatest({ db, schema });
     const run = async (statement: string) => {
@@ -82,11 +89,9 @@ describe("migration 045", () => {
       ('${ids.builtInTurn}', '${builtInSessionId}', '${ids.builtInAsk}', '${ids.builtInReply}', 'completed', 'next_turn', 1, now())`);
 
     // Now 045.
-    await run(
-      `DELETE FROM _migrations WHERE name = '045_agent_session_log.sql'`,
-    );
+    await run(`DELETE FROM _migrations WHERE name >= '045'`);
     const result = await migrateToLatest({ db, schema });
-    expect(result.applied).toEqual(["045_agent_session_log.sql"]);
+    expect(result.applied).toEqual(FROM_045);
 
     const items = await run(
       `SELECT id, kind, status, text, turn_id, position, payload FROM agent_items WHERE session_id = '${sessionId}' ORDER BY position`,
