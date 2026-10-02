@@ -187,14 +187,18 @@ describe("agent routes", () => {
     });
   });
 
-  describe("POST /api/projects/:projectId/agent/sessions/:sessionId/messages", () => {
+  describe("POST /api/projects/:projectId/agent/sessions/:sessionId/commands", () => {
+    const url = `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/commands`;
+
     it("responds 503 when no coding agent is configured", async () => {
       const app = await buildApp();
       const res = await app.inject({
         method: "POST",
-        url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
+        url,
         payload: {
-          message: "Hello, agent!",
+          type: "send",
+          commandId: "command-0001",
+          text: "Hello, agent!",
         },
       });
       expect(res.statusCode).toBe(503);
@@ -202,18 +206,45 @@ describe("agent routes", () => {
       await app.close();
     });
 
-    it("rejects empty message", async () => {
+    it("validates the command before anything runs", async () => {
       const app = await buildApp();
-      const res = await app.inject({
-        method: "POST",
-        url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
-        payload: {
-          message: "",
+      for (const payload of [
+        { type: "send", commandId: "command-0001", text: "" },
+        { type: "send", text: "no command id" },
+        {
+          type: "send",
+          commandId: "command-0001",
+          text: "x",
+          dispatch: "next_turn",
         },
-      });
-      expect(res.statusCode).toBe(400);
+        { type: "answer", commandId: "command-0001" },
+      ]) {
+        const res = await app.inject({ method: "POST", url, payload });
+        expect(res.statusCode).toBe(400);
+      }
       await app.close();
     });
+  });
+
+  it("no longer serves the routes commands replaced", async () => {
+    const app = await buildApp();
+    const base = `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`;
+    for (const [method, url] of [
+      ["POST", `${base}/messages`],
+      ["POST", `${base}/questions/q1/answer`],
+      ["GET", `${base}/permissions`],
+      ["POST", `${base}/permissions/${SESSION_ID}`],
+      ["POST", `${base}/retry`],
+      ["PATCH", `${base}/turns/${SESSION_ID}`],
+      ["DELETE", `${base}/turns/${SESSION_ID}`],
+      ["POST", `${base}/turns/${SESSION_ID}/send-now`],
+      ["POST", `${base}/interrupt`],
+      ["POST", `${base}/resume`],
+    ] as const) {
+      const res = await app.inject({ method, url, payload: {} });
+      expect([method, url, res.statusCode]).toEqual([method, url, 404]);
+    }
+    await app.close();
   });
 
   describe("watcher lifecycle routes", () => {
@@ -276,19 +307,21 @@ describe("agent routes", () => {
   });
 });
 
-// The raised body cap is scoped to the messages route (base64 media rides
-// in the message body); every other route keeps Fastify's default 1MB cap.
+// The raised body cap is scoped to the commands and mirror routes (base64
+// media rides in a send); every other route keeps Fastify's default 1MB cap.
 describe("body limits", () => {
   // Past Fastify's 1MB default, within the text-attachment schema cap.
   const bigBody = "x".repeat(1_500_000);
 
-  it("lets a >1MB body through to the messages handler", async () => {
+  it("lets a >1MB body through to the commands handler", async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
-      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
+      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/commands`,
       payload: {
-        message: "look at this",
+        type: "send",
+        commandId: "command-0001",
+        text: "look at this",
         attachments: [
           {
             kind: "text",
@@ -313,122 +346,6 @@ describe("body limits", () => {
     });
     expect(res.statusCode).toBe(413);
     await app.close();
-  });
-});
-
-describe("tool permission routes (no core → 503, validation first)", () => {
-  it("lists 503 without a broker and validates ids", async () => {
-    const app = await buildApp();
-    const res = await app.inject({
-      method: "GET",
-      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/permissions`,
-    });
-    expect(res.statusCode).toBe(503);
-    const bad = await app.inject({
-      method: "POST",
-      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/permissions/not-a-uuid`,
-      payload: { decision: "allow" },
-    });
-    expect(bad.statusCode).toBe(400);
-    const badBody = await app.inject({
-      method: "POST",
-      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/permissions/${SESSION_ID}`,
-      payload: { decision: "maybe" },
-    });
-    expect(badBody.statusCode).toBe(400);
-    await app.close();
-  });
-});
-
-describe("tool permission routes with named approvers (ADR 0176)", () => {
-  const APPROVAL_ID = "c3d4e5f6-a7b8-4890-8def-123456789012";
-  const OPEN_ID = "d4e5f6a7-b8c9-4890-8ef0-234567890123";
-  const request = {
-    server: "connection_prod",
-    tool: "query",
-    description: "Needs approval",
-    input: {},
-  };
-  const pending = [
-    {
-      id: APPROVAL_ID,
-      sessionId: SESSION_ID,
-      request,
-      createdAt: "2026-09-27T00:00:00.000Z",
-      expiresAt: "2026-09-27T00:30:00.000Z",
-      approvers: ["alice"],
-    },
-    {
-      id: OPEN_ID,
-      sessionId: SESSION_ID,
-      request,
-      createdAt: "2026-09-27T00:00:00.000Z",
-      expiresAt: "2026-09-27T00:30:00.000Z",
-    },
-  ];
-  /** The chat is held by the test user; alice only approves. */
-  function app() {
-    const answered: string[] = [];
-    const server = createTestApp({
-      core: {
-        agentSessions: {
-          assertSession: async (identity: { externalUserId: string }) => {
-            if (identity.externalUserId !== "test-user")
-              throw new AccessDeniedError();
-          },
-        },
-        toolPermissions: {
-          list: async () => pending,
-          get: async (id: string) => pending.find((entry) => entry.id === id),
-          answer: async (id: string) => {
-            answered.push(id);
-            return true;
-          },
-        },
-      } as never,
-    });
-    return { server, answered };
-  }
-  const asAlice = {
-    "x-catamorphic-tenant-id": "test-tenant",
-    "x-external-user-id": "alice",
-  };
-  const ids = (body: { permissions: Array<{ id: string }> }) =>
-    body.permissions.map((entry) => entry.id);
-
-  it("shows an ask that names approvers to them alone", async () => {
-    const { server } = app();
-    const holder = await server.inject({
-      method: "GET",
-      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/permissions`,
-    });
-    expect(ids(holder.json())).toEqual([OPEN_ID]);
-    const approver = await server.inject({
-      method: "GET",
-      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/permissions`,
-      headers: asAlice,
-    });
-    expect(ids(approver.json())).toEqual([APPROVAL_ID]);
-    await server.close();
-  });
-
-  it("lets only the named approvers answer it", async () => {
-    const { server, answered } = app();
-    const holder = await server.inject({
-      method: "POST",
-      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/permissions/${APPROVAL_ID}`,
-      payload: { decision: "allow" },
-    });
-    expect(holder.statusCode).toBe(403);
-    const approver = await server.inject({
-      method: "POST",
-      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/permissions/${APPROVAL_ID}`,
-      payload: { decision: "allow" },
-      headers: asAlice,
-    });
-    expect(approver.statusCode).toBe(200);
-    expect(answered).toEqual([APPROVAL_ID]);
-    await server.close();
   });
 });
 
@@ -460,6 +377,36 @@ describe("keyed chats a caller may not see (ADR 0173)", () => {
         { sessionId: null, closed: false },
       ]);
     }
+    await server.close();
+  });
+});
+
+describe("personal environments (ADR 0198)", () => {
+  it("refuses sign-ins: they stay on the machine they were made on", async () => {
+    const replace = vi.fn(async () => ({ allowed: true, files: [] }));
+    const server = createTestApp({
+      core: { personalEnvironments: { replace } } as never,
+    });
+    const url = `/api/projects/${PROJECT_ID}/personal-environment`;
+    const refused = await server.inject({
+      method: "PUT",
+      url,
+      payload: { logins: { codex: { auth: "{}" } }, files: [] },
+    });
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json().message).toContain(
+      "Sign-ins stay on the machine they were made on",
+    );
+    expect(replace).not.toHaveBeenCalled();
+    const kept = await server.inject({
+      method: "PUT",
+      url,
+      payload: { files: [{ path: ".env", content: "QQ==" }] },
+    });
+    expect([kept.statusCode, kept.json()]).toEqual([
+      200,
+      { allowed: true, files: [] },
+    ]);
     await server.close();
   });
 });

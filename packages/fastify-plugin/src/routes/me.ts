@@ -1,3 +1,4 @@
+import { RUNNER_PROTOCOL_VERSION } from "@catamorphic/agent-protocol/runner";
 import {
   type ControlPlanePermission,
   effectiveProjectPermissions,
@@ -8,6 +9,12 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import { MeSchema } from "../schemas.js";
+
+/**
+ * The agent protocols this server speaks: the session log and its commands
+ * (ADR 0196) and the runner protocol its machines run (ADR 0197).
+ */
+const AGENT_PROTOCOL = { session: 1, runner: RUNNER_PROTOCOL_VERSION } as const;
 
 const CONTROL_PLANE_PERMISSIONS: readonly ControlPlanePermission[] = [
   "connections:read",
@@ -104,6 +111,7 @@ export function registerMeRoutes(app: FastifyInstance, ctx: RouteContext) {
           agentSessions: Boolean(ctx.core?.agentSessions),
           storeUploadMaxBytes: features.storeUploadMaxBytes,
         },
+        agentProtocol: AGENT_PROTOCOL,
       });
     },
   });
