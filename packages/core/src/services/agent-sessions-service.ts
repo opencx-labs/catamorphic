@@ -876,6 +876,12 @@ export class AgentSessionsService {
   /** This process's name as a running turn's lease owner. */
   readonly turnWorkerId = `agent-sessions:${randomUUID()}`;
   private archiveResources?: ArchiveSessionResourcesHandler;
+  /**
+   * Owners recently seen acting on their own chats, so their turns run as
+   * them without a resolver round trip. A cache (ADR 0193): another
+   * replica resolves the owner through the host instead.
+   */
+  private readonly knownOwners = new Map<string, Identity>();
   /** The host's identity resolver, from {@link startWorker}. */
   private resolveOwner?: (args: {
     tenantId: string;
@@ -2928,6 +2934,10 @@ export class AgentSessionsService {
     if (!project) return null;
     if (isProjectPrincipal(session.external_user_id))
       return projectChatIdentity({ tenantId: project.tenant_id, projectId: session.project_id });
+    const known = this.knownOwners.get(
+      `${project.tenant_id}:${session.project_id}:${session.external_user_id}`,
+    );
+    if (known && !this.resolveOwner) return known;
     return (
       (await this.resolveOwner?.({
         tenantId: project.tenant_id,
@@ -4989,13 +4999,12 @@ export class AgentSessionsService {
             .executeTakeFirst();
           if (existing) return this.get(identity, projectId, existing.id);
         }
-        const forkId = randomUUID();
-        const copy = copySettledHistory({
-          snapshot: await readFullSnapshot({ db: this.db, sessionId }),
-          sessionId: forkId,
-          ...(input.messageId ? { throughItemId: input.messageId } : {}),
-        });
-        if (!copy) throw new AgentSessionNotFoundError(input.messageId ?? sessionId);
+        const history = await readFullSnapshot({ db: this.db, sessionId });
+        if (
+          input.messageId &&
+          !history.items.some((item) => item.id === input.messageId)
+        )
+          throw new AgentSessionNotFoundError(input.messageId);
 
         const forkTitle = session.title ? `${session.title} (fork)` : null;
         // Notices never reach the harness, so the fork's self-awareness
@@ -5008,41 +5017,49 @@ export class AgentSessionsService {
         const forkSystemPrompt = [session.system_prompt, forkNote]
           .filter((part): part is string => Boolean(part))
           .join("\n\n");
+        const forkInput = {
+          ...(session.agent_id ? { agentId: session.agent_id } : {}),
+          ...(session.model ? { model: session.model } : {}),
+          ...(session.model_effort
+            ? { effort: session.model_effort as AgentEffort }
+            : {}),
+          ...(session.environment_name
+            ? { environment: session.environment_name }
+            : {}),
+          systemPrompt: forkSystemPrompt,
+          source: session.source as AgentSessionSource,
+          parentSessionId: sessionId,
+          forkedFromSessionId: sessionId,
+          visibility: "promoted" as const,
+          ...(forkTitle ? { title: forkTitle } : {}),
+          ...(input.sourceActionId
+            ? { sourceActionId: input.sourceActionId }
+            : {}),
+        };
+        const prepared = await this.prepareSessionCreate(
+          identity,
+          projectId,
+          forkInput,
+        );
         const row = await this.db.transaction().execute(async (trx) => {
+          const created = await this.createInner(identity, projectId, {
+            ...forkInput,
+            prepared,
+            transaction: trx,
+          });
+          const forkId = created.id;
+          const copy = copySettledHistory({
+            snapshot: history,
+            sessionId: forkId,
+            ...(input.messageId ? { throughItemId: input.messageId } : {}),
+          });
+          if (!copy) throw new AgentSessionNotFoundError(input.messageId ?? sessionId);
           const fork = await trx
-            .insertInto("agent_sessions")
-            .values({
-              id: forkId,
-              project_id: projectId,
-              external_user_id: identity.externalUserId,
-              source: session.source,
-              agent_id: session.agent_id,
-              model: session.model,
-              model_effort: session.model_effort,
-              system_prompt: forkSystemPrompt,
-              sandbox_id: null,
-              status: "active",
-              base_commit_sha: session.base_commit_sha,
-              icon: session.icon,
-              parent_session_id: sessionId,
-              forked_from_session_id: sessionId,
-              source_action_id: input.sourceActionId ?? null,
-              title: forkTitle,
-              authority_host_id: this.hostId,
-              authority_revision: 1,
-            })
+            .updateTable("agent_sessions")
+            .set({ icon: session.icon, base_commit_sha: session.base_commit_sha })
+            .where("id", "=", forkId)
             .returningAll()
             .executeTakeFirstOrThrow();
-          await trx
-            .insertInto("agent_session_views")
-            .values({
-              session_id: fork.id,
-              tenant_id: identity.tenantId,
-              external_user_id: identity.externalUserId,
-              visibility: "promoted",
-              previous_visibility: "promoted",
-            })
-            .execute();
           // The copied history is not new activity: no workflow fires on it.
           await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
             trx,
@@ -8147,6 +8164,15 @@ export class AgentSessionsService {
       agentId: row.agent_id,
       intent,
     });
+    if (identity.externalUserId === row.external_user_id) {
+      const key = `${identity.tenantId}:${projectId}:${identity.externalUserId}`;
+      this.knownOwners.delete(key);
+      this.knownOwners.set(key, identity);
+      if (this.knownOwners.size > 1_000) {
+        const oldest = this.knownOwners.keys().next().value;
+        if (oldest !== undefined) this.knownOwners.delete(oldest);
+      }
+    }
     return row;
   }
 

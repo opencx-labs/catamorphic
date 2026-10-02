@@ -369,16 +369,15 @@ export class SessionLog {
     if (input.cursors.length === 0) return [];
     const rows = await this.db
       .selectFrom("agent_session_events as event")
-      .innerJoin(
-        sql<{ session_id: string; after: number }>`(values ${sql.join(
-          input.cursors.map(
-            (cursor) => sql`(${cursor.sessionId}::uuid, ${cursor.after}::bigint)`,
+      .where((eb) =>
+        eb.or(
+          input.cursors.map((cursor) =>
+            eb.and([
+              eb("event.session_id", "=", cursor.sessionId),
+              eb("event.sequence", ">", String(cursor.after)),
+            ]),
           ),
-        )})`.as("cursor(session_id, after)"),
-        (join) =>
-          join.on(
-            sql<boolean>`cursor.session_id = event.session_id and event.sequence > cursor.after`,
-          ),
+        ),
       )
       .select([
         "event.session_id",

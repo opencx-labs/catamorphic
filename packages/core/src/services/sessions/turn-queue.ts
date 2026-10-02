@@ -262,18 +262,24 @@ export class TurnQueue {
           ),
         ),
       )
-      .returning([
+      .returning((eb) => [
         "id",
         "cancellation_requested_at",
-        sql<boolean>`exists (select 1 from agent_turn_commands command where command.turn_id = agent_turns.id and command.status = 'pending')`.as(
-          "commands",
-        ),
+        eb
+          .exists(
+            eb
+              .selectFrom("agent_turn_commands as command")
+              .select("command.id")
+              .whereRef("command.turn_id", "=", "agent_turns.id")
+              .where("command.status", "=", "pending"),
+          )
+          .as("commands"),
       ])
       .execute();
     return rows.map((row) => ({
       turnId: row.id,
       cancellationRequested: row.cancellation_requested_at !== null,
-      commands: row.commands,
+      commands: Boolean(row.commands),
     }));
   }
 
@@ -350,8 +356,11 @@ export class TurnQueue {
   }
 
   /** Commands the runner has not acknowledged, oldest first. */
-  async openCommands(input: { turnId: string }): Promise<TurnCommand[]> {
-    const rows = await this.db
+  async openCommands(input: {
+    turnId: string;
+    executor?: Kysely<DB> | Transaction<DB>;
+  }): Promise<TurnCommand[]> {
+    const rows = await (input.executor ?? this.db)
       .selectFrom("agent_turn_commands")
       .selectAll()
       .where("turn_id", "=", input.turnId)

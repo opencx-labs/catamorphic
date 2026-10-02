@@ -1,6 +1,6 @@
 # 0174 — Background processes are a sandbox capability
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0196](0196-agent-runners-run-harnesses-beside-their-workspace.md))
 - **Date:** 2026-09-27
 - **Refines:** 0155, 0164
 

@@ -51,7 +51,7 @@ import {
   turnFromRow,
 } from "./session-rows.js";
 import { derivedId, ingestHarnessEvents } from "./turn-ingest.js";
-import type { ClaimedTurn, TurnQueue } from "./turn-queue.js";
+import type { ClaimedTurn, TurnCommandKind, TurnQueue } from "./turn-queue.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -165,6 +165,16 @@ interface LocalTurn {
   channel?: RunnerChannel;
   /** This process is stopping: hand reattachable work back instead. */
   handingBack: boolean;
+  /** Host calls answered here, as `<attemptId>:<callId>`: never saved back. */
+  answered: Set<string>;
+}
+
+/** The runner state to save: without calls this holder already answered. */
+function unanswered(local: LocalTurn, attemptId: string, runner: RunnerState): RunnerState {
+  const calls = Object.fromEntries(
+    Object.entries(runner.calls).filter(([callId]) => !local.answered.has(`${attemptId}:${callId}`)),
+  );
+  return { ...runner, calls };
 }
 
 /** The text a continuation turn gives the agent (ADR 0196). */
@@ -303,6 +313,7 @@ export class TurnEngine {
       abort: new AbortController(),
       wake: () => wake(),
       handingBack: false,
+      answered: new Set(),
     };
     const nextWake = () =>
       new Promise<void>((resolve) => {
@@ -337,6 +348,10 @@ export class TurnEngine {
         () => this.drive(local, rearm),
       );
     } catch (error) {
+      // Losing the lease mid-step is losing the turn, not a failure of it.
+      if (error instanceof TurnLeaseLostError) local.abort.abort();
+      if (!local.abort.signal.aborted)
+        console.warn("[catamorphic] A turn failed unexpectedly", error);
       if (!local.abort.signal.aborted)
         await this.failUnexpectedly(local, error).catch((settleError) =>
           console.warn(
@@ -345,6 +360,13 @@ export class TurnEngine {
           ),
         );
     } finally {
+      // A runner in this process cannot be reached by whoever holds the
+      // turn next, so it stops with this holder.
+      if (
+        local.abort.signal.aborted &&
+        local.channel?.location.kind === "in_process"
+      )
+        await local.channel.kill().catch(() => {});
       release();
       this.local.delete(claim.turn.id);
     }
@@ -616,7 +638,9 @@ export class TurnEngine {
             .select("payload")
             .where("turn_id", "=", input.turn.id)
             .where("kind", "=", "user_message")
-            .where("id", "!=", input.turn.inputItemId ?? "")
+            .$if(input.turn.inputItemId !== null, (query) =>
+              query.where("id", "!=", input.turn.inputItemId ?? ""),
+            )
             .orderBy("position")
             .execute()
         : [];
@@ -917,7 +941,7 @@ export class TurnEngine {
           await db.transaction().execute(async (trx) => {
             await this.assertOwned(local, trx);
             await queue.markCommands({
-              ids: (await queue.openCommands({ turnId: turn.id }))
+              ids: (await queue.openCommands({ turnId: turn.id, executor: trx }))
                 .filter((command) => command.kind === "interrupt")
                 .map((command) => command.id),
               status: "dropped",
@@ -1046,8 +1070,10 @@ export class TurnEngine {
             calls.push([frame.callId, frame.call]);
           }
         } else if (frame.type === "ack") {
+          // Only queued turn commands are acknowledged in Postgres; the
+          // engine's own (start, result, stop) are not rows.
           const [kind, commandId] = splitCommandId(frame.commandId);
-          if (commandId) {
+          if (commandId && QUEUED_COMMAND_KINDS.has(kind)) {
             acked.push(commandId);
             if (kind === "steer" && frame.error) refusedSteers.push(commandId);
           }
@@ -1105,7 +1131,7 @@ export class TurnEngine {
       await queue.markCommands({ ids: acknowledged, status: "acknowledged", executor: trx });
       await trx
         .updateTable("agent_turn_attempts")
-        .set({ runner: runner as unknown as Json })
+        .set({ runner: unanswered(local, attempt.id, runner) as unknown as Json })
         .where("id", "=", attempt.id)
         .execute();
       return {
@@ -1125,7 +1151,7 @@ export class TurnEngine {
       await this.assertOwned(local, trx);
       await trx
         .updateTable("agent_turn_attempts")
-        .set({ runner: runner as unknown as Json })
+        .set({ runner: unanswered(local, attemptId, runner) as unknown as Json })
         .where("id", "=", attemptId)
         .execute();
     });
@@ -1158,6 +1184,7 @@ export class TurnEngine {
             await this.native.append({ threadId, ...(call.subpath ? { subpath: call.subpath } : {}), entries: call.entries, executor: trx });
             await this.forgetCall(trx, ctx.attempt.id, callId);
           });
+          local.answered.add(`${ctx.attempt.id}:${callId}`);
           result = null;
         } else if (call.kind === "native_state.load") {
           result = (await this.native.load({ threadId, ...(call.subpath ? { subpath: call.subpath } : {}) })) ?? null;
@@ -1189,11 +1216,13 @@ export class TurnEngine {
           },
         },
       ]);
-      if (call.kind !== "native_state.append")
+      if (call.kind !== "native_state.append") {
         await this.deps.db.transaction().execute(async (trx) => {
           await this.assertOwned(local, trx);
           await this.forgetCall(trx, ctx.attempt.id, callId);
         });
+        local.answered.add(`${ctx.attempt.id}:${callId}`);
+      }
     }
   }
 
@@ -1359,7 +1388,7 @@ export class TurnEngine {
       }
       await log.append(trx, { sessionId: input.turn.sessionId, events });
       await queue.markCommands({
-        ids: (await queue.openCommands({ turnId: input.turn.id })).map((command) => command.id),
+        ids: (await queue.openCommands({ turnId: input.turn.id, executor: trx })).map((command) => command.id),
         status: "dropped",
         executor: trx,
       });
@@ -1429,6 +1458,13 @@ export class TurnEngine {
         ? await trx.selectFrom("agent_provider_threads").selectAll().where("id", "=", ctx.attempt.providerThreadId).executeTakeFirst()
         : undefined;
       const strong = (thread?.native_ref as unknown as NativeRef | null)?.strength === "strong";
+      // The thread took this turn's input before its runner went away: a
+      // continuation on it is not handed the turn again.
+      if (thread)
+        events.push({
+          type: "provider_thread.changed",
+          thread: { ...providerThreadFromRow(thread), lastTurnOrdinal: ctx.turn.ordinal, updatedAt: now },
+        });
       const newer = await trx
         .selectFrom("agent_turns")
         .select("id")
@@ -1506,7 +1542,7 @@ export class TurnEngine {
       }
       await log.append(trx, { sessionId: ctx.turn.sessionId, commandId: `continue:${ctx.turn.id}`, events });
       await queue.markCommands({
-        ids: (await queue.openCommands({ turnId: ctx.turn.id })).map((command) => command.id),
+        ids: (await queue.openCommands({ turnId: ctx.turn.id, executor: trx })).map((command) => command.id),
         status: "dropped",
         executor: trx,
       });
@@ -1525,13 +1561,18 @@ export class TurnEngine {
   }
 
   /** Items steered into a turn after its input, in order. */
-  private async steeredItemIds(turn: Turn): Promise<string[]> {
-    const rows = await this.deps.db
+  private async steeredItemIds(
+    turn: Turn,
+    executor: Kysely<DB> | Transaction<DB> = this.deps.db,
+  ): Promise<string[]> {
+    const rows = await executor
       .selectFrom("agent_items")
       .select("id")
       .where("turn_id", "=", turn.id)
       .where("kind", "=", "user_message")
-      .where("id", "!=", turn.inputItemId ?? "")
+      .$if(turn.inputItemId !== null, (query) =>
+        query.where("id", "!=", turn.inputItemId ?? ""),
+      )
       .orderBy("position")
       .execute();
     return rows.map((row) => row.id);
@@ -1543,7 +1584,7 @@ export class TurnEngine {
    * person's message is never dropped.
    */
   private async requeueSteers(trx: Transaction<DB>, turn: Turn, now: string): Promise<SessionEvent[]> {
-    const steered = await this.steeredItemIds(turn);
+    const steered = await this.steeredItemIds(turn, trx);
     if (steered.length === 0) return [];
     const attempts = await trx
       .selectFrom("agent_turn_attempts")
@@ -1663,6 +1704,13 @@ export class TurnLeaseLostError extends Error {
     this.name = "TurnLeaseLostError";
   }
 }
+
+const QUEUED_COMMAND_KINDS: ReadonlySet<string> = new Set<TurnCommandKind>([
+  "steer",
+  "interrupt",
+  "respond",
+  "stop",
+]);
 
 function splitCommandId(id: string): [string, string | undefined] {
   const index = id.indexOf(":");

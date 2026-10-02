@@ -92,6 +92,7 @@ function inProcessChannel(
     },
     kill: async () => {
       inProcessRunners.delete(runnerId);
+      runner.kill();
     },
   };
 }

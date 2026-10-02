@@ -19,8 +19,10 @@ restart reached nobody.
 **A runner owns one attempt.** The *agent runner* (`@catamorphic/agent-runner`)
 runs a harness adapter next to the workspace it edits: inside the
 session's sandbox on a server (a sandbox process from a hash-addressed
-bundle, run with Bun), and in-process where the harness runs on the host
-(the desktop, the built-in agent). It speaks one protocol: sequenced
+bundle, run with Bun or Node), and in-process where the harness runs on
+the host (the desktop, the built-in agent). The runner knows no harness;
+`@catamorphic/runner-bundle` registers the adapters a sandbox runs, so
+adapters test against the real runner without a package cycle. It speaks one protocol: sequenced
 NDJSON frames out (events, host calls, acknowledgements, exit) and
 commands in (start, steer, interrupt, respond, stop), each command
 deduplicated by id. A sandbox runner's output is addressed by byte cursor,

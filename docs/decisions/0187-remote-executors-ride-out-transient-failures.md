@@ -1,6 +1,6 @@
 # 0187 — Remote executors ride out transient failures on one operation queue
 
-- **Status:** Accepted; a worker's session is its process epoch and any replica runs its agents (0192)
+- **Status:** Accepted (sessions are worker epochs by 0192; agent runners by [0196](0196-agent-runners-run-harnesses-beside-their-workspace.md))
 - **Date:** 2026-09-29
 - **Refines:** 0098 (This machine runners), 0164 (enrolled workers)
 

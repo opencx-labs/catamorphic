@@ -14,6 +14,7 @@ export class InProcessRunner {
   private readonly frames: RunnerFrame[] = [];
   private readonly waiters = new Set<() => void>();
   private readonly runner: AttemptRunner;
+  private killed = false;
   readonly done: Promise<void>;
 
   constructor(input: {
@@ -24,6 +25,9 @@ export class InProcessRunner {
     this.runner = new AttemptRunner({
       ...input,
       write: (frame) => {
+        // A killed runner is gone like a dead process: nothing it says
+        // after reaches anyone.
+        if (this.killed) return;
         this.frames.push(frame);
         for (const wake of this.waiters) wake();
         this.waiters.clear();
@@ -62,7 +66,19 @@ export class InProcessRunner {
     return ready;
   }
 
+  /**
+   * Stop the attempt for good: its holder is gone, so nobody may read it
+   * again. A reader still attached sees it exit.
+   */
+  kill(): void {
+    if (this.killed) return;
+    this.killed = true;
+    this.runner.handle({ id: "kill", command: { kind: "stop" } });
+    for (const wake of this.waiters) wake();
+    this.waiters.clear();
+  }
+
   get exited(): boolean {
-    return this.frames.at(-1)?.type === "exit";
+    return this.killed || this.frames.at(-1)?.type === "exit";
   }
 }
