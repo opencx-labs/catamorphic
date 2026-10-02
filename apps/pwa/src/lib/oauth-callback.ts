@@ -1,3 +1,4 @@
+import { assertSessionProtocol } from "./api.js";
 import type { Route } from "./nav.js";
 import { completeRemoteAuthorization } from "./oauth.js";
 import { addRemoteConnection } from "./store.js";
@@ -169,7 +170,9 @@ async function accessibleProjects(options: {
   }
   const me = (await response.json()) as {
     projects?: Array<{ projectId?: string }>;
+    agentProtocol?: { session?: number } | null;
   };
+  assertSessionProtocol(me);
   const ids = (me.projects ?? []).flatMap((project) =>
     typeof project.projectId === "string" && project.projectId.length > 0
       ? [project.projectId]
@@ -220,7 +223,9 @@ async function confirmProjectAccess(options: {
   }
   const me = (await response.json()) as {
     projects?: Array<{ projectId?: string }>;
+    agentProtocol?: { session?: number } | null;
   };
+  assertSessionProtocol(me);
   return Boolean(
     me.projects?.some((project) => project.projectId === options.projectId),
   );

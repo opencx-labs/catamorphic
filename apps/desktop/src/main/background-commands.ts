@@ -69,7 +69,7 @@ export type BackgroundNotifier = (input: {
    * `message_only` records the news without starting a turn: the agent
    * heard about this command moments ago and will read it next turn.
    */
-  mode?: "next_turn" | "message_only";
+  mode?: "queue" | "message_only";
 }) => Promise<void>;
 
 /** The model reads at most this much in one wake message. */

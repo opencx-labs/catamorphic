@@ -15,7 +15,11 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "./server.js";
-import { oauthAccessToken, testServerOptions } from "./test-support.js";
+import {
+  oauthAccessToken,
+  replyOf,
+  testServerOptions,
+} from "./test-support.js";
 
 /**
  * Slack from project code (#117, ADR 0179), end to end on a Work server:
@@ -479,10 +483,10 @@ describe("Slack from project code (#117)", () => {
     });
     // Each event reached the chat once: the retry of Ev0001 added nothing.
     const delivered = await server.catamorphic.core.db
-      .selectFrom("agent_messages")
-      .select("content")
+      .selectFrom("agent_items")
+      .select("text")
       .where("session_id", "=", chat?.id ?? "")
-      .where("role", "=", "user")
+      .where("kind", "=", "user_message")
       .execute();
     expect(delivered).toHaveLength(2);
     // Nothing more arrives later.
@@ -511,13 +515,10 @@ describe("Slack from project code (#117)", () => {
     const other = await sessions.create(project, projectId, {
       agentId: `project:${projectId}:slack`,
     });
-    const answered = await sessions.sendMessage(
-      project,
-      projectId,
-      other.id,
-      "Hello",
+    const answered = replyOf(
+      await sessions.sendMessage(project, projectId, other.id, "Hello"),
     );
-    expect(answered.metadata?.status).not.toBe("failed");
+    expect(answered.turn.status).not.toBe("failed");
     await new Promise((resolve) => setTimeout(resolve, 2_000));
     expect(await replyRuns()).toHaveLength(before);
   }, 120_000);

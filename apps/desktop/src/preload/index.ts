@@ -567,8 +567,6 @@ const api = {
     invoke("catamorphic:personal-environment-add-files", projectId),
   personalEnvironmentRemoveFile: (input: unknown): Promise<unknown> =>
     invoke("catamorphic:personal-environment-remove-file", input),
-  personalEnvironmentSetLogin: (input: unknown): Promise<unknown> =>
-    invoke("catamorphic:personal-environment-set-login", input),
   personalEnvironmentConfigFile: (projectId: string): Promise<string> =>
     invoke("catamorphic:personal-environment-config-file", projectId),
   onPersonalEnvironmentChanged: (

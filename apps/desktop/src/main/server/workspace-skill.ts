@@ -111,7 +111,7 @@ private native todo list.
 
 Discover list_project_sessions and read_project_session for authorized peer
 context. children_only lists your direct children. send_project_session_message
-has message_only, next_turn and interrupt delivery; use interrupt for urgent
+has message_only, queue and interrupt delivery; use interrupt for urgent
 course changes. spawn_subsession delegates bounded work through allowed routes;
 wait_for_subsessions waits for results; interrupt_subsession stops a child.
 Use request_user_attention only when the user should see a latent session.

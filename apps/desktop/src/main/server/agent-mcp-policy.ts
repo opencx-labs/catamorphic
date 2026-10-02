@@ -1,16 +1,11 @@
-import type { ToolPermissionBroker } from "@catamorphic/core";
 import type {
   AgentMcpServerConfig,
   AgentPluginConfig,
   McpToolPolicyLayers,
-  ToolPermissionDecision,
-  ToolPermissionHandler,
   ToolPolicyAnnotations,
-  TurnOptions,
 } from "@catamorphic/sandbox";
 import { narrowingLayer, PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
 import { DESKTOP_DEFAULT_SANDBOXING } from "../../shared/agent-permissions.js";
-import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { AgentConfig } from "../agents-store.js";
 import {
   connectionServerKeys,
@@ -20,7 +15,6 @@ import { connectorHarnessPath } from "../connector-harness.js";
 import type { ConnectorsService } from "../connectors.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { HostSkillsRuntime } from "./host-skills.js";
-import { askToolConsent } from "./tool-consent.js";
 
 const WORKFLOWS_SERVER_KEY = PROJECT_TOOLS_SERVER_KEY;
 /** An agent's resolved MCP surface: servers for every harness, plugin
@@ -38,8 +32,7 @@ export interface ResolvedMcp {
   policies: Record<string, McpToolPolicyLayers>;
   /** Cached tool annotations per server key (for `auto` off the hot path). */
   annotations: Record<string, Record<string, ToolPolicyAnnotations>>;
-  /** Server key → connection id, so "Always allow" can land on the right
-   * connection's policy. */
+  /** Server key → connection id, for the connection's own tools. */
   connectionIds: Record<string, string>;
 }
 
@@ -47,8 +40,6 @@ interface DesktopAgentMcpDeps {
   profileConfig: ProfileConfigManager;
   connectors?: Pick<ConnectorsService, "listInstalled">;
   hostSkills?: () => HostSkillsRuntime | undefined;
-  workspaceBridge?: WorkspaceBridge;
-  toolPermissions?: ToolPermissionBroker;
 }
 
 export class DesktopAgentMcp {
@@ -189,116 +180,9 @@ export class DesktopAgentMcp {
   }
 
   /**
-   * The `ask` prompt for an agent's MCP tools: the front window's consent
-   * modal, labeled with the agent. "Always allow" is persisted on the
-   * connection's policy (the profile ceiling) so the next provider build
-   * and every other agent see it; the asking harness remembers it too.
+   * The surface as it is now, read at every attempt so a permission or
+   * connection edit reaches the next turn without restarting anything.
    */
-  private readonly sessionQuestions = new Map<
-    string,
-    NonNullable<TurnOptions["askQuestion"]>
-  >();
-  questionForSession({ sessionId }: { sessionId: string }) {
-    return this.sessionQuestions.get(sessionId);
-  }
-
-  bindSessionQuestions({
-    sessionId,
-    options,
-  }: {
-    sessionId: string;
-    options?: TurnOptions;
-  }): () => void {
-    if (options?.askQuestion)
-      this.sessionQuestions.set(sessionId, options.askQuestion);
-    return () => {
-      if (this.sessionQuestions.get(sessionId) === options?.askQuestion)
-        this.sessionQuestions.delete(sessionId);
-    };
-  }
-
-  permissionHandler({
-    config,
-    profileId,
-  }: {
-    config: AgentConfig;
-    profileId: string;
-  }): ToolPermissionHandler | undefined {
-    const bridge = this.deps.workspaceBridge;
-    const broker = this.deps.toolPermissions;
-    if (!bridge && !broker) return undefined;
-    return async (request, signal) => {
-      if (signal?.aborted) return { decision: "deny" };
-      // Session consent uses the durable chat question. Sessionless host
-      // requests race the desktop bridge and companion broker; the first
-      // answer withdraws the other prompt.
-      const askQuestion = request.sessionId
-        ? this.sessionQuestions.get(request.sessionId)
-        : undefined;
-      const decision: ToolPermissionDecision = askQuestion
-        ? await askToolConsent({ askQuestion, request, signal })
-        : await new Promise<ToolPermissionDecision>((resolve) => {
-            let settled = false;
-            const abortModal = new AbortController();
-            const ask = broker?.open(request, config.name);
-            const settle = (
-              value: ToolPermissionDecision,
-              source: "bridge" | "broker",
-            ) => {
-              if (settled) return;
-              settled = true;
-              signal?.removeEventListener("abort", cancel);
-              if (source === "bridge" && ask) broker?.answer(ask.id, value);
-              if (source === "broker") abortModal.abort();
-              resolve(value);
-            };
-            const cancel = () => {
-              abortModal.abort();
-              settle({ decision: "deny" }, "bridge");
-            };
-            signal?.addEventListener("abort", cancel, { once: true });
-            if (signal?.aborted) {
-              cancel();
-              return;
-            }
-            void ask?.promise.then((value) => settle(value, "broker"));
-            if (bridge) {
-              void bridge
-                .toolPermission(config.name, request, abortModal.signal)
-                .then((value) => {
-                  // Null = no window, cancelled, or timed out. With a broker
-                  // present its own timeout produces the deny (and a paired
-                  // phone may still answer); without one, deny here, because
-                  // a tool call must never hang on a missing UI.
-                  if (value) settle(value, "bridge");
-                  else if (!ask) settle({ decision: "deny" }, "bridge");
-                })
-                .catch((cause) => {
-                  // A throwing bridge must not leave the race unsettled (and
-                  // must not surface as an unhandled rejection in main).
-                  console.warn(
-                    "[desktop] tool-permission prompt failed:",
-                    cause,
-                  );
-                  settle({ decision: "deny" }, "bridge");
-                });
-            }
-          });
-      if (signal?.aborted) return { decision: "deny" };
-      if (decision.decision === "allow" && decision.remember === "always") {
-        const connectionId = this.live({ config, profileId }).connectionIds[
-          request.server
-        ];
-        if (connectionId) {
-          this.deps.profileConfig
-            .forProfile(profileId)
-            .connections.setToolPermission(connectionId, request.tool, "allow");
-        }
-      }
-      return decision;
-    };
-  }
-
   live({
     config,
     profileId,
@@ -309,7 +193,7 @@ export class DesktopAgentMcp {
     // The profile store's copy is the live one for profile agents (a
     // cleared policy is a real edit — no fallback to the build-time copy);
     // project agents are not in that store and carry their definition's
-    // policies, which are part of their cache key so an edit rebuilds.
+    // policies, read from the committed file on every lookup.
     const latest =
       this.deps.profileConfig.forProfile(profileId).agents.get(config.id) ??
       config;

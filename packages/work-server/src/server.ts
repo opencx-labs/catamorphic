@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { ACTIVE_TURN_STATUSES } from "@catamorphic/agent-protocol";
 import type { AgentCapabilityOptions } from "@catamorphic/core";
 import {
   type ConnectionActionGuard,
   type ConnectionProvider,
-  DurableToolPermissionBroker,
   type Identity,
   startEventDispatcher,
   WorkerNodesService,
@@ -107,6 +107,7 @@ import {
   type MachineProvisioner,
   MachineReconciler,
 } from "./workers/machine-rules.js";
+import { signInCapabilities } from "./workers/sign-ins.js";
 import { WorkWorkerRegistry } from "./workers/worker-registry.js";
 import { registerWorkerRoutes } from "./workers/worker-routes.js";
 
@@ -451,6 +452,7 @@ async function createWorkServerInner(
     isolation: execution.isolation,
     workloads: config.execution.workloads,
     capabilities: execution.machineCapabilities,
+    signIns: () => signInCapabilities(execution.signInRoot),
     sandboxProvider,
     placement: {
       workers: () => workers.placements(),
@@ -480,12 +482,7 @@ async function createWorkServerInner(
     await workers.settle();
   });
   const environmentProvider = machine.environmentProvider;
-  const toolPermissions = new DurableToolPermissionBroker(ownDb);
-  const agents = buildAgentRegistry({
-    sandboxProvider,
-    toolPermissions,
-    settings: config.agent,
-  });
+  const agents = buildAgentRegistry({ settings: config.agent });
   // GitHub is an ordinary connection (ADR 0177): built in, always offered,
   // backed by the `github` service connection an administrator connects.
   const github = defineGithubConnectionProvider(hooks.github);
@@ -561,7 +558,6 @@ async function createWorkServerInner(
       objectStore ?? new FsBundleStore(path.join(data, "app-bundles")),
     documentBlobStore:
       objectStore ?? new FsBundleStore(path.join(data, "document-blobs")),
-    toolPermissions,
     triggerKinds: [aiToolCall, schedule, webhook, ...SESSION_TRIGGER_KINDS],
     // Workflows bound to `ai.tool-call` are tools on the project MCP, for
     // project agents and members' own MCP clients alike.
@@ -1274,8 +1270,9 @@ async function stopMemberWork(args: {
     .selectFrom("agent_turns as turn")
     .innerJoin("agent_sessions as session", "session.id", "turn.session_id")
     .select(["session.id", "session.project_id"])
+    .distinct()
     .where("session.external_user_id", "=", args.userId)
-    .where("turn.status", "=", "running")
+    .where("turn.status", "in", [...ACTIVE_TURN_STATUSES])
     .execute();
   for (const session of running) {
     try {

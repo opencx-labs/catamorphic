@@ -124,13 +124,14 @@ export interface SessionHostOperations {
    * automation after (one per pull request, one per day). A chat someone
    * archived comes back and runs; after `close`, the key starts a new chat.
    * `mode` decides what the agent does:
-   * `next_turn` (default) starts or queues its work, `message_only` only
-   * records the message, `interrupt` redirects work in progress.
+   * `queue` (default) starts or queues its work, `steer` joins the work in
+   * progress, `interrupt` stops it and runs next, `message_only` only
+   * records the message.
    */
   deliver: Call<
     DeliverTarget & {
       content: string;
-      mode?: "message_only" | "next_turn" | "interrupt";
+      mode?: "queue" | "steer" | "interrupt" | "message_only";
       /** Flag this message itself for the person's attention. */
       attention?: "required" | "none";
       /**

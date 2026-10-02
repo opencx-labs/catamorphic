@@ -10,6 +10,11 @@
       "bun": "./src/index.ts",
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./testing": {
+      "bun": "./src/testing/index.ts",
+      "import": "./dist/testing/index.js",
+      "types": "./dist/testing/index.d.ts"
     }
   },
   "scripts": {
@@ -19,16 +24,19 @@
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
-    "@catamorphic/sandbox": "workspace:*",
-    "ai": "^7.0.97",
-    "zod": "^4.1.8",
+    "@catamorphic/agent-protocol": "workspace:*",
     "@catamorphic/mcp": "workspace:*",
     "@catamorphic/otel": "workspace:*",
-    "@opentelemetry/api": "^1.9.1"
+    "@catamorphic/sandbox": "workspace:*",
+    "@opentelemetry/api": "^1.9.1",
+    "ai": "^7.0.97",
+    "zod": "^4.1.8"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
+    "@catamorphic/agent-runner": "workspace:*",
+    "@catamorphic/local-process": "workspace:*",
+    "@opentelemetry/sdk-metrics": "^2.9.0",
     "@opentelemetry/sdk-trace-node": "^2.9.0",
-    "@opentelemetry/sdk-metrics": "^2.9.0"
+    "@types/node": "^26.1.1"
   }
 }

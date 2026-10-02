@@ -1,159 +1,112 @@
+import type { Item } from "@catamorphic/react";
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_WORK_DISPLAY,
-  groupTurns,
-  type TimelineItem,
-} from "./turn-groups.js";
+  command,
+  input,
+  reply,
+  timelineOf,
+  turn,
+} from "../components/catamorphic/timeline-fixtures.js";
+import { DEFAULT_WORK_DISPLAY, type TurnRow, turnRows } from "./turn-groups.js";
 
-const user = (id: string) => ({ id, role: "user" });
-const note = (id: string, status = "completed") => ({
-  id,
-  role: "assistant",
-  metadata: { status },
-});
-const shape = (items: TimelineItem<{ id: string }>[]) =>
-  items.map((item) =>
-    item.kind === "message"
-      ? item.message.id
-      : `${item.folded.map((m) => m.id).join("+")}>${item.shown.map((m) => m.id).join("+")}${item.working ? "*" : ""}`,
+const items: Item[] = [
+  input("t1", "Go"),
+  command("c1", "t1"),
+  reply("n1", "t1", "First note"),
+  command("c2", "t1"),
+  reply("n2", "t1", "Second note"),
+  command("c3", "t1"),
+  reply("a", "t1", "Answer"),
+];
+
+const group = (extra: Item[] = []) => {
+  const [only] = timelineOf({
+    turns: [turn("t1", 1)],
+    items: [...items, ...extra],
+  });
+  if (!only) throw new Error("No turn");
+  return only;
+};
+
+/** Each row as its kind, and a reply as its id with its steps. */
+const shape = (rows: TurnRow[]) =>
+  rows.map((row) =>
+    row.kind === "reply"
+      ? `${row.item.id}[${row.steps.map((step) => step.item.id).join(",")}]${row.answer ? "!" : ""}`
+      : row.kind === "steps"
+        ? `steps[${row.steps.map((step) => step.item.id).join(",")}]`
+        : row.entry.kind,
   );
 
-const log = [user("u1"), note("a1"), note("a2"), note("a3")];
-
-describe("groupTurns", () => {
-  it("keeps every note in place by default, running or settled", () => {
-    for (const working of [true, false])
-      expect(
-        shape(
-          groupTurns(log, {
-            working,
-            display: { live: "all", settled: "keep" },
-          }),
-        ),
-      ).toEqual(["u1", "a1", "a2", "a3"]);
-  });
-
+describe("turnRows", () => {
   it("folds the notes under the answer once the turn has settled", () => {
-    const display = { live: "all", settled: "collapse" } as const;
-    expect(shape(groupTurns(log, { working: false, display }))).toEqual([
-      "u1",
-      "a1+a2>a3",
-    ]);
-    // Still running: nothing folds yet.
-    expect(shape(groupTurns(log, { working: true, display }))).toEqual([
-      "u1",
-      "a1",
-      "a2",
-      "a3",
-    ]);
+    expect(
+      shape(turnRows(group(), { live: false, display: DEFAULT_WORK_DISPLAY })),
+    ).toEqual(["input", "a[c1,n1,c2,n2,c3]!"]);
   });
 
-  it("shows only the latest note while the turn runs", () => {
-    const display = { live: "latest", settled: "collapse" } as const;
-    expect(shape(groupTurns(log, { working: true, display }))).toEqual([
-      "u1",
-      "a1+a2>a3*",
-    ]);
-  });
-
-  it("only treats the run at the end of the log as running", () => {
-    const display = { live: "latest", settled: "keep" } as const;
+  it("keeps every note in place when asked to", () => {
     expect(
       shape(
-        groupTurns([...log, user("u2"), note("b1"), note("b2")], {
-          working: true,
-          display,
+        turnRows(group(), {
+          live: false,
+          display: { live: "all", settled: "keep" },
         }),
       ),
-    ).toEqual(["u1", "a1", "a2", "a3", "u2", "b1>b2*"]);
+    ).toEqual(["input", "n1[c1]", "n2[c2]", "a[c3]!"]);
   });
 
-  it("keeps a failure and the note before it in place", () => {
+  it("shows every note while the turn runs by default, none of them the answer", () => {
+    expect(
+      shape(turnRows(group(), { live: true, display: DEFAULT_WORK_DISPLAY })),
+    ).toEqual(["input", "n1[c1]", "n2[c2]", "a[c3]"]);
+  });
+
+  it("shows only the latest note while the turn runs, when asked to", () => {
     expect(
       shape(
-        groupTurns([user("u1"), note("a1"), note("a2"), note("a3", "failed")], {
-          working: false,
-          display: { live: "all", settled: "collapse" },
+        turnRows(group(), {
+          live: true,
+          display: { live: "latest", settled: "keep" },
         }),
       ),
-    ).toEqual(["u1", "a1>a2+a3"]);
+    ).toEqual(["input", "a[c1,n1,c2,n2,c3]"]);
   });
 
-  it("never folds one turn's answer into the next turn's steps", () => {
-    const answer = (id: string) => ({
-      id,
-      role: "assistant",
-      metadata: { status: "completed", changedFiles: [] },
-    });
-    const display = { live: "latest", settled: "collapse" } as const;
-    // Two turns back to back, no user message between them.
-    const backToBack = [
-      user("u1"),
-      note("a1"),
-      answer("a2"),
-      note("b1"),
-      answer("b2"),
-    ];
-    expect(shape(groupTurns(backToBack, { working: false, display }))).toEqual([
-      "u1",
-      "a1>a2",
-      "b1>b2",
-    ]);
-    // The second turn still running: the first stays settled.
+  it("keeps the work since the latest note last, never folded", () => {
     expect(
       shape(
-        groupTurns([...backToBack.slice(0, 3), note("b1"), note("b2")], {
-          working: true,
-          display,
-        }),
-      ),
-    ).toEqual(["u1", "a1>a2", "b1>b2*"]);
-  });
-
-  it("leaves a single-message turn alone", () => {
-    expect(
-      shape(
-        groupTurns([user("u1"), note("a1")], {
-          working: false,
+        turnRows(group([command("c4", "t1")]), {
+          live: true,
           display: { live: "latest", settled: "collapse" },
         }),
       ),
-    ).toEqual(["u1", "a1"]);
+    ).toEqual(["input", "a[c1,n1,c2,n2,c3]", "steps[c4]"]);
   });
 
-  it("shows every note by default, with the running turn's work open", () => {
-    const items = groupTurns(log, {
-      working: true,
-      display: DEFAULT_WORK_DISPLAY,
-    });
-    expect(shape(items)).toEqual(["u1", "a1", "a2", "a3"]);
+  it("never folds notes across a message steered in between", () => {
+    const steered = input("t1", "Also this", { id: "steer" });
     expect(
-      items.map((item) => item.kind === "message" && item.working === true),
-    ).toEqual([false, true, true, true]);
+      shape(
+        turnRows(
+          group([steered, command("c5", "t1"), reply("b", "t1", "Done")]),
+          {
+            live: false,
+            display: DEFAULT_WORK_DISPLAY,
+          },
+        ),
+      ),
+    ).toEqual(["input", "a[c1,n1,c2,n2,c3]", "input", "b[c5]!"]);
   });
 
-  it("keeps the steps since the latest note last, never folded", () => {
-    const running = [...log, note("p", "in_progress")];
-    expect(
-      shape(
-        groupTurns(running, {
-          working: true,
-          display: { live: "latest", settled: "collapse" },
-        }),
-      ),
-    ).toEqual(["u1", "a1+a2>a3*", "p"]);
-    expect(
-      shape(
-        groupTurns([user("u1"), note("p", "in_progress")], {
-          working: true,
-          display: { live: "latest", settled: "collapse" },
-        }),
-      ),
-    ).toEqual(["u1", "p"]);
-    const [, , , , last] = groupTurns(running, {
-      working: true,
-      display: { live: "all", settled: "collapse" },
+  it("leaves a single-reply turn alone", () => {
+    const [only] = timelineOf({
+      turns: [turn("t1", 1)],
+      items: [input("t1", "Hi"), reply("a", "t1", "Hello")],
     });
-    expect(last).toMatchObject({ kind: "message", working: true });
+    if (!only) throw new Error("No turn");
+    expect(
+      shape(turnRows(only, { live: false, display: DEFAULT_WORK_DISPLAY })),
+    ).toEqual(["input", "a[]!"]);
   });
 });

@@ -1,5 +1,5 @@
 "use client";
-import type { PendingAgentTurn } from "@catamorphic/react";
+import type { AgentAttachment } from "@catamorphic/react";
 import { ChevronUp, Pencil, Trash2, Zap } from "lucide-react";
 import {
   type ComponentType,
@@ -12,6 +12,15 @@ import {
 function DefaultHint({ children }: { label: string; children: ReactNode }) {
   return <>{children}</>;
 }
+/** A message waiting in the session's queue: its turn id, text and pills. */
+export interface QueuedChatMessage {
+  id: string;
+  content: string;
+  attachments: AgentAttachment[];
+  /** Held for editing (here or on another device): later messages wait. */
+  held?: boolean;
+}
+
 /** How many queued messages stay visible while collapsed. */
 const QUEUE_COLLAPSE_THRESHOLD = 2;
 
@@ -31,7 +40,7 @@ export function ChatQueue({
   renderAttachments,
   Hint = DefaultHint,
 }: {
-  queue: PendingAgentTurn[];
+  queue: QueuedChatMessage[];
   onUpdate?: (
     id: string,
     content: string,
@@ -43,8 +52,8 @@ export function ChatQueue({
   onHold?: (
     id: string | null,
   ) => undefined | boolean | Promise<undefined | boolean>;
-  renderContent?: (turn: PendingAgentTurn) => ReactNode;
-  renderAttachments?: (turn: PendingAgentTurn) => ReactNode;
+  renderContent?: (turn: QueuedChatMessage) => ReactNode;
+  renderAttachments?: (turn: QueuedChatMessage) => ReactNode;
   Hint?: ComponentType<{ label: string; children: ReactNode }>;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -94,7 +103,7 @@ function QueuedBubble({
   renderAttachments,
   Hint = DefaultHint,
 }: {
-  queued: PendingAgentTurn;
+  queued: QueuedChatMessage;
   onUpdate?: (
     id: string,
     content: string,
@@ -106,8 +115,8 @@ function QueuedBubble({
   onHold?: (
     id: string | null,
   ) => undefined | boolean | Promise<undefined | boolean>;
-  renderContent?: (turn: PendingAgentTurn) => ReactNode;
-  renderAttachments?: (turn: PendingAgentTurn) => ReactNode;
+  renderContent?: (turn: QueuedChatMessage) => ReactNode;
+  renderAttachments?: (turn: QueuedChatMessage) => ReactNode;
   Hint?: ComponentType<{ label: string; children: ReactNode }>;
 }) {
   const savingRef = useRef(false);
@@ -271,7 +280,7 @@ function QueuedBubble({
           </p>
         )}
         <div className="mt-1 flex items-center justify-end gap-0.5 text-[10px] uppercase tracking-wider text-fg-faint">
-          Queued
+          {queued.held && !editing ? "Held" : "Queued"}
           <span className="ml-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/queued:opacity-100 group-focus-within/queued:opacity-100">
             {!editing && (
               <Hint label="Edit before it sends">

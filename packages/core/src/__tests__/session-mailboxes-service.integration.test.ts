@@ -40,7 +40,6 @@ describe("session mailboxes", () => {
         id: sessionId,
         project_id: projectId,
         external_user_id: identity.externalUserId,
-        provider: "test",
         authority_host_id: "desktop-host",
         authority_revision: 3,
       })
@@ -61,7 +60,7 @@ describe("session mailboxes", () => {
       destination: { hostId: "desktop-host", revision: 3 },
       content: "PR checks passed",
       author: { kind: "watcher" as const, watcherId: crypto.randomUUID() },
-      mode: "next_turn" as const,
+      mode: "queue" as const,
       idempotencyKey: "github:delivery-1",
     };
     const first = await mailboxes.enqueue(
@@ -87,7 +86,7 @@ describe("session mailboxes", () => {
         messageId: first.messageId,
         authorityRevision: 3,
         content: "PR checks passed",
-        mode: "next_turn",
+        mode: "queue",
       }),
     ]);
   });
@@ -111,7 +110,7 @@ describe("session mailboxes", () => {
     const item = await db
       .selectFrom("session_mailbox_items")
       .select("id")
-      .where("message_id", "=", receipt.messageId)
+      .where("item_id", "=", receipt.messageId)
       .executeTakeFirstOrThrow();
     await mailboxes.acknowledge(identity, projectId, item.id, {
       destinationHostId: "desktop-host",

@@ -1,15 +1,16 @@
 import { randomUUID } from "node:crypto";
+import {
+  type DispatchMode,
+  dispatchModeSchema,
+  type SessionMessageAuthor,
+  sessionMessageAuthorSchema,
+} from "@catamorphic/agent-protocol";
 import type { DB, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely, Selectable } from "kysely";
 import type { Identity } from "../identity.js";
 import { assertAgentSessionAccess } from "./agent-session-access.js";
-import {
-  parseSessionMessageAuthor,
-  type SessionDeliveryMode,
-  type SessionDeliveryReceipt,
-  type SessionMessageAuthor,
-} from "./agent-turns-service.js";
+import type { SessionDeliveryReceipt } from "./agent-sessions-service.js";
 import { requireTenantProject } from "./projects-service.js";
 
 type MailboxRow = Selectable<DB["session_mailbox_items"]>;
@@ -29,7 +30,7 @@ export interface SessionMailboxItem {
   messageId: string;
   content: string;
   author: SessionMessageAuthor;
-  mode: SessionDeliveryMode;
+  mode: DispatchMode;
   idempotencyKey: string | null;
   metadata: JsonObject | null;
   createdAt: string;
@@ -68,7 +69,7 @@ export class SessionMailboxesService {
       destination: SessionAuthority;
       content: string;
       author: SessionMessageAuthor;
-      mode: SessionDeliveryMode;
+      mode: DispatchMode;
       idempotencyKey?: string;
       metadata?: JsonObject;
     },
@@ -106,7 +107,7 @@ export class SessionMailboxesService {
           throw new SessionAuthorityMismatchError(sessionId);
         }
 
-        const messageId = randomUUID();
+        const itemId = randomUUID();
         const inserted = await this.db
           .insertInto("session_mailbox_items")
           .values({
@@ -115,7 +116,7 @@ export class SessionMailboxesService {
             source_host_id: this.hostId,
             destination_host_id: input.destination.hostId,
             authority_revision: input.destination.revision,
-            message_id: messageId,
+            item_id: itemId,
             content: input.content,
             author_kind: input.author.kind,
             author_payload: JSON.parse(JSON.stringify(input.author)),
@@ -129,11 +130,11 @@ export class SessionMailboxesService {
               .where("idempotency_key", "is not", null)
               .doNothing(),
           )
-          .returning(["message_id"])
+          .returning(["item_id"])
           .executeTakeFirst();
         if (inserted) {
           return {
-            messageId: inserted.message_id,
+            messageId: inserted.item_id,
             turnId: null,
             mode: input.mode,
             created: true,
@@ -141,12 +142,12 @@ export class SessionMailboxesService {
         }
         const existing = await this.db
           .selectFrom("session_mailbox_items")
-          .select("message_id")
+          .select("item_id")
           .where("session_id", "=", sessionId)
           .where("idempotency_key", "=", input.idempotencyKey ?? "")
           .executeTakeFirstOrThrow();
         return {
-          messageId: existing.message_id,
+          messageId: existing.item_id,
           turnId: null,
           mode: input.mode,
           created: false,
@@ -227,23 +228,12 @@ function mapMailboxItem(row: MailboxRow): SessionMailboxItem {
     sourceHostId: row.source_host_id,
     destinationHostId: row.destination_host_id,
     authorityRevision: Number(row.authority_revision),
-    messageId: row.message_id,
+    messageId: row.item_id,
     content: row.content,
-    author: parseSessionMessageAuthor(row.author_kind, row.author_payload),
-    mode: parseMode(row.delivery_mode),
+    author: sessionMessageAuthorSchema.parse(row.author_payload),
+    mode: dispatchModeSchema.parse(row.delivery_mode),
     idempotencyKey: row.idempotency_key,
     metadata: row.metadata as JsonObject | null,
     createdAt: row.created_at.toISOString(),
   };
-}
-
-function parseMode(value: string): SessionDeliveryMode {
-  if (
-    value === "message_only" ||
-    value === "next_turn" ||
-    value === "interrupt"
-  ) {
-    return value;
-  }
-  throw new Error(`Invalid session mailbox delivery mode '${value}'`);
 }

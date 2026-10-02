@@ -4,17 +4,13 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PersonalEnvironmentView } from "../../shared/personal-environment.js";
-import {
-  loginStatus,
-  RemoteEnvironmentModal,
-} from "./remote-environment-modal.js";
+import { RemoteEnvironmentModal } from "./remote-environment-modal.js";
 
 const desktop = vi.hoisted(() => ({
   personalEnvironment: vi.fn(),
   personalEnvironmentSync: vi.fn(),
   personalEnvironmentAddFiles: vi.fn(),
   personalEnvironmentRemoveFile: vi.fn(),
-  personalEnvironmentSetLogin: vi.fn(),
   personalEnvironmentConfigFile: vi.fn(),
   onPersonalEnvironmentChanged: vi.fn(() => () => {}),
 }));
@@ -41,8 +37,6 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-const hour = 60 * 60_000;
-
 function view(
   overrides: Partial<PersonalEnvironmentView> = {},
 ): PersonalEnvironmentView {
@@ -52,28 +46,6 @@ function view(
     configExists: true,
     configError: null,
     server: "allowed",
-    logins: [
-      {
-        harness: "claude-code",
-        label: "Claude Code",
-        included: true,
-        available: true,
-        expiresAt: new Date(Date.now() + 5 * hour).toISOString(),
-        server: {
-          expiresAt: new Date(Date.now() + 5 * hour + 60_000).toISOString(),
-          updatedAt: new Date().toISOString(),
-          needsRefresh: false,
-        },
-      },
-      {
-        harness: "codex",
-        label: "Codex",
-        included: false,
-        available: true,
-        expiresAt: null,
-        server: null,
-      },
-    ],
     files: [
       {
         path: "apps/api/.env.local",
@@ -121,13 +93,17 @@ const button = (text: string) =>
   );
 
 describe("RemoteEnvironmentModal", () => {
-  it("shows sign-ins with freshness, files with problems, and the last send", async () => {
+  it("says where sign-ins run, and shows files with problems and the last send", async () => {
     desktop.personalEnvironment.mockResolvedValue(view());
     await render();
     const text = document.body.textContent ?? "";
     expect(text).toContain("Remote environment");
-    expect(text).toContain("On the server, valid for 5h");
-    expect(text).toContain("Not used on the server");
+    expect(
+      document.body.querySelector('[data-testid="remote-environment-sign-ins"]')
+        ?.textContent,
+    ).toContain(
+      "A chat that uses one runs only on a machine where you signed in to it yourself",
+    );
     expect(text).toContain("apps/api/.env.local");
     expect(text).toContain("2 KB");
     expect(text).toContain("Not found in the project folder");
@@ -135,12 +111,7 @@ describe("RemoteEnvironmentModal", () => {
     expect(
       document.body.querySelector('[data-testid="remote-environment-server"]'),
     ).toBeNull();
-    const checkboxes = Array.from(
-      document.body.querySelectorAll<HTMLInputElement>(
-        'input[type="checkbox"]',
-      ),
-    );
-    expect(checkboxes.map((box) => box.checked)).toEqual([true, false]);
+    expect(document.body.querySelector('input[type="checkbox"]')).toBeNull();
     expect(text).not.toMatch(/[–—]/);
   });
 
@@ -155,24 +126,13 @@ describe("RemoteEnvironmentModal", () => {
     ).toContain('"personalCredentials": true');
   });
 
-  it("edits the config through the desktop: logins, files, removal", async () => {
+  it("edits the config through the desktop: files and removal", async () => {
     desktop.personalEnvironment.mockResolvedValue(view());
-    desktop.personalEnvironmentSetLogin.mockResolvedValue(view());
     desktop.personalEnvironmentAddFiles.mockResolvedValue(null);
     desktop.personalEnvironmentRemoveFile.mockResolvedValue(
       view({ files: [] }),
     );
     await render();
-
-    const codex = document.body.querySelectorAll<HTMLInputElement>(
-      'input[type="checkbox"]',
-    )[1];
-    await act(async () => codex?.click());
-    expect(desktop.personalEnvironmentSetLogin).toHaveBeenCalledWith({
-      projectId: "project-1",
-      harness: "codex",
-      included: true,
-    });
 
     await act(async () => button("Add files")?.click());
     expect(desktop.personalEnvironmentAddFiles).toHaveBeenCalledWith(
@@ -207,7 +167,7 @@ describe("RemoteEnvironmentModal", () => {
 
   it("shows a broken config and keeps edits off until it is fixed", async () => {
     desktop.personalEnvironment.mockResolvedValue(
-      view({ configError: 'Unknown key "file"; use "logins" and "files"' }),
+      view({ configError: 'Unknown key "file"; use "files"' }),
     );
     await render();
     expect(
@@ -225,36 +185,5 @@ describe("RemoteEnvironmentModal", () => {
     await act(async () => button("Send now")?.click());
     expect(desktop.personalEnvironmentSync).toHaveBeenCalledWith("project-1");
     expect(document.body.textContent).toContain("Sent 3m ago");
-  });
-});
-
-describe("loginStatus", () => {
-  const base = view().logins[0];
-  it("names what the person needs to know", () => {
-    if (!base) return;
-    const now = Date.now();
-    expect(loginStatus({ ...base, available: false }, "allowed", now)).toBe(
-      "Not signed in on this computer",
-    );
-    expect(
-      loginStatus(
-        {
-          ...base,
-          server: base.server ? { ...base.server, needsRefresh: true } : null,
-        },
-        "allowed",
-        now,
-      ),
-    ).toBe("Refreshing on this computer");
-    expect(loginStatus({ ...base, server: null }, "allowed", now)).toBe(
-      "Not sent yet",
-    );
-    expect(
-      loginStatus(
-        { ...base, server: null, expiresAt: new Date(now - 1).toISOString() },
-        "not-allowed",
-        now,
-      ),
-    ).toBe("Signed in on this computer, expired");
   });
 });

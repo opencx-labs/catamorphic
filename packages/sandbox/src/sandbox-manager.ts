@@ -5,6 +5,7 @@ import type {
   SandboxProvider,
   SandboxResources,
   SandboxType,
+  SignInHarness,
 } from "./types.js";
 
 interface SandboxRecord {
@@ -43,6 +44,11 @@ interface SandboxManagerOpts {
   store: SandboxStore;
   defaultSnapshotName?: string;
   resources?: SandboxResources;
+  /**
+   * Members' own sign-ins a new dev sandbox mounts from the machine (ADR
+   * 0199): the session owner's, for an agent that runs on it.
+   */
+  signIns?: ReadonlyArray<{ harness: SignInHarness; member: string }>;
 }
 
 export class SandboxManagerImpl implements SandboxManager {
@@ -50,8 +56,10 @@ export class SandboxManagerImpl implements SandboxManager {
   private readonly store: SandboxStore;
   private readonly resources: SandboxResources | undefined;
   private readonly defaultSnapshotName: string | undefined;
+  private readonly signIns: SandboxManagerOpts["signIns"];
 
   constructor(opts: SandboxManagerOpts) {
+    this.signIns = opts.signIns;
     this.provider = opts.provider;
     this.store = opts.store;
     this.defaultSnapshotName = opts.defaultSnapshotName;
@@ -154,6 +162,9 @@ export class SandboxManagerImpl implements SandboxManager {
       language: "typescript",
       autoStopInterval: opts.sandboxType === "dev" ? 30 : 15,
       labels: opts.labels,
+      ...(opts.sandboxType === "dev" && this.signIns?.length
+        ? { signIns: this.signIns }
+        : {}),
     });
 
     if (opts.cloneSource) {

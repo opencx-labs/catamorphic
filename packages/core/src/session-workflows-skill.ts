@@ -16,7 +16,7 @@ Discover this host's actual capabilities and schemas before authoring.
 | Request | Delivery | Lifetime |
 | --- | --- | --- |
 | Remind the user | deliver with mode: "message_only", attention: "required" | One-shot schedule owned by the session, no default expiry |
-| Wake an agent to do work | deliver with mode: "next_turn" | One-shot or conditional monitor; stop when its purpose is complete |
+| Wake an agent to do work | deliver with mode: "queue" | One-shot or conditional monitor; stop when its purpose is complete |
 | Monitor events without noise | Inspect the event/state, then deliver only a meaningful change | Session watcher or explicitly enabled reusable workflow |
 | Have an agent prepare a recurring result in a stable chat | deliver with a stable key (e.g. "daily") | Member or project enablement; the key reuses the same chat |
 | Have an agent handle something for everyone in the project (a PR review, an inbound request) | deliver with the event's key; the project shares one chat per key | Project enablement |
@@ -100,7 +100,7 @@ export const followUp = defineWorkflow(({ defineBoundary }) => ({
         context.host["catamorphic.sessions"].deliver({
           sessionId: "REPLACE_WITH_CURRENT_SESSION_ID",
           content: "Continue the requested follow-up. Inspect current state first.",
-          mode: "next_turn",
+          mode: "queue",
           idempotencyKey: context.input.activationId + ":" + context.input.scheduledFor,
         }),
     }),
@@ -159,7 +159,7 @@ predicates can reject an event, branch the stop boundary too: a quiet return fro
 one boundary does not skip the next boundary. Stop only after a matching action. The stop operation belongs to temporary activations.
 Use inspect in a preceding boundary if current state must supersede the event
 snapshot. deliver with message_only and attention: "required" requests user attention without running a model;
-use deliver with next_turn when the parent agent should continue automatically.
+use deliver with queue when the parent agent should continue automatically.
 
 ### User reminder
 
@@ -268,9 +268,10 @@ Both recipes, with the trigger library they bind, are in the \`slack\` skill.
   returns the chat's key, and through: "<messageId>" ends it at that message,
   so a workflow on session.turn-changed reads exactly the reply the event's
   detail.resultMessageId names, even after later turns.
-- deliver message_only records context without a model turn; next_turn starts
-  work when idle or queues behind the active turn; interrupt requests a course
-  change. The host preserves origin in model input and in visible history.
+- deliver message_only records context without a model turn; queue starts
+  work when idle or queues behind the active turn; steer adds the message to
+  the turn working now (it queues when none is); interrupt stops the active
+  turn and runs this next. The host preserves origin in model input and in visible history.
   Authoring a workflow message does not grant system/developer instruction rank.
 - deliver names its chat one of two ways. sessionId reaches that exact chat.
   key reaches the chat this workflow keeps for the key: the first delivery starts
@@ -317,7 +318,7 @@ Both recipes, with the trigger library they bind, are in the \`slack\` skill.
   independent conversation. Do not simulate children as untracked shell agents.
 - attention: "required" on deliver alerts the user to that exact message. It is
   independent of mode and defaults to none. Use message_only for a reminder to
-  the user; use next_turn for work the agent should perform. Do not run a model
+  the user; use queue for work the agent should perform. Do not run a model
   merely to display a reminder. Notification preferences affect alerts, not the
   retained message or its unread attention. Repeated delivery with the same key
   creates one message and one attention request.

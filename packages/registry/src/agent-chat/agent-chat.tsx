@@ -1,19 +1,15 @@
 "use client";
 
 import {
-  type UseAgentChatResult,
+  QUESTIONS_DISMISSED_MESSAGE,
+  type RuntimeRequest,
+  type RuntimeRequestResponse,
   useAgentChat,
-  useAnswerAgentQuestion,
-  useToolPermissions,
 } from "@catamorphic/react";
-import { ArrowUp, Bot, Maximize2, Minimize2, Plus } from "lucide-react";
+import { ArrowUp, Bot, Maximize2, Minimize2, Plus, Square } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, useState } from "react";
 import { AgentQuestionPanel } from "../agent-question-panel/agent-question-panel.js";
-import {
-  ChatTimeline,
-  QUESTIONS_DISMISSED_MESSAGE,
-  toTimeline,
-} from "../chat-timeline/chat-timeline.js";
+import { ChatTimeline } from "../chat-timeline/chat-timeline.js";
 import { TodoProgress } from "../todo-progress/todo-progress.js";
 import { ToolPermissionCard } from "../tool-permission-card/tool-permission-card.js";
 
@@ -30,10 +26,20 @@ export interface AgentChatProps {
   onSessionCreated?: (sessionId: string) => void;
   /**
    * `dock` (default) renders the collapsible bottom-docked bar. `full` fills
-   * the parent and keeps the conversation always visible — for hosts where
+   * the parent and keeps the conversation always visible, for hosts where
    * chat is the primary surface.
    */
   variant?: "dock" | "full";
+  /**
+   * Fork the conversation through a message (the item id). Wire it to
+   * `useForkAgentSession` with `{ sessionId, messageId: itemId }`; without
+   * it the Fork action is hidden.
+   */
+  onFork?: (input: { sessionId: string; itemId: string }) => void;
+  /** The viewer's external user id, so requests naming approvers wait honestly. */
+  viewerId?: string;
+  /** An agent's display name, for agent-change notices. */
+  resolveAgentName?: (agentId: string) => string | undefined;
 }
 
 export function AgentChat({
@@ -44,18 +50,11 @@ export function AgentChat({
   sessionId,
   onSessionCreated,
   variant = "dock",
+  onFork,
+  viewerId,
+  resolveAgentName,
 }: AgentChatProps) {
   const chat = useAgentChat(projectId, { sessionId, onSessionCreated });
-  // Tool-permission asks (ADR 0054) park on the host and surface here as
-  // consent cards while a turn runs; the tool call resumes on the answer.
-  const permissions = useToolPermissions(
-    projectId,
-    chat.sessionId ?? undefined,
-    {
-      enabled: chat.isWorking,
-    },
-  );
-  const answerQuestion = useAnswerAgentQuestion(projectId, chat.sessionId);
   const isFull = variant === "full";
   const [dockExpanded, setDockExpanded] = useState(false);
   const expanded = isFull || dockExpanded;
@@ -63,11 +62,26 @@ export function AgentChat({
     if (!isFull) setDockExpanded(value);
   };
   const [draft, setDraft] = useState("");
-  const { messages, activity } = toTimeline(
-    chat.messages,
-    chat.optimisticMessages,
-    chat.activity,
+  const [responding, setResponding] = useState<string | null>(null);
+
+  // Questions answer in the panel or in the person's own words through the
+  // composer (ADR 0195); approvals and elicitations answer on their cards.
+  const questions = chat.requests.filter(
+    (request) =>
+      request.kind === "question" && request.answerable && request.questions,
   );
+  const cards = chat.requests.filter((request) => !questions.includes(request));
+  const respond = async (
+    request: RuntimeRequest,
+    response: RuntimeRequestResponse,
+  ) => {
+    setResponding(request.id);
+    try {
+      await chat.respond(request.id, response);
+    } finally {
+      setResponding(null);
+    }
+  };
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
@@ -89,6 +103,11 @@ export function AgentChat({
     }
   };
 
+  const lastReply = chat.timeline
+    .at(-1)
+    ?.entries.filter((entry) => entry.kind === "reply")
+    .at(-1);
+
   return (
     <section
       className={`relative flex w-full flex-col text-fg ${
@@ -97,7 +116,8 @@ export function AgentChat({
       aria-label={title}
     >
       <span className="sr-only" aria-live="polite">
-        {activity ?? messages.at(-1)?.content}
+        {chat.activity ??
+          (lastReply?.kind === "reply" ? lastReply.item.text : undefined)}
       </span>
       <div
         className={`relative origin-bottom overflow-hidden rounded-t-2xl border-border bg-bg-raised/95 backdrop-blur-xl transition-[height,opacity,transform,margin,border-width] duration-200 ease-out ${
@@ -115,16 +135,29 @@ export function AgentChat({
             <span className="grid size-7 place-items-center rounded-full border border-border-strong bg-bg-overlay">
               <Bot className="size-4" />
             </span>
-            {title}
+            {chat.session?.title ?? title}
           </span>
           <span className="flex items-center gap-1">
+            {chat.isWorking && (
+              <button
+                type="button"
+                className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-fg-muted hover:bg-bg-overlay hover:text-fg"
+                onClick={() => void chat.interrupt()}
+                aria-label="Stop the agent"
+                title="Stop"
+                data-testid="chat-interrupt"
+              >
+                <Square className="size-3 fill-current" />
+                Stop
+              </button>
+            )}
             {chat.sessionId && (
               <button
                 type="button"
                 className="grid size-8 place-items-center rounded-lg text-fg-muted hover:bg-bg-overlay hover:text-fg disabled:opacity-40"
                 onClick={chat.startNewSession}
                 disabled={chat.isSending}
-                data-disabled-reason="Wait for the current reply to finish"
+                data-disabled-reason="Wait for the message to send"
                 aria-label="Start new agent session"
                 title="New session"
               >
@@ -145,65 +178,75 @@ export function AgentChat({
         </header>
         <ChatTimeline
           className={
-            permissions.permissions.length > 0
+            cards.length > 0
               ? "h-[calc(100%-48px)] pb-2"
               : "h-[calc(100%-48px)]"
           }
-          messages={messages}
-          activity={activity}
+          timeline={chat.timeline}
+          pending={chat.pending}
           queue={chat.queue}
-          onUpdateQueued={chat.updateQueued}
-          onRemoveQueued={chat.removeQueued}
+          activity={chat.activity}
+          onEditQueued={chat.editQueued}
+          onCancelQueued={chat.cancelQueued}
           onSendQueuedNow={chat.sendQueuedNow}
           onHoldQueued={chat.holdQueued}
-          onRetry={() => void chat.retry()}
-          error={chat.error?.message ?? null}
+          onRetry={(turnId) => void chat.retry(turnId)}
+          onInterrupt={(turnId) => void chat.interrupt(turnId)}
+          onRollback={chat.rollback}
+          onFork={
+            onFork && chat.sessionId
+              ? (itemId) =>
+                  chat.sessionId &&
+                  onFork({ sessionId: chat.sessionId, itemId })
+              : undefined
+          }
+          onResendFailed={(commandId) => void chat.resendFailed(commandId)}
+          onDismissFailed={chat.dismissFailed}
+          hasOlder={chat.hasOlder}
+          isLoadingOlder={chat.isLoadingOlder}
+          onLoadOlder={() => void chat.loadOlder()}
+          resolveRequest={(requestId) => chat.state?.requests[requestId]}
+          resolveAgentName={resolveAgentName}
+          error={
+            chat.connectionLost
+              ? "Connection lost. Reconnecting; the agent may still be working."
+              : (chat.error?.message ?? null)
+          }
         />
-        {permissions.permissions.length > 0 && (
+        {cards.length > 0 && (
           <div className="absolute inset-x-3 bottom-3 flex flex-col gap-2">
-            {permissions.permissions.map((permission) => (
+            {cards.map((request) => (
               <ToolPermissionCard
-                key={permission.id}
-                permission={permission}
-                busy={permissions.isAnswering}
-                onAnswer={(answer) =>
-                  void permissions.answer(permission.id, answer)
-                }
+                key={request.id}
+                request={request}
+                viewerId={viewerId}
+                busy={responding === request.id}
+                onRespond={(response) => void respond(request, response)}
               />
             ))}
           </div>
         )}
       </div>
-      <ChatDeliveryRecovery chat={chat} />
-      {expanded && (
+      {expanded && questions.length > 0 && (
         <div className="max-h-[50vh] overflow-y-auto">
-          {chat.session?.questions?.map(
-            (request) =>
-              request.questions && (
-                <AgentQuestionPanel
-                  key={request.requestId}
-                  questions={request.questions}
-                  blocking={request.blocking !== false}
-                  disabled={answerQuestion.isPending}
-                  onSubmit={(answer) =>
-                    answerQuestion.mutate({
-                      requestId: request.requestId,
-                      answer,
-                    })
-                  }
-                  onDismiss={() =>
-                    answerQuestion.mutate({
-                      requestId: request.requestId,
-                      answer: QUESTIONS_DISMISSED_MESSAGE,
-                    })
-                  }
-                />
-              ),
-          )}
+          {questions.map((request) => (
+            <AgentQuestionPanel
+              key={request.id}
+              questions={request.questions ?? []}
+              blocking={request.blocking}
+              disabled={responding === request.id}
+              onSubmit={(answers) =>
+                void respond(request, { kind: "question", answers })
+              }
+              onDismiss={() =>
+                void respond(request, {
+                  kind: "question",
+                  answers: [QUESTIONS_DISMISSED_MESSAGE],
+                })
+              }
+            />
+          ))}
         </div>
-      )}
-      {answerQuestion.error && (
-        <p role="alert">{answerQuestion.error.message}</p>
       )}
       <form
         className={`flex min-h-16 items-center gap-2 border border-border bg-bg-raised/95 p-2 backdrop-blur-xl ${expanded ? "rounded-b-2xl" : "rounded-2xl"}`}
@@ -215,7 +258,13 @@ export function AgentChat({
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={placeholder}
+          placeholder={
+            questions.length > 0
+              ? "Or reply in your own words..."
+              : chat.isWorking
+                ? "Message (queues until the agent is done)..."
+                : placeholder
+          }
           rows={1}
           aria-label="Message the coding agent"
         />
@@ -248,51 +297,5 @@ export function AgentChat({
         </button>
       </form>
     </section>
-  );
-}
-
-/** Local failures remain recoverable without confusing delivery with execution. */
-export function ChatDeliveryRecovery({
-  chat,
-}: {
-  chat: Pick<
-    UseAgentChatResult,
-    | "failedMessages"
-    | "resendFailed"
-    | "dismissFailed"
-    | "isSending"
-    | "authenticationRequired"
-  >;
-}) {
-  if (chat.authenticationRequired) return null;
-  return (
-    <div className="shrink-0" aria-live="polite">
-      {chat.failedMessages.map((message) => (
-        <div
-          key={message.id}
-          className="flex items-center gap-3 border-t border-border px-3 py-2 text-xs"
-          data-failed-delivery={message.id}
-        >
-          <span className="min-w-0 flex-1 truncate text-fg-muted">
-            Not delivered: {message.content || "Attachment"}
-          </span>
-          <button
-            type="button"
-            className="text-accent disabled:opacity-40"
-            disabled={chat.isSending}
-            onClick={() => void chat.resendFailed(message.id)}
-          >
-            Send again
-          </button>
-          <button
-            type="button"
-            className="text-fg-muted hover:text-fg"
-            onClick={() => chat.dismissFailed(message.id)}
-          >
-            Dismiss
-          </button>
-        </div>
-      ))}
-    </div>
   );
 }

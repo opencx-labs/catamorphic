@@ -4,18 +4,33 @@ import {
   executionSettingsFromEnv,
   startWorkWorker,
 } from "@catamorphic/work-server";
+import { workerCommand } from "./worker-cli.js";
 
 /**
  * A Work worker (ADR 0164): the same image, started with
- * `bun apps/server/src/worker.ts`. It executes agent sandboxes for a control
- * plane and holds no database URL, deployment secret, or vault key.
+ * `bun apps/server/src/worker.ts` (`work worker` in the image). It executes
+ * agent sandboxes for a control plane and holds no database URL, deployment
+ * secret, or vault key.
  *
  *   WORK_CONTROL_PLANE_URL   the control plane's public origin (HTTPS)
  *   WORK_WORKER_ENROLLMENT   one-time code, needed only on first start
- *   WORK_DATA_DIR            local state: credential and sandboxes (/data)
+ *   WORK_DATA_DIR            local state: credential, sandboxes, members'
+ *                            sign-ins (/data)
  *   WORK_SANDBOX, WORK_MAX_WORKSPACES, WORK_CAPACITY_*, WORK_WORKSPACE_*
  *                            execution backend and budgets, as on a server
+ *
+ * `sign-in`, `sign-out` and `sign-ins` manage members' own harness sign-ins
+ * on this machine (ADR 0199); `help` lists them.
  */
+const command = workerCommand(process.argv.slice(2));
+if (command) {
+  try {
+    process.exit(command(process.env));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
 const telemetry = startTelemetry({ serviceName: "work-worker" });
 const controlPlaneUrl = process.env.WORK_CONTROL_PLANE_URL;
 if (!controlPlaneUrl) {

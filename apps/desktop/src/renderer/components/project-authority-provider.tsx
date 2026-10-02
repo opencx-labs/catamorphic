@@ -1,5 +1,10 @@
 import { createApiClient } from "@catamorphic/api-client";
-import { CatamorphicProvider, useCatamorphic } from "@catamorphic/react";
+import {
+  CatamorphicProvider,
+  SESSION_PROTOCOL_MISMATCH_MESSAGE,
+  speaksSessionProtocol,
+  useCatamorphic,
+} from "@catamorphic/react";
 import { QueryClient, useQuery } from "@tanstack/react-query";
 import {
   createContext,
@@ -15,6 +20,8 @@ const RemoteAuthority = createContext<{
   serverUrl: string;
   /** The member edits the program (`program:write`, ADR 0158). */
   writesProgram: boolean;
+  /** Who the server knows this member as, once `/me` answered. */
+  externalUserId: string | undefined;
 } | null>(null);
 export const useRemoteAuthority = () => useContext(RemoteAuthority);
 const authorityCaches = new Map<string, QueryClient>();
@@ -110,6 +117,18 @@ export function ProjectAuthorityProvider({
         the remote project.
       </p>
     );
+  // A server on another session protocol cannot be talked to (ADR 0197):
+  // say so instead of failing every chat request.
+  if (member.data && !speaksSessionProtocol(member.data))
+    return (
+      <p
+        role="alert"
+        className="p-3 text-sm text-fg-muted"
+        data-testid="remote-protocol-mismatch"
+      >
+        {SESSION_PROTOCOL_MISMATCH_MESSAGE}
+      </p>
+    );
   return (
     <CatamorphicProvider
       apiClient={context.apiClient}
@@ -120,6 +139,7 @@ export function ProjectAuthorityProvider({
       <RemoteAuthority.Provider
         value={{
           ...remote,
+          externalUserId: member.data?.identity.externalUserId,
           writesProgram:
             member.data?.projects.some(
               (project) =>

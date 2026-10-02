@@ -377,11 +377,11 @@ export class NodeRecoveryService {
     return this.deps.db.transaction().execute(async (trx) => {
       if (!(await lockLostAllocation({ trx, ...args }))) return "skipped";
       await retireAllocation({ trx, allocationId: args.allocation.id });
-      // The sandbox and the harness's own session died with the machine;
+      // The sandbox and any runner in it died with the machine;
       // the next turn starts both again, as after an idle release.
       await trx
         .updateTable("agent_sessions")
-        .set({ sandbox_id: null, provider_session_id: null })
+        .set({ sandbox_id: null })
         .where("allocation_id", "=", args.allocation.id)
         .execute();
       return "released";

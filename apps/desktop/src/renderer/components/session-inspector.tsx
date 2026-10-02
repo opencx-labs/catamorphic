@@ -234,7 +234,7 @@ export function SessionInspector({
             </span>
           </span>
           <HarnessIcon
-            harness={harness ?? session?.provider}
+            harness={harness}
             provider={provider}
             className="size-3.5"
           />
@@ -457,7 +457,7 @@ export function SessionInspectorContent({
         {incognito ? <InspectorRow label="Privacy" value="Incognito" /> : null}
         {session?.handoffStatus === "pending" ? (
           <InspectorRow label="Sync" value="Moving between hosts" />
-        ) : session && session.mirrorMessageCount > 0 ? (
+        ) : session && session.mirrorSequence > 0 ? (
           <InspectorRow label="Sync" value="Mirrored conversation" />
         ) : null}
         {session?.parentSessionId ? (

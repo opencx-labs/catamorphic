@@ -1,6 +1,6 @@
 # 0195: The conversation continues around agent questions
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0197](0197-agent-sessions-are-an-event-log-of-turns.md): replies to a waiting question steer the turn)
 - **Date:** 2026-10-02
 - **Refines:** 0122
 

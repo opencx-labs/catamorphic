@@ -9,7 +9,7 @@ import {
   workExecution,
 } from "./execution-config.js";
 import { createWorkServer, SERVER_TENANT_ID } from "./server.js";
-import { testServerOptions } from "./test-support.js";
+import { say, testServerOptions } from "./test-support.js";
 
 it("rejects invalid budgets and subprocess resource guarantees before boot", () => {
   expect(() => executionSettingsFromEnv({ WORK_MAX_WORKSPACES: "0" })).toThrow(
@@ -154,7 +154,13 @@ it("a full managed machine preserves existing work and restores an archived sess
       }),
     ).rejects.toThrow("no workspace capacity");
     await expect(
-      sessions.sendMessage(identity, project.id, first.id, "still works"),
+      say({
+        sessions,
+        identity,
+        projectId: project.id,
+        sessionId: first.id,
+        text: "still works",
+      }),
     ).resolves.toMatchObject({ content: "Echo: still works" });
     const originalAllocation = first.allocationId;
     await sessions.archive(identity, project.id, first.id);
@@ -174,8 +180,14 @@ it("a full managed machine preserves existing work and restores an archived sess
     const restored = await sessions.unarchive(identity, project.id, first.id);
     expect(restored[0]?.allocationId).not.toBe(originalAllocation);
     await expect(
-      sessions.sendMessage(identity, project.id, first.id, "restored"),
-    ).resolves.toMatchObject({ content: "Echo: restored" });
+      say({
+        sessions,
+        identity,
+        projectId: project.id,
+        sessionId: first.id,
+        text: "restored",
+      }),
+    ).resolves.toMatchObject({ content: "Echo: restored (turn 2)" });
     const nodes = new WorkerNodesService(core.db);
     const health = (
       await server.app.inject({ method: "GET", url: "/healthz" })

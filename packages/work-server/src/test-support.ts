@@ -1,4 +1,6 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import type { AgentTurnUsage, Item, Turn } from "@catamorphic/agent-protocol";
+import type { AgentSessionsService, Identity } from "@catamorphic/core";
 import pg from "pg";
 import { workServerConfigFromEnv } from "./config.js";
 import type { WorkServerOptions } from "./server.js";
@@ -163,4 +165,67 @@ export async function dropTestDatabase(args: {
       `${open} connection(s) to ${args.database} were still open 10 seconds after the servers shut down`,
     );
   }
+}
+
+/**
+ * A settled turn as tests read it: the agent's final reply (or the turn's
+ * error, for one that failed), its usage, and the turn.
+ */
+export function replyOf(result: { reply: Item | null; turn: Turn }): {
+  content: string;
+  usage: AgentTurnUsage | undefined;
+  turn: Turn;
+} {
+  const { reply, turn } = result;
+  return {
+    content:
+      reply?.kind === "assistant_message"
+        ? reply.text
+        : (turn.error?.message ?? ""),
+    usage: turn.outcome?.usage,
+    turn,
+  };
+}
+
+/** Send a message and wait for its turn: {@link replyOf} that turn. */
+export async function say(input: {
+  sessions: AgentSessionsService;
+  identity: Identity;
+  projectId: string;
+  sessionId: string;
+  text: string;
+}): Promise<ReturnType<typeof replyOf>> {
+  return replyOf(
+    await input.sessions.sendMessage(
+      input.identity,
+      input.projectId,
+      input.sessionId,
+      input.text,
+    ),
+  );
+}
+
+/** Queue a message without waiting for it; resolves its turn's id. */
+export async function enqueue(input: {
+  sessions: AgentSessionsService;
+  identity: Identity;
+  projectId: string;
+  sessionId: string;
+  text: string;
+}): Promise<string> {
+  const receipt = await input.sessions.command(
+    input.identity,
+    input.projectId,
+    input.sessionId,
+    {
+      type: "send",
+      commandId: randomUUID(),
+      text: input.text,
+      dispatch: "queue",
+    },
+  );
+  const turnId = receipt.result?.turnId;
+  if (receipt.status !== "accepted" || typeof turnId !== "string")
+    throw new Error(receipt.error?.message ?? "The message started no turn");
+  return turnId;
 }

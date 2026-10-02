@@ -10,24 +10,29 @@
       "bun": "./src/index.ts",
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./testing": {
+      "bun": "./src/testing/index.ts",
+      "import": "./dist/testing/index.js",
+      "types": "./dist/testing/index.d.ts"
     }
   },
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "build": "tsup && tsc --project tsconfig.build.json --noEmit false --emitDeclarationOnly",
     "dev": "tsup --watch --no-clean",
+    "record:claude-replay": "bun scripts/record-replay.ts && biome format --write src/testing/fixtures",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/claude-code --config ../../vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.287",
+    "@catamorphic/agent-protocol": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^4.1.8"
   },
   "devDependencies": {
-    "@catamorphic/core": "workspace:*",
-    "@catamorphic/db": "workspace:*",
-    "@catamorphic/git": "workspace:*",
-    "@types/node": "^26.1.1",
-    "kysely": "^0.29.5"
+    "@catamorphic/agent-runner": "workspace:*",
+    "@types/node": "^26.1.1"
   }
 }

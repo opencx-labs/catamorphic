@@ -8,8 +8,8 @@
  * results back, and reports the answer and usage as a `result`. Tests put
  * it on a sandbox's PATH as `claude`.
  *
- * With a member's own login (ADR 0184: `CLAUDE_CONFIG_DIR` and no
- * `ANTHROPIC_BASE_URL`) it calls no model: it runs the command of a
+ * On a member's own sign-in (ADR 0199: `CLAUDE_CONFIG_DIR` at their home on
+ * the machine and no `ANTHROPIC_BASE_URL`) it calls no model: it runs the command of a
  * `run: <command>` line itself, and otherwise answers with a report of the
  * credentials it was given, so tests see what reached the CLI.
  */

@@ -1,5 +1,63 @@
 // Provider
 
+export type {
+  AgentAttachment,
+  AgentMediaAttachment,
+  AgentQuestion,
+  AgentQuestionOption,
+  AgentTextAttachment,
+  AgentTextSource,
+  AgentTodo,
+  AgentTurnUsage,
+  AssistantMessageItem,
+  Attempt,
+  CommandItem,
+  CommandReceipt,
+  ContextHandoffItem,
+  FileChangeItem,
+  Item,
+  ItemCommon,
+  ItemKind,
+  ItemStatus,
+  JsonObject,
+  JsonValue,
+  NoticeItem,
+  PlanItem,
+  ReasoningItem,
+  RequestItem,
+  RuntimeRequest,
+  RuntimeRequestResponse,
+  SessionCommand,
+  SessionMessageAuthor,
+  SessionSnapshot,
+  SessionState,
+  StoredSessionEvent,
+  SubagentItem,
+  ToolCallItem,
+  Turn,
+  TurnStatus,
+  UserMessageItem,
+} from "@catamorphic/agent-protocol";
+// The session model every chat client renders (ADR 0197), re-exported so a
+// copied registry component needs only this package.
+export {
+  activeTurn,
+  commandActivity,
+  isActiveTurnStatus,
+  isSettledTurnStatus,
+  isWorking,
+  itemActivity,
+  itemsOfTurn,
+  orderedTurns,
+  pendingRequests,
+  queuedTurns,
+} from "@catamorphic/agent-protocol";
+// The marker helpers live beside the harness renderers in the sandbox
+// package (its browser-safe subpath) so pills mean the same on both sides.
+export {
+  ATTACHMENT_MARKER,
+  messageWithAttachmentNames,
+} from "@catamorphic/sandbox/attachments";
 // Atoms
 export {
   codeAtom,
@@ -22,14 +80,25 @@ export {
 } from "./hooks/use-agent-catalog.js";
 export {
   type AgentAuthenticationRequired,
+  type AgentChatAttachment,
   authenticationRequiredFrom,
-  type OptimisticAgentMessage,
-  type PendingAgentTurn,
+  type PendingAgentMessage,
+  type SendOptions,
+  turnActivity,
   type UseAgentChatOptions,
   type UseAgentChatResult,
   useAgentChat,
 } from "./hooks/use-agent-chat.js";
-export { useAgentSession } from "./hooks/use-agent-session.js";
+export {
+  type AgentSessionConnection,
+  type AgentSessionData,
+  type AgentSessionInfo,
+  agentSessionQueryKey,
+  reconnectDelayMs,
+  type UseAgentSessionOptions,
+  type UseAgentSessionResult,
+  useAgentSession,
+} from "./hooks/use-agent-session.js";
 // Agent (Track A)
 export {
   type AgentSessionsList,
@@ -37,7 +106,6 @@ export {
   useAgentAttention,
   useAgentSessions,
 } from "./hooks/use-agent-sessions.js";
-export { useAnswerAgentQuestion } from "./hooks/use-answer-agent-question.js";
 export { useAppPresentations } from "./hooks/use-app-presentations.js";
 export {
   type ArchiveAgentSessionInput,
@@ -172,23 +240,7 @@ export {
   useTriggerRun,
 } from "./hooks/use-runs.js";
 export { useSelectedNode } from "./hooks/use-selected-node.js";
-export {
-  type AgentChatAttachment,
-  type AgentChatMediaAttachment,
-  type AgentChatTextAttachment,
-  type AgentChatTextSource,
-  ATTACHMENT_MARKER,
-  messageWithAttachmentNames,
-  type SendAgentMessageInput,
-  useSendAgentMessage,
-} from "./hooks/use-send-agent-message.js";
 export { useSessionArtifacts } from "./hooks/use-session-artifacts.js";
-export {
-  type PendingToolPermission,
-  type ToolPermissionAnswer,
-  type UseToolPermissionsOptions,
-  useToolPermissions,
-} from "./hooks/use-tool-permissions.js";
 export {
   type UpdateAgentSessionInput,
   useUpdateAgentSession,
@@ -263,6 +315,29 @@ export {
 } from "./lib/match-workflow-nodes.js";
 export type { ResourcePreview } from "./lib/resource-preview.js";
 export {
+  type SessionCommandInput,
+  sendSessionCommand,
+} from "./lib/session-commands.js";
+export {
+  AGENT_SESSION_PROTOCOL,
+  readSessionStream,
+  SESSION_PROTOCOL_MISMATCH_MESSAGE,
+  speaksSessionProtocol,
+} from "./lib/session-stream.js";
+export {
+  answerRows,
+  itemText,
+  QUESTIONS_DISMISSED_MESSAGE,
+  type QueuedMessage,
+  sessionQueue,
+  sessionTimeline,
+  startingTurn,
+  type TimelineEntry,
+  type TimelineTurn,
+  type WorkItem,
+  waitsToRun,
+} from "./lib/session-timeline.js";
+export {
   buildUntitledWorkflowName,
   displayNameFromWorkflowName,
   ensurePrimaryWorkflowExportName,
@@ -282,7 +357,6 @@ export {
 } from "./provider.js";
 // Shared domain types (also available as subpath import `@catamorphic/react/types`)
 export type {
-  AgentMessage,
   AgentSession,
   AgentSessionDetail,
   AttachedPlugin,
@@ -311,7 +385,6 @@ export type {
   RunsList,
   Secret,
   SecretStatus,
-  SessionDeliveryReceipt,
   SignalRunInput,
   SubmitRunInput,
   TriggeredRun,

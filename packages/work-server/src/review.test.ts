@@ -343,20 +343,14 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
   const answers = async (sessionId: string) =>
     (
       await server.catamorphic.core.db
-        .selectFrom("agent_messages")
-        .select(["content", "metadata"])
+        .selectFrom("agent_items")
+        .select("text")
         .where("session_id", "=", sessionId)
-        .where("role", "=", "assistant")
-        .orderBy("seq", "asc")
+        .where("kind", "=", "assistant_message")
+        .where("status", "!=", "in_progress")
+        .orderBy("position", "asc")
         .execute()
-    )
-      .filter(
-        (message) =>
-          JSON.stringify(message.metadata).includes(
-            '"status":"in_progress"',
-          ) === false,
-      )
-      .map((message) => message.content);
+    ).map((message) => message.text);
 
   async function waitFor<T>(
     what: string,
@@ -829,13 +823,13 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       workspace: { ref: "refs/pull/1/head", commit: pullHead },
     });
     const delivered2 = await server.catamorphic.core.db
-      .selectFrom("agent_messages")
-      .select("content")
+      .selectFrom("agent_items")
+      .select("text")
       .where("session_id", "=", sessionId)
-      .where("role", "=", "user")
-      .orderBy("seq", "desc")
+      .where("kind", "=", "user_message")
+      .orderBy("position", "desc")
       .executeTakeFirstOrThrow();
-    expect(delivered2.content).toContain(
+    expect(delivered2.text).toContain(
       `New commits since your last review (${previous}..${pullHead})`,
     );
   }, 120_000);

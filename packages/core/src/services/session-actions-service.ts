@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
+import type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
 import type { DB, Json, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
 import type { AgentSessionsService } from "./agent-sessions-service.js";
-import type { SessionMessageAuthor } from "./agent-turns-service.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import {
   ChatAudienceSchema,
@@ -227,20 +227,16 @@ export class SessionActionsService {
             "through" in args && args.through !== undefined
               ? args.through
               : undefined;
-          const end =
-            through === undefined
-              ? session.messages.length
-              : session.messages.findIndex(
-                  (message) => message.id === through,
-                ) + 1;
-          if (end === 0 && through !== undefined)
-            throw new Error("No message in this chat has that id");
           const limit = "limit" in args ? (args.limit ?? 30) : 30;
-          return json({
-            sessionId: session.id,
-            key: session.key,
-            messages: session.messages.slice(Math.max(0, end - limit), end),
-          });
+          const messages = await this.sessions.transcript(
+            input.identity,
+            input.projectId,
+            session.id,
+            { ...(typeof through === "string" ? { through } : {}), limit },
+          );
+          if (through && !messages.some((message) => message.id === through))
+            throw new Error("No message in this chat has that id");
+          return json({ sessionId: session.id, key: session.key, messages });
         }
         if (!("idempotencyKey" in args))
           throw new Error("idempotencyKey is required");
@@ -265,7 +261,12 @@ export class SessionActionsService {
                     .selectFrom("agent_turns")
                     .select("id")
                     .where("session_id", "=", args.sessionId)
-                    .where("status", "=", "running")
+                    .where("status", "in", [
+                      "preparing",
+                      "running",
+                      "waiting",
+                      "finalizing",
+                    ])
                     .limit(1)
                 : null,
             actor: json({
@@ -445,7 +446,7 @@ export class SessionActionsService {
                   input.identity,
                   input.projectId,
                   args.sessionId,
-                  { expectedTurnId: action.target_turn_id },
+                  { turnId: action.target_turn_id },
                 );
               result = { interrupted: action.target_turn_id !== null };
               break;
@@ -510,7 +511,7 @@ export class SessionActionsService {
                 })
                 .where("id", "=", args.sessionId)
                 .execute();
-            await this.sessions.turns.deliver({
+            await this.sessions.deliverWithin(trx, {
               sessionId: args.sessionId,
               content,
               author: input.author,
@@ -526,7 +527,6 @@ export class SessionActionsService {
                 causation: input.causation ?? [],
                 provenance: input.provenance ?? {},
               },
-              transaction: trx,
             });
             await trx
               .updateTable("session_actions")
@@ -561,7 +561,7 @@ export class SessionActionsService {
               .returning("id")
               .executeTakeFirst();
             if (!failed) return;
-            await this.sessions.turns.deliver({
+            await this.sessions.deliverWithin(trx, {
               sessionId: args.sessionId,
               content: `${actionLabel(input.operation)} failed: ${message}`,
               author: input.author,
@@ -576,7 +576,6 @@ export class SessionActionsService {
                 causation: input.causation ?? [],
                 provenance: input.provenance ?? {},
               },
-              transaction: trx,
             });
           });
           throw error;

@@ -101,7 +101,7 @@ export interface SessionCoordinationBridge {
     ownSessionId: string,
     peerSessionId: string,
     content: string,
-    mode: "message_only" | "next_turn" | "interrupt",
+    mode: "message_only" | "queue" | "interrupt",
   ): Promise<unknown>;
   spawn(
     projectId: string,
@@ -326,12 +326,12 @@ export function buildWorkspaceToolkit(
     {
       name: "send_project_session_message",
       description:
-        "Send a message to another session in this project. Use message_only for context that should not start work, next_turn to queue work, or interrupt only when the other agent must change course immediately.",
+        "Send a message to another session in this project. Use message_only for context that should not start work, queue to queue work, or interrupt only when the other agent must change course immediately.",
       parameters: {
         session_id: z.string().min(1).describe("Target session id"),
         message: z.string().min(1).describe("Message to send"),
         delivery_mode: z
-          .enum(["message_only", "next_turn", "interrupt"])
+          .enum(["message_only", "queue", "interrupt"])
           .default("message_only"),
       },
       execute: async (input, ctx) => {
@@ -344,7 +344,7 @@ export function buildWorkspaceToolkit(
           ctx.sessionId,
           String(input.session_id),
           String(input.message),
-          input.delivery_mode as "message_only" | "next_turn" | "interrupt",
+          input.delivery_mode as "message_only" | "queue" | "interrupt",
         );
       },
     },

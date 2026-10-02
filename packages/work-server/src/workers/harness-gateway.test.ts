@@ -12,7 +12,7 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "../server.js";
-import { testServerOptions } from "../test-support.js";
+import { replyOf, testServerOptions } from "../test-support.js";
 import { startWorkWorker } from "./worker-runtime.js";
 
 /**
@@ -375,11 +375,13 @@ describe("Claude Code on a worker, with its model through the gateway", () => {
       environment: "build",
     });
     sessionId = session.id;
-    const answer = await sessions().sendMessage(
-      identity,
-      projectId,
-      sessionId,
-      "run: printf 'edited by claude code' > notes.md && cat notes.md",
+    const answer = replyOf(
+      await sessions().sendMessage(
+        identity,
+        projectId,
+        sessionId,
+        "run: printf 'edited by claude code' > notes.md && cat notes.md",
+      ),
     );
     expect(answer.content).toContain("Done: edited by claude code");
     // The file is in the sandbox on the worker, not on the control plane.
@@ -394,7 +396,7 @@ describe("Claude Code on a worker, with its model through the gateway", () => {
     expect(upstreamBodies[0]).toContain("claude-test");
 
     // Usage: the harness reported the turn, and the gateway counted each call.
-    expect(answer.metadata?.usage).toMatchObject({
+    expect(answer.usage).toMatchObject({
       inputTokens: 50,
       outputTokens: 22,
     });
@@ -435,11 +437,8 @@ describe("Claude Code on a worker, with its model through the gateway", () => {
   }, 120_000);
 
   it("holds only the grant in the sandbox, never the key", async () => {
-    const answer = await sessions().sendMessage(
-      identity,
-      projectId,
-      sessionId,
-      "run: env",
+    const answer = replyOf(
+      await sessions().sendMessage(identity, projectId, sessionId, "run: env"),
     );
     expect(answer.content).toContain(
       `ANTHROPIC_BASE_URL=${base}/api/gateway/model/anthropic`,

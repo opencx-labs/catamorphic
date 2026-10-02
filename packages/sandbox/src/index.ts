@@ -6,12 +6,7 @@ export {
 } from "@catamorphic/runtime";
 export * from "./agent-capabilities.js";
 export { HttpAgentCapabilityGateway } from "./capability-client.js";
-export { capabilityEventPresenter } from "./capability-events.js";
 export * from "./capability-mcp.js";
-export {
-  AgentEventBuffer,
-  type AgentEventBufferOptions,
-} from "./coding-agent/event-buffer.js";
 export {
   CLAUDE_CODE_PERMISSION_MODES,
   type ClaudeCodePermissionMode,
@@ -22,7 +17,6 @@ export {
   type HarnessPermissions,
   harnessPermissionIssues,
 } from "./coding-agent/harness-permissions.js";
-export { transcriptHistoryPreamble } from "./coding-agent/history.js";
 export {
   buildPluginsPreamble,
   PLUGIN_STAGE_DIR,
@@ -33,46 +27,9 @@ export {
   agentQuestionDescription,
   agentQuestionInputSchema,
   agentQuestionJsonSchema,
-  askUserToolResult,
   closeQuestionsDescription,
   closeQuestionsInputSchema,
-  closeQuestionsJsonSchema,
-  isQuestionReply,
-  QuestionReplyError,
 } from "./coding-agent/questions.js";
-export {
-  type AgentRuntimeProvider,
-  AgentRuntimeUnsupportedError,
-} from "./coding-agent/runtime-provider.js";
-export type {
-  AgentApprovalRequest,
-  AgentElicitationRequest,
-  AgentEventCursor,
-  AgentLoopPlacement,
-  AgentQuestionRequest,
-  AgentRuntimeCapabilities,
-  AgentRuntimeDescriptor,
-  AgentRuntimeEvent,
-  AgentRuntimeEventType,
-  AgentRuntimeMessage,
-  AgentRuntimeOperationSupport,
-  AgentRuntimeRequest,
-  AgentRuntimeRequestResponse,
-  AgentRuntimeSession,
-  AgentTask,
-  AgentTaskStatus,
-  AgentTurnHandle,
-  ControlAgentTask,
-  InterruptAgentTurn,
-  ListAgentTasks,
-  RespondToAgentRequest,
-  ResumeAgentRuntimeSession,
-  RetryAgentTurn,
-  StartAgentRuntimeSession,
-  StartAgentTurn,
-  StopAgentRuntimeSession,
-  SubscribeToAgentEvents,
-} from "./coding-agent/runtime-types.js";
 export {
   ATTACHMENT_MARKER,
   describeTextSource,
@@ -117,17 +74,10 @@ export type {
   AgentTextAttachment,
   AgentTextSource,
   AttachedPluginForAgent,
-  CodingAgentProvider,
   ExtraTool,
   ExtraToolContext,
   McpServersSource,
-  ProviderSession,
   SandboxModelGateway,
-  SandboxPersonalLogin,
-  SessionCaller,
-  StartSessionOpts,
-  TurnOptions,
-  TurnSandbox,
 } from "./coding-agent/types.js";
 export {
   AGENT_EFFORT_LEVELS,
@@ -150,8 +100,6 @@ export {
   MACHINE_CAPABILITIES,
   type MachineCapability,
   type NodeAccess,
-  PERSONAL_LOGIN_KINDS,
-  type PersonalLoginKind,
   placementOrder,
   poolMatches,
   type WorkloadKind,
@@ -214,6 +162,17 @@ export {
   spawnInSandbox,
   splitUtf8,
 } from "./sandbox-stdio.js";
+export {
+  machineSignInHome,
+  parseSandboxPaths,
+  parseSignInCapability,
+  refuseSignIns,
+  remapPaths,
+  SANDBOX_PATHS_ENV,
+  type SandboxPathMap,
+  signInMemberDirectory,
+  signInMemberOf,
+} from "./sign-ins.js";
 export type {
   StdioSupervisorTransport,
   SupervisorProcessHandle,
@@ -221,14 +180,11 @@ export type {
 export { StdioDeploymentRuntimeProvider } from "./stdio-deployment-runtime.js";
 export type {
   AgentErrorKind,
-  AgentEvent,
   AgentQuestion,
   AgentQuestionOption,
-  AgentSession,
   AgentTurnUsage,
   CancelRuntimeInvocationArgs,
   CloneSource,
-  CodingAgent,
   CreateSandboxOpts,
   DeploymentRuntime,
   DeploymentRuntimeProvider,
@@ -257,7 +213,6 @@ export type {
   SandboxResources,
   SandboxStatus,
   SandboxType,
-  SessionInfo,
   StepEntry,
 } from "./types.js";
 export {
@@ -265,6 +220,10 @@ export {
   positiveTokenCount,
   RuntimeEventReportingError,
   RuntimeInfrastructureError,
+  SIGN_IN_HARNESSES,
+  type SignInHarness,
+  signInCapability,
+  signInHomePath,
 } from "./types.js";
 export type { WorkflowPackagePayload } from "./workflow-package.js";
 export {

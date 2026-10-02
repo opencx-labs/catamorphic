@@ -555,6 +555,67 @@ describe("SessionCheckouts", () => {
       expect.stringMatching(/^[0-9a-f]{40,64}$/),
     ]);
   });
+
+  it("rolls a chat's own worktree back to a turn's start, keeping history (ADR 0197)", async () => {
+    const owned = await checkouts.createManaged({ projectId, sessionId });
+    const before = await checkouts.head({ workingDirectory: owned.path });
+    await fs.writeFile(path.join(owned.path, "README.md"), "changed\n");
+    await fs.writeFile(path.join(owned.path, "added.txt"), "added\n");
+    const after = await checkouts.checkpoint({
+      projectId,
+      sessionId,
+      workingDirectory: owned.path,
+      message: "Turn",
+    });
+    // A later turn's unrecorded leftovers go too.
+    await fs.writeFile(path.join(owned.path, "scratch.txt"), "scratch\n");
+    expect(
+      await checkouts.restore({
+        projectId,
+        workingDirectory: owned.path,
+        commit: before ?? "",
+        expectedHead: after,
+        owned: true,
+      }),
+    ).toBe("restored");
+    expect(await fs.readFile(path.join(owned.path, "README.md"), "utf8")).toBe(
+      "hello\n",
+    );
+    const files = await fs.readdir(owned.path);
+    expect(files).not.toContain("added.txt");
+    expect(files).not.toContain("scratch.txt");
+    // The branch still holds the turn's checkpoint.
+    expect(await checkouts.head({ workingDirectory: owned.path })).toBe(after);
+  });
+
+  it("rolls the person's own folder back only while nothing else changed it", async () => {
+    const before = await checkouts.head({ workingDirectory: rootPath });
+    await fs.writeFile(path.join(rootPath, "notes.md"), "turn\n");
+    const after = await checkouts.checkpoint({
+      projectId,
+      sessionId,
+      workingDirectory: rootPath,
+      message: "Turn",
+    });
+    const restore = {
+      projectId,
+      workingDirectory: rootPath,
+      commit: before ?? "",
+      expectedHead: after,
+      owned: false,
+    };
+    await fs.writeFile(path.join(rootPath, "mine.md"), "the person's\n");
+    expect(await checkouts.restore(restore)).toContain("not recorded yet");
+    expect(await fs.readFile(path.join(rootPath, "notes.md"), "utf8")).toBe(
+      "turn\n",
+    );
+    await fs.rm(path.join(rootPath, "mine.md"));
+    expect(
+      await checkouts.restore({ ...restore, expectedHead: before }),
+    ).toContain("changed since the chat's last turn");
+    expect(await checkouts.restore(restore)).toBe("restored");
+    expect(await fs.readdir(rootPath)).not.toContain("notes.md");
+  });
 });
 
 describe("parseWorktreePorcelain", () => {

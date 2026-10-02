@@ -55,6 +55,16 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
       envVars: stringMap.optional(),
       autoStopInterval: z.number().optional(),
       labels: stringMap.optional(),
+      // Members' sign-ins the executor mounts from its own disk (ADR 0199).
+      signIns: z
+        .array(
+          z.object({
+            harness: z.enum(["claude-code", "codex"]),
+            member: z.string().min(1),
+          }),
+        )
+        .readonly()
+        .optional(),
     }),
   }),
   z.object({

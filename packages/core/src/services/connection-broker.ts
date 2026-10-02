@@ -26,7 +26,6 @@ import {
 } from "./connections-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
 import { bindingRepositories } from "./git-repositories.js";
-import type { ToolPermissionChannel } from "./tool-permission-broker.js";
 import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
 
 const tracer = getTracer("@catamorphic/core");
@@ -59,8 +58,18 @@ export interface ConnectionGateway {
   guards: readonly ConnectionActionGuard[];
   /** How long one guard may take before the action escalates (ADR 0183). */
   guardTimeoutMs?: number;
-  /** Where an escalated agent action asks its person for approval. */
-  approvals?: ToolPermissionChannel;
+  /**
+   * Ask an agent session's person to approve an escalated action, as a
+   * request on the session's working turn (ADR 0197).
+   */
+  approve?: (input: {
+    sessionId: string;
+    title: string;
+    description: string;
+    server: string;
+    tool: string;
+    input: Record<string, unknown>;
+  }) => Promise<"allow" | "deny">;
   /** The member who owns an agent session, for review and audit. */
   sessionOwner?: (sessionId: string) => Promise<string | undefined>;
   /** The session agent's sandboxing: contained agents only read (ADR 0182). */
@@ -742,23 +751,22 @@ export class ConnectionBroker {
         metadata: metadata(outcome.records),
       };
     }
-    if (caller !== "agent" || !args.agentSessionId || !this.gateway.approvals) {
+    if (caller !== "agent" || !args.agentSessionId || !this.gateway.approve) {
       return {
         verdict: "deny",
         reason: `requires human approval (${outcome.reason})`,
         metadata: metadata(outcome.records, "unavailable"),
       };
     }
-    const decision = await this.gateway.approvals.handlerFor(
-      "Connection gateway",
-    )({
+    const decision = await this.gateway.approve({
       sessionId: args.agentSessionId,
+      title: `Allow ${args.action} on ${args.connection.alias}?`,
+      description: `Needs your approval: ${outcome.reason}`,
       server: `connection_${args.connection.alias}`,
       tool: args.action,
-      description: `Needs your approval: ${outcome.reason}`,
       input: jsonRecord(args.input),
     });
-    return decision.decision === "allow"
+    return decision === "allow"
       ? { verdict: "allow", metadata: metadata(outcome.records, "approved") }
       : {
           verdict: "deny",

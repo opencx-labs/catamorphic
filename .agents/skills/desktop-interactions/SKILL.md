@@ -48,8 +48,9 @@ instructions to restore superseded behavior.
 - Project agents learn desktop configuration from the `configuring-catamorphic-desktop`
   host skill and the read-only `desktop_settings` tool, then edit the files directly.
   Do not add settings write tools or mirrored files.
-- New per-turn facts for agents are `TurnOptions.context` fragments (ADR 0152),
-  never text prepended to the user's message. Core seeds stay host-neutral and
+- New per-turn facts for agents are `TurnContextFragment`s from the host
+  harness's `context(context)` hook (ADR 0152), rendered into
+  `AttemptStart.context`, never text prepended to the user's message. Core seeds stay host-neutral and
   never import desktop code.
 - A reusable component change goes into the registry source and every installed
   consumer together.

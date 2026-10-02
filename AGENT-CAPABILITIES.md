@@ -29,12 +29,15 @@ actual loop host and working directory. A standalone `context.read` can run on a
 different API instance, so those fields are `null` instead of guessing the loop's
 location from the API server.
 
-Facts are `TurnOptions.context` fragments (`{ source, text, trust }`), refreshed
-each turn and delivered beside the user's message through the harness's native
+Facts are `TurnContextFragment`s (`{ source, text, trust }`): core's capability
+prompt plus a host harness's `context(context)` hook. They are refreshed each
+turn, rendered into `AttemptStart.context` by `renderTurnContext` (one tagged
+block per source; observed text is marked as data and cannot close its own
+block), and delivered beside the user's message through the harness's native
 channel, never inside the message text or the cached system prompt: Claude Code
 uses the `UserPromptSubmit` hook's `additionalContext`, Codex uses
-`turn/start.additionalContext` (observed content as `untrusted`), and the AI SDK
-adapter adds a system message just before the user message. Hosts append their
+`turn/start.additionalContext`, and the AI SDK adapter adds a system message
+just before the user message. Hosts append their
 own fragments (the desktop adds the screen, private-file placement and peers).
 Descriptive names are data. No credentials, email addresses,
 permission arrays, lease tokens, or other users are injected automatically.

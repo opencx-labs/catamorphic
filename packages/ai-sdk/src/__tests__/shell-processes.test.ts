@@ -9,19 +9,17 @@ import {
   shellSandboxProcesses,
 } from "@catamorphic/sandbox";
 import type { Tool } from "ai";
-import { simulateReadableStream } from "ai";
-import { MockLanguageModelV4 } from "ai/test";
 import { afterAll, describe, expect, it, vi } from "vitest";
-
-vi.mock("@catamorphic/mcp", () => ({ connectMcpServer: vi.fn() }));
-
-import { AiSdkCodingAgent } from "../ai-sdk-agent.js";
+import { createAiSdkAdapter } from "../adapter.js";
 import {
   runShell,
   type ShellProvider,
   type ShellState,
   shellTools,
+  stopBackgroundCommands,
 } from "../shell.js";
+import { replayModel, replyCall, toolCallsCall } from "../testing/index.js";
+import { attemptStart, FakeHost } from "./fake-host.js";
 
 const root = fs.realpathSync(
   fs.mkdtempSync(path.join(os.tmpdir(), "ai-sdk-processes-")),
@@ -252,8 +250,8 @@ describe("background command tools", () => {
   });
 });
 
-describe("AiSdkCodingAgent background commands", () => {
-  it("stops what a chat left running when the chat is disposed", async () => {
+describe("ai-sdk adapter background commands", () => {
+  it("keeps a chat's background commands across turns until the chat stops them", async () => {
     const shell = sandbox({ ceilingMs: 30_000 });
     const pidFile = path.join(root, "server.pid");
     const provider: SandboxProvider = {
@@ -270,72 +268,56 @@ describe("AiSdkCodingAgent background commands", () => {
       gitClone: vi.fn(),
       gitCheckout: vi.fn(),
     };
-    const usage = {
-      inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
-      outputTokens: { total: 1, text: 1, reasoning: 0 },
-    };
-    const model = new MockLanguageModelV4({
-      doStream: [
-        {
-          stream: simulateReadableStream({
-            chunks: [
-              { type: "stream-start" as const, warnings: [] },
-              {
-                type: "tool-call" as const,
-                toolCallId: "tool-1",
-                toolName: "run_background_command",
-                input: JSON.stringify({
-                  command: `echo $$ > ${pidFile}; exec sleep 300`,
-                  description: "Start the server",
-                }),
-              },
-              {
-                type: "finish" as const,
-                finishReason: {
-                  unified: "tool-calls" as const,
-                  raw: undefined,
-                },
-                usage,
-              },
-            ],
-          }),
-        },
-        {
-          stream: simulateReadableStream({
-            chunks: [
-              { type: "stream-start" as const, warnings: [] },
-              { type: "text-start" as const, id: "t" },
-              { type: "text-delta" as const, id: "t", delta: "Started." },
-              { type: "text-end" as const, id: "t" },
-              {
-                type: "finish" as const,
-                finishReason: { unified: "stop" as const, raw: undefined },
-                usage,
-              },
-            ],
-          }),
-        },
+    const replay = replayModel({
+      calls: [
+        toolCallsCall([
+          {
+            id: "tool-1",
+            name: "run_background_command",
+            input: {
+              command: `echo $$ > ${pidFile}; exec sleep 300`,
+              description: "Start the server",
+            },
+          },
+        ]),
+        replyCall("Started."),
       ],
     });
-    const agent = new AiSdkCodingAgent({ model, sandboxProvider: provider });
-    const session = await agent.startSession({
-      projectId: "project-1",
-      userId: "user-1",
-      sandboxId: "box",
-      sessionId: "chat-1",
-      workingDirectory: root,
-      commandTimeoutSeconds: 1_800,
+    // The host keeps the chat's shell across attempts.
+    const state: ShellState = {};
+    const host = new FakeHost({
+      adapter: createAiSdkAdapter({ model: replay.model }),
+      attempt: attemptStart({
+        thread: { mode: "fresh", providerThreadId: "chat-1" },
+        workingDirectory: root,
+      }),
+      local: {
+        sandbox: {
+          provider,
+          sandboxId: "box",
+          workingDirectory: root,
+          commandBudgetSeconds: 1_800,
+        },
+        shell: state,
+      },
     });
-    for await (const _event of agent.sendMessage(session, "Start it")) {
-      // Drain the turn.
-    }
-    const tools = JSON.stringify(model.doStreamCalls[0]?.tools ?? []);
+    await host.done;
+    const tools = JSON.stringify(replay.calls[0]?.tools ?? []);
     expect(tools).toContain("run_background_command");
     // The Environment's budget reaches the model as bash's ceiling.
     expect(tools).toContain("at most 1800s");
+    const started = host
+      .of("item.started")
+      .find((event) => event.key === "tool:tool-1");
+    expect(started?.item).toMatchObject({
+      kind: "tool_call",
+      tool: "run_background_command",
+      description: "Start the server",
+    });
     const pid = Number(fs.readFileSync(pidFile, "utf8"));
     expect(alive(pid)).toBe(true);
-    await agent.dispose(session);
+    expect(state.background?.size).toBe(1);
+    await stopBackgroundCommands({ provider, sandboxId: "box", state });
     await expect.poll(() => alive(pid)).toBe(false);
   }, 30_000);
 });

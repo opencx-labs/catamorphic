@@ -40,38 +40,3 @@ export const closeQuestionsInputSchema = z.object({
 });
 export const closeQuestionsDescription =
   "Close questions you asked that are still open in the chat, for example when the user answered them in a message or they no longer matter. Closed questions disappear from the chat and send no answer.";
-export const closeQuestionsJsonSchema = z.toJSONSchema(
-  closeQuestionsInputSchema,
-  { io: "input" },
-);
-
-const QUESTION_REPLY = "QuestionReplyError";
-
-/**
- * The person wrote in the chat while a blocking question waited, so the
- * asking call returns without an answer (ADR 0195). The message says what
- * happened to the question; the person's message itself arrives as input.
- */
-export class QuestionReplyError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = QUESTION_REPLY;
-  }
-}
-
-/** By name, since harness bundles may hold their own copy of the class. */
-export function isQuestionReply(error: unknown): error is QuestionReplyError {
-  return error instanceof Error && error.name === QUESTION_REPLY;
-}
-
-/** An ask_user tool's text: the answer, or the note that the person replied. */
-export async function askUserToolResult(
-  answer: Promise<string>,
-): Promise<string> {
-  try {
-    return await answer;
-  } catch (error) {
-    if (isQuestionReply(error)) return error.message;
-    throw error;
-  }
-}

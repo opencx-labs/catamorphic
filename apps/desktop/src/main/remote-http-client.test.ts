@@ -345,15 +345,6 @@ describe("httpDocumentsClient", () => {
         if ((init?.method ?? "GET") === "GET")
           return Response.json({
             allowed: true,
-            logins: {
-              codex: {
-                fingerprint: "f",
-                expiresAt: "2026-10-01T00:00:00.000Z",
-                updatedAt: "2026-09-28T00:00:00.000Z",
-                needsRefresh: true,
-              },
-              other: { fingerprint: "ignored" },
-            },
             files: [
               { path: ".env", fingerprint: "g", bytes: 4, updatedAt: "x" },
               { nope: true },
@@ -364,18 +355,9 @@ describe("httpDocumentsClient", () => {
     });
     await expect(client.personalEnvironment()).resolves.toEqual({
       allowed: true,
-      logins: {
-        codex: {
-          fingerprint: "f",
-          expiresAt: "2026-10-01T00:00:00.000Z",
-          updatedAt: "2026-09-28T00:00:00.000Z",
-          needsRefresh: true,
-        },
-      },
       files: [{ path: ".env", fingerprint: "g", bytes: 4, updatedAt: "x" }],
     });
     await client.putPersonalEnvironment({
-      logins: { codex: { auth: "{}" } },
       files: [{ path: ".env", content: "QT0x" }],
     });
     await client.deletePersonalEnvironment();
@@ -384,10 +366,7 @@ describe("httpDocumentsClient", () => {
       {
         method: "PUT",
         path: "/api/projects/p-1/personal-environment",
-        body: {
-          logins: { codex: { auth: "{}" } },
-          files: [{ path: ".env", content: "QT0x" }],
-        },
+        body: { files: [{ path: ".env", content: "QT0x" }] },
       },
       { method: "DELETE", path: "/api/projects/p-1/personal-environment" },
     ]);

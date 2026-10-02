@@ -123,7 +123,7 @@ describe("interrupted turn recovery", () => {
     // Durable turns keep a 60-second worker lease across process death.
     // Recovery must wait for that lease to expire before declaring it orphaned.
     await runWait(
-      `return timelineMessages().some((m) => m.includes('interrupted before it finished'));`,
+      `return timelineMessages().some((m) => m.includes('stopped before it finished'));`,
       {
         timeoutMs: 90_000,
         label: "interrupted message after the worker lease expires",

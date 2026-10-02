@@ -151,8 +151,9 @@ authorization returns to it.
   the work that would stop; show that impact and retry with
   `confirmStop: true` only after the user confirms. `useUnarchiveAgentSession`
   restores it.
-- Tool permission asks: `useToolPermissions` plus the registry
-  `tool-permission-card` (ADR 0054).
+- Questions, tool approvals and connector requests are session requests
+  (ADR 0197): `useAgentChat().requests`, answered with `respond`, rendered
+  by the registry `agent-question-panel` and `tool-permission-card`.
 
 For message delivery, queue editing, failure recovery, and what a chat host is
 responsible for, read the [chat contract](../../../apps/desktop/docs/chat-state.md).

@@ -479,6 +479,33 @@ export class ProjectManager {
   }
 
   /**
+   * Put a session's copy back at one of its own commits, discarding what
+   * came after (a rollback, ADR 0197), and publish it as the session's
+   * branch so its next sandbox is seeded from there.
+   */
+  async resetSession(args: {
+    tenantId: string;
+    projectId: string;
+    sessionId: string;
+    commit: string;
+  }): Promise<void> {
+    const repo = await this.openSession({
+      tenantId: args.tenantId,
+      projectId: args.projectId,
+      sessionId: args.sessionId,
+      refresh: true,
+    });
+    try {
+      await repo.moveBranch("main", args.commit);
+      await repo.checkout("main");
+      await repo.resetWorkingTree();
+      await this.publishSession({ ...args, repo, head: args.commit });
+    } finally {
+      await repo.dispose();
+    }
+  }
+
+  /**
    * Forget a closed session's workspace: its `sessions/<id>` branch on the
    * origin and its `session-<id>` copy on this machine. Commits already
    * reachable elsewhere stay; missing pieces are no-ops.

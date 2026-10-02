@@ -1,7 +1,6 @@
 import { FileText, Plus, RefreshCw, ServerCog } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type {
-  PersonalEnvironmentLoginView,
   PersonalEnvironmentServerState,
   PersonalEnvironmentView,
 } from "../../shared/personal-environment.js";
@@ -24,9 +23,11 @@ const SERVER_NOTE: Record<PersonalEnvironmentServerState, string | null> = {
 };
 
 /**
- * The member's remote environment for a linked project (ADR 0184): which of
- * their own sign-ins and which project files reach their sessions on the
- * server. Everything here edits `.work/personal/environment.json`.
+ * The member's remote environment for a linked project (ADR 0184): which
+ * project files reach their sessions on the server. Sign-ins never leave
+ * the machine they were made on (ADR 0199), so the modal says where a
+ * subscription runs instead of offering to send it. Everything here edits
+ * `.work/personal/environment.json`.
  */
 export function RemoteEnvironmentModal({
   open,
@@ -117,9 +118,9 @@ export function RemoteEnvironmentModal({
             </h2>
           </div>
           <p className="mt-1 text-xs leading-5 text-fg-muted">
-            Your own sign-ins and chosen files, for your sessions on this
-            project's server. Only your sessions receive them, and the files are
-            never committed or shared with other members.
+            Files you choose, for your sessions on this project's server. Only
+            your sessions receive them, and they are never committed or shared
+            with other members.
           </p>
         </header>
 
@@ -133,45 +134,20 @@ export function RemoteEnvironmentModal({
             </p>
           )}
 
-          <section className="flex flex-col gap-2">
+          <section
+            className="flex flex-col gap-2"
+            data-testid="remote-environment-sign-ins"
+          >
             <h3 className="text-[11px] font-semibold uppercase tracking-wider text-fg-faint">
               Sign-ins
             </h3>
-            {view?.logins.map((login) => (
-              <label
-                key={login.harness}
-                className="flex items-center gap-3 rounded-xl border border-border p-3"
-                data-testid="remote-environment-login"
-              >
-                <input
-                  type="checkbox"
-                  checked={login.included}
-                  disabled={busy !== null || Boolean(view.configError)}
-                  data-disabled-reason={
-                    view.configError ? "Fix the config file first" : waitReason
-                  }
-                  aria-label={`Use my ${login.label} sign-in`}
-                  onChange={(event) => {
-                    const included = event.target.checked;
-                    void act(`login:${login.harness}`, () =>
-                      desktopApi.personalEnvironmentSetLogin({
-                        projectId,
-                        harness: login.harness,
-                        included,
-                      }),
-                    );
-                  }}
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13px] font-medium text-fg">
-                    {login.label}
-                  </p>
-                  <p className="truncate text-xs text-fg-faint">
-                    {loginStatus(login, view.server, now)}
-                  </p>
-                </div>
-              </label>
-            ))}
+            <p className="text-xs leading-5 text-fg-muted">
+              Claude Code and Codex subscriptions stay on the computer you
+              signed in on. A chat that uses one runs only on a machine where
+              you signed in to it yourself, such as this computer when it is
+              connected to the project. Nothing about your sign-ins is sent to
+              the server.
+            </p>
           </section>
 
           <section className="flex flex-col gap-2">
@@ -297,33 +273,6 @@ export function RemoteEnvironmentModal({
       </div>
     </Modal>
   );
-}
-
-export function loginStatus(
-  login: PersonalEnvironmentLoginView,
-  server: PersonalEnvironmentServerState,
-  now: number,
-): string {
-  if (!login.available) return "Not signed in on this computer";
-  if (!login.included) return "Not used on the server";
-  if (login.server?.needsRefresh) return "Refreshing on this computer";
-  const expiresAt = login.server?.expiresAt ?? login.expiresAt;
-  const freshness = expiresAt ? validity(expiresAt, now) : null;
-  if (login.server)
-    return ["On the server", freshness].filter(Boolean).join(", ");
-  if (server === "allowed") return "Not sent yet";
-  return ["Signed in on this computer", freshness].filter(Boolean).join(", ");
-}
-
-function validity(iso: string, now: number): string {
-  const ms = Date.parse(iso) - now;
-  if (!Number.isFinite(ms)) return "";
-  if (ms <= 0) return "expired";
-  const minutes = Math.floor(ms / 60_000);
-  if (minutes < 60) return `valid for ${Math.max(1, minutes)}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `valid for ${hours}h`;
-  return `valid for ${Math.floor(hours / 24)}d`;
 }
 
 function ago(iso: string, now: number): string {

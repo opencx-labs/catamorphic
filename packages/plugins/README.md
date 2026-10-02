@@ -463,21 +463,22 @@ agents below) owns that prompt. Its flow:
   context (the agent is still usable, just blind to attached packages).
 
 
-### 2. Coding agent (`CodingAgentProvider` implementations)
+### 2. Coding agent (every harness adapter)
 
-`startSession({ attachedPlugins })` on every provider:
+Core prepares each attempt of a turn with the project's attached plugins, so
+every harness adapter gets them the same way (ADR 0198):
 
 - The shared staging helpers (`stagedPluginFiles` / `stagePluginDocs` in
   `packages/sandbox/src/coding-agent/plugin-staging.ts`) write each plugin's
-  README + d.ts into `<pluginDirectory>/_plugins/<slug>/`, where the agent
-  can read them directly. Hosts may supply `pluginDirectory` on any harness;
-  it defaults to the working directory. The desktop supplies a host-owned
-  directory outside the project for all three harnesses.
+  README + d.ts into `_plugins/<slug>/` in the agent's working directory,
+  where the agent can read them directly: uploaded through the sandbox
+  provider for a sandbox, written to disk for a local checkout.
 - `buildPluginsPreamble()` generates a Markdown block listing each plugin
-  and the absolute on-disk path of its staged docs.
-- The preamble is prepended to the first message passed to
-  the selected `@catamorphic/ai-sdk`, `@catamorphic/claude-code`, or
-  `@catamorphic/codex` provider.
+  and the path of its staged docs.
+- The preamble is appended to the attempt's system prompt
+  (`AttemptStart.systemPrompt`), which the `@catamorphic/ai-sdk`,
+  `@catamorphic/claude-code`, or `@catamorphic/codex` adapter hands its
+  harness.
 
 ---
 

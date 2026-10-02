@@ -10,19 +10,27 @@
       "bun": "./src/index.ts",
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./testing": {
+      "bun": "./src/testing/index.ts",
+      "import": "./dist/testing/index.js",
+      "types": "./dist/testing/index.d.ts"
     }
   },
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "build": "tsup && tsc --project tsconfig.build.json --noEmit false --emitDeclarationOnly",
     "dev": "tsup --watch --no-clean",
+    "record:codex-replay": "bun scripts/record-codex-replay.ts",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/codex --config ../../vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
+    "@catamorphic/agent-protocol": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
     "@openai/codex-sdk": "0.160.0"
   },
   "devDependencies": {
+    "@catamorphic/agent-runner": "workspace:*",
     "@types/node": "^26.1.1"
   }
 }

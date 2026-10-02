@@ -1,27 +1,32 @@
 # Chat state and embedding
 
 `packages/react` owns reusable delivery orchestration. Core owns durable execution,
-transcripts and the inbox. Desktop owns surfaces, focus, bubbles, file persistence
+the session event log and the turn queue (ADR 0197). Desktop owns surfaces, focus, bubbles, file persistence
 and native clipboard access. Registry components compose the hook and callbacks;
 they must not import Electron or assume a desktop workspace.
 
 ## Three independent facts
 
-- Delivery: local session creation and message acknowledgement. `isSending` ends
-  when those operations settle; mutation-observer pending flags are not authority.
-- Execution: the server execution record determines `isWorking` and agent activity.
-- Connectivity: a failed status request means the client cannot confirm progress;
-  it does not prove the agent stopped or is still working.
+- Delivery: local session creation and command receipts. `isSending` ends when
+  those operations settle; mutation-observer pending flags are not authority.
+- Execution: the session's turns determine `isWorking` (a turn preparing,
+  running, waiting or finalizing) and the activity line (`turn.activity`).
+- Connectivity: a dropped event stream means the client cannot confirm
+  progress; it resumes from its last applied sequence and does not prove the
+  agent stopped or is still working.
 
 The delivery reducer scopes events to their initiating conversation. Switching
 projects/sessions resets local state. Late results cannot adopt a session or modify
 the new conversation. Adopting the hook's own lazily created id is the same chat.
-Overlapping sends settle independently. Failed messages retain content, attachments
-and the original idempotency key for Send again. Registry `ChatDeliveryRecovery`
-provides the optional presentation; hosts may supply their own.
+Overlapping sends settle independently. A sent message shows at once and is
+replaced by its item when the stream delivers it. Failed messages retain content,
+attachments and their `commandId` for Send again, so a resend cannot deliver
+twice; timelines show them as unsent bubbles with Send again and Dismiss.
 
-The server inbox is the only queue authority. Queue mutations are serialized and
-bounded; errors remain visible, and failed edits do not discard the held message.
+The server's turn queue is the only queue authority. Queue commands
+(`edit_queued`, `cancel_queued`, `send_now`) carry their own command ids; a
+refused command shows its receipt's message, and failed edits do not discard
+the held message.
 Retrying a failed execution is distinct from retrying delivery. Do not reconstruct
 execution from a pending fetch or optimistic transcript entries.
 
@@ -75,7 +80,8 @@ Queue mutations resolve to `true` only after server confirmation. A `false` resu
 ## Agent questions
 
 Question batches are durable session requests with a `blocking` flag (default true).
-Use `useAnswerAgentQuestion` and the request id to submit an answer. Non-blocking
+Answer with `useAgentChat().respond(requestId, { kind: "question", answers })`,
+one answer per question. Non-blocking
 questions stay answerable while work continues and after the turn finishes.
 Collapsing a question preserves its draft. The existing inbox delivers answers to
 the current harness or starts a continuation if the turn has already ended.
@@ -86,16 +92,17 @@ turn, attachments included, and the question stays open as "Answer when ready"
 (ADR 0195). A permission request is withdrawn instead. Panels have no "Other"
 row: free text goes through the composer, whose placeholder says so while a
 question is open. The waiting status sits in the panel header. Answers render in
-history as the questions and what was picked, from the message's `question`
-metadata. Agents close questions a reply settled with `close_questions`.
+history as the questions and what was picked: from the resolved request, or a
+later answer message's `question` metadata. Agents close questions a reply settled with `close_questions`.
 
 Attachment preparation shows on the composer's attach button. Never add a row
 above the composer for transient state: it moves the dock and any open question.
 
 ## Consent belongs to the conversation
 
-Session tool approvals and native app-access consent are durable blocking agent
-questions, with concise action, reason and explicit allow/deny choices. Do not
+Session tool approvals and native app-access consent are durable blocking
+session requests (`approval` and `elicitation`), shown in the chat with the tool
+and what it sends and explicit Allow once, Always allow and Deny choices. Do not
 surface them as global alert dialogs or store their only copy in a mounted tab.
 Navigation, minimizing, project switching and renderer reload must preserve the
 request and its waiting indicator. Answer delivery is keyed to its initiating

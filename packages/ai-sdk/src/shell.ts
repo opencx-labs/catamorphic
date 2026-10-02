@@ -56,7 +56,9 @@ export async function runShell(input: {
   const marker = `__catamorphic_cwd_${crypto.randomUUID().replaceAll("-", "")}__`;
   const cwd = input.state.cwd ?? input.root;
   const script = [
-    `cd ${quote(cwd)} 2>/dev/null || cd ${quote(input.root)}`,
+    // The command starts in the root already; a root only the provider
+    // can map (a virtual `/workspace`) stays where the provider put it.
+    `cd ${quote(cwd)} 2>/dev/null || cd ${quote(input.root)} 2>/dev/null`,
     input.command,
     "__catamorphic_status=$?",
     `printf '\\n${marker}%s\\n' "$PWD"`,
