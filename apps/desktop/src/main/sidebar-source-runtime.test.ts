@@ -22,7 +22,12 @@ afterEach(() => {
 });
 function setup(
   source: string,
-  opts: { idleMs?: number; timeoutMs?: number } = {},
+  opts: {
+    idleMs?: number;
+    timeoutMs?: number;
+    startTimeoutMs?: number;
+    executable?: () => Promise<string>;
+  } = {},
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidebar-source-"));
   roots.push(root);
@@ -144,6 +149,25 @@ it("reports a hung load as too slow", async () => {
     timeoutMs: 200,
   });
   await expect(load()).rejects.toThrow("too long");
+});
+
+it("gives up on a toolchain that never resolves, and spawns nothing after", async () => {
+  let resolveExecutable: (executable: string) => void = () => {};
+  const { load, runtime } = setup(
+    `export default {async load(){return {items:[]}}}`,
+    {
+      startTimeoutMs: 200,
+      executable: () =>
+        new Promise((resolve) => {
+          resolveExecutable = resolve;
+        }),
+    },
+  );
+  await expect(load()).rejects.toThrow("took too long to start");
+  // The toolchain arriving late must not start a worker for a dead request.
+  resolveExecutable("bun");
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(Reflect.get(runtime, "child")).toBeUndefined();
 });
 
 it("survives a hung source, source edits and a worker crash", async () => {

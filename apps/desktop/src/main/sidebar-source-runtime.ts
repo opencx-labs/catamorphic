@@ -49,6 +49,8 @@ export class SidebarSourceRuntime {
       executable: () => Promise<string>;
       idleMs?: number;
       timeoutMs?: number;
+      /** How long resolving the toolchain and loading the module may take. */
+      startTimeoutMs?: number;
     },
   ) {}
 
@@ -59,11 +61,30 @@ export class SidebarSourceRuntime {
     if (this.starting) return this.starting;
     if (this.child) return this.child;
     const generation = this.generation;
-    const starting = this.opts.executable().then((executable) => {
-      if (this.disposed || generation !== this.generation)
-        throw new Error("Sidebar source changed. Retry loading it.");
-      return new Promise<ChildProcess>((resolve, reject) => {
-        const child = spawn(
+    // A toolchain that never resolves or a module whose import never
+    // finishes cannot hold requests forever: one deadline covers both.
+    const starting = new Promise<ChildProcess>((resolve, reject) => {
+      let child: ChildProcess | undefined;
+      let expired = false;
+      const startup = setTimeout(() => {
+        expired = true;
+        const error = new Error(
+          "Sidebar source took too long to start. Retry to reload it.",
+        );
+        reject(error);
+        if (child && this.child === child) this.stop(error, true);
+      }, this.opts.startTimeoutMs ?? START_TIMEOUT_MS);
+      const fail = (error: unknown) => {
+        clearTimeout(startup);
+        reject(error);
+      };
+      this.opts.executable().then((executable) => {
+        if (expired) return;
+        if (this.disposed || generation !== this.generation) {
+          fail(new Error("Sidebar source changed. Retry loading it."));
+          return;
+        }
+        const spawned = spawn(
           executable,
           [this.opts.workerPath, this.opts.modulePath],
           {
@@ -71,23 +92,15 @@ export class SidebarSourceRuntime {
             stdio: ["pipe", "ignore", "pipe", "pipe"],
           },
         );
-        this.child = child;
-        // A module whose import never finishes cannot hold requests forever.
-        const startup = setTimeout(() => {
-          const error = new Error(
-            "Sidebar source took too long to start. Retry to reload it.",
-          );
-          reject(error);
-          if (this.child === child) this.stop(error, true);
-        }, START_TIMEOUT_MS);
-        const started = (error?: Error) => {
+        child = spawned;
+        this.child = spawned;
+        this.attach(spawned, (error) => {
+          if (error) return fail(error);
           clearTimeout(startup);
-          if (error) reject(error);
-          else resolve(child);
-        };
-        this.attach(child, started);
+          resolve(spawned);
+        });
         if (this.listeners.size) this.send({ method: "subscribe" });
-      });
+      }, fail);
     });
     this.starting = starting;
     try {
