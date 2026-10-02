@@ -182,9 +182,12 @@ export class SessionLog {
         commandId: null,
         event,
       });
+    // Never behind what the session already logged.
     await trx
       .updateTable("agent_sessions")
-      .set({ event_sequence: input.snapshot.sequence })
+      .set({
+        event_sequence: sql`greatest(event_sequence, ${input.snapshot.sequence})`,
+      })
       .where("id", "=", input.sessionId)
       .execute();
   }

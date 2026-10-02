@@ -187,6 +187,7 @@ import {
   SessionCommandRejectedError,
   SessionLog,
 } from "./sessions/session-log.js";
+import { copySettledHistory } from "./sessions/session-copy.js";
 import { SessionFeed } from "./sessions/session-feed.js";
 import {
   readFullSnapshot,
@@ -4781,34 +4782,17 @@ export class AgentSessionsService {
             .executeTakeFirst();
           if (existing) return this.get(identity, projectId, existing.id);
         }
-        const messages = await this.db
-          .selectFrom("agent_messages")
-          .where("session_id", "=", sessionId)
-          .selectAll()
-          .orderBy("seq", "asc")
-          .execute();
-
-        let copied = messages;
-        if (input.messageId) {
-          const cut = messages.findIndex(
-            (message) => message.id === input.messageId,
-          );
-          if (cut === -1) {
-            throw new AgentSessionNotFoundError(input.messageId);
-          }
-          copied = messages.slice(0, cut + 1);
-        }
-        // Only settled content forks: an in-flight or failed tail would give
-        // the new conversation a phantom turn.
-        copied = copied.filter((message) => {
-          const status = (message.metadata as JsonObject | null)?.status;
-          return status !== "in_progress" && status !== "failed";
+        const forkId = randomUUID();
+        const copy = copySettledHistory({
+          snapshot: await readFullSnapshot({ db: this.db, sessionId }),
+          sessionId: forkId,
+          ...(input.messageId ? { throughItemId: input.messageId } : {}),
         });
+        if (!copy) throw new AgentSessionNotFoundError(input.messageId ?? sessionId);
 
         const forkTitle = session.title ? `${session.title} (fork)` : null;
-        // Marker rows never reach the harness (transcriptHistory drops them),
-        // so the fork's self-awareness travels in its system prompt: the
-        // first anchored turn already knows it's on a tangent.
+        // Notices never reach the harness, so the fork's self-awareness
+        // travels in its system prompt.
         const forkNote = `This conversation is a fork of ${
           session.title
             ? `the conversation "${session.title}"`
@@ -4821,9 +4805,9 @@ export class AgentSessionsService {
           const fork = await trx
             .insertInto("agent_sessions")
             .values({
+              id: forkId,
               project_id: projectId,
               external_user_id: identity.externalUserId,
-              provider: session.provider,
               source: session.source,
               agent_id: session.agent_id,
               model: session.model,
@@ -4852,46 +4836,64 @@ export class AgentSessionsService {
               previous_visibility: "promoted",
             })
             .execute();
+          // The copied history is not new activity: no workflow fires on it.
           await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
             trx,
           );
-          for (const message of copied) {
-            await trx
-              .insertInto("agent_messages")
-              .values({
-                session_id: fork.id,
-                role: message.role,
-                content: message.content,
-                commit_sha: message.commit_sha,
-                metadata: message.metadata,
-                author_kind: message.author_kind,
-                author_payload: message.author_payload,
-                delivery_mode: message.delivery_mode,
-                idempotency_key: message.idempotency_key,
-              })
-              .execute();
-          }
+          // Positions stay the source's, so the fork's log continues after
+          // the source's sequence.
+          await this.log.importSnapshot(trx, { sessionId: forkId, snapshot: copy.snapshot });
           await sql`select set_config('catamorphic.suppress_session_events', 'false', true)`.execute(
             trx,
           );
-          // The divider that tells both the user and the agent where this
-          // conversation came from.
-          await trx
-            .insertInto("agent_messages")
-            .values({
-              session_id: fork.id,
-              role: "system",
-              content: session.title
-                ? `Forked from "${session.title}"`
-                : "Forked from another conversation",
-              author_kind: "system",
-              author_payload: { kind: "system", code: "session_fork" },
-              delivery_mode: "message_only",
-              metadata: {
-                marker: { kind: "fork", parentSessionId: sessionId },
-              },
-            })
-            .execute();
+          // The fork's first turn forks the source's native thread through
+          // the fork point, when the harness can (ADR 0196); otherwise it
+          // starts fresh and is handed the copied history.
+          if (copy.forkPoint) {
+            const now = new Date().toISOString();
+            const threadId = randomUUID();
+            await this.log.append(trx, {
+              sessionId: forkId,
+              events: [
+                {
+                  type: "provider_thread.changed",
+                  thread: {
+                    id: threadId,
+                    sessionId: forkId,
+                    harness: copy.forkPoint.harness,
+                    nativeRef: null,
+                    status: "active",
+                    lastTurnOrdinal: copy.snapshot.turns.at(-1)?.ordinal ?? null,
+                    portable: false,
+                    createdAt: now,
+                    updatedAt: now,
+                  },
+                },
+              ],
+            });
+            await trx
+              .updateTable("agent_provider_threads")
+              .set({
+                fork_source: protocolJson({
+                  threadId: copy.forkPoint.threadId,
+                  source: copy.forkPoint.source,
+                  ...(copy.forkPoint.throughTurnRef
+                    ? { throughTurnRef: copy.forkPoint.throughTurnRef }
+                    : {}),
+                }),
+              })
+              .where("id", "=", threadId)
+              .execute();
+          }
+          // The divider that tells the user where this conversation came from.
+          await this.appendNotice(trx, {
+            sessionId: forkId,
+            code: "session_fork",
+            text: session.title
+              ? `Forked from "${session.title}"`
+              : "Forked from another conversation",
+            data: { parentSessionId: sessionId },
+          });
           return fork;
         });
         return mapSession(row, false, this.hostId, this.authorityLeaseMs);
@@ -5005,6 +5007,12 @@ export class AgentSessionsService {
         sessionId: sourceSessionId,
       }),
     };
+    // An inheriting child starts from the parent's settled history; its
+    // first turn is handed it (ADR 0196).
+    const inherited =
+      contextMode === "inherit"
+        ? await readFullSnapshot({ db: this.db, sessionId: sourceSessionId })
+        : null;
     const created = await this.db.transaction().execute(async (transaction) => {
       await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...origin.author, causation: origin.causation ?? [] })}, true)`.execute(
         transaction,
@@ -5046,38 +5054,21 @@ export class AgentSessionsService {
         prepared: preparedChild,
         transaction,
       });
-      if (contextMode === "inherit") {
-        const history = await transaction
-          .selectFrom("agent_messages")
-          .selectAll()
-          .where("session_id", "=", sourceSessionId)
-          .where(sql`coalesce(metadata ->> 'status', '')`, "!=", "in_progress")
-          .orderBy("seq", "asc")
-          .execute();
-        await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
-          transaction,
-        );
-        for (const message of history) {
-          await transaction
-            .insertInto("agent_messages")
-            .values({
-              session_id: child.id,
-              role: message.role,
-              content: message.content,
-              commit_sha: message.commit_sha,
-              metadata: message.metadata,
-              author_kind: message.author_kind,
-              author_payload: message.author_payload,
-              delivery_mode: message.delivery_mode,
-              idempotency_key: null,
-            })
-            .execute();
+      if (inherited) {
+        const copy = copySettledHistory({ snapshot: inherited, sessionId: child.id });
+        if (copy) {
+          await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
+            transaction,
+          );
+          await this.log.importSnapshot(transaction, {
+            sessionId: child.id,
+            snapshot: copy.snapshot,
+          });
+          await sql`select set_config('catamorphic.suppress_session_events', 'false', true)`.execute(
+            transaction,
+          );
         }
       }
-
-      await sql`select set_config('catamorphic.suppress_session_events', 'false', true)`.execute(
-        transaction,
-      );
       const delegation = await transaction
         .insertInto("agent_delegations")
         .values({
@@ -5092,18 +5083,22 @@ export class AgentSessionsService {
         })
         .returningAll()
         .executeTakeFirstOrThrow();
-      const receipt = await this.turns.deliver({
-        sessionId: child.id,
-        content: task,
+      const childRow = await transaction
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", child.id)
+        .executeTakeFirstOrThrow();
+      const receipt = await this.deliverIn(transaction, {
+        session: childRow,
+        text: task,
         author: origin.author,
         metadata: {
           causation: origin.causation ?? [],
           provenance: origin.provenance ?? {},
           deliveredBy: identity.externalUserId,
         },
-        mode: "next_turn",
+        dispatch: "queue",
         idempotencyKey: `delegation:${delegation.id}:task`,
-        transaction,
       });
       return { child, delegation, receipt };
     });
