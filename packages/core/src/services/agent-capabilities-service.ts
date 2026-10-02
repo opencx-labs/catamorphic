@@ -286,15 +286,24 @@ export class AgentCapabilitiesService {
           DiscoverCapabilitiesSchema.parse(input);
         const context = await this.context(args);
         const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-        const matching = [...(await this.resolve(context, { query })).values()]
-          .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-          .filter(
-            (item) =>
-              (!cursor || item.name > cursor) &&
-              words.every((word) =>
-                `${item.name} ${item.description}`.toLowerCase().includes(word),
-              ),
-          );
+        const all = [...(await this.resolve(context, { query })).values()].sort(
+          (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+        );
+        const text = (item: AgentCapability) =>
+          `${item.name} ${item.description}`.toLowerCase();
+        // Every word narrows; a descriptive query ("screenshot window
+        // capture") that no one capability matches whole falls back to
+        // any word, so discovery never comes back empty for wordiness.
+        const strict = all.filter((item) =>
+          words.every((word) => text(item).includes(word)),
+        );
+        const matching = (
+          strict.length > 0 || words.length < 2
+            ? strict
+            : all.filter((item) =>
+                words.some((word) => text(item).includes(word)),
+              )
+        ).filter((item) => !cursor || item.name > cursor);
         const visible: AgentCapability[] = [];
         for (const item of matching) {
           if (await item.authorize(context)) visible.push(item);

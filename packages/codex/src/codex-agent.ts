@@ -1,8 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type {
-  AgentAttachment,
   AgentCapabilityGateway,
   AgentEffort,
   AgentEvent,
@@ -41,7 +37,6 @@ import type {
   ThreadEvent,
   ThreadItem,
   ThreadOptions,
-  UserInput,
 } from "@openai/codex-sdk";
 
 import {
@@ -50,6 +45,7 @@ import {
   type CodexElicitation,
   type CodexElicitationResult,
 } from "./app-server.js";
+import { stageTurnInput } from "./turn-input.js";
 
 type CodexConfigObject = NonNullable<CodexOptions["config"]>;
 
@@ -936,43 +932,6 @@ function mapItemEvent(item: ThreadItem): AgentEvent[] {
       return [{ type: "diagnostic", content: item.message }];
     default:
       return [];
-  }
-}
-
-/** Keep attachment bytes alive for the CLI turn, including resumed threads. */
-async function stageTurnInput(text: string, attachments?: AgentAttachment[]) {
-  const media = (attachments ?? []).filter((item) => item.kind !== "text");
-  if (media.length === 0) return { input: text, cleanup: async () => {} };
-  const directory = await mkdtemp(join(tmpdir(), "catamorphic-codex-input-"));
-  const cleanup = () => rm(directory, { recursive: true, force: true });
-  try {
-    const input: UserInput[] = [{ type: "text", text }];
-    for (const [index, item] of media.entries()) {
-      const extensions: Record<string, string> = {
-        "image/png": "png",
-        "image/jpeg": "jpg",
-        "image/webp": "webp",
-        "image/gif": "gif",
-        "application/pdf": "pdf",
-      };
-      const file = join(
-        directory,
-        `${index}.${extensions[item.mediaType] ?? "bin"}`,
-      );
-      await writeFile(file, Buffer.from(item.dataBase64, "base64"));
-      if (item.kind === "image") {
-        input.push({ type: "local_image", path: file });
-      } else {
-        input.push({
-          type: "text",
-          text: `Attached document ${JSON.stringify(item.name)} (${item.mediaType}) is available at ${JSON.stringify(file)} for this turn. Read it with your file or shell tools.`,
-        });
-      }
-    }
-    return { input, cleanup };
-  } catch (error) {
-    await cleanup();
-    throw error;
   }
 }
 

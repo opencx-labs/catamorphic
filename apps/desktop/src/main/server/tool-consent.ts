@@ -1,4 +1,8 @@
-import type { ToolPermissionHandler, TurnOptions } from "@catamorphic/sandbox";
+import {
+  isQuestionReply,
+  type ToolPermissionHandler,
+  type TurnOptions,
+} from "@catamorphic/sandbox";
 
 /** Consent uses the owning session's durable question and explicit choices. */
 export async function askToolConsent({
@@ -40,6 +44,7 @@ export async function askToolConsent({
   const answer = await askQuestion({
     requestId: `permission:${crypto.randomUUID()}`,
     blocking: true,
+    consent: true,
     signal,
     questions: [
       {
@@ -60,6 +65,10 @@ export async function askToolConsent({
         ],
       },
     ],
+    // Writing in the chat instead withdraws the request (ADR 0195).
+  }).catch((error: unknown) => {
+    if (isQuestionReply(error)) return undefined;
+    throw error;
   });
   if (signal?.aborted) return { decision: "deny" };
   if (answer === "Allow once") return { decision: "allow" };

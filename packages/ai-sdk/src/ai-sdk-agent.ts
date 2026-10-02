@@ -28,7 +28,10 @@ import {
   agentCapabilityTools,
   agentQuestionInputSchema,
   agentToolResult,
+  askUserToolResult,
   buildPluginsPreamble,
+  closeQuestionsDescription,
+  closeQuestionsInputSchema,
   extraToolResult,
   isMediaAttachment,
   mergePolicyLayers,
@@ -533,12 +536,28 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
                 execute: async (input, { toolCallId, abortSignal }) => {
                   const ask = opts.askQuestion;
                   if (!ask) throw new Error("Question handler is unavailable");
-                  return ask({
-                    requestId: toolCallId,
-                    questions: input.questions,
-                    blocking: input.blocking,
-                    signal: abortSignal,
-                  });
+                  return askUserToolResult(
+                    ask({
+                      requestId: toolCallId,
+                      questions: input.questions,
+                      blocking: input.blocking,
+                      signal: abortSignal,
+                    }),
+                  );
+                },
+              }),
+            }
+          : {}),
+        ...(opts?.closeQuestions
+          ? {
+              close_questions: tool({
+                description: closeQuestionsDescription,
+                inputSchema: closeQuestionsInputSchema,
+                execute: (input) => {
+                  const close = opts.closeQuestions;
+                  if (!close)
+                    throw new Error("Question handler is unavailable");
+                  return close(input);
                 },
               }),
             }
@@ -567,8 +586,8 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
         stepInputIds = fresh.map((entry) => entry.id);
         stepMessages = [
           ...messages,
-          ...fresh.map(
-            (entry): ModelMessage => ({ role: "user", content: entry.content }),
+          ...fresh.map((entry) =>
+            userMessage(entry.content, entry.attachments ?? []),
           ),
         ];
         return { messages: stepMessages };

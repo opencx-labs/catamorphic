@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, PencilLine, X } from "lucide-react";
+import { Check, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AgentQuestion } from "./chat-timeline";
 
@@ -15,26 +15,21 @@ export interface AgentQuestionPanelProps {
   renderDismiss?: (button: React.ReactNode, label: string) => React.ReactNode;
 }
 
-const OTHER = "__other__";
-
 interface Answer {
-  /** Selected option labels, or [OTHER] when free text is chosen. */
+  /** Selected option labels. */
   selected: string[];
-  otherText: string;
 }
 
-const emptyAnswer = (): Answer => ({ selected: [], otherText: "" });
+const emptyAnswer = (): Answer => ({ selected: [] });
 
-const isAnswered = (answer: Answer): boolean =>
-  answer.selected.includes(OTHER)
-    ? answer.otherText.trim().length > 0
-    : answer.selected.length > 0;
+const isAnswered = (answer: Answer): boolean => answer.selected.length > 0;
 
 /**
  * Tabbed question form for agent `ask_user` turns, styled after the Claude
  * Code VSCode extension: one tab per question, animated slide between them,
- * options with effect descriptions, and an always-available "Other" free
- * text answer.
+ * and options with effect descriptions. Answers in the person's own words
+ * go through the chat composer, which the agent reads while the question
+ * stays open (ADR 0195).
  */
 export function AgentQuestionPanel({
   questions,
@@ -64,8 +59,8 @@ export function AgentQuestionPanel({
   const allAnswered = answers.every(isAnswered);
 
   // Height follows the active panel so the slide never clips or jumps. A
-  // ResizeObserver (not a one-shot measure) because the Other input expands
-  // with a CSS transition — the final height only exists when it ends.
+  // ResizeObserver (not a one-shot measure) because question text reflows
+  // when the panel's width changes.
   const panelRefs = useRef<(HTMLDivElement | null)[]>([]);
   const [panelHeight, setPanelHeight] = useState<number>();
   useLayoutEffect(() => {
@@ -121,22 +116,18 @@ export function AgentQuestionPanel({
     if (!question) return;
     let next: Answer | undefined;
     setAnswer(index, (answer) => {
-      if (question.multiSelect && label !== OTHER) {
+      if (question.multiSelect) {
         const selected = answer.selected.includes(label)
           ? answer.selected.filter((entry) => entry !== label)
-          : [...answer.selected.filter((entry) => entry !== OTHER), label];
+          : [...answer.selected, label];
         next = { ...answer, selected };
-      } else if (label === OTHER) {
-        next = answer.selected.includes(OTHER)
-          ? { ...answer, selected: [] }
-          : { ...answer, selected: [OTHER] };
       } else {
         next = { ...answer, selected: [label] };
       }
       return next;
     });
     // Single-select answers glide to the next unanswered question.
-    if (!question.multiSelect && label !== OTHER && questions.length > 1) {
+    if (!question.multiSelect && questions.length > 1) {
       clearTimeout(advanceTimerRef.current);
       advanceTimerRef.current = setTimeout(() => {
         setActiveIndex((current) => {
@@ -169,11 +160,6 @@ export function AgentQuestionPanel({
       className="animate-question-in mx-3 mb-1 overflow-hidden rounded-xl border border-accent/35 bg-bg-overlay/60"
       aria-label="The agent has a question"
     >
-      <p className="px-3 pt-2 text-[11px] text-fg-muted">
-        {blocking
-          ? "Waiting for your answer"
-          : "Answer when ready. The agent can keep working."}
-      </p>
       <header className="flex items-center gap-2 border-b border-border px-3 pt-2.5 pb-0">
         {questions.length > 1 ? (
           <div
@@ -223,11 +209,17 @@ export function AgentQuestionPanel({
             })}
           </div>
         ) : (
-          <span className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-fg-muted">
+          <span className="mb-2 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-fg-muted">
             {questions[0]?.header}
           </span>
         )}
-        <span className="mb-2 ml-auto">
+        <span
+          role="status"
+          className="mb-2 ml-auto min-w-0 truncate text-[11px] text-fg-muted"
+        >
+          {blocking ? "Waiting for your answer" : "Answer when ready"}
+        </span>
+        <span className="mb-2 shrink-0">
           {renderDismiss(
             <button
               type="button"
@@ -285,55 +277,11 @@ export function AgentQuestionPanel({
                       />
                     );
                   })}
-                  <OptionRow
-                    label="Other"
-                    description="Answer in your own words instead."
-                    selected={answer.selected.includes(OTHER)}
-                    multiSelect={false}
-                    disabled={disabled}
-                    icon={<PencilLine className="size-3" />}
-                    onSelect={() => selectOption(index, OTHER)}
-                  />
-                  <div
-                    className={`grid transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-                      answer.selected.includes(OTHER)
-                        ? "grid-rows-[1fr] opacity-100"
-                        : "grid-rows-[0fr] opacity-0"
-                    }`}
-                  >
-                    <div className="overflow-hidden">
-                      <textarea
-                        rows={1}
-                        className="field mt-0.5 w-full resize-none px-2.5 py-1.5 text-[13px] leading-5 outline-none [field-sizing:content] placeholder:text-fg-faint"
-                        placeholder="Type your answer…"
-                        value={answer.otherText}
-                        disabled={disabled}
-                        onChange={(event) =>
-                          setAnswer(index, (current) => ({
-                            ...current,
-                            otherText: event.target.value,
-                          }))
-                        }
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" && !event.shiftKey) {
-                            event.preventDefault();
-                            if (!answer.otherText.trim()) return;
-                            const pending = answers
-                              .map((entry, i) => ({ entry, i }))
-                              .filter(
-                                ({ entry, i }) =>
-                                  i !== index && !isAnswered(entry),
-                              )
-                              .map(({ i }) => i);
-                            const next =
-                              pending.find((i) => i > index) ?? pending[0];
-                            if (next === undefined) submit();
-                            else setActiveIndex(next);
-                          }
-                        }}
-                      />
-                    </div>
-                  </div>
+                  {question.options.length === 0 && (
+                    <p className="text-xs text-fg-muted">
+                      Reply in the chat to answer.
+                    </p>
+                  )}
                 </div>
               </div>
             );
@@ -342,10 +290,10 @@ export function AgentQuestionPanel({
       </div>
 
       <footer className="flex items-center justify-between gap-2 border-t border-border px-3 py-2">
-        <span className="text-[11px] text-fg-faint">
+        <span className="min-w-0 truncate text-[11px] text-fg-faint">
           {questions.length > 1
-            ? `${answers.filter(isAnswered).length} of ${questions.length} answered`
-            : "Submit your answer here."}
+            ? `${answers.filter(isAnswered).length} of ${questions.length} answered · or reply in the chat`
+            : "Or reply in the chat in your own words."}
         </span>
         <button
           type="button"
@@ -366,7 +314,6 @@ function OptionRow({
   selected,
   multiSelect,
   disabled,
-  icon,
   onSelect,
 }: {
   label: string;
@@ -374,7 +321,6 @@ function OptionRow({
   selected: boolean;
   multiSelect: boolean;
   disabled: boolean;
-  icon?: React.ReactNode;
   onSelect: () => void;
 }) {
   return (
@@ -398,14 +344,10 @@ function OptionRow({
             : "border-border-strong bg-bg-inset text-transparent group-hover:border-fg-faint"
         }`}
       >
-        {icon && !selected ? (
-          <span className="text-fg-faint">{icon}</span>
-        ) : (
-          <Check
-            className={`size-3 transition-transform duration-150 ${selected ? "scale-100" : "scale-0"}`}
-            strokeWidth={3}
-          />
-        )}
+        <Check
+          className={`size-3 transition-transform duration-150 ${selected ? "scale-100" : "scale-0"}`}
+          strokeWidth={3}
+        />
       </span>
       <span className="min-w-0">
         <span className="block text-[13px] font-medium leading-5">{label}</span>
@@ -422,10 +364,7 @@ function OptionRow({
 /** Compose the user's selections into the text sent back to the agent. */
 function formatAnswers(questions: AgentQuestion[], answers: Answer[]): string {
   const lines = questions.map((question, index) => {
-    const answer = answers[index] ?? emptyAnswer();
-    const value = answer.selected.includes(OTHER)
-      ? answer.otherText.trim()
-      : answer.selected.join(", ");
+    const value = (answers[index] ?? emptyAnswer()).selected.join(", ");
     return questions.length > 1 ? `${question.question}\n→ ${value}` : value;
   });
   return lines.join("\n\n");

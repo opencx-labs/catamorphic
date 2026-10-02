@@ -842,6 +842,11 @@ function ChatDockContent({
       (message) =>
         message.role === "user" &&
         message.content !== QUESTIONS_DISMISSED_MESSAGE &&
+        !(
+          typeof message.metadata === "object" &&
+          message.metadata !== null &&
+          "questionRequestId" in message.metadata
+        ) &&
         message.content.trim() !== "",
     )
     .map((message) =>
@@ -2810,11 +2815,6 @@ function ChatDockContent({
                     </div>
                   ),
                 )}
-            {pendingTransfers > 0 && (
-              <p role="status" className="mx-3 text-xs text-muted">
-                Preparing attachments…
-              </p>
-            )}
             {transferError && (
               <div
                 role="alert"
@@ -2976,16 +2976,34 @@ function ChatDockContent({
                 {/* Any file attaches — as media when the agent takes it,
                   as a path pill otherwise — so the picker never filters
                   and never hides. */}
-                <ShortcutHint label="Attach files">
+                {/* Preparation shows in place on the attach button: a
+                  status row above the composer shifted the whole dock
+                  (and an open question) up and back for every paste. */}
+                <ShortcutHint
+                  label={
+                    pendingTransfers > 0
+                      ? "Preparing attachments…"
+                      : "Attach files"
+                  }
+                >
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
                     className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
                     aria-label="Attach files"
                   >
-                    <Paperclip className="size-4" />
+                    {pendingTransfers > 0 ? (
+                      <LoaderCircle className="size-4 animate-spin" />
+                    ) : (
+                      <Paperclip className="size-4" />
+                    )}
                   </button>
                 </ShortcutHint>
+                {pendingTransfers > 0 && (
+                  <span role="status" className="sr-only">
+                    Preparing attachments…
+                  </span>
+                )}
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -3058,9 +3076,17 @@ function ChatDockContent({
                   }
                   maxPills={MAX_ATTACHMENTS}
                   placeholder={
-                    accepts.length > 0
-                      ? composerPlaceholder
-                      : `${composerPlaceholder.replace(/…$/, "")} (text only)…`
+                    // An open question takes free-text answers here: the
+                    // panel has no "Other" row (ADR 0195).
+                    // A permission request is no question: typing declines it.
+                    chat.session?.questions?.some(
+                      (request) => !request.consent,
+                    ) ||
+                    (questions && !chat.isSending)
+                      ? "Answer in your own words…"
+                      : accepts.length > 0
+                        ? composerPlaceholder
+                        : `${composerPlaceholder.replace(/…$/, "")} (text only)…`
                   }
                   ariaLabel="Message the assistant"
                 />
@@ -3069,7 +3095,9 @@ function ChatDockContent({
                 <ContextMeter messages={chat.messages} />
                 <ShortcutHint
                   label={
-                    chat.isWorking
+                    // A message during a blocking question reaches the
+                    // agent at once (ADR 0195); otherwise it queues.
+                    chat.isWorking && !awaitingInput
                       ? `Queue (${/Mac/.test(navigator.platform) ? "⌘↵" : "Ctrl+Enter"} sends now)`
                       : "Send"
                   }

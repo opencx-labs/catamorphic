@@ -706,13 +706,15 @@ export function buildWorkspaceToolkit(
     {
       name: "read_tab",
       description:
-        "Expand one workspace tab by key (from workspace_overview): browser tabs return the page's visible text, terminals their recent output, chats their conversation transcript, editors the open file's path plus the user's current text selection (text and line range) when that editor is focused — so 'this paragraph' or 'the selected code' resolves without asking. Use it to look into anything the user can see, or anything running in the background.",
+        "Expand one workspace tab by key (from workspace_overview): a browser page's visible text, a terminal's recent output, a chat's transcript, or an editor's file path plus the user's focused selection (text and line range), so 'this paragraph' or 'the selected code' resolves without asking. Key 'window' returns a screenshot of Work itself. Use it to look at anything the user can see or that runs in the background.",
       parameters: {
         key: z
           .string()
           .describe("Tab key from workspace_overview, e.g. 'browser:<id>'"),
       },
       execute: async (input, ctx) => {
+        if (input.key === "window")
+          return bridge.screenshotWindow(ctx.projectId);
         const result = await bridge.readTab(ctx.projectId, String(input.key));
         // Chat tabs resolve to a session pointer; the transcript itself
         // lives in the chat store, not behind the bridge.
@@ -1098,7 +1100,7 @@ export function buildWorkspaceToolkit(
     {
       name: "desktop_settings",
       description:
-        "Get the files that configure Work for this project and person (preferences, theme, keyboard shortcuts, and workspace.js for sidebars and palette modes) with their scopes, and any validation errors. Use with the configuring-catamorphic-desktop skill when the person wants to change how Work looks or behaves.",
+        "Get the files that configure Work for this project and person (preferences, theme, keyboard shortcuts, workspace.js for sidebars and palette modes, and browser bookmarks) with their scopes, and any validation errors. Use with the configuring-catamorphic-desktop skill when the person wants to change how Work looks or behaves, or to bookmark a page.",
       parameters: {},
       execute: async (_input, ctx) => {
         if (!host.desktopSettings)

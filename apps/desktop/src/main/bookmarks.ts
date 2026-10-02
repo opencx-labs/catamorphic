@@ -11,7 +11,8 @@ import type {
  * Browser bookmarks. Both project and profile-wide scopes support the same
  * recursive folder model. Pinning promotes a bookmark out of its project so
  * it follows the user across projects.
- * Stored as plain JSON at `<userData>/bookmarks.json`.
+ * Stored as plain JSON at `<userData>/bookmarks.json`. Edits made to the
+ * file outside the app (an agent adding a bookmark) load live.
  */
 export interface Bookmark {
   id: string;
@@ -111,37 +112,104 @@ function placeAmongSiblings(
   scope.bookmarks.sort(byPosition);
 }
 
+/** Which trees an outside edit changed, for the change broadcast. */
+export interface BookmarksFileChange {
+  projectIds: string[];
+  profileIds: string[];
+}
+
 export class BookmarksStore {
   private data: BookmarksFile;
+  /** What this store last read or wrote, to tell its own writes apart. */
+  private written = "";
 
   constructor(private readonly file: string) {
-    this.data = this.load();
+    this.data = this.parse(this.read()) ?? {
+      byProject: {},
+      pinnedByProfile: {},
+      libraryByProfile: {},
+    };
   }
 
-  private load(): BookmarksFile {
+  private read(): string | undefined {
     try {
-      const raw: SerializedBookmarksFile = JSON.parse(
-        fs.readFileSync(this.file, "utf-8"),
-      );
+      return fs.readFileSync(this.file, "utf-8");
+    } catch {
+      return undefined;
+    }
+  }
+
+  private parse(text: string | undefined): BookmarksFile | undefined {
+    if (text === undefined) return undefined;
+    try {
+      const raw: SerializedBookmarksFile = JSON.parse(text);
+      if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+        return undefined;
       const pinnedByProfile = Object.fromEntries(
         Object.entries(raw.pinnedByProfile ?? {}).map(([profileId, value]) => [
           profileId,
           Array.isArray(value) ? { folders: [], bookmarks: value } : value,
         ]),
       );
+      this.written = text;
       return {
         byProject: raw.byProject ?? {},
         libraryByProfile: raw.libraryByProfile ?? {},
         pinnedByProfile,
       };
     } catch {
-      return { byProject: {}, pinnedByProfile: {}, libraryByProfile: {} };
+      return undefined;
     }
   }
 
   private save(): void {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(this.file, `${JSON.stringify(this.data, null, 2)}\n`);
+    this.written = `${JSON.stringify(this.data, null, 2)}\n`;
+    fs.writeFileSync(this.file, this.written);
+  }
+
+  /**
+   * Load edits made outside the app. The file is polled by stat, not
+   * watched through its directory: that is userData, where Chromium's
+   * caches write constantly. Polling also follows an atomic save (write a
+   * temporary file, rename it over this one). Text that is not a bookmarks
+   * file is ignored until it is fixed; the next in-app change rewrites it
+   * from memory.
+   */
+  watch(
+    onChange: (change: BookmarksFileChange) => void,
+    { intervalMs = 1000 }: { intervalMs?: number } = {},
+  ): () => void {
+    const reload = () => {
+      const text = this.read();
+      if (text === undefined || text === this.written) return;
+      const before = this.data;
+      const next = this.parse(text);
+      if (!next) return;
+      this.data = next;
+      const differs = <T>(
+        a: Record<string, T>,
+        b: Record<string, T>,
+      ): string[] =>
+        [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(
+          (key) => JSON.stringify(a[key]) !== JSON.stringify(b[key]),
+        );
+      onChange({
+        projectIds: differs(before.byProject, next.byProject),
+        profileIds: [
+          ...new Set([
+            ...differs(before.pinnedByProfile, next.pinnedByProfile),
+            ...differs(before.libraryByProfile, next.libraryByProfile),
+          ]),
+        ],
+      });
+    };
+    fs.watchFile(
+      this.file,
+      { interval: intervalMs, persistent: false },
+      reload,
+    );
+    return () => fs.unwatchFile(this.file, reload);
   }
 
   forProject(projectId: string): ProjectBookmarks {

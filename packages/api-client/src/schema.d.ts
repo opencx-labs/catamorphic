@@ -7207,6 +7207,7 @@ export interface paths {
                             questions?: {
                                 requestId: string;
                                 blocking?: boolean;
+                                consent?: boolean;
                                 questions?: {
                                     question: string;
                                     header: string;
