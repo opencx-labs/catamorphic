@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@catamorphic/agent-protocol": "workspace:*",
+    "@catamorphic/claude-code": "workspace:*",
     "@catamorphic/sandbox": "workspace:*"
   },
   "devDependencies": {

@@ -1,9 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "./dist",
-    "rootDir": "./src",
-    "types": ["node"]
+    "types": ["node"],
+    // The runner's bundle depends on this package, so tests reach the
+    // runner's source (see vitest.config.ts) instead of a dependency.
+    "paths": {
+      "@catamorphic/agent-runner": ["../agent-runner/src/index.ts"]
+    }
   },
   "include": ["src"]
 }

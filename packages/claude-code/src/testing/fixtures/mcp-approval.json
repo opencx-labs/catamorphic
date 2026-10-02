@@ -1,0 +1,1407 @@
+{
+  "provider": "claude-code",
+  "sdkVersion": "0.3.263",
+  "cliVersion": "2.1.263",
+  "scenario": "mcp-approval",
+  "source": "recorded",
+  "attempts": [
+    {
+      "outbound": {
+        "prompt": "Look up two words",
+        "cwd": "{{cwd}}",
+        "thread": {
+          "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "resume": null,
+          "forkSession": false,
+          "resumeSessionAt": null
+        },
+        "model": "claude-sonnet-4-5",
+        "effort": null,
+        "permissionMode": "acceptEdits",
+        "systemPromptAppend": "You are a Work fixture agent. Keep answers short.",
+        "allowedTools": [
+          "Agent",
+          "Bash",
+          "BashOutput",
+          "Edit",
+          "Glob",
+          "Grep",
+          "KillShell",
+          "Monitor",
+          "NotebookEdit",
+          "PowerShell",
+          "Read",
+          "Skill",
+          "SlashCommand",
+          "Task",
+          "TaskOutput",
+          "TaskStop",
+          "TodoWrite",
+          "WebFetch",
+          "WebSearch",
+          "Write"
+        ],
+        "disallowedTools": [],
+        "mcpServers": {
+          "fixture": "stdio"
+        },
+        "env": {
+          "ANTHROPIC_BASE_URL": "{{model}}",
+          "CLAUDE_CONFIG_DIR": "{{home}}",
+          "WORK_MODEL_KEY_FILE": "{{state}}/model-key",
+          "CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "300000",
+          "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+          "DISABLE_AUTOUPDATER": "1"
+        },
+        "apiKeyHelper": "cat \"$WORK_MODEL_KEY_FILE\"",
+        "includePartialMessages": true,
+        "sessionStore": true,
+        "hooks": ["PostToolUse", "UserPromptSubmit"]
+      },
+      "messages": [
+        {
+          "type": "replay.input",
+          "uuid": "e9e1c0ba-9856-47cc-b359-1d66d9fb1342",
+          "text": "Look up two words"
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "e9e1c0ba-9856-47cc-b359-1d66d9fb1342",
+          "state": "queued",
+          "uuid": "f3bc06aa-f38e-454d-92fb-fd631561d29a",
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd"
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "e9e1c0ba-9856-47cc-b359-1d66d9fb1342",
+          "state": "started",
+          "uuid": "7a4bdeba-a084-4ec8-8814-47b0bf628c76",
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd"
+        },
+        {
+          "type": "replay.hook",
+          "event": "UserPromptSubmit",
+          "toolUseID": "dc3f0e32-28fe-4273-9ea5-60cd92fceff6",
+          "input": {
+            "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+            "transcript_path": "{{home}}/projects/{{cwd-key}}/bbf80ba1-183b-4dd2-a53d-811ff2734ccd.jsonl",
+            "cwd": "{{cwd}}",
+            "prompt_id": "e65afeaa-d62a-42d2-9878-bb57bf116638",
+            "permission_mode": "acceptEdits",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Look up two words"
+          }
+        },
+        {
+          "type": "system",
+          "subtype": "init",
+          "cwd": "{{cwd}}",
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "tools": [
+            "Task",
+            "AskUserQuestion",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "Edit",
+            "EnterPlanMode",
+            "EnterWorktree",
+            "ExitPlanMode",
+            "ExitWorktree",
+            "Glob",
+            "Grep",
+            "ListAgents",
+            "NotebookEdit",
+            "Read",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskCreate",
+            "TaskGet",
+            "TaskList",
+            "TaskOutput",
+            "TaskStop",
+            "TaskUpdate",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "Write",
+            "mcp__fixture__lookup"
+          ],
+          "mcp_servers": [
+            {
+              "name": "fixture",
+              "status": "connected"
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "permissionMode": "acceptEdits",
+          "slash_commands": [
+            "deep-research",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "claude-api",
+            "workflow-authoring",
+            "run",
+            "run-skill-generator",
+            "agents",
+            "auto-mode-setup",
+            "autocompact",
+            "clear",
+            "color",
+            "compact",
+            "config",
+            "context",
+            "effort",
+            "fast",
+            "heapdump",
+            "init",
+            "mcp",
+            "model",
+            "__remote-workflow",
+            "workflow-launch-exec",
+            "reload-plugins",
+            "reload-skills",
+            "rename",
+            "security-review",
+            "usage",
+            "insights",
+            "recap",
+            "goal",
+            "list-agents",
+            "team-onboarding"
+          ],
+          "terminal_slash_commands": ["doctor", "color", "reload-plugins"],
+          "apiKeySource": "apiKeyHelper",
+          "claude_code_version": "2.1.263",
+          "output_style": "default",
+          "agents": [
+            "claude",
+            "Explore",
+            "general-purpose",
+            "Plan",
+            "statusline-setup"
+          ],
+          "skills": [
+            "deep-research",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "claude-api",
+            "workflow-authoring",
+            "run",
+            "run-skill-generator"
+          ],
+          "plugins": [],
+          "capabilities": [
+            "interrupt_receipt_v1",
+            "interrupt_cancel_queued_v1",
+            "msg_lifecycle_v1"
+          ],
+          "analytics_disabled": true,
+          "product_feedback_disabled": true,
+          "uuid": "fb54b0c6-e739-4bd5-b7a7-da0ed7c8ba8a",
+          "messaging_socket_path": "/tmp/cc-socks/40549.sock",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required"
+        },
+        {
+          "type": "system",
+          "subtype": "status",
+          "status": "requesting",
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "uuid": "0226f5a3-80f3-4b76-aa2f-ebb0349fbd85"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_scripted_1",
+              "type": "message",
+              "role": "assistant",
+              "model": "claude-sonnet-4-5",
+              "content": [],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "usage": {
+                "input_tokens": 10,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 1
+              }
+            }
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "ae2fce91-cc62-439e-9913-15e78e4d538c",
+          "ttft_ms": 4,
+          "user_message_uuid": "e9e1c0ba-9856-47cc-b359-1d66d9fb1342",
+          "user_message_uuids": ["e9e1c0ba-9856-47cc-b359-1d66d9fb1342"]
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "tool_use",
+              "id": "toolu_fixture_lookup_1",
+              "name": "mcp__fixture__lookup",
+              "input": {}
+            }
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "ddc25f6c-6bef-4b66-88c2-1a95c89fa4a5"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "input_json_delta",
+              "partial_json": "{\"word\":\"alpha\"}"
+            }
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "10759e53-5f61-4e28-b8fd-c7f6af71e441"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "id": "msg_scripted_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_fixture_lookup_1",
+                "name": "mcp__fixture__lookup",
+                "input": {
+                  "word": "alpha"
+                }
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 1
+            },
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "uuid": "25d01ec1-aa20-4655-9ed8-3b1de293c36b",
+          "timestamp": "2026-10-02T14:13:31.034Z",
+          "tool_use_meta": [
+            {
+              "id": "toolu_fixture_lookup_1",
+              "display_name": "Lookup",
+              "server_display_name": "fixture"
+            }
+          ]
+        },
+        {
+          "type": "replay.can_use_tool",
+          "toolName": "mcp__fixture__lookup",
+          "input": {
+            "word": "alpha"
+          },
+          "toolUseID": "toolu_fixture_lookup_1",
+          "result": {
+            "behavior": "allow",
+            "updatedInput": {
+              "word": "alpha"
+            }
+          }
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 0
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "b2214a5e-064e-4b53-adbf-15414ac51dee"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_delta",
+            "delta": {
+              "stop_reason": "tool_use",
+              "stop_sequence": null
+            },
+            "usage": {
+              "output_tokens": 5
+            }
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "e651b030-1121-43c2-a8e9-e881a00c6c2f"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_stop"
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "727bc2fe-3b94-4b80-ae9b-bc37ba85d01a"
+        },
+        {
+          "type": "replay.hook",
+          "event": "PostToolUse",
+          "toolUseID": "toolu_fixture_lookup_1",
+          "input": {
+            "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+            "transcript_path": "{{home}}/projects/{{cwd-key}}/bbf80ba1-183b-4dd2-a53d-811ff2734ccd.jsonl",
+            "cwd": "{{cwd}}",
+            "prompt_id": "e65afeaa-d62a-42d2-9878-bb57bf116638",
+            "permission_mode": "acceptEdits",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "mcp__fixture__lookup",
+            "tool_input": {
+              "word": "alpha"
+            },
+            "tool_response": "{\"word\":\"alpha\",\"meaning\":\"a fixture word\"}",
+            "tool_use_id": "toolu_fixture_lookup_1",
+            "duration_ms": 2
+          }
+        },
+        {
+          "type": "user",
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "tool_use_id": "toolu_fixture_lookup_1",
+                "type": "tool_result",
+                "content": "{\"word\":\"alpha\",\"meaning\":\"a fixture word\"}"
+              }
+            ]
+          },
+          "parent_tool_use_id": null,
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "uuid": "858eed64-7dc2-44a5-83b8-30ae14609d85",
+          "timestamp": "2026-10-02T14:13:31.041Z",
+          "tool_use_result": {
+            "content": "{\"word\":\"alpha\",\"meaning\":\"a fixture word\"}",
+            "structuredContent": {
+              "word": "alpha",
+              "meaning": "a fixture word"
+            }
+          }
+        },
+        {
+          "type": "system",
+          "subtype": "status",
+          "status": "requesting",
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "uuid": "7673ec7e-afe8-49af-9168-afff0c4e5f4b"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_scripted_2",
+              "type": "message",
+              "role": "assistant",
+              "model": "claude-sonnet-4-5",
+              "content": [],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "usage": {
+                "input_tokens": 10,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 1
+              }
+            }
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "51bc86c7-0b7e-46ef-9dc8-558db1fa029d",
+          "ttft_ms": 2
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "tool_use",
+              "id": "toolu_fixture_lookup_2",
+              "name": "mcp__fixture__lookup",
+              "input": {}
+            }
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "9c5de71c-4d17-471e-8370-24c02fd5e0f0"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "input_json_delta",
+              "partial_json": "{\"word\":\"beta\"}"
+            }
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "e00088a8-bdaa-4f76-a6e2-58238671a27f"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "id": "msg_scripted_2",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_fixture_lookup_2",
+                "name": "mcp__fixture__lookup",
+                "input": {
+                  "word": "beta"
+                }
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 1
+            },
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "uuid": "2a73db78-6d49-47e2-bdff-6b51968626f9",
+          "timestamp": "2026-10-02T14:13:31.046Z",
+          "tool_use_meta": [
+            {
+              "id": "toolu_fixture_lookup_2",
+              "display_name": "Lookup",
+              "server_display_name": "fixture"
+            }
+          ]
+        },
+        {
+          "type": "replay.can_use_tool",
+          "toolName": "mcp__fixture__lookup",
+          "input": {
+            "word": "beta"
+          },
+          "toolUseID": "toolu_fixture_lookup_2",
+          "result": {
+            "behavior": "deny",
+            "message": "The user declined to let you use \"lookup\" on fixture for this call."
+          }
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 0
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "f4b48bfa-d767-4bb8-952a-c3487cd7ae95"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_delta",
+            "delta": {
+              "stop_reason": "tool_use",
+              "stop_sequence": null
+            },
+            "usage": {
+              "output_tokens": 5
+            }
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "c25bcb86-a099-4805-bd14-4608077c4613"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_stop"
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "b8d02b9f-f423-4582-bd38-470cac20c753"
+        },
+        {
+          "type": "user",
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "content": "The user declined to let you use \"lookup\" on fixture for this call.",
+                "is_error": true,
+                "tool_use_id": "toolu_fixture_lookup_2"
+              }
+            ]
+          },
+          "parent_tool_use_id": null,
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "uuid": "073535d4-45a5-4733-a694-d125a3747926",
+          "timestamp": "2026-10-02T14:13:31.048Z",
+          "tool_use_result": "Error: The user declined to let you use \"lookup\" on fixture for this call.",
+          "tool_result_meta": [
+            {
+              "id": "toolu_fixture_lookup_2",
+              "non_execution_kind": "permission-rule"
+            }
+          ]
+        },
+        {
+          "type": "system",
+          "subtype": "status",
+          "status": "requesting",
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "uuid": "8bc6478b-6da6-4954-bc01-1b2f484901f8"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_scripted_3",
+              "type": "message",
+              "role": "assistant",
+              "model": "claude-sonnet-4-5",
+              "content": [],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "usage": {
+                "input_tokens": 10,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 1
+              }
+            }
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "e860b076-1a1b-42bc-ad33-1cca5801d3b7",
+          "ttft_ms": 2
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "text",
+              "text": ""
+            }
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "f6fca648-6770-42ab-ad70-87a1d1e2f1ec"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "text_delta",
+              "text": "One looked up,"
+            }
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "01d0ee37-2af8-4563-a69c-320fd98585d1"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "text_delta",
+              "text": " one refused."
+            }
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "643954a8-c604-43a3-9bbb-69688c2d8ee5"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "id": "msg_scripted_3",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [
+              {
+                "type": "text",
+                "text": "One looked up, one refused."
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 1
+            },
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "uuid": "7cfa6f53-bc9f-4c85-9b6b-98de6ebe61eb",
+          "timestamp": "2026-10-02T14:13:31.053Z"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 0
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "ae8960c4-384d-4366-af6c-7e93aa7cc367"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_delta",
+            "delta": {
+              "stop_reason": "end_turn",
+              "stop_sequence": null
+            },
+            "usage": {
+              "output_tokens": 5
+            }
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "f4bbaba7-3888-4295-b68c-d44cef1546b6"
+        },
+        {
+          "type": "stream_event",
+          "event": {
+            "type": "message_stop"
+          },
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "parent_tool_use_id": null,
+          "uuid": "a703840b-83d2-46e1-98e5-9d30ae956347"
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "queue-operation",
+              "operation": "enqueue",
+              "timestamp": "2026-10-02T14:13:30.915Z",
+              "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+              "content": "Look up two words"
+            },
+            {
+              "type": "queue-operation",
+              "operation": "dequeue",
+              "timestamp": "2026-10-02T14:13:30.915Z",
+              "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd"
+            },
+            {
+              "parentUuid": null,
+              "isSidechain": false,
+              "promptId": "e65afeaa-d62a-42d2-9878-bb57bf116638",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": "Look up two words"
+              },
+              "uuid": "e9e1c0ba-9856-47cc-b359-1d66d9fb1342",
+              "timestamp": "2026-10-02T14:13:31.001Z",
+              "permissionMode": "acceptEdits",
+              "promptSource": "sdk",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "e9e1c0ba-9856-47cc-b359-1d66d9fb1342",
+              "isSidechain": false,
+              "attachment": {
+                "type": "agent_listing_delta",
+                "addedTypes": [
+                  "claude",
+                  "Explore",
+                  "general-purpose",
+                  "Plan",
+                  "statusline-setup"
+                ],
+                "addedLines": [
+                  "- claude: Catch-all for any task that doesn't fit a more specific agent. FleetView's default when no agent name is typed. (Tools: *)",
+                  "- Explore: Fast read-only search agent for locating code. Use it to find files by pattern (eg. \"src/components/**/*.tsx\"), grep for symbols or keywords (eg. \"API endpoints\"), or answer \"where is X defined / which files reference Y.\" Do NOT use it for code review, design-doc auditing, cross-file consistency checks, or open-ended analysis — it reads excerpts rather than whole files and will miss content past its read window. When calling, specify search breadth: \"quick\" for a single targeted lookup, \"medium\" for moderate exploration, or \"very thorough\" to search across multiple locations and naming conventions. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: *)",
+                  "- Plan: Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- statusline-setup: Use this agent to configure the user's Claude Code status line setting. (Tools: Read, Edit)"
+                ],
+                "removedTypes": [],
+                "isInitial": true,
+                "showConcurrencyNote": true
+              },
+              "type": "attachment",
+              "uuid": "683ade72-36a8-4c19-9bca-998a9c0d9ee2",
+              "timestamp": "2026-10-02T14:13:31.001Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "683ade72-36a8-4c19-9bca-998a9c0d9ee2",
+              "isSidechain": false,
+              "attachment": {
+                "type": "skill_listing",
+                "content": "- dataviz: Use this skill whenever you are about to create ANY chart, graph, plot, dashboard, or data visualization, in ANY output medium — an HTML or React artifact, inline SVG, plotting code in any library (matplotlib, plotly, d3, Recharts, …), an image/PNG you will render and upload, or a chart shared into Slack. Read it BEFORE writing the first line of chart code, choosing chart colors, building a stat tile / meter / KPI row, or laying out a dashboard. When the destination is a first-party document connector (host-designated, never self-described) that renders live charts, hand it the rows (inline, or as an uploaded data file the chart cites) rather than a rendered PNG/SVG — a picture of a chart loses hover, data inspection and per-value comments. Produces visualizations that read as one system — elegant, accessible, consistent in light and dark — using a brand-neutral placeholder palette you swap for your own. Teaches a design-system-agnostic method: a form heuristic, a color formula with a runnable validator, mark specs, and interaction rules. A validated default palette is documented in `references/palette.md` — swap that file's values for your brand's. Triggers on: \"chart\", \"graph\", \"plot\", \"data viz\", \"visualization\", \"dashboard\", \"analytics\", \"visualize data\", \"categorical colors\", \"sequential / diverging palette\", \"stat tile\", \"sparkline\", \"heatmap\", \"legend\", \"axis\", \"tooltip\", \"chart colors\", \"color by series\".\n- update-config: Use this skill to configure the Claude Code harness via settings.json. Automated behaviors (\"from now on when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks configured in settings.json - the harness executes these, not Claude, so memory/preferences cannot fulfill them. Also use for: permissions (\"allow X\", \"add permission\", \"move permission to\"), env vars (\"set X=Y\"), hook troubleshooting, or any changes to settings.json/settings.local.json files. Examples: \"allow npm commands\", \"add bq permission to global settings\", \"move permission to user settings\", \"set DEBUG=true\", \"when claude stops show X\". For simple settings like theme/model, suggest the /config command.\n- keybindings-help: Use when the user wants to customize keyboard shortcuts, rebind keys, add chord bindings, or modify ~/.claude/keybindings.json. Examples: \"rebind ctrl+s\", \"add a chord shortcut\", \"change the submit key\", \"customize keybindings\".\n- code-review: Review the current diff, or a PR number/branch/path target, for correctness bugs and reuse/simplification/efficiency cleanups at the given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings); with no level given, it reuses the level you typed last. Pass --comment to post findings as inline PR comments, or --fix to apply the findings to the working tree after the review.\n- simplify: Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use /code-review for that.\n- fewer-permission-prompts: Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts.\n- loop: Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let the model self-pace. - When the user wants to set up a recurring task, poll for status, or run something repeatedly on an interval (e.g. \"check the deploy every 5 minutes\", \"keep running /babysit-prs\"). Do NOT invoke for one-off tasks.\n- claude-api: Reference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration.\nTRIGGER — read BEFORE opening the target file; don't skip because it \"looks like a one-liner\" — whenever: the prompt names Claude/Anthropic in any form (Claude, Anthropic, Fable, Opus, Sonnet, Haiku, `anthropic`, `@anthropic-ai`, `claude-*`, `us.anthropic.*`, `[1m]`); the user asks about an LLM (pricing/model choice/limits/caching) — never answer from memory; OR the task is LLM-shaped with provider unstated (agent/MCP/tool-definition/multi-agent/RAG/LLM-judge/computer-use; generate/summarize/extract/classify/rewrite/converse over NL; debugging refusals/cutoffs/streaming/tool-calls/tokens).\nSKIP only when another provider is being worked on (overrides all triggers): OpenAI/GPT/Gemini/Llama/Mistral/Cohere/Ollama named in the query; OR `grep -rE 'openai|langchain_openai|google.generativeai|genai|mistralai|cohere|ollama'` over the project hits (run this grep FIRST if no provider named — don't Read the file).\n- workflow-authoring: Reference for writing a Workflow tool script (script API and gotchas, resume, quality patterns, worked examples). Load before authoring a script for a workflow the user already opted into; it does not itself authorize running one.\n- run: Launch and drive this project's app to see a change working. Use when asked to run, start, or screenshot the app, or to confirm a change works in the real app (not just tests). First looks for a project skill that already covers launching the app; otherwise falls back to built-in patterns per project type (CLI, server, TUI, Electron, browser-driven, library).\n- init: Initialize a new CLAUDE.md file with codebase documentation\n- security-review: Complete a security review of the pending changes on the current branch",
+                "skillCount": 12,
+                "isInitial": true,
+                "names": [
+                  "dataviz",
+                  "update-config",
+                  "keybindings-help",
+                  "code-review",
+                  "simplify",
+                  "fewer-permission-prompts",
+                  "loop",
+                  "claude-api",
+                  "workflow-authoring",
+                  "run",
+                  "init",
+                  "security-review"
+                ]
+              },
+              "type": "attachment",
+              "uuid": "17c070f4-6397-40d7-892d-6880cd117f45",
+              "timestamp": "2026-10-02T14:13:31.001Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "17c070f4-6397-40d7-892d-6880cd117f45",
+              "isSidechain": false,
+              "attachment": {
+                "type": "total_tokens_reminder",
+                "text": "<total_tokens>15000000 tokens left</total_tokens>"
+              },
+              "type": "attachment",
+              "uuid": "f2cde633-ee37-4527-803b-63378e073f10",
+              "timestamp": "2026-10-02T14:13:31.001Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "type": "atis-latch",
+              "atis": "",
+              "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd"
+            },
+            {
+              "parentUuid": "f2cde633-ee37-4527-803b-63378e073f10",
+              "isSidechain": false,
+              "message": {
+                "id": "msg_scripted_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "tool_use",
+                    "id": "toolu_fixture_lookup_1",
+                    "name": "mcp__fixture__lookup",
+                    "input": {
+                      "word": "alpha"
+                    }
+                  }
+                ],
+                "stop_reason": "tool_use",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 0,
+              "type": "assistant",
+              "uuid": "25d01ec1-aa20-4655-9ed8-3b1de293c36b",
+              "timestamp": "2026-10-02T14:13:31.034Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "25d01ec1-aa20-4655-9ed8-3b1de293c36b",
+              "isSidechain": false,
+              "promptId": "e65afeaa-d62a-42d2-9878-bb57bf116638",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": [
+                  {
+                    "tool_use_id": "toolu_fixture_lookup_1",
+                    "type": "tool_result",
+                    "content": "{\"word\":\"alpha\",\"meaning\":\"a fixture word\"}"
+                  }
+                ]
+              },
+              "uuid": "858eed64-7dc2-44a5-83b8-30ae14609d85",
+              "timestamp": "2026-10-02T14:13:31.041Z",
+              "toolUseResult": "{\"word\":\"alpha\",\"meaning\":\"a fixture word\"}",
+              "mcpMeta": {
+                "structuredContent": {
+                  "word": "alpha",
+                  "meaning": "a fixture word"
+                }
+              },
+              "sourceToolAssistantUUID": "25d01ec1-aa20-4655-9ed8-3b1de293c36b",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "858eed64-7dc2-44a5-83b8-30ae14609d85",
+              "isSidechain": false,
+              "attachment": {
+                "type": "total_tokens_reminder",
+                "text": "<total_tokens>14999985 tokens left</total_tokens>"
+              },
+              "type": "attachment",
+              "uuid": "5dc2ee9d-4fbb-4aa2-9c9b-dad061eca46d",
+              "timestamp": "2026-10-02T14:13:31.042Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "5dc2ee9d-4fbb-4aa2-9c9b-dad061eca46d",
+              "isSidechain": false,
+              "message": {
+                "id": "msg_scripted_2",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "tool_use",
+                    "id": "toolu_fixture_lookup_2",
+                    "name": "mcp__fixture__lookup",
+                    "input": {
+                      "word": "beta"
+                    }
+                  }
+                ],
+                "stop_reason": "tool_use",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 0,
+              "attributionMcpServer": "fixture",
+              "attributionMcpTool": "lookup",
+              "type": "assistant",
+              "uuid": "2a73db78-6d49-47e2-bdff-6b51968626f9",
+              "timestamp": "2026-10-02T14:13:31.046Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "2a73db78-6d49-47e2-bdff-6b51968626f9",
+              "isSidechain": false,
+              "promptId": "e65afeaa-d62a-42d2-9878-bb57bf116638",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "tool_result",
+                    "content": "The user declined to let you use \"lookup\" on fixture for this call.",
+                    "is_error": true,
+                    "tool_use_id": "toolu_fixture_lookup_2"
+                  }
+                ]
+              },
+              "uuid": "073535d4-45a5-4733-a694-d125a3747926",
+              "timestamp": "2026-10-02T14:13:31.048Z",
+              "toolUseResult": "Error: The user declined to let you use \"lookup\" on fixture for this call.",
+              "toolDenialKind": "permission-rule",
+              "sourceToolAssistantUUID": "2a73db78-6d49-47e2-bdff-6b51968626f9",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "073535d4-45a5-4733-a694-d125a3747926",
+              "isSidechain": false,
+              "attachment": {
+                "type": "total_tokens_reminder",
+                "text": "<total_tokens>14999985 tokens left</total_tokens>"
+              },
+              "type": "attachment",
+              "uuid": "28827e6a-7d19-474b-a4e0-ece3fbbf2882",
+              "timestamp": "2026-10-02T14:13:31.049Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "28827e6a-7d19-474b-a4e0-ece3fbbf2882",
+              "isSidechain": false,
+              "message": {
+                "id": "msg_scripted_3",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "One looked up, one refused."
+                  }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 10,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "output_tokens": 5,
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": "standard",
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": "",
+                  "iterations": [],
+                  "speed": "standard"
+                },
+                "stop_details": null
+              },
+              "apiBlockIndex": 0,
+              "type": "assistant",
+              "uuid": "7cfa6f53-bc9f-4c85-9b6b-98de6ebe61eb",
+              "timestamp": "2026-10-02T14:13:31.053Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            }
+          ]
+        },
+        {
+          "duration_api_ms": 30,
+          "stop_reason": "end_turn",
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "total_cost_usd": 0.000315,
+          "usage": {
+            "input_tokens": 30,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 15,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "",
+            "iterations": [],
+            "speed": "standard"
+          },
+          "modelUsage": {
+            "claude-sonnet-4-5": {
+              "inputTokens": 30,
+              "outputTokens": 15,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0,
+              "webSearchRequests": 0,
+              "costUSD": 0.000315,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 0,
+              "canonicalModel": "claude-sonnet-4-5",
+              "provider": "firstParty",
+              "costBasis": "list"
+            }
+          },
+          "permission_denials": [
+            {
+              "tool_name": "mcp__fixture__lookup",
+              "tool_use_id": "toolu_fixture_lookup_2",
+              "tool_input": {
+                "word": "beta"
+              }
+            }
+          ],
+          "terminal_reason": "completed",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required",
+          "subagent_stats": {
+            "spawned": 0,
+            "requested": {
+              "background": 0,
+              "foreground": 0,
+              "unset": 0
+            },
+            "started_in_background": 0,
+            "max_depth": 0,
+            "spawned_by_subagents": 0,
+            "completed": 0,
+            "failed": 0,
+            "killed": {
+              "parent": 0,
+              "user": 0,
+              "system": 0
+            },
+            "refused": {
+              "depth_limit": 0,
+              "concurrency_limit": 0,
+              "budget": 0
+            },
+            "by_type": {}
+          },
+          "is_error": false,
+          "num_turns": 3,
+          "subtype": "success",
+          "api_error_status": null,
+          "result": "One looked up, one refused.",
+          "ttft_ms": 36,
+          "type": "result",
+          "duration_ms": 71,
+          "uuid": "754b0475-00b7-4747-9e23-fb75a07c228b",
+          "ttft_stream_ms": 36,
+          "time_to_request_ms": 32,
+          "first_content_frame_ms": 36,
+          "user_message_uuid": "e9e1c0ba-9856-47cc-b359-1d66d9fb1342",
+          "user_message_uuids": ["e9e1c0ba-9856-47cc-b359-1d66d9fb1342"],
+          "request_sent_wall_ms": 1790950411030,
+          "queued_turn_count": 0
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "e9e1c0ba-9856-47cc-b359-1d66d9fb1342",
+          "state": "completed",
+          "uuid": "22dfa66c-f7b8-4d51-8bb6-3f2d5d7bbd14",
+          "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd"
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "last-prompt",
+              "lastPrompt": "Look up two words",
+              "leafUuid": "7cfa6f53-bc9f-4c85-9b6b-98de6ebe61eb",
+              "sessionId": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "type": "thread",
+          "ref": {
+            "id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd",
+            "strength": "strong"
+          }
+        },
+        {
+          "type": "turn.started"
+        },
+        {
+          "type": "item.started",
+          "key": "toolu_fixture_lookup_1",
+          "ref": {
+            "id": "toolu_fixture_lookup_1",
+            "strength": "strong"
+          },
+          "item": {
+            "kind": "tool_call",
+            "tool": "mcp__fixture__lookup",
+            "server": "fixture",
+            "description": null,
+            "input": {
+              "word": "alpha"
+            },
+            "result": null,
+            "error": null
+          }
+        },
+        {
+          "type": "request.opened",
+          "key": "approval:1",
+          "request": {
+            "kind": "approval",
+            "blocking": true,
+            "title": "Allow lookup?",
+            "origin": {
+              "kind": "mcp",
+              "id": "fixture",
+              "displayName": "fixture"
+            },
+            "approval": {
+              "action": "fixture · lookup",
+              "tool": {
+                "server": "fixture",
+                "name": "lookup",
+                "input": {
+                  "word": "alpha"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "item.completed",
+          "key": "toolu_fixture_lookup_1",
+          "status": "completed",
+          "item": {
+            "result": {
+              "word": "alpha",
+              "meaning": "a fixture word"
+            },
+            "error": null
+          }
+        },
+        {
+          "type": "item.started",
+          "key": "toolu_fixture_lookup_2",
+          "ref": {
+            "id": "toolu_fixture_lookup_2",
+            "strength": "strong"
+          },
+          "item": {
+            "kind": "tool_call",
+            "tool": "mcp__fixture__lookup",
+            "server": "fixture",
+            "description": null,
+            "input": {
+              "word": "beta"
+            },
+            "result": null,
+            "error": null
+          }
+        },
+        {
+          "type": "request.opened",
+          "key": "approval:2",
+          "request": {
+            "kind": "approval",
+            "blocking": true,
+            "title": "Allow lookup?",
+            "origin": {
+              "kind": "mcp",
+              "id": "fixture",
+              "displayName": "fixture"
+            },
+            "approval": {
+              "action": "fixture · lookup",
+              "tool": {
+                "server": "fixture",
+                "name": "lookup",
+                "input": {
+                  "word": "beta"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "item.completed",
+          "key": "toolu_fixture_lookup_2",
+          "status": "failed",
+          "item": {
+            "result": null,
+            "error": "The user declined to let you use \"lookup\" on fixture for this call."
+          }
+        },
+        {
+          "type": "item.started",
+          "key": "msg_scripted_3:0",
+          "ref": {
+            "id": "msg_scripted_3:0",
+            "strength": "strong"
+          },
+          "item": {
+            "kind": "assistant_message",
+            "text": "",
+            "agentId": null
+          }
+        },
+        {
+          "type": "item.delta",
+          "key": "msg_scripted_3:0",
+          "field": "text",
+          "text": "One looked up,"
+        },
+        {
+          "type": "item.delta",
+          "key": "msg_scripted_3:0",
+          "field": "text",
+          "text": " one refused."
+        },
+        {
+          "type": "item.completed",
+          "key": "msg_scripted_3:0",
+          "status": "completed",
+          "item": {
+            "text": "One looked up, one refused."
+          }
+        },
+        {
+          "type": "usage",
+          "usage": {
+            "model": "claude-sonnet-4-5",
+            "inputTokens": 30,
+            "cachedInputTokens": 0,
+            "cacheCreationTokens": 0,
+            "outputTokens": 15,
+            "costUsd": 0.000315,
+            "contextTokens": 10,
+            "contextWindow": 200000
+          }
+        },
+        {
+          "type": "turn.completed",
+          "status": "completed",
+          "ref": {
+            "id": "7cfa6f53-bc9f-4c85-9b6b-98de6ebe61eb",
+            "strength": "strong"
+          }
+        }
+      ]
+    }
+  ]
+}

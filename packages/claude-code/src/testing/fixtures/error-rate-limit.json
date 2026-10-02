@@ -1,0 +1,568 @@
+{
+  "provider": "claude-code",
+  "sdkVersion": "0.3.263",
+  "cliVersion": "2.1.263",
+  "scenario": "error-rate-limit",
+  "source": "recorded",
+  "attempts": [
+    {
+      "outbound": {
+        "prompt": "Hello?",
+        "cwd": "{{cwd}}",
+        "thread": {
+          "sessionId": "5270332d-c9f1-412e-a5a1-b78979291419",
+          "resume": null,
+          "forkSession": false,
+          "resumeSessionAt": null
+        },
+        "model": "claude-sonnet-4-5",
+        "effort": null,
+        "permissionMode": "acceptEdits",
+        "systemPromptAppend": "You are a Work fixture agent. Keep answers short.",
+        "allowedTools": [
+          "Agent",
+          "Bash",
+          "BashOutput",
+          "Edit",
+          "Glob",
+          "Grep",
+          "KillShell",
+          "Monitor",
+          "NotebookEdit",
+          "PowerShell",
+          "Read",
+          "Skill",
+          "SlashCommand",
+          "Task",
+          "TaskOutput",
+          "TaskStop",
+          "TodoWrite",
+          "WebFetch",
+          "WebSearch",
+          "Write"
+        ],
+        "disallowedTools": [],
+        "mcpServers": {},
+        "env": {
+          "ANTHROPIC_BASE_URL": "{{model}}",
+          "CLAUDE_CONFIG_DIR": "{{home}}",
+          "WORK_MODEL_KEY_FILE": "{{state}}/model-key",
+          "CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "300000",
+          "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+          "DISABLE_AUTOUPDATER": "1"
+        },
+        "apiKeyHelper": "cat \"$WORK_MODEL_KEY_FILE\"",
+        "includePartialMessages": true,
+        "sessionStore": true,
+        "hooks": ["PostToolUse", "UserPromptSubmit"]
+      },
+      "messages": [
+        {
+          "type": "replay.input",
+          "uuid": "12b0bcc9-3b3e-47ce-9223-2ec53abf963f",
+          "text": "Hello?"
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "12b0bcc9-3b3e-47ce-9223-2ec53abf963f",
+          "state": "queued",
+          "uuid": "937d23ba-2aa0-4fb5-a1ad-0789ed39cd2f",
+          "session_id": "5270332d-c9f1-412e-a5a1-b78979291419"
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "12b0bcc9-3b3e-47ce-9223-2ec53abf963f",
+          "state": "started",
+          "uuid": "2a91b63b-a0f2-4c9a-bcfb-bd5bd957a5cd",
+          "session_id": "5270332d-c9f1-412e-a5a1-b78979291419"
+        },
+        {
+          "type": "replay.hook",
+          "event": "UserPromptSubmit",
+          "toolUseID": "890c420a-2c55-44b9-b885-5b08aa64a77c",
+          "input": {
+            "session_id": "5270332d-c9f1-412e-a5a1-b78979291419",
+            "transcript_path": "{{home}}/projects/{{cwd-key}}/5270332d-c9f1-412e-a5a1-b78979291419.jsonl",
+            "cwd": "{{cwd}}",
+            "prompt_id": "9105adc9-393a-4e17-b613-2e7a94b5a557",
+            "permission_mode": "acceptEdits",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Hello?"
+          }
+        },
+        {
+          "type": "system",
+          "subtype": "init",
+          "cwd": "{{cwd}}",
+          "session_id": "5270332d-c9f1-412e-a5a1-b78979291419",
+          "tools": [
+            "Task",
+            "AskUserQuestion",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "Edit",
+            "EnterPlanMode",
+            "EnterWorktree",
+            "ExitPlanMode",
+            "ExitWorktree",
+            "Glob",
+            "Grep",
+            "ListAgents",
+            "NotebookEdit",
+            "Read",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskCreate",
+            "TaskGet",
+            "TaskList",
+            "TaskOutput",
+            "TaskStop",
+            "TaskUpdate",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "Write"
+          ],
+          "mcp_servers": [],
+          "model": "claude-sonnet-4-5",
+          "permissionMode": "acceptEdits",
+          "slash_commands": [
+            "deep-research",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "claude-api",
+            "workflow-authoring",
+            "run",
+            "run-skill-generator",
+            "agents",
+            "auto-mode-setup",
+            "autocompact",
+            "clear",
+            "color",
+            "compact",
+            "config",
+            "context",
+            "effort",
+            "fast",
+            "heapdump",
+            "init",
+            "mcp",
+            "model",
+            "__remote-workflow",
+            "workflow-launch-exec",
+            "reload-plugins",
+            "reload-skills",
+            "rename",
+            "security-review",
+            "usage",
+            "insights",
+            "recap",
+            "goal",
+            "list-agents",
+            "team-onboarding"
+          ],
+          "terminal_slash_commands": ["doctor", "color", "reload-plugins"],
+          "apiKeySource": "apiKeyHelper",
+          "claude_code_version": "2.1.263",
+          "output_style": "default",
+          "agents": [
+            "claude",
+            "Explore",
+            "general-purpose",
+            "Plan",
+            "statusline-setup"
+          ],
+          "skills": [
+            "deep-research",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "claude-api",
+            "workflow-authoring",
+            "run",
+            "run-skill-generator"
+          ],
+          "plugins": [],
+          "capabilities": [
+            "interrupt_receipt_v1",
+            "interrupt_cancel_queued_v1",
+            "msg_lifecycle_v1"
+          ],
+          "analytics_disabled": true,
+          "product_feedback_disabled": true,
+          "uuid": "60531145-ff1f-4798-9b67-20871a11505a",
+          "messaging_socket_path": "/tmp/cc-socks/42538.sock",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required"
+        },
+        {
+          "type": "system",
+          "subtype": "status",
+          "status": "requesting",
+          "session_id": "5270332d-c9f1-412e-a5a1-b78979291419",
+          "uuid": "94cd9457-59cb-4f59-9ca1-7c099111ab00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "diagnostics": null,
+            "id": "ab12fbf7-d03e-425a-9122-f5f52d6cc3cc",
+            "container": null,
+            "model": "<synthetic>",
+            "role": "assistant",
+            "stop_details": null,
+            "stop_reason": "stop_sequence",
+            "stop_sequence": "",
+            "type": "message",
+            "usage": {
+              "output_tokens_details": null,
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "server_tool_use": {
+                "web_search_requests": 0,
+                "web_fetch_requests": 0
+              },
+              "service_tier": null,
+              "cache_creation": {
+                "ephemeral_1h_input_tokens": 0,
+                "ephemeral_5m_input_tokens": 0
+              },
+              "inference_geo": null,
+              "iterations": null,
+              "speed": null
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "API Error: Request rejected (429) · Number of requests has exceeded your rate limit"
+              }
+            ],
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "5270332d-c9f1-412e-a5a1-b78979291419",
+          "uuid": "73723ed5-f8fd-4522-969e-c27e96a73e3c",
+          "timestamp": "2026-10-02T14:13:37.283Z",
+          "error": "rate_limit",
+          "is_api_error_message": true,
+          "user_message_uuid": "12b0bcc9-3b3e-47ce-9223-2ec53abf963f",
+          "user_message_uuids": ["12b0bcc9-3b3e-47ce-9223-2ec53abf963f"]
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "5270332d-c9f1-412e-a5a1-b78979291419",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "queue-operation",
+              "operation": "enqueue",
+              "timestamp": "2026-10-02T14:13:37.233Z",
+              "sessionId": "5270332d-c9f1-412e-a5a1-b78979291419",
+              "content": "Hello?"
+            },
+            {
+              "type": "queue-operation",
+              "operation": "dequeue",
+              "timestamp": "2026-10-02T14:13:37.233Z",
+              "sessionId": "5270332d-c9f1-412e-a5a1-b78979291419"
+            },
+            {
+              "parentUuid": null,
+              "isSidechain": false,
+              "promptId": "9105adc9-393a-4e17-b613-2e7a94b5a557",
+              "type": "user",
+              "message": {
+                "role": "user",
+                "content": "Hello?"
+              },
+              "uuid": "12b0bcc9-3b3e-47ce-9223-2ec53abf963f",
+              "timestamp": "2026-10-02T14:13:37.245Z",
+              "permissionMode": "acceptEdits",
+              "promptSource": "sdk",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "5270332d-c9f1-412e-a5a1-b78979291419",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "12b0bcc9-3b3e-47ce-9223-2ec53abf963f",
+              "isSidechain": false,
+              "attachment": {
+                "type": "agent_listing_delta",
+                "addedTypes": [
+                  "claude",
+                  "Explore",
+                  "general-purpose",
+                  "Plan",
+                  "statusline-setup"
+                ],
+                "addedLines": [
+                  "- claude: Catch-all for any task that doesn't fit a more specific agent. FleetView's default when no agent name is typed. (Tools: *)",
+                  "- Explore: Fast read-only search agent for locating code. Use it to find files by pattern (eg. \"src/components/**/*.tsx\"), grep for symbols or keywords (eg. \"API endpoints\"), or answer \"where is X defined / which files reference Y.\" Do NOT use it for code review, design-doc auditing, cross-file consistency checks, or open-ended analysis — it reads excerpts rather than whole files and will miss content past its read window. When calling, specify search breadth: \"quick\" for a single targeted lookup, \"medium\" for moderate exploration, or \"very thorough\" to search across multiple locations and naming conventions. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: *)",
+                  "- Plan: Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs. (Tools: All tools except Agent, Artifact, ArtifactComments, ArtifactData, ArtifactCheck, ExitPlanMode, Edit, Write, NotebookEdit)",
+                  "- statusline-setup: Use this agent to configure the user's Claude Code status line setting. (Tools: Read, Edit)"
+                ],
+                "removedTypes": [],
+                "isInitial": true,
+                "showConcurrencyNote": true
+              },
+              "type": "attachment",
+              "uuid": "ba6ea8bd-4d63-47d7-af94-4d86a7e5521c",
+              "timestamp": "2026-10-02T14:13:37.245Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "5270332d-c9f1-412e-a5a1-b78979291419",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "ba6ea8bd-4d63-47d7-af94-4d86a7e5521c",
+              "isSidechain": false,
+              "attachment": {
+                "type": "skill_listing",
+                "content": "- dataviz: Use this skill whenever you are about to create ANY chart, graph, plot, dashboard, or data visualization, in ANY output medium — an HTML or React artifact, inline SVG, plotting code in any library (matplotlib, plotly, d3, Recharts, …), an image/PNG you will render and upload, or a chart shared into Slack. Read it BEFORE writing the first line of chart code, choosing chart colors, building a stat tile / meter / KPI row, or laying out a dashboard. When the destination is a first-party document connector (host-designated, never self-described) that renders live charts, hand it the rows (inline, or as an uploaded data file the chart cites) rather than a rendered PNG/SVG — a picture of a chart loses hover, data inspection and per-value comments. Produces visualizations that read as one system — elegant, accessible, consistent in light and dark — using a brand-neutral placeholder palette you swap for your own. Teaches a design-system-agnostic method: a form heuristic, a color formula with a runnable validator, mark specs, and interaction rules. A validated default palette is documented in `references/palette.md` — swap that file's values for your brand's. Triggers on: \"chart\", \"graph\", \"plot\", \"data viz\", \"visualization\", \"dashboard\", \"analytics\", \"visualize data\", \"categorical colors\", \"sequential / diverging palette\", \"stat tile\", \"sparkline\", \"heatmap\", \"legend\", \"axis\", \"tooltip\", \"chart colors\", \"color by series\".\n- update-config: Use this skill to configure the Claude Code harness via settings.json. Automated behaviors (\"from now on when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks configured in settings.json - the harness executes these, not Claude, so memory/preferences cannot fulfill them. Also use for: permissions (\"allow X\", \"add permission\", \"move permission to\"), env vars (\"set X=Y\"), hook troubleshooting, or any changes to settings.json/settings.local.json files. Examples: \"allow npm commands\", \"add bq permission to global settings\", \"move permission to user settings\", \"set DEBUG=true\", \"when claude stops show X\". For simple settings like theme/model, suggest the /config command.\n- keybindings-help: Use when the user wants to customize keyboard shortcuts, rebind keys, add chord bindings, or modify ~/.claude/keybindings.json. Examples: \"rebind ctrl+s\", \"add a chord shortcut\", \"change the submit key\", \"customize keybindings\".\n- code-review: Review the current diff, or a PR number/branch/path target, for correctness bugs and reuse/simplification/efficiency cleanups at the given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings); with no level given, it reuses the level you typed last. Pass --comment to post findings as inline PR comments, or --fix to apply the findings to the working tree after the review.\n- simplify: Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use /code-review for that.\n- fewer-permission-prompts: Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts.\n- loop: Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let the model self-pace. - When the user wants to set up a recurring task, poll for status, or run something repeatedly on an interval (e.g. \"check the deploy every 5 minutes\", \"keep running /babysit-prs\"). Do NOT invoke for one-off tasks.\n- claude-api: Reference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration.\nTRIGGER — read BEFORE opening the target file; don't skip because it \"looks like a one-liner\" — whenever: the prompt names Claude/Anthropic in any form (Claude, Anthropic, Fable, Opus, Sonnet, Haiku, `anthropic`, `@anthropic-ai`, `claude-*`, `us.anthropic.*`, `[1m]`); the user asks about an LLM (pricing/model choice/limits/caching) — never answer from memory; OR the task is LLM-shaped with provider unstated (agent/MCP/tool-definition/multi-agent/RAG/LLM-judge/computer-use; generate/summarize/extract/classify/rewrite/converse over NL; debugging refusals/cutoffs/streaming/tool-calls/tokens).\nSKIP only when another provider is being worked on (overrides all triggers): OpenAI/GPT/Gemini/Llama/Mistral/Cohere/Ollama named in the query; OR `grep -rE 'openai|langchain_openai|google.generativeai|genai|mistralai|cohere|ollama'` over the project hits (run this grep FIRST if no provider named — don't Read the file).\n- workflow-authoring: Reference for writing a Workflow tool script (script API and gotchas, resume, quality patterns, worked examples). Load before authoring a script for a workflow the user already opted into; it does not itself authorize running one.\n- run: Launch and drive this project's app to see a change working. Use when asked to run, start, or screenshot the app, or to confirm a change works in the real app (not just tests). First looks for a project skill that already covers launching the app; otherwise falls back to built-in patterns per project type (CLI, server, TUI, Electron, browser-driven, library).\n- init: Initialize a new CLAUDE.md file with codebase documentation\n- security-review: Complete a security review of the pending changes on the current branch",
+                "skillCount": 12,
+                "isInitial": true,
+                "names": [
+                  "dataviz",
+                  "update-config",
+                  "keybindings-help",
+                  "code-review",
+                  "simplify",
+                  "fewer-permission-prompts",
+                  "loop",
+                  "claude-api",
+                  "workflow-authoring",
+                  "run",
+                  "init",
+                  "security-review"
+                ]
+              },
+              "type": "attachment",
+              "uuid": "13f25930-fb75-4048-b859-c1971c163f40",
+              "timestamp": "2026-10-02T14:13:37.245Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "5270332d-c9f1-412e-a5a1-b78979291419",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "parentUuid": "13f25930-fb75-4048-b859-c1971c163f40",
+              "isSidechain": false,
+              "attachment": {
+                "type": "total_tokens_reminder",
+                "text": "<total_tokens>15000000 tokens left</total_tokens>"
+              },
+              "type": "attachment",
+              "uuid": "28f2d878-fd5d-4ced-956f-52b45094d041",
+              "timestamp": "2026-10-02T14:13:37.245Z",
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "5270332d-c9f1-412e-a5a1-b78979291419",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            },
+            {
+              "type": "atis-latch",
+              "atis": "",
+              "sessionId": "5270332d-c9f1-412e-a5a1-b78979291419"
+            },
+            {
+              "parentUuid": "28f2d878-fd5d-4ced-956f-52b45094d041",
+              "isSidechain": false,
+              "type": "assistant",
+              "uuid": "73723ed5-f8fd-4522-969e-c27e96a73e3c",
+              "timestamp": "2026-10-02T14:13:37.283Z",
+              "message": {
+                "diagnostics": null,
+                "id": "ab12fbf7-d03e-425a-9122-f5f52d6cc3cc",
+                "container": null,
+                "model": "<synthetic>",
+                "role": "assistant",
+                "stop_details": null,
+                "stop_reason": "stop_sequence",
+                "stop_sequence": "",
+                "type": "message",
+                "usage": {
+                  "output_tokens_details": null,
+                  "input_tokens": 0,
+                  "output_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0
+                  },
+                  "service_tier": null,
+                  "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0
+                  },
+                  "inference_geo": null,
+                  "iterations": null,
+                  "speed": null
+                },
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "API Error: Request rejected (429) · Number of requests has exceeded your rate limit"
+                  }
+                ],
+                "context_management": null
+              },
+              "apiErrorIsTransient": false,
+              "error": "rate_limit",
+              "isApiErrorMessage": true,
+              "apiErrorStatus": 429,
+              "userType": "external",
+              "entrypoint": "sdk-ts",
+              "cwd": "{{cwd}}",
+              "sessionId": "5270332d-c9f1-412e-a5a1-b78979291419",
+              "version": "2.1.263",
+              "gitBranch": "HEAD"
+            }
+          ]
+        },
+        {
+          "duration_api_ms": 0,
+          "stop_reason": "stop_sequence",
+          "session_id": "5270332d-c9f1-412e-a5a1-b78979291419",
+          "total_cost_usd": 0,
+          "usage": {
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "",
+            "iterations": [],
+            "speed": "standard"
+          },
+          "modelUsage": {},
+          "permission_denials": [],
+          "terminal_reason": "api_error",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required",
+          "subagent_stats": {
+            "spawned": 0,
+            "requested": {
+              "background": 0,
+              "foreground": 0,
+              "unset": 0
+            },
+            "started_in_background": 0,
+            "max_depth": 0,
+            "spawned_by_subagents": 0,
+            "completed": 0,
+            "failed": 0,
+            "killed": {
+              "parent": 0,
+              "user": 0,
+              "system": 0
+            },
+            "refused": {
+              "depth_limit": 0,
+              "concurrency_limit": 0,
+              "budget": 0
+            },
+            "by_type": {}
+          },
+          "is_error": true,
+          "num_turns": 1,
+          "subtype": "success",
+          "api_error_status": 429,
+          "result": "API Error: Request rejected (429) · Number of requests has exceeded your rate limit",
+          "type": "result",
+          "duration_ms": 51,
+          "uuid": "d40c56fc-2e3f-48df-97ba-4772a0bfe5fb",
+          "user_message_uuid": "12b0bcc9-3b3e-47ce-9223-2ec53abf963f",
+          "user_message_uuids": ["12b0bcc9-3b3e-47ce-9223-2ec53abf963f"],
+          "queued_turn_count": 0
+        },
+        {
+          "type": "command_lifecycle",
+          "command_uuid": "12b0bcc9-3b3e-47ce-9223-2ec53abf963f",
+          "state": "cancelled",
+          "uuid": "a37448de-559c-4a3f-b327-7d194133e471",
+          "session_id": "5270332d-c9f1-412e-a5a1-b78979291419"
+        },
+        {
+          "type": "replay.store",
+          "op": "append",
+          "sessionId": "5270332d-c9f1-412e-a5a1-b78979291419",
+          "subpath": null,
+          "entries": [
+            {
+              "type": "last-prompt",
+              "lastPrompt": "Hello?",
+              "leafUuid": "73723ed5-f8fd-4522-969e-c27e96a73e3c",
+              "sessionId": "5270332d-c9f1-412e-a5a1-b78979291419"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "type": "thread",
+          "ref": {
+            "id": "5270332d-c9f1-412e-a5a1-b78979291419",
+            "strength": "strong"
+          }
+        },
+        {
+          "type": "turn.started"
+        },
+        {
+          "type": "turn.completed",
+          "status": "failed",
+          "error": {
+            "message": "API Error: Request rejected (429) · Number of requests has exceeded your rate limit",
+            "kind": "rate_limit",
+            "retrySafe": true
+          }
+        }
+      ]
+    }
+  ]
+}
