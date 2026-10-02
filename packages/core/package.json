@@ -27,6 +27,7 @@
     "@catamorphic/otel": "workspace:*",
     "@catamorphic/parser": "workspace:*",
     "@catamorphic/plugins": "workspace:*",
+    "@catamorphic/runner-bundle": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
     "@catamorphic/workflow": "workspace:*",
     "croner": "^10.0.1",

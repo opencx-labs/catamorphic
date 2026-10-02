@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { codexToolFilter } from "../codex-agent.js";
+import { codexToolFilter, mcpServersConfig } from "../config.js";
 
-describe("codexToolFilter (Codex has no approval channel)", () => {
-  it("allowlists when unknown tools must not run (auto/ask/deny defaults)", () => {
+describe("Codex MCP tool policy", () => {
+  it("hides only the tools a policy denies outright", () => {
     const layers = [
       {
         tools: {
@@ -14,21 +14,41 @@ describe("codexToolFilter (Codex has no approval channel)", () => {
     const annotations = {
       list_channels: { readOnlyHint: true },
       create_channel: { readOnlyHint: false },
-      opaque: {},
     };
-    // Default auto: unknown → ask → fails closed → allowlist of allows.
     expect(codexToolFilter(layers, annotations)).toEqual({
-      enabled_tools: ["list_channels", "post_message"],
+      disabled_tools: ["delete_channel"],
     });
     expect(codexToolFilter(undefined, annotations)).toEqual({});
+    expect(
+      codexToolFilter([{ default: "deny", tools: { x: "allow" } }], {
+        y: {},
+      }),
+    ).toEqual({ disabled_tools: ["y"] });
   });
 
-  it("denylists when unknown tools may run (explicit allow default)", () => {
+  it("makes every other tool on a policy server ask, so the runner decides", () => {
     expect(
-      codexToolFilter([{ default: "allow", tools: { x: "deny", y: "ask" } }], {
-        z: { readOnlyHint: true },
+      mcpServersConfig({
+        servers: {
+          "team.slack": {
+            transport: "http",
+            url: "https://mcp.example/slack",
+            headers: { authorization: "Bearer grant" },
+            defaultToolsApprovalMode: "approve",
+          },
+          files: { transport: "stdio", command: "files-mcp", args: ["--ro"] },
+        },
+        policies: { "team.slack": [{ tools: { delete_channel: "deny" } }] },
+        annotations: {},
       }),
-    ).toEqual({ disabled_tools: ["x", "y"] });
-    expect(codexToolFilter([{ default: "allow" }], {})).toEqual({});
+    ).toEqual({
+      team_slack: {
+        url: "https://mcp.example/slack",
+        http_headers: { authorization: "Bearer grant" },
+        disabled_tools: ["delete_channel"],
+        default_tools_approval_mode: "prompt",
+      },
+      files: { command: "files-mcp", args: ["--ro"] },
+    });
   });
 });

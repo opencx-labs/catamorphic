@@ -9,7 +9,7 @@ import {
   splitLines,
 } from "@catamorphic/agent-protocol/runner";
 import { AGENT_RUNNER_VERSION, InProcessRunner } from "@catamorphic/agent-runner";
-import { loadRunnerBundle } from "@catamorphic/agent-runner/bundle";
+import { loadRunnerBundle } from "@catamorphic/runner-bundle";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 
 /**

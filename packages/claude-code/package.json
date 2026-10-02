@@ -21,7 +21,7 @@
     "build": "tsup && tsc --project tsconfig.build.json --noEmit false --emitDeclarationOnly",
     "dev": "tsup --watch --no-clean",
     "record:claude-replay": "bun scripts/record-replay.ts && biome format --write src/testing/fixtures",
-    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/claude-code --config ./vitest.config.ts",
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/claude-code --config ../../vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
@@ -32,6 +32,7 @@
     "zod": "^4.1.8"
   },
   "devDependencies": {
+    "@catamorphic/agent-runner": "workspace:*",
     "@types/node": "^26.1.1"
   }
 }

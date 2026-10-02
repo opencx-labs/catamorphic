@@ -1,57 +1,68 @@
 # @catamorphic/codex
 
-`CodexAgent` adapts the pinned OpenAI Codex app-server protocol to Catamorphic's
-`CodingAgentProvider`. It operates on a local checkout on the machine running
-the CLI. Register it with `topology: "native"` and supply `nativeAgentCheckout`
-in your host. It is not a controller for a remote sandbox.
+The Codex harness adapter (`codex`) for the agent runner (ADR 0196). It runs
+one pinned `codex app-server` process per attempt, beside the workspace it
+edits: inside the session's sandbox on a server (in the runner bundle), or
+in the host's own process on the desktop.
 
 ```ts
-import { CodexAgent } from "@catamorphic/codex";
+import { createCodexAdapter } from "@catamorphic/codex";
 
-const provider = new CodexAgent({
-  codexPathOverride: verifiedCodexExecutable,
-  env: { CODEX_HOME: accountHome },
-  sandboxMode: "workspace-write",
-  mcpServersForSession: sessionTools,
-  // Set these when your host provides the corresponding session tools.
-  disableNativeSubagents: true,
-  disableNativeGoals: true,
-});
+const adapters = { codex: createCodexAdapter() };
 ```
 
-The host creates `accountHome` and owns login or API-key provisioning. Desktop
-resolves a verified pinned executable and its PATH sidecars independently of
-an installed developer toolchain (ADR 0091). Other hosts may provide their own.
-Each host session retains a native app-server process and its MCP children across
-turns. Current cwd, model and effort refresh each turn; session instructions are
-developer instructions and each turn's context rides `turn/start.additionalContext`
-(ADR 0152). Changed
-MCP configuration or policy restarts the process and resumes the durable thread ID.
-Five idle minutes release the process; the next turn resumes with fresh MCP state.
-`interrupt` interrupts the native turn, and disposal closes its process and gateway.
+The adapter takes no per-agent settings. Everything arrives with each
+`AttemptStart`:
 
-The default is workspace-write, no interactive approvals, with network access.
-Ordinary project files are writable; Codex itself protects `.agents`, `.codex`,
-and `.git`. Full access is an explicit host/user choice, never an automatic
-fallback after a denied write. A host with project-editing tools can handle
-an authorized skill edit through that existing surface.
+- `options`: `command` (the `codex` executable, default `codex`),
+  `disableNativeSubagents`, `disableNativeGoals`, `networkAccess` (default
+  true) and `config` (extra Codex `-c` overrides, merged last).
+- `permissions`: Codex's own `sandbox` (`read-only`, `workspace-write`,
+  `danger-full-access`) and `approvals` (`untrusted`, `on-failure`,
+  `on-request`, `never`). The sandbox defaults to `workspace-write` with
+  `modelAccess: host` and to `danger-full-access` elsewhere, where the Work
+  sandbox is the boundary. Approvals default to `on-request`.
+- `modelAccess`: `gateway` is the `work` model provider (Responses API, a
+  key command reading `keyFile`) with `CODEX_HOME` in the state directory;
+  `sign_in` runs with `CODEX_HOME` at the member's own home (ADR 0197);
+  `host` runs Codex as the host configured it (`env`, including an optional
+  `CODEX_API_KEY`).
+- `mcpServers` become Codex `mcp_servers`. A server with a tool policy asks
+  before every call (`default_tools_approval_mode = prompt`), and the
+  runner decides the ask by the policy, opening an approval only for `ask`.
+- `hostTools` are Codex dynamic tools; a call is a host call.
+- `systemPrompt` (and installed `plugins`) become developer instructions;
+  `context` rides `turn/start.additionalContext`.
 
-The owner's `.agents/skills` are discovered natively by Codex. Catamorphic
-project skills live in `.work/skills`; the host exposes them through
-the same skill listing and `read_skill` surfaces as host skills. Text attachments retain their context;
-images use SDK `local_image` inputs, and documents are staged as readable local
-files. All staged bytes are removed when the turn ends or startup fails.
+Codex's structured questions (`request_user_input`), command, file and
+permission approvals, and MCP elicitations are runtime requests. A steer is
+`turn/steer` into the running turn; an interrupt is `turn/interrupt`.
 
-Supply `mcpElicitationForSession` to create a form/URL request handler per native
-session lifetime and `onToolPermission` for native
-command/file approvals. With either handler enabled, native approval policy is
-`on-request`; absent callbacks decline requests. MCP tool-level `ask` filters
-still fail closed; native elicitation is a separate service permission mechanism. Connection retries surface as diagnostics; a failed
-turn or incomplete stream surfaces as an error. Tests cover normalized events; native
-CLI conformance uses a loopback Responses/MCP fixture with a disposable home.
-See [ADR 0101](../../docs/decisions/0101-harness-capabilities-and-session-monitors.md).
+Native state is the thread's rollout file (`nativeState: "file"`): the
+adapter mirrors its new lines to Work as they appear, restores them into a
+fresh `CODEX_HOME` to resume elsewhere, and keeps a fork's ancestors'
+rollouts with the fork, since a fork's history starts in its source's file.
 
-The desktop's optional Codex Computer Use connector references the user's installed
-native plugin. The CLI/SDK alone does not include OS control. See the desktop
-[browser and computer-use contract](../../apps/desktop/docs/computer-use.md) and
-[ADR 0112](../../docs/decisions/0112-browser-control-and-tool-media.md).
+## Tests replay real transcripts
+
+`fixtures/replay/*.json` are recorded from the pinned CLI against a
+scripted loopback Responses API (`bun run record:codex-replay [scenario]`;
+scenarios live in `src/__tests__/replay/scenarios.ts`). The replay peer in
+`@catamorphic/codex/testing` replaces only the app-server process: every
+frame the adapter sends must match the transcript in order, and recorded
+frames and rollout writes are served in their recorded order around them.
+
+```ts
+import { createCodexAdapter } from "@catamorphic/codex";
+import { CodexReplay, loadCodexFixture } from "@catamorphic/codex/testing";
+
+const replay = new CodexReplay(await loadCodexFixture("simple-reply"), {
+  placeholders: { root, model, node, fixtures },
+});
+const adapter = createCodexAdapter({ transport: replay.transport });
+// Run the scenario's attempts through a runner, then:
+await replay.verify();
+```
+
+`listCodexModels`, `resolveCodexModel` and `listCodexSkills` read the CLI's
+catalogs without a model turn.

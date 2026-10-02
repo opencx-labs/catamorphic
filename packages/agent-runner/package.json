@@ -10,21 +10,16 @@
       "bun": "./src/index.ts",
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
-    },
-    "./bundle": {
-      "import": "./dist/bundle.js",
-      "types": "./dist/bundle.d.ts"
     }
   },
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly && bun scripts/build-bundle.ts",
+    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
     "dev": "tsup --watch --no-clean",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/agent-runner --config ../../vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
     "@catamorphic/agent-protocol": "workspace:*",
-    "@catamorphic/claude-code": "workspace:*",
     "@catamorphic/sandbox": "workspace:*"
   },
   "devDependencies": {

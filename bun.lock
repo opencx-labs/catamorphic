@@ -181,7 +181,6 @@
       "version": "0.0.1",
       "dependencies": {
         "@catamorphic/agent-protocol": "workspace:*",
-        "@catamorphic/claude-code": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
       },
       "devDependencies": {
@@ -252,6 +251,7 @@
         "zod": "^4.1.8",
       },
       "devDependencies": {
+        "@catamorphic/agent-runner": "workspace:*",
         "@types/node": "^26.1.1",
       },
     },
@@ -283,10 +283,12 @@
       "name": "@catamorphic/codex",
       "version": "0.0.1",
       "dependencies": {
+        "@catamorphic/agent-protocol": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
         "@openai/codex-sdk": "0.153.4",
       },
       "devDependencies": {
+        "@catamorphic/agent-runner": "workspace:*",
         "@types/node": "^26.1.1",
       },
     },
@@ -302,6 +304,7 @@
         "@catamorphic/otel": "workspace:*",
         "@catamorphic/parser": "workspace:*",
         "@catamorphic/plugins": "workspace:*",
+        "@catamorphic/runner-bundle": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
         "@catamorphic/workflow": "workspace:*",
         "croner": "^10.0.1",
@@ -566,6 +569,18 @@
         "@tanstack/react-query": "^5",
         "react": "^18.2 || ^19",
         "react-dom": "^18.2 || ^19",
+      },
+    },
+    "packages/runner-bundle": {
+      "name": "@catamorphic/runner-bundle",
+      "version": "0.0.1",
+      "dependencies": {
+        "@catamorphic/agent-runner": "workspace:*",
+        "@catamorphic/claude-code": "workspace:*",
+        "@catamorphic/codex": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^26.1.1",
       },
     },
     "packages/runtime": {
@@ -912,6 +927,8 @@
     "@catamorphic/react": ["@catamorphic/react@workspace:packages/react"],
 
     "@catamorphic/registry": ["@catamorphic/registry@workspace:packages/registry"],
+
+    "@catamorphic/runner-bundle": ["@catamorphic/runner-bundle@workspace:packages/runner-bundle"],
 
     "@catamorphic/runtime": ["@catamorphic/runtime@workspace:packages/runtime"],
 
