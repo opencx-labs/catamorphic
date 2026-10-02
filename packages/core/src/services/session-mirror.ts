@@ -170,15 +170,24 @@ export async function writeSessionMirror({
         })
         .execute();
     }
+    // The source's native threads live on its machine: the copy keeps them
+    // for the turns that name them, as unavailable, so a turn here starts a
+    // thread of its own and is handed the history (ADR 0197).
+    const away = <T extends { status: string }>(thread: T): T => ({ ...thread, status: "unavailable" });
     if (input.base && (!current || Number(current.event_sequence) === 0)) {
-      // The source's provider threads come along: its turns and attempts
-      // name them, and later pushes replicate their changes. A turn here
-      // resolves which thread it continues on (ADR 0197).
-      await log.importSnapshot(trx, { sessionId, snapshot: input.base });
+      await log.importSnapshot(trx, {
+        sessionId,
+        snapshot: { ...input.base, providerThreads: input.base.providerThreads.map(away) },
+      });
     }
+    const events = input.events.map((stored) =>
+      stored.event.type === "provider_thread.changed"
+        ? { ...stored, event: { ...stored.event, thread: away(stored.event.thread) } }
+        : stored,
+    );
     let sequence: number;
     try {
-      sequence = await log.replicate(trx, { sessionId, events: input.events });
+      sequence = await log.replicate(trx, { sessionId, events });
     } catch (error) {
       if (error instanceof SessionLogGapError)
         throw new SessionMirrorBehindError(sessionId, error.expected - 1);
