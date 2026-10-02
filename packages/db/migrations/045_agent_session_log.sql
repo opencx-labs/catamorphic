@@ -278,12 +278,20 @@ SELECT legacy.id, legacy.session_id,
            ELSE COALESCE(legacy.error, result.content, 'The turn stopped') END,
          'kind', result.metadata->'errorKind')) END,
        jsonb_strip_nulls(jsonb_build_object(
-         'changedFiles', CASE WHEN jsonb_typeof(result.metadata->'changedFiles') = 'array' THEN result.metadata->'changedFiles' ELSE '[]'::jsonb END,
+         'changedFiles', COALESCE((
+           SELECT jsonb_agg(jsonb_build_object(
+             'path', CASE jsonb_typeof(change) WHEN 'string' THEN change #>> '{}' ELSE change->>'path' END,
+             'kind', CASE WHEN change->>'kind' = 'deleted' THEN 'deleted' ELSE 'modified' END))
+             FROM jsonb_array_elements(CASE WHEN jsonb_typeof(result.metadata->'changedFiles') = 'array'
+               THEN result.metadata->'changedFiles' ELSE '[]'::jsonb END) change
+         ), '[]'::jsonb),
          'usage', result.metadata->'usage',
          'storeSync', result.metadata->'storeSync',
          'workspaceSync', result.metadata->'workspaceSync')),
        result.commit_sha,
-       legacy.created_at, legacy.started_at, COALESCE(legacy.completed_at, legacy.updated_at),
+       legacy.created_at, legacy.started_at,
+       CASE WHEN legacy.status IN ('queued', 'held') THEN NULL
+            ELSE COALESCE(legacy.completed_at, legacy.updated_at) END,
        legacy.updated_at, GREATEST(legacy.attempt, 1)
   FROM agent_turns_legacy legacy
   LEFT JOIN agent_messages result ON result.id = legacy.result_message_id;
@@ -305,6 +313,12 @@ UPDATE agent_items SET payload = payload || jsonb_build_object(
 
 UPDATE agent_turns turn SET provider_thread_id = thread.id
   FROM agent_provider_threads thread WHERE thread.session_id = turn.session_id;
+
+-- A converted session's log continues after its history: new items sort
+-- after the converted ones.
+UPDATE agent_sessions session SET event_sequence = converted.last
+  FROM (SELECT session_id, max(position) AS last FROM agent_items GROUP BY session_id) converted
+ WHERE converted.session_id = session.id;
 
 CREATE TABLE agent_turn_attempts (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
