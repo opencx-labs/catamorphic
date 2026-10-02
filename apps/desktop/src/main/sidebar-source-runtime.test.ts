@@ -22,7 +22,12 @@ afterEach(() => {
 });
 function setup(
   source: string,
-  opts: { idleMs?: number; timeoutMs?: number } = {},
+  opts: {
+    idleMs?: number;
+    timeoutMs?: number;
+    startTimeoutMs?: number;
+    executable?: () => Promise<string>;
+  } = {},
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidebar-source-"));
   roots.push(root);
@@ -139,19 +144,54 @@ it("cancels pending reads and starts a new load without publishing a stale respo
   });
 });
 
-it("survives a hung source, source edits and a worker crash", async () => {
-  const { load, modulePath, runtime } = setup(
-    `export default {async load(){ while(true){} }};`,
-    { timeoutMs: 200 },
-  );
+it("reports a hung load as too slow", async () => {
+  const { load } = setup(`export default {async load(){ while(true){} }};`, {
+    timeoutMs: 200,
+  });
   await expect(load()).rejects.toThrow("too long");
+});
+
+it("gives up on a toolchain that never resolves, and spawns nothing after", async () => {
+  let resolveExecutable: (executable: string) => void = () => {};
+  const { load, runtime } = setup(
+    `export default {async load(){return {items:[]}}}`,
+    {
+      startTimeoutMs: 200,
+      executable: () =>
+        new Promise((resolve) => {
+          resolveExecutable = resolve;
+        }),
+    },
+  );
+  await expect(load()).rejects.toThrow("took too long to start");
+  // The toolchain arriving late must not start a worker for a dead request.
+  resolveExecutable("bun");
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(Reflect.get(runtime, "child")).toBeUndefined();
+});
+
+it("survives a hung source, source edits and a worker crash", async () => {
+  const { root, load, modulePath, runtime } = setup(
+    `import {writeFileSync} from 'node:fs'; export default {async load(){ writeFileSync('hung', String(process.pid)); while(true){} }};`,
+  );
   const notify = vi.fn();
   const release = runtime.subscribe(notify);
+  const hung = load();
+  const marker = path.join(root, "hung");
+  const pid = await eventually(() => {
+    const value = fs.readFileSync(marker, "utf8");
+    expect(value).toMatch(/^\d+$/);
+    return Number(value);
+  });
+  const replaced = expect(hung).rejects.toThrow("changed");
   fs.writeFileSync(
     modulePath,
     `export default {async load(){return {items:[{id:'recovered',label:'Ready'}]}}}`,
   );
+  await replaced;
   await eventually(() => expect(notify).toHaveBeenCalled());
+  // The retired worker never yields from its loop and is still killed.
+  await eventually(() => expect(() => process.kill(pid, 0)).toThrow());
   expect(await load()).toMatchObject({ items: [{ id: "recovered" }] });
   notify.mockClear();
   fs.writeFileSync(
@@ -161,6 +201,15 @@ it("survives a hung source, source edits and a worker crash", async () => {
   await eventually(() => expect(notify).toHaveBeenCalled());
   await expect(load()).rejects.toThrow("stopped");
   release();
+});
+
+it("times a request from when a loaded worker receives it, not from process start", async () => {
+  const { load } = setup(
+    `await new Promise(r=>setTimeout(r,1200)); export default {async load(){ process.exit(1) }}`,
+    { timeoutMs: 800 },
+  );
+  // Startup outlasts the request budget; the crash still reports as one.
+  await expect(load()).rejects.toThrow("stopped");
 });
 
 it("ignores late protocol messages from a replaced worker", async () => {
