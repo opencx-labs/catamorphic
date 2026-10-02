@@ -4,7 +4,7 @@
  */
 const result = await Bun.build({
   entrypoints: [new URL("../src/sandbox-main.ts", import.meta.url).pathname],
-  target: "bun",
+  target: "node",
   format: "esm",
   minify: false,
   sourcemap: "none",

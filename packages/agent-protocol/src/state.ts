@@ -63,8 +63,9 @@ function compareItems(a: Item, b: Item): number {
 function upsertItem(items: readonly Item[], item: Item): Item[] {
   const index = items.findIndex((existing) => existing.id === item.id);
   if (index >= 0) {
+    // An item keeps the place it was added at.
     const next = items.slice();
-    next[index] = item;
+    next[index] = { ...item, position: (items[index] as Item).position };
     return next;
   }
   const next = items.slice();

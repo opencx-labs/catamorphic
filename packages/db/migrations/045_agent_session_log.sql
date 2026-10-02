@@ -50,6 +50,8 @@ CREATE TABLE agent_provider_threads (
     portable boolean NOT NULL DEFAULT false,
     -- Where a file-backed native state lives in the harness home (Codex rollouts).
     state_path text,
+    -- A forked session's first thread: the source thread and the turn it forks through.
+    fork_source jsonb,
     created_at timestamp with time zone NOT NULL DEFAULT now(),
     updated_at timestamp with time zone NOT NULL DEFAULT now()
 );

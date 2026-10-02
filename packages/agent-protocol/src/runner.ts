@@ -306,14 +306,19 @@ export type HarnessEvent =
 
 export type HostCall =
   | { kind: "tool"; name: string; input: JsonValue; itemKey?: string }
-  /** Append native state entries (Claude SessionStore, a rollout file's lines). */
+  /**
+   * Append native state entries (Claude SessionStore, a rollout file's
+   * lines). `thread` names the native thread by its native id; absent, the
+   * attempt's own. A fork may read its source thread's.
+   */
   | {
       kind: "native_state.append";
+      thread?: string;
       subpath?: string;
       entries: JsonValue[];
     }
-  | { kind: "native_state.load"; subpath?: string }
-  | { kind: "native_state.subpaths" };
+  | { kind: "native_state.load"; thread?: string; subpath?: string }
+  | { kind: "native_state.subpaths"; thread?: string };
 
 // ---------------------------------------------------------------------------
 // Frames (runner → host)
@@ -453,9 +458,16 @@ export interface AttemptHost {
   request(key: string, request: RequestDraft): Promise<RuntimeRequestResponse>;
   /** The native thread's state, stored with Work (capabilities.nativeState). */
   nativeState: {
-    append(input: { subpath?: string; entries: JsonValue[] }): Promise<void>;
-    load(input: { subpath?: string }): Promise<JsonValue[] | null>;
-    subpaths(): Promise<string[]>;
+    append(input: {
+      thread?: string;
+      subpath?: string;
+      entries: JsonValue[];
+    }): Promise<void>;
+    load(input: {
+      thread?: string;
+      subpath?: string;
+    }): Promise<JsonValue[] | null>;
+    subpaths(input?: { thread?: string }): Promise<string[]>;
   };
   /** Aborted when the runner stops: end the harness promptly. */
   signal: AbortSignal;

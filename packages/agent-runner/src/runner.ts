@@ -71,7 +71,7 @@ export class AttemptRunner {
   private emitFrame(frame: UnsequencedFrame): void {
     if (this.exited) return;
     this.seq += 1;
-    this.options.write({ ...frame, seq: this.seq } as RunnerFrame);
+    this.options.write(boundFrame({ ...frame, seq: this.seq } as RunnerFrame));
   }
 
   private emitEvent(event: HarnessEvent): void {
@@ -339,22 +339,27 @@ export class AttemptRunner {
         }),
       request: (key, request) => this.openRequest(key, request),
       nativeState: {
-        append: async ({ subpath, entries }) => {
+        append: async ({ thread, subpath, entries }) => {
           await this.call({
             kind: "native_state.append",
+            ...(thread ? { thread } : {}),
             ...(subpath ? { subpath } : {}),
             entries,
           });
         },
-        load: async ({ subpath }) => {
+        load: async ({ thread, subpath }) => {
           const result = await this.call({
             kind: "native_state.load",
+            ...(thread ? { thread } : {}),
             ...(subpath ? { subpath } : {}),
           });
           return Array.isArray(result) ? result : null;
         },
-        subpaths: async () => {
-          const result = await this.call({ kind: "native_state.subpaths" });
+        subpaths: async (input) => {
+          const result = await this.call({
+            kind: "native_state.subpaths",
+            ...(input?.thread ? { thread: input.thread } : {}),
+          });
           return Array.isArray(result)
             ? result.filter(
                 (value): value is string => typeof value === "string",
@@ -365,6 +370,32 @@ export class AttemptRunner {
       signal: this.abort.signal,
     };
   }
+}
+
+/** Largest frame, in characters: a host reads frames in 1 MiB chunks. */
+export const MAX_FRAME_CHARS = 512 * 1024;
+const TRUNCATED_STRING_CHARS = 16 * 1024;
+
+/**
+ * A frame small enough to read in one chunk. A huge tool result or command
+ * output is cut, string by string, rather than dropped: the item still
+ * completes, and says it was shortened.
+ */
+export function boundFrame(frame: RunnerFrame): RunnerFrame {
+  if (JSON.stringify(frame).length <= MAX_FRAME_CHARS) return frame;
+  const cut = (value: unknown): unknown => {
+    if (typeof value === "string")
+      return value.length > TRUNCATED_STRING_CHARS
+        ? `${value.slice(0, TRUNCATED_STRING_CHARS)}\n[Shortened: ${value.length - TRUNCATED_STRING_CHARS} more characters]`
+        : value;
+    if (Array.isArray(value)) return value.slice(0, 200).map(cut);
+    if (value && typeof value === "object")
+      return Object.fromEntries(
+        Object.entries(value).map(([key, inner]) => [key, cut(inner)]),
+      );
+    return value;
+  };
+  return cut(frame) as RunnerFrame;
 }
 
 function toolResult(value: JsonValue | undefined): HostToolResult {
