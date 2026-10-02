@@ -107,7 +107,7 @@ export type CreateCatamorphicConfig = CatamorphicHostConfig &
         /**
          * Pluggable coding agent(s) for AI-assisted editing: one
          * `RegisteredCodingAgent` (a host adapter such as
-         * `createAiSdkAdapter`, or a sandboxed harness by id, ADR 0196) or a
+         * `createAiSdkAdapter`, or a sandboxed harness by id, ADR 0197) or a
          * `CodingAgentRegistry` when the host offers several agents. Requires
          * `sandboxProvider`; enables the agent-session APIs.
          */

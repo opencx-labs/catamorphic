@@ -11,7 +11,7 @@ import {
 } from "@catamorphic/sandbox";
 
 /**
- * Members' own harness sign-ins on this machine (ADR 0197). Each is the
+ * Members' own harness sign-ins on this machine (ADR 0198). Each is the
  * harness's own home for one member under the machine's data directory,
  * made by the harness's own login in the operator's terminal on this
  * machine. Work never reads, copies or sends what is inside: the machine
@@ -118,7 +118,8 @@ export function signInOnMachine(input: {
   }
   const login = signInCommand({ ...input, home });
   const spawn: Spawn =
-    input.spawn ?? ((command, args, options) => spawnSync(command, args, options));
+    input.spawn ??
+    ((command, args, options) => spawnSync(command, args, options));
   const result = spawn(login.command, login.args, {
     env: { ...process.env, ...login.env },
     stdio: "inherit",

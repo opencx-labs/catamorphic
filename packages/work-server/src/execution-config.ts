@@ -251,7 +251,7 @@ export function workExecution(args: {
 }) {
   const { settings } = args;
   validateExecutionSettings(settings);
-  // Members' own sign-ins, made on this machine (ADR 0197).
+  // Members' own sign-ins, made on this machine (ADR 0198).
   const signIns = signInRoot(args.dataDir);
   const provider =
     settings.backend === "microsandbox"

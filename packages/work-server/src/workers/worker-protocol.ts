@@ -1,7 +1,7 @@
 import { RUNNER_PROTOCOL_VERSION } from "@catamorphic/agent-protocol/runner";
 
 /**
- * The protocol a worker states on every call (ADR 0196): the runner
+ * The protocol a worker states on every call (ADR 0197): the runner
  * protocol its sandboxes run, since the control plane drives their
  * runners through it.
  */

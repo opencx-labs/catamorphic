@@ -8,7 +8,7 @@ import {
 const HARNESSES = ["claude-code", "codex"] as const;
 type Harness = (typeof HARNESSES)[number];
 
-const USAGE = `Members' own sign-ins on this machine (ADR 0197):
+const USAGE = `Members' own sign-ins on this machine (ADR 0198):
 
   work worker sign-in <claude-code|codex> --member <id> [-- <login args>]
       Run the harness's own login here, in this terminal, for one member.
@@ -34,7 +34,8 @@ export function workerCommand(
   if (command === "sign-ins")
     return (env) => {
       const signIns = listMachineSignIns(signInRoot(dataDir(env)));
-      if (signIns.length === 0) console.log("No one is signed in on this machine.");
+      if (signIns.length === 0)
+        console.log("No one is signed in on this machine.");
       for (const signIn of signIns)
         console.log(`${signIn.harness}\t${signIn.member}`);
       return 0;

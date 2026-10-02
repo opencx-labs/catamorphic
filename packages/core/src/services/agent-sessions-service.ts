@@ -3098,7 +3098,9 @@ export class AgentSessionsService {
     const known = this.knownOwners.get(
       `${project.tenant_id}:${session.project_id}:${session.external_user_id}`,
     );
-    if (known && !this.resolveOwner) return known;
+    // The host resolves members again, so revoked access stops their work;
+    // a root caller (no scope) is nobody the host could resolve.
+    if (known && (!this.resolveOwner || known.scope === undefined)) return known;
     return (
       (await this.resolveOwner?.({
         tenantId: project.tenant_id,
@@ -7441,7 +7443,7 @@ export class AgentSessionsService {
     const commandTimeoutSeconds =
       allocation.policy.requirements.resources?.commandTimeoutSeconds;
     // The owner's own sign-in, when the placed machine reports it (ADR
-    // 0197): the sandbox mounts that one home from the machine's disk.
+    // 0198): the sandbox mounts that one home from the machine's disk.
     const owner = placementOwner(session.external_user_id);
     const signIn =
       agent.signIn &&

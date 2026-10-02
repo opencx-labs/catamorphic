@@ -42,7 +42,11 @@ brain become replicas. Never add a replica just for capacity.
    ```
 
    Pass the code through the deployment's secret mechanism; it is needed only
-   for the first start. The worker stores its credential in
+   for the first start. Every worker call states the worker's protocol; a
+   control plane that cannot drive it answers `426` with
+   `{ "code": "upgrade_required", "serverProtocol", "minimum" }`, and the
+   worker logs which side to update and asks again every few minutes. Run
+   workers of the control plane's release. The worker stores its credential in
    `/data/worker-credential` (owner-only) and refuses to start if
    `DATABASE_URL`, `WORK_SECRET`, or `WORK_VAULT_KEY` is set. It dials out; open
    no inbound port.
@@ -461,18 +465,23 @@ An Environment chooses its sandbox (ADR 0176) in `.work/project.json`:
   `WORK_UNENFORCED_EGRESS=accept`, which runs them with open egress.
 
 Machines advertise `images`, `images.build`, `containers`, and
-`network.policy`, and a local-process machine `harness.claude-code` and
+`network.policy`, `sign-ins` and one `sign-in:<harness>:<member>` per
+member signed in on them, and a local-process machine `harness.claude-code` and
 `harness.codex` when those CLIs are on its `PATH`;
 `GET /_work/operator/machines` shows them. An Environment
 no machine satisfies reports which capability is missing. VM budgets include
 nested containers; the Docker disk has its own size, and local-process
 containers are not budgeted.
 
-## Members' own logins and files
+## Members' own sign-ins and files
 
-An Environment with `"personalCredentials": true` lets a member's own
-Claude Code or Codex login and listed files reach that member's own chats
-(ADR 0184, [harnesses](harnesses.md#members-own-logins)). Only placements
+An Environment with `"personalCredentials": true` lets a member's chats run
+Claude Code or Codex on the member's own sign-in, made on a machine with
+`work worker sign-in <claude-code|codex> --member <id>` in a terminal there
+(ADR 0198, [harnesses](harnesses.md#members-own-sign-ins)), and lets their
+listed files reach their own chats. The sign-in never leaves that machine:
+the worker reports only `sign-in:<harness>:<member>` in its offer, and
+placement takes only a machine reporting the chat owner's. Only placements
 that isolate the member qualify: microsandbox, a worker whose access names
 only that person, or the member's device. A local-process machine that
 serves several people (a `trusted` worker, or the control plane itself)
@@ -480,7 +489,9 @@ refuses them unless its operator sets `WORK_PERSONAL_CREDENTIALS=accept` on
 that machine (the worker's own environment, like `WORK_UNENFORCED_EGRESS`),
 which advertises `credentials.personal`. Give such Environments egress to
 `api.anthropic.com`, `chatgpt.com`, and `api.openai.com` when they restrict
-it, and the CLIs on the path or in the image.
+it, and the CLIs on the path or in the image. A company that wants these
+harnesses for everyone binds a model connection instead
+([harnesses](harnesses.md)).
 
 ## Unattended agents
 

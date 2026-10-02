@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { ACTIVE_TURN_STATUSES } from "@catamorphic/agent-protocol";
 import type { AgentCapabilityOptions } from "@catamorphic/core";
 import {
   type ConnectionActionGuard,
@@ -54,7 +55,6 @@ import { WorkAdmissionService } from "./admission/admission-service.js";
 import { registerWorkAdmissionRoutes } from "./admission/routes.js";
 import { workAgentCapabilities } from "./agent-capabilities.js";
 import { buildAgentRegistry } from "./agents.js";
-import { signInCapabilities } from "./workers/sign-ins.js";
 import { parseWorkAuthConfig } from "./auth/auth-config.js";
 import { openWorkAuthDatabase } from "./auth/auth-database.js";
 import { trustedProxies } from "./auth/client-address.js";
@@ -107,6 +107,7 @@ import {
   type MachineProvisioner,
   MachineReconciler,
 } from "./workers/machine-rules.js";
+import { signInCapabilities } from "./workers/sign-ins.js";
 import { WorkWorkerRegistry } from "./workers/worker-registry.js";
 import { registerWorkerRoutes } from "./workers/worker-routes.js";
 
@@ -1269,8 +1270,9 @@ async function stopMemberWork(args: {
     .selectFrom("agent_turns as turn")
     .innerJoin("agent_sessions as session", "session.id", "turn.session_id")
     .select(["session.id", "session.project_id"])
+    .distinct()
     .where("session.external_user_id", "=", args.userId)
-    .where("turn.status", "=", "running")
+    .where("turn.status", "in", [...ACTIVE_TURN_STATUSES])
     .execute();
   for (const session of running) {
     try {

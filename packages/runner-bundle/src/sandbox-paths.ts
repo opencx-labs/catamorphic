@@ -25,8 +25,7 @@ export function withSandboxPaths(
     start: (attempt, host, local) => {
       const mapped: AttemptHost = {
         emit: (event) => host.emit(outward(event)),
-        callTool: async (input) =>
-          inward(await host.callTool(outward(input))),
+        callTool: async (input) => inward(await host.callTool(outward(input))),
         authorize: (input) => {
           const { signal, ...rest } = input;
           return host.authorize({ ...outward(rest), signal });

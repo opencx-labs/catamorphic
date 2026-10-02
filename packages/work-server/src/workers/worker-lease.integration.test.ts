@@ -21,7 +21,12 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "../server.js";
-import { createTestDatabase, testServerOptions } from "../test-support.js";
+import {
+  createTestDatabase,
+  enqueue as enqueueMessage,
+  testServerOptions,
+} from "../test-support.js";
+import { WORKER_PROTOCOL, WORKER_PROTOCOL_HEADER } from "./worker-protocol.js";
 import { startWorkWorker } from "./worker-runtime.js";
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -227,21 +232,20 @@ it.skipIf(!process.env.DATABASE_URL)(
       const turns = (sessionId: string) =>
         db()
           .selectFrom("agent_turns")
-          .select(["id", "status", "result_message_id", "attempt"])
+          .select(["id", "status", "attempt_count"])
           .where("session_id", "=", sessionId)
           .orderBy("created_at")
           .execute();
       /** Enqueue on a random replica; any replica may run it. */
       const enqueue = async (sessionId: string, message: string) => {
         const server = anyReplica();
-        const receipt = await sessions(server).enqueueMessage(
-          await memberOn(server),
-          project.id,
+        return enqueueMessage({
+          sessions: sessions(server),
+          identity: await memberOn(server),
+          projectId: project.id,
           sessionId,
-          message,
-        );
-        if (!receipt.turnId) throw new Error("No turn");
-        return receipt.turnId;
+          text: message,
+        });
       };
       /** The turn's settled reply, from Postgres. */
       const settled = async (turnId: string, timeout = 60_000) => {
@@ -257,22 +261,23 @@ it.skipIf(!process.env.DATABASE_URL)(
               ).status,
             { timeout, interval: 250 },
           )
-          .toMatch(/^(completed|failed)$/);
-        const reply = await db()
+          .toMatch(/^(completed|failed|interrupted)$/);
+        const turn = await db()
           .selectFrom("agent_turns")
-          .innerJoin(
-            "agent_messages",
-            "agent_messages.id",
-            "agent_turns.result_message_id",
-          )
-          .select([
-            "agent_turns.status",
-            "agent_messages.content",
-            "agent_messages.metadata",
-          ])
-          .where("agent_turns.id", "=", turnId)
+          .select(["status", sql<string | null>`error->>'message'`.as("error")])
+          .where("id", "=", turnId)
           .executeTakeFirstOrThrow();
-        return reply;
+        const reply = await db()
+          .selectFrom("agent_items")
+          .select("text")
+          .where("turn_id", "=", turnId)
+          .where("kind", "=", "assistant_message")
+          .orderBy("position", "desc")
+          .executeTakeFirst();
+        return {
+          status: turn.status,
+          content: reply?.text ?? turn.error ?? "",
+        };
       };
       const count = (content: string) =>
         content.split("\n---\n").at(-1)?.trim();
@@ -321,9 +326,10 @@ it.skipIf(!process.env.DATABASE_URL)(
       await startReplica(runs === "a" ? "b" : "a");
 
       // 2. The replica running the turn crashes mid-turn (SIGKILL). Only
-      // that turn is lost: once its lease lapses, the other replica settles
-      // it as interrupted and never runs it again. The crashing replica is
-      // a process of its own; until it claims a turn, replica a runs them.
+      // that turn is lost: once its lease lapses, another replica settles
+      // it as interrupted and never runs it again (ADR 0197). The crashing
+      // replica is a process of its own; replica a takes no turns meanwhile,
+      // so the crashing replica's poller claims the next one.
       await stopReplica("b");
       let appended = 2;
       crashable = await startReplicaProcess({
@@ -334,45 +340,25 @@ it.skipIf(!process.env.DATABASE_URL)(
           WORK_MACHINE_NAME: "crashable",
         },
       });
-      let crashed: string | undefined;
-      for (let attempt = 0; attempt < 10 && !crashed; attempt++) {
-        since = new Date();
-        // Queued without a local drain, so either replica's poller claims it.
-        const queued =
-          await anyReplica().catamorphic.core.agentSessions?.turns.deliver({
-            sessionId: chat.id,
-            content: SLOW_TURN,
-            author: { kind: "user", externalUserId: owner.externalUserId },
-            mode: "queue",
-          });
-        if (!queued?.turnId) throw new Error("No turn");
-        turnId = queued.turnId;
-        await sleeping(since);
-        if (await runningOn(chat.id)) {
-          reply = await settled(turnId);
-          expect(reply.status, reply.content).toBe("completed");
-          appended += 2;
-          continue;
-        }
-        crashable.kill("SIGKILL");
-        crashed = turnId;
-        appended += 1;
-      }
-      if (!crashed) throw new Error("The crashable replica never ran a turn");
-      reply = await settled(crashed, 120_000);
-      expect(reply.status, reply.content).toBe("failed");
-      expect(reply.metadata).toMatchObject({
-        status: "failed",
-        unexpectedStop: true,
-      });
+      await sessions(a).stopLocalTurns({ timeoutMs: 0 });
+      since = new Date();
+      const crashed = await enqueue(chat.id, SLOW_TURN);
+      await sleeping(since);
+      expect(await runningOn(chat.id)).toBeUndefined();
+      crashable.kill("SIGKILL");
+      appended += 1;
+      await stopReplica("a");
+      await startReplica("a");
       await startReplica("b");
+      reply = await settled(crashed, 120_000);
+      expect(reply.status, reply.content).toBe("interrupted");
       turnId = await enqueue(chat.id, "run wc -c < ../ops");
       reply = await settled(turnId);
       // The interrupted turn's first append ran once; nothing after it ran.
       expect(count(reply.content)).toBe(`exit=0\n${appended}`);
-      expect((await turns(chat.id)).every((turn) => turn.attempt === 1)).toBe(
-        true,
-      );
+      expect(
+        (await turns(chat.id)).every((turn) => turn.attempt_count === 1),
+      ).toBe(true);
 
       // 3. The worker connects again under its epoch mid-turn: nothing is
       // interrupted.
@@ -399,7 +385,10 @@ it.skipIf(!process.env.DATABASE_URL)(
       const reconnect = await anyReplica().app.inject({
         method: "POST",
         url: "/api/workers/connect",
-        headers: { authorization: `Worker ${credential}` },
+        headers: {
+          authorization: `Worker ${credential}`,
+          [WORKER_PROTOCOL_HEADER]: String(WORKER_PROTOCOL.server),
+        },
         payload: {
           session: firstEpoch,
           offer: {

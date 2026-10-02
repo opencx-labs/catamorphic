@@ -2,8 +2,12 @@ import type {
   AgentCapabilityGateway,
   TurnContextFragment,
 } from "../agent-capabilities.js";
-import type { SignInHarness } from "../types.js";
-import type { AgentEvent, AgentQuestion, SandboxProvider } from "../types.js";
+import type {
+  AgentEvent,
+  AgentQuestion,
+  SandboxProvider,
+  SignInHarness,
+} from "../types.js";
 import type { HarnessPermissions } from "./harness-permissions.js";
 import type { McpToolPolicyLayers } from "./tool-policy.js";
 

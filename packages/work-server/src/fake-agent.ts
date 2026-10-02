@@ -19,7 +19,7 @@ interface FakeSandbox {
 }
 
 /**
- * The deterministic agent of `WORK_FAKE_AGENT=1` (ADR 0196): lets the
+ * The deterministic agent of `WORK_FAKE_AGENT=1` (ADR 0197): lets the
  * server boot, invite and chat end to end with no model key, for tests and
  * for trying the server before configuring a provider. It is the
  * `EchoAdapter` (`Echo: <message>`, and its `[[directive]]`s) run on the
@@ -92,13 +92,16 @@ function startWorkspaceCommand(input: {
   request: string;
   sandbox: FakeSandbox | undefined;
 }): AttemptControl {
-  const { attempt, host, request } = input;
+  const { attempt, host } = input;
   const stop = new AbortController();
   const ref: NativeRef =
     attempt.thread.mode === "resume"
       ? attempt.thread.nativeRef
       : { id: randomUUID(), strength: "strong" };
-  const turnRef: NativeRef = { id: `${ref.id}:${attempt.turnId}`, strength: "strong" };
+  const turnRef: NativeRef = {
+    id: `${ref.id}:${attempt.turnId}`,
+    strength: "strong",
+  };
   const run = async () => {
     host.emit({ type: "thread", ref });
     host.emit({ type: "turn.started", ref: turnRef });
@@ -119,7 +122,9 @@ function startWorkspaceCommand(input: {
     host.emit({
       type: "turn.completed",
       status: "failed",
-      error: { message: error instanceof Error ? error.message : String(error) },
+      error: {
+        message: error instanceof Error ? error.message : String(error),
+      },
     });
   });
   return {

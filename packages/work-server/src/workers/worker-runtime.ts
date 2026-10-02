@@ -34,7 +34,7 @@ export interface WorkWorkerOptions {
   execution: WorkExecutionSettings;
   version?: string;
   /**
-   * The protocol this worker states on every call (ADR 0196); the one it
+   * The protocol this worker states on every call (ADR 0197); the one it
    * speaks by default. Tests state another to see the control plane refuse.
    */
   protocol?: number;
@@ -103,7 +103,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   const provider: SandboxProvider = execution.provider;
   /**
    * What this worker offers, read again for every connect: members'
-   * sign-ins come and go on the machine (ADR 0197), and only the fact that
+   * sign-ins come and go on the machine (ADR 0198), and only the fact that
    * one exists is reported.
    */
   const currentOffer = (): WorkerOffer => ({
@@ -447,7 +447,7 @@ function upgradeAnswer(input: { answer: unknown; protocol: number }): string {
 }
 
 /**
- * The control plane cannot drive this worker's protocol (426, ADR 0196):
+ * The control plane cannot drive this worker's protocol (426, ADR 0197):
  * one of them must be updated.
  */
 export class WorkerUpgradeRequiredError extends RunnerSessionEndedError {

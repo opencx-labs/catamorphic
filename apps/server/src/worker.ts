@@ -20,7 +20,7 @@ import { workerCommand } from "./worker-cli.js";
  *                            execution backend and budgets, as on a server
  *
  * `sign-in`, `sign-out` and `sign-ins` manage members' own harness sign-ins
- * on this machine (ADR 0197); `help` lists them.
+ * on this machine (ADR 0198); `help` lists them.
  */
 const command = workerCommand(process.argv.slice(2));
 if (command) {

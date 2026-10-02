@@ -14,7 +14,7 @@ import {
   admissionPolicy,
   type ExecutionEnvironmentsService,
 } from "./execution-environments-service.js";
-import { SessionLogGapError, type SessionLog } from "./sessions/session-log.js";
+import { type SessionLog, SessionLogGapError } from "./sessions/session-log.js";
 
 /**
  * The session was continued on THIS backend: its authority moved here, so
@@ -174,7 +174,18 @@ export async function writeSessionMirror({
       await log.importSnapshot(trx, {
         sessionId,
         // The copy runs this side's agent, not the source's harness threads.
-        snapshot: { ...input.base, providerThreads: [] },
+        snapshot: {
+          ...input.base,
+          providerThreads: [],
+          turns: input.base.turns.map((turn) => ({
+            ...turn,
+            providerThreadId: null,
+          })),
+          attempts: input.base.attempts.map((attempt) => ({
+            ...attempt,
+            providerThreadId: null,
+          })),
+        },
       });
     }
     let sequence: number;
@@ -225,7 +236,9 @@ export async function writeSessionMirror({
             externalUserId: identity.externalUserId,
             agentId: session.agent_id,
             session:
-              snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
+              snapshot &&
+              typeof snapshot === "object" &&
+              !Array.isArray(snapshot)
                 ? { ...snapshot, id: sessionId }
                 : {},
           },

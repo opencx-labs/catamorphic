@@ -63,7 +63,7 @@ Start small and add only what the situation needs:
 | More execution capacity, workers, replicas for availability | [Machines: control plane, replicas, and workers](references/cluster-deployment.md) |
 | Sharing documents, folders, or apps with customers behind a sign-in | [Sharing outside the company](references/sharing.md) |
 | Members working from Claude Code, Codex, or another MCP client | [Working from your own agent](references/members-over-mcp.md) |
-| Project agents that are Claude Code or Codex, running on the server with a model key the gateway holds | [Harnesses on the server](references/harnesses.md) |
+| Project agents that are Claude Code or Codex, running on the server with a model key the gateway holds, or on a member's own subscription signed in on the machine | [Harnesses on the server](references/harnesses.md) |
 | Work server plus company code (a guard or classifier, a directory, a connection provider, seeds, or a route) | [`@catamorphic/work-server`](../../packages/work-server/README.md): extend the published image with hooks; never fork the server |
 | Existing or custom application | [Custom host](references/custom-host.md) |
 | Sign-in, OIDC, invitations, roles, permissions | [Auth and identity](references/auth-and-identity.md) |
@@ -115,6 +115,10 @@ disagree with the installed source, the source wins.
 - **Model keys are connections too.** Claude Code and Codex agents run in
   their sandbox and reach their model through the gateway with the chat's
   grant (ADR 0180); the server's own model variables never reach them.
+- **Sign-ins stay on the machine.** A member's Claude Code or Codex
+  subscription runs only where they signed in with the CLI's own login
+  (`work worker sign-in`), in an Environment with `"personalCredentials":
+  true`; Work never copies, stores, or forwards a sign-in (ADR 0198).
 - **GitHub is a connection.** The organization's GitHub App installation is
   the `github` service connection; sync, proposals, and agents' GitHub
   actions all go through it (ADR 0177). There is no GitHub token variable

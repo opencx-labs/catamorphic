@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * `work`, the image's machine-local command (ADRs 0164, 0197):
+ * `work`, the image's machine-local command (ADRs 0164, 0198):
  *
  *   work worker              run this machine as an enrolled worker
  *   work worker sign-in ...  members' own sign-ins on this machine

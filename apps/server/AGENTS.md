@@ -32,7 +32,21 @@ that hold only a machine credential and dial out to the control plane. A
 worker owns its node lease (ADR 0192): any replica runs its agents and
 forwards their sandbox operations, and no replica keeps a worker in memory. Workflow runs and credentials stay on the control plane. Never
 give a worker database, vault, or sign-in secrets, and never add a replica for
-capacity. A Postgres control plane refuses plain-subprocess agents unless
+capacity. Workers state their protocol on every call and get `426` when the
+control plane cannot drive them (ADR 0197).
+
+Members' subscription sign-ins stay on the machine they were made on (ADR
+0198): `work worker sign-in <claude-code|codex> --member <id>` runs the CLI's
+own login in the operator's terminal into
+`<WORK_DATA_DIR>/sign-ins/<harness>/<member>`, the machine reports only
+`sign-in:<harness>:<member>`, and a sandbox of that member's own chat mounts
+that one home. Never read, copy, upload, store, or forward a sign-in: Anthropic's
+terms (https://code.claude.com/docs/en/legal-and-compliance) let a person
+sign in to the unmodified Claude Code on a machine they use and forbid a
+service from collecting or routing others' Claude.ai credentials. An admin
+allows sign-ins with an Environment that has `"personalCredentials": true`
+plus machines whose members signed in; otherwise companies use model
+connections through the gateway or a member's own API key. A Postgres control plane refuses plain-subprocess agents unless
 microsandbox or `WORK_TRUST_CONTROL_PLANE_AGENTS=1`. Follow the
 [machines reference](../../skills/setup-work-server/references/cluster-deployment.md)
 and keep its enrollment and recovery instructions accurate. Preserve the
@@ -50,7 +64,13 @@ alone never free capacity.
 - Docker: see `Dockerfile` header. `--network host` for mDNS on Linux.
 - Chat needs one of `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` /
   `OPENAI_API_KEY` (`WORK_MODEL` overrides; anthropic defaults to
-  claude-opus-5). `WORK_FAKE_AGENT=1` = deterministic echo agent.
+  claude-opus-5). `WORK_FAKE_AGENT=1` = deterministic echo agent (the
+  `EchoAdapter` on the host, plus workspace commands such as `run <shell>`,
+  see `packages/work-server/src/fake-agent.ts`).
+- Agents run on the agent runner (ADR 0197): the built-in assistant is the
+  AI SDK adapter on the control plane; Claude Code and Codex are the runner
+  bundle (`packages/runner-bundle/dist/runner.mjs`, built with the
+  packages) inside the chat's sandbox, run with Bun or Node.
 - Boot prints public API, documentation, and sign-in locations, never a
   credential.
 - Local setup agents inspect the schemas under `packages/work-server/src/setup` and call the

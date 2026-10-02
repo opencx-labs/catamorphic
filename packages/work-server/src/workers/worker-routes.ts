@@ -39,7 +39,7 @@ const Completion = z.strictObject({
  * `superseded: true` once a newer process of the worker took over; a 409
  * from complete refuses only that receipt. Every call states the worker's
  * protocol (`work-protocol`); one this control plane cannot drive is
- * answered 426 naming which side to update (ADR 0196).
+ * answered 426 naming which side to update (ADR 0197).
  */
 export function registerWorkerRoutes(
   app: FastifyInstance,

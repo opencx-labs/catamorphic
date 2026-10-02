@@ -14,7 +14,7 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "../server.js";
-import { testServerOptions } from "../test-support.js";
+import { replyOf, testServerOptions } from "../test-support.js";
 import { startWorkWorker } from "./worker-runtime.js";
 
 const execute = promisify(execFile);
@@ -391,20 +391,20 @@ describe("a pull request review chat with Git through the gateway", () => {
   const answers = async () => {
     const sessions = server.catamorphic.core.agentSessions;
     if (!sessions) throw new Error("Agent sessions are unavailable");
-    return (await sessions.get(identity, projectId, sessionId)).messages
+    return (await sessions.transcript(identity, projectId, sessionId))
       .filter((message) => message.role === "assistant")
       .map((message) => message.content);
   };
   const run = async (command: string) => {
     const sessions = server.catamorphic.core.agentSessions;
     if (!sessions) throw new Error("Agent sessions are unavailable");
-    return (
+    return replyOf(
       await sessions.sendMessage(
         identity,
         projectId,
         sessionId,
         `run ${command}`,
-      )
+      ),
     ).content;
   };
 
@@ -464,6 +464,18 @@ describe("a pull request review chat with Git through the gateway", () => {
     ).toEqual({ ref: "refs/pull/42/head", commit: nextHead });
 
     // Idle release and rehydration keep the base.
+    // The reply shows before its turn finishes saving (ADR 0197).
+    await waitFor(
+      async () =>
+        (
+          await server.catamorphic.core.db
+            .selectFrom("agent_turns")
+            .select("status")
+            .where("session_id", "=", sessionId)
+            .execute()
+        ).every((turn) => turn.status === "completed"),
+      "the chat's turns to settle",
+    );
     expect(
       await sessions.releaseIdleWorkspaces({
         now: new Date(Date.now() + 10 * 60_000),
@@ -580,13 +592,13 @@ describe("a pull request review chat with Git through the gateway", () => {
       throw new Error("No session");
     const sessions = server.catamorphic.core.agentSessions;
     if (!sessions) throw new Error("Agent sessions are unavailable");
-    const pushed = (
+    const pushed = replyOf(
       await sessions.sendMessage(
         identity,
         projectId,
         String(delivered.sessionId),
         "run git checkout -q -b work/inspect && git -c user.name=Agent -c user.email=agent@example.test commit -q --allow-empty -m probe && git push origin work/inspect 2>&1",
-      )
+      ),
     ).content;
     expect(pushed).not.toMatch(/^exit=0/);
     expect(pushed).toContain("sandboxing is contained");

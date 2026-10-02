@@ -55,7 +55,7 @@ export async function registerWorkMachine(args: {
   /** What this machine offers beside its sandbox provider (ADR 0184). */
   capabilities?: readonly string[];
   /**
-   * Members' sign-ins on this machine (ADR 0197), read again every few
+   * Members' sign-ins on this machine (ADR 0198), read again every few
    * seconds: a sign-in made or removed here reaches placement without a
    * restart.
    */
@@ -355,7 +355,10 @@ export async function registerWorkMachine(args: {
       .where("lease_token", "=", lease.token)
       .execute()
       .catch((error) =>
-        console.warn("[catamorphic] Could not refresh this machine's sign-ins", error),
+        console.warn(
+          "[catamorphic] Could not refresh this machine's sign-ins",
+          error,
+        ),
       )
       .finally(() => {
         refreshing = undefined;

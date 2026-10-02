@@ -3,7 +3,7 @@ import { SIGN_IN_HARNESSES, type SignInHarness } from "./types.js";
 
 /**
  * Where a machine keeps one member's sign-in home for a harness (ADR
- * 0197): `<root>/<harness>/<member>`, on the machine's own disk. The
+ * 0198): `<root>/<harness>/<member>`, on the machine's own disk. The
  * harness's own login writes there (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`);
  * sandboxes of that member's chats see it at `signInHomePath`. Work never
  * reads what is inside.
@@ -43,7 +43,7 @@ export function signInMemberOf(directory: string): string | undefined {
 
 /**
  * For providers whose sandboxes run on someone else's machines (cloud
- * sandboxes): a sign-in stays on the machine it was made on (ADR 0197), so
+ * sandboxes): a sign-in stays on the machine it was made on (ADR 0198), so
  * they refuse to be handed one.
  */
 export function refuseSignIns(input: {

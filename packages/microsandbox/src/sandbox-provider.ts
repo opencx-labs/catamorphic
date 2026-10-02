@@ -99,7 +99,7 @@ export interface MicrosandboxProviderConfig {
   /** Size of each container sandbox's Docker disk. Default 8 GiB. */
   containerDiskMib?: number;
   /**
-   * Where this machine keeps members' own harness sign-ins (ADR 0197),
+   * Where this machine keeps members' own harness sign-ins (ADR 0198),
    * one home per harness and member (`machineSignInHome`). A sandbox
    * created with `signIns` bind-mounts exactly those homes, read-write so
    * the CLI's own token refresh keeps working. Without it the provider
@@ -111,7 +111,7 @@ export interface MicrosandboxProviderConfig {
 /**
  * Runs once per new sandbox; ~20s on first use, no-op when everything
  * exists. Agent sessions need git and bash, and the agent runner needs Bun
- * or Node (ADR 0196); an image without them gets them from its package
+ * or Node (ADR 0197); an image without them gets them from its package
  * manager (Node, the smaller of the two).
  */
 const DEFAULT_SETUP_COMMAND =
@@ -240,7 +240,9 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
         .env(APP_DATA_ENV, APP_DATA_MOUNT);
     }
     for (const signIn of signIns)
-      builder = builder.volume(signIn.guest, (mount) => mount.bind(signIn.host));
+      builder = builder.volume(signIn.guest, (mount) =>
+        mount.bind(signIn.host),
+      );
     const sandbox = await builder.create();
     this.connections.set(name, sandbox);
     const prepare = async (command: string, what: string) => {
@@ -254,7 +256,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       await prepare(
         this.config.setupCommand,
         opts.egress?.mode === "allowlist"
-          ? "Sandbox setup command (egress is restricted, so the image must already have git and bash)"
+          ? "Sandbox setup command (egress is restricted, so the image must already have git, bash, and Bun or Node)"
           : "Sandbox setup command",
       );
     if (opts.containers)
@@ -277,7 +279,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * The sign-in homes a sandbox mounts (ADR 0197): each one this machine
+   * The sign-in homes a sandbox mounts (ADR 0198): each one this machine
    * keeps for the member named, nothing else of the sign-in root.
    */
   private signInMounts(
