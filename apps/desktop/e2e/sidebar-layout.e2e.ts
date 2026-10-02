@@ -458,6 +458,11 @@ describe("configurable browser workspace", () => {
     await app.waitFor(
       "document.querySelector('aside').dataset.sidebarRevealed === 'true'",
     );
+    // A keyboard reveal hands focus to the sidebar it revealed.
+    await app.waitFor(
+      "document.activeElement?.closest('aside') && document.activeElement.getAttribute('aria-label') === 'Expand sidebar'",
+      { label: "focus moves into the revealed sidebar" },
+    );
     await run("$('button[aria-label=\"Expand sidebar\"]').click()");
     await app.waitFor(
       "document.querySelector('aside').getAttribute('aria-hidden') === 'false'",

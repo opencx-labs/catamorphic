@@ -11,15 +11,20 @@ export function useSidebarReveal(enabled: boolean) {
 
   useEffect(() => {
     if (
-      revealed &&
-      document.activeElement?.matches("[data-sidebar-reveal-edge]")
-    ) {
+      !revealed ||
+      !document.activeElement?.matches("[data-sidebar-reveal-edge]")
+    )
+      return;
+    // The sidebar is invisible until the commit after the reveal starts its
+    // slide, and an invisible button cannot take focus.
+    const frame = requestAnimationFrame(() =>
       sidebarRef.current
         ?.querySelector<HTMLButtonElement>(
           'button[aria-label="Expand sidebar"]',
         )
-        ?.focus();
-    }
+        ?.focus(),
+    );
+    return () => cancelAnimationFrame(frame);
   }, [revealed]);
 
   useEffect(() => {
