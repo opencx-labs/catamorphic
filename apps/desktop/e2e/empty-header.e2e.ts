@@ -7,7 +7,7 @@ const click = async (selector: string) => {
   const target = await app.waitFor<{ x: number; y: number }>(
     `(() => {
     if ([...document.querySelectorAll('[data-sidebar]')].some(sidebar =>
-      !['open', 'closed'].includes(sidebar.dataset.motion) ||
+      sidebar.dataset.settled !== 'true' ||
       sidebar.getAnimations({subtree:true}).some(animation => animation.playState === 'running'))) return false;
     const button = document.querySelector(${JSON.stringify(selector)});
     if (!button) return false;
@@ -57,7 +57,7 @@ describe("empty workspace header", () => {
         for (const rightOpen of [false, true]) {
           // Wait for the native sidebar layout to settle before hit testing.
           await app.waitFor(`(() => {
-            if ([...document.querySelectorAll('[data-sidebar]')].some(sidebar => !['open', 'closed'].includes(sidebar.dataset.motion))) return false;
+            if ([...document.querySelectorAll('[data-sidebar]')].some(sidebar => sidebar.dataset.settled !== 'true')) return false;
             const header = document.querySelector('.workspace-chrome').getBoundingClientRect();
             const toggle = document.querySelector('[aria-label="${rightOpen ? "Collapse" : "Expand"} right sidebar"]');
             if (!toggle) return false;
@@ -99,7 +99,7 @@ describe("empty workspace header", () => {
         `window.catamorphicDesktop.devWindow('setSize', ${width}, 700)`,
       );
       await app.waitFor(
-        `innerWidth === ${width} && [...document.querySelectorAll('[data-sidebar]')].every(e => ['open', 'closed'].includes(e.dataset.motion))`,
+        `innerWidth === ${width} && [...document.querySelectorAll('[data-sidebar]')].every(e => e.dataset.settled === 'true')`,
       );
       const centered = await app.eval<boolean>(`(() => {
         const button = document.querySelector(${JSON.stringify(action)});
@@ -126,7 +126,7 @@ describe("empty workspace header", () => {
     );
     await click('[aria-label="Expand sidebar"]');
     await app.waitFor(
-      `document.querySelector('[data-sidebar="left"]').dataset.motion === 'open'`,
+      `document.querySelector('[data-sidebar="left"]').dataset.motion === 'open' && document.querySelector('[data-sidebar="left"]').dataset.settled === 'true'`,
     );
     await click('[data-sidebar="left"] [aria-label="Customize sidebar"]');
     await app.waitFor(

@@ -227,7 +227,7 @@ describe("tabbed sidebars", () => {
     );
     await app.waitFor(`(() => {
       const sides = [...document.querySelectorAll('[data-sidebar]')];
-      return sides.length === 2 && sides.every(side => ['open', 'closed'].includes(side.dataset.motion) && side.getAnimations({subtree:true}).every(a => a.playState !== 'running'));
+      return sides.length === 2 && sides.every(side => side.dataset.settled === 'true' && side.getAnimations({subtree:true}).every(a => a.playState !== 'running'));
     })()`);
     if (process.env.CATAMORPHIC_SIDEBAR_SCREENSHOT)
       await app.screenshot(process.env.CATAMORPHIC_SIDEBAR_SCREENSHOT);
@@ -309,7 +309,7 @@ describe("tabbed sidebars", () => {
     await toggleRight();
     await waitRight(true);
     await app.waitFor(
-      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]').dataset.motion === 'open'`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]').dataset.motion === 'open' && document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]').dataset.settled === 'true'`,
     );
     expect(
       await app.eval(`(() => {

@@ -199,6 +199,7 @@ export function TabbedSidebar({
       data-sidebar={side}
       data-motion={motion.phase}
       data-docked={motion.docked}
+      data-settled={motion.settled}
       data-tab-motion={tabMotion}
       data-resizing={resizing || undefined}
       data-sidebar-revealed={revealed}
@@ -212,11 +213,7 @@ export function TabbedSidebar({
       <div
         ref={panel}
         className={`sidebar-inner ${overlay ? "rounded-r-xl shadow-xl" : ""}`}
-        style={{
-          width: layout.width,
-          viewTransitionName:
-            motion.phase === "open" ? `sidebar-${side}` : "none",
-        }}
+        style={{ width: layout.width }}
       >
         {header}
         {(tabs.length > 1 || headerActions) && (

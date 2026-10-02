@@ -5,28 +5,27 @@ import {
   useRef,
   useState,
 } from "react";
+import { transitionSidebarToggle } from "./sidebar-transition.js";
 
 /**
- * A sidebar slides over the content and only then takes its place beside it;
- * leaving, it gives its place back first and slides away once the content has
- * painted at its new size. The slide is a transform, so the compositor runs
- * it without layout, and the content beside it (a web page in its own
- * process, a terminal, the code editor) resizes once per toggle, while
- * nothing moves, instead of on every frame.
+ * A sidebar moves the moment it is toggled and the content settles after it
+ * (ADR 0197). The panel slides over the content with a transform, so the
+ * compositor runs it without layout. Once it has stopped, the content takes
+ * or gives back the sidebar's space in a view transition that morphs it
+ * from its old layout to its new one (`transitionSidebarToggle`): the
+ * content (a web page in its own process, a terminal, the editor) lays out
+ * at its new size once, behind snapshots, and never while anything moves.
  *
+ * `phase` is where the panel is:
  * - `closed`: off screen and invisible.
- * - `opening`: sliding in over the content.
- * - `open`: in place; beside the content when docking, over it otherwise.
- * - `undocking`: still in place over the content, which has just taken the
- *   sidebar's space and is painting at its new size.
+ * - `opening`: sliding in.
+ * - `open`: in place.
  * - `closing`: sliding away.
+ *
+ * `docked` is whether the content makes room for the panel. It changes only
+ * at rest: after a docking sidebar opens, and after one closes.
  */
-export type SidebarPhase =
-  | "closed"
-  | "opening"
-  | "open"
-  | "undocking"
-  | "closing";
+export type SidebarPhase = "closed" | "opening" | "open" | "closing";
 
 export interface SidebarMotion {
   phase: SidebarPhase;
@@ -34,13 +33,10 @@ export interface SidebarMotion {
   docked: boolean;
 }
 
-/** Frames the content gets to paint at its new size before the slide. */
-const SETTLE_FRAMES = 2;
-
 /**
  * `panel` is the element whose CSS transform transition carries the slide;
  * the phase follows that transition, so a slowed or interrupted slide stays
- * in step and one that never runs (a hidden workspace) ends at once.
+ * in step and one that never runs ends at once.
  */
 export function useSidebarMotion({
   open,
@@ -51,43 +47,25 @@ export function useSidebarMotion({
   /** Whether the open sidebar takes space beside the content. */
   dock: boolean;
   panel: RefObject<HTMLElement | null>;
-}): SidebarMotion {
+}): SidebarMotion & {
+  /** The panel is still and the content is where it belongs. */
+  settled: boolean;
+} {
   const [phase, setPhase] = useState<SidebarPhase>(open ? "open" : "closed");
-  const docked = phase === "open" && dock;
-  // What the previous commit laid out: leaving a docked place gives the space
-  // back before sliding, even when `dock` turned off in the same update.
-  const dockedRef = useRef(docked);
+  const [docked, setDocked] = useState(open && dock);
+  const [morphing, setMorphing] = useState(false);
+  const atRest = phase === "open" || phase === "closed";
+  // Where the content belongs once the panel is still.
+  const place = phase === "open" && dock;
+  const latest = useRef({ atRest, place });
+  latest.current = { atRest, place };
 
   useLayoutEffect(() => {
-    const wasDocked = dockedRef.current;
     setPhase((current) => {
-      if (open)
-        return current === "open" || current === "undocking"
-          ? "open"
-          : "opening";
-      if (current === "open") return wasDocked ? "undocking" : "closing";
-      if (current === "opening") return "closing";
-      return current;
+      if (open) return current === "open" ? "open" : "opening";
+      return current === "closed" ? "closed" : "closing";
     });
   }, [open]);
-  // After the effect above, so it reads the previous commit.
-  useLayoutEffect(() => {
-    dockedRef.current = docked;
-  });
-
-  useEffect(() => {
-    if (phase !== "undocking") return;
-    let remaining = SETTLE_FRAMES;
-    let frame = 0;
-    const tick = () => {
-      remaining -= 1;
-      if (remaining > 0) frame = requestAnimationFrame(tick);
-      else
-        setPhase((current) => (current === "undocking" ? "closing" : current));
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [phase]);
 
   useLayoutEffect(() => {
     if (phase !== "opening" && phase !== "closing") return;
@@ -125,5 +103,20 @@ export function useSidebarMotion({
     };
   }, [phase, panel]);
 
-  return { phase, docked };
+  // One morph at a time. It reads where the content belongs when it applies
+  // and leaves the content alone if the panel has started moving again;
+  // another follows once the panel is still.
+  useEffect(() => {
+    if (!atRest || morphing || docked === place) return;
+    setMorphing(true);
+    transitionSidebarToggle({
+      sidebar: panel.current?.parentElement ?? null,
+      update: () => {
+        if (latest.current.atRest) setDocked(latest.current.place);
+        setMorphing(false);
+      },
+    });
+  }, [atRest, morphing, docked, place, panel]);
+
+  return { phase, docked, settled: atRest && docked === place };
 }

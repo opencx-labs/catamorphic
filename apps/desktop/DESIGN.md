@@ -278,10 +278,11 @@ the animation is wrong, not the test.
 Framed content previews transition the workspace margins and corner radius over
 200 ms with the standard easing. Reduced motion applies the frame immediately.
 
-Sidebars slide over the content with a 200 ms transform and dock at rest
-(ADR 0197): the content beside them resizes once per toggle, never while
-anything moves. New motion beside a page, terminal, editor or app frame
-slides over it rather than animating its size.
+A sidebar slides with a 200 ms transform the moment it is toggled, and the
+content beside it settles after it stops: a 200 ms view-transition morph
+from its old layout to its new one (ADR 0197). The content resizes once per
+toggle, never while anything moves. New motion beside a page, terminal,
+editor or app frame moves over it rather than animating its size.
 
 ### Current motion inventory
 
@@ -1506,12 +1507,13 @@ update it with its own updater. Work's checks for its own updates now count
 time asleep, wait a minute after waking, retry soon after a failure and keep a
 log. See ADR 0196.
 
-### 2026-10-02: Sidebars slide over the page instead of pushing it
+### 2026-10-02: Sidebars move first, the page settles after
 
 Toggling a sidebar over a web page shifted the whole page: opening dragged it
 along with the sidebar's edge and snapped it back when it resized, and closing
-reflowed it on the first frame, then slid it. The sidebar now slides over the
-content and takes its place when it stops; closing gives the space back under
-the still panel first, then slides away. The page reflows once while nothing
-moves, the slide never waits on the page, and the toggle travels with the
-panel. See ADR 0197.
+reflowed it on the first frame, then slid it. Now the sidebar slides the
+moment it is toggled, and when it stops the page glides into its new place
+instead of snapping, as Safari animates its sidebar: snapshots of the old and
+new layout move so the page's main column travels straight to where it lands,
+and cross-fade. A web page may hold still for a moment between the two while
+it lays out at its new size. See ADR 0197.

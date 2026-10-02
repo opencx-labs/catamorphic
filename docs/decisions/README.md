@@ -209,4 +209,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0194](0194-browser-tabs-load-like-chrome-and-sleep-when-unused.md) | Browser tabs load like Chrome's and sleep when unused | Accepted |
 | [0195](0195-conversation-continues-around-agent-questions.md) | The conversation continues around agent questions: replies defer, agents close, no "Other" row | Accepted |
 | [0196](0196-installed-claude-code-first.md) | The person's own Claude Code runs first; Claude Code and Codex pins move by scheduled pull request | Accepted |
-| [0197](0197-sidebars-slide-over-content-and-dock-at-rest.md) | Sidebars slide over the content and dock at rest | Accepted |
+| [0197](0197-sidebars-move-first-content-settles-after.md) | Sidebars move first; the content settles after them | Accepted |

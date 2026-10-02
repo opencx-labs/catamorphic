@@ -59,23 +59,28 @@ on each resize; a terminal refits and Monaco relayouts. With a GitHub tab
 showing, a width-animated Cmd+B toggle ran 4–7 frames of 40–55 ms (a
 terminal: 6 of 53–67 ms) while the renderer's main thread was nearly idle.
 
-Sidebars therefore slide over the content with a transform and take their
-place only at rest (`lib/sidebar-motion.ts`, ADR 0197): opening slides in,
-then docks; closing undocks, lets the content paint at its new size under
-the still panel for two frames, then slides away. The content resizes once
-per toggle while nothing moves, and the slide runs on the compositor. On the
-same GitHub tab a toggle has no long animation frames and one 33–50 ms frame
-at rest; a terminal toggle has none. Do not animate the size of anything
-beside a page, terminal, editor or app frame; slide over it and resize once.
-The one remaining size animation is the content frame's padding preview in
-Settings, which resizes a page shown beside Settings for its 200 ms.
+Sidebars therefore move first and the content settles after them
+(`lib/sidebar-motion.ts`, ADR 0197). The panel slides with a transform the
+moment it is toggled, over the content when opening and away from it when
+closing; the compositor runs it without layout. Once it is still, the
+content takes or gives back the space in a view transition
+(`lib/sidebar-transition.ts`): GPU snapshots of its old and new layout
+travel and cross-fade while the real content lays out once behind them. A
+page cannot resize without the window waiting for it to repaint (40–300 ms
+by page), so that wait falls in the short hold between the slide and the
+morph, while nothing moves. Do not animate the size of anything beside a
+page, terminal, editor or app frame. The one remaining size animation is
+the content frame's padding preview in Settings, which resizes a page shown
+beside Settings for its 200 ms.
 
-Measure with rAF gaps and `long-animation-frame` entries in the workspace
-window over CDP while toggling, and record which phase each long frame falls
-in (`aside[data-motion]`). Long frames with no script and no layout time are
-waiting on another process, not the renderer. `Page.startScreencast` misses
-compositor-only motion; film slides with `Page.captureScreenshot` and
-`Animation.setPlaybackRate`.
+rAF gaps measure the renderer's main thread, not what reaches the screen:
+a main-thread task during a compositor slide does not drop its frames.
+Judge motion by `DrawFrame` intervals in a CDP trace (`cc` and
+`disabled-by-default-devtools.timeline.frame` categories), and use rAF
+gaps and `long-animation-frame` entries to find main-thread work. Long
+frames with no script and no layout time are waiting on another process.
+`Page.startScreencast` misses compositor-only motion; film with
+`Page.captureScreenshot` and `Animation.setPlaybackRate`.
 
 ## Development timing retention
 

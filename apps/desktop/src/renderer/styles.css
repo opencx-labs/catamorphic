@@ -1444,10 +1444,9 @@ kbd {
 }
 
 /* Bare icon tabs. Both sidebars share the same quiet chrome and motion: the
-   aside holds the sidebar's place beside the content (its width, once
-   docked) and the panel inside slides over the content with a transform
-   (lib/sidebar-motion.ts), so the content resizes once per toggle and never
-   while anything moves. */
+   panel slides with a transform the moment it is toggled, and the aside
+   holds the sidebar's place beside the content (its width, once docked),
+   which changes only once the panel is still (lib/sidebar-motion.ts). */
 .tabbed-sidebar {
   position: relative;
   flex-shrink: 0;
@@ -1575,7 +1574,19 @@ kbd {
 .sidebar-resizer:active {
   background: color-mix(in srgb, var(--color-accent) 25%, transparent);
 }
-/* Config reload snapshots crossfade only the sidebars; the live workspace stays put. */
+/* Config reload snapshots crossfade only the sidebars; the live workspace
+   stays put. Names are unique to the visible workspace (others are only
+   transparent). */
+[data-workspace-visible="true"]
+  [data-sidebar="left"][data-motion="open"]
+  > .sidebar-inner {
+  view-transition-name: sidebar-left;
+}
+[data-workspace-visible="true"]
+  [data-sidebar="right"][data-motion="open"]
+  > .sidebar-inner {
+  view-transition-name: sidebar-right;
+}
 ::view-transition-group(sidebar-left),
 ::view-transition-group(sidebar-right),
 ::view-transition-old(sidebar-left),
@@ -1591,6 +1602,48 @@ kbd {
 }
 ::view-transition {
   pointer-events: none;
+}
+/* The content taking or giving back a still sidebar's space
+   (lib/sidebar-transition.ts): its box moves from where it was to where it
+   lands, under the sidebar; inside it, the old and new snapshots travel by
+   --content-shift (how far its main column moves within the box) so that
+   column goes straight to its new place while they cross-fade. Neither is
+   scaled, so text never stretches. */
+::view-transition-group(sidebar-left),
+::view-transition-group(sidebar-right) {
+  z-index: 1;
+}
+::view-transition-group(workspace-content),
+::view-transition-old(workspace-content),
+::view-transition-new(workspace-content) {
+  animation-duration: 200ms;
+  animation-timing-function: var(--ease-standard);
+}
+::view-transition-image-pair(workspace-content) {
+  overflow: clip;
+}
+::view-transition-old(workspace-content),
+::view-transition-new(workspace-content) {
+  inline-size: auto;
+  block-size: auto;
+}
+::view-transition-old(workspace-content) {
+  animation-name: content-out;
+}
+::view-transition-new(workspace-content) {
+  animation-name: content-in;
+}
+@keyframes content-out {
+  to {
+    translate: var(--content-shift, 0) 0;
+    opacity: 0;
+  }
+}
+@keyframes content-in {
+  from {
+    translate: calc(-1 * var(--content-shift, 0px)) 0;
+    opacity: 0;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .sidebar-tab,

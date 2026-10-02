@@ -5,6 +5,14 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSidebarMotion } from "./sidebar-motion.js";
 
+/** Content morphs wait here until a test lets them apply. */
+const morphs: Array<() => void> = [];
+vi.mock("./sidebar-transition.js", () => ({
+  transitionSidebarToggle: ({ update }: { update: () => void }) => {
+    morphs.push(update);
+  },
+}));
+
 /** The slide a real panel would run: one transform transition at a time. */
 class FakeTransition {
   readonly transitionProperty: string;
@@ -60,7 +68,6 @@ function Sidebar({ open, dock }: { open: boolean; dock: boolean }) {
 describe("useSidebarMotion", () => {
   let container: HTMLDivElement;
   let root: Root;
-  let frames: Array<() => void>;
 
   const render = (open: boolean, dock = true) =>
     act(() => root.render(<Sidebar open={open} dock={dock} />));
@@ -71,30 +78,21 @@ describe("useSidebarMotion", () => {
       docked: element?.dataset.docked === "true",
     };
   };
-  const frame = () =>
-    act(() => {
-      const pending = frames;
-      frames = [];
-      for (const callback of pending) callback();
-    });
   const finishSlide = () =>
     act(async () => {
       slides.at(-1)?.slide.finish();
     });
+  const applyMorph = () =>
+    act(() => {
+      morphs.shift()?.();
+    });
 
   beforeEach(() => {
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
-    frames = [];
     slides = [];
+    morphs.length = 0;
     runsSlides = true;
     vi.stubGlobal("CSSTransition", FakeTransition);
-    vi.stubGlobal("requestAnimationFrame", (callback: () => void) => {
-      frames.push(callback);
-      return frames.length;
-    });
-    vi.stubGlobal("cancelAnimationFrame", () => {
-      frames = [];
-    });
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -113,65 +111,89 @@ describe("useSidebarMotion", () => {
     root = createRoot(container);
     render(false);
     expect(state()).toEqual({ phase: "closed", docked: false });
+    expect(morphs).toHaveLength(0);
   });
 
-  it("slides in over the content and takes its space once in place", async () => {
+  it("slides in over the content, then the content makes room", async () => {
     render(false);
     render(true);
+    // Moving at once; the content keeps its place while it moves.
     expect(state()).toEqual({ phase: "opening", docked: false });
+    expect(morphs).toHaveLength(0);
     await finishSlide();
+    expect(state()).toEqual({ phase: "open", docked: false });
+    expect(morphs).toHaveLength(1);
+    applyMorph();
     expect(state()).toEqual({ phase: "open", docked: true });
   });
 
-  it("gives its space back, lets the content paint, then slides away", async () => {
+  it("slides away from the content's side, then the content takes the space", async () => {
     render(true);
     render(false);
-    // No committed frame has the panel sliding while the content still
-    // has its old width: the space goes back before any motion.
-    expect(state()).toEqual({ phase: "undocking", docked: false });
-    frame();
-    expect(state().phase).toBe("undocking");
-    frame();
-    expect(state()).toEqual({ phase: "closing", docked: false });
+    expect(state()).toEqual({ phase: "closing", docked: true });
+    expect(morphs).toHaveLength(0);
     await finishSlide();
+    expect(state()).toEqual({ phase: "closed", docked: true });
+    applyMorph();
     expect(state()).toEqual({ phase: "closed", docked: false });
   });
 
-  it("undocks before sliding when closing also turns docking off", () => {
+  it("keeps the content's place when closing also turns docking off", async () => {
     render(true, true);
     render(false, false);
-    expect(state()).toEqual({ phase: "undocking", docked: false });
+    expect(state()).toEqual({ phase: "closing", docked: true });
+    await finishSlide();
+    applyMorph();
+    expect(state()).toEqual({ phase: "closed", docked: false });
   });
 
-  it("slides straight away from over the content", () => {
+  it("never moves the content for an overlay", async () => {
+    render(false, false);
     render(true, false);
+    await finishSlide();
     expect(state()).toEqual({ phase: "open", docked: false });
     render(false, false);
-    expect(state()).toEqual({ phase: "closing", docked: false });
+    await finishSlide();
+    expect(state()).toEqual({ phase: "closed", docked: false });
+    expect(morphs).toHaveLength(0);
   });
 
-  it("reverses mid-slide and takes its space back while undocking", async () => {
+  it("makes room when an open overlay becomes a docked sidebar", () => {
+    render(true, false);
+    render(true, true);
+    applyMorph();
+    expect(state()).toEqual({ phase: "open", docked: true });
+  });
+
+  it("reverses mid-slide without moving the content", async () => {
     render(false);
     render(true);
     render(false);
-    expect(state().phase).toBe("closing");
+    expect(state()).toEqual({ phase: "closing", docked: false });
     render(true);
     expect(state().phase).toBe("opening");
     await finishSlide();
-    expect(state().phase).toBe("open");
-    render(false);
-    expect(state().phase).toBe("undocking");
-    render(true);
+    applyMorph();
     expect(state()).toEqual({ phase: "open", docked: true });
-    frame();
-    frame();
-    expect(state().phase).toBe("open");
+    // Reopened while sliding away: the content never left.
+    render(false);
+    render(true);
+    await finishSlide();
+    expect(state()).toEqual({ phase: "open", docked: true });
+    expect(morphs).toHaveLength(0);
   });
 
-  it("docks when an open overlay becomes a docked sidebar", () => {
-    render(true, false);
-    render(true, true);
-    expect(state()).toEqual({ phase: "open", docked: true });
+  it("leaves the content alone if the panel moves again before the morph", async () => {
+    render(false);
+    render(true);
+    await finishSlide();
+    expect(morphs).toHaveLength(1);
+    render(false);
+    applyMorph();
+    expect(state()).toEqual({ phase: "closing", docked: false });
+    await finishSlide();
+    expect(state()).toEqual({ phase: "closed", docked: false });
+    expect(morphs).toHaveLength(0);
   });
 
   it("ends a slide cancelled with nothing replacing it", async () => {
@@ -182,17 +204,18 @@ describe("useSidebarMotion", () => {
     // no other starts.
     runsSlides = false;
     await act(async () => slides.at(-1)?.slide.cancel());
-    expect(state()).toEqual({ phase: "open", docked: true });
+    expect(state().phase).toBe("open");
   });
 
   it("ends a slide that never runs, as in a panel that is not rendered", () => {
     runsSlides = false;
     render(false);
     render(true);
-    expect(state()).toEqual({ phase: "open", docked: true });
+    expect(state().phase).toBe("open");
+    applyMorph();
     render(false);
-    frame();
-    frame();
+    expect(state().phase).toBe("closed");
+    applyMorph();
     expect(state()).toEqual({ phase: "closed", docked: false });
   });
 });
