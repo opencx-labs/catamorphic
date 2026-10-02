@@ -2,7 +2,7 @@
   "$schema": "https://ui.shadcn.com/schema/registry-item.json",
   "name": "chat-timeline",
   "type": "registry:component",
-  "description": "Presentational conversation log: message bubbles, changed-file chips, live activity line, stick-to-bottom scrolling. Stateless \u2014 feed it from useAgentChat. Used by agent-chat.",
+  "description": "Presentational conversation log over a session's turns (ADR 0196): messages, timed work steps, answers with copy, fork and undo, notices, handoffs, answered questions, failures with retry, pending sends, the queue and stick-to-bottom scrolling. Stateless: feed it from useAgentChat. Used by agent-chat.",
   "dependencies": [
     "@catamorphic/react",
     "lucide-react",

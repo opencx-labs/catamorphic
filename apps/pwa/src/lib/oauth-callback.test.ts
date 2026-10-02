@@ -61,6 +61,7 @@ function fetchForCallback(options: {
       expect(request.headers.get("authorization")).toBe("Bearer access-token");
       return Response.json({
         identity: { externalUserId: "user-1", root: false },
+        agentProtocol: { session: 1, runner: 1 },
         projects: admitted
           ? [{ projectId: "project-1", agents: ["assistant"] }]
           : [],

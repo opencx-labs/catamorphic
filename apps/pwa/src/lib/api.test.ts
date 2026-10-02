@@ -222,3 +222,31 @@ describe("PWA authenticated fetch", () => {
     ).rejects.toThrow("Sign in to this server");
   });
 });
+
+describe("session protocol check", () => {
+  it("accepts a server on this app's session protocol", async () => {
+    const { verifySessionProtocol } = await import("./api.js");
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      expect(String(input)).toBe("http://192.168.1.71:4756/api/me");
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        "Bearer device-token",
+      );
+      return Response.json({ agentProtocol: { session: 1, runner: 1 } });
+    });
+    await expect(
+      verifySessionProtocol({
+        serverUrl: "http://192.168.1.71:4756/api/",
+        accessToken: "device-token",
+        fetch: fetchImpl,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("refuses a server on another session protocol with an update message", async () => {
+    const { assertSessionProtocol } = await import("./api.js");
+    expect(() => assertSessionProtocol({})).toThrow("Update Work to continue");
+    expect(() =>
+      assertSessionProtocol({ agentProtocol: { session: 2 } }),
+    ).toThrow("Update Work to continue");
+  });
+});
