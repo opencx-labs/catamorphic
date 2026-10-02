@@ -11,7 +11,7 @@ import type {
   SandboxProvider,
 } from "@catamorphic/sandbox";
 import { sql } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
@@ -969,6 +969,47 @@ describeIf("Project trigger kinds end to end", () => {
       "onPullRequest",
       "onPullRequest",
     ]);
+  }, 60_000);
+
+  it("delivers an event at once even when the host clock trails the database", async () => {
+    const [endpoint] = await core.webhooks.list({ identity, projectId });
+    const token = endpoint?.path.split("/").at(-1) ?? "";
+    const activity = async () =>
+      (
+        await db
+          .selectFrom("workflow_runs")
+          .select("id")
+          .where("project_id", "=", projectId)
+          .where("workflow_name", "=", "onActivity")
+          .execute()
+      ).length;
+    const before = await activity();
+    // Receipts become due at the database's now(). A host clock behind it
+    // (or one truncated to milliseconds) must not defer a fresh delivery.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() - 5_000);
+    try {
+      const receipt = await core.webhooks.receive({
+        projectId,
+        name: "github",
+        token,
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-GitHub-Event": "issue_comment",
+          "X-GitHub-Delivery": "d-skewed-clock",
+        },
+        query: {},
+        body: Buffer.from(
+          JSON.stringify({ action: "created", issue: { number: 3 } }),
+        ),
+      });
+      expect(receipt.type).toBe("event");
+      await core.dispatchEvents();
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(await activity()).toBe(before + 1);
   }, 60_000);
 
   it("fails the scan when a project kind shadows a host kind or loops", async () => {
