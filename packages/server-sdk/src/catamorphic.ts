@@ -7,6 +7,7 @@ import type {
   CatamorphicCoreConfig,
   CodeHost,
   CodingAgentRegistry,
+  RegisteredCodingAgent,
   ConnectionProvider,
   CredentialVault,
   DeploymentRuntimeCleanupResult,
@@ -41,11 +42,7 @@ import {
   ProjectManager,
 } from "@catamorphic/git";
 import type { PluginResolver } from "@catamorphic/plugins";
-import type {
-  CodingAgentProvider,
-  EnvironmentProvider,
-  SandboxProvider,
-} from "@catamorphic/sandbox";
+import type { EnvironmentProvider, SandboxProvider } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import type pg from "pg";
 import {
@@ -110,7 +107,7 @@ export type CreateCatamorphicConfig = CatamorphicHostConfig &
          * `CodingAgentRegistry` when the host offers several agents. Requires
          * `sandboxProvider`; enables the agent-session APIs.
          */
-        codingAgent: CodingAgentProvider | CodingAgentRegistry;
+        codingAgent: RegisteredCodingAgent | CodingAgentRegistry;
         /** Stable host identity the agent sessions belong to. */
         hostId: string;
       }
@@ -219,6 +216,8 @@ export interface CatamorphicHostConfig {
    * a chat trigger kind. Exceptions are swallowed and never delay the turn.
    */
   onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
+  /** A person chose "Always allow" for an agent's tool; the host keeps it (ADR 0054). */
+  onToolAlwaysAllowed?: CatamorphicCoreConfig["onToolAlwaysAllowed"];
   /** Optional host-owned delivery transport for durable user notifications. */
   pushNotifications?: PushNotificationTransport;
   /**
@@ -280,13 +279,6 @@ export interface CatamorphicHostConfig {
    */
   documentBlobStore?: CatamorphicCoreConfig["documentBlobStore"];
   storeSyncAroundTurns?: boolean;
-  /**
-   * The HTTP answer surface for tool-permission asks (ADR 0054): harnesses
-   * park asks here and remote clients list/answer them over the plugin's
-   * permissions routes. Hosts with their own consent UI can omit it — or
-   * register one anyway and race the two.
-   */
-  toolPermissions?: CatamorphicCoreConfig["toolPermissions"];
   /**
    * Hosts and ports (`work.acme.com:443`) sandboxes reach this control plane
    * at; restricted egress always allows them (ADR 0176).
@@ -401,6 +393,7 @@ export class Catamorphic {
       mcpToolKinds: contributions.mcpToolKinds,
       ...(config.webhooks ? { webhooks: config.webhooks } : {}),
       onAgentTurnSettled: config.onAgentTurnSettled,
+      ...(config.onToolAlwaysAllowed ? { onToolAlwaysAllowed: config.onToolAlwaysAllowed } : {}),
       pushNotifications: config.pushNotifications,
       capabilityProviders: contributions.capabilityProviders,
       projectHooks: contributions.projectHooks,
@@ -410,7 +403,6 @@ export class Catamorphic {
       standingAgentPrompt: config.standingAgentPrompt,
       documentBlobStore: config.documentBlobStore,
       storeSyncAroundTurns: config.storeSyncAroundTurns,
-      toolPermissions: config.toolPermissions,
       gatewayHosts: config.gatewayHosts,
     });
   }
@@ -554,10 +546,10 @@ export class Catamorphic {
       [...this.agentWorkerHandles].map((handle) => handle.stop()),
     );
     // Turns running here are interrupted at once and settle before the
-    // database goes; lease renewals stop (ADR 0193). A host that wants to
-    // let turns finish calls stopLocalTurns with a grace period first.
+    // database goes; a sandbox runner is handed back for another replica
+    // to reattach (ADR 0197).
     await this.core.agentSessions
-      ?.stopLocalTurns({ timeoutMs: 0, settleMs: 3_000 })
+      ?.stopLocalTurns({ timeoutMs: 3_000 })
       .catch((error: unknown) =>
         console.warn("[catamorphic] Could not stop local turns", error),
       );

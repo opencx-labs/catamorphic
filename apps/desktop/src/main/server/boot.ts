@@ -519,6 +519,7 @@ export async function startEmbeddedServer(
       ),
     // `triggers` is assigned right after construction; turns can only
     // settle later, once a chat message round-trips.
+    onToolAlwaysAllowed: (event) => agentRegistry.rememberToolAllowed(event),
     onAgentTurnSettled: (event) => {
       triggers.onAgentTurnSettled(
         event,

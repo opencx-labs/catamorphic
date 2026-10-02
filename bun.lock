@@ -642,6 +642,7 @@
         "zod": "^4.4.3",
       },
       "devDependencies": {
+        "@catamorphic/agent-runner": "workspace:*",
         "@catamorphic/fastify-plugin": "workspace:*",
         "@catamorphic/parser": "workspace:*",
         "@electric-sql/pglite": "^0.5.4",

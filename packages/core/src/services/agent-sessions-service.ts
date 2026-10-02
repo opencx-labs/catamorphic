@@ -634,6 +634,17 @@ export function buildAgentSystemPrompt({
     .join("\n\n");
 }
 
+/** A person's "Always allow" for one tool of one server. */
+export interface ToolAlwaysAllowedEvent {
+  identity: Identity;
+  projectId: string;
+  sessionId: string;
+  agentId: string | null;
+  /** The server key the harness knows the tool by. */
+  server: string;
+  tool: string;
+}
+
 /** A chat turn reaching a settled state, for host hooks (e.g. triggers). */
 export interface AgentTurnSettledEvent {
   identity: Identity;
@@ -764,6 +775,12 @@ interface AgentSessionsDeps {
    */
   onTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
   /**
+   * A person chose "Always allow" for a tool (ADR 0054): the host persists
+   * it where its policies live, so later attempts and other agents see it.
+   * The asking attempt already remembers it. Exceptions are swallowed.
+   */
+  onToolAlwaysAllowed?: (input: ToolAlwaysAllowedEvent) => void | Promise<void>;
+  /**
    * The host's standing agent prompt: `undefined` = framework default,
    * string = replacement, `false` = none (ADR 0049).
    */
@@ -867,6 +884,7 @@ export class AgentSessionsService {
   private readonly plugins?: PluginsService;
   private readonly pluginResolver?: PluginResolver;
   private readonly onTurnSettled?: AgentSessionsDeps["onTurnSettled"];
+  private readonly onToolAlwaysAllowed?: AgentSessionsDeps["onToolAlwaysAllowed"];
   private readonly agentCapabilities?: AgentCapabilitiesService;
   private readonly standingAgentPrompt?: string | false;
   private readonly mcpToolNames?: AgentSessionsDeps["mcpToolNames"];
@@ -1110,6 +1128,7 @@ export class AgentSessionsService {
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
     this.onTurnSettled = deps.onTurnSettled;
+    this.onToolAlwaysAllowed = deps.onToolAlwaysAllowed;
     this.standingAgentPrompt = deps.standingAgentPrompt;
     this.agentCapabilities = deps.agentCapabilities;
     this.mcpToolNames = deps.mcpToolNames;
@@ -2293,6 +2312,13 @@ export class AgentSessionsService {
       }
       if (command.type === "interrupt")
         await this.interruptDelegation(identity, projectId, sessionId);
+      if (
+        command.type === "respond" &&
+        command.response.kind === "approval" &&
+        command.response.decision === "approved" &&
+        command.response.remember === "always"
+      )
+        await this.rememberAlwaysAllowed({ identity, session, requestId: command.requestId });
       this.kick(sessionId);
     }
     return receipt;
@@ -2326,6 +2352,34 @@ export class AgentSessionsService {
     if (options.notifyParent !== false)
       await this.interruptDelegation(identity, projectId, sessionId);
     this.kick(sessionId);
+  }
+
+  private async rememberAlwaysAllowed(input: {
+    identity: Identity;
+    session: SessionRow;
+    requestId: string;
+  }): Promise<void> {
+    if (!this.onToolAlwaysAllowed) return;
+    const row = await this.db
+      .selectFrom("agent_runtime_requests")
+      .selectAll()
+      .where("session_id", "=", input.session.id)
+      .where("request_id", "=", input.requestId)
+      .executeTakeFirst();
+    const tool = row ? requestFromRow(row).approval?.tool : undefined;
+    if (!tool?.server) return;
+    await Promise.resolve()
+      .then(() =>
+        this.onToolAlwaysAllowed?.({
+          identity: input.identity,
+          projectId: input.session.project_id,
+          sessionId: input.session.id,
+          agentId: input.session.agent_id,
+          server: tool.server ?? "",
+          tool: tool.name,
+        }),
+      )
+      .catch((error) => console.warn("[catamorphic] Could not keep an Always allow", error));
   }
 
   private async interruptIn(

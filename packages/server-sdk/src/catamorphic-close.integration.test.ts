@@ -3,53 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Identity } from "@catamorphic/core";
-import type {
-  AgentEvent,
-  CodingAgentProvider,
-  ProviderSession,
-  StartSessionOpts,
-} from "@catamorphic/sandbox";
+import { EchoAdapter } from "@catamorphic/agent-runner";
 import pg from "pg";
 import { expect, it, vi } from "vitest";
 import { createCatamorphic } from "./catamorphic.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
-
-/** A harness that works until it is interrupted. */
-class QuietAgent implements CodingAgentProvider {
-  readonly name = "quiet";
-  private markStarted = () => {};
-  readonly started = new Promise<void>((resolve) => {
-    this.markStarted = resolve;
-  });
-  private markStopped = () => {};
-  private readonly stopped = new Promise<void>((resolve) => {
-    this.markStopped = resolve;
-  });
-
-  async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
-    return {
-      providerSessionId: crypto.randomUUID(),
-      sessionId: opts.sessionId,
-      projectId: opts.projectId,
-      sandboxId: opts.sandboxId,
-      workingDirectory: opts.workingDirectory,
-    };
-  }
-
-  async *sendMessage(): AsyncIterable<AgentEvent> {
-    this.markStarted();
-    await this.stopped;
-    yield { type: "error", content: "Interrupted." };
-    yield { type: "done" };
-  }
-
-  interrupt(): void {
-    this.markStopped();
-  }
-
-  async dispose(): Promise<void> {}
-}
 
 /**
  * Closing an SDK instance that owns its database (ADR 0193): a turn running
@@ -61,10 +20,10 @@ it.skipIf(!connectionString)(
   async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "sdk-close-"));
     const schema = `sdk_close_${crypto.randomUUID().replaceAll("-", "")}`;
-    const agent = new QuietAgent();
+    // The echo harness works on `[[hang]]` until it is interrupted.
     const registered = {
       id: "quiet",
-      provider: agent,
+      harness: { placement: "host" as const, adapter: new EchoAdapter() },
       topology: "native" as const,
     };
     const warn = vi.spyOn(console, "warn");
@@ -116,31 +75,31 @@ it.skipIf(!connectionString)(
         name: "Close",
       });
       const session = await sessions.create(identity, projectId, {});
-      const receipt = await sessions.enqueueMessage(
-        identity,
-        projectId,
-        session.id,
-        "work quietly",
+      await sessions.command(identity, projectId, session.id, {
+        type: "send",
+        commandId: crypto.randomUUID(),
+        text: "[[hang]]",
+      });
+      await vi.waitFor(
+        async () => {
+          const detail = await sessions.get(identity, projectId, session.id);
+          expect(detail.snapshot.turns[0]?.status).toBe("running");
+        },
+        { timeout: 15_000 },
       );
-      await agent.started;
 
       await cat.close();
 
       const turn = await admin.query<{
         status: string;
         lease_owner: string | null;
-        metadata: { interrupted?: boolean } | null;
       }>(
-        `SELECT t.status, t.lease_owner, m.metadata
-           FROM "${schema}".agent_turns t
-           LEFT JOIN "${schema}".agent_messages m ON m.id = t.result_message_id
-          WHERE t.id = $1`,
-        [receipt.turnId],
+        `SELECT status, lease_owner FROM "${schema}".agent_turns WHERE session_id = $1`,
+        [session.id],
       );
       expect(turn.rows[0]).toMatchObject({
-        status: "failed",
+        status: "interrupted",
         lease_owner: null,
-        metadata: { interrupted: true },
       });
       // No lease renewal or drain reaches the closed database.
       warn.mockClear();

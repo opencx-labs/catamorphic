@@ -202,7 +202,6 @@ beforeAll(async () => {
       id: sessionId,
       project_id: projectId,
       external_user_id: alice.externalUserId,
-      provider: "fixture",
       agent_id: "assistant",
     })
     .execute();

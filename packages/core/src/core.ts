@@ -16,6 +16,7 @@ import {
   AgentSessionsService,
   type AgentTurnSettledEvent,
   type NativeAgentCheckout,
+  type ToolAlwaysAllowedEvent,
 } from "./services/agent-sessions-service.js";
 import type { AppBundleStore } from "./services/app-bundle-store.js";
 import { AppPoliciesService } from "./services/app-policies-service.js";
@@ -295,6 +296,8 @@ export interface CatamorphicCoreConfig {
    * kind. Exceptions are swallowed and never delay the turn.
    */
   onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
+  /** A person chose "Always allow" for an agent's tool; the host keeps it (ADR 0054). */
+  onToolAlwaysAllowed?: (event: ToolAlwaysAllowedEvent) => void | Promise<void>;
   /** Optional host-owned Web Push transport. Events remain durable without it. */
   pushNotifications?: PushNotificationTransport;
   /**
@@ -1163,6 +1166,7 @@ export class CatamorphicCore {
           : {}),
         plugins: this.plugins,
         pluginResolver: this.pluginResolver,
+        ...(config.onToolAlwaysAllowed ? { onToolAlwaysAllowed: config.onToolAlwaysAllowed } : {}),
         onTurnSettled: async (event) => {
           if (
             event.status === "completed" ||
