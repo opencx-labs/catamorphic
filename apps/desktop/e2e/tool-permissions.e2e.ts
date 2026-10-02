@@ -425,7 +425,7 @@ describe("talking around questions", () => {
     );
     await run(`sendHere('do something else instead'); return true;`);
     await runWait(
-      `return !approval() && hereLog().includes('permission decision: deny') && hereLog().includes('You said: do something else instead');`,
+      `return !approval() && hereLog().includes('permission decision: deny') && hereLog().includes('Steered: do something else instead');`,
       { timeoutMs: 30_000, label: "consent withdrawn, message answered" },
     );
   }, 60_000);

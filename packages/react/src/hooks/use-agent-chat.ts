@@ -306,6 +306,17 @@ export function useAgentChat(
     return creationRef.current.promise;
   };
 
+  // Without a live stream, a command's effect shows on the next snapshot.
+  const connectionRef = useRef(live.connection);
+  connectionRef.current = live.connection;
+  const refreshUnlessStreaming = (target: string) => {
+    if (connectionRef.current === "live" || !projectId) return;
+    void queryClient.invalidateQueries({
+      queryKey: agentSessionQueryKey(projectId, target),
+      exact: true,
+    });
+  };
+
   /** Run one command on the current session; errors land on the chat. */
   const run = async (
     command: SessionCommandInput,
@@ -317,13 +328,15 @@ export function useAgentChat(
     setError(token, null);
     setInFlight((count) => count + 1);
     try {
-      return await sendSessionCommand({
+      const receipt = await sendSessionCommand({
         apiClient,
         projectId,
         sessionId: target,
         command,
         ...(commandId ? { commandId } : {}),
       });
+      refreshUnlessStreaming(target);
+      return receipt;
     } catch (error) {
       if (scopeRef.current.token === token)
         setError(token, toCatamorphicError({ cause: error }));
@@ -364,6 +377,7 @@ export function useAgentChat(
         },
       });
       blockedRef.current = null;
+      refreshUnlessStreaming(target);
       const itemId =
         typeof receipt.result?.itemId === "string"
           ? receipt.result.itemId

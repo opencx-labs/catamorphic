@@ -3,6 +3,7 @@
 import {
   applySessionEvents,
   type Item,
+  isSettledTurnStatus,
   isWorking,
   type SessionSnapshot,
   type SessionState,
@@ -49,10 +50,10 @@ export interface UseAgentSessionOptions {
   /**
    * Stream live events (default true). Off, or past the client's stream
    * limit, the snapshot is polled instead: every `pollIntervalMs` while a
-   * turn runs, and not at all while idle.
+   * turn is unsettled, and not at all while idle.
    */
   live?: boolean;
-  /** Poll cadence while a turn runs and nothing streams (default 1500). */
+  /** Poll cadence while a turn is unsettled and nothing streams (default 1500). */
   pollIntervalMs?: number;
 }
 
@@ -147,7 +148,14 @@ export function useAgentSession(
       if (current.state.error) return 3_000;
       if (streaming) return false;
       const data = current.state.data;
-      return data && isWorking(data.state) ? pollIntervalMs : false;
+      // Poll while anything is unsettled: a turn running, waiting to
+      // start, or waiting to retry.
+      return data &&
+        Object.values(data.state.turns).some(
+          (turn) => !isSettledTurnStatus(turn.status),
+        )
+        ? pollIntervalMs
+        : false;
     },
   });
 

@@ -867,6 +867,7 @@ const UserMessage = memo(
         <SessionAttribution
           author={item.author}
           metadata={item.metadata}
+          attention={item.attention}
           onOpen={context.onLinkClick}
         />
         {strip.length > 0 && <AttachmentStrip attachments={strip} />}
@@ -1301,6 +1302,12 @@ function TurnOutcome({
       data-testid="chat-interrupted"
     >
       <div className="italic">Interrupted</div>
+      {turn.error?.message && (
+        // Not a person's stop: say what happened (the machine went away).
+        <span className="italic" data-testid="chat-interrupted-reason">
+          {turn.error.message}
+        </span>
+      )}
       {stopped && (
         <span data-testid="chat-interrupted-step">
           {`While: ${stopped.label}${stopped.ran ? ` (${stopped.ran})` : ""}`}

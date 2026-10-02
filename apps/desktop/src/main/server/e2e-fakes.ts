@@ -780,6 +780,11 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
         },
         () => {},
       );
+    // A non-blocking question's answer reaches the agent as a message
+    // steered into the turn still working (ADR 0195).
+    void turn.nextSteer().then((input) => {
+      answer ??= [input.text.split("User answer:\n").pop() ?? input.text];
+    });
     yield {
       type: "text",
       content: "I am continuing independent work while you decide.",
