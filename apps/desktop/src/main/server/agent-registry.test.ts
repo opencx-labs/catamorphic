@@ -180,9 +180,6 @@ it("fails an unapproved project agent's turns with the fix", () => {
   );
   expect(blocked.harness.adapter.capabilities()).toEqual(NO_CAPABILITIES);
   expect(() =>
-    blocked.harness.adapter.start(
-      {} as AttemptStart,
-      {} as AttemptHost,
-    ),
+    blocked.harness.adapter.start({} as AttemptStart, {} as AttemptHost),
   ).toThrow("Approve it first.");
 });

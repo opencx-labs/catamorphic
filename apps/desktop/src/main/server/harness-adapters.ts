@@ -23,7 +23,7 @@ export interface AgentErrorLabels {
 }
 
 /**
- * A desktop agent's harness (ADR 0196): an adapter whose attempt needs
+ * A desktop agent's harness (ADR 0197): an adapter whose attempt needs
  * readying first, on the host, before the harness starts. The integrity
  * pinned executable may still be downloading, or a project secret still
  * resolving, so `prepare` may take a while; the attempt is running

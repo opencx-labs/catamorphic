@@ -19,7 +19,7 @@ import { refreshRemoteCredentials } from "./remote-oauth.js";
 import type { RemoteProjectsStore } from "./remote-projects-store.js";
 
 /**
- * One mirror push (ADR 0195). Core's entry does not export the type, so it
+ * One mirror push (ADR 0196). Core's entry does not export the type, so it
  * is read off the service method that accepts it.
  */
 type SessionMirrorInput = Parameters<AgentSessionsService["mirror"]>[3];
@@ -34,7 +34,7 @@ export type SessionMirrorExport = Pick<
 const MAX_PUSH_ROUNDS = 5;
 
 /**
- * Session mirroring (ADR 0195, superseding ADR 0061's transport):
+ * Session mirroring (ADR 0196, superseding ADR 0061's transport):
  * local-first, synced to the linked remote. After every settled turn on a
  * remote-linked project, the session's log events after the remote's
  * acknowledged sequence are pushed to the remote's mirror route, which

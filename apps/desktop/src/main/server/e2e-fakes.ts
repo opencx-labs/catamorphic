@@ -312,7 +312,7 @@ interface FakeTurn {
 
 /**
  * E2E-only harness with scripted, prompt-keyed behavior over the real
- * host (ADR 0196): its tools are the desktop's workspace tools and
+ * host (ADR 0197): its tools are the desktop's workspace tools and
  * capabilities, its questions, approvals and elicitations are session
  * requests, and its files land in the chat's checkout. No model.
  *
@@ -387,9 +387,7 @@ export class E2eFakeAdapter implements HarnessAdapter {
         pause,
         tool: (name, input) =>
           attempt.hostTools.some((tool) => tool.name === name)
-            ? host
-                .callTool({ name, input: toJson(input) })
-                .then(toolValue)
+            ? host.callTool({ name, input: toJson(input) }).then(toolValue)
             : turn.capability(`workspace.${name}`, input),
         toolResult: (name, input) =>
           host.callTool({ name, input: toJson(input) }),
@@ -398,16 +396,14 @@ export class E2eFakeAdapter implements HarnessAdapter {
             steerWaiters.push(resolve);
           }),
         discover: async (query) =>
-          z
-            .object({ items: z.array(z.object({ name: z.string() })) })
-            .parse(
-              await host
-                .callTool({
-                  name: "discover_capabilities",
-                  input: { query },
-                })
-                .then(toolValue),
-            ),
+          z.object({ items: z.array(z.object({ name: z.string() })) }).parse(
+            await host
+              .callTool({
+                name: "discover_capabilities",
+                input: { query },
+              })
+              .then(toolValue),
+          ),
         capability: async (name, input) => {
           const page = await turn.discover(name);
           if (!page.items.some((item) => item.name === name))
@@ -566,7 +562,8 @@ class FakeTranscript {
           });
           return;
         }
-        const pending = Boolean(step.toolUseId) && step.toolResult === undefined;
+        const pending =
+          Boolean(step.toolUseId) && step.toolResult === undefined;
         this.host.emit({
           type: "item.started",
           key: step.toolUseId ?? this.key("tool"),
@@ -1307,7 +1304,10 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
     const checkout = await turn.tool("create_worktree", {});
     const created = z.object({ path: z.string() }).safeParse(checkout);
     if (created.success) {
-      const filePath = path.join(created.data.path, "coordination-same-turn.txt");
+      const filePath = path.join(
+        created.data.path,
+        "coordination-same-turn.txt",
+      );
       fs.writeFileSync(filePath, "created after checkout transition\n");
       yield { type: "file_edit", content: "write", filePath };
     }
@@ -1371,14 +1371,12 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
       }
       let output = started.output;
       if (started.status === "running") {
-        const finished = z
-          .object({ output: z.string() })
-          .parse(
-            await turn.tool("read_background_output", {
-              id: started.id,
-              wait_seconds: 60,
-            }),
-          );
+        const finished = z.object({ output: z.string() }).parse(
+          await turn.tool("read_background_output", {
+            id: started.id,
+            wait_seconds: 60,
+          }),
+        );
         output += finished.output;
       }
       yield {
@@ -1402,7 +1400,11 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
         kind: "elicitation",
         blocking: true,
         title: "Computer Use",
-        origin: { kind: "mcp", id: "computer-use", displayName: "Computer Use" },
+        origin: {
+          kind: "mcp",
+          id: "computer-use",
+          displayName: "Computer Use",
+        },
         elicitation: {
           server: "Computer Use",
           message: 'Allow Computer Use to use "Calculator"?',

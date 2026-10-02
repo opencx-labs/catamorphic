@@ -16,7 +16,7 @@ import {
 import { RemoteSessionMirror } from "./remote-mirror.js";
 
 /**
- * The turn-settled mirror pusher against a fake remote (ADR 0195): pushes
+ * The turn-settled mirror pusher against a fake remote (ADR 0196): pushes
  * a base snapshot to a remote without a copy, then only the log events
  * after the remote's sequence, follows `behind` answers, and permanently
  * stops for a session once the remote reports divergence (continued there).

@@ -73,5 +73,7 @@ it("rewrites a provider's raw auth failure into the reconnect path", () => {
     providerLabel: "OpenRouter",
   });
   expect(error.kind).toBe("auth");
-  expect(error.message).toContain('rejected the credentials of the "Fake Agent"');
+  expect(error.message).toContain(
+    'rejected the credentials of the "Fake Agent"',
+  );
 });

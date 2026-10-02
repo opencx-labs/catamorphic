@@ -548,7 +548,7 @@ export class SessionCheckouts {
   }
 
   /**
-   * Put a checkout's files back at `commit` for a rollback (ADR 0195), or
+   * Put a checkout's files back at `commit` for a rollback (ADR 0196), or
    * say why not. A worktree the chat owns is restored whatever is in it. A
    * person's own folder, or a worktree they assigned, only when it is still
    * where the chat's last turn left it (`expectedHead`, or `commit` when that
@@ -568,7 +568,13 @@ export class SessionCheckouts {
     const commonDir = await canonicalCommonDir(input.workingDirectory);
     return withRepositoryMutationLock(commonDir, async () => {
       const cwd = input.workingDirectory;
-      if (!(await gitSucceeds(cwd, ["cat-file", "-e", `${input.commit}^{commit}`])))
+      if (
+        !(await gitSucceeds(cwd, [
+          "cat-file",
+          "-e",
+          `${input.commit}^{commit}`,
+        ]))
+      )
         return "The checkpoint this turn started from is no longer in the repository, so the files were left as they are.";
       const head = await this.head({ workingDirectory: cwd });
       const status = await git(cwd, [

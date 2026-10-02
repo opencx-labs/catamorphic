@@ -15,10 +15,10 @@ import type {
   AgentCoordinationStrategy,
   AgentDefinition,
   AgentDelegationPolicy,
-  AgentHarness as RegisteredHarness,
   AgentTurnContext,
   CodingAgentRegistry,
   RegisteredCodingAgent,
+  AgentHarness as RegisteredHarness,
 } from "@catamorphic/core";
 import {
   connectionMcpServerName,
@@ -177,7 +177,7 @@ const codex = createCodexAdapter();
  * per-profile agents.json files and committed project agents, resolved
  * live on every lookup, so adding or editing an agent in Settings applies
  * to the next turn without a restart. Every agent runs its harness on this
- * machine, in the chat's checkout (`topology: "native"`, ADR 0196); its
+ * machine, in the chat's checkout (`topology: "native"`, ADR 0197); its
  * conversation lives in the session log, so nothing here holds a chat.
  */
 export class DesktopAgentRegistry implements CodingAgentRegistry {
@@ -537,7 +537,6 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     return this.deps.profileConfig.forDefaultProfile().agents.defaultAgentId();
   }
 
-
   get(id: string): RegisteredCodingAgent | undefined {
     const projectRef = parseProjectAgentId(id);
     if (projectRef)
@@ -789,7 +788,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         id,
         `The project agent "${def.name}" names no project secret for its credentials. Fix its definition in agents/ and try again.`,
       );
-    const built = this.build({ config, profileId, ...(apiKey ? { apiKey } : {}) });
+    const built = this.build({
+      config,
+      profileId,
+      ...(apiKey ? { apiKey } : {}),
+    });
     if (!built)
       return this.failFast(
         id,
@@ -833,7 +836,6 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     }
     return undefined;
   }
-
 
   /**
    * The harness one agent config runs on, with everything the host serves
@@ -1116,7 +1118,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 return {
                   ...("personalFilesDirectory" in settings &&
                   settings.personalFilesDirectory
-                    ? { personalFilesDirectory: settings.personalFilesDirectory }
+                    ? {
+                        personalFilesDirectory: settings.personalFilesDirectory,
+                      }
                     : {}),
                   ...("errors" in settings && settings.errors?.length
                     ? { settingsErrors: settings.errors }
@@ -1216,7 +1220,6 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     );
   }
 
-
   /** Live policy/configuration, shared by direct and discovered projections. */
   capabilitySurface(id: string) {
     const found = this.configFor(id);
@@ -1249,7 +1252,6 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       : { config: resolved.config, profileId: resolved.profileId };
   }
 
-
   /** Effective concurrent-checkout doctrine for a profile or project agent. */
   coordinationForAgent(id: string): AgentCoordinationStrategy {
     const profile = this.findConfig(id);
@@ -1277,4 +1279,3 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     }
   }
 }
-

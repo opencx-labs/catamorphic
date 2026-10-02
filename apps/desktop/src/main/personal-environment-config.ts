@@ -7,7 +7,7 @@ import { PROJECT_PERSONAL_DIR } from "@catamorphic/workflow/project-layout";
 /**
  * `.work/personal/environment.json` (ADR 0184): which project files reach
  * the member's sessions on the linked Work server. Sign-ins never do (ADR
- * 0197). Inside the git-excluded personal folder, so it never ships.
+ * 0198). Inside the git-excluded personal folder, so it never ships.
  */
 export const PERSONAL_ENVIRONMENT_PATH = `${PROJECT_PERSONAL_DIR}/environment.json`;
 /** Status for agents and people: no secrets, rewritten only on change. */

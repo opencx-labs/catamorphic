@@ -158,7 +158,7 @@ type DeployResult =
 /**
  * `PUT /projects/:projectId/personal-environment` (ADR 0184): replaces the
  * caller's own files for the project, contents as base64. Sign-ins are never
- * sent (ADR 0197).
+ * sent (ADR 0198).
  */
 export type RemotePersonalEnvironmentUpload = PersonalEnvironmentInput;
 

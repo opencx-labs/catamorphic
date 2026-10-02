@@ -26,7 +26,7 @@ import {
  * Keeps each linked project's remote environment (ADR 0184) current: the
  * member's listed files, sent to the Work server when they change and
  * checked on a timer and on focus. Sign-ins are never sent: they stay on
- * the machine they were made on (ADR 0197).
+ * the machine they were made on (ADR 0198).
  */
 
 /** How often each linked server is asked about the environment. */
