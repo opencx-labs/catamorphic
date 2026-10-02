@@ -71,7 +71,7 @@ await executionWorker.stop();
 await catamorphic.close();
 ```
 
-`codingAgent` accepts either one `CodingAgentProvider` or a dynamic
+`codingAgent` accepts either one `RegisteredCodingAgent` or a dynamic
 `CodingAgentRegistry`. Agent sessions require `hostId` and `sandboxProvider`;
 registry entries with `topology: "native"` also require
 `nativeAgentCheckout`. Keep provider behavior behind the registry so project

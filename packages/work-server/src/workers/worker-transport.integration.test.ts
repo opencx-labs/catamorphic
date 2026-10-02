@@ -11,7 +11,7 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "../server.js";
-import { testServerOptions } from "../test-support.js";
+import { replyOf, testServerOptions } from "../test-support.js";
 import { startWorkWorker } from "./worker-runtime.js";
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -186,16 +186,18 @@ it.skipIf(!process.env.DATABASE_URL)(
       });
       /** Append one byte per step, then count them, in one turn. */
       const turn = async (appends: number): Promise<string> => {
-        const reply = await sessions.sendMessage(
-          identity,
-          project.id,
-          session.id,
-          [
-            ...Array.from({ length: appends }, () => "run printf . >> ops"),
-            "run wc -c < ops",
-          ].join(" ;; "),
+        const reply = replyOf(
+          await sessions.sendMessage(
+            identity,
+            project.id,
+            session.id,
+            [
+              ...Array.from({ length: appends }, () => "run printf . >> ops"),
+              "run wc -c < ops",
+            ].join(" ;; "),
+          ),
         );
-        expect(reply.metadata?.status).not.toBe("failed");
+        expect(reply.turn.status).not.toBe("failed");
         return reply.content;
       };
 

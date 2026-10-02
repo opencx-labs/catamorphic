@@ -13,7 +13,11 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "./server.js";
-import { createTestDatabase, testServerOptions } from "./test-support.js";
+import {
+  createTestDatabase,
+  enqueue,
+  testServerOptions,
+} from "./test-support.js";
 
 /**
  * Disposable replicas (ADR 0190), end to end on network Postgres: replica a,
@@ -208,15 +212,16 @@ it.skipIf(!process.env.DATABASE_URL)(
       if (!sessions) throw new Error("Agent sessions are not configured");
       const session = await sessions.create(member, project.id);
       const replies = async () =>
-        (await sessions.get(member, project.id, session.id)).messages
+        (await sessions.transcript(member, project.id, session.id))
           .filter((message) => message.role === "assistant")
           .map((message) => message.content);
-      await sessions.enqueueMessage(
-        member,
-        project.id,
-        session.id,
-        "write-file note.txt saved before the crash",
-      );
+      await enqueue({
+        sessions,
+        identity: member,
+        projectId: project.id,
+        sessionId: session.id,
+        text: "write-file note.txt saved before the crash",
+      });
       await expect
         .poll(
           async () =>
@@ -320,12 +325,13 @@ it.skipIf(!process.env.DATABASE_URL)(
       await core.runs.cancel({ identity, runId: next.id });
 
       // The chat continues on the new replica from its last checkpoint.
-      await sessions.enqueueMessage(
-        member,
-        project.id,
-        session.id,
-        "read-file note.txt",
-      );
+      await enqueue({
+        sessions,
+        identity: member,
+        projectId: project.id,
+        sessionId: session.id,
+        text: "read-file note.txt",
+      });
       await expect
         .poll(replies, { timeout: 60_000, interval: 500 })
         .toEqual([expect.any(String), "saved before the crash"]);

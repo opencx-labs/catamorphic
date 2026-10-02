@@ -1,18 +1,16 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
-import { AiSdkCodingAgent } from "@catamorphic/ai-sdk";
-import { ClaudeCodeAgent } from "@catamorphic/claude-code";
-import { CodexAgent } from "@catamorphic/codex";
+import { createAiSdkAdapter } from "@catamorphic/ai-sdk";
 import {
   type AgentDefinition,
+  type AgentHarness,
   type CodingAgentRegistry,
   normalizeConnectionRequirement,
   type RegisteredCodingAgent,
-  type ToolPermissionChannel,
 } from "@catamorphic/core";
-import type { PersonalLoginKind, SandboxProvider } from "@catamorphic/sandbox";
+import type { SignInHarness } from "@catamorphic/sandbox";
 import type { WorkAgentSettings } from "./config.js";
-import { FakeEchoAgent } from "./fake-agent.js";
+import { createFakeAgentAdapter } from "./fake-agent.js";
 
 /**
  * The Work server's agent roster: one "assistant" agent backed by the
@@ -27,8 +25,6 @@ export interface AgentSetup {
 }
 
 export function buildAgentRegistry(deps: {
-  sandboxProvider: SandboxProvider;
-  toolPermissions: ToolPermissionChannel;
   settings: WorkAgentSettings;
 }): AgentSetup {
   const { settings } = deps;
@@ -54,47 +50,46 @@ export function buildAgentRegistry(deps: {
     resolveModel = (id) => openai(id);
   }
 
-  const harnesses = sandboxHarnesses(deps.toolPermissions);
   if (settings.fake) {
     return {
       registry: assistantRegistry({
-        provider: new FakeEchoAgent(),
+        harness: { placement: "host", adapter: createFakeAgentAdapter() },
         effort,
-        harnesses,
       }),
       description: "assistant → deterministic fake (WORK_FAKE_AGENT)",
     };
   }
   // Without an organization model the assistant is off, but members can
-  // still chat with Claude Code and Codex on their own logins (ADR 0184).
+  // still chat with Claude Code and Codex on their own sign-ins on a
+  // machine they signed in on (ADR 0198).
   if (!resolveModel || !providerName) {
     return {
-      registry: assistantRegistry({ effort, harnesses }),
+      registry: assistantRegistry({ effort }),
       description:
-        "assistant off (set ANTHROPIC_API_KEY, OPENROUTER_API_KEY or OPENAI_API_KEY); Claude Code and Codex on members' own logins",
+        "assistant off (set ANTHROPIC_API_KEY, OPENROUTER_API_KEY or OPENAI_API_KEY); Claude Code and Codex on members' own sign-ins",
     };
   }
   if (!modelId) {
     return {
-      registry: assistantRegistry({ effort, harnesses }),
-      description: `assistant off (${providerName} needs WORK_MODEL set to a model id); Claude Code and Codex on members' own logins`,
+      registry: assistantRegistry({ effort }),
+      description: `assistant off (${providerName} needs WORK_MODEL set to a model id); Claude Code and Codex on members' own sign-ins`,
     };
   }
 
   return {
     registry: assistantRegistry({
-      provider: new AiSdkCodingAgent({
-        model: resolveModel(modelId),
-        sandboxProvider: deps.sandboxProvider,
-        resolveModel,
-        effort,
-        // Asks park on the broker: clients (the pwa app) list and
-        // answer them over the permissions routes (ADR 0054).
-        onToolPermission: deps.toolPermissions.handlerFor("Assistant"),
-      }),
+      // The built-in agent runs on the control plane (ADR 0197); its file
+      // and shell tools act on the chat's sandbox.
+      harness: {
+        placement: "host",
+        adapter: createAiSdkAdapter({
+          model: resolveModel(modelId),
+          resolveModel,
+          effort,
+        }),
+      },
       effort,
       modelId,
-      harnesses,
     }),
     description: `assistant → ${providerName}/${modelId} (effort ${effort})`,
   };
@@ -103,20 +98,21 @@ export function buildAgentRegistry(deps: {
 export const ASSISTANT_SLUG = "assistant";
 
 /**
- * Host agents that run Claude Code or Codex in the chat's sandbox with the
- * chat owner's own login, sent by their desktop (ADR 0184). Offered in
- * projects with an Environment that allows personal credentials.
+ * Claude Code and Codex on the chat owner's own sign-in, made on the
+ * machine that runs the chat (ADR 0198). Offered in projects with an
+ * Environment that allows personal credentials; a chat places only on a
+ * machine that reports its owner's sign-in.
  */
-export const PERSONAL_HARNESS_AGENTS: Readonly<
-  Record<PersonalLoginKind, { name: string; description: string }>
+export const SIGN_IN_AGENTS: Readonly<
+  Record<SignInHarness, { name: string; description: string }>
 > = {
   "claude-code": {
     name: "Claude Code",
-    description: "Claude Code with your own Claude login",
+    description: "Claude Code on your own Claude sign-in on the machine",
   },
   codex: {
     name: "Codex",
-    description: "Codex with your own ChatGPT login",
+    description: "Codex on your own ChatGPT sign-in on the machine",
   },
 };
 
@@ -125,52 +121,70 @@ export function projectAssistantId(projectId: string): string {
   return `project:${projectId}:${ASSISTANT_SLUG}`;
 }
 
+const SYSTEM_PROMPT =
+  "You work through a company server. Unless execution context explicitly identifies an authenticated member device, the working directory and home directory belong to the server or its sandbox, not the user's device. New personal files should stay local to the user's device by default. Do not claim that writing outside the project on the server satisfies device-local or private storage. If no device file tool is available, provide the requested content in chat and clearly explain that it has not been saved to their device. Use only host-supported private storage for private output. Saving, proposing, and publishing are separate actions: never add personal output to shared project source or store/ unless the user explicitly requests sharing. When asked to propose or prepare shared content for review, discover project.propose_change and pass only the intended file paths and desired content. Submit the proposal before writing shared project files: shared checkout writes can be checkpointed and synchronized immediately. If the proposal capability is unavailable, explain that and keep the proposed content in chat; do not silently publish it instead. A chat or ordinary document change alone does not require a new worktree.";
+
 /**
- * One provider, addressable two ways: bare "assistant" (root callers,
- * default), and `project:<id>:assistant` — the id a member's role ref
+ * Claude Code and Codex on the server (ADRs 0180, 0197): the runner bundle
+ * runs each inside the chat's sandbox, on a worker or the control plane,
+ * where its CLI is. Model and effort travel as turn defaults.
+ */
+function sandboxHarness(kind: SignInHarness): {
+  harness: AgentHarness;
+  options: RegisteredCodingAgent["options"];
+} {
+  return kind === "codex"
+    ? { harness: { placement: "sandbox", id: "codex" }, options: {} }
+    : {
+        harness: { placement: "sandbox", id: "claude-code" },
+        // The sandbox is the boundary: edits and commands run without
+        // prompts, and sandboxing is enforced where changes leave it (ADR
+        // 0182). A definition's own permission mode travels per turn.
+        options: { permissionMode: "acceptEdits", memory: false },
+      };
+}
+
+/**
+ * One assistant, addressable two ways: bare "assistant" (root callers,
+ * default), and `project:<id>:assistant`, the id a member's role ref
  * (`agents: ["assistant"]`) maps to. Scoped session-access checks compare
  * against the project-qualified form, so the registry must serve it.
  */
 function assistantRegistry(config: {
   /** The organization model's assistant; absent without an org model. */
-  provider?: RegisteredCodingAgent["provider"];
+  harness?: AgentHarness;
   effort: "low" | "medium" | "high";
   modelId?: string;
-  harnesses: SandboxHarnesses;
 }): CodingAgentRegistry {
   const defaults = {
     effort: config.effort,
     ...(config.modelId ? { model: config.modelId } : {}),
   };
-  const assistant: RegisteredCodingAgent = {
+  const assistant: RegisteredCodingAgent | undefined = config.harness && {
     id: ASSISTANT_SLUG,
-    provider: config.provider ?? config.harnesses.claudeCode,
+    harness: config.harness,
     topology: "controller",
-    systemPrompt:
-      "You work through a company server. Unless execution context explicitly identifies an authenticated member device, the working directory and home directory belong to the server or its sandbox, not the user's device. New personal files should stay local to the user's device by default. Do not claim that writing outside the project on the server satisfies device-local or private storage. If no device file tool is available, provide the requested content in chat and clearly explain that it has not been saved to their device. Use only host-supported private storage for private output. Saving, proposing, and publishing are separate actions: never add personal output to shared project source or store/ unless the user explicitly requests sharing. When asked to propose or prepare shared content for review, discover project.propose_change and pass only the intended file paths and desired content. Submit the proposal before writing shared project files: shared checkout writes can be checkpointed and synchronized immediately. If the proposal capability is unavailable, explain that and keep the proposed content in chat; do not silently publish it instead. A chat or ordinary document change alone does not require a new worktree.",
+    systemPrompt: SYSTEM_PROMPT,
     defaults,
   };
   const projectForm = /^project:[0-9a-f-]+:assistant$/;
-  // Claude Code and Codex on the member's own login (ADR 0184): the same
-  // harness instances as project agents; the turn's login decides.
-  const personal = (kind: PersonalLoginKind): RegisteredCodingAgent => ({
+  // Claude Code and Codex on the member's own sign-in (ADR 0198).
+  const signInAgent = (kind: SignInHarness): RegisteredCodingAgent => ({
     id: kind,
-    name: PERSONAL_HARNESS_AGENTS[kind].name,
-    description: PERSONAL_HARNESS_AGENTS[kind].description,
-    provider:
-      kind === "codex" ? config.harnesses.codex : config.harnesses.claudeCode,
+    name: SIGN_IN_AGENTS[kind].name,
+    description: SIGN_IN_AGENTS[kind].description,
+    ...sandboxHarness(kind),
     topology: "controller",
     sandboxing: "propose",
-    personalLogin: kind,
-    systemPrompt: assistant.systemPrompt,
+    signIn: kind,
+    systemPrompt: SYSTEM_PROMPT,
   });
-  const personalAgents = [personal("claude-code"), personal("codex")];
-  const personalForm = /^project:[0-9a-f-]+:(claude-code|codex)$/;
-  // Without an org model, a chat starts on the member's own Claude Code.
-  const hasAssistant = config.provider !== undefined;
+  const signInAgents = [signInAgent("claude-code"), signInAgent("codex")];
+  const signInForm = /^project:[0-9a-f-]+:(claude-code|codex)$/;
   return {
+    // Without an org model, a chat starts on the member's own Claude Code.
     defaultAgentId: (projectId) =>
-      hasAssistant
+      assistant
         ? projectId
           ? projectAssistantId(projectId)
           : ASSISTANT_SLUG
@@ -178,16 +192,15 @@ function assistantRegistry(config: {
           ? `project:${projectId}:claude-code`
           : "claude-code",
     get: (id) => {
-      if (hasAssistant && id === ASSISTANT_SLUG) return assistant;
-      if (hasAssistant && projectForm.test(id)) return { ...assistant, id };
-      const bare = personalAgents.find((agent) => agent.id === id);
+      if (assistant && id === ASSISTANT_SLUG) return assistant;
+      if (assistant && projectForm.test(id)) return { ...assistant, id };
+      const bare = signInAgents.find((agent) => agent.id === id);
       if (bare) return bare;
-      const qualified = id.match(personalForm)?.[1];
-      const agent = personalAgents.find((entry) => entry.id === qualified);
+      const qualified = id.match(signInForm)?.[1];
+      const agent = signInAgents.find((entry) => entry.id === qualified);
       return agent ? { ...agent, id } : undefined;
     },
-    list: () =>
-      hasAssistant ? [assistant, ...personalAgents] : personalAgents,
+    list: () => (assistant ? [assistant, ...signInAgents] : signInAgents),
     projectAgent: ({ id, entry }) => {
       const definition = entry.definition;
       if (
@@ -198,10 +211,8 @@ function assistantRegistry(config: {
           id,
           definition,
           promptFile: entry.promptFile,
-          systemPrompt: assistant.systemPrompt,
-          harnesses: config.harnesses,
         });
-      if (definition?.kind !== "builtin" || !hasAssistant) return undefined;
+      if (definition?.kind !== "builtin" || !assistant) return undefined;
       // The Work server supplies a service-owned model. Personal CLI/profile
       // credentials remain an explicit capability of a different host factory.
       if (definition.credentials) return undefined;
@@ -212,7 +223,7 @@ function assistantRegistry(config: {
         environment: definition.environment,
         connectionRequirements: definition.connections,
         delegation: definition.delegation,
-        systemPrompt: [assistant.systemPrompt, entry.promptFile]
+        systemPrompt: [SYSTEM_PROMPT, entry.promptFile]
           .filter(Boolean)
           .join("\n\n"),
         defaults: {
@@ -226,89 +237,46 @@ function assistantRegistry(config: {
 }
 
 /**
- * Claude Code and Codex on the server (ADR 0180): each runs inside the
- * chat's sandbox, on a worker or the control plane, and reaches its model
- * through the gateway with the chat's grant. One harness instance per kind
- * serves every project agent of that kind; model and effort travel as turn
- * defaults.
- */
-interface SandboxHarnesses {
-  claudeCode: ClaudeCodeAgent;
-  codex: CodexAgent;
-}
-
-function sandboxHarnesses(
-  toolPermissions: ToolPermissionChannel,
-): SandboxHarnesses {
-  return {
-    claudeCode: new ClaudeCodeAgent({
-      sandbox: {},
-      // The sandbox is the boundary: edits and commands run without
-      // prompts, and sandboxing is enforced where changes leave it (ADR
-      // 0182). A definition's own permission mode travels per turn.
-      permissionMode: "acceptEdits",
-      memory: false,
-      onToolPermission: toolPermissions.handlerFor("Claude Code"),
-    }),
-    codex: new CodexAgent({
-      sandbox: {},
-      onToolPermission: toolPermissions.handlerFor("Codex"),
-    }),
-  };
-}
-
-/**
  * A committed `claude-code` or `codex` agent, served when its credentials
- * name a model connection of its Environment (ADR 0180), or `personal`: the
- * chat owner's own login their desktop sent (ADR 0184). Project secrets
- * and the machine's own CLI login are desktop concepts.
+ * name a model connection of its Environment (ADR 0180), or `personal`:
+ * the chat owner's own sign-in on the machine that runs it (ADR 0198).
+ * Project secrets and the machine's own CLI login are desktop concepts.
  */
 function sandboxProjectAgent(input: {
   id: string;
   definition: AgentDefinition;
   promptFile: string | undefined;
-  systemPrompt: string | undefined;
-  harnesses: SandboxHarnesses;
 }): RegisteredCodingAgent | undefined {
   const { definition } = input;
-  const kind: PersonalLoginKind =
+  const kind: SignInHarness =
     definition.kind === "codex" ? "codex" : "claude-code";
   const requirements = (definition.connections ?? []).map(
     normalizeConnectionRequirement,
   );
+  const common = {
+    id: input.id,
+    ...sandboxHarness(kind),
+    topology: "controller" as const,
+    sandboxing: definition.sandboxing ?? "propose",
+    environment: definition.environment,
+    delegation: definition.delegation,
+    systemPrompt: [SYSTEM_PROMPT, input.promptFile]
+      .filter(Boolean)
+      .join("\n\n"),
+    defaults: {
+      ...(definition.model ? { model: definition.model } : {}),
+      ...(definition.effort ? { effort: definition.effort } : {}),
+    },
+  };
   if (definition.credentials?.source === "personal")
-    return {
-      id: input.id,
-      provider:
-        kind === "codex" ? input.harnesses.codex : input.harnesses.claudeCode,
-      topology: "controller",
-      sandboxing: definition.sandboxing ?? "propose",
-      environment: definition.environment,
-      connectionRequirements: requirements,
-      personalLogin: kind,
-      delegation: definition.delegation,
-      systemPrompt: [input.systemPrompt, input.promptFile]
-        .filter(Boolean)
-        .join("\n\n"),
-      defaults: {
-        ...(definition.model ? { model: definition.model } : {}),
-        ...(definition.effort ? { effort: definition.effort } : {}),
-      },
-    };
+    return { ...common, connectionRequirements: requirements, signIn: kind };
   const alias =
     definition.credentials?.source === "connection"
       ? definition.credentials.connection
       : undefined;
   if (!alias) return undefined;
   return {
-    id: input.id,
-    provider:
-      definition.kind === "codex"
-        ? input.harnesses.codex
-        : input.harnesses.claudeCode,
-    topology: "controller",
-    sandboxing: definition.sandboxing ?? "propose",
-    environment: definition.environment,
+    ...common,
     // The model connection is required like any binding the agent uses.
     connectionRequirements: requirements.some(
       (requirement) => requirement.alias === alias,
@@ -316,13 +284,5 @@ function sandboxProjectAgent(input: {
       ? requirements
       : [...requirements, { alias }],
     modelConnection: alias,
-    delegation: definition.delegation,
-    systemPrompt: [input.systemPrompt, input.promptFile]
-      .filter(Boolean)
-      .join("\n\n"),
-    defaults: {
-      ...(definition.model ? { model: definition.model } : {}),
-      ...(definition.effort ? { effort: definition.effort } : {}),
-    },
   };
 }

@@ -2,10 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  DurableToolPermissionBroker,
-  WorkerNodesService,
-} from "@catamorphic/core";
+import { WorkerNodesService } from "@catamorphic/core";
 import {
   EncryptedCredentialVault,
   PostgresObjectStore,
@@ -17,7 +14,11 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "./server.js";
-import { createTestDatabase, testServerOptions } from "./test-support.js";
+import {
+  createTestDatabase,
+  enqueue,
+  testServerOptions,
+} from "./test-support.js";
 
 it.skipIf(!process.env.DATABASE_URL)(
   "two Work server instances share state and execute only on the selected machine",
@@ -149,24 +150,25 @@ it.skipIf(!process.env.DATABASE_URL)(
         member,
         project.id,
       );
-      await a.catamorphic.core.agentSessions!.enqueueMessage(
-        member,
-        project.id,
-        session.id,
-        "execution-location",
-      );
-      await expect
-        .poll(
-          async () =>
-            (
-              await a.catamorphic.core.agentSessions!.get(
-                member,
-                project.id,
-                session.id,
-              )
-            ).messages.find((message) => message.role === "assistant")?.content,
-          { timeout: 15000 },
+      await enqueue({
+        sessions: a.catamorphic.core.agentSessions!,
+        identity: member,
+        projectId: project.id,
+        sessionId: session.id,
+        text: "execution-location",
+      });
+      const answers = async (server: WorkServer) =>
+        (
+          await server.catamorphic.core.agentSessions!.transcript(
+            member,
+            project.id,
+            session.id,
+          )
         )
+          .filter((message) => message.role === "assistant")
+          .map((message) => message.content);
+      await expect
+        .poll(async () => (await answers(a))[0], { timeout: 15000 })
         .toContain(path.join(dir, bHealth.machine.label, "sandboxes"));
       expect(
         (
@@ -219,27 +221,45 @@ it.skipIf(!process.env.DATABASE_URL)(
           use: (value) => Buffer.from(value).toString(),
         }),
       ).toBe("private credential");
-      const brokerA = new DurableToolPermissionBroker(a.catamorphic.core.db, {
-        timeoutMs: 5000,
-      });
-      const brokerB = new DurableToolPermissionBroker(b.catamorphic.core.db, {
-        timeoutMs: 5000,
-      });
-      const permission = brokerA.handlerFor("Researcher")({
+      // A question asked through one replica is answered through the
+      // other: the request and its answer live in Postgres (ADR 0197).
+      await enqueue({
+        sessions: a.catamorphic.core.agentSessions!,
+        identity: member,
+        projectId: project.id,
         sessionId: session.id,
-        server: "crm",
-        tool: "update",
-        input: {},
+        text: "ask Which region?",
       });
+      const pendingRequest = async () =>
+        (
+          await b.catamorphic.core.agentSessions!.get(
+            member,
+            project.id,
+            session.id,
+          )
+        ).snapshot.requests.find((request) => request.status === "pending");
       await expect
-        .poll(async () => (await brokerB.list(session.id)).length)
-        .toBe(1);
-      const pending = (await brokerB.list(session.id))[0];
-      if (!pending) throw new Error("Permission request missing");
-      expect(
-        await brokerB.answer(pending.id, { decision: "allow" }, member),
-      ).toBe(true);
-      expect(await permission).toEqual({ decision: "allow" });
+        .poll(async () => (await pendingRequest())?.answerable, {
+          timeout: 15000,
+        })
+        .toBe(true);
+      const request = await pendingRequest();
+      if (!request) throw new Error("Question missing");
+      const receipt = await b.catamorphic.core.agentSessions!.command(
+        member,
+        project.id,
+        session.id,
+        {
+          type: "respond",
+          commandId: randomUUID(),
+          requestId: request.id,
+          response: { kind: "question", answers: ["eu-west"] },
+        },
+      );
+      expect(receipt.status).toBe("accepted");
+      await expect
+        .poll(async () => (await answers(a)).at(-1), { timeout: 15000 })
+        .toBe("Answered where asked: eu-west");
       const nodes = new WorkerNodesService(a.catamorphic.core.db);
       await nodes.setEnabled({
         tenantId: identity.tenantId,
@@ -484,7 +504,7 @@ it("a Postgres deployment requires the operator credential every replica shares"
 });
 
 it.skipIf(!process.env.DATABASE_URL)(
-  "stopping a replica lets a running chat turn settle before its sandbox goes",
+  "stopping a replica settles its running chat turn before its sandbox goes",
   async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "work-sigterm-"));
     const database = await createTestDatabase("work_sigterm");
@@ -518,12 +538,13 @@ it.skipIf(!process.env.DATABASE_URL)(
       const sessions = core.agentSessions;
       if (!sessions) throw new Error("Agent sessions are not configured");
       const session = await sessions.create(identity, project.id);
-      await sessions.enqueueMessage(
+      await enqueue({
+        sessions,
         identity,
-        project.id,
-        session.id,
-        "run sleep 3 && echo finished",
-      );
+        projectId: project.id,
+        sessionId: session.id,
+        text: "run sleep 3 && echo finished",
+      });
       await expect
         .poll(
           async () =>
@@ -542,16 +563,13 @@ it.skipIf(!process.env.DATABASE_URL)(
       await server.shutdown();
       stopped = true;
       await admin.connect();
+      // A runner in this process stops with it (ADR 0197): its turn is
+      // settled as interrupted, never left running for nobody.
       const turn = await admin.query(
-        "SELECT status FROM catamorphic.agent_turns WHERE session_id = $1",
+        "SELECT status FROM catamorphic.agent_turns WHERE session_id = $1 ORDER BY ordinal LIMIT 1",
         [session.id],
       );
-      expect(turn.rows).toEqual([{ status: "completed" }]);
-      const reply = await admin.query(
-        "SELECT content FROM catamorphic.agent_messages WHERE session_id = $1 AND role = 'assistant'",
-        [session.id],
-      );
-      expect(reply.rows[0]?.content).toContain("finished");
+      expect(turn.rows).toEqual([{ status: "interrupted" }]);
       // Only then did the machine go, and the chat's workspace with it.
       const allocation = await admin.query(
         "SELECT a.status, a.release_reason FROM catamorphic.agent_sessions s JOIN catamorphic.execution_allocations a ON a.id = s.allocation_id WHERE s.id = $1",

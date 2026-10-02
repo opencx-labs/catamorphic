@@ -26,11 +26,14 @@ import {
   assertSandboxResources,
   assertWriteSize,
   decodeProcessChunk,
+  machineSignInHome,
   newProcessId,
   PROCESS_SIGNALS,
   processReadBounds,
   SANDBOX_CAPABILITIES,
+  SANDBOX_PATHS_ENV,
   StdioDeploymentRuntimeProvider,
+  signInHomePath,
 } from "@catamorphic/sandbox";
 import { APP_DATA_ENV } from "@catamorphic/workflow/project-layout";
 import {
@@ -80,6 +83,14 @@ export interface LocalProcessProviderConfig {
    * `network.policy`; nothing restricts the network.
    */
   acceptUnenforcedEgress?: boolean;
+  /**
+   * Where this machine keeps members' own harness sign-ins (ADR 0198),
+   * one home per harness and member (`machineSignInHome`). A sandbox
+   * created with `signIns` links exactly those homes at
+   * `signInHomePath`, so the harness's own home is the one on this
+   * machine's disk. Without it the provider refuses `signIns`.
+   */
+  signInRoot?: string;
 }
 
 const CONTAINERS_MARKER = "containers";
@@ -139,12 +150,14 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
   >();
   private readonly docker?: LocalProcessProviderConfig["docker"];
   private readonly acceptUnenforcedEgress: boolean;
+  private readonly signInRoot: string | undefined;
   private readonly dockerProxies = new Map<string, Promise<DockerProxy>>();
 
   constructor(config?: LocalProcessProviderConfig) {
     this.projectDataDirectory = config?.projectDataDirectory;
     this.docker = config?.docker;
     this.acceptUnenforcedEgress = config?.acceptUnenforcedEgress ?? false;
+    this.signInRoot = config?.signInRoot;
     this.capabilities = [
       ...(this.docker ? [SANDBOX_CAPABILITIES.containers] : []),
       ...(this.acceptUnenforcedEgress
@@ -183,9 +196,17 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
       throw new Error(
         "Local-process sandboxes cannot enforce an egress policy; place the Environment on a microsandbox machine",
       );
+    const signIns = this.signInHomes(opts);
     const id = `local-${crypto.randomUUID().slice(0, 12)}`;
     for (const dir of ["workspace", "home", "tmp"]) {
       fs.mkdirSync(path.join(this.root, id, dir), { recursive: true });
+    }
+    // The owner's own sign-in stays where they made it; the sandbox's
+    // harness home is a link to it (ADR 0198).
+    for (const signIn of signIns) {
+      const link = this.resolvePath(id, signIn.virtual);
+      fs.mkdirSync(path.dirname(link), { recursive: true });
+      fs.symlinkSync(signIn.host, link, "dir");
     }
     if (opts.containers) {
       fs.writeFileSync(path.join(this.root, id, CONTAINERS_MARKER), "");
@@ -544,6 +565,36 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
   }
 
   /**
+   * The sign-in homes a sandbox links (ADR 0198): each one this machine
+   * keeps for the member named, nothing else of the sign-in root.
+   */
+  private signInHomes(
+    opts: CreateSandboxOpts,
+  ): Array<{ host: string; virtual: string }> {
+    const requested = opts.signIns ?? [];
+    if (requested.length === 0) return [];
+    const root = this.signInRoot;
+    if (!root)
+      throw new Error(
+        "This machine keeps no members' sign-ins, so its sandboxes cannot run on one",
+      );
+    return requested.map((signIn) => {
+      const host = machineSignInHome({ root, ...signIn });
+      if (!fs.statSync(host, { throwIfNoEntry: false })?.isDirectory())
+        throw new Error(
+          `This machine has no ${signIn.harness} sign-in for ${signIn.member}. Sign in on it with: work worker sign-in ${signIn.harness} --member ${signIn.member}`,
+        );
+      return {
+        host,
+        virtual: signInHomePath({
+          workspaceRoot: this.workspaceRoot,
+          harness: signIn.harness,
+        }),
+      };
+    });
+  }
+
+  /**
    * Map a virtual `/workspace/...` path onto this sandbox's directory. Paths
    * outside the virtual root (after normalization, e.g. the runtime dir
    * `<workspace>/../runtime`) live as siblings inside the sandbox dir.
@@ -579,6 +630,12 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
       ...this.baseEnv,
       HOME: path.join(sandboxDir, "home"),
       TMPDIR: path.join(sandboxDir, "tmp"),
+      // Processes are handed virtual paths (an agent runner's attempt);
+      // this says where they really are.
+      [SANDBOX_PATHS_ENV]: JSON.stringify({
+        virtual: this.workspaceRoot,
+        real: path.join(sandboxDir, "workspace"),
+      }),
       ...(this.sandboxes.get(sandboxId)?.envVars ?? {}),
       ...(callEnv ?? {}),
     };

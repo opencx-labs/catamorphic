@@ -11,6 +11,7 @@ import {
   MACHINE_CAPABILITIES,
   type MachineCapability,
 } from "@catamorphic/sandbox";
+import { signInRoot } from "./workers/sign-ins.js";
 
 /** How this machine executes agent and workflow sandboxes. */
 export interface WorkExecutionSettings {
@@ -250,6 +251,8 @@ export function workExecution(args: {
 }) {
   const { settings } = args;
   validateExecutionSettings(settings);
+  // Members' own sign-ins, made on this machine (ADR 0198).
+  const signIns = signInRoot(args.dataDir);
   const provider =
     settings.backend === "microsandbox"
       ? new MicrosandboxSandboxProvider({
@@ -257,6 +260,7 @@ export function workExecution(args: {
           cpus: (settings.defaults.cpuMillis ?? 1000) / 1000,
           memoryMib: settings.defaults.memoryMb,
           containers: settings.containers ?? true,
+          signInRoot: signIns,
           ...(settings.images?.builder
             ? {
                 imageBuilder: dockerImageBuilder({
@@ -268,6 +272,7 @@ export function workExecution(args: {
       : new LocalProcessSandboxProvider({
           root: path.join(args.dataDir, "sandboxes"),
           env: { PATH: settings.path, LANG: "C.UTF-8" },
+          signInRoot: signIns,
           ...(settings.dockerSocket
             ? {
                 docker: {
@@ -291,5 +296,6 @@ export function workExecution(args: {
         ? ("sandbox" as const)
         : ("process" as const),
     machineCapabilities: machineCapabilities(settings),
+    signInRoot: signIns,
   };
 }

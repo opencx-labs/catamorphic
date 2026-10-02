@@ -21,6 +21,11 @@
 #     -e WORK_CONTROL_PLANE_URL=https://brain.example.com \
 #     -e WORK_WORKER_ENROLLMENT=<one-time code> \
 #     work-server bun apps/server/src/worker.ts
+#
+# A member signs in to Claude Code or Codex on the machine that runs their
+# chats with the harness's own login (ADR 0198); the sign-in stays in /data:
+#
+#   docker exec -it <worker> work worker sign-in claude-code --member <id>
 FROM oven/bun:1.3.14
 
 # The local-process execution provider (ADR 0047) runs agent/workflow
@@ -31,14 +36,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 
 WORKDIR /app
 COPY . .
-# Packages (dists the server resolves) + the mobile PWA the server serves
-# at its root (invite webLinks open it directly).
+# Packages (dists the server resolves, including the agent runner bundle,
+# packages/runner-bundle/dist/runner.mjs, that sandboxes run with this
+# image's Bun, ADR 0197) + the mobile PWA the server serves at its root
+# (invite webLinks open it directly).
 # --ignore-scripts: the workspace's pinned `node` helper package installs a
 # Node binary through npm in its preinstall step; the image has bun only, and
 # every build here runs under bun.
 RUN bun install --frozen-lockfile --ignore-scripts \
   && bunx turbo run build --filter='./packages/*' --filter=catamorphic-pwa --no-daemon \
+  && test -s packages/runner-bundle/dist/runner.mjs \
   && rm -rf /root/.bun/install/cache \
+  && printf '#!/bin/sh\nexec bun /app/apps/server/src/work.ts "$@"\n' > /usr/local/bin/work \
+  && chmod 755 /usr/local/bin/work \
   && mkdir -p /data \
   && chown bun:bun /data
 

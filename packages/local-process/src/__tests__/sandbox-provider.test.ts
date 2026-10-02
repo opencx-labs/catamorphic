@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  machineSignInHome,
+  parseSandboxPaths,
+  signInHomePath,
+} from "@catamorphic/sandbox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { LocalProcessSandboxProvider } from "../sandbox-provider.js";
 
@@ -36,6 +41,72 @@ describe("LocalProcessSandboxProvider", () => {
     } finally {
       fs.rmSync(isolatedRoot, { recursive: true, force: true });
     }
+  });
+
+  it("links exactly the owner's sign-in home from the machine (ADR 0198)", async () => {
+    const signInRoot = path.join(root, "sign-ins");
+    const home = (member: string) =>
+      machineSignInHome({ root: signInRoot, harness: "claude-code", member });
+    for (const member of ["alice", "bob"]) {
+      fs.mkdirSync(home(member), { recursive: true });
+      fs.writeFileSync(path.join(home(member), "owner"), member);
+    }
+    const machine = new LocalProcessSandboxProvider({
+      root: path.join(root, "sign-in-sandboxes"),
+      signInRoot,
+    });
+    const sandbox = await machine.createSandbox({
+      signIns: [{ harness: "claude-code", member: "alice" }],
+    });
+    const inside = signInHomePath({
+      workspaceRoot: machine.workspaceRoot,
+      harness: "claude-code",
+    });
+    const seen = await machine.executeCommand(
+      sandbox.id,
+      'cat .work-sign-in/claude-code/owner && echo && ls -A .work-sign-in && printf "%s" "$CATAMORPHIC_SANDBOX_PATHS"',
+    );
+    expect(seen.exitCode).toBe(0);
+    const [owner, listed, paths] = seen.result.split("\n");
+    expect(owner).toBe("alice");
+    expect(listed).toBe("claude-code");
+    // Processes learn where their virtual paths really are.
+    const mapping = parseSandboxPaths(paths);
+    expect(mapping?.virtual).toBe(machine.workspaceRoot);
+    expect(
+      fs.realpathSync(
+        path.join(
+          mapping?.real ?? "",
+          path.posix.relative(machine.workspaceRoot, inside),
+        ),
+      ),
+    ).toBe(fs.realpathSync(home("alice")));
+    // The CLI refreshing its token writes to the machine's home.
+    await machine.executeCommand(
+      sandbox.id,
+      "printf refreshed > .work-sign-in/claude-code/token",
+    );
+    expect(fs.readFileSync(path.join(home("alice"), "token"), "utf8")).toBe(
+      "refreshed",
+    );
+    // Destroying the sandbox leaves the sign-in where it was made.
+    await machine.destroySandbox(sandbox.id);
+    expect(fs.readFileSync(path.join(home("alice"), "owner"), "utf8")).toBe(
+      "alice",
+    );
+
+    await expect(
+      machine.createSandbox({
+        signIns: [{ harness: "codex", member: "alice" }],
+      }),
+    ).rejects.toThrow("work worker sign-in codex --member alice");
+    await expect(
+      new LocalProcessSandboxProvider({
+        root: path.join(root, "no-sign-ins"),
+      }).createSandbox({
+        signIns: [{ harness: "claude-code", member: "alice" }],
+      }),
+    ).rejects.toThrow("keeps no members' sign-ins");
   });
 
   it("keeps project data across runtime replacement without exposing it to build sandboxes", async () => {

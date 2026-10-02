@@ -5,6 +5,10 @@ import {
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
+  WORKER_PROTOCOL_HEADER,
+  workerProtocolRefusal,
+} from "./worker-protocol.js";
+import {
   WorkerConnectSchema,
   WorkerDisabledError,
   WorkerIsolationError,
@@ -33,7 +37,9 @@ const Completion = z.strictObject({
  * answers any call, and each call renews the lease: operations and leases
  * live in Postgres. A 409 from poll or renew ends the session, with
  * `superseded: true` once a newer process of the worker took over; a 409
- * from complete refuses only that receipt.
+ * from complete refuses only that receipt. Every call states the worker's
+ * protocol (`work-protocol`); one this control plane cannot drive is
+ * answered 426 naming which side to update (ADR 0197).
  */
 export function registerWorkerRoutes(
   app: FastifyInstance,
@@ -43,6 +49,7 @@ export function registerWorkerRoutes(
     request: FastifyRequest,
     reply: FastifyReply,
   ) => {
+    if (await refusedProtocol(request, reply)) return undefined;
     const header = request.headers.authorization;
     const worker = await registry.authenticate(
       Array.isArray(header) ? header[0] : header,
@@ -55,6 +62,7 @@ export function registerWorkerRoutes(
   };
 
   app.post("/api/workers/enroll", async (request, reply) => {
+    if (await refusedProtocol(request, reply)) return reply;
     const body = z
       .strictObject({ code: z.string().min(10) })
       .safeParse(request.body);
@@ -161,6 +169,19 @@ export function registerWorkerRoutes(
       }
     },
   );
+}
+
+/** Answers 426 when the worker's protocol is not one this plane drives. */
+async function refusedProtocol(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<boolean> {
+  const refusal = workerProtocolRefusal(
+    request.headers[WORKER_PROTOCOL_HEADER],
+  );
+  if (!refusal) return false;
+  await reply.status(426).send(refusal);
+  return true;
 }
 
 /** The worker's session ended: 409, marked when a newer process took over. */

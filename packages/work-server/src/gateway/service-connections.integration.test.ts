@@ -12,7 +12,11 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "../server.js";
-import { oauthAccessToken, testServerOptions } from "../test-support.js";
+import {
+  oauthAccessToken,
+  replyOf,
+  testServerOptions,
+} from "../test-support.js";
 import { startWorkWorker } from "../workers/worker-runtime.js";
 
 /**
@@ -369,15 +373,17 @@ describe.skipIf(!databaseUrl)("service connections (ADR 0172)", () => {
       agentId: `project:${project.id}:reviewer`,
       environment: "review",
     });
-    const located = await sessions.sendMessage(
-      principal,
-      project.id,
-      session.id,
-      "execution-location",
+    const located = replyOf(
+      await sessions.sendMessage(
+        principal,
+        project.id,
+        session.id,
+        "execution-location",
+      ),
     );
     expect(
-      located.metadata?.status,
-      JSON.stringify({ content: located.content, metadata: located.metadata }),
+      located.turn.status,
+      JSON.stringify({ content: located.content, turn: located.turn }),
     ).not.toBe("failed");
     expect(located.content).toContain(path.join(workerDir, "sandboxes"));
     const allocation = await core.executionAllocations.get({
@@ -394,9 +400,8 @@ describe.skipIf(!databaseUrl)("service connections (ADR 0172)", () => {
       },
     ]);
 
-    // The harness holds the grant it got when the chat was anchored (#122).
-    // A long-lived chat idles past its expiry; its next turn extends that
-    // same grant rather than leaving the harness with a dead bearer.
+    // A long-lived chat idles past its grant's expiry; its next turn starts
+    // its harness with a live grant, never a dead bearer (#122).
     const anchored = await core.db
       .selectFrom("connection_capability_grants")
       .select("id")
@@ -409,22 +414,24 @@ describe.skipIf(!databaseUrl)("service connections (ADR 0172)", () => {
       .set({ expires_at: new Date(Date.now() - 60_000) })
       .where("id", "=", anchored.id)
       .execute();
-    const later = await sessions.sendMessage(
-      principal,
-      project.id,
-      session.id,
-      "execution-location",
+    const later = replyOf(
+      await sessions.sendMessage(
+        principal,
+        project.id,
+        session.id,
+        "execution-location",
+      ),
     );
-    expect(later.metadata?.status).not.toBe("failed");
-    const extended = await core.db
+    expect(later.turn.status).not.toBe("failed");
+    const live = await core.db
       .selectFrom("connection_capability_grants")
-      .select(["revoked_at", "expires_at"])
-      .where("id", "=", anchored.id)
-      .executeTakeFirstOrThrow();
-    expect(extended.revoked_at).toBeNull();
-    expect(new Date(extended.expires_at).getTime()).toBeGreaterThan(
-      Date.now() + 30 * 60_000,
-    );
+      .select(["expires_at"])
+      .where("agent_session_id", "=", session.id)
+      .where("channel", "=", "mcp")
+      .where("revoked_at", "is", null)
+      .where("expires_at", ">", new Date(Date.now() + 30 * 60_000))
+      .execute();
+    expect(live.length).toBeGreaterThan(0);
 
     // The agent reaches the alias the way its harness does: the brokered
     // connection MCP endpoint with a short-lived, session-bound grant.
