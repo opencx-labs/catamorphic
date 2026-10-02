@@ -109,19 +109,24 @@ export const runtimeRequestResponseSchema = z.union([
 ]);
 
 export const sessionCommandSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("send"),
-    commandId,
-    /** May be empty when attachments carry the message. */
-    text: z.string().max(1_000_000),
-    attachments: z.array(attachmentSchema).max(50).optional(),
-    /** Default: steer a running subsession, queue otherwise. */
-    dispatch: z.enum(["queue", "steer", "interrupt"]).optional(),
-    /** Move the chat's workspace to a ref before this turn (ADR 0178). */
-    workspace: workspaceRequestSchema.optional(),
-  }).refine((send) => send.text.trim() !== "" || (send.attachments?.length ?? 0) > 0, {
-    message: "A message needs text or an attachment",
-  }),
+  z
+    .object({
+      type: z.literal("send"),
+      commandId,
+      /** May be empty when attachments carry the message. */
+      text: z.string().max(1_000_000),
+      attachments: z.array(attachmentSchema).max(50).optional(),
+      /** Default: steer a running subsession, queue otherwise. */
+      dispatch: z.enum(["queue", "steer", "interrupt"]).optional(),
+      /** Move the chat's workspace to a ref before this turn (ADR 0178). */
+      workspace: workspaceRequestSchema.optional(),
+    })
+    .refine(
+      (send) => send.text.trim() !== "" || (send.attachments?.length ?? 0) > 0,
+      {
+        message: "A message needs text or an attachment",
+      },
+    ),
   z.object({
     type: z.literal("interrupt"),
     commandId,

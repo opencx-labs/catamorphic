@@ -13,7 +13,10 @@ import type {
   TurnError,
 } from "@catamorphic/agent-protocol";
 import { itemActivity } from "@catamorphic/agent-protocol";
-import type { HarnessEvent, ItemDraft } from "@catamorphic/agent-protocol/runner";
+import type {
+  HarnessEvent,
+  ItemDraft,
+} from "@catamorphic/agent-protocol/runner";
 import type { DB } from "@catamorphic/db";
 import type { Transaction } from "kysely";
 import { itemFromRow, requestFromRow } from "./session-rows.js";
@@ -259,13 +262,18 @@ export async function ingestHarnessEvents(input: {
         items.set(itemId, item);
         out.push({ type: "item.added", item });
         if (event.request.blocking && turn.status === "running")
-          emitTurn({ ...turn, status: "waiting", activity: waitingLine(event.request.kind), activityAt: at });
+          emitTurn({
+            ...turn,
+            status: "waiting",
+            activity: waitingLine(event.request.kind),
+            activityAt: at,
+          });
         break;
       }
       case "request.closed": {
         const id = derivedId(attemptId, `request:${event.key}`);
         const current = requests.get(id);
-        if (!current || current.status !== "pending") break;
+        if (current?.status !== "pending") break;
         const closed: RuntimeRequest = {
           ...current,
           status: "cancelled",

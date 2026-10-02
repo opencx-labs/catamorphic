@@ -8,7 +8,10 @@ import {
   type RunnerFrame,
   splitLines,
 } from "@catamorphic/agent-protocol/runner";
-import { AGENT_RUNNER_VERSION, InProcessRunner } from "@catamorphic/agent-runner";
+import {
+  AGENT_RUNNER_VERSION,
+  InProcessRunner,
+} from "@catamorphic/agent-runner";
 import { loadRunnerBundle } from "@catamorphic/runner-bundle";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 
@@ -129,9 +132,12 @@ export async function startSandboxRunner(input: {
   bundle ??= loadRunnerBundle();
   const { source, hash } = await bundle;
   const directory = `${input.stateDirectory}/runner`;
-  const file = `${directory}/${hash}.mjs`;
   const present = await input.provider
-    .executeCommand(input.sandboxId, `test -f ${shellQuote(file)} && echo present`)
+    .executeCommand(
+      input.sandboxId,
+      `test -f ${shellQuote(`runner/${hash}.mjs`)} && echo present`,
+      { cwd: input.stateDirectory },
+    )
     .then(
       (result) => result.result.includes("present"),
       () => false,
@@ -144,7 +150,9 @@ export async function startSandboxRunner(input: {
     );
   const started = await processes.startProcess({
     sandboxId: input.sandboxId,
-    command: `runtime="$(command -v bun || command -v node)"; if [ -z "$runtime" ]; then echo "This sandbox has neither Bun nor Node to run the agent runner." >&2; exit 127; fi; exec "$runtime" ${shellQuote(file)}`,
+    // Relative to its working directory: a provider maps only the cwd onto
+    // its own filesystem, never paths inside a command.
+    command: `runtime="$(command -v bun || command -v node)"; if [ -z "$runtime" ]; then echo "This sandbox has neither Bun nor Node to run the agent runner." >&2; exit 127; fi; exec "$runtime" ${shellQuote(`runner/${hash}.mjs`)}`,
     cwd: input.stateDirectory,
     ...(input.env ? { env: input.env } : {}),
     name: "Agent runner",
@@ -207,7 +215,9 @@ export function sandboxChannel(input: {
       // An incomplete last line is read again with the next chunk.
       const next = output.nextCursor - Buffer.byteLength(split.rest, "utf8");
       const exited =
-        output.status === "exited" && !output.more && split.rest.length === 0 &&
+        output.status === "exited" &&
+        !output.more &&
+        split.rest.length === 0 &&
         next >= output.outputBytes;
       return { frames, diagnostics, cursor: next, exited };
     },

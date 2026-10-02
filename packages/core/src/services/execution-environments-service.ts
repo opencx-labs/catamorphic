@@ -11,13 +11,13 @@ import type {
   SignInHarness,
 } from "@catamorphic/sandbox";
 import {
-  signInCapability,
   dockerfileDigest,
   environmentSatisfies,
   harnessCapability,
   MACHINE_CAPABILITIES,
   resolveEgress,
   SANDBOX_CAPABILITIES,
+  signInCapability,
 } from "@catamorphic/sandbox";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import type { Identity } from "../identity.js";

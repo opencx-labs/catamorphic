@@ -81,8 +81,10 @@ export class AttemptRunner {
     // on it stops waiting.
     if (event.type === "request.closed") {
       const pending = this.requests.get(event.key);
+      // Closed already (or released, which leaves it open in Work).
+      if (!pending) return;
       this.requests.delete(event.key);
-      pending?.reject(new RequestClosedError(event.reason));
+      pending.reject(new RequestClosedError(event.reason));
     }
     this.emitFrame({ type: "event", event });
   }
@@ -145,7 +147,9 @@ export class AttemptRunner {
         case "interrupt":
           // Whatever the harness waits on ends with it: an interrupted
           // turn's question or approval has nobody left to answer it.
-          this.closeRequests("The turn was interrupted before it was answered.");
+          this.closeRequests(
+            "The turn was interrupted before it was answered.",
+          );
           this.control?.interrupt(command.reason);
           this.ack(frame.id);
           return;
@@ -304,23 +308,23 @@ export class AttemptRunner {
       const answer = this.openRequest(
         key,
         {
-        kind: "approval",
-        blocking: true,
-        title: `Allow ${request.tool}?`,
-        origin: {
-          kind: "mcp",
-          id: request.server,
-          displayName: request.server,
-        },
-        approval: {
-          action: `${request.server} · ${request.tool}`,
-          ...(request.description ? { details: request.description } : {}),
-          tool: {
-            server: request.server,
-            name: request.tool,
-            input: toJson(request.input),
+          kind: "approval",
+          blocking: true,
+          title: `Allow ${request.tool}?`,
+          origin: {
+            kind: "mcp",
+            id: request.server,
+            displayName: request.server,
           },
-        },
+          approval: {
+            action: `${request.server} · ${request.tool}`,
+            ...(request.description ? { details: request.description } : {}),
+            tool: {
+              server: request.server,
+              name: request.tool,
+              input: toJson(request.input),
+            },
+          },
         },
         signal,
       );

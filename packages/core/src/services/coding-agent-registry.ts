@@ -45,10 +45,15 @@ export type AgentHarness =
       /** Tools this host serves the agent beside Work's capability tools. */
       hostTools?: readonly ExtraTool[];
       /** MCP servers this host adds, read at every turn so rotated tokens apply. */
-      mcpServers?: (context: AgentTurnContext) => Record<string, AgentMcpServerConfig>;
+      mcpServers?: (
+        context: AgentTurnContext,
+      ) => Record<string, AgentMcpServerConfig>;
       /** The host's own policy layers per server, read live (ADR 0054). */
       toolPolicies?: () => Record<string, McpToolPolicyLayers>;
-      toolAnnotations?: () => Record<string, Record<string, ToolPolicyAnnotations>>;
+      toolAnnotations?: () => Record<
+        string,
+        Record<string, ToolPolicyAnnotations>
+      >;
       plugins?: readonly AgentPluginConfig[];
       /** Facts for this turn, beside the person's message (ADR 0152). */
       context?: (context: AgentTurnContext) => Promise<TurnContextFragment[]>;
@@ -119,7 +124,9 @@ export interface RegisteredCodingAgent {
 }
 
 /** The harness id an agent runs on. */
-export function harnessIdOf(agent: Pick<RegisteredCodingAgent, "harness">): string {
+export function harnessIdOf(
+  agent: Pick<RegisteredCodingAgent, "harness">,
+): string {
   return agent.harness.placement === "host"
     ? agent.harness.adapter.id
     : agent.harness.id;

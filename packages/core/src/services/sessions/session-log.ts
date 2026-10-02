@@ -88,7 +88,7 @@ export class SessionLog {
     const positions = new Map<string, number>();
     const stored = input.events.map((event, index): StoredSessionEvent => {
       const sequence = first + index;
-      let placed = event;
+      let placed = protocolEvent(event);
       if (event.type === "item.added") {
         positions.set(event.item.id, sequence);
         placed = { ...event, item: { ...event.item, position: sequence } };
@@ -243,7 +243,9 @@ export class SessionLog {
         const raced = await this.receipt(trx, input);
         if (raced) return raced;
         const ran = await input.run(trx);
-        const result = ran ? (JSON.parse(JSON.stringify(ran)) as JsonObject) : null;
+        const result = ran
+          ? (JSON.parse(JSON.stringify(ran)) as JsonObject)
+          : null;
         const sequence = await this.latestSequence(trx, input.sessionId);
         await trx
           .insertInto("agent_session_commands")
@@ -336,7 +338,9 @@ export class SessionLog {
     after: number;
     maxEvents?: number;
     maxBytes?: number;
-  }): Promise<{ reset: true } | { reset: false; events: StoredSessionEvent[] }> {
+  }): Promise<
+    { reset: true } | { reset: false; events: StoredSessionEvent[] }
+  > {
     const maxEvents = input.maxEvents ?? REPLAY_MAX_EVENTS;
     const maxBytes = input.maxBytes ?? REPLAY_MAX_BYTES;
     const rows = await this.db
@@ -472,10 +476,14 @@ async function project(
       const values = {
         status: attempt.status,
         provider_thread_id: attempt.providerThreadId,
-        native_turn_ref: attempt.nativeTurnRef ? json(attempt.nativeTurnRef) : null,
+        native_turn_ref: attempt.nativeTurnRef
+          ? json(attempt.nativeTurnRef)
+          : null,
         error: attempt.error ? json(attempt.error) : null,
         started_at: attempt.startedAt ? new Date(attempt.startedAt) : null,
-        completed_at: attempt.completedAt ? new Date(attempt.completedAt) : null,
+        completed_at: attempt.completedAt
+          ? new Date(attempt.completedAt)
+          : null,
       };
       await trx
         .insertInto("agent_turn_attempts")
@@ -591,7 +599,11 @@ async function projectItem(trx: Transaction<DB>, item: Item): Promise<void> {
     author_payload: user
       ? json(user.author)
       : item.kind === "assistant_message"
-        ? json({ kind: "agent", sessionId: item.sessionId, agentId: item.agentId })
+        ? json({
+            kind: "agent",
+            sessionId: item.sessionId,
+            agentId: item.agentId,
+          })
         : null,
     dispatch: user ? user.dispatch : null,
     attention: user?.attention === "required",
@@ -660,11 +672,13 @@ async function projectSession(
   if ("attentionRevision" in fields)
     set.attention_revision = fields.attentionRevision;
   if ("environment" in fields) set.environment_name = fields.environment;
-  if ("authorityHostId" in fields) set.authority_host_id = fields.authorityHostId;
+  if ("authorityHostId" in fields)
+    set.authority_host_id = fields.authorityHostId;
   if ("authorityRevision" in fields)
     set.authority_revision = fields.authorityRevision;
   if ("handoffStatus" in fields) set.handoff_status = fields.handoffStatus;
-  if ("parentSessionId" in fields) set.parent_session_id = fields.parentSessionId;
+  if ("parentSessionId" in fields)
+    set.parent_session_id = fields.parentSessionId;
   if (Object.keys(set).length === 0) return;
   set.updated_at = fields.updatedAt ? new Date(fields.updatedAt) : new Date();
   await trx
@@ -672,4 +686,53 @@ async function projectSession(
     .set(set)
     .where("id", "=", sessionId)
     .execute();
+}
+
+/**
+ * An event as the protocol defines it, whatever a writer spread into its
+ * entity: engine state (a runner's location, its cursor) stays in its own
+ * columns and never reaches the log or a client.
+ */
+function protocolEvent(event: SessionEvent): SessionEvent {
+  switch (event.type) {
+    case "attempt.changed": {
+      const a = event.attempt;
+      return {
+        type: "attempt.changed",
+        attempt: {
+          id: a.id,
+          turnId: a.turnId,
+          sessionId: a.sessionId,
+          ordinal: a.ordinal,
+          reason: a.reason,
+          status: a.status,
+          providerThreadId: a.providerThreadId,
+          nativeTurnRef: a.nativeTurnRef,
+          error: a.error,
+          createdAt: a.createdAt,
+          startedAt: a.startedAt,
+          completedAt: a.completedAt,
+        },
+      };
+    }
+    case "provider_thread.changed": {
+      const t = event.thread;
+      return {
+        type: "provider_thread.changed",
+        thread: {
+          id: t.id,
+          sessionId: t.sessionId,
+          harness: t.harness,
+          nativeRef: t.nativeRef,
+          status: t.status,
+          lastTurnOrdinal: t.lastTurnOrdinal,
+          portable: t.portable,
+          createdAt: t.createdAt,
+          updatedAt: t.updatedAt,
+        },
+      };
+    }
+    default:
+      return event;
+  }
 }

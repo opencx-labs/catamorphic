@@ -57,10 +57,14 @@ export function copySettledHistory(input: {
       // turn (message_only, notices) come along.
       (item.turnId ? kept.has(item.turnId) : true),
   );
-  const attempts = snapshot.attempts.filter((attempt) => kept.has(attempt.turnId));
+  const attempts = snapshot.attempts.filter((attempt) =>
+    kept.has(attempt.turnId),
+  );
   const requests = snapshot.requests.filter(
     (request) =>
-      request.status !== "pending" && request.turnId && kept.has(request.turnId),
+      request.status !== "pending" &&
+      request.turnId &&
+      kept.has(request.turnId),
   );
   const last = turns.at(-1);
   const lastAttempt = last
@@ -69,7 +73,9 @@ export function copySettledHistory(input: {
         .sort((a, b) => b.ordinal - a.ordinal)[0]
     : undefined;
   const sourceThread = last?.providerThreadId
-    ? snapshot.providerThreads.find((thread) => thread.id === last.providerThreadId)
+    ? snapshot.providerThreads.find(
+        (thread) => thread.id === last.providerThreadId,
+      )
     : undefined;
 
   const ids = new Map<string, string>([[snapshot.session.id, input.sessionId]]);
@@ -81,8 +87,12 @@ export function copySettledHistory(input: {
       ...snapshot,
       session: { ...snapshot.session, id: input.sessionId },
       // The copy runs on threads of its own: the source's stay the source's.
-      turns: turns.map(rebase).map((turn) => ({ ...turn, providerThreadId: null })),
-      attempts: attempts.map(rebase).map((attempt) => ({ ...attempt, providerThreadId: null })),
+      turns: turns
+        .map(rebase)
+        .map((turn) => ({ ...turn, providerThreadId: null })),
+      attempts: attempts
+        .map(rebase)
+        .map((attempt) => ({ ...attempt, providerThreadId: null })),
       items: items.map(rebase),
       requests: requests.map(rebase),
       providerThreads: [],

@@ -208,21 +208,6 @@ export {
   type RegisteredCodingAgent,
   singleAgentRegistry,
 } from "./services/coding-agent-registry.js";
-export {
-  REPLAY_MAX_BYTES,
-  REPLAY_MAX_EVENTS,
-  SessionCommandRejectedError,
-} from "./services/sessions/session-log.js";
-export {
-  STREAM_MAX_PENDING_BYTES,
-  STREAM_MAX_PENDING_EVENTS,
-} from "./services/sessions/session-feed.js";
-export {
-  HISTORY_PAGE_ITEMS,
-  SNAPSHOT_TURNS,
-  type TranscriptMessage,
-} from "./services/sessions/session-reads.js";
-export { CONTINUATION_PROMPT } from "./services/sessions/turn-engine.js";
 export { ConnectionAdmissionService } from "./services/connection-admission.js";
 export {
   ConnectionActionDeniedError,
@@ -669,6 +654,21 @@ export {
   SessionWorkspaces,
   workspaceMoveNote,
 } from "./services/session-workspaces.js";
+export {
+  STREAM_MAX_PENDING_BYTES,
+  STREAM_MAX_PENDING_EVENTS,
+} from "./services/sessions/session-feed.js";
+export {
+  REPLAY_MAX_BYTES,
+  REPLAY_MAX_EVENTS,
+  SessionCommandRejectedError,
+} from "./services/sessions/session-log.js";
+export {
+  HISTORY_PAGE_ITEMS,
+  SNAPSHOT_TURNS,
+  type TranscriptMessage,
+} from "./services/sessions/session-reads.js";
+export { CONTINUATION_PROMPT } from "./services/sessions/turn-engine.js";
 export {
   humanizeSkillName,
   type ProjectSkill,

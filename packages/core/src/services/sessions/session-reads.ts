@@ -1,8 +1,4 @@
-import type {
-  Item,
-  SessionSnapshot,
-  Turn,
-} from "@catamorphic/agent-protocol";
+import type { Item, SessionSnapshot, Turn } from "@catamorphic/agent-protocol";
 import type { DB } from "@catamorphic/db";
 import type { Kysely, Transaction } from "kysely";
 import {
@@ -84,7 +80,9 @@ export async function readSnapshot(input: {
               eb(
                 "turn_id",
                 "in",
-                pending.length > 0 ? pending.map((row) => row.id) : ["00000000-0000-0000-0000-000000000000"],
+                pending.length > 0
+                  ? pending.map((row) => row.id)
+                  : ["00000000-0000-0000-0000-000000000000"],
               ),
             ]),
           ),
@@ -178,11 +176,33 @@ export async function readFullSnapshot(input: {
         .selectAll()
         .where("id", "=", input.sessionId)
         .executeTakeFirstOrThrow();
-      const turns = await trx.selectFrom("agent_turns").selectAll().where("session_id", "=", input.sessionId).orderBy("ordinal").execute();
-      const items = await trx.selectFrom("agent_items").select("payload").where("session_id", "=", input.sessionId).orderBy("position").execute();
-      const attempts = await trx.selectFrom("agent_turn_attempts").selectAll().where("session_id", "=", input.sessionId).execute();
-      const requests = await trx.selectFrom("agent_runtime_requests").selectAll().where("session_id", "=", input.sessionId).execute();
-      const threads = await trx.selectFrom("agent_provider_threads").selectAll().where("session_id", "=", input.sessionId).execute();
+      const turns = await trx
+        .selectFrom("agent_turns")
+        .selectAll()
+        .where("session_id", "=", input.sessionId)
+        .orderBy("ordinal")
+        .execute();
+      const items = await trx
+        .selectFrom("agent_items")
+        .select("payload")
+        .where("session_id", "=", input.sessionId)
+        .orderBy("position")
+        .execute();
+      const attempts = await trx
+        .selectFrom("agent_turn_attempts")
+        .selectAll()
+        .where("session_id", "=", input.sessionId)
+        .execute();
+      const requests = await trx
+        .selectFrom("agent_runtime_requests")
+        .selectAll()
+        .where("session_id", "=", input.sessionId)
+        .execute();
+      const threads = await trx
+        .selectFrom("agent_provider_threads")
+        .selectAll()
+        .where("session_id", "=", input.sessionId)
+        .execute();
       return {
         sequence: Number(session.event_sequence),
         session: sessionFieldsFromRow(session),

@@ -99,7 +99,12 @@ export function sessionLogFixture(db: Kysely<DB>) {
           events: [
             {
               type: "turn.changed",
-              turn: { ...turn, status: "completed", completedAt: now, updatedAt: now },
+              turn: {
+                ...turn,
+                status: "completed",
+                completedAt: now,
+                updatedAt: now,
+              },
             },
           ],
         });

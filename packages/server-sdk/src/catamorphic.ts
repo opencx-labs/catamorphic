@@ -7,7 +7,6 @@ import type {
   CatamorphicCoreConfig,
   CodeHost,
   CodingAgentRegistry,
-  RegisteredCodingAgent,
   ConnectionProvider,
   CredentialVault,
   DeploymentRuntimeCleanupResult,
@@ -21,6 +20,7 @@ import type {
   ProjectEventSourceProvider,
   ProjectLifecycleHooks,
   PushNotificationTransport,
+  RegisteredCodingAgent,
   RetentionConfig,
   TriggerKindRuntime,
 } from "@catamorphic/core";
@@ -42,7 +42,10 @@ import {
   ProjectManager,
 } from "@catamorphic/git";
 import type { PluginResolver } from "@catamorphic/plugins";
-import type { EnvironmentProvider, SandboxProvider } from "@catamorphic/sandbox";
+import type {
+  EnvironmentProvider,
+  SandboxProvider,
+} from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import type pg from "pg";
 import {
@@ -393,7 +396,9 @@ export class Catamorphic {
       mcpToolKinds: contributions.mcpToolKinds,
       ...(config.webhooks ? { webhooks: config.webhooks } : {}),
       onAgentTurnSettled: config.onAgentTurnSettled,
-      ...(config.onToolAlwaysAllowed ? { onToolAlwaysAllowed: config.onToolAlwaysAllowed } : {}),
+      ...(config.onToolAlwaysAllowed
+        ? { onToolAlwaysAllowed: config.onToolAlwaysAllowed }
+        : {}),
       pushNotifications: config.pushNotifications,
       capabilityProviders: contributions.capabilityProviders,
       projectHooks: contributions.projectHooks,

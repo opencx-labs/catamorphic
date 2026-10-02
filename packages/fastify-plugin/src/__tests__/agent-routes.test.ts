@@ -239,7 +239,6 @@ describe("agent routes", () => {
       ["DELETE", `${base}/turns/${SESSION_ID}`],
       ["POST", `${base}/turns/${SESSION_ID}/send-now`],
       ["POST", `${base}/interrupt`],
-      ["POST", `${base}/resume`],
     ] as const) {
       const res = await app.inject({ method, url, payload: {} });
       expect([method, url, res.statusCode]).toEqual([method, url, 404]);
