@@ -353,6 +353,7 @@
       "name": "@catamorphic/fastify-plugin",
       "version": "0.0.1",
       "dependencies": {
+        "@catamorphic/agent-protocol": "workspace:*",
         "@catamorphic/app": "workspace:*",
         "@catamorphic/core": "workspace:*",
         "@catamorphic/db": "workspace:*",
@@ -372,6 +373,8 @@
         "zod": "^4.4.3",
       },
       "devDependencies": {
+        "@catamorphic/agent-runner": "workspace:*",
+        "@electric-sql/pglite": "^0.5.4",
         "@opentelemetry/sdk-trace-node": "^2.9.0",
       },
     },

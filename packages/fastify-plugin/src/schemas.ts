@@ -1,3 +1,31 @@
+import {
+  type AgentTurnUsage,
+  type Attempt,
+  attachmentSchema,
+  type CommandReceipt,
+  type DispatchMode,
+  dispatchModeSchema,
+  type Item,
+  type JsonObject,
+  jsonValueSchema,
+  type NativeRef,
+  type ProviderThread,
+  type RuntimeRequest,
+  type RuntimeRequestResponse,
+  type SessionCommand,
+  type SessionEvent,
+  type SessionFields,
+  type SessionMessageAuthor,
+  type SessionSnapshot,
+  type SessionStreamMessage,
+  type StoredSessionEvent,
+  sessionCommandSchema,
+  sessionMessageAuthorSchema,
+  type Turn,
+  type TurnError,
+  type TurnOutcome,
+} from "@catamorphic/agent-protocol";
+import { RUNNER_PROTOCOL_VERSION } from "@catamorphic/agent-protocol/runner";
 import { APP_ICON_NAMES } from "@catamorphic/app";
 import {
   RoleDefinitionSchema as CoreRoleDefinitionSchema,
@@ -622,7 +650,7 @@ export const EnvironmentListSchema = z.object({
         .boolean()
         .optional()
         .describe(
-          "Present when the Environment allows personal credentials (ADR 0184): whether the caller's own chats placed there would carry their logins and files",
+          "Present when the Environment allows personal credentials (ADR 0184): whether the caller's own chats placed there would carry their files and may run on their own sign-in",
         ),
       reasons: z.array(z.string()),
       binding: z
@@ -1028,6 +1056,8 @@ export const AgentTodoSchema = z.object({
   title: z.string().min(1).max(200),
   description: z.string().min(1).max(4_000),
   status: AgentTodoStatusSchema,
+  /** What the agent does while this is in progress ("Reviewing migrations"). */
+  activeForm: z.string().max(200).optional(),
 });
 
 export const AgentSessionSourceSchema = z.enum([
@@ -1104,9 +1134,7 @@ export const AgentSessionSchema = z.object({
   projectId: z.string().uuid(),
   externalUserId: z.string(),
   owner: z.enum(["member", "project"]),
-  provider: z.string(),
   source: AgentSessionSourceSchema,
-  providerSessionId: z.string().nullable(),
   sandboxId: z.string().uuid().nullable(),
   environment: z.string().nullable(),
   allocationId: z.string().uuid().nullable(),
@@ -1124,8 +1152,9 @@ export const AgentSessionSchema = z.object({
   todos: z.array(AgentTodoSchema).max(50),
   authorityHostId: z.string().min(1),
   authorityRevision: z.number().int().positive(),
-  authoritySeenAt: z.string().datetime().nullable(),
-  mirrorMessageCount: z.number().int().nonnegative(),
+  authoritySeenAt: z.string().datetime(),
+  /** The last event sequence a mirror pushed here (ADR 0196). */
+  mirrorSequence: z.number().int().nonnegative(),
   handoffStatus: z.enum(["none", "pending"]),
   handoffDestinationHostId: z.string().nullable(),
   resumable: z.boolean(),
@@ -1262,131 +1291,594 @@ export const EnvironmentErrorSchema = z.object({
   reasons: z.array(z.string()).optional(),
 });
 
-export const SessionDeliveryModeSchema = z.enum([
-  "message_only",
-  "queue",
-  "interrupt",
-]);
+// --- Agent session log (ADR 0196) ---
+//
+// The wire shapes of `@catamorphic/agent-protocol`. Each schema is bound to
+// its protocol type with `describes`, so a change on either side that the
+// other does not follow fails the typecheck here.
 
-export const SessionMessageAuthorSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("user"), externalUserId: z.string() }),
-  z.object({
-    kind: z.literal("agent"),
-    sessionId: z.string().uuid(),
-    agentId: z.string().nullable(),
-  }),
-  z.object({
-    kind: z.literal("workflow"),
-    runId: z.string().uuid(),
-    workflowName: z.string(),
-    displayName: z.string().optional(),
-  }),
-  z.object({
-    kind: z.literal("watcher"),
-    watcherId: z.string().uuid(),
-    runId: z.string().uuid().optional(),
-  }),
-  z.object({ kind: z.literal("system"), code: z.string() }),
-]);
+/** Every member's keys, across a union. */
+type KeysOf<T> = T extends unknown ? `${Exclude<keyof T, symbol>}` : never;
 
-/** A transcript pushed from another backend (ADR 0061). */
-export const MirrorAgentSessionSchema = z.object({
-  workStatus: z.enum(["open", "completed"]).optional(),
-  stateRevision: z.number().int().nonnegative().optional(),
-  events: z
-    .array(
-      z.object({
-        id: z.string().uuid(),
-        kind: z.enum([
-          "session.created",
-          "session.message-received",
-          "session.message-sent",
-          "session.turn-changed",
-          "session.state-changed",
-          "session.work-changed",
-          "session.authority-changed",
-        ]),
-        occurredAt: z.string().datetime(),
-        payload: z.record(z.string(), JsonValueSchema),
+/**
+ * Bind a schema to the protocol type it describes: the schema's output must
+ * be assignable to the type, the type to the schema's output, and both name
+ * the same fields (so a new optional field is not silently stripped).
+ */
+function describes<T>() {
+  return <S extends z.ZodType<T>>(
+    schema: S &
+      ([T] extends [z.output<S>]
+        ? [KeysOf<T>] extends [KeysOf<z.output<S>>]
+          ? unknown
+          : never
+        : never),
+  ): S => schema;
+}
+
+// The protocol's own JSON value (inside a `respond` command) is recursive;
+// naming it lets the OpenAPI document reference it instead of an anonymous
+// cycle.
+z.globalRegistry.add(jsonValueSchema, { id: "ProtocolJsonValue" });
+
+export const DispatchModeSchema = describes<DispatchMode>()(
+  dispatchModeSchema.describe(
+    "queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn",
+  ),
+);
+
+export const SessionMessageAuthorSchema = describes<SessionMessageAuthor>()(
+  sessionMessageAuthorSchema,
+);
+
+const JsonObjectSchema = describes<JsonObject>()(
+  z.record(z.string(), JsonValueSchema),
+);
+
+const NativeRefSchema = describes<NativeRef>()(
+  z.object({
+    id: z.string(),
+    strength: z.enum(["strong", "weak", "none"]),
+  }),
+);
+
+const TurnErrorSchema = describes<TurnError>()(
+  z.object({
+    message: z.string(),
+    kind: z
+      .enum(["auth", "rate_limit", "unavailable", "model_incompat"])
+      .optional(),
+    retrySafe: z.boolean().optional(),
+  }),
+);
+
+const AgentTurnUsageSchema = describes<AgentTurnUsage>()(
+  z.object({
+    model: z.string().optional(),
+    inputTokens: z.number().optional(),
+    cachedInputTokens: z.number().optional(),
+    cacheCreationTokens: z.number().optional(),
+    outputTokens: z.number().optional(),
+    reasoningTokens: z.number().optional(),
+    costUsd: z.number().optional(),
+    contextTokens: z.number().optional(),
+    contextWindow: z.number().optional(),
+  }),
+);
+
+const TurnOutcomeSchema = describes<TurnOutcome>()(
+  z.object({
+    changedFiles: z.array(
+      z.object({ path: z.string(), kind: z.enum(["modified", "deleted"]) }),
+    ),
+    usage: AgentTurnUsageSchema.optional(),
+    storeSync: JsonObjectSchema.optional(),
+    workspaceSync: z.object({ error: z.string() }).optional(),
+    notification: z
+      .object({ title: z.string().optional(), body: z.string().optional() })
+      .optional(),
+  }),
+);
+
+export const TurnSchema = describes<Turn>()(
+  z
+    .object({
+      id: z.string(),
+      sessionId: z.string(),
+      ordinal: z.number().int(),
+      status: z.enum([
+        "queued",
+        "held",
+        "preparing",
+        "running",
+        "waiting",
+        "finalizing",
+        "completed",
+        "failed",
+        "interrupted",
+        "cancelled",
+        "rolled_back",
+      ]),
+      inputItemId: z.string().nullable(),
+      dispatch: z.enum(["queue", "interrupt"]),
+      priority: z.number(),
+      activity: z.string().nullable(),
+      activityAt: z.string().nullable(),
+      attemptCount: z.number().int(),
+      activeAttemptId: z.string().nullable(),
+      providerThreadId: z.string().nullable(),
+      retryAt: z.string().nullable(),
+      cancellationRequested: z.boolean(),
+      error: TurnErrorSchema.nullable(),
+      outcome: TurnOutcomeSchema.nullable(),
+      checkpoint: z.object({
+        before: z.string().nullable(),
+        after: z.string().nullable(),
       }),
-    )
-    .optional(),
+      continuationOf: z.string().nullable(),
+      createdAt: z.string(),
+      startedAt: z.string().nullable(),
+      completedAt: z.string().nullable(),
+      updatedAt: z.string(),
+    })
+    .meta({ id: "Turn" }),
+);
+
+export const AttemptSchema = describes<Attempt>()(
+  z
+    .object({
+      id: z.string(),
+      turnId: z.string(),
+      sessionId: z.string(),
+      ordinal: z.number().int(),
+      reason: z.enum(["initial", "retry", "steer_restart", "recovery"]),
+      status: z.enum([
+        "preparing",
+        "running",
+        "completed",
+        "failed",
+        "interrupted",
+        "lost",
+        "superseded",
+      ]),
+      providerThreadId: z.string().nullable(),
+      nativeTurnRef: NativeRefSchema.nullable(),
+      error: TurnErrorSchema.nullable(),
+      createdAt: z.string(),
+      startedAt: z.string().nullable(),
+      completedAt: z.string().nullable(),
+    })
+    .meta({ id: "Attempt" }),
+);
+
+/** The identity and placement Work assigns every item. */
+const itemCommon = {
+  id: z.string(),
+  sessionId: z.string(),
+  turnId: z.string().nullable(),
+  attemptId: z.string().nullable(),
+  parentItemId: z.string().nullable(),
+  position: z.number().int(),
+  status: z.enum(["in_progress", "completed", "failed", "cancelled"]),
+  nativeRef: NativeRefSchema.nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  startedAt: z.string().nullable(),
+  endedAt: z.string().nullable(),
+};
+
+export const ItemSchema = describes<Item>()(
+  z
+    .discriminatedUnion("kind", [
+      z.object({
+        ...itemCommon,
+        kind: z.literal("user_message"),
+        author: SessionMessageAuthorSchema,
+        text: z.string(),
+        attachments: z.array(attachmentSchema),
+        dispatch: DispatchModeSchema,
+        attention: z.literal("required").nullable(),
+        idempotencyKey: z.string().nullable(),
+        metadata: JsonObjectSchema,
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("assistant_message"),
+        text: z.string(),
+        agentId: z.string().nullable(),
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("reasoning"),
+        text: z.string(),
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("tool_call"),
+        tool: z.string(),
+        server: z.string().nullable(),
+        description: z.string().nullable(),
+        input: JsonValueSchema,
+        result: JsonValueSchema.nullable(),
+        error: z.string().nullable(),
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("command"),
+        command: z.string(),
+        description: z.string().nullable(),
+        output: z.string(),
+        exitCode: z.number().int().nullable(),
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("file_change"),
+        path: z.string(),
+        change: z
+          .enum(["created", "modified", "deleted", "renamed"])
+          .nullable(),
+        previousPath: z.string().nullable(),
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("plan"),
+        steps: z.array(
+          z.object({
+            text: z.string(),
+            status: z.enum(["pending", "in_progress", "completed"]),
+          }),
+        ),
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("request"),
+        requestId: z.string(),
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("subagent"),
+        title: z.string(),
+        agentType: z.string().nullable(),
+        childSessionId: z.string().nullable(),
+        result: z.string().nullable(),
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("notice"),
+        code: z.string(),
+        text: z.string(),
+        data: JsonObjectSchema,
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("context_handoff"),
+        strategy: z.enum(["delta", "full"]),
+        fromProviderThreadIds: z.array(z.string()),
+        toProviderThreadId: z.string(),
+        coveredTurnOrdinals: z.object({
+          from: z.number().int(),
+          to: z.number().int(),
+        }),
+        text: z.string(),
+      }),
+    ])
+    .meta({ id: "Item" }),
+);
+
+/** An answer to a runtime request; the protocol's own schema, typed exactly. */
+const RuntimeRequestResponseSchema = describes<RuntimeRequestResponse>()(
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("approval"),
+      decision: z.enum(["approved", "denied"]),
+      remember: z.literal("always").optional(),
+      /** Why Work denied it when no person did: told to the agent. */
+      reason: z.string().optional(),
+    }),
+    z.object({ kind: z.literal("question"), answers: z.array(z.string()) }),
+    z.object({
+      kind: z.literal("elicitation"),
+      action: z.enum(["accept", "decline", "cancel"]),
+      content: JsonValueSchema.optional(),
+    }),
+  ]),
+);
+
+export const RuntimeRequestSchema = describes<RuntimeRequest>()(
+  z
+    .object({
+      id: z.string(),
+      sessionId: z.string(),
+      turnId: z.string().nullable(),
+      attemptId: z.string().nullable(),
+      itemId: z.string().nullable(),
+      kind: z.enum(["question", "approval", "elicitation"]),
+      status: z.enum(["pending", "resolved", "expired", "cancelled"]),
+      answerable: z.boolean(),
+      blocking: z.boolean(),
+      title: z.string(),
+      description: z.string().nullable(),
+      origin: z.object({
+        kind: z.enum(["tool", "provider", "mcp", "host"]),
+        id: z.string(),
+        displayName: z.string().optional(),
+      }),
+      questions: z
+        .array(
+          z.object({
+            question: z.string(),
+            header: z.string(),
+            multiSelect: z.boolean(),
+            options: z.array(
+              z.object({ label: z.string(), description: z.string() }),
+            ),
+          }),
+        )
+        .nullable(),
+      approval: z
+        .object({
+          action: z.string(),
+          details: z.string().optional(),
+          tool: z
+            .object({
+              server: z.string().nullable(),
+              name: z.string(),
+              input: JsonValueSchema,
+            })
+            .optional(),
+        })
+        .nullable(),
+      elicitation: z
+        .object({
+          server: z.string(),
+          message: z.string(),
+          schema: JsonObjectSchema.optional(),
+          url: z.string().optional(),
+        })
+        .nullable(),
+      approvers: z.array(z.string()),
+      expiresAt: z.string().nullable(),
+      response: RuntimeRequestResponseSchema.nullable(),
+      resolvedBy: z.string().nullable(),
+      reason: z.string().nullable(),
+      createdAt: z.string(),
+      resolvedAt: z.string().nullable(),
+      runnerKey: z.string().optional(),
+    })
+    .meta({ id: "RuntimeRequest" }),
+);
+
+export const ProviderThreadSchema = describes<ProviderThread>()(
+  z
+    .object({
+      id: z.string(),
+      sessionId: z.string(),
+      harness: z.string(),
+      nativeRef: NativeRefSchema.nullable(),
+      status: z.enum(["active", "unavailable", "closed"]),
+      lastTurnOrdinal: z.number().int().nullable(),
+      portable: z.boolean(),
+      createdAt: z.string(),
+      updatedAt: z.string(),
+    })
+    .meta({ id: "ProviderThread" }),
+);
+
+/** A session's shared fields, what every viewer sees alike. */
+export const SessionFieldsSchema = describes<SessionFields>()(
+  z
+    .object({
+      id: z.string(),
+      projectId: z.string(),
+      title: z.string().nullable(),
+      icon: z.string().nullable(),
+      agentId: z.string().nullable(),
+      model: z.string().nullable(),
+      modelEffort: AgentEffortSchema.nullable(),
+      status: z.enum(["active", "closed"]),
+      workStatus: z.enum(["open", "completed"]),
+      activity: z.string().nullable(),
+      todos: z.array(AgentTodoSchema),
+      parentSessionId: z.string().nullable(),
+      forkedFromSessionId: z.string().nullable(),
+      attentionRevision: z.number().int(),
+      environment: z.string().nullable(),
+      authorityHostId: z.string(),
+      authorityRevision: z.number().int(),
+      handoffStatus: z.enum(["none", "pending"]),
+      updatedAt: z.string(),
+    })
+    .meta({ id: "SessionFields" }),
+);
+
+export const SessionEventSchema = describes<SessionEvent>()(
+  z
+    .discriminatedUnion("type", [
+      z.object({
+        type: z.literal("session.changed"),
+        session: SessionFieldsSchema.partial(),
+      }),
+      z.object({ type: z.literal("turn.changed"), turn: TurnSchema }),
+      z.object({ type: z.literal("attempt.changed"), attempt: AttemptSchema }),
+      z.object({ type: z.literal("item.added"), item: ItemSchema }),
+      z.object({ type: z.literal("item.changed"), item: ItemSchema }),
+      z.object({
+        type: z.literal("item.text_appended"),
+        itemId: z.string(),
+        field: z.enum(["text", "output"]),
+        text: z.string(),
+        at: z.string(),
+      }),
+      z.object({
+        type: z.literal("request.changed"),
+        request: RuntimeRequestSchema,
+      }),
+      z.object({
+        type: z.literal("provider_thread.changed"),
+        thread: ProviderThreadSchema,
+      }),
+    ])
+    .meta({ id: "SessionEvent" }),
+);
+
+export const StoredSessionEventSchema = describes<StoredSessionEvent>()(
+  z
+    .object({
+      sessionId: z.string(),
+      sequence: z.number().int().positive(),
+      at: z.string(),
+      commandId: z.string().nullable(),
+      event: SessionEventSchema,
+    })
+    .meta({ id: "StoredSessionEvent" }),
+);
+
+export const SessionSnapshotSchema = describes<SessionSnapshot>()(
+  z
+    .object({
+      sequence: z.number().int().nonnegative(),
+      session: SessionFieldsSchema,
+      turns: z.array(TurnSchema),
+      attempts: z.array(AttemptSchema),
+      items: z.array(ItemSchema),
+      requests: z.array(RuntimeRequestSchema),
+      providerThreads: z.array(ProviderThreadSchema),
+      olderBefore: z.number().int().nullable(),
+    })
+    .meta({ id: "SessionSnapshot" }),
+);
+
+/** One server-sent event of `GET …/events`, as its `data:` JSON. */
+export const SessionStreamMessageSchema = describes<SessionStreamMessage>()(
+  z
+    .discriminatedUnion("type", [
+      z.object({
+        type: z.literal("events"),
+        events: z.array(StoredSessionEventSchema),
+      }),
+      z.object({ type: z.literal("reset"), snapshot: SessionSnapshotSchema }),
+      z.object({
+        type: z.literal("heartbeat"),
+        sequence: z.number().int().nonnegative(),
+      }),
+    ])
+    .meta({ id: "SessionStreamMessage" }),
+);
+
+export const CommandReceiptSchema = describes<CommandReceipt>()(
+  z
+    .object({
+      commandId: z.string(),
+      status: z.enum(["accepted", "rejected"]),
+      sequence: z.number().int().nonnegative(),
+      result: JsonObjectSchema.nullable(),
+      error: z.object({ code: z.string(), message: z.string() }).nullable(),
+    })
+    .meta({ id: "CommandReceipt" }),
+);
+
+/** A command to a session; resending one `commandId` returns its first receipt. */
+export const SessionCommandSchema =
+  describes<SessionCommand>()(sessionCommandSchema);
+
+export const AgentSessionDetailSchema = AgentSessionSchema.extend({
+  snapshot: SessionSnapshotSchema,
+});
+
+export const SessionItemsQuerySchema = z.object({
+  /** Items before this position: a snapshot's or page's `olderBefore`. */
+  before: z.coerce.number().int().positive(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+});
+
+export const SessionItemsPageSchema = z.object({
+  items: z.array(ItemSchema),
+  olderBefore: z.number().int().nullable(),
+});
+
+export const SessionEventsQuerySchema = z.object({
+  /** Stream events after this sequence: a snapshot's `sequence`. */
+  after: z.coerce.number().int().nonnegative().optional(),
+});
+
+export const SessionMirrorQuerySchema = z.object({
+  /** The copy's last sequence; omitted for a copy that does not exist yet. */
+  after: z.coerce.number().int().nonnegative().optional(),
+});
+
+/** One workflow-facing session event a mirror carries (ADR 0156). */
+const MirrorProjectEventSchema = z.object({
+  id: z.string().uuid(),
+  kind: z
+    .string()
+    .regex(/^session\./)
+    .max(100),
+  occurredAt: z.string().datetime(),
+  payload: JsonObjectSchema,
+});
+
+/**
+ * One mirror push (ADR 0196): the source's log after this copy's sequence,
+ * or, for a copy that does not exist yet, a full snapshot to start from.
+ */
+export const MirrorAgentSessionSchema = z.object({
   authority: z.object({
     hostId: z.string().min(1).max(255),
     revision: z.number().int().positive(),
   }),
   title: z.string().max(500).nullable().optional(),
   icon: z.string().max(100).nullable().optional(),
-  /** The source's provider name, kept for provenance. */
-  provider: z.string().max(100).optional(),
   /** The surface that originally created the conversation. */
   source: AgentSessionSourceSchema.optional(),
-  todos: z.array(AgentTodoSchema).max(50),
-  /** The source session's project-agent slug: same agent here when
-   * available and covered (ADR 0062), else the registry default. */
+  /**
+   * The source session's project-agent slug: the same agent here when
+   * this server has it and the caller's role covers it, else the default.
+   */
   agentSlug: z.string().max(200).optional(),
-  messages: z
-    .array(
-      z.object({
-        id: z.string().uuid(),
-        role: z.enum(["user", "assistant", "system"]),
-        content: z.string().max(1_000_000),
-        metadata: z.record(z.string(), z.unknown()).nullable().optional(),
-        author: SessionMessageAuthorSchema,
-        deliveryMode: SessionDeliveryModeSchema,
-        idempotencyKey: z.string().max(500).nullable(),
-        createdAt: z.string().datetime(),
-      }),
-    )
-    .max(2_000),
+  todos: z.array(AgentTodoSchema).max(50).optional(),
+  workStatus: z.enum(["open", "completed"]).optional(),
+  /** Every turn, item, request and thread at `base.sequence`, for a new copy. */
+  base: SessionSnapshotSchema.optional(),
+  events: z.array(StoredSessionEventSchema).max(5_000),
+  projectEvents: z.array(MirrorProjectEventSchema).max(5_000).optional(),
 });
 
-export const MirrorConflictSchema = z.object({
-  error: z.string(),
-  /** True: this server holds messages the source doesn't — stop pushing. */
-  diverged: z.boolean(),
+export const MirrorAgentSessionResultSchema = z.object({
+  session: AgentSessionSchema,
+  /** The copy's last event sequence after the push. */
+  sequence: z.number().int().nonnegative(),
+  /** Why a newly mirrored chat continues with another agent than the one it ran. */
+  agentNotice: z.string().optional(),
 });
 
-export const ResumeAgentSessionSchema = z.object({
-  expectedAuthorityRevision: z.number().int().positive(),
+export const MirrorExportSchema = z.object({
+  /** The whole session, when the copy is new or too far behind for events. */
+  base: SessionSnapshotSchema.optional(),
+  events: z.array(StoredSessionEventSchema),
+  projectEvents: z.array(MirrorProjectEventSchema).optional(),
 });
+
+/**
+ * Why a mirror push was refused: `diverged` (the chat continued here, so
+ * stop pushing), `behind` (the copy ends at `sequence`, so resend from
+ * there), or `turn_in_progress` (a turn runs here; push when it settles).
+ */
+export const MirrorConflictSchema = z.discriminatedUnion("code", [
+  z.object({ error: z.string(), code: z.literal("diverged") }),
+  z.object({
+    error: z.string(),
+    code: z.literal("behind"),
+    sequence: z.number().int().nonnegative(),
+  }),
+  z.object({ error: z.string(), code: z.literal("turn_in_progress") }),
+]);
 
 export const ForkAgentSessionSchema = z.object({
   /**
-   * Fork point: the transcript is copied up to and including this
-   * message. Omitted = the whole settled transcript.
+   * Fork point: the item (ADR 0196) the transcript is copied through,
+   * with the turn it belongs to. Omitted = every settled turn.
    */
-  messageId: z.string().uuid().optional(),
-});
-
-export const AgentMessageSchema = z.object({
-  id: z.string().uuid(),
-  sessionId: z.string().uuid(),
-  role: z.enum(["user", "assistant", "system"]),
-  content: z.string(),
-  commitSha: z.string().length(40).nullable(),
-  metadata: z.record(z.string(), z.unknown()).nullable(),
-  author: SessionMessageAuthorSchema,
-  deliveryMode: SessionDeliveryModeSchema,
-  idempotencyKey: z.string().nullable(),
-  createdAt: z.string().datetime(),
-});
-
-export const PendingSessionTurnSchema = z.object({
-  id: z.string().uuid(),
-  messageId: z.string().uuid(),
-  content: z.string(),
-  metadata: z.record(z.string(), z.unknown()).nullable(),
-  deliveryMode: z.enum(["queue", "interrupt"]),
-  status: z.enum(["queued", "held", "running"]),
-  createdAt: z.string().datetime(),
-});
-
-export const SessionDeliveryReceiptSchema = z.object({
-  messageId: z.string().uuid(),
-  turnId: z.string().uuid().nullable(),
-  mode: SessionDeliveryModeSchema,
-  created: z.boolean(),
+  messageId: z.string().min(1).max(200).optional(),
 });
 
 export const SessionMailboxItemSchema = z.object({
@@ -1396,10 +1888,11 @@ export const SessionMailboxItemSchema = z.object({
   sourceHostId: z.string(),
   destinationHostId: z.string(),
   authorityRevision: z.number().int().positive(),
+  /** The user item the delivery becomes on the destination (ADR 0196). */
   messageId: z.string().uuid(),
   content: z.string(),
   author: SessionMessageAuthorSchema,
-  mode: SessionDeliveryModeSchema,
+  mode: DispatchModeSchema,
   idempotencyKey: z.string().nullable(),
   metadata: z.record(z.string(), z.unknown()).nullable(),
   createdAt: z.string().datetime(),
@@ -1452,174 +1945,7 @@ export const WatcherIdParamsSchema = AgentSessionIdParamsSchema.extend({
   watcherId: z.string().uuid(),
 });
 
-export const AgentTurnIdParamsSchema = AgentSessionIdParamsSchema.extend({
-  turnId: z.string().uuid(),
-});
-
-export const UpdateQueuedAgentTurnSchema = z
-  .object({
-    content: z.string().min(1).max(200_000).optional(),
-    metadata: z.record(z.string(), z.unknown()).optional(),
-    held: z.boolean().optional(),
-  })
-  .refine(
-    (input) =>
-      input.content !== undefined ||
-      input.metadata !== undefined ||
-      input.held !== undefined,
-    { message: "Provide content, metadata, or held." },
-  );
-
 export const OkSchema = z.object({ ok: z.literal(true) });
-
-// --- tool permissions (ADR 0054) ---
-export const ToolPermissionIdParamsSchema = AgentSessionIdParamsSchema.extend({
-  permissionId: z.string().uuid(),
-});
-export const PendingToolPermissionSchema = z.object({
-  id: z.string(),
-  sessionId: z.string().optional(),
-  agentLabel: z.string().optional(),
-  request: z.object({
-    sessionId: z.string().optional(),
-    server: z.string(),
-    tool: z.string(),
-    description: z.string().optional(),
-    input: z.record(z.string(), z.unknown()),
-    annotations: z
-      .object({
-        readOnlyHint: z.boolean().optional(),
-        destructiveHint: z.boolean().optional(),
-      })
-      .optional(),
-  }),
-  createdAt: z.string(),
-  expiresAt: z.string(),
-  /** An unattended chat's approvers, who may answer it (ADR 0176). */
-  approvers: z.array(z.string()).optional(),
-});
-export const PendingToolPermissionsSchema = z.object({
-  permissions: z.array(PendingToolPermissionSchema),
-});
-export const ToolPermissionDecisionSchema = z.discriminatedUnion("decision", [
-  z.object({
-    decision: z.literal("allow"),
-    remember: z.literal("always").optional(),
-  }),
-  z.object({ decision: z.literal("deny") }),
-]);
-
-export const AgentMediaAttachmentSchema = z.object({
-  kind: z.enum(["image", "document"]),
-  name: z.string().min(1).max(200),
-  /** MIME type, e.g. "image/png", "application/pdf". */
-  mediaType: z.string().min(1).max(100),
-  /** ~10MB decoded per file (base64 is 4/3 the byte size). */
-  dataBase64: z.string().min(1).max(14_000_000),
-});
-
-export const AgentTextSourceSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("paste") }),
-  z.object({
-    type: z.literal("selection"),
-    filePath: z.string().min(1).max(4096),
-    startLine: z.number().int().positive().optional(),
-    endLine: z.number().int().positive().optional(),
-  }),
-  z.object({ type: z.literal("url"), url: z.string().min(1).max(8192) }),
-  z.object({ type: z.literal("path"), path: z.string().min(1).max(4096) }),
-  z.object({
-    type: z.literal("tab"),
-    key: z.string().min(1).max(200),
-    kind: z.string().min(1).max(40),
-    title: z.string().min(1).max(500),
-    url: z.string().min(1).max(8192).optional(),
-    filePath: z.string().min(1).max(4096).optional(),
-  }),
-]);
-
-/** Text context beside a message: paste, editor selection, URL, path. */
-export const AgentTextAttachmentSchema = z.object({
-  kind: z.literal("text"),
-  name: z.string().min(1).max(200),
-  /** ~2MB of text — well past any sane paste, well short of the DB row cap. */
-  text: z.string().max(2_000_000),
-  source: AgentTextSourceSchema,
-});
-
-export const AgentAttachmentSchema = z.union([
-  AgentMediaAttachmentSchema,
-  AgentTextAttachmentSchema,
-]);
-
-export const SendMessageSchema = z
-  .object({
-    // Empty prose is fine when attachments carry the message ("look at
-    // this" with just a pill); rejected only when BOTH are empty.
-    message: z.string().max(200_000),
-    idempotencyKey: z.string().min(1).max(200).optional(),
-    attachments: z.array(AgentAttachmentSchema).max(32).optional(),
-    deliveryMode: z.enum(["queue", "interrupt"]).optional(),
-    /** Move the chat's workspace to a ref before this turn (ADR 0178). */
-    workspace: SessionWorkspaceRequestBodySchema.optional(),
-  })
-  .refine(
-    (body) =>
-      body.message.trim().length > 0 || (body.attachments?.length ?? 0) > 0,
-    { message: "A message needs text or at least one attachment." },
-  );
-
-export const AgentExecutionSchema = z.object({
-  turnId: z.string(),
-  status: z.enum([
-    "queued",
-    "held",
-    "running",
-    "completed",
-    "failed",
-    "cancelled",
-  ]),
-  phase: z.enum(["preparing", "working", "waiting", "saving", "parked"]),
-  activity: z.string().nullable(),
-  activityAt: z.string().nullable(),
-  startedAt: z.string().nullable(),
-  retryAt: z.string().nullable(),
-  attempt: z.number(),
-  executorHealthy: z.boolean(),
-  cancellationRequested: z.boolean(),
-});
-
-export const PendingAgentQuestionSchema = z.object({
-  requestId: z.string(),
-  blocking: z.boolean().optional(),
-  /** A permission request: a chat message withdraws it (ADR 0195). */
-  consent: z.boolean().optional(),
-  questions: z
-    .array(
-      z.object({
-        question: z.string(),
-        header: z.string(),
-        multiSelect: z.boolean(),
-        options: z.array(
-          z.object({ label: z.string(), description: z.string() }),
-        ),
-      }),
-    )
-    .optional(),
-});
-export const AgentQuestionParamsSchema = AgentSessionIdParamsSchema.extend({
-  requestId: z.string().min(1),
-});
-export const AnswerAgentQuestionSchema = z.object({
-  answer: z.string().trim().min(1).max(200_000),
-});
-
-export const AgentSessionDetailSchema = AgentSessionSchema.extend({
-  questions: z.array(PendingAgentQuestionSchema).optional(),
-  execution: AgentExecutionSchema.nullable(),
-  messages: z.array(AgentMessageSchema),
-  pendingTurns: z.array(PendingSessionTurnSchema),
-});
 
 // --- Skills ---
 export const SkillSchema = z.object({
@@ -1935,6 +2261,14 @@ export const MeSchema = z.object({
     agentSessions: z.boolean(),
     storeUploadMaxBytes: z.number(),
   }),
+  /**
+   * The protocols this server speaks (ADR 0196, 0197): a client refuses a
+   * server whose session or runner protocol it does not know.
+   */
+  agentProtocol: z.object({
+    session: z.literal(1),
+    runner: z.literal(RUNNER_PROTOCOL_VERSION),
+  }),
 });
 
 // --- Workflow parse ---
@@ -2095,77 +2429,46 @@ export const AgentCatalogSchema = z.object({
   ),
 });
 
-// --- Personal environments (ADR 0184) ---
+// --- Personal environments (ADRs 0184, 0198) ---
 
-export const PersonalLoginKindSchema = z.enum(["claude-code", "codex"]);
+/** Why a body naming sign-ins is refused: they never leave their machine. */
+export const PERSONAL_SIGN_INS_REFUSED =
+  "Sign-ins stay on the machine they were made on (ADR 0198): sign in to the harness there, and send only files here.";
 
 export const PutPersonalEnvironmentSchema = z
-  .object({
-    logins: z
-      .object({
-        "claude-code": z
-          .object({
-            credentials: z
+  .strictObject(
+    {
+      files: z
+        .array(
+          z.object({
+            path: z
               .string()
-              .min(2)
-              .describe(
-                "Claude Code's .credentials.json as JSON text, refresh token removed",
-              ),
-            expiresAt: z.string().optional(),
-          })
-          .optional(),
-        codex: z
-          .object({
-            auth: z
-              .string()
-              .min(2)
-              .describe(
-                "Codex's auth.json as JSON text, refresh token removed",
-              ),
-            expiresAt: z.string().optional(),
-          })
-          .optional(),
-      })
-      .default({}),
-    files: z
-      .array(
-        z.object({
-          path: z
-            .string()
-            .min(1)
-            .max(512)
-            .describe("Repository-relative path, / separated"),
-          content: z.string().describe("The file's bytes, base64"),
-        }),
-      )
-      .max(50)
-      .default([]),
-  })
+              .min(1)
+              .max(512)
+              .describe("Repository-relative path, / separated"),
+            content: z.string().describe("The file's bytes, base64"),
+          }),
+        )
+        .max(50)
+        .default([]),
+    },
+    {
+      error: (issue) =>
+        issue.code === "unrecognized_keys" && issue.keys.includes("logins")
+          ? PERSONAL_SIGN_INS_REFUSED
+          : undefined,
+    },
+  )
   .describe(
-    "The caller's personal logins and files for this project; replaces what the server holds",
+    "The caller's personal files for this project; replaces what the server holds",
   );
-
-export const PersonalLoginStatusSchema = z.object({
-  fingerprint: z.string(),
-  expiresAt: z.string().optional(),
-  updatedAt: z.string(),
-  needsRefresh: z
-    .boolean()
-    .describe(
-      "Expires within the hour while the caller has live chats using it: refresh locally and send it again",
-    ),
-});
 
 export const PersonalEnvironmentSchema = z.object({
   allowed: z
     .boolean()
     .describe(
-      "Some Environment of the project gives the caller's own chats their personal credentials",
+      "Some Environment of the project gives the caller's own chats their personal files",
     ),
-  logins: z.object({
-    "claude-code": PersonalLoginStatusSchema.optional(),
-    codex: PersonalLoginStatusSchema.optional(),
-  }),
   files: z.array(
     z.object({
       path: z.string(),

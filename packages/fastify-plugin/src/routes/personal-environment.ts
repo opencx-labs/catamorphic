@@ -19,9 +19,11 @@ import {
 
 /**
  * The caller's own personal environment for a project (ADR 0184): their
- * harness logins and listed files, which reach only their own chats'
- * sandboxes in Environments that allow personal credentials. Every route
- * acts on the caller's own set; none returns a value.
+ * listed files, which reach only their own chats' sandboxes in
+ * Environments that allow personal credentials. Sign-ins are not part of
+ * it: they stay on the machine they were made on (ADR 0198), and a body
+ * naming `logins` is refused. Every route acts on the caller's own set;
+ * none returns a value.
  */
 export function registerPersonalEnvironmentRoutes(
   app: FastifyInstance,
@@ -37,7 +39,7 @@ export function registerPersonalEnvironmentRoutes(
       return reply.status(503).send({ error: error.message });
     throw error;
   };
-  // Logins and 50 files of up to 256 KiB each, as base64.
+  // 50 files of up to 256 KiB each, as base64.
   const bodyLimit = 24 * 1024 * 1024;
 
   typed.route({

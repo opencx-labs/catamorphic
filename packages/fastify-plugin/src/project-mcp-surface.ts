@@ -558,13 +558,16 @@ export function surfaceTools(
             })
           ).id;
         try {
-          const reply = await sessions.sendMessage(
+          const { reply } = await sessions.sendMessage(
             identity,
             projectId,
             sessionId,
             message,
           );
-          return { sessionId, reply: reply.content };
+          return {
+            sessionId,
+            reply: reply?.kind === "assistant_message" ? reply.text : "",
+          };
         } catch (error) {
           // No reply yet: the message waits for a machine, is held or
           // cancelled, or its machine stopped. The caller reads the chat.
@@ -579,7 +582,7 @@ export function surfaceTools(
       definition: {
         name: "send_agent_message",
         description:
-          "Deliver an attributed message from your current session to this or another agent session. message_only records it without waking the agent; queue wakes an idle session or queues behind its active turn; interrupt stops the active turn and runs this next. Set attention to required to alert the user to this message, independently of whether the agent should run. Use interrupt only when delay would make the work wrong.",
+          "Deliver an attributed message from your current session to this or another agent session. queue (the default) wakes an idle session or runs after its active turn; steer adds it to the active turn so the agent sees it while it works; interrupt stops the active turn and runs this next; message_only records it without waking the agent. Set attention to required to alert the user to this message, independently of whether the agent should run. Use interrupt only when delay would make the work wrong.",
         inputSchema: {
           type: "object",
           properties: {
@@ -588,7 +591,8 @@ export function surfaceTools(
             message: { type: "string" },
             mode: {
               type: "string",
-              enum: ["message_only", "queue", "interrupt"],
+              enum: ["queue", "steer", "interrupt", "message_only"],
+              default: "queue",
             },
             attention: { type: "string", enum: ["none", "required"] },
             idempotencyKey: { type: "string" },
@@ -604,21 +608,22 @@ export function surfaceTools(
               additionalProperties: false,
             },
           },
-          required: ["toSessionId", "message", "mode"],
+          required: ["toSessionId", "message"],
         },
       },
       call: guarded(async (args) => {
         const fromSessionId = str(args.fromSessionId) ?? currentSessionId;
         const toSessionId = str(args.toSessionId);
         const message = str(args.message);
-        const mode = args.mode;
+        const mode = args.mode === undefined ? "queue" : args.mode;
         if (
           !fromSessionId ||
           !toSessionId ||
           !message ||
-          (mode !== "message_only" &&
-            mode !== "queue" &&
-            mode !== "interrupt")
+          (mode !== "queue" &&
+            mode !== "steer" &&
+            mode !== "interrupt" &&
+            mode !== "message_only")
         ) {
           throw new Error(
             "fromSessionId, toSessionId, message, and a valid mode are required",

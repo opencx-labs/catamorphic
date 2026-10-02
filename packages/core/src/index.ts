@@ -645,7 +645,11 @@ export {
   type SessionMailboxItem,
   SessionMailboxNotFoundError,
 } from "./services/session-mailboxes-service.js";
-export { SessionMirrorDivergedError } from "./services/session-mirror.js";
+export {
+  SessionMirrorBehindError,
+  SessionMirrorDivergedError,
+  type SessionMirrorInput,
+} from "./services/session-mirror.js";
 export {
   type SessionSyncIntent,
   SessionSyncLeaseError,

@@ -171,11 +171,10 @@ export async function writeSessionMirror({
         .execute();
     }
     if (input.base && (!current || Number(current.event_sequence) === 0)) {
-      await log.importSnapshot(trx, {
-        sessionId,
-        // The copy runs this side's agent, not the source's harness threads.
-        snapshot: { ...input.base, providerThreads: [] },
-      });
+      // The source's provider threads come along: its turns and attempts
+      // name them, and later pushes replicate their changes. A turn here
+      // resolves which thread it continues on (ADR 0197).
+      await log.importSnapshot(trx, { sessionId, snapshot: input.base });
     }
     let sequence: number;
     try {

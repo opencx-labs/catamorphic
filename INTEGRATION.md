@@ -554,18 +554,15 @@ supplies two things:
   simply the first layer, the user's own policy the second, the agent's the
   third. Codex has no per-call approval channel: `deny` and `ask` become
   `disabled_tools` there.
-- **The answer to `ask`** — `onToolPermission`. Hosts with their own consent
-  UI implement it directly. Browser-served hosts use the broker: create a
-  `ToolPermissionBroker` (from `@catamorphic/core`), pass it as
-  `toolPermissions` on the core config and hand `broker.handlerFor(agentName)`
-  to each provider. The plugin then serves
-  `GET /projects/:id/agent/sessions/:sid/permissions` and
-  `POST …/permissions/:pid` (`{decision: "allow" | "deny", remember?:
-  "always"}`); `useToolPermissions()` in `@catamorphic/react` polls them
-  while a turn runs and the registry's `tool-permission-card` (already inside
-  `agent-chat`) renders the consent. Unanswered asks deny after five minutes.
-  Persisting an "always allow" is the host's job — it knows where the
-  connection's policy lives.
+- **The answer to `ask`** (ADR 0196): an ask is a runtime request on the
+  session's working turn (`kind: "approval"`), in the session snapshot and
+  its event stream like any other change. Any client answers it on any
+  replica with a `respond` command:
+  `POST /projects/:id/agent/sessions/:sid/commands` with
+  `{ type: "respond", commandId, requestId, response: { kind: "approval",
+  decision: "approved" | "denied", remember?: "always" } }`. Questions and
+  elicitations answer the same way. Persisting an "always allow" is the
+  host's job: it knows where the connection's policy lives.
 - **Unattended chats** (ADR 0176) — `DurableToolPermissionBroker` (durable,
   any replica answers) routes an ask in a project chat, or one a workflow
   delivered with `approvers: { members, roles }`, to those people: it
@@ -1037,14 +1034,13 @@ the sandbox (the same `sandbox`-channel grants as Git) and passes the turn
 process started with `stdin: true`), with the gateway as their only model
 endpoint. Harness binaries come from the Environment image.
 
-Personal credentials (ADR 0184): a member's own harness logins and listed
-files may reach sandboxes that run only that member's work. The member's
-client calls `PUT /projects/:id/personal-environment` with `{ logins:
-{ "claude-code"?: { credentials, expiresAt? }, codex?: { auth, expiresAt? } },
-files: [{ path, content /* base64 */ }] }` (refresh tokens refused, at most
-50 files of 256 KiB, repository-relative paths); `GET` answers `{ allowed,
-logins: { [kind]: { fingerprint, expiresAt?, updatedAt, needsRefresh } },
-files: [{ path, fingerprint, bytes, updatedAt }] }` and `DELETE` forgets them.
+Personal credentials (ADRs 0184, 0198): a member's listed files may reach
+sandboxes that run only that member's work. The member's client calls
+`PUT /projects/:id/personal-environment` with `{ files: [{ path, content
+/* base64 */ }] }` (at most 50 files of 256 KiB, repository-relative paths);
+a body naming `logins` is refused with 400, since sign-ins stay on the
+machine they were made on. `GET` answers `{ allowed, files: [{ path,
+fingerprint, bytes, updatedAt }] }` and `DELETE` forgets them.
 Values are sealed in `credentialVault` (required) as
 `core.personalEnvironments`. An Environment opts in with
 `personalCredentials: true`; admission then requires the chat's owner to be a
