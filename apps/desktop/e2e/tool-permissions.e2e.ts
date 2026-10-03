@@ -277,8 +277,12 @@ it("keeps working while questions are collapsed and consumes the answer in the s
   await runWait(
     `return !!modal() && timeline().includes('continuing independent work');`,
   );
-  await app.waitFor(
-    `!document.getAnimations().some(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity)`,
+  // The agent keeps working (a step every 200 ms), so the chat behind the
+  // question never stops animating; only the panel being photographed has
+  // to be still.
+  await runWait(
+    `return !!modal() && modal().getAnimations({ subtree: true }).every((a) => a.playState !== 'running');`,
+    { label: "question panel still" },
   );
   await app.screenshot("/tmp/catamorphic-nonblocking-question.png");
   await run(`$('button[aria-label="Answer later"]').click(); return true;`);
