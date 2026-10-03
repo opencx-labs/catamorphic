@@ -230,6 +230,15 @@ describe("browser tabs", () => {
       `return navigator.platform.toLowerCase().startsWith('mac');`,
     );
     if (isMac) {
+      // The tab's title changes when a navigation commits, before the guest
+      // has finished loading. Press a mouse button only in a loaded page the
+      // host can navigate away from, as a person would.
+      const loadedWith = (title: string, history: string) =>
+        runWait(
+          `const view = $('webview'); return !view.isLoading() && view.getTitle() === ${JSON.stringify(title)} && view.${history}();`,
+          { timeoutMs: 30_000, label: `${title} loaded` },
+        );
+      await loadedWith("Second E2E Page", "canGoBack");
       await run(`
         void $('webview').executeJavaScript(
           "window.dispatchEvent(new MouseEvent('mouseup', { button: 3, bubbles: true, cancelable: true }))",
@@ -237,6 +246,7 @@ describe("browser tabs", () => {
         return true;
       `);
       await showsTab("E2E Page", "browser mouse button moved back");
+      await loadedWith("E2E Page", "canGoForward");
       await run(`
         void $('webview').executeJavaScript(
           "window.dispatchEvent(new MouseEvent('mouseup', { button: 4, bubbles: true, cancelable: true }))",
