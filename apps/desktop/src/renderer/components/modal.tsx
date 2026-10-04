@@ -23,14 +23,29 @@ export function Modal({
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-
-  useEffect(() => {
-    if (!open || !mounted) return;
-    const previousFocus =
+  // Where focus was as the dialog opened, read before a field inside it
+  // can take focus on mount (autoFocus), so closing returns there.
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const wasOpenRef = useRef(false);
+  if (open && !wasOpenRef.current)
+    previousFocusRef.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
-    panelRef.current?.focus({ preventScroll: true });
+  wasOpenRef.current = open;
+
+  useEffect(() => {
+    if (!open || !mounted) return;
+    const previousFocus = previousFocusRef.current;
+    // A field that focused itself on mount keeps focus; otherwise the
+    // panel takes it, for containment.
+    if (
+      !(
+        document.activeElement instanceof Node &&
+        panelRef.current?.contains(document.activeElement)
+      )
+    )
+      panelRef.current?.focus({ preventScroll: true });
     const onKeyDown = (event: KeyboardEvent) => {
       // A dialog stacked on top of this one (a confirm inside a settings
       // modal) owns the keys; only the topmost open dialog reacts.

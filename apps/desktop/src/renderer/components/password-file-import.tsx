@@ -124,15 +124,15 @@ function UnlockDatabase({
   const fieldRef = useRef<HTMLInputElement>(null);
   const id = useId();
 
-  // A fresh field for each database; a wrong password is selected to retype.
+  // A fresh field for each database (it focuses itself as the dialog
+  // mounts); a wrong password is selected to retype.
   useEffect(() => {
     if (!open) return;
     setKeyFile(locked?.keyFile ?? null);
-    const frame = requestAnimationFrame(() => {
+    if (locked?.wrongKey) {
       fieldRef.current?.focus();
       fieldRef.current?.select();
-    });
-    return () => cancelAnimationFrame(frame);
+    }
   }, [open, locked]);
   useEffect(() => {
     if (open) setPassword("");
@@ -189,6 +189,8 @@ function UnlockDatabase({
             </span>
             <input
               ref={fieldRef}
+              // biome-ignore lint/a11y/noAutofocus: the dialog's one field, focused as it opens
+              autoFocus
               id={`${id}-password`}
               type="password"
               data-testid="password-file-password"
