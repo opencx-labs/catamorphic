@@ -141,9 +141,10 @@ setup flows. Never edit credential stores or invent scalar preference keys for
 those flows. Committed agent behavior follows the project's agent-authoring guide.
 The palette searches settings normally; type settings then Space or Tab to search
 only settings. Enter opens and highlights the target without changing its value.
-The palette ranks by match, kind and use: commands, app surfaces and the items
-the sidebars list before pages, frequently used destinations first, and rows the
-user picked for a query earlier. A source a sidebar section shows lifts its rows,
+The palette ranks by match, kind and use: open tabs first, then commands, app
+surfaces and the items the sidebars list, then bookmarks, then pages; frequently
+used destinations first, and rows the user picked for a query earlier. Type tabs
+then Space to list only open tabs. A source a sidebar section shows lifts its rows,
 so adding or removing a section in workspace.js changes their rank; otherwise the
 palette learns from use on its own. Do not try to tune ranking any other way.
 `;

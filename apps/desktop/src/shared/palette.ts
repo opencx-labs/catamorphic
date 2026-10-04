@@ -124,6 +124,7 @@ export function paletteCountsVisit(key: string): boolean {
  */
 export const BUILTIN_PALETTE_TRIGGERS = {
   history: ["history"],
+  tabs: ["tabs"],
   files: ["files", "file"],
   content: ["content", "grep"],
   settings: ["settings", "preferences"],

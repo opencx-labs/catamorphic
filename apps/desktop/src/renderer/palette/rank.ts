@@ -13,11 +13,14 @@ export const PALETTE_RESULT_LIMIT = 80;
 
 /**
  * What a row is, for ranking (ADR 0186). The prior says how likely a text
- * match on this kind of row is what the user meant: commands and app
- * surfaces are the palette's reason to exist, pages the long tail. A page
- * beats a command only with a clearly better match or much heavier use.
+ * match on this kind of row is what the user meant: an open tab is where
+ * the user already is, commands and app surfaces are the palette's reason
+ * to exist, a bookmark is a page the user chose to keep, pages the long
+ * tail. A page beats a command only with a clearly better match or much
+ * heavier use; an open tab beats a bookmark or page with the same match.
  */
 export type PaletteCategory =
+  | "tab"
   | "command"
   | "surface"
   | "resource"
@@ -26,6 +29,7 @@ export type PaletteCategory =
   | "page"
   | "choice";
 const PRIOR: Record<PaletteCategory, number> = {
+  tab: 1.25,
   command: 1,
   surface: 1,
   choice: 1,
@@ -36,7 +40,7 @@ const PRIOR: Record<PaletteCategory, number> = {
 };
 /**
  * A row the user keeps in a sidebar section is their own shortlist: it
- * ranks with commands, whatever kind of row it is.
+ * ranks at least with commands, whatever kind of row it is.
  */
 const SIDEBAR_PRIOR = 1;
 
@@ -159,7 +163,10 @@ export function createPaletteIndex<T extends Rankable>(items: readonly T[]) {
     keywords: item.keywords.map((word) => normalizeCommandQuery(word)),
     detail: item.detail ? normalizeCommandQuery(item.detail) : "",
     command: prepareCommand(item.label, item.keywords),
-    prior: item.sidebar ? SIDEBAR_PRIOR : PRIOR[item.category ?? "command"],
+    prior: Math.max(
+      PRIOR[item.category ?? "command"],
+      item.sidebar ? SIDEBAR_PRIOR : 0,
+    ),
   }));
   return (
     query: string,
@@ -234,7 +241,10 @@ export function frequentItems<
   let pages = 0;
   for (const { item } of scored) {
     if (chosen.length >= limit) break;
-    const page = item.category === "page" || item.category === "bookmark";
+    const page =
+      item.category === "page" ||
+      item.category === "bookmark" ||
+      item.category === "tab";
     if (page && pages >= pageLimit) continue;
     if (page) pages += 1;
     chosen.push(item);

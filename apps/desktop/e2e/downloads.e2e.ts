@@ -122,6 +122,155 @@ describe("downloads", () => {
     );
   });
 
+  it("dragging the strip across a page reaches the middle resting spot", async () => {
+    await app.eval(
+      `window.catamorphicDesktop.setPrefs({ dockPlacement: 'right' }).then(() => true)`,
+    );
+    await app.waitFor(
+      `document.querySelector('[data-dock-host]')?.dataset.dockPlacement === 'right' && document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'false' && !document.querySelector('[data-dock-rail]').getAnimations().some((animation) => animation.playState === 'running')`,
+      { label: "strip open at the right" },
+    );
+    const handle = await app.eval<{ x: number; y: number; middle: number }>(
+      `(() => {
+        const arrows = document.querySelector('[data-dock-arrows]').getBoundingClientRect();
+        const host = document.querySelector('[data-dock-host]').getBoundingClientRect();
+        return { x: arrows.left + arrows.width / 2, y: arrows.top + arrows.height / 2, middle: host.left + host.width / 2 };
+      })()`,
+    );
+    // The page fills the content area under the strip.
+    expect(
+      await app.eval<string>(
+        `document.elementsFromPoint(${handle.middle}, ${handle.y}).map((el) => el.tagName).join(',')`,
+      ),
+    ).toContain("WEBVIEW");
+    const mouse = (type: string, x: number) =>
+      app.cdp("Input.dispatchMouseEvent", {
+        type,
+        x,
+        y: handle.y,
+        button: "left",
+        clickCount: 1,
+        ...(type === "mouseMoved" ? { buttons: 1 } : {}),
+      });
+    await mouse("mousePressed", handle.x);
+    await mouse("mouseMoved", handle.x - 10);
+    await app.waitFor(
+      `document.querySelector('[data-dock-rail]')?.dataset.dockDragging === 'true'`,
+      { label: "strip follows the pointer" },
+    );
+    // One quick move leaves the strip behind, over the page.
+    await mouse("mouseMoved", handle.middle);
+    await app.waitFor(
+      `!!document.querySelector('[data-dock-target="center"][data-active]')`,
+      { label: "middle resting spot lit" },
+    );
+    await mouse("mouseReleased", handle.middle);
+    await app.waitFor(
+      `document.querySelector('[data-dock-host]')?.dataset.dockPlacement === 'center' && !document.querySelector('[data-dock-dragging]') && !document.querySelector('[data-dock-drag-shield]')`,
+      { label: "strip lands in the middle" },
+    );
+  });
+
+  it("the popover opens toward the middle wherever the strip rests", async () => {
+    const popover = `document.querySelector('[data-testid="downloads-popover"]')`;
+    const check = async (label: string) => {
+      await click('[data-testid="downloads-bubble"]');
+      await app.waitFor(
+        `(() => {
+          const element = ${popover};
+          if (!element || element.getAnimations().some((animation) => animation.playState === 'running')) return false;
+          const box = element.getBoundingClientRect();
+          const host = document.querySelector('[data-dock-host]').getBoundingClientRect();
+          return box.left >= host.left - 1 && box.right <= host.right + 1 && box.right <= window.innerWidth;
+        })()`,
+        { label: `popover inside the window: ${label}` },
+      );
+      await click('[data-testid="downloads-bubble"]');
+      await app.waitFor(`!${popover}`, { label: "popover closed" });
+    };
+    for (const placement of ["left", "right", "center"]) {
+      await app.eval(
+        `window.catamorphicDesktop.setPrefs({ dockPlacement: '${placement}' }).then(() => true)`,
+      );
+      await app.waitFor(
+        `document.querySelector('[data-dock-host]')?.dataset.dockPlacement === '${placement}' && !document.querySelector('[data-dock-rail]').getAnimations().some((animation) => animation.playState === 'running')`,
+        { label: `strip open at ${placement}` },
+      );
+      await check(`open strip at ${placement}`);
+    }
+    // Collapsed, the strip rests in a bottom corner.
+    await click("[data-dock-arrows]");
+    for (const side of ["left", "right"]) {
+      await app.eval(
+        `window.catamorphicDesktop.setPrefs({ dockSide: '${side}' }).then(() => true)`,
+      );
+      await app.waitFor(
+        `document.querySelector('[data-dock-host]')?.dataset.dockSide === '${side}' && document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'true' && !document.querySelector('[data-dock-rail]').getAnimations({ subtree: true }).some((animation) => animation.playState === 'running')`,
+        { label: `strip collapsed at ${side}` },
+      );
+      await check(`collapsed at ${side}`);
+    }
+    // The detached dock is a window just big enough for the strip; it
+    // grows while the popover is open, which opens toward the middle.
+    await app.eval(`window.catamorphicDesktop.dockDetach(true)`);
+    const dock = await app.connectToFrame("surface=dock");
+    try {
+      const opensInside = async (label: string) => {
+        await dock.eval(
+          `document.querySelector('[data-testid="downloads-bubble"]').click(); true`,
+        );
+        await dock.waitFor(
+          `(() => {
+            const element = ${popover};
+            if (!element || element.getAnimations().some((animation) => animation.playState === 'running')) return false;
+            const box = element.getBoundingClientRect();
+            return box.left >= 0 && box.top >= 0 && box.right <= window.innerWidth && box.bottom <= window.innerHeight;
+          })()`,
+          { label: `popover inside the detached dock: ${label}` },
+        );
+        await dock.eval(
+          `document.querySelector('[data-testid="downloads-bubble"]').click(); true`,
+        );
+        await dock.waitFor(`!${popover}`, { label: "detached popover closed" });
+      };
+      await dock.waitFor(
+        `!!document.querySelector('[data-testid="downloads-bubble"]') && document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'false'`,
+        { label: "detached strip open" },
+      );
+      for (const placement of ["left", "right"]) {
+        await app.eval(
+          `window.catamorphicDesktop.setPrefs({ dockPlacement: '${placement}' }).then(() => true)`,
+        );
+        await dock.waitFor(
+          `document.querySelector('[data-dock-host]')?.dataset.dockPlacement === '${placement}'`,
+          { label: `detached strip open at ${placement}` },
+        );
+        await opensInside(`open strip at ${placement}`);
+      }
+      await dock.eval(
+        `document.querySelector('[data-dock-arrows]').click(); true`,
+      );
+      for (const side of ["left", "right"]) {
+        await app.eval(
+          `window.catamorphicDesktop.setPrefs({ dockSide: '${side}' }).then(() => true)`,
+        );
+        await dock.waitFor(
+          `document.querySelector('[data-dock-host]')?.dataset.dockSide === '${side}' && document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
+          { label: `detached strip collapsed at ${side}` },
+        );
+        await opensInside(`collapsed at ${side}`);
+      }
+    } finally {
+      dock.close();
+      await app.eval(`window.catamorphicDesktop.dockDetach(false)`);
+    }
+    // Back in the window, the strip mounts open and settles.
+    await app.waitFor(
+      `document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'false' && !document.querySelector('[data-dock-rail]').getAnimations({ subtree: true }).some((animation) => animation.playState === 'running')`,
+      { label: "dock back in the window" },
+    );
+  });
+
   it("the bubble lists the file and leads to the Downloads page", async () => {
     await click('[data-testid="downloads-bubble"]');
     await app.waitFor(
@@ -198,6 +347,20 @@ describe("downloads", () => {
       { label: "row removed" },
     );
     expect(fs.existsSync(path.join(downloadsDir, "bundle.bin"))).toBe(true);
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+
+  it("closing the bubble hides it until the next download", async () => {
+    await click('[data-testid="downloads-bubble-close"]');
+    await app.waitFor(
+      `!document.querySelector('[data-testid="downloads-bubble-root"]')`,
+      { label: "bubble closed" },
+    );
+    await inGuest("document.getElementById('bin').click(); true");
+    await app.waitFor(
+      `!!document.querySelector('[data-testid="downloads-bubble"]')`,
+      { label: "a new download brings the bubble back" },
+    );
     expect(app.getRendererErrors()).toEqual([]);
   });
 });

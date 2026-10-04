@@ -23,7 +23,7 @@ places and users could not add one.
 `list` rows the palette ranks, `compute` rows the mode answers itself (input
 and model choices), or `load` rows fetched once per entry and ranked, or per
 query with the source searching (`filtered`). Built-in modes (history, files,
-content, settings, sites, commands, web, agent), choice pickers (model,
+content, settings, sites, commands, web, agent, tabs), choice pickers (model,
 effort, permission mode, agents) and sidebar searches all take this shape;
 one loader owns debounce, abort, loading, empty, error and retry rows.
 Committing a row either proceeds normally, stays (enter a mode, retry), or
@@ -47,8 +47,16 @@ surfaces 1, project resources 0.9, settings and bookmarks 0.8, pages 0.6), so
 a page beats a command only with a clearly better match or much heavier use.
 A row that is an item of a sidebar section (a pinned or project bookmark, a
 chat, workflow or app the sidebar lists, a custom section's link) is the
-user's own shortlist and ranks with commands (1) whatever its kind; archived
-chats, found only through the palette, keep the resource prior.
+user's own shortlist and ranks at least with commands (1) whatever its kind;
+archived chats, found only through the palette, keep the resource prior.
+Open tabs rank above all of them (1.25): an open tab stands in for its page,
+bookmark, chat or file while it is open (one row per destination; app
+surfaces keep their own row), the tab in front is left out, and the `tabs`
+mode lists every open tab in strip order. Imported bookmarks are searched
+like the pinned and project ones; open tabs and the library stay out of the
+empty palette. `tabs` joins the built-in names, so a workspace.js mode
+triggered by `tabs` is refused like any other collision until renamed.
+(Amended 2026-10-04.)
 Frecency (Firefox-style visit count weighted by sampled recency) multiplies
 the score, with a small boost for use in the current project. A pick records
 the typed query; rows picked for a related query rise strongly next time.

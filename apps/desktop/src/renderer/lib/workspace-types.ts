@@ -72,6 +72,8 @@ export type WorkspaceTab = (
       chatIcon?: string | null;
       /** The chat is a fork of another conversation. */
       fork?: boolean;
+      /** Its conversation, once the first message created one. */
+      sessionId?: string;
     }
   | {
       kind: "browser";
