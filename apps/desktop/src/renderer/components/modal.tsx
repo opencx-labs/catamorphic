@@ -23,13 +23,20 @@ export function Modal({
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-
-  useEffect(() => {
-    if (!open || !mounted) return;
-    const previousFocus =
+  // Where focus was as the dialog opened, read before a field inside it
+  // takes focus on mount (autoFocus), so closing returns there.
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const wasOpenRef = useRef(false);
+  if (open && !wasOpenRef.current)
+    previousFocusRef.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
+  wasOpenRef.current = open;
+
+  useEffect(() => {
+    if (!open || !mounted) return;
+    const previousFocus = previousFocusRef.current;
     // A field the dialog focused as it mounted (autoFocus) keeps focus;
     // otherwise the panel takes it, so keys reach the dialog.
     if (!panelRef.current?.contains(document.activeElement))
