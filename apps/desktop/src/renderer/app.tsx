@@ -135,6 +135,7 @@ import {
   type WorkspaceTab,
   WorkspaceTabBar,
 } from "./components/workspace-tabs.js";
+import { notePersonInput } from "./lib/app-focus.js";
 import {
   type ChatSessionAction,
   type ChatSessionMenuEntry,
@@ -3825,8 +3826,10 @@ export function App({
       }
     };
     window.addEventListener("keydown", onKeyDown);
-    const unsubscribeGuestKeys = desktopApi.onBrowserGuestKey(
-      (key) =>
+    const unsubscribeGuestKeys = desktopApi.onBrowserGuestKey((key) => {
+      // A key pressed inside a page is the person's input too.
+      notePersonInput();
+      return (
         visibleRef.current &&
         dispatchShortcut(
           {
@@ -3838,8 +3841,9 @@ export function App({
             shiftKey: key.shift,
           },
           key.webContentsId,
-        ),
-    );
+        )
+      );
+    });
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       unsubscribeGuestKeys();

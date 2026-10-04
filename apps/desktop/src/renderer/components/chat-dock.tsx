@@ -59,6 +59,7 @@ import {
 } from "../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
 import { agentPermissionView } from "../lib/agent-permissions.js";
+import { appIsMovingFocus, moveFocusAsApp } from "../lib/app-focus.js";
 import {
   type AgentInfo,
   desktopApi,
@@ -1024,10 +1025,10 @@ function ChatDockContent({
   }, [nativeWindow]);
   const nativeBackdrop = nativeWindow && !windowFocused;
   // Deferred focus may run much later in a hidden/throttled window. Explicit
-  // input and external focus changes after it was scheduled own focus. Only
-  // this dock's known autofocus calls are excluded from that authority.
+  // input and external focus changes after it was scheduled own focus. The
+  // app's own focus moves (this composer's autofocus, a New Tab greeting
+  // its user) are excluded from that authority (lib/app-focus).
   const userInteractionRef = useRef(0);
-  const internalAutofocusDepthRef = useRef(0);
   // A watching dock leaves focus where it is until the person interacts.
   const watchBackdropInteractionRef = useRef(
     entry.watchBackdrop ? userInteractionRef.current : null,
@@ -1043,9 +1044,10 @@ function ChatDockContent({
     const inDock = (target: EventTarget | null) =>
       target instanceof Node && sectionRef.current?.contains(target) === true;
     const onFocusIn = (event: FocusEvent) => {
-      if (internalAutofocusDepthRef.current === 0) {
-        userInteractionRef.current += 1;
-      }
+      // The app's own moves (this composer's autofocus, a New Tab greeting
+      // its user) do not stand in for the person: a pending autofocus still
+      // lands. Engagement still follows where focus went.
+      if (!appIsMovingFocus()) userInteractionRef.current += 1;
       const inside = inDock(event.target);
       if (inside) {
         setDockEngaged(true);
@@ -1906,12 +1908,7 @@ function ChatDockContent({
   // The composer's attach button opens this hidden picker.
   const fileInputRef = useRef<HTMLInputElement>(null);
   const focusComposerInternally = useCallback(() => {
-    internalAutofocusDepthRef.current += 1;
-    try {
-      composerRef.current?.focus();
-    } finally {
-      internalAutofocusDepthRef.current -= 1;
-    }
+    moveFocusAsApp(() => composerRef.current?.focus());
   }, []);
   // Restore to here (ADR 0197): undo the turn and every later one, files
   // included, then hand the person their words back in the composer so
