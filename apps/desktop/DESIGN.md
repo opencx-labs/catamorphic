@@ -497,6 +497,17 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-04: Bookmarks read and write their file like every other config file
+
+`bookmarks.json` was the one config file the app kept in memory and wrote
+back whole, so an edit made outside the app (an agent adding a bookmark)
+was lost when an in-app change (a page's favicon, a drag) landed before
+the next one-second poll. Bookmarks now use `ConfigFile`, as prefs,
+shortcuts and the theme do: every read and change goes to the file, a
+change writes atomically, and an invalid file keeps the last valid
+bookmarks, is named in Settings, and is never written over. The poll only
+tells windows what changed.
+
 ### 2026-10-04: The palette goes to open tabs first; the dock fits its screen edge
 
 Typing in the palette now finds open tabs, and a tab ranks above a bookmark

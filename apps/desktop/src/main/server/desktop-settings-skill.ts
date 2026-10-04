@@ -123,8 +123,10 @@ ids are any unique string and folderId/parentId name a folder of the same tree.
 To bookmark the page the person is looking at, take its URL and title from the
 turn context or read_tab and append it; omit position to place it last. Keep
 every other key and tree as it is, write the whole file to a temporary sibling
-and rename it over the original. Valid edits show in the sidebar at once; text
-that is not valid JSON is ignored until fixed.
+and rename it over the original. Valid edits show in the sidebar at once, and
+the app's own changes build on them. An invalid file (not JSON, or a tree of the
+wrong shape) keeps the last valid bookmarks, is named in Settings, and blocks
+bookmark changes in the app until it is fixed.
 
 ${WORKSPACE_AUTHORING_GUIDE}
 
