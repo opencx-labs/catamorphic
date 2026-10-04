@@ -224,6 +224,8 @@ it("preserves floating chats, their draft, and their bubble when opening links",
       column: box(scroller.firstElementChild),
     };
   })()`);
+  // Wider than the column, or the old layout would pass too.
+  expect(layout.panel[1] - layout.panel[0]).toBeGreaterThan(800);
   expect(layout.panel[1] - layout.scroller[1]).toBeLessThanOrEqual(2);
   expect(layout.scroller[0] - layout.panel[0]).toBeLessThanOrEqual(2);
   expect(layout.column[1] - layout.column[0]).toBeLessThanOrEqual(768);
