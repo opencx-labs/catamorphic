@@ -18,6 +18,11 @@ vi.mock("../lib/desktop-api", () => ({
     vaultCopyPassword: vi.fn().mockResolvedValue(true),
     vaultGeneratePassword: vi.fn().mockResolvedValue("Gen3rated-Pass.x"),
     onVaultChanged: vi.fn().mockReturnValue(() => undefined),
+    vaultPasskeys: vi.fn().mockResolvedValue([]),
+    passwordFileImport: vi.fn().mockResolvedValue({ status: "cancelled" }),
+    passwordFileUnlock: vi.fn(),
+    passwordFileKeyFile: vi.fn().mockResolvedValue({ keyFile: "db.keyx" }),
+    passwordFileForget: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -33,6 +38,15 @@ const bob = {
   origin: "https://mail.example.org",
   username: "bob",
   hasNote: false,
+  updatedAt: Date.now(),
+};
+
+const passkey = {
+  id: "passkey-1",
+  rpId: "github.com",
+  username: "octo",
+  credentialId: "Y3JlZA",
+  discoverable: true,
   updatedAt: Date.now(),
 };
 
@@ -88,7 +102,7 @@ describe("PasswordsScreen", () => {
   it("adds a password with a generated secret and a note", async () => {
     await render();
     expect(container.textContent).toContain(
-      "Passwords you save while signing in appear here.",
+      "Passwords and passkeys you save while signing in appear here.",
     );
     const add = [...container.querySelectorAll("button")].find((button) =>
       button.textContent?.includes("Add"),
@@ -255,5 +269,142 @@ describe("PasswordsScreen", () => {
       profileId: "profile-1",
       origin: "https://bank.example",
     });
+  });
+
+  it("lists passkeys beside passwords, filters them and deletes one", async () => {
+    vi.mocked(desktopApi.vaultList).mockResolvedValueOnce([alice]);
+    vi.mocked(desktopApi.vaultPasskeys).mockResolvedValueOnce([passkey]);
+    await render();
+    expect(
+      container.querySelector('[data-testid="passwords-count"]')?.textContent,
+    ).toBe("1 password, 1 passkey");
+    const row = container.querySelector('[data-testid="passkey-row"]');
+    expect(row?.textContent).toContain("github.com");
+    expect(row?.textContent).toContain("octo");
+    // Passkeys never reveal or copy: their keys stay in the vault.
+    expect(row?.querySelector('[aria-label^="Reveal"]')).toBeNull();
+
+    const search = container.querySelector<HTMLInputElement>(
+      '[data-testid="password-search"]',
+    );
+    await act(async () => setValue(search, "passkey"));
+    expect(
+      container.querySelectorAll('[data-testid="password-row"]'),
+    ).toHaveLength(0);
+    expect(
+      container.querySelectorAll('[data-testid="passkey-row"]'),
+    ).toHaveLength(1);
+    await act(async () => setValue(search, ""));
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Delete passkey for octo on github.com"]',
+        )
+        ?.click(),
+    );
+    expect(document.body.textContent).toContain(
+      "Delete the passkey for github.com?",
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="password-delete-confirm"]',
+        )
+        ?.click(),
+    );
+    expect(desktopApi.vaultRemove).toHaveBeenCalledWith({
+      profileId: "profile-1",
+      id: "passkey-1",
+    });
+  });
+
+  it("imports a file and says what it brought in", async () => {
+    vi.mocked(desktopApi.passwordFileImport).mockResolvedValueOnce({
+      status: "imported",
+      passwords: 2,
+      passkeys: 1,
+      existing: 3,
+      skipped: 0,
+    });
+    await render();
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[data-testid="passwords-import"]')
+        ?.click(),
+    );
+    expect(
+      container.querySelector('[data-testid="passwords-import-status"]')
+        ?.textContent,
+    ).toBe("Imported 2 passwords and 1 passkey. 3 already saved.");
+  });
+
+  it("unlocks a KeePass database, retrying a wrong password", async () => {
+    const locked = {
+      status: "locked" as const,
+      token: "token-1",
+      name: "Passwords.kdbx",
+      keyFile: null,
+      wrongKey: false,
+    };
+    vi.mocked(desktopApi.passwordFileImport).mockResolvedValueOnce(locked);
+    vi.mocked(desktopApi.passwordFileUnlock)
+      .mockResolvedValueOnce({ ...locked, wrongKey: true })
+      .mockResolvedValueOnce({
+        status: "imported",
+        passwords: 0,
+        passkeys: 4,
+        existing: 0,
+        skipped: 1,
+      });
+    await render();
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[data-testid="passwords-import"]')
+        ?.click(),
+    );
+    const dialog = document.querySelector(
+      '[data-testid="password-file-unlock"]',
+    );
+    expect(dialog?.textContent).toContain("Unlock Passwords.kdbx");
+    const field = dialog?.querySelector<HTMLInputElement>(
+      '[data-testid="password-file-password"]',
+    );
+    await act(async () => setValue(field ?? null, "wrong"));
+    await act(async () => {
+      dialog?.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      );
+    });
+    expect(document.body.textContent).toContain(
+      "That password does not open this database.",
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="password-file-choose-key"]',
+        )
+        ?.click(),
+    );
+    expect(
+      document.querySelector('[data-testid="password-file-key"]')?.textContent,
+    ).toBe("db.keyx");
+    await act(async () => setValue(field ?? null, "right"));
+    await act(async () => {
+      dialog?.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      );
+    });
+    expect(desktopApi.passwordFileUnlock).toHaveBeenLastCalledWith({
+      profileId: "profile-1",
+      token: "token-1",
+      password: "right",
+    });
+    expect(
+      container.querySelector('[data-testid="passwords-import-status"]')
+        ?.textContent,
+    ).toBe(
+      "Imported 4 passkeys. 1 item without a website or passkey left out.",
+    );
   });
 });

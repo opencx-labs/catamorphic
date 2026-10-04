@@ -40,6 +40,7 @@ import {
 import { matchesShortcut } from "../shared/keybindings.js";
 import { OPEN_ACTIONS } from "../shared/open-mode.js";
 import { paletteUseSchema } from "../shared/palette.js";
+import type { PasswordFileImportResult } from "../shared/password-import.js";
 import {
   type ScreenShareAnswer,
   type ScreenShareRequest,
@@ -75,7 +76,14 @@ import {
   BROWSER_IMPORTERS,
   listImportableBrowsers,
 } from "./browser-import/index.js";
-import { parsePasswordCsv } from "./browser-import/password-csv.js";
+import {
+  type ImportedVault,
+  PasswordFileError,
+  passwordFileKind,
+  readKeepassDatabase,
+  readPasswordFile,
+  WrongDatabaseKey,
+} from "./browser-import/password-file.js";
 import {
   importBrowserPasswords,
   passwordImportSupport,
@@ -398,7 +406,11 @@ export function registerBrowserSupport(
       callback(permission !== "openExternal"),
   );
   const permissionBroker = new SitePermissionBroker();
-  const disposePasskeys = registerPasskeys();
+  const disposePasskeys = registerPasskeys({
+    vault,
+    profileFor: (host) => windows.profileFor(host),
+    onVaultChanged: (profileId) => vaultChanged(profileId),
+  });
   const siteIcons = new SiteIcons();
   // Pages pick their icon by the scheme they see, which follows the OS.
   const colorScheme = () =>
@@ -2149,6 +2161,11 @@ export function registerBrowserSupport(
     },
   );
   ipcMain.handle(
+    "catamorphic:vault-passkeys",
+    (_event, input: { profileId: string }) =>
+      vault.listPasskeys(input.profileId),
+  );
+  ipcMain.handle(
     "catamorphic:vault-remove",
     async (_event, input: { profileId: string; id: string }) => {
       await vault.remove(input.profileId, input.id);
@@ -2513,27 +2530,212 @@ export function registerBrowserSupport(
     },
   );
 
+  // --- password and passkey files (ADR 0201) ---
+  /** KeePass databases waiting for their password, by token. */
+  const lockedFiles = new Map<
+    string,
+    {
+      profileId: string;
+      /** The window that picked the file; only it may unlock or change it. */
+      hostId: number;
+      name: string;
+      bytes: Buffer;
+      keyFile: { name: string; bytes: Buffer } | null;
+      expires: NodeJS.Timeout;
+    }
+  >();
+  /** Exports and databases are small; anything larger is not one. */
+  const MAX_IMPORT_BYTES = 64 * 1024 * 1024;
+  const readImportFile = (file: string): Buffer => {
+    if (fs.statSync(file).size > MAX_IMPORT_BYTES)
+      throw new PasswordFileError(
+        "This file is too large to be a password export.",
+      );
+    return fs.readFileSync(file);
+  };
+  /** A locked database the calling window opened, for its profile. */
+  const lockedFor = (sender: WebContents, token: string) => {
+    const locked = lockedFiles.get(token);
+    return locked &&
+      locked.hostId === sender.id &&
+      windows.profileFor(sender) === locked.profileId
+      ? locked
+      : null;
+  };
+  const forgetLocked = (token: string) => {
+    const locked = lockedFiles.get(token);
+    if (!locked) return;
+    clearTimeout(locked.expires);
+    locked.bytes.fill(0);
+    locked.keyFile?.bytes.fill(0);
+    lockedFiles.delete(token);
+  };
+  /** Where an import's file picker looks; E2E names files instead. */
+  const pickFile = async (
+    sender: WebContents,
+    options: Electron.OpenDialogOptions,
+  ): Promise<string | null> => {
+    const scripted = process.env.CATAMORPHIC_E2E_PICK_FILE;
+    if (process.env.CATAMORPHIC_E2E_DATA_DIR && scripted) {
+      // The test writes the path it wants picked next ("" cancels).
+      const next = fs.readFileSync(scripted, "utf8").trim();
+      return next || null;
+    }
+    const window = BrowserWindow.fromWebContents(sender);
+    if (!window) return null;
+    const picked = await dialog.showOpenDialog(window, options);
+    return picked.canceled ? null : (picked.filePaths[0] ?? null);
+  };
+  const importVault = async (
+    profileId: string,
+    contents: ImportedVault,
+  ): Promise<PasswordFileImportResult> => {
+    const result = await vault.importMissing({
+      profileId,
+      credentials: contents.logins,
+      passkeys: contents.passkeys,
+    });
+    if (result.imported + result.importedPasskeys > 0) vaultChanged(profileId);
+    return {
+      status: "imported",
+      passwords: result.imported,
+      passkeys: result.importedPasskeys,
+      existing: result.existing,
+      skipped: contents.skipped,
+    };
+  };
+  const failed = (error: unknown): PasswordFileImportResult => ({
+    status: "failed",
+    message:
+      error instanceof PasswordFileError
+        ? error.message
+        : "Work couldn't save what this file holds. Try again.",
+  });
   ipcMain.handle(
-    "catamorphic:browser-import-passwords",
-    async (event, input: unknown) => {
+    "catamorphic:password-file-import",
+    async (event, input: unknown): Promise<PasswordFileImportResult> => {
       const { profileId } = z.object({ profileId: z.string() }).parse(input);
       if (!profiles.get(profileId)) throw new Error("Choose a profile again.");
-      const window = BrowserWindow.fromWebContents(event.sender);
-      if (!window) return { imported: 0, cancelled: true };
-      const picked = await dialog.showOpenDialog(window, {
-        title: "Import passwords from Chrome or Firefox",
+      const file = await pickFile(event.sender, {
+        title: "Import passwords and passkeys",
         properties: ["openFile"],
-        filters: [{ name: "Password CSV", extensions: ["csv"] }],
+        filters: [
+          {
+            name: "CSV, Bitwarden JSON or KeePass database",
+            extensions: ["csv", "json", "kdbx"],
+          },
+        ],
       });
-      const file = picked.filePaths[0];
-      if (picked.canceled || !file) return { imported: 0, cancelled: true };
-      const imported = parsePasswordCsv(fs.readFileSync(file, "utf-8"));
-      const result = await vault.importMissing({
-        profileId,
-        credentials: imported,
+      if (!file) return { status: "cancelled" };
+      let bytes: Buffer;
+      try {
+        bytes = readImportFile(file);
+      } catch (error) {
+        return error instanceof PasswordFileError
+          ? failed(error)
+          : { status: "failed", message: "Work couldn't read this file." };
+      }
+      if (passwordFileKind(bytes) === "kdbx") {
+        const token = randomUUID();
+        lockedFiles.set(token, {
+          profileId,
+          hostId: event.sender.id,
+          name: path.basename(file),
+          bytes,
+          keyFile: null,
+          // An unlock nobody finishes lets the file go.
+          expires: setTimeout(() => forgetLocked(token), 10 * 60_000),
+        });
+        return {
+          status: "locked",
+          token,
+          name: path.basename(file),
+          keyFile: null,
+          wrongKey: false,
+        };
+      }
+      try {
+        const contents = readPasswordFile(bytes);
+        return await importVault(profileId, contents);
+      } catch (error) {
+        return failed(error);
+      } finally {
+        bytes.fill(0);
+      }
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:password-file-unlock",
+    async (event, input: unknown): Promise<PasswordFileImportResult> => {
+      const { profileId, token, password } = z
+        .object({
+          profileId: z.string(),
+          token: z.string(),
+          password: z.string().max(4096),
+        })
+        .parse(input);
+      const locked = lockedFor(event.sender, token);
+      if (!locked || locked.profileId !== profileId)
+        return {
+          status: "failed",
+          message: "Choose the database again.",
+        };
+      try {
+        const contents = await readKeepassDatabase({
+          bytes: locked.bytes,
+          password,
+          keyFile: locked.keyFile?.bytes,
+        });
+        forgetLocked(token);
+        return await importVault(profileId, contents);
+      } catch (error) {
+        if (error instanceof WrongDatabaseKey)
+          return {
+            status: "locked",
+            token,
+            name: locked.name,
+            keyFile: locked.keyFile?.name ?? null,
+            wrongKey: true,
+          };
+        forgetLocked(token);
+        return failed(error);
+      }
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:password-file-key-file",
+    async (event, input: unknown) => {
+      const { token, clear } = z
+        .object({ token: z.string(), clear: z.boolean().optional() })
+        .parse(input);
+      const locked = lockedFor(event.sender, token);
+      if (!locked) return null;
+      if (clear) {
+        locked.keyFile?.bytes.fill(0);
+        locked.keyFile = null;
+        return { keyFile: null };
+      }
+      const file = await pickFile(event.sender, {
+        title: "Choose the database's key file",
+        properties: ["openFile"],
       });
-      if (result.imported > 0) vaultChanged(profileId);
-      return { imported: result.imported, cancelled: false };
+      if (!file) return { keyFile: locked.keyFile?.name ?? null };
+      let bytes: Buffer;
+      try {
+        bytes = readImportFile(file);
+      } catch {
+        return { keyFile: locked.keyFile?.name ?? null };
+      }
+      locked.keyFile?.bytes.fill(0);
+      locked.keyFile = { name: path.basename(file), bytes };
+      return { keyFile: locked.keyFile.name };
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:password-file-forget",
+    (event, input: unknown) => {
+      const { token } = z.object({ token: z.string() }).parse(input);
+      if (lockedFor(event.sender, token)) forgetLocked(token);
     },
   );
 
@@ -2573,6 +2775,7 @@ export function registerBrowserSupport(
       );
       pendingCredentials.clear();
       suggestedPasswords.clear();
+      for (const token of [...lockedFiles.keys()]) forgetLocked(token);
       unsubscribeRemoved();
       history.dispose();
       paletteUsage.dispose();

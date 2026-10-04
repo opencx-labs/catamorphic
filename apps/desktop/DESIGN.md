@@ -1568,3 +1568,24 @@ instead of snapping, as Safari animates its sidebar: snapshots of the old and
 new layout move so the page's main column travels straight to where it lands,
 and cross-fade. A web page may hold still for a moment between the two while
 it lays out at its new size. See ADR 0200.
+
+### 2026-10-04: Passkeys live in Work
+
+The passkey sheet used to say passkeys could not be used in Work yet. Now
+Work keeps them in the profile's vault, next to passwords (ADR 0201). When a
+site creates a passkey, the sheet names the account and offers **Save
+passkey**. When a site asks you to sign in, the sheet lists your passkeys for
+it. With Touch ID the first is already focused, so Enter then a touch signs
+in; without it nothing is focused, so a stray Enter cannot answer. Like
+Chrome's, the sheet ignores input for its first half second. Touch ID
+confirms each use, the way the system's own passkey sheet does. A tab
+without focus is refused, so the sheet never appears over another page. A security key still works
+alongside: the sheet says so in one quiet line rather than making you choose
+a path first. A site that waits for autofill gets your passkeys at the top of
+the suggestions under its username field. When Work cannot help, the sheet
+says why in the site's terms (it asks for a security key, it requires Touch
+ID this Mac lacks, the account already has a passkey here). With no passkey
+saved, **Import passkeys** opens Passwords. There, one Import button takes a
+Bitwarden export, a KeePassXC database (unlocked in a small dialog, key file
+optional) or a CSV. One sentence then says what came in. Passkeys get their
+own section with delete only, since there is nothing to reveal.

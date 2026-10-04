@@ -405,8 +405,19 @@ const api = {
     invoke("catamorphic:browser-import-list"),
   browserImportRun: (input: unknown): Promise<unknown> =>
     invoke("catamorphic:browser-import-run", input),
-  browserImportPasswords: (input: { profileId: string }): Promise<unknown> =>
-    invoke("catamorphic:browser-import-passwords", input),
+  passwordFileImport: (input: { profileId: string }): Promise<unknown> =>
+    invoke("catamorphic:password-file-import", input),
+  passwordFileUnlock: (input: {
+    profileId: string;
+    token: string;
+    password: string;
+  }): Promise<unknown> => invoke("catamorphic:password-file-unlock", input),
+  passwordFileKeyFile: (input: {
+    token: string;
+    clear?: boolean;
+  }): Promise<unknown> => invoke("catamorphic:password-file-key-file", input),
+  passwordFileForget: (input: { token: string }): Promise<void> =>
+    invoke("catamorphic:password-file-forget", input),
 
   devUpdateRestart: (): Promise<boolean> =>
     invoke("catamorphic:dev-update-restart"),
@@ -781,6 +792,17 @@ const api = {
   },
   passkeyCancel: (input: { id: string }): Promise<boolean> =>
     invoke("catamorphic:passkey-cancel", input),
+  passkeyUse: (input: { id: string; passkeyId: string }): Promise<unknown> =>
+    invoke("catamorphic:passkey-use", input),
+  passkeySave: (input: { id: string }): Promise<unknown> =>
+    invoke("catamorphic:passkey-save", input),
+  passkeyAutofill: (input: { guestId: number }): Promise<unknown> =>
+    invoke("catamorphic:passkey-autofill", input),
+  passkeyAutofillUse: (input: {
+    guestId: number;
+    requestId: string;
+    passkeyId: string;
+  }): Promise<unknown> => invoke("catamorphic:passkey-autofill-use", input),
   onSiteSystemRefusal: (listener: (notice: unknown) => void) => {
     const handler = (_event: unknown, notice: unknown) => listener(notice);
     ipcRenderer.on("catamorphic:site-permission-system-refused", handler);
@@ -1084,6 +1106,8 @@ const api = {
   }): Promise<void> => invoke("catamorphic:vault-allow-saving", input),
   vaultRemove: (input: { profileId: string; id: string }): Promise<void> =>
     invoke("catamorphic:vault-remove", input),
+  vaultPasskeys: (input: { profileId: string }): Promise<unknown[]> =>
+    invoke("catamorphic:vault-passkeys", input),
   vaultCopyPassword: (input: {
     profileId: string;
     id: string;

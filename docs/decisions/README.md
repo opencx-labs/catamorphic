@@ -163,7 +163,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0148](0148-session-access-for-apps.md) | Session access for apps | Accepted |
 | [0149](0149-observed-git-overviews.md) | Observed Git overviews | Accepted |
 | [0150](0150-site-settings.md) | Site settings: one modal per site, Chrome's permission model | Accepted |
-| [0151](0151-browser-password-manager.md) | Browser password manager: offers after sign-ins that land, suggestions under the field, generated passwords that save themselves | Accepted |
+| [0151](0151-browser-password-manager.md) | Browser password manager: offers after sign-ins that land, suggestions under the field, generated passwords that save themselves | Accepted (amended by 0201) |
 | [0152](0152-agent-context-channels.md) | Agent context: a short standing prompt and per-turn context beside the message | Accepted |
 | [0153](0153-downloads-in-the-dock.md) | Downloads in the dock: no save dialog, a dock button with progress, a Downloads page | Accepted |
 | [0154](0154-profile-history.md) | History belongs to the profile: loose files, the project as an attribute, a project scope on the page | Accepted |
@@ -197,7 +197,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0182](0182-sandboxing-and-permission-modes-are-different-settings.md) | Sandboxing and permission modes are different settings | Accepted |
 | [0183](0183-guards-are-host-code-work-server-config-is-typed-data.md) | Guards are host code; Work server config is typed data | Accepted |
 | [0184](0184-personal-credentials-reach-a-members-own-sessions.md) | Personal credentials reach a member's own sessions | Accepted (logins superseded by 0199) |
-| [0185](0185-passkey-requests-stay-answerable.md) | Passkey requests in browser tabs stay answerable | Accepted |
+| [0185](0185-passkey-requests-stay-answerable.md) | Passkey requests in browser tabs stay answerable | Accepted (amended by 0201) |
 | [0186](0186-palette-modes-and-use-ranked-search.md) | Palette modes share one shape, and search ranks by use | Accepted |
 | [0187](0187-remote-executors-ride-out-transient-failures.md) | Remote executors ride out transient failures on one operation queue | Accepted (sessions are worker epochs by 0192; runners by 0198) |
 | [0188](0188-back-and-forward-between-surfaces.md) | Back and forward move between surfaces, and tabs keep their way back | Accepted |
@@ -213,3 +213,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md) | Agent runners run harnesses beside their workspace | Accepted |
 | [0199](0199-subscription-sign-ins-stay-on-the-machine.md) | Subscription sign-ins stay on the machine they were made on | Accepted |
 | [0200](0200-sidebars-move-first-content-settles-after.md) | Sidebars move first; the content settles after them | Accepted |
+| [0201](0201-work-keeps-passkeys-in-the-profile-vault.md) | Work keeps passkeys in the profile's vault: the sheet saves and signs in, autofill offers them, Bitwarden and KeePassXC files import | Accepted (amends 0185, 0151) |

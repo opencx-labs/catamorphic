@@ -1,6 +1,6 @@
 # 0151: Browser password manager
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by 0201)
 - **Date:** 2026-09-23
 - **Builds on:** 0150 (site settings)
 
@@ -51,7 +51,8 @@ workspace page (tab kind `passwords`), like Sites, opened from the
 palette, profile settings and "Manage passwords". It lists logins and
 the sites set to "Never for this site".
 
-**Storage stays KDBX.** Notes use the standard `Notes` field, stored as
+**Storage stays KDBX.** (ADR 0201 adds passkeys as entries in the same
+vault and makes deletes permanent.) Notes use the standard `Notes` field, stored as
 a protected value. Listings report only whether a note exists; its text
 comes with `reveal`, behind the same device authentication as the
 password. The "never save" origins live in the database's custom meta
