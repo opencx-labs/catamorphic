@@ -10,9 +10,8 @@ import * as kdbx from "kdbxweb";
  * Node's own Argon2 runs where the runtime has it (Node with OpenSSL 3.2+,
  * as under tests); Electron's Node is built on BoringSSL without it, so
  * the app uses hash-wasm, a small WebAssembly implementation. Both derive
- * the same keys (kdbx-argon2.test.ts pins them). The native path matters
- * in test workers: allocating wasm memory per derivation in worker
- * threads crashes V8 there (UnregisterWasmAllocation).
+ * the same keys (kdbx-argon2.test.ts pins them). Tests take the native
+ * path, which spares them a wasm instance per derivation.
  */
 const nativeArgon2 = (() => {
   try {
