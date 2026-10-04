@@ -6,6 +6,7 @@ import type { ProfileConnection } from "../shared/profile-connections.js";
 import type { SettingsPatch, SettingsScope } from "../shared/settings.js";
 import { AgentBindingsStore } from "./agent-bindings-store.js";
 import { AgentsStore } from "./agents-store.js";
+import { BookmarksStore } from "./bookmarks.js";
 import { readConfigObject, writeConfigObject } from "./config-file.js";
 import { ConnectionsStore } from "./connections-store.js";
 import { type Keybindings, KeybindingsStore } from "./keybindings.js";
@@ -84,17 +85,20 @@ export class ProfileConfigManager {
     (profileId: string, prefs: AppPrefs) => void
   >();
 
+  /** Browser bookmarks: one file for every profile and project. */
+  readonly bookmarks: BookmarksStore;
+
   constructor(
     private readonly paths: DataPaths,
     private readonly profiles: ProfilesStore,
     private readonly systemAppearance: () => ThemeAppearance = () => "dark",
   ) {
+    this.bookmarks = new BookmarksStore(paths.bookmarksFile);
     this.unsubscribeRemoved = profiles.onRemoved((id) =>
       this.releaseProfile(id),
     );
   }
 
-  /** Browser bookmarks: one file for every profile and project. */
   bookmarksFile(): string {
     return this.paths.bookmarksFile;
   }
@@ -372,6 +376,7 @@ export class ProfileConfigManager {
       ...[
         stores.theme.error,
         stores.keybindings.error,
+        this.bookmarks.error,
         workspace.error ? `${workspace.file}: ${workspace.error}` : undefined,
         ...legacySidebarFiles({
           profileDir: this.profileDir(profileId),

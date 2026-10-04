@@ -300,34 +300,102 @@ describe("BookmarksStore", () => {
     );
   });
 
-  it("migrates the former flat pinned array on read", () => {
-    const { file } = store();
-    fs.writeFileSync(
-      file,
-      JSON.stringify({
-        byProject: {},
-        pinnedByProfile: {
-          profile: [
-            { id: "one", label: "Example", url: "https://example.com" },
-          ],
-        },
-      }),
-    );
-
-    expect(new BookmarksStore(file).pinned("profile")).toEqual({
-      folders: [],
-      bookmarks: [{ id: "one", label: "Example", url: "https://example.com" }],
+  it("builds every change on the file as it is, so an outside edit is never written over", () => {
+    const { value, file } = store();
+    value.addBookmark("p", { label: "Docs", url: "https://docs.test/" });
+    // An agent appends a bookmark; the app changes something before any
+    // poll could have noticed.
+    const edited = JSON.parse(fs.readFileSync(file, "utf-8"));
+    edited.byProject.p.bookmarks.push({
+      id: "agent-1",
+      label: "Agent added",
+      url: "https://agent.test/",
+      note: "kept as written",
     });
+    fs.writeFileSync(file, JSON.stringify(edited));
+    value.observeFavicon({
+      profileId: "profile",
+      projectIds: ["p"],
+      url: "https://docs.test/",
+      faviconUrl: "https://docs.test/icon.png",
+    });
+    const saved = JSON.parse(fs.readFileSync(file, "utf-8"));
+    expect(saved.byProject.p.bookmarks).toEqual([
+      expect.objectContaining({
+        label: "Docs",
+        faviconUrl: "https://docs.test/icon.png",
+      }),
+      {
+        id: "agent-1",
+        label: "Agent added",
+        url: "https://agent.test/",
+        note: "kept as written",
+      },
+    ]);
   });
 
-  it("repairs folders for bookmarks flattened by an earlier import", () => {
+  it("still announces an outside edit that an in-app change built on", async () => {
+    const { value, file } = store();
+    value.addBookmark("x", { label: "Docs", url: "https://docs.test/" });
+    const changes: unknown[] = [];
+    const unwatch = value.watch((change) => changes.push(change), {
+      intervalMs: 20,
+    });
+    try {
+      // The poller's first stat is its baseline: edits before it are not
+      // changes to it.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      // An agent adds to project y; before the poll, the app changes x.
+      const edited = JSON.parse(fs.readFileSync(file, "utf-8"));
+      edited.byProject.y = {
+        folders: [],
+        bookmarks: [{ id: "agent", label: "Agent", url: "https://a.test/" }],
+      };
+      fs.writeFileSync(file, JSON.stringify(edited));
+      value.addBookmark("x", { label: "Blog", url: "https://blog.test/" });
+      // x's caller tells windows about x; the watcher still tells them y.
+      await expect
+        .poll(() => changes, { timeout: 3000 })
+        .toEqual([{ projectIds: ["y"], profileIds: [] }]);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(changes).toHaveLength(1);
+    } finally {
+      unwatch();
+    }
+  });
+
+  it("reports a broken file and refuses to write over it", () => {
+    const { value, file } = store();
+    value.addBookmark("p", { label: "Docs", url: "https://docs.test/" });
+    fs.writeFileSync(file, '{ "byProject": { "p": { "bookmarks": [{}] } } }');
+    // What was valid stays shown, with the reason the edit is not.
+    expect(value.forProject("p").bookmarks.map((entry) => entry.label)).toEqual(
+      ["Docs"],
+    );
+    expect(value.error).toContain(file);
+    expect(() =>
+      value.addBookmark("p", { label: "Blog", url: "https://blog.test/" }),
+    ).toThrow();
+    expect(fs.readFileSync(file, "utf-8")).toBe(
+      '{ "byProject": { "p": { "bookmarks": [{}] } } }',
+    );
+    // Fixed, it applies again.
+    fs.writeFileSync(file, JSON.stringify({ byProject: {} }));
+    expect(value.forProject("p").bookmarks).toEqual([]);
+    expect(value.error).toBeUndefined();
+  });
+
+  it("files a root bookmark into the folder a later import gives it", () => {
     const { file } = store();
     fs.writeFileSync(
       file,
       JSON.stringify({
         byProject: {},
         pinnedByProfile: {
-          profile: [{ id: "bun", label: "Bun", url: "https://bun.sh" }],
+          profile: {
+            folders: [],
+            bookmarks: [{ id: "bun", label: "Bun", url: "https://bun.sh" }],
+          },
         },
       }),
     );
@@ -368,12 +436,12 @@ describe("BookmarksStore", () => {
     value.unpin("profile", "project", imported?.id ?? "missing");
 
     expect(value.pinned("profile").bookmarks).toHaveLength(0);
-    expect(value.forProject("project").bookmarks).toEqual([
-      expect.objectContaining({
-        label: "Example",
-        url: "https://example.com",
-        folderId: undefined,
-      }),
-    ]);
+    const [unpinned, ...rest] = value.forProject("project").bookmarks;
+    expect(rest).toEqual([]);
+    expect(unpinned).toMatchObject({
+      label: "Example",
+      url: "https://example.com",
+    });
+    expect(unpinned?.folderId).toBeUndefined();
   });
 });

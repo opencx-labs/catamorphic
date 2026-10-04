@@ -65,7 +65,6 @@ import {
   sitePermissionStateSchema,
 } from "../shared/site-settings.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
-import { BookmarksStore } from "./bookmarks.js";
 import { HistoryStore } from "./browser-history.js";
 import {
   importBrowserCookies,
@@ -476,7 +475,7 @@ export function registerBrowserSupport(
     siteSettings.releaseProfile(profileId);
     preparedSessions.delete(partitionFor(profileId));
   });
-  const bookmarks = new BookmarksStore(profileConfig.bookmarksFile());
+  const bookmarks = profileConfig.bookmarks;
   const appCommandListeners = new Map<
     BrowserWindow,
     (event: Electron.Event, command: string) => void
@@ -2163,35 +2162,23 @@ export function registerBrowserSupport(
   );
 
   // --- bookmarks ---
-  const bookmarksChanged = (projectId: string, profileId: string) =>
+  const bookmarksChanged = (projectId: string | null, profileId: string) =>
     broadcast("catamorphic:bookmarks-changed", {
       projectId,
-      project: bookmarks.forProject(projectId),
       profileId,
-      pinned: bookmarks.pinned(profileId),
-      library: bookmarks.library(profileId),
+      ...bookmarks.trees({ projectId: projectId ?? undefined, profileId }),
     });
   // An agent (or the person) editing bookmarks.json shows up live.
   const unwatchBookmarks = bookmarks.watch(({ projectIds, profileIds }) => {
     for (const projectId of projectIds)
       bookmarksChanged(projectId, profiles.profileForProject(projectId).id);
-    for (const profileId of profileIds)
-      broadcast("catamorphic:bookmarks-changed", {
-        projectId: null,
-        project: null,
-        profileId,
-        pinned: bookmarks.pinned(profileId),
-        library: bookmarks.library(profileId),
-      });
+    for (const profileId of profileIds) bookmarksChanged(null, profileId);
   });
 
   ipcMain.handle(
     "catamorphic:bookmarks-get",
-    (_event, input: { projectId: string; profileId: string }) => ({
-      project: bookmarks.forProject(input.projectId),
-      pinned: bookmarks.pinned(input.profileId),
-      library: bookmarks.library(input.profileId),
-    }),
+    (_event, input: { projectId: string; profileId: string }) =>
+      bookmarks.trees(input),
   );
   ipcMain.handle(
     "catamorphic:bookmarks-add",
@@ -2447,13 +2434,7 @@ export function registerBrowserSupport(
               profileId,
               importer.readBookmarks(input.sourceProfileId),
             );
-            broadcast("catamorphic:bookmarks-changed", {
-              projectId: null,
-              project: null,
-              profileId,
-              pinned: bookmarks.pinned(profileId),
-              library: bookmarks.library(profileId),
-            });
+            bookmarksChanged(null, profileId);
           });
         if (selected.has("history"))
           await attempt(() => {
