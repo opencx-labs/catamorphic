@@ -75,6 +75,7 @@ function passkey(input: {
   privateKeyPem: string | null;
   counter?: unknown;
   discoverable?: unknown;
+  backupEligible?: boolean;
 }): PasskeyInput | null {
   if (
     typeof input.rpId !== "string" ||
@@ -95,6 +96,7 @@ function passkey(input: {
     discoverable: !(
       input.discoverable === false || input.discoverable === "false"
     ),
+    backupEligible: input.backupEligible ?? true,
   };
 }
 
@@ -118,13 +120,14 @@ export function readBitwardenExport(text: string): ImportedVault {
   } catch {
     throw new PasswordFileError("This file is not a password export.");
   }
+  // A password-protected export has no items at all, only ciphertext.
+  if (isObject(parsed) && parsed.encrypted === true)
+    throw new PasswordFileError(
+      "This Bitwarden export is encrypted. Export again as JSON, not encrypted JSON, and delete the file after importing.",
+    );
   if (!isObject(parsed) || !Array.isArray(parsed.items))
     throw new PasswordFileError(
       "This JSON file is not a Bitwarden export. Export your vault from Bitwarden as JSON.",
-    );
-  if (parsed.encrypted === true)
-    throw new PasswordFileError(
-      "This Bitwarden export is encrypted. Export again as JSON, not encrypted JSON, and delete the file after importing.",
     );
   const result: ImportedVault = { logins: [], passkeys: [], skipped: 0 };
   for (const item of parsed.items) {
@@ -192,23 +195,35 @@ export async function readKeepassDatabase({
   password: string;
   keyFile?: Uint8Array | null;
 }): Promise<ImportedVault> {
-  const credentials = new kdbx.Credentials(
-    kdbx.ProtectedValue.fromString(password),
-    keyFile ? toArrayBuffer(keyFile) : null,
-  );
-  let db: kdbx.Kdbx;
-  try {
-    db = await kdbx.Kdbx.load(toArrayBuffer(bytes), credentials);
-  } catch (error) {
-    if (
-      error instanceof kdbx.KdbxError &&
-      error.code === kdbx.Consts.ErrorCodes.InvalidKey
-    )
-      throw new WrongDatabaseKey();
-    throw new PasswordFileError(
-      "This KeePass database could not be read. Check that it is a KDBX file.",
+  // An empty field means no password, as KeePassXC reads it; a database
+  // whose password really is empty is tried next.
+  const attempts = password ? [password] : keyFile ? [null, ""] : [""];
+  let db: kdbx.Kdbx | null = null;
+  for (const attempt of attempts) {
+    const credentials = new kdbx.Credentials(
+      attempt === null ? null : kdbx.ProtectedValue.fromString(attempt),
+      // kdbxweb wipes the key bytes it is given, so each attempt gets a copy.
+      keyFile ? toArrayBuffer(keyFile) : null,
     );
+    const data = toArrayBuffer(bytes);
+    try {
+      db = await kdbx.Kdbx.load(data, credentials);
+      break;
+    } catch (error) {
+      if (
+        !(
+          error instanceof kdbx.KdbxError &&
+          error.code === kdbx.Consts.ErrorCodes.InvalidKey
+        )
+      )
+        throw new PasswordFileError(
+          "This KeePass database could not be read. Check that it is a KDBX file.",
+        );
+    } finally {
+      new Uint8Array(data).fill(0);
+    }
   }
+  if (!db) throw new WrongDatabaseKey();
   const bin = db.meta.recycleBinUuid?.id;
   const result: ImportedVault = { logins: [], passkeys: [], skipped: 0 };
   const walk = (group: kdbx.KdbxGroup) => {
@@ -225,12 +240,21 @@ export async function readKeepassDatabase({
       const pem = fieldText(entry, "KPEX_PASSKEY_PRIVATE_KEY_PEM");
       if (pem) {
         const handle = fieldText(entry, "KPEX_PASSKEY_USER_HANDLE");
+        // StrongBox writes the older names; KeePassXC reads them first.
+        const credentialId =
+          fieldText(entry, "KPEX_PASSKEY_GENERATED_USER_ID") ||
+          fieldText(entry, "KPEX_PASSKEY_CREDENTIAL_ID");
+        const eligible = fieldText(entry, "KPEX_PASSKEY_FLAG_BE").toLowerCase();
         const imported = passkey({
           rpId: fieldText(entry, "KPEX_PASSKEY_RELYING_PARTY"),
-          username: fieldText(entry, "KPEX_PASSKEY_USERNAME") || username,
-          credentialId: fromBase64Url(
-            fieldText(entry, "KPEX_PASSKEY_CREDENTIAL_ID"),
-          ),
+          username:
+            fieldText(entry, "KPXC_PASSKEY_USERNAME") ||
+            fieldText(entry, "KPEX_PASSKEY_USERNAME") ||
+            username,
+          credentialId: credentialId ? fromBase64Url(credentialId) : null,
+          backupEligible: eligible
+            ? eligible === "1" || eligible === "true"
+            : true,
           userHandle: handle ? fromBase64Url(handle) : null,
           privateKeyPem: normalizePem(pem),
           counter: fieldText(entry, "WORK_PASSKEY_COUNTER"),

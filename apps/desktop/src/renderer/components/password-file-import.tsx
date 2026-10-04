@@ -30,12 +30,14 @@ export function importSummary(result: Imported): string {
       ? `${count(result.skipped, "item", "items")} without a website or passkey left out`
       : "",
   ].filter(Boolean);
+  if (!added.length && !result.skipped)
+    return result.existing
+      ? "Everything in this file is already saved."
+      : "This file has no website logins or passkeys.";
   const head = added.length
     ? `Imported ${added.join(" and ")}`
-    : result.existing
-      ? "Everything in this file is already saved"
-      : "This file has no website logins or passkeys";
-  return `${head}${notes.length ? `. ${notes.join(", ")}` : ""}.`;
+    : "Nothing new to import";
+  return notes.length ? `${head}. ${notes.join(", ")}.` : `${head}.`;
 }
 
 /**
@@ -46,6 +48,8 @@ export function importSummary(result: Imported): string {
  */
 export function usePasswordFileImport(profileId: string): {
   start: () => void;
+  /** Forget the last result (another import is starting). */
+  reset: () => void;
   busy: boolean;
   summary: string | null;
   error: string | null;
@@ -93,7 +97,11 @@ export function usePasswordFileImport(profileId: string): {
       }}
     />
   );
-  return { start, busy, summary, error, dialog };
+  const reset = useCallback(() => {
+    setSummary(null);
+    setError(null);
+  }, []);
+  return { start, reset, busy, summary, error, dialog };
 }
 
 function UnlockDatabase({
@@ -141,16 +149,20 @@ function UnlockDatabase({
           password,
         }),
       );
+    } catch {
+      onResult({
+        status: "failed",
+        message: "This database could not be imported. Try again.",
+      });
     } finally {
       setUnlocking(false);
     }
   };
   const chooseKeyFile = async (clear = false) => {
     if (!locked) return;
-    const chosen = await desktopApi.passwordFileKeyFile({
-      token: locked.token,
-      clear,
-    });
+    const chosen = await desktopApi
+      .passwordFileKeyFile({ token: locked.token, clear })
+      .catch(() => null);
     if (chosen) setKeyFile(chosen.keyFile);
   };
 
@@ -185,6 +197,7 @@ function UnlockDatabase({
               autoComplete="off"
               spellCheck={false}
               aria-invalid={locked?.wrongKey || undefined}
+              aria-describedby={`${id}-error`}
               className="field h-8 w-full rounded-md px-2.5 text-[13px]"
             />
           </label>
@@ -217,8 +230,9 @@ function UnlockDatabase({
           </div>
           {/* Reserved so an error never moves the footer. */}
           <p
+            id={`${id}-error`}
             className="mt-2 min-h-4 text-xs text-danger"
-            role={locked?.wrongKey ? "alert" : undefined}
+            aria-live="assertive"
           >
             {locked?.wrongKey
               ? keyFile

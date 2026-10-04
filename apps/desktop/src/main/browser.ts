@@ -2555,12 +2555,32 @@ export function registerBrowserSupport(
     string,
     {
       profileId: string;
+      /** The window that picked the file; only it may unlock or change it. */
+      hostId: number;
       name: string;
       bytes: Buffer;
       keyFile: { name: string; bytes: Buffer } | null;
       expires: NodeJS.Timeout;
     }
   >();
+  /** Exports and databases are small; anything larger is not one. */
+  const MAX_IMPORT_BYTES = 64 * 1024 * 1024;
+  const readImportFile = (file: string): Buffer => {
+    if (fs.statSync(file).size > MAX_IMPORT_BYTES)
+      throw new PasswordFileError(
+        "This file is too large to be a password export.",
+      );
+    return fs.readFileSync(file);
+  };
+  /** A locked database the calling window opened, for its profile. */
+  const lockedFor = (sender: WebContents, token: string) => {
+    const locked = lockedFiles.get(token);
+    return locked &&
+      locked.hostId === sender.id &&
+      windows.profileFor(sender) === locked.profileId
+      ? locked
+      : null;
+  };
   const forgetLocked = (token: string) => {
     const locked = lockedFiles.get(token);
     if (!locked) return;
@@ -2608,7 +2628,7 @@ export function registerBrowserSupport(
     message:
       error instanceof PasswordFileError
         ? error.message
-        : "This file could not be imported. Try another export.",
+        : "Work couldn't save what this file holds. Try again.",
   });
   ipcMain.handle(
     "catamorphic:password-file-import",
@@ -2626,37 +2646,46 @@ export function registerBrowserSupport(
         ],
       });
       if (!file) return { status: "cancelled" };
+      let bytes: Buffer;
       try {
-        const bytes = fs.readFileSync(file);
-        if (passwordFileKind(bytes) === "kdbx") {
-          const token = randomUUID();
-          lockedFiles.set(token, {
-            profileId,
-            name: path.basename(file),
-            bytes,
-            keyFile: null,
-            // An unlock nobody finishes lets the file go.
-            expires: setTimeout(() => forgetLocked(token), 10 * 60_000),
-          });
-          return {
-            status: "locked",
-            token,
-            name: path.basename(file),
-            keyFile: null,
-            wrongKey: false,
-          };
-        }
+        bytes = readImportFile(file);
+      } catch (error) {
+        return error instanceof PasswordFileError
+          ? failed(error)
+          : { status: "failed", message: "Work couldn't read this file." };
+      }
+      if (passwordFileKind(bytes) === "kdbx") {
+        const token = randomUUID();
+        lockedFiles.set(token, {
+          profileId,
+          hostId: event.sender.id,
+          name: path.basename(file),
+          bytes,
+          keyFile: null,
+          // An unlock nobody finishes lets the file go.
+          expires: setTimeout(() => forgetLocked(token), 10 * 60_000),
+        });
+        return {
+          status: "locked",
+          token,
+          name: path.basename(file),
+          keyFile: null,
+          wrongKey: false,
+        };
+      }
+      try {
         const contents = readPasswordFile(bytes);
-        bytes.fill(0);
         return await importVault(profileId, contents);
       } catch (error) {
         return failed(error);
+      } finally {
+        bytes.fill(0);
       }
     },
   );
   ipcMain.handle(
     "catamorphic:password-file-unlock",
-    async (_event, input: unknown): Promise<PasswordFileImportResult> => {
+    async (event, input: unknown): Promise<PasswordFileImportResult> => {
       const { profileId, token, password } = z
         .object({
           profileId: z.string(),
@@ -2664,7 +2693,7 @@ export function registerBrowserSupport(
           password: z.string().max(4096),
         })
         .parse(input);
-      const locked = lockedFiles.get(token);
+      const locked = lockedFor(event.sender, token);
       if (!locked || locked.profileId !== profileId)
         return {
           status: "failed",
@@ -2698,7 +2727,7 @@ export function registerBrowserSupport(
       const { token, clear } = z
         .object({ token: z.string(), clear: z.boolean().optional() })
         .parse(input);
-      const locked = lockedFiles.get(token);
+      const locked = lockedFor(event.sender, token);
       if (!locked) return null;
       if (clear) {
         locked.keyFile?.bytes.fill(0);
@@ -2710,18 +2739,22 @@ export function registerBrowserSupport(
         properties: ["openFile"],
       });
       if (!file) return { keyFile: locked.keyFile?.name ?? null };
+      let bytes: Buffer;
+      try {
+        bytes = readImportFile(file);
+      } catch {
+        return { keyFile: locked.keyFile?.name ?? null };
+      }
       locked.keyFile?.bytes.fill(0);
-      locked.keyFile = {
-        name: path.basename(file),
-        bytes: fs.readFileSync(file),
-      };
+      locked.keyFile = { name: path.basename(file), bytes };
       return { keyFile: locked.keyFile.name };
     },
   );
   ipcMain.handle(
     "catamorphic:password-file-forget",
-    (_event, input: unknown) => {
-      forgetLocked(z.object({ token: z.string() }).parse(input).token);
+    (event, input: unknown) => {
+      const { token } = z.object({ token: z.string() }).parse(input);
+      if (lockedFor(event.sender, token)) forgetLocked(token);
     },
   );
 

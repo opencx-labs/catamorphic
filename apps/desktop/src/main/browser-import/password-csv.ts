@@ -58,7 +58,15 @@ export function parsePasswordCsv(source: string): ImportedPassword[] {
   }
   const imported: ImportedPassword[] = [];
   for (const record of records) {
-    const rawUrl = record[urlIndex]?.trim();
+    // Bitwarden's CSV joins an item's several URIs with commas.
+    const rawUrl = (
+      columns[urlIndex] === "login_uri"
+        ? record[urlIndex]
+            ?.split(",")
+            .map((uri) => uri.trim())
+            .find((uri) => /^https?:\/\//i.test(uri))
+        : record[urlIndex]
+    )?.trim();
     const password = record[passwordIndex] ?? "";
     if (!rawUrl || !password) continue;
     try {

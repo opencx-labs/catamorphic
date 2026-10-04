@@ -77,6 +77,12 @@ export interface PasskeyInput {
   /** Imported passkeys keep counting where their old home left off. */
   counter?: number;
   discoverable?: boolean;
+  /**
+   * Backup eligibility is fixed at registration (WebAuthn), so an imported
+   * passkey keeps its own. New passkeys are eligible: the vault is a file
+   * that can be copied.
+   */
+  backupEligible?: boolean;
 }
 
 /** How a user verification attempt ended. */
@@ -92,6 +98,8 @@ interface OpenVault {
   db: kdbx.Kdbx;
   file: string;
   deviceAuthed: boolean;
+  /** The last write; the next one waits for it (kdbxweb cannot save twice at once). */
+  writing: Promise<void>;
 }
 
 const VAULT_GROUP = "Work Browser";
@@ -213,22 +221,53 @@ export class PasswordVault {
       );
     } else {
       db = kdbx.Kdbx.create(credentials, VAULT_GROUP);
-      await this.persist({ db, file: vaultFile, deviceAuthed: false });
+      await this.persist({
+        db,
+        file: vaultFile,
+        deviceAuthed: false,
+        writing: Promise.resolve(),
+      });
     }
 
-    const vault: OpenVault = { db, file: vaultFile, deviceAuthed: false };
+    const vault: OpenVault = {
+      db,
+      file: vaultFile,
+      deviceAuthed: false,
+      writing: Promise.resolve(),
+    };
+    // Earlier versions moved deleted logins to the recycle bin, where their
+    // passwords stayed in the file. They were deleted; finish the job.
+    const bin = db.meta.recycleBinUuid
+      ? db.getGroup(db.meta.recycleBinUuid)
+      : undefined;
+    if (bin && (bin.entries.length > 0 || bin.groups.length > 0)) {
+      for (const entry of [...bin.entries]) db.move(entry, null);
+      for (const group of [...bin.groups]) db.move(group, null);
+      await this.persist(vault);
+    }
     return vault;
   }
 
-  private async persist(vault: OpenVault): Promise<void> {
-    const data = await vault.db.save();
-    const temporary = `${vault.file}.${randomUUID()}.tmp`;
-    try {
-      fs.writeFileSync(temporary, Buffer.from(data), { mode: 0o600 });
-      fs.renameSync(temporary, vault.file);
-    } finally {
-      fs.rmSync(temporary, { force: true });
-    }
+  /**
+   * Writes the vault after the previous write finishes. Two saves at once
+   * corrupt a kdbxweb database (each rewrites and zeroes the header's
+   * seeds mid-save), and one sign-in, import or edit can overlap another.
+   */
+  private persist(vault: OpenVault): Promise<void> {
+    const write = vault.writing
+      .catch(() => {})
+      .then(async () => {
+        const data = await vault.db.save();
+        const temporary = `${vault.file}.${randomUUID()}.tmp`;
+        try {
+          fs.writeFileSync(temporary, Buffer.from(data), { mode: 0o600 });
+          fs.renameSync(temporary, vault.file);
+        } finally {
+          fs.rmSync(temporary, { force: true });
+        }
+      });
+    vault.writing = write;
+    return write;
   }
 
   /**
@@ -708,9 +747,11 @@ export class PasswordVault {
         kdbx.ProtectedValue.fromString(toBase64Url(input.userHandle)),
       );
     else entry.fields.delete(PASSKEY_FIELD.userHandle);
-    // Backup eligible: the vault is a file that can be copied. Not backed
-    // up: nothing syncs it.
-    entry.fields.set(PASSKEY_FIELD.backupEligible, "1");
+    // Backed up describes now, and nothing syncs this vault.
+    entry.fields.set(
+      PASSKEY_FIELD.backupEligible,
+      input.backupEligible === false ? "0" : "1",
+    );
     entry.fields.set(PASSKEY_FIELD.backedUp, "0");
     if (input.counter)
       entry.fields.set(PASSKEY_FIELD.counter, String(input.counter));

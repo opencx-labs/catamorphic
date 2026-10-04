@@ -299,7 +299,7 @@ describe("PasswordsScreen", () => {
     await act(async () =>
       container
         .querySelector<HTMLButtonElement>(
-          '[aria-label="Delete passkey for github.com"]',
+          '[aria-label="Delete passkey for octo on github.com"]',
         )
         ?.click(),
     );

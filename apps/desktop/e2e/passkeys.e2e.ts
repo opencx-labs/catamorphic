@@ -132,6 +132,17 @@ const guest = `document.querySelector('webview')`;
 const sheet = `document.querySelector('[data-testid="passkey-sheet"]')`;
 const inGuest = <T>(code: string) =>
   app.eval<T>(`${guest}.executeJavaScript(${JSON.stringify(code)}, true)`);
+/**
+ * Starts a request the way a person does, from the tab in front: a tab
+ * without focus is Chromium's to refuse, and Work shows no sheet for it.
+ */
+const startInGuest = async <T>(code: string) => {
+  await app.eval(`${guest}.focus(); true`);
+  await app.waitFor(`${guest}.executeJavaScript('document.hasFocus()', true)`, {
+    label: "tab focused",
+  });
+  return inGuest<T>(code);
+};
 const titleIs = (title: string, timeoutMs?: number) =>
   app.waitFor(`${guest}.getTitle() === ${JSON.stringify(title)}`, {
     label: `page title ${title}`,
@@ -144,9 +155,10 @@ const pageReady = () =>
   );
 // The modal takes focus in the same effect that starts listening for
 // keys, so a focused sheet is one that Escape reaches.
+// Answers count once the sheet's input protection has passed.
 const sheetShown = (label: string) =>
   app.waitFor(
-    `!!${sheet}?.closest('[role="dialog"]')?.contains(document.activeElement)`,
+    `${sheet}?.dataset.armed === 'true' && !!${sheet}?.closest('[role="dialog"]')?.contains(document.activeElement)`,
     { label },
   );
 const sheetGone = (label: string) => app.waitFor(`!${sheet}`, { label });
@@ -217,7 +229,7 @@ describe("passkeys", () => {
   });
 
   it("shows a sign-in Work cannot answer and cancels it into NotAllowedError", async () => {
-    await inGuest("signIn(); true");
+    await startInGuest("signIn(); true");
     await sheetShown("passkey sheet");
     const text = await app.eval<string>(`${sheet}.textContent`);
     expect(text).toContain(
@@ -234,7 +246,7 @@ describe("passkeys", () => {
 
   it("frees the page for the next attempt, and Escape cancels too", async () => {
     // Before, the stuck request made this one fail as already pending.
-    await inGuest("signIn(); true");
+    await startInGuest("signIn(); true");
     await sheetShown("sheet for the retry");
     await app.press("Escape");
     await titleIs("get:NotAllowedError");
@@ -242,10 +254,11 @@ describe("passkeys", () => {
   });
 
   it("keeps one sheet for the request that is really waiting", async () => {
-    await inGuest("signIn(); true");
+    await startInGuest("signIn(); true");
     await sheetShown("sheet for the first request");
-    // Chromium refuses a second request while one waits.
-    expect(await inGuest("secondSignIn()")).toBe("OperationError");
+    // The sheet holds focus, so a second request comes from a page
+    // without it and is refused, as Chrome refuses one behind its dialog.
+    expect(await inGuest("secondSignIn()")).toBe("NotAllowedError");
     expect(
       await app.eval(
         `document.querySelectorAll('[data-testid="passkey-sheet"]').length`,
@@ -258,7 +271,7 @@ describe("passkeys", () => {
   });
 
   it("closes by itself when the page gives up", async () => {
-    await inGuest("register(); true");
+    await startInGuest("register(); true");
     await sheetShown("sheet for creating a passkey");
     expect(await app.eval<string>(`${sheet}.textContent`)).toContain(
       "wants to create a passkey",
@@ -271,7 +284,7 @@ describe("passkeys", () => {
   it("keeps the site's deadline instead of waiting forever", async () => {
     // Chrome holds a timeout to at least ten seconds.
     const started = Date.now();
-    await inGuest("signIn({ timeout: 1000 }); true");
+    await startInGuest("signIn({ timeout: 1000 }); true");
     await sheetShown("sheet for the timed request");
     await titleIs("get:NotAllowedError", 20_000);
     expect(Date.now() - started).toBeGreaterThanOrEqual(9_000);
@@ -284,7 +297,7 @@ describe("passkeys", () => {
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(await app.eval(`!!${sheet}`)).toBe(false);
     // The page's own passkey button still works alongside it.
-    await inGuest("signIn(); true");
+    await startInGuest("signIn(); true");
     await sheetShown("sheet beside a pending autofill");
     await app.press("Escape");
     await titleIs("get:NotAllowedError");
@@ -297,8 +310,22 @@ describe("passkeys", () => {
     );
   });
 
-  it("withdraws the sheet when the page moves on", async () => {
+  it("raises no sheet for a tab that does not have focus", async () => {
+    // Focus moves to the app, as when the person types in the address bar.
+    await app.eval(
+      `(() => { ${guest}.blur(); document.body.tabIndex = -1; document.body.focus(); return true; })()`,
+    );
+    await app.waitFor(
+      `${guest}.executeJavaScript('document.hasFocus()', true).then((focused) => !focused)`,
+      { label: "tab lost focus" },
+    );
     await inGuest("signIn(); true");
+    await titleIs("get:NotAllowedError");
+    expect(await app.eval(`!!${sheet}`)).toBe(false);
+  });
+
+  it("withdraws the sheet when the page moves on", async () => {
+    await startInGuest("signIn(); true");
     await sheetShown("sheet before navigating");
     await inGuest("location.href = '/signin?moved'; true");
     await sheetGone("sheet withdrawn on navigation");
@@ -306,7 +333,7 @@ describe("passkeys", () => {
   });
 
   it("saves a new passkey in Work, and the site accepts it", async () => {
-    await inGuest("register(); true");
+    await startInGuest("register(); true");
     await sheetShown("sheet offering to save");
     expect(
       await app.eval<string>(
@@ -338,7 +365,7 @@ describe("passkeys", () => {
   });
 
   it("signs in with the saved passkey from the sheet", async () => {
-    await inGuest("signIn(); true");
+    await startInGuest("signIn(); true");
     await sheetShown("sheet listing the saved passkey");
     expect(await choices()).toEqual(["adaPasskey saved in Work"]);
     expect(await app.eval<string>(`${sheet}.textContent`)).toContain(
@@ -357,7 +384,7 @@ describe("passkeys", () => {
   });
 
   it("offers only the passkeys a site asks for", async () => {
-    await inGuest(
+    await startInGuest(
       `signIn({ allowCredentials: [{ type: "public-key", id: new Uint8Array([1, 2, 3]) }] }); true`,
     );
     await sheetShown("sheet for an unknown credential");
@@ -365,7 +392,7 @@ describe("passkeys", () => {
     await app.press("Escape");
     await titleIs("get:NotAllowedError");
     await sheetGone("sheet closed");
-    await inGuest(
+    await startInGuest(
       `signIn({ allowCredentials: [{ type: "public-key", id: unb64(${JSON.stringify(created.id)}) }] }); true`,
     );
     await sheetShown("sheet for the known credential");
@@ -376,7 +403,7 @@ describe("passkeys", () => {
   });
 
   it("tells a site the account already has a passkey here", async () => {
-    await inGuest(
+    await startInGuest(
       `register({ excludeCredentials: [{ type: "public-key", id: unb64(${JSON.stringify(created.id)}) }] }); true`,
     );
     await sheetShown("sheet for an excluded account");
@@ -392,7 +419,7 @@ describe("passkeys", () => {
     const verifies = await inGuest<boolean>(
       "PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()",
     );
-    await inGuest(`signIn({ userVerification: "required" }); true`);
+    await startInGuest(`signIn({ userVerification: "required" }); true`);
     await sheetShown("sheet for a request that requires verification");
     if (verifies) expect(await choices()).toHaveLength(1);
     else {
@@ -490,7 +517,7 @@ describe("passkeys", () => {
       skipped: 0,
     });
 
-    await inGuest("signIn(); true");
+    await startInGuest("signIn(); true");
     await sheetShown("sheet listing both passkeys");
     expect(await choices()).toEqual([
       "adaPasskey saved in Work",
@@ -536,7 +563,7 @@ describe("passkeys", () => {
     fs.writeFileSync(pickFile, file);
 
     // The sheet's way to Passwords, for a site Work has no passkey for.
-    await inGuest(
+    await startInGuest(
       `signIn({ allowCredentials: [{ type: "public-key", id: new Uint8Array([9]) }] }); true`,
     );
     await sheetShown("sheet without a passkey for the request");
@@ -587,7 +614,7 @@ describe("passkeys", () => {
       { label: "imported passkey listed" },
     );
 
-    await click('[aria-label="Delete passkey for localhost"]');
+    await click('[aria-label="Delete passkey for keepass on localhost"]');
     await app.waitFor(
       `document.body.textContent.includes('Delete the passkey for localhost?')`,
       { label: "delete confirmation" },

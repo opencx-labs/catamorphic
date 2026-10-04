@@ -287,7 +287,9 @@ export function PasswordsScreen({ profileId }: { profileId: string }) {
   };
 
   const savedCount = [
-    count(credentials?.length ?? 0, "password", "passwords"),
+    credentials?.length || !passkeys.length
+      ? count(credentials?.length ?? 0, "password", "passwords")
+      : "",
     passkeys.length ? count(passkeys.length, "passkey", "passkeys") : "",
   ]
     .filter(Boolean)
@@ -541,7 +543,11 @@ export function PasswordsScreen({ profileId }: { profileId: string }) {
                       setDeleteError(null);
                       setConfirmDelete(true);
                     }}
-                    aria-label={`Delete passkey for ${passkey.rpId}`}
+                    aria-label={
+                      passkey.username
+                        ? `Delete passkey for ${passkey.username} on ${passkey.rpId}`
+                        : `Delete passkey for ${passkey.rpId}`
+                    }
                     className={`${iconButton} row-reveal hover:bg-danger/10 hover:text-danger`}
                   >
                     <Trash2 className="size-3.5" />

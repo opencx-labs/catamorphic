@@ -342,7 +342,11 @@ export function BrowserImport({ profileId }: { profileId: string }) {
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
           type="button"
-          onClick={() => setOpen(true)}
+          onClick={() => {
+            file.reset();
+            setDone(false);
+            setOpen(true);
+          }}
           data-testid="settings-browser-import"
           className="h-8 rounded-md border border-border px-3 text-xs text-fg transition-colors duration-150 hover:bg-bg-overlay"
         >

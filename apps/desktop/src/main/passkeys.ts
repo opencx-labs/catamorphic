@@ -76,6 +76,7 @@ const beginInput = z.discriminatedUnion("kind", [
     kind: z.literal("create"),
     mediation: z.literal("modal"),
     icon: z.string().max(2048).optional(),
+    focused: z.boolean(),
     options: createOptions,
   }),
   z.object({
@@ -83,6 +84,7 @@ const beginInput = z.discriminatedUnion("kind", [
     kind: z.literal("get"),
     mediation: z.enum(["modal", "conditional"]),
     icon: z.string().max(2048).optional(),
+    focused: z.boolean(),
     options: getOptions,
   }),
 ]);
@@ -236,14 +238,17 @@ export function registerPasskeys({
     passkeyId: string,
   ): Promise<PasskeyUseResult> => {
     if (entry.input.kind !== "get") return "gone";
+    // Claimed before any await, so a double click raises one Touch ID.
     if (entry.busy) return "refused";
-    if (!(await candidates(entry)).some((passkey) => passkey.id === passkeyId))
-      return "gone";
-    const secret = await vault.passkeySecret(entry.profileId, passkeyId);
-    const key = secret ? readPrivateKey(secret.privateKeyPem) : null;
-    if (!secret || !key) return "gone";
     entry.busy = true;
     try {
+      if (
+        !(await candidates(entry)).some((passkey) => passkey.id === passkeyId)
+      )
+        return "gone";
+      const secret = await vault.passkeySecret(entry.profileId, passkeyId);
+      const key = secret ? readPrivateKey(secret.privateKeyPem) : null;
+      if (!secret || !key) return "gone";
       const verified = await verify(
         entry,
         `sign in to ${entry.rpId} with a passkey`,
@@ -276,11 +281,13 @@ export function registerPasskeys({
 
   const create = async (entry: Pending): Promise<PasskeyUseResult> => {
     if (entry.input.kind !== "create" || !entry.algorithm) return "gone";
+    // Claimed before any await: two saves would leave the page one key and
+    // the vault another.
     if (entry.busy) return "refused";
-    if (await unavailable(entry)) return "gone";
-    const options = entry.input.options;
     entry.busy = true;
+    const options = entry.input.options;
     try {
+      if (await unavailable(entry)) return "gone";
       const verified = await verify(entry, `save a passkey for ${entry.rpId}`);
       if (!stillAsking(entry)) return "gone";
       if (!verified) return "refused";
@@ -316,26 +323,37 @@ export function registerPasskeys({
       const guest = event.sender;
       const frame = event.senderFrame;
       const parsed = beginInput.safeParse(raw);
-      // Only the top frame is wrapped; its own URL is the origin.
+      // Only the top frame is wrapped. Its origin, not its URL, is the
+      // caller: a sandboxed document keeps its URL but has an opaque
+      // ("null") origin, and Work never signs for one.
       if (
         !parsed.success ||
         guest.getType() !== "webview" ||
         !frame ||
+        frame.detached ||
         frame.parent !== null
       )
         return { status: "settled" };
       const input = parsed.data;
-      const origin = siteOrigin(frame.url);
+      const origin = siteOrigin(frame.origin);
       const host = guest.hostWebContents;
       if (!origin || !host || host.isDestroyed()) return { status: "settled" };
+      // A tab without focus cannot raise the sheet over the one in front.
+      // Chrome refuses an unfocused document at once; Chromium in a
+      // webview would leave it waiting, so Work refuses it the same way.
+      if (input.mediation === "modal" && !input.focused)
+        return { status: "error", name: "NotAllowedError" };
+      // Duplicate ids come only from a page calling the bridge itself.
+      if (pending.has(input.id)) return { status: "settled" };
       const hostname = new URL(origin).hostname;
       const rpId = (
         input.kind === "create"
           ? (input.options.rp.id ?? hostname)
           : (input.options.rpId ?? hostname)
       ).toLowerCase();
-      if (!validRelyingParty(origin, rpId))
-        return { status: "error", name: "SecurityError" };
+      // Work answers only relying parties it can vouch for. Anything else
+      // (related origins, unusual hosts) is Chromium's to accept or refuse.
+      if (!validRelyingParty(origin, rpId)) return { status: "settled" };
       const modal = input.mediation === "modal";
       // A page has one modal request at a time (Chromium refuses a second
       // as already pending), so a tab shows at most one sheet, the first.

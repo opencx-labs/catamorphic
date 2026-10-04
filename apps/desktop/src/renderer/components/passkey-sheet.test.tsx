@@ -6,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PasskeyRequest } from "../../shared/passkeys.js";
 import { desktopApi } from "../lib/desktop-api.js";
-import { PasskeyHost } from "./passkey-sheet.js";
+import { PASSKEY_INPUT_PROTECTION_MS, PasskeyHost } from "./passkey-sheet.js";
 
 const listeners = vi.hoisted(() => ({
   request: null as ((request: PasskeyRequest) => void) | null,
@@ -71,9 +71,12 @@ describe("PasskeyHost", () => {
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
   });
 
-  const show = async (request: PasskeyRequest) => {
+  const wait = (ms: number) =>
+    act(() => new Promise((resolve) => setTimeout(resolve, ms)));
+  /** Shows a request and waits out the sheet's input protection. */
+  const show = async (request: PasskeyRequest, armed = true) => {
     await act(async () => listeners.request?.(request));
-    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    await wait(armed ? PASSKEY_INPUT_PROTECTION_MS + 20 : 0);
   };
   const sheet = () => document.querySelector('[data-testid="passkey-sheet"]');
   const click = async (selector: string) =>
@@ -113,6 +116,8 @@ describe("PasskeyHost", () => {
       document.querySelector('[data-testid="passkey-sheet-error"]')
         ?.textContent,
     ).toBe("Touch ID didn't confirm it. Try again.");
+    // Trying again starts from the passkey that was refused.
+    expect(document.activeElement).toBe(choices[1]);
     await act(async () => choices[1]?.click());
     expect(desktopApi.passkeyUse).toHaveBeenCalledTimes(2);
     // Main settles the request once the page has its credential; the
@@ -124,6 +129,29 @@ describe("PasskeyHost", () => {
         ?.className.includes("animate-modal-in") ?? false,
     ).toBe(false);
     expect(desktopApi.passkeyCancel).not.toHaveBeenCalled();
+  });
+
+  it("ignores a click that lands as the sheet appears", async () => {
+    await show(
+      { ...base, passkeys: [{ id: "a", username: "ada@example.com" }] },
+      false,
+    );
+    await click('[data-testid="passkey-sheet-choice"]');
+    expect(desktopApi.passkeyUse).not.toHaveBeenCalled();
+    await wait(PASSKEY_INPUT_PROTECTION_MS + 20);
+    await click('[data-testid="passkey-sheet-choice"]');
+    expect(desktopApi.passkeyUse).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Enter from answering when no Touch ID stands behind it", async () => {
+    await show({
+      ...base,
+      verifies: false,
+      passkeys: [{ id: "a", username: "ada@example.com" }],
+    });
+    expect(
+      document.activeElement?.closest('[data-testid="passkey-sheet-choice"]'),
+    ).toBeNull();
   });
 
   it("explains what can answer when Work has no passkey for the site", async () => {

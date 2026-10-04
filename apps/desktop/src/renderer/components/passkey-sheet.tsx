@@ -12,6 +12,9 @@ import { PendingButton } from "./pending-button.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 import { SiteFavicon } from "./site-favicon.js";
 
+/** How long the sheet ignores answers after it appears (Chrome uses 500 ms). */
+export const PASSKEY_INPUT_PROTECTION_MS = 500;
+
 /**
  * A page asking for a passkey (shared/passkeys.ts, ADR 0201). Signing in
  * lists the profile's passkeys for the site; creating offers to save the
@@ -127,29 +130,50 @@ function PasskeySheet({
   /** The passkey (or "save") Touch ID is confirming now. */
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Chrome's input protection: a sheet that appears under a keystroke or a
+  // click meant for the page ignores it. Answers count once it has been up
+  // a moment.
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setArmed(true), PASSKEY_INPUT_PROTECTION_MS);
+    return () => clearTimeout(timer);
+  }, []);
+  const rootRef = useRef<HTMLDivElement>(null);
   const answer = async (key: string, run: () => Promise<PasskeyUseResult>) => {
-    if (pending) return;
+    if (pending || !armed) return;
     setPending(key);
     setError(null);
+    let refused = false;
     try {
       const result = await run();
       // `used` and `gone` both end the request; the sheet closes as it
       // settles. `refused` keeps it open to try again.
-      if (result === "refused")
+      refused = result === "refused";
+      if (refused)
         setError(
           request.verifies
             ? "Touch ID didn't confirm it. Try again."
             : "That didn't go through. Try again.",
         );
     } catch {
+      refused = true;
       setError("That didn't go through. Try again.");
     } finally {
       setPending(null);
     }
+    // Trying again starts where it failed, from the keyboard too.
+    if (refused)
+      [
+        ...(rootRef.current?.querySelectorAll<HTMLElement>("[data-answer]") ??
+          []),
+      ]
+        .find((element) => element.dataset.answer === key)
+        ?.focus({ preventScroll: true });
   };
 
-  // The first choice takes focus, so Enter answers at once.
-  const rootRef = useRef<HTMLDivElement>(null);
+  // The first choice takes focus when Touch ID stands between it and an
+  // answer; without Touch ID a stray Enter would answer, so focus stays on
+  // the sheet.
   useEffect(() => {
     const frame = requestAnimationFrame(() =>
       rootRef.current
@@ -158,11 +182,17 @@ function PasskeySheet({
     );
     return () => cancelAnimationFrame(frame);
   }, []);
+  const deliberate = request.verifies;
 
   const account = request.account;
   const accountName = account?.name || account?.displayName || "";
   return (
-    <div ref={rootRef} className="p-5" data-testid="passkey-sheet">
+    <div
+      ref={rootRef}
+      className="p-5"
+      data-testid="passkey-sheet"
+      data-armed={armed}
+    >
       <div className="flex items-start gap-3">
         <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-bg-overlay">
           <SiteFavicon
@@ -220,10 +250,11 @@ function PasskeySheet({
             {request.passkeys.map((passkey, index) => (
               <button
                 key={passkey.id}
-                data-first-choice={index === 0 || undefined}
+                data-first-choice={(deliberate && index === 0) || undefined}
+                data-answer={passkey.id}
                 type="button"
-                disabled={pending !== null}
-                data-disabled-reason="Waiting for Touch ID"
+                // Not `disabled`: that would drop focus out of the sheet.
+                aria-disabled={pending !== null || undefined}
                 data-testid="passkey-sheet-choice"
                 onClick={() =>
                   void answer(passkey.id, () =>
@@ -233,7 +264,7 @@ function PasskeySheet({
                     }),
                   )
                 }
-                className="flex w-full cursor-pointer items-center gap-3 rounded-md border border-border bg-bg-raised px-3 py-2 text-left transition-colors duration-150 hover:bg-bg-overlay disabled:cursor-default"
+                className="focus-ring-inset flex w-full cursor-pointer items-center gap-3 rounded-md border border-border bg-bg-raised px-3 py-2 text-left transition-colors duration-150 hover:bg-bg-overlay aria-disabled:cursor-default"
               >
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[13px] text-fg">
@@ -311,7 +342,7 @@ function PasskeySheet({
         {/* Reserved so an error never moves the buttons. */}
         <p
           className="mt-2 min-h-4 text-[12px] leading-4 text-danger"
-          role={error ? "alert" : undefined}
+          aria-live="assertive"
           data-testid="passkey-sheet-error"
         >
           {error}
@@ -320,7 +351,8 @@ function PasskeySheet({
         <div className="mt-2 flex flex-wrap items-center gap-2">
           {!signIn && offersWork && (
             <PendingButton
-              data-first-choice
+              data-first-choice={deliberate || undefined}
+              data-answer="save"
               pending={pending === "save"}
               pendingLabel="Saving…"
               onClick={() =>
@@ -339,7 +371,7 @@ function PasskeySheet({
             type="button"
             onClick={onCancel}
             className={
-              excluded || !offersWork ? "button-primary" : "button-secondary"
+              excluded || !offersWork ? "button-primary" : "button-ghost"
             }
             data-testid="passkey-sheet-cancel"
           >

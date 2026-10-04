@@ -1544,8 +1544,11 @@ The passkey sheet used to say passkeys could not be used in Work yet. Now
 Work keeps them in the profile's vault, next to passwords (ADR 0201). When a
 site creates a passkey, the sheet names the account and offers **Save
 passkey**. When a site asks you to sign in, the sheet lists your passkeys for
-it, with the first already focused so Enter signs in. Touch ID confirms each
-use, the way the system's own passkey sheet does. A security key still works
+it. With Touch ID the first is already focused, so Enter then a touch signs
+in; without it nothing is focused, so a stray Enter cannot answer. Like
+Chrome's, the sheet ignores input for its first half second. Touch ID
+confirms each use, the way the system's own passkey sheet does. A tab
+without focus is refused, so the sheet never appears over another page. A security key still works
 alongside: the sheet says so in one quiet line rather than making you choose
 a path first. A site that waits for autofill gets your passkeys at the top of
 the suggestions under its username field. When Work cannot help, the sheet

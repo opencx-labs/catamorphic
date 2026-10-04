@@ -292,6 +292,8 @@ contextBridge.exposeInMainWorld("__workPasskeys", {
       kind,
       mediation,
       icon: pageIcon(),
+      // Read in this isolated world, where the page cannot redefine it.
+      focused: document.hasFocus(),
       options,
     }),
   settle: (id: string): void => {
@@ -299,6 +301,8 @@ contextBridge.exposeInMainWorld("__workPasskeys", {
   },
   capabilities: (): Promise<{ verifies: boolean }> =>
     ipcRenderer.invoke("catamorphic:passkey-capabilities"),
+  /** Whether the page has focus, read where the page cannot redefine it. */
+  focused: (): boolean => document.hasFocus(),
 });
 if (typeof contextBridge.executeInMainWorld === "function") {
   contextBridge.executeInMainWorld({
@@ -332,6 +336,7 @@ if (typeof contextBridge.executeInMainWorld === "function") {
         ) => Promise<Answer>;
         settle: (id: string) => void;
         capabilities: () => Promise<{ verifies: boolean }>;
+        focused: () => boolean;
       }
       type Descriptor = { type?: unknown; id?: unknown };
       type PublicKey = {
@@ -550,6 +555,10 @@ if (typeof contextBridge.executeInMainWorld === "function") {
       ): Promise<Credential | null> => {
         const signal = options.signal;
         if (signal?.aborted) return Promise.reject(signal.reason);
+        // Chrome refuses a document without focus at once. Refused here,
+        // it never reaches Chromium, whose single request slot (and its
+        // abort) belongs to the request that is really waiting.
+        if (!bridge.focused()) return Promise.reject(notAllowed());
         let described: unknown = null;
         try {
           described = describe(kind, options.publicKey ?? {});
@@ -607,7 +616,10 @@ if (typeof contextBridge.executeInMainWorld === "function") {
                 );
               },
               () => {
+                // Work could not take the request; Chromium's answer stands.
                 sheet = false;
+                if (nativeDone && !done && !ended)
+                  finish(false, () => reject(nativeFailure));
               },
             );
           // A security key answers through Chromium.

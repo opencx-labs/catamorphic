@@ -276,11 +276,15 @@ export function usePasswordAutofill({
       }
       // The page signs in with the passkey once Touch ID confirms it.
       if (item.kind === "passkey") {
-        void desktopApi.passkeyAutofillUse({
-          guestId,
-          requestId: item.requestId,
-          passkeyId: item.passkey.id,
-        });
+        void desktopApi
+          .passkeyAutofillUse({
+            guestId,
+            requestId: item.requestId,
+            passkeyId: item.passkey.id,
+          })
+          // A refused Touch ID leaves the page waiting; the field offers
+          // the passkey again on its next click.
+          .catch(() => undefined);
         return;
       }
       void desktopApi.browserCredentialFill({

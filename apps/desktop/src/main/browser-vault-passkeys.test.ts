@@ -196,6 +196,46 @@ describe("passkeys in the vault", () => {
     expect(all).toEqual([]);
   });
 
+  it("survives writes that overlap, one after another", async () => {
+    const { dir, vault } = fixture();
+    await vault.list("profile");
+    // A sign-in's counter, a new passkey and a password save at once.
+    await Promise.all([
+      vault.savePasskey("profile", passkey()),
+      vault.save("profile", {
+        origin: "https://example.com",
+        username: "ada",
+        password: "fixture",
+      }),
+      vault.importMissing({
+        profileId: "profile",
+        credentials: [
+          { origin: "https://two.example", username: "b", password: "p" },
+        ],
+        passkeys: [
+          passkey({
+            userHandle: Buffer.from("user-5"),
+            credentialId: Buffer.from("other"),
+          }),
+        ],
+      }),
+    ]);
+    const reopened = new PasswordVault(dir);
+    expect(await reopened.list("profile")).toHaveLength(2);
+    expect(await reopened.listPasskeys("profile")).toHaveLength(2);
+  });
+
+  it("keeps an imported passkey's backup eligibility", async () => {
+    const { vault } = fixture();
+    const saved = await vault.savePasskey(
+      "profile",
+      passkey({ backupEligible: false }),
+    );
+    expect(
+      (await vault.passkeySecret("profile", saved.id))?.backupEligible,
+    ).toBe(false);
+  });
+
   it("no longer lists logins an older version moved to the recycle bin", async () => {
     const { dir, vault } = fixture();
     const login = await vault.save("profile", {
@@ -216,5 +256,11 @@ describe("passkeys in the vault", () => {
     );
     const reopened = new PasswordVault(dir);
     expect(await reopened.list("profile")).toEqual([]);
+    // And the file no longer holds the deleted password.
+    const file = await openFile(dir);
+    const bin = file.meta.recycleBinUuid
+      ? file.getGroup(file.meta.recycleBinUuid)
+      : undefined;
+    expect(bin?.entries ?? []).toEqual([]);
   });
 });

@@ -103,6 +103,7 @@ describe("Bitwarden JSON exports", () => {
         privateKeyPem: expect.stringContaining("BEGIN PRIVATE KEY"),
         counter: 3,
         discoverable: true,
+        backupEligible: true,
       },
       {
         rpId: "github.com",
@@ -112,17 +113,33 @@ describe("Bitwarden JSON exports", () => {
         privateKeyPem: expect.stringContaining("BEGIN PRIVATE KEY"),
         counter: 0,
         discoverable: false,
+        backupEligible: true,
       },
     ]);
     expect(result.skipped).toBe(2);
   });
 
   it("explains an encrypted export instead of failing quietly", () => {
+    // A password-protected export carries only ciphertext, no items.
     expect(() =>
       readBitwardenExport(
-        JSON.stringify({ encrypted: true, passwordProtected: true, items: [] }),
+        JSON.stringify({
+          encrypted: true,
+          passwordProtected: true,
+          salt: "c2FsdA==",
+          kdfType: 0,
+          kdfIterations: 600000,
+          encKeyValidation_DO_NOT_EDIT: "2.x|y|z",
+          data: "2.a|b|c",
+        }),
       ),
-    ).toThrow(PasswordFileError);
+    ).toThrow(/is encrypted/);
+    // An account-restricted export keeps encrypted items.
+    expect(() =>
+      readBitwardenExport(
+        JSON.stringify({ encrypted: true, items: [{ login: "2.a|b|c" }] }),
+      ),
+    ).toThrow(/is encrypted/);
     expect(() => readBitwardenExport('{"hello":1}')).toThrow(
       /not a Bitwarden export/,
     );
@@ -234,6 +251,59 @@ describe("KeePass databases", () => {
   });
 });
 
+describe("KeePass variants", () => {
+  async function save(db: kdbx.Kdbx): Promise<Uint8Array> {
+    return new Uint8Array(await db.save());
+  }
+
+  it("opens a database protected by a key file alone", async () => {
+    const keyFile = randomBytes(32);
+    const db = kdbx.Kdbx.create(
+      new kdbx.Credentials(null, new Uint8Array(keyFile)),
+      "Key only",
+    );
+    const entry = db.createEntry(db.getDefaultGroup());
+    entry.fields.set("URL", "https://example.com");
+    entry.fields.set("Password", kdbx.ProtectedValue.fromString("pw"));
+    const result = await readKeepassDatabase({
+      bytes: await save(db),
+      password: "",
+      keyFile,
+    });
+    expect(result.logins).toHaveLength(1);
+  });
+
+  it("reads StrongBox's passkey names and keeps backup eligibility", async () => {
+    const db = kdbx.Kdbx.create(
+      new kdbx.Credentials(kdbx.ProtectedValue.fromString("pw")),
+      "StrongBox",
+    );
+    const entry = db.createEntry(db.getDefaultGroup());
+    entry.fields.set("KPXC_PASSKEY_USERNAME", "strong");
+    entry.fields.set(
+      "KPEX_PASSKEY_GENERATED_USER_ID",
+      toBase64Url(Buffer.from("sb-id")),
+    );
+    entry.fields.set(
+      "KPEX_PASSKEY_PRIVATE_KEY_PEM",
+      kdbx.ProtectedValue.fromString(generatePasskeyKey(-7).privateKeyPem),
+    );
+    entry.fields.set("KPEX_PASSKEY_RELYING_PARTY", "example.com");
+    entry.fields.set("KPEX_PASSKEY_FLAG_BE", "0");
+    const result = await readKeepassDatabase({
+      bytes: await save(db),
+      password: "pw",
+    });
+    expect(result.passkeys).toEqual([
+      expect.objectContaining({
+        username: "strong",
+        credentialId: Buffer.from("sb-id"),
+        backupEligible: false,
+      }),
+    ]);
+  });
+});
+
 describe("file detection", () => {
   it("knows a file by its contents", () => {
     expect(passwordFileKind(Buffer.from('﻿  {"items": []}'))).toBe("bitwarden");
@@ -245,10 +315,17 @@ describe("file detection", () => {
   it("reads Bitwarden's CSV columns", () => {
     const csv =
       "folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp\n" +
-      ",,login,Example,,,0,https://example.com,ada,secret,\n";
+      ",,login,Example,,,0,https://example.com,ada,secret,\n" +
+      // Several URIs arrive joined by commas.
+      ',,login,Mail,,,0,"android://app,https://mail.example.org/login,https://other.example",grace,pw,\n';
     expect(readPasswordFile(Buffer.from(csv))).toEqual({
       logins: [
         { origin: "https://example.com", username: "ada", password: "secret" },
+        {
+          origin: "https://mail.example.org",
+          username: "grace",
+          password: "pw",
+        },
       ],
       passkeys: [],
       skipped: 0,
