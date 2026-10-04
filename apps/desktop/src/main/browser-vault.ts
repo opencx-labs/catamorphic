@@ -2,8 +2,9 @@ import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { app, safeStorage, systemPreferences } from "electron";
-import { argon2d, argon2id } from "hash-wasm";
 import * as kdbx from "kdbxweb";
+import "./kdbx-argon2.js";
+import { fromBase64Url, toBase64Url } from "./webauthn.js";
 
 /**
  * Per-profile password vault, Chrome-style: the user never types a master
@@ -14,24 +15,6 @@ import * as kdbx from "kdbxweb";
  * session) are gated behind local device auth (Touch ID / account password)
  * once per app run per profile, mirroring Chrome's behavior on macOS.
  */
-
-// kdbxweb needs an external Argon2; hash-wasm is small and WASM-based.
-kdbx.CryptoEngine.setArgon2Impl(
-  async (password, salt, memory, iterations, length, parallelism, type) => {
-    const fn =
-      type === kdbx.CryptoEngine.Argon2TypeArgon2d ? argon2d : argon2id;
-    const hash = await fn({
-      password: new Uint8Array(password),
-      salt: new Uint8Array(salt),
-      memorySize: memory,
-      iterations,
-      hashLength: length,
-      parallelism,
-      outputType: "binary",
-    });
-    return hash.buffer as ArrayBuffer;
-  },
-);
 
 /**
  * Listing metadata. Notes can hold recovery codes and the like, so a
@@ -60,6 +43,45 @@ export interface CredentialUpdate {
   note?: string;
 }
 
+/**
+ * A passkey in the vault, as listings show it. The private key never
+ * leaves main: `passkeySecret` hands it to the WebAuthn code there.
+ */
+export interface SavedPasskey {
+  id: string;
+  rpId: string;
+  username: string;
+  /** The credential id, base64url, as sites know it. */
+  credentialId: string;
+  /** Only listed for a sign-in that names it (allowCredentials). */
+  discoverable: boolean;
+  /** Last change, ms since epoch. */
+  updatedAt: number;
+}
+
+export interface PasskeySecret extends SavedPasskey {
+  privateKeyPem: string;
+  userHandle: Buffer | null;
+  counter: number;
+  backupEligible: boolean;
+  backedUp: boolean;
+}
+
+/** A passkey arriving from a site (create) or an export (import). */
+export interface PasskeyInput {
+  rpId: string;
+  username: string;
+  credentialId: Buffer;
+  userHandle: Buffer | null;
+  privateKeyPem: string;
+  /** Imported passkeys keep counting where their old home left off. */
+  counter?: number;
+  discoverable?: boolean;
+}
+
+/** How a user verification attempt ended. */
+export type UserVerification = "verified" | "unavailable" | "refused";
+
 /** How a submitted login relates to what the vault already holds. */
 export type CredentialMatch =
   | { status: "new" }
@@ -75,6 +97,24 @@ interface OpenVault {
 const VAULT_GROUP = "Work Browser";
 /** Meta custom data key: origins the user chose never to save for. */
 const NEVER_SAVE_KEY = "work.never-save";
+
+/**
+ * Passkeys use KeePassXC's entry attributes, so a KeePassXC database
+ * imports as it is and entries Work writes read the same way there. The
+ * counter and discoverability are Work's own (KeePassXC keeps neither).
+ */
+export const PASSKEY_FIELD = {
+  username: "KPEX_PASSKEY_USERNAME",
+  credentialId: "KPEX_PASSKEY_CREDENTIAL_ID",
+  privateKey: "KPEX_PASSKEY_PRIVATE_KEY_PEM",
+  relyingParty: "KPEX_PASSKEY_RELYING_PARTY",
+  userHandle: "KPEX_PASSKEY_USER_HANDLE",
+  backupEligible: "KPEX_PASSKEY_FLAG_BE",
+  backedUp: "KPEX_PASSKEY_FLAG_BS",
+  counter: "WORK_PASSKEY_COUNTER",
+  discoverable: "WORK_PASSKEY_DISCOVERABLE",
+} as const;
+const PASSKEY_TAG = "Passkey";
 
 export function normalizeCredentialOrigin(raw: string): string {
   const value = raw.trim();
@@ -220,15 +260,65 @@ export class PasswordVault {
     return true;
   }
 
+  /**
+   * Fresh user verification for one passkey use (Touch ID, every time,
+   * as the system passkey sheets do). Unlike `deviceAuth` it is never
+   * cached; a Mac without Touch ID reports "unavailable", so the passkey
+   * answers without the user-verified flag where a site allows that.
+   */
+  async verifyUser(reason: string): Promise<UserVerification> {
+    if (
+      process.env.CATAMORPHIC_DEV_NO_SYSTEM_PROMPTS === "1" &&
+      !app.isPackaged
+    )
+      return "verified";
+    if (process.platform !== "darwin" || !systemPreferences.canPromptTouchID())
+      return "unavailable";
+    try {
+      await systemPreferences.promptTouchID(reason);
+      return "verified";
+    } catch {
+      return "refused";
+    }
+  }
+
+  /** Whether `verifyUser` can verify at all on this machine. */
+  canVerifyUser(): boolean {
+    if (
+      process.env.CATAMORPHIC_DEV_NO_SYSTEM_PROMPTS === "1" &&
+      !app.isPackaged
+    )
+      return true;
+    return (
+      process.platform === "darwin" && systemPreferences.canPromptTouchID()
+    );
+  }
+
   private entries(db: kdbx.Kdbx): kdbx.KdbxEntry[] {
     const root = db.getDefaultGroup();
     const all: kdbx.KdbxEntry[] = [];
+    // Older vaults moved deleted logins to the recycle bin; they stay gone.
+    const bin = db.meta.recycleBinUuid?.id;
     const walk = (group: kdbx.KdbxGroup) => {
+      if (bin && group.uuid.id === bin) return;
       all.push(...group.entries);
       for (const child of group.groups) walk(child);
     };
     walk(root);
     return all;
+  }
+
+  private isPasskey(entry: kdbx.KdbxEntry): boolean {
+    return entry.fields.has(PASSKEY_FIELD.privateKey);
+  }
+
+  /** Saved logins: every entry that is not a passkey. */
+  private logins(db: kdbx.Kdbx): kdbx.KdbxEntry[] {
+    return this.entries(db).filter((entry) => !this.isPasskey(entry));
+  }
+
+  private passkeys(db: kdbx.Kdbx): kdbx.KdbxEntry[] {
+    return this.entries(db).filter((entry) => this.isPasskey(entry));
   }
 
   private originOf(entry: kdbx.KdbxEntry): string {
@@ -264,7 +354,7 @@ export class PasswordVault {
     const normalizedOrigin = origin
       ? normalizeCredentialOrigin(origin)
       : undefined;
-    return this.entries(vault.db)
+    return this.logins(vault.db)
       .filter(
         (entry) =>
           !normalizedOrigin || this.originOf(entry) === normalizedOrigin,
@@ -288,7 +378,7 @@ export class PasswordVault {
       "unlock saved passwords for autofill",
     );
     if (!authed) return null;
-    const entry = this.entries(vault.db).find(
+    const entry = this.logins(vault.db).find(
       (candidate) => candidate.uuid.id === id,
     );
     if (!entry) return null;
@@ -310,7 +400,7 @@ export class PasswordVault {
   ): Promise<CredentialMatch> {
     const vault = await this.unlock(profileId);
     const origin = normalizeCredentialOrigin(input.origin);
-    const candidates = this.entries(vault.db).filter(
+    const candidates = this.logins(vault.db).filter(
       (entry) => this.originOf(entry) === origin,
     );
     const sameUser = candidates.find(
@@ -370,17 +460,27 @@ export class PasswordVault {
     }
   }
 
-  /** Import in one write, preserving accounts added or edited during Keychain auth. */
+  /**
+   * Import in one write, preserving accounts added or edited during
+   * Keychain auth. A login is known by its site and username, a passkey
+   * by its relying party and credential id.
+   */
   async importMissing({
     profileId,
     credentials,
+    passkeys = [],
   }: {
     profileId: string;
     credentials: Array<{ origin: string; username: string; password: string }>;
-  }): Promise<{ imported: number; existing: number }> {
+    passkeys?: PasskeyInput[];
+  }): Promise<{
+    imported: number;
+    importedPasskeys: number;
+    existing: number;
+  }> {
     const vault = await this.unlock(profileId);
     const identities = new Set(
-      this.entries(vault.db).map((entry) =>
+      this.logins(vault.db).map((entry) =>
         JSON.stringify([
           this.originOf(entry),
           this.fieldText(entry, "UserName"),
@@ -410,8 +510,35 @@ export class PasswordVault {
         entry.times.update();
         identities.add(identity);
       }
+      const imported = created.length;
+      const known = new Set(
+        this.passkeys(vault.db).map((entry) =>
+          JSON.stringify([
+            this.fieldText(entry, PASSKEY_FIELD.relyingParty),
+            this.fieldText(entry, PASSKEY_FIELD.credentialId),
+          ]),
+        ),
+      );
+      for (const input of passkeys) {
+        const identity = JSON.stringify([
+          input.rpId,
+          toBase64Url(input.credentialId),
+        ]);
+        if (known.has(identity)) {
+          existing++;
+          continue;
+        }
+        const entry = vault.db.createEntry(group);
+        created.push(entry);
+        this.writePasskey(entry, input);
+        known.add(identity);
+      }
       if (created.length) await this.persist(vault);
-      return { imported: created.length, existing };
+      return {
+        imported,
+        importedPasskeys: created.length - imported,
+        existing,
+      };
     } catch (error) {
       group.entries = group.entries.filter((entry) => !created.includes(entry));
       throw error;
@@ -430,7 +557,7 @@ export class PasswordVault {
   ): Promise<SavedCredential> {
     const vault = await this.unlock(profileId);
     const origin = normalizeCredentialOrigin(input.origin);
-    const existing = this.entries(vault.db).find(
+    const existing = this.logins(vault.db).find(
       (entry) =>
         this.originOf(entry) === origin &&
         this.fieldText(entry, "UserName") === input.username,
@@ -455,7 +582,7 @@ export class PasswordVault {
     input: CredentialUpdate,
   ): Promise<SavedCredential | null> {
     const vault = await this.unlock(profileId);
-    const entry = this.entries(vault.db).find(
+    const entry = this.logins(vault.db).find(
       (candidate) => candidate.uuid.id === id,
     );
     if (!entry) return null;
@@ -481,7 +608,141 @@ export class PasswordVault {
       (candidate) => candidate.uuid.id === id,
     );
     if (!entry) return;
-    vault.db.remove(entry);
+    // Deleted for good: the recycle bin would keep a passkey's private key.
+    vault.db.move(entry, null);
     await this.persist(vault);
+  }
+
+  // --- passkeys ---
+
+  private passkeySummary(entry: kdbx.KdbxEntry): SavedPasskey {
+    return {
+      id: entry.uuid.id,
+      rpId: this.fieldText(entry, PASSKEY_FIELD.relyingParty),
+      username: this.fieldText(entry, PASSKEY_FIELD.username),
+      credentialId: this.fieldText(entry, PASSKEY_FIELD.credentialId),
+      discoverable: this.fieldText(entry, PASSKEY_FIELD.discoverable) !== "0",
+      updatedAt: entry.times.lastModTime?.getTime() ?? 0,
+    };
+  }
+
+  /** Passkeys, all or one relying party's. Nothing secret. */
+  async listPasskeys(
+    profileId: string,
+    rpId?: string,
+  ): Promise<SavedPasskey[]> {
+    const vault = await this.unlock(profileId);
+    return this.passkeys(vault.db)
+      .map((entry) => this.passkeySummary(entry))
+      .filter((passkey) => !rpId || passkey.rpId === rpId)
+      .sort((a, b) =>
+        `${a.rpId}\n${a.username}`.localeCompare(`${b.rpId}\n${b.username}`),
+      );
+  }
+
+  /**
+   * A passkey's private key, for signing in main. Callers verify the
+   * user first (`verifyUser`); nothing here reaches IPC.
+   */
+  async passkeySecret(
+    profileId: string,
+    id: string,
+  ): Promise<PasskeySecret | null> {
+    const vault = await this.unlock(profileId);
+    const entry = this.passkeys(vault.db).find(
+      (candidate) => candidate.uuid.id === id,
+    );
+    if (!entry) return null;
+    const handle = this.fieldText(entry, PASSKEY_FIELD.userHandle);
+    const flag = (name: string, fallback: boolean) => {
+      const value = this.fieldText(entry, name).toLowerCase();
+      return value ? value === "1" || value === "true" : fallback;
+    };
+    return {
+      ...this.passkeySummary(entry),
+      privateKeyPem: this.fieldText(entry, PASSKEY_FIELD.privateKey),
+      userHandle: handle ? fromBase64Url(handle) : null,
+      counter: Number(this.fieldText(entry, PASSKEY_FIELD.counter)) || 0,
+      backupEligible: flag(PASSKEY_FIELD.backupEligible, true),
+      backedUp: flag(PASSKEY_FIELD.backedUp, false),
+    };
+  }
+
+  /**
+   * The next signature counter for a passkey that counts. Passkeys Work
+   * creates stay at zero, as synced passkeys do; an imported one that
+   * counted keeps rising past where its old home left it.
+   */
+  async nextPasskeyCounter(profileId: string, id: string): Promise<number> {
+    const vault = await this.unlock(profileId);
+    const entry = this.passkeys(vault.db).find(
+      (candidate) => candidate.uuid.id === id,
+    );
+    const current = entry
+      ? Number(this.fieldText(entry, PASSKEY_FIELD.counter)) || 0
+      : 0;
+    if (!entry || current === 0) return 0;
+    const next = current + 1;
+    entry.fields.set(PASSKEY_FIELD.counter, String(next));
+    await this.persist(vault);
+    return next;
+  }
+
+  private writePasskey(entry: kdbx.KdbxEntry, input: PasskeyInput): void {
+    entry.fields.set("Title", `${input.rpId} (Passkey)`);
+    entry.fields.set("URL", `https://${input.rpId}`);
+    entry.fields.set("UserName", input.username);
+    entry.fields.set(PASSKEY_FIELD.username, input.username);
+    entry.fields.set(
+      PASSKEY_FIELD.credentialId,
+      kdbx.ProtectedValue.fromString(toBase64Url(input.credentialId)),
+    );
+    entry.fields.set(
+      PASSKEY_FIELD.privateKey,
+      kdbx.ProtectedValue.fromString(input.privateKeyPem),
+    );
+    entry.fields.set(PASSKEY_FIELD.relyingParty, input.rpId);
+    if (input.userHandle)
+      entry.fields.set(
+        PASSKEY_FIELD.userHandle,
+        kdbx.ProtectedValue.fromString(toBase64Url(input.userHandle)),
+      );
+    else entry.fields.delete(PASSKEY_FIELD.userHandle);
+    // Backup eligible: the vault is a file that can be copied. Not backed
+    // up: nothing syncs it.
+    entry.fields.set(PASSKEY_FIELD.backupEligible, "1");
+    entry.fields.set(PASSKEY_FIELD.backedUp, "0");
+    if (input.counter)
+      entry.fields.set(PASSKEY_FIELD.counter, String(input.counter));
+    else entry.fields.delete(PASSKEY_FIELD.counter);
+    if (input.discoverable === false)
+      entry.fields.set(PASSKEY_FIELD.discoverable, "0");
+    else entry.fields.delete(PASSKEY_FIELD.discoverable);
+    if (!entry.tags.includes(PASSKEY_TAG))
+      entry.tags = [...entry.tags, PASSKEY_TAG];
+    entry.times.update();
+  }
+
+  /**
+   * Save a passkey a site just created. One account keeps one passkey
+   * per site: a new one for the same user handle replaces the old.
+   */
+  async savePasskey(
+    profileId: string,
+    input: PasskeyInput,
+  ): Promise<SavedPasskey> {
+    const vault = await this.unlock(profileId);
+    const handle = input.userHandle ? toBase64Url(input.userHandle) : null;
+    const existing = handle
+      ? this.passkeys(vault.db).find(
+          (entry) =>
+            this.fieldText(entry, PASSKEY_FIELD.relyingParty) === input.rpId &&
+            this.fieldText(entry, PASSKEY_FIELD.userHandle) === handle,
+        )
+      : undefined;
+    const entry = existing ?? vault.db.createEntry(vault.db.getDefaultGroup());
+    this.writePasskey(entry, input);
+    await this.persist(vault);
+    return this.passkeySummary(entry);
   }
 }

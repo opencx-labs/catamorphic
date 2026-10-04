@@ -52,7 +52,12 @@ import type {
   HistoryVisit,
 } from "../../shared/history.js";
 import type { OpenMode } from "../../shared/open-mode.js";
-import type { PasskeyRequest } from "../../shared/passkeys.js";
+import type {
+  PasskeyChoice,
+  PasskeyRequest,
+  PasskeyUseResult,
+} from "../../shared/passkeys.js";
+import type { PasswordFileImportResult } from "../../shared/password-import.js";
 import type { PersonalEnvironmentView } from "../../shared/personal-environment.js";
 import type {
   PrComment,
@@ -639,6 +644,16 @@ export interface SavedCredential {
   username: string;
   /** Notes are revealed like passwords; listings only say one exists. */
   hasNote: boolean;
+  updatedAt: number;
+}
+
+/** A passkey saved in the profile's vault. Its private key stays in main. */
+export interface SavedPasskey {
+  id: string;
+  rpId: string;
+  username: string;
+  credentialId: string;
+  discoverable: boolean;
   updatedAt: number;
 }
 
@@ -1260,10 +1275,21 @@ export interface CatamorphicDesktopApi {
   browserImportRun: (
     input: BrowserImportRequest,
   ) => Promise<BrowserImportResult>;
-  browserImportPasswords: (input: { profileId: string }) => Promise<{
-    imported: number;
-    cancelled: boolean;
-  }>;
+  /** Pick a CSV, Bitwarden JSON or KeePass file and import it. */
+  passwordFileImport: (input: {
+    profileId: string;
+  }) => Promise<PasswordFileImportResult>;
+  passwordFileUnlock: (input: {
+    profileId: string;
+    token: string;
+    password: string;
+  }) => Promise<PasswordFileImportResult>;
+  /** Choose (or `clear`) the key file for a locked database. */
+  passwordFileKeyFile: (input: {
+    token: string;
+    clear?: boolean;
+  }) => Promise<{ keyFile: string | null } | null>;
+  passwordFileForget: (input: { token: string }) => Promise<void>;
   onCloseSurface: (listener: () => void) => () => void;
   getSettings: (input?: {
     projectId?: string;
@@ -1411,6 +1437,22 @@ export interface CatamorphicDesktopApi {
     listener: (payload: { ids: string[] }) => void,
   ) => () => void;
   passkeyCancel: (input: { id: string }) => Promise<boolean>;
+  /** Sign in with a saved passkey the sheet offered (Touch ID first). */
+  passkeyUse: (input: {
+    id: string;
+    passkeyId: string;
+  }) => Promise<PasskeyUseResult>;
+  /** Save the passkey the sheet's site asked to create. */
+  passkeySave: (input: { id: string }) => Promise<PasskeyUseResult>;
+  /** The passkeys a tab's autofill request offers, if one is waiting. */
+  passkeyAutofill: (input: {
+    guestId: number;
+  }) => Promise<{ requestId: string; passkeys: PasskeyChoice[] } | null>;
+  passkeyAutofillUse: (input: {
+    guestId: number;
+    requestId: string;
+    passkeyId: string;
+  }) => Promise<PasskeyUseResult>;
   onSiteSystemRefusal: (
     listener: (notice: SiteSystemRefusal) => void,
   ) => () => void;
@@ -1560,7 +1602,9 @@ export interface CatamorphicDesktopApi {
     profileId: string;
     origin: string;
   }) => Promise<void>;
+  /** Removes a saved password or passkey. */
   vaultRemove: (input: { profileId: string; id: string }) => Promise<void>;
+  vaultPasskeys: (input: { profileId: string }) => Promise<SavedPasskey[]>;
   vaultCopyPassword: (input: {
     profileId: string;
     id: string;

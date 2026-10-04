@@ -1,6 +1,7 @@
 import {
   Check,
   Copy,
+  Download,
   Eye,
   EyeOff,
   KeyRound,
@@ -17,25 +18,28 @@ import {
   type PasswordDraft,
   PasswordEditor,
 } from "../components/password-editor.js";
+import { usePasswordFileImport } from "../components/password-file-import.js";
+import { PendingButton } from "../components/pending-button.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import { SiteFavicon } from "../components/site-favicon.js";
-import { desktopApi, type SavedCredential } from "../lib/desktop-api.js";
+import {
+  desktopApi,
+  type SavedCredential,
+  type SavedPasskey,
+} from "../lib/desktop-api.js";
 import { useListMotion } from "../lib/list-motion.js";
 
 const EMPTY_DRAFT: PasswordDraft = { origin: "", username: "", note: "" };
 
-function matchesQuery(credential: SavedCredential, query: string): boolean {
+function matchesQuery(fields: string[], query: string): boolean {
   const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   if (terms.length === 0) return true;
-  const searchable = [
-    credential.origin,
-    displayHost(credential.origin),
-    credential.username,
-  ]
-    .join("\n")
-    .toLocaleLowerCase();
+  const searchable = fields.join("\n").toLocaleLowerCase();
   return terms.every((term) => searchable.includes(term));
 }
+
+const count = (value: number, one: string, many: string) =>
+  `${value} ${value === 1 ? one : many}`;
 
 function updatedLabel(time: number): string {
   if (!time) return "";
@@ -95,17 +99,27 @@ function Reveal({
 const iconButton =
   "grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-raised hover:text-fg";
 
+/** What the delete confirmation is about. */
+type DeleteTarget =
+  | { kind: "password"; credential: SavedCredential }
+  | { kind: "passkey"; passkey: SavedPasskey };
+
 /**
- * Every login this profile saved, and the sites it never saves for.
- * Rows reveal, copy, edit (username, password, note) and delete; adding
- * and editing open the shared password dialog. Opened from the palette,
- * profile settings, and "Manage passwords" under a login field.
+ * Every login and passkey this profile saved, and the sites it never
+ * saves for. Password rows reveal, copy, edit (username, password, note)
+ * and delete; adding and editing open the shared password dialog.
+ * Passkey rows only delete: their keys never leave the vault (ADR 0201).
+ * Import brings both in from a password manager's file. Opened from the
+ * palette, profile settings, "Manage passwords" under a login field and
+ * "Import passkeys" on the passkey sheet.
  */
 export function PasswordsScreen({ profileId }: { profileId: string }) {
   const [credentials, setCredentials] = useState<SavedCredential[] | null>(
     null,
   );
+  const [passkeys, setPasskeys] = useState<SavedPasskey[]>([]);
   const [neverSaved, setNeverSaved] = useState<string[]>([]);
+  const fileImport = usePasswordFileImport(profileId);
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState<PasswordDraft>(EMPTY_DRAFT);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -114,9 +128,7 @@ export function PasswordsScreen({ profileId }: { profileId: string }) {
     password: string;
     note: string;
   } | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<SavedCredential | null>(
-    null,
-  );
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -133,11 +145,13 @@ export function PasswordsScreen({ profileId }: { profileId: string }) {
     const load = () =>
       Promise.all([
         desktopApi.vaultList({ profileId }),
+        desktopApi.vaultPasskeys({ profileId }),
         desktopApi.vaultNeverSaved({ profileId }),
       ])
-        .then(([saved, never]) => {
+        .then(([saved, savedPasskeys, never]) => {
           if (cancelled) return;
           setCredentials(saved);
+          setPasskeys(savedPasskeys);
           setNeverSaved(never);
         })
         .catch((cause: unknown) => {
@@ -159,8 +173,21 @@ export function PasswordsScreen({ profileId }: { profileId: string }) {
   useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
 
   const filtered = useMemo(
-    () => (credentials ?? []).filter((item) => matchesQuery(item, query)),
+    () =>
+      (credentials ?? []).filter((item) =>
+        matchesQuery(
+          [item.origin, displayHost(item.origin), item.username],
+          query,
+        ),
+      ),
     [credentials, query],
+  );
+  const filteredPasskeys = useMemo(
+    () =>
+      passkeys.filter((item) =>
+        matchesQuery([item.rpId, item.username, "passkey"], query),
+      ),
+    [passkeys, query],
   );
   const filteredNever = useMemo(() => {
     const words = query.toLocaleLowerCase().trim().split(/\s+/);
@@ -170,7 +197,11 @@ export function PasswordsScreen({ profileId }: { profileId: string }) {
   }, [neverSaved, query]);
   useListMotion(
     listRef,
-    [...filtered.map(({ id }) => id), ...filteredNever].join("\n"),
+    [
+      ...filtered.map(({ id }) => id),
+      ...filteredPasskeys.map(({ id }) => id),
+      ...filteredNever,
+    ].join("\n"),
   );
 
   const openEditor = (next: PasswordDraft, trigger: HTMLElement) => {
@@ -238,12 +269,14 @@ export function PasswordsScreen({ profileId }: { profileId: string }) {
     }
   };
 
-  const remove = async (credential: SavedCredential) => {
+  const remove = async (target: DeleteTarget) => {
     setDeleteError(null);
+    const id =
+      target.kind === "password" ? target.credential.id : target.passkey.id;
     try {
-      await desktopApi.vaultRemove({ profileId, id: credential.id });
+      await desktopApi.vaultRemove({ profileId, id });
       setConfirmDelete(false);
-      if (revealed?.id === credential.id) setRevealed(null);
+      if (revealed?.id === id) setRevealed(null);
     } catch (cause) {
       setDeleteError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -253,7 +286,12 @@ export function PasswordsScreen({ profileId }: { profileId: string }) {
     void desktopApi.vaultAllowSaving({ profileId, origin }).catch(fail);
   };
 
-  const count = credentials?.length ?? 0;
+  const savedCount = [
+    count(credentials?.length ?? 0, "password", "passwords"),
+    passkeys.length ? count(passkeys.length, "passkey", "passkeys") : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="passwords-page">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
@@ -261,8 +299,11 @@ export function PasswordsScreen({ profileId }: { profileId: string }) {
         <h1 className="min-w-0 flex-1 text-sm font-medium text-fg">
           Passwords
           {credentials && (
-            <span className="ml-2 text-xs font-normal text-fg-faint">
-              {count} saved
+            <span
+              className="ml-2 text-xs font-normal text-fg-faint"
+              data-testid="passwords-count"
+            >
+              {savedCount}
             </span>
           )}
         </h1>
@@ -284,6 +325,17 @@ export function PasswordsScreen({ profileId }: { profileId: string }) {
             className="min-w-0 flex-1 bg-transparent text-[12px] text-fg outline-none placeholder:text-fg-faint"
           />
         </label>
+        <ShortcutHint label="Import passwords and passkeys from Bitwarden, KeePassXC or a CSV file">
+          <PendingButton
+            pending={fileImport.busy}
+            pendingLabel="Importing…"
+            onClick={fileImport.start}
+            data-testid="passwords-import"
+            className="button-ghost button-sm"
+          >
+            <Download className="size-3.5" /> Import
+          </PendingButton>
+        </ShortcutHint>
         <button
           type="button"
           onClick={(event) =>
@@ -296,6 +348,18 @@ export function PasswordsScreen({ profileId }: { profileId: string }) {
       </header>
       <div className="min-h-0 flex-1 overflow-auto px-4 pb-6">
         <div ref={listRef} className="mx-auto max-w-3xl">
+          {(fileImport.summary || fileImport.error) && (
+            <p
+              role={fileImport.error ? "alert" : "status"}
+              data-testid="passwords-import-status"
+              className={`mt-4 flex items-center gap-1.5 rounded-md bg-bg-inset px-3 py-2 text-xs ${
+                fileImport.error ? "text-danger" : "text-fg-muted"
+              }`}
+            >
+              {!fileImport.error && <Check className="size-3.5 shrink-0" />}
+              {fileImport.error ?? fileImport.summary}
+            </p>
+          )}
           {filtered.length > 0 && (
             <h2 className="pb-2 pt-5 text-xs font-medium text-fg-muted">
               Saved passwords
@@ -406,7 +470,7 @@ export function PasswordsScreen({ profileId }: { profileId: string }) {
                       <button
                         type="button"
                         onClick={() => {
-                          setDeleteTarget(credential);
+                          setDeleteTarget({ kind: "password", credential });
                           setDeleteError(null);
                           setConfirmDelete(true);
                         }}
@@ -433,6 +497,59 @@ export function PasswordsScreen({ profileId }: { profileId: string }) {
               </div>
             );
           })}
+          {filteredPasskeys.length > 0 && (
+            <h2 className="pb-2 pt-6 text-xs font-medium text-fg-muted">
+              Passkeys
+            </h2>
+          )}
+          {filteredPasskeys.map((passkey) => (
+            <div
+              key={passkey.id}
+              data-item-id={passkey.id}
+              data-testid="passkey-row"
+              className="group flex min-w-0 items-center gap-1 rounded-md transition-colors duration-150 hover:bg-bg-overlay focus-within:bg-bg-overlay"
+            >
+              <span className="flex min-w-0 flex-1 items-center gap-3 px-2 py-2">
+                <SiteFavicon
+                  url={`https://${passkey.rpId}`}
+                  className="size-4"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] text-fg">
+                    {passkey.rpId}
+                  </span>
+                  <span className="flex min-w-0 items-center gap-1.5 text-xs text-fg-faint">
+                    <span className="truncate">
+                      {passkey.username || "No username"}
+                    </span>
+                    <span className="inline-flex shrink-0 items-center gap-1">
+                      <KeyRound className="size-3" /> Passkey
+                    </span>
+                  </span>
+                </span>
+                <span className="shrink-0 text-[11px] tabular-nums text-fg-faint">
+                  {updatedLabel(passkey.updatedAt)}
+                </span>
+              </span>
+              {/* As wide as a password row's actions, so dates line up. */}
+              <span className="mr-1 flex w-28 shrink-0 items-center justify-end">
+                <ShortcutHint label="Delete">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeleteTarget({ kind: "passkey", passkey });
+                      setDeleteError(null);
+                      setConfirmDelete(true);
+                    }}
+                    aria-label={`Delete passkey for ${passkey.rpId}`}
+                    className={`${iconButton} row-reveal hover:bg-danger/10 hover:text-danger`}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </ShortcutHint>
+              </span>
+            </div>
+          ))}
           {filteredNever.length > 0 && (
             <h2 className="pb-2 pt-6 text-xs font-medium text-fg-muted">
               Never saved
@@ -458,15 +575,17 @@ export function PasswordsScreen({ profileId }: { profileId: string }) {
               </button>
             </div>
           ))}
-          {filtered.length === 0 && filteredNever.length === 0 && (
-            <p className="py-16 text-center text-[13px] text-fg-muted">
-              {!credentials
-                ? (error ?? "Reading passwords…")
-                : query
-                  ? "No password matches."
-                  : "Passwords you save while signing in appear here."}
-            </p>
-          )}
+          {filtered.length === 0 &&
+            filteredPasskeys.length === 0 &&
+            filteredNever.length === 0 && (
+              <p className="py-16 text-center text-[13px] text-fg-muted">
+                {!credentials
+                  ? (error ?? "Reading passwords…")
+                  : query
+                    ? "No password or passkey matches."
+                    : "Passwords and passkeys you save while signing in appear here."}
+              </p>
+            )}
           {error && credentials && (
             <p role="alert" className="mt-3 text-xs text-danger">
               {error}
@@ -475,6 +594,7 @@ export function PasswordsScreen({ profileId }: { profileId: string }) {
         </div>
       </div>
 
+      {fileImport.dialog}
       <PasswordEditor
         open={editorOpen}
         profileId={profileId}
@@ -487,15 +607,32 @@ export function PasswordsScreen({ profileId }: { profileId: string }) {
         width={420}
       >
         <div className="px-5 pt-5">
-          <h2 className="text-sm font-semibold text-fg">
-            Delete the password for{" "}
-            {displayHost(deleteTarget?.origin ?? "this website")}?
-          </h2>
-          <p className="mt-2 text-[13px] leading-relaxed text-fg-muted">
-            {deleteTarget?.username
-              ? `The login for ${deleteTarget.username} and its note are removed from this profile.`
-              : "The saved login and its note are removed from this profile."}
-          </p>
+          {deleteTarget?.kind === "passkey" ? (
+            <>
+              <h2 className="text-sm font-semibold text-fg">
+                Delete the passkey for {deleteTarget.passkey.rpId}?
+              </h2>
+              <p className="mt-2 text-[13px] leading-relaxed text-fg-muted">
+                {deleteTarget.passkey.username
+                  ? `You won't be able to sign in as ${deleteTarget.passkey.username} with it in Work. `
+                  : "You won't be able to sign in with it in Work. "}
+                The site may still list it in your account settings.
+              </p>
+            </>
+          ) : (
+            <>
+              <h2 className="text-sm font-semibold text-fg">
+                Delete the password for{" "}
+                {displayHost(deleteTarget?.credential.origin ?? "this website")}
+                ?
+              </h2>
+              <p className="mt-2 text-[13px] leading-relaxed text-fg-muted">
+                {deleteTarget?.credential.username
+                  ? `The login for ${deleteTarget.credential.username} and its note are removed from this profile.`
+                  : "The saved login and its note are removed from this profile."}
+              </p>
+            </>
+          )}
           <p
             className="mt-3 min-h-4 text-xs text-danger"
             role={deleteError ? "alert" : undefined}
@@ -515,8 +652,11 @@ export function PasswordsScreen({ profileId }: { profileId: string }) {
             type="button"
             onClick={() => deleteTarget && void remove(deleteTarget)}
             className="button-danger"
+            data-testid="password-delete-confirm"
           >
-            Delete password
+            {deleteTarget?.kind === "passkey"
+              ? "Delete passkey"
+              : "Delete password"}
           </button>
         </footer>
       </Modal>

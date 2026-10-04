@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import type { LoginFieldKind } from "../../shared/login-fields.js";
+import type { PasskeyChoice } from "../../shared/passkeys.js";
 import { desktopApi, type SavedCredential } from "../lib/desktop-api.js";
 import { MaskedPassword } from "./password-editor.js";
 import { SiteFavicon } from "./site-favicon.js";
@@ -31,7 +32,15 @@ interface Rect {
 
 type Item =
   | { kind: "credential"; credential: SavedCredential }
+  | { kind: "passkey"; passkey: PasskeyChoice; requestId: string }
   | { kind: "generated"; password: string };
+
+const itemKey = (item: Item) =>
+  item.kind === "credential"
+    ? item.credential.id
+    : item.kind === "passkey"
+      ? `passkey:${item.passkey.id}`
+      : "generated";
 
 interface Suggestions {
   fieldId: string;
@@ -74,17 +83,21 @@ function visibleItems(suggestions: Suggestions): Item[] {
     return suggestions.items;
   }
   const typed = suggestions.value.toLocaleLowerCase();
-  return suggestions.items.filter(
-    (item) =>
-      item.kind !== "credential" ||
-      item.credential.username.toLocaleLowerCase().startsWith(typed),
+  return suggestions.items.filter((item) =>
+    item.kind === "credential"
+      ? item.credential.username.toLocaleLowerCase().startsWith(typed)
+      : item.kind === "passkey"
+        ? item.passkey.username.toLocaleLowerCase().startsWith(typed)
+        : true,
   );
 }
 
 /**
  * Chrome's autofill dropdown for a browser tab: saved logins under a
- * username or password field when the user clicks it, a generated
- * password under a new-password field. The guest page reports the field
+ * username or password field when the user clicks it, passkeys first
+ * when the page is waiting for one (a field marked "webauthn" with an
+ * autofill request pending, ADR 0201), a generated password under a
+ * new-password field. The guest page reports the field
  * and forwards the keys the list owns (arrows, Enter on a highlighted
  * row, Escape); main fills the chosen login, so secrets never pass
  * through here, except the suggested password shown to be read.
@@ -155,7 +168,7 @@ export function usePasswordAutofill({
   const show = useCallback(
     async (payload: Record<string, unknown>) => {
       const guest = guestRef.current;
-      const { fieldId, kind, rect, value } = payload;
+      const { fieldId, kind, rect, value, webauthn } = payload;
       if (
         !guest ||
         typeof fieldId !== "string" ||
@@ -190,11 +203,26 @@ export function usePasswordAutofill({
           ? [{ kind: "generated", password: suggestion.password }]
           : [];
       } else {
-        const credentials = await desktopApi.vaultList({ profileId, origin });
-        items = credentials.map((credential) => ({
-          kind: "credential",
-          credential,
-        }));
+        const [credentials, autofill] = await Promise.all([
+          desktopApi.vaultList({ profileId, origin }),
+          webauthn === true
+            ? desktopApi
+                .passkeyAutofill({ guestId: guest.getWebContentsId() })
+                .catch(() => null)
+            : null,
+        ]);
+        items = [
+          ...(autofill?.passkeys ?? []).map(
+            (passkey): Item => ({
+              kind: "passkey",
+              passkey,
+              requestId: autofill?.requestId ?? "",
+            }),
+          ),
+          ...credentials.map(
+            (credential): Item => ({ kind: "credential", credential }),
+          ),
+        ];
       }
       if (current !== sequence.current) return;
       const next: Suggestions = {
@@ -243,6 +271,15 @@ export function usePasswordAutofill({
           profileId,
           guestId,
           fieldId: current.fieldId,
+        });
+        return;
+      }
+      // The page signs in with the passkey once Touch ID confirms it.
+      if (item.kind === "passkey") {
+        void desktopApi.passkeyAutofillUse({
+          guestId,
+          requestId: item.requestId,
+          passkeyId: item.passkey.id,
         });
         return;
       }
@@ -417,14 +454,16 @@ function SuggestionList({
         const active = index === highlight;
         return (
           <div
-            key={item.kind === "credential" ? item.credential.id : "generated"}
+            key={itemKey(item)}
             role="option"
             tabIndex={-1}
             aria-selected={active}
             data-testid={
               item.kind === "credential"
                 ? "password-suggestion"
-                : "password-suggestion-generated"
+                : item.kind === "passkey"
+                  ? "passkey-suggestion"
+                  : "password-suggestion-generated"
             }
             onMouseEnter={() => onHighlight(index)}
             onMouseLeave={() => onHighlight(-1)}
@@ -446,6 +485,23 @@ function SuggestionList({
                     {item.credential.username || "No username"}
                   </span>
                   <MaskedPassword className="mt-1 text-fg-faint" />
+                </span>
+              </>
+            ) : item.kind === "passkey" ? (
+              <>
+                <SiteFavicon
+                  url={suggestions.origin}
+                  faviconUrl={faviconUrl}
+                  className="size-4"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] text-fg">
+                    {item.passkey.username || "No username"}
+                  </span>
+                  <span className="flex items-center gap-1 text-[11px] leading-4 text-fg-muted">
+                    <KeyRound className="size-3 shrink-0" />
+                    Passkey
+                  </span>
                 </span>
               </>
             ) : (

@@ -1,8 +1,13 @@
 # 0185 — Passkey requests in browser tabs stay answerable
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by 0201)
 - **Date:** 2026-09-28
 - **Refines:** 0137 (sign-in recovery)
+
+> Amended by [0201](0201-work-keeps-passkeys-in-the-profile-vault.md): Work
+> now keeps passkeys in the profile's vault and answers requests itself.
+> Autofill is offered, capabilities report a platform passkey provider,
+> and the Touch ID authenticator follow-up below was not taken.
 
 ## Context
 

@@ -5501,7 +5501,7 @@ export function App({
             onClose={() => setSiteSettingsOrigin(null)}
           />
           <ScreenShareHost />
-          <PasskeyHost />
+          <PasskeyHost onOpenPasswords={() => openPasswords()} />
           <UpdateBanner
             hasActiveWork={hasActiveWork}
             onOpenRelease={(url) => openBrowserTab(url)}

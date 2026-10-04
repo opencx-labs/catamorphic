@@ -8,10 +8,11 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { BrowserImportCategory } from "../../shared/browser-import.js";
 import { desktopApi, type ImportableBrowser } from "../lib/desktop-api.js";
 import { Modal } from "./modal.js";
+import { usePasswordFileImport } from "./password-file-import.js";
 import { PendingButton } from "./pending-button.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 
@@ -327,20 +328,7 @@ export function BrowserImportDialog({
 export function BrowserImport({ profileId }: { profileId: string }) {
   const [open, setOpen] = useState(false);
   const [done, setDone] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const importCsv = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await desktopApi.browserImportPasswords({ profileId });
-      if (!result.cancelled) setDone(true);
-    } catch {
-      setError("Could not import this password file. Try another export.");
-    } finally {
-      setBusy(false);
-    }
-  }, [profileId]);
+  const file = usePasswordFileImport(profileId);
   return (
     <section className="settings-card mt-4">
       <h2 className="flex items-center gap-2 text-sm font-semibold text-fg">
@@ -348,7 +336,8 @@ export function BrowserImport({ profileId }: { profileId: string }) {
         Import browser data
       </h2>
       <p className="mt-1 text-xs leading-5 text-fg-muted">
-        Bring your bookmarks, history and accounts from another browser.
+        Bring your bookmarks, history and accounts from another browser, or
+        passwords and passkeys from Bitwarden, KeePassXC or a CSV file.
       </p>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
@@ -360,28 +349,34 @@ export function BrowserImport({ profileId }: { profileId: string }) {
           Import from a browser
         </button>
         <PendingButton
-          pending={busy}
+          pending={file.busy}
           pendingLabel="Importing…"
-          onClick={() => void importCsv()}
+          onClick={() => {
+            setDone(false);
+            file.start();
+          }}
+          data-testid="settings-password-file-import"
           className="h-8 rounded-md px-2 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay"
         >
-          Import password CSV
+          Import from a file
         </PendingButton>
-        {done && (
+        {(done || file.summary) && (
           <span
             role="status"
+            data-testid="settings-import-status"
             className="inline-flex items-center gap-1.5 text-xs text-fg-muted"
           >
-            <Check className="size-3.5" />
-            Import complete
+            <Check className="size-3.5 shrink-0" />
+            {file.summary ?? "Import complete"}
           </span>
         )}
       </div>
-      {error && (
+      {file.error && (
         <p role="alert" className="mt-2 text-xs text-danger">
-          {error}
+          {file.error}
         </p>
       )}
+      {file.dialog}
       <BrowserImportDialog
         open={open}
         profileId={profileId}
