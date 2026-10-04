@@ -30,7 +30,10 @@ export function Modal({
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
-    panelRef.current?.focus({ preventScroll: true });
+    // A field the dialog focused as it mounted (autoFocus) keeps focus;
+    // otherwise the panel takes it, so keys reach the dialog.
+    if (!panelRef.current?.contains(document.activeElement))
+      panelRef.current?.focus({ preventScroll: true });
     const onKeyDown = (event: KeyboardEvent) => {
       // A dialog stacked on top of this one (a confirm inside a settings
       // modal) owns the keys; only the topmost open dialog reacts.
