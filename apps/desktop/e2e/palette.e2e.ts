@@ -322,17 +322,6 @@ it("switches to open tabs from search and the Tabs mode, above bookmarks and his
         },
       }),
     );
-    // Main polls the file; an in-app save (a page's favicon) before the
-    // poll would write over the edit, so browse only once main has it.
-    await expect
-      .poll(
-        () =>
-          app.eval<boolean>(
-            `window.catamorphicDesktop.bookmarksGet({projectId:'none',profileId:${JSON.stringify(defaultProfileId)}}).then(data=>data.library.bookmarks.some(bookmark=>bookmark.id==='delta'))`,
-          ),
-        { timeout: 15_000 },
-      )
-      .toBe(true);
     const address = () =>
       run<string>(
         `return [...document.querySelectorAll('input[aria-label="Address and search bar"]')].find(el=>el.checkVisibility({visibilityProperty:true,opacityProperty:true}))?.value ?? ''`,

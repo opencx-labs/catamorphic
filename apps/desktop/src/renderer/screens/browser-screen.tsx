@@ -987,17 +987,22 @@ export function BrowserScreen({
 
   const toggleBookmark = () => {
     if (!projectId) return;
+    // A broken bookmarks file refuses changes; Settings names it, and the
+    // star keeps showing what the file holds.
+    const ignore = () => {};
     if (!currentBookmark) {
-      void desktopApi.bookmarksAdd({
-        projectId,
-        profileId,
-        label: pageTitleRef.current || pageUrl,
-        url: pageUrl,
-        faviconUrl: faviconUrl ?? undefined,
-      });
+      desktopApi
+        .bookmarksAdd({
+          projectId,
+          profileId,
+          label: pageTitleRef.current || pageUrl,
+          url: pageUrl,
+          faviconUrl: faviconUrl ?? undefined,
+        })
+        .catch(ignore);
       return;
     }
-    void (currentBookmark.library
+    (currentBookmark.library
       ? desktopApi.bookmarksRemoveLibrary({
           projectId,
           profileId,
@@ -1013,7 +1018,8 @@ export function BrowserScreen({
             projectId,
             profileId,
             id: currentBookmark.id,
-          }));
+          })
+    ).catch(ignore);
   };
 
   const updateSuggestions = useCallback(
