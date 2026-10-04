@@ -698,6 +698,8 @@ function ChatDockContent({
   };
 
   const isTab = entry.mode === "tab";
+  /** Outside a tab, the column the messages and the composer share. */
+  const floatingColumn = isTab ? "" : "mx-auto w-full max-w-3xl";
   const frontSurface = entry.mode === "partial" || (isTab && tabActive);
   const slashing = draft.startsWith("/");
   const catalogActive = slashing && frontSurface;
@@ -2441,17 +2443,15 @@ function ChatDockContent({
             </span>
           </div>
         </div>
-        {/* In tab mode the scroller spans the full tab (scrollbar at the
-          edge) while the content column stays centered and readable. */}
-        <div
-          className={`flex min-h-0 w-full flex-1 flex-col ${
-            isTab ? "" : "mx-auto max-w-3xl"
-          }`}
-        >
+        {/* The scroller spans the whole surface, so its scrollbar sits at
+          the edge of the tab or the floating panel (which the dock host
+          widens past the column, styles.css), while everything else keeps
+          a centered, readable column. */}
+        <div className="flex min-h-0 w-full flex-1 flex-col">
           {visibleWatchers.length > 0 && (
             <div
-              className={`flex shrink-0 flex-wrap gap-1 border-b border-border-subtle px-3 py-2 ${
-                isTab ? "mx-auto w-full max-w-4xl" : ""
+              className={`mx-auto flex w-full shrink-0 flex-wrap gap-1 border-b border-border-subtle px-3 py-2 ${
+                isTab ? "max-w-4xl" : "max-w-3xl"
               }`}
               data-testid="chat-watchers"
             >
@@ -2529,7 +2529,10 @@ function ChatDockContent({
             </div>
           )}
           {watcherQuery.stop.error && (
-            <p role="alert" className="px-3 py-2 text-xs text-danger">
+            <p
+              role="alert"
+              className={`px-3 py-2 text-xs text-danger ${floatingColumn}`}
+            >
               {watcherQuery.stop.error.message}
             </p>
           )}
@@ -2540,7 +2543,11 @@ function ChatDockContent({
               focusMessageId={entry.focusMessageId}
               backgroundCommands={backgroundCommands}
               className={lurking ? "hidden" : "min-h-0 flex-1"}
-              contentClassName={isTab ? "mx-auto w-full max-w-4xl pt-12" : ""}
+              contentClassName={
+                isTab
+                  ? "mx-auto w-full max-w-4xl pt-12"
+                  : "mx-auto w-full max-w-3xl"
+              }
               turns={chat.timeline}
               requests={chat.state?.requests}
               pending={chat.pending}
@@ -2596,7 +2603,7 @@ function ChatDockContent({
           {lurking && (
             <div
               data-testid="lurk-status"
-              className="flex min-h-0 flex-1 items-center gap-2 px-4 text-xs text-fg-muted"
+              className={`flex min-h-0 flex-1 items-center gap-2 px-4 text-xs text-fg-muted ${floatingColumn}`}
             >
               <LoaderCircle
                 className="size-4 shrink-0 animate-spin"
@@ -2609,12 +2616,14 @@ function ChatDockContent({
             </div>
           )}
           {runtimeSettingsError ? (
-            <p
-              role="alert"
-              className="mx-4 mb-2 rounded-md border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger"
-            >
-              Could not update chat settings: {runtimeSettingsError}
-            </p>
+            <div className={floatingColumn}>
+              <p
+                role="alert"
+                className="mx-4 mb-2 rounded-md border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger"
+              >
+                Could not update chat settings: {runtimeSettingsError}
+              </p>
+            </div>
           ) : null}
           {/* Keep the composer clear of the bubble UI: bottom padding for
             the expanded strip, side padding for the corner bubble. */}
@@ -2628,7 +2637,7 @@ function ChatDockContent({
                         ? "px-16"
                         : ""
                   }`
-                : ""
+                : "mx-auto max-w-3xl"
             }`}
           >
             {/* The surfaces rail: the agent's working tabs (linked pages,
