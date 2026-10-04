@@ -200,6 +200,40 @@ it("preserves floating chats, their draft, and their bubble when opening links",
   await app.waitFor(
     `!!document.querySelector('${bubble}[aria-expanded=true]')`,
   );
+  await app.waitFor(
+    "getComputedStyle(document.querySelector('[data-floating-chat]')).opacity === '1'",
+  );
+  // The scroller spans the floating panel, so its scrollbar sits at the
+  // panel's edge, while the messages keep a centered, readable column.
+  const layout = await app.eval<{
+    panel: [number, number];
+    scroller: [number, number];
+    column: [number, number];
+  }>(`(() => {
+    const panel = document.querySelector('[data-floating-chat]');
+    let scroller = panel.querySelector('[data-user-message]');
+    while (scroller && !/auto|scroll/.test(getComputedStyle(scroller).overflowY))
+      scroller = scroller.parentElement;
+    const box = (element) => {
+      const rect = element.getBoundingClientRect();
+      return [rect.left, rect.right];
+    };
+    return {
+      panel: box(panel),
+      scroller: box(scroller),
+      column: box(scroller.firstElementChild),
+    };
+  })()`);
+  expect(layout.panel[1] - layout.scroller[1]).toBeLessThanOrEqual(2);
+  expect(layout.scroller[0] - layout.panel[0]).toBeLessThanOrEqual(2);
+  expect(layout.column[1] - layout.column[0]).toBeLessThanOrEqual(768);
+  expect(
+    Math.abs(
+      layout.column[0] -
+        layout.scroller[0] -
+        (layout.scroller[1] - layout.column[1]),
+    ),
+  ).toBeLessThanOrEqual(20);
   await app.eval(`(() => { ${setReactValueJs}
     setReactValue(document.querySelector('[data-floating-chat] [data-composer-input]'), 'Keep this draft');
   })()`);

@@ -2444,13 +2444,10 @@ function ChatDockContent({
             </span>
           </div>
         </div>
-        {/* In tab mode the scroller spans the full tab (scrollbar at the
-          edge) while the content column stays centered and readable. */}
-        <div
-          className={`flex min-h-0 w-full flex-1 flex-col ${
-            isTab ? "" : "mx-auto max-w-3xl"
-          }`}
-        >
+        {/* The scroller spans the whole surface, so its scrollbar sits at
+          the edge of the tab or the floating panel, while the messages and
+          the composer keep a centered, readable column. */}
+        <div className="flex min-h-0 w-full flex-1 flex-col">
           {visibleWatchers.length > 0 && (
             <div
               className={`flex shrink-0 flex-wrap gap-1 border-b border-border-subtle px-3 py-2 ${
@@ -2543,7 +2540,11 @@ function ChatDockContent({
               focusMessageId={entry.focusMessageId}
               backgroundCommands={backgroundCommands}
               className={lurking ? "hidden" : "min-h-0 flex-1"}
-              contentClassName={isTab ? "mx-auto w-full max-w-4xl pt-12" : ""}
+              contentClassName={
+                isTab
+                  ? "mx-auto w-full max-w-4xl pt-12"
+                  : "mx-auto w-full max-w-3xl"
+              }
               turns={chat.timeline}
               requests={chat.state?.requests}
               pending={chat.pending}
@@ -2631,7 +2632,7 @@ function ChatDockContent({
                         ? "px-16"
                         : ""
                   }`
-                : ""
+                : "mx-auto max-w-3xl"
             }`}
           >
             {/* The surfaces rail: the agent's working tabs (linked pages,
