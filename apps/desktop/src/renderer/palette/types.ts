@@ -27,6 +27,11 @@ export interface PaletteItem {
    * different group (e.g. "Project agents" in the agent pickers).
    */
   group?: string;
+  /**
+   * Listed only for a query, never in the empty palette: open tabs (the
+   * strip shows them) and an imported bookmark library (too long a list).
+   */
+  searchOnly?: boolean;
   /** Unusable rows (invalid project agents): visible, never committable. */
   disabled?: boolean;
   /** Navigate items load something tab-shaped and honor the commit mode. */

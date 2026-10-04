@@ -70,6 +70,19 @@ import { OpenResourceButton } from "./open-resource-button.js";
  */
 
 /** The whole input is URL-shaped: scheme, or domain(+path) with no spaces. */
+/** The conversation a chat's usage key (its history identity) names. */
+function chatSessionOf(key: string): string | null {
+  if (!key.startsWith('["chat",')) return null;
+  try {
+    const identity: unknown = JSON.parse(key);
+    return Array.isArray(identity) && typeof identity[2] === "string"
+      ? identity[2]
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 const URLISH =
   /^(https?:\/\/\S+|[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?|localhost(:\d+)?(\/\S*)?)$/i;
 const LONG_QUERY = 60;
@@ -308,7 +321,7 @@ export function CommandPalette({
     profileItems,
     commandItems,
   } = useCommandRows({ enterMode, skills, agentSkills: skillAgent?.skills });
-  const { resourceItems, bookmarkedUsage } = useResourceRows({
+  const { resourceItems, tabItems, bookmarkedUsage } = useResourceRows({
     active: variant === "tab" || open,
   });
   const { surfaceItems, historyPageItem } = useDestinationRows();
@@ -323,6 +336,7 @@ export function CommandPalette({
     historyRow,
     settingItems,
     commandItems,
+    tabItems,
     sectionSearch,
     projectAgents,
   });
@@ -377,7 +391,9 @@ export function CommandPalette({
   );
   // Rows everything else already lists: a bookmarked page or a workflow
   // appears once, as its own row, ranked with its history counts.
-  const nativeRows = useMemo(() => {
+  // The empty palette lists rows as they are (`listedRows`, without open
+  // tabs); a query ranks one row per destination (`nativeRows`).
+  const { nativeRows, listedRows } = useMemo(() => {
     // A custom mode over a built-in source lists rows the palette already
     // has (the same chat, the same workflow): each row appears once.
     const rows = [
@@ -391,7 +407,26 @@ export function CommandPalette({
       ...surfaceItems,
     ];
     const seen = new Set<string>();
-    return rows.filter((row) => !seen.has(row.id) && seen.add(row.id));
+    const unique = rows.filter((row) => !seen.has(row.id) && seen.add(row.id));
+    // One row per destination: an open tab stands in for its page,
+    // bookmark, chat or file. App surfaces already bring their open tab to
+    // the front, so they keep their own row.
+    const usages = (category: PaletteItem["category"]) =>
+      new Set(
+        unique.flatMap((row) =>
+          row.category === category && row.usage ? [row.usage] : [],
+        ),
+      );
+    const surfaces = usages("surface");
+    const open = usages("tab");
+    return {
+      nativeRows: unique.filter((row) =>
+        row.category === "tab"
+          ? !surfaces.has(row.usage ?? "")
+          : row.category === "surface" || !open.has(row.usage ?? ""),
+      ),
+      listedRows: unique.filter((row) => !row.searchOnly),
+    };
   }, [
     actionItems,
     skillItems,
@@ -489,12 +524,12 @@ export function CommandPalette({
       const siteSettings = surfaceItems.filter(
         (item) => item.id === "site-settings",
       );
-      const rest = nativeRows.filter(
+      const rest = listedRows.filter(
         (item) =>
           item.id !== "site-settings" && !topLevelModeRows.includes(item),
       );
       const byUsage = new Map(
-        nativeRows.flatMap((item) => (item.usage ? [[item.usage, item]] : [])),
+        listedRows.flatMap((item) => (item.usage ? [[item.usage, item]] : [])),
       );
       const frequent = frequentItems(
         [
@@ -507,15 +542,18 @@ export function CommandPalette({
         rankContext,
       ).map((item) => ({ ...item, group: "Frequent" }));
       const taken = new Set(frequent.map((item) => item.id));
+      // Recent history fills in after what is listed above it; a page found
+      // only by typing (an open tab, an imported bookmark) still shows here.
+      const listed = new Set(
+        [...frequent, ...rest].flatMap((item) => item.usage ?? []),
+      );
       return [
         ...startingActionItems,
         ...siteSettings,
         ...frequent,
         ...rest.filter((item) => !taken.has(item.id)),
         ...historyItems
-          .filter(
-            (item) => !taken.has(item.id) && !nativeUsage.has(item.usage ?? ""),
-          )
+          .filter((item) => !listed.has(item.usage ?? ""))
           .slice(0, 8),
       ];
     }
@@ -571,8 +609,7 @@ export function CommandPalette({
     query,
     startingActionItems,
     surfaceItems,
-    nativeRows,
-    nativeUsage,
+    listedRows,
     topLevelModeRows,
     signals.frequentHistory,
     historyRow,
@@ -672,12 +709,8 @@ export function CommandPalette({
     };
     // Incognito chats stay out of what the palette remembers, as they
     // stay out of history.
-    const chat = key.startsWith('["chat",') ? item.id.slice(8) : null;
-    void (
-      chat && item.id.startsWith("session:")
-        ? desktopApi.sessionIsIncognito(chat)
-        : Promise.resolve(false)
-    )
+    const chat = chatSessionOf(key);
+    void (chat ? desktopApi.sessionIsIncognito(chat) : Promise.resolve(false))
       .then((incognito) => {
         if (!incognito) return desktopApi.paletteRecord(use);
       })

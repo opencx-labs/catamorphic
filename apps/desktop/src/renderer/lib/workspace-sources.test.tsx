@@ -13,6 +13,7 @@ import type { WorkspaceTab } from "./workspace-types.js";
 const mocks = vi.hoisted(() => ({
   GET: vi.fn(),
   open: vi.fn(),
+  focus: vi.fn(),
   session: vi.fn(),
   listen: vi.fn((_options: { listener: () => void }) => () => {}),
   query: {
@@ -56,6 +57,8 @@ it("checks grants and advertised item actions, forwards open modes, and updates 
       profileId: "profile",
       surface: { kind: "chat", sessionId: "parent" },
       tabs,
+      activeTabKey: tabs[0] ? `${tabs[0].kind}:${tabs[0].name}` : undefined,
+      onFocusTab: mocks.focus,
       writesProgram: false,
       onOpenSession: mocks.open,
       onOpenTab: mocks.open,
@@ -137,9 +140,23 @@ it("checks grants and advertised item actions, forwards open modes, and updates 
     );
     expect(broker).toBe(sources);
     expect(publish).toHaveBeenCalledWith({ type: "invalidate" });
-    expect(
-      (await current.read({ source: "tabs", signal })).items[0]?.label,
-    ).toBe("new.md");
+    const tab = (await current.read({ source: "tabs", signal })).items[0];
+    expect(tab?.label).toBe("new.md");
+    expect(tab?.data).toMatchObject({ kind: "editor", active: true });
+    // Opening a tab row brings that tab forward, the way it was asked.
+    await current.execute({
+      source: "tabs",
+      itemId: "editor:new.md",
+      action: "open-side",
+      signal,
+    });
+    expect(mocks.focus).toHaveBeenCalledWith("editor:new.md", "side");
+    // The strip is rebuilt every render; the same tabs refresh nothing.
+    publish.mockClear();
+    await act(async () =>
+      root.render(<Probe tabs={[{ kind: "editor", name: "new.md" }]} />),
+    );
+    expect(publish).not.toHaveBeenCalled();
     unsubscribe?.();
     publish.mockClear();
     await act(async () => root.render(<Probe tabs={[]} />));

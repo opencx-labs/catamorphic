@@ -1,4 +1,4 @@
-import { Command, Settings as SettingsIcon } from "lucide-react";
+import { Command, PanelTop, Settings as SettingsIcon } from "lucide-react";
 import { BUILTIN_PALETTE_TRIGGERS } from "../../../shared/palette.js";
 import type { PaletteItem, PaletteMode } from "../types.js";
 
@@ -23,5 +23,17 @@ export const commandsMode = (items: readonly PaletteItem[]): PaletteMode => ({
   description: "Only commands, skills, projects and profiles",
   placeholder: "Search commands…",
   names: BUILTIN_PALETTE_TRIGGERS.commands,
+  rows: { kind: "list", items },
+});
+
+/** Open tabs in strip order; Enter switches to one. */
+export const tabsMode = (items: readonly PaletteItem[]): PaletteMode => ({
+  id: "tabs",
+  chip: "Tabs",
+  icon: PanelTop,
+  label: "Search open tabs",
+  description: "Switch to a tab you have open",
+  placeholder: "Search open tabs…",
+  names: BUILTIN_PALETTE_TRIGGERS.tabs,
   rows: { kind: "list", items },
 });

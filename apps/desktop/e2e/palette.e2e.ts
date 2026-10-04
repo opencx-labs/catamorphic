@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
@@ -276,4 +277,135 @@ it("leads the empty palette with frequently used surfaces", async () => {
   ).toBe(true);
   expect(order.filter((id) => id === "tab:usage")).toHaveLength(1);
   await close();
+});
+
+it("switches to open tabs from search and the Tabs mode, above bookmarks and history", async () => {
+  const server = http.createServer((request, response) => {
+    const name = (request.url ?? "/").slice(1) || "index";
+    response.setHeader("Content-Type", "text/html");
+    response.end(
+      `<title>${name[0]?.toUpperCase()}${name.slice(1)} handbook</title><p>${name}</p>`,
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string")
+    throw new Error("Missing server address");
+  const origin = `http://127.0.0.1:${address.port}`;
+  try {
+    // A saved page nobody opened yet, in a folder of the imported library.
+    const { defaultProfileId } = await app.eval<{ defaultProfileId: string }>(
+      "window.catamorphicDesktop.profilesList()",
+    );
+    const bookmarksFile = path.join(app.userDataDir, "bookmarks.json");
+    const saved = fs.existsSync(bookmarksFile)
+      ? JSON.parse(fs.readFileSync(bookmarksFile, "utf8"))
+      : {};
+    fs.writeFileSync(
+      bookmarksFile,
+      JSON.stringify({
+        ...saved,
+        libraryByProfile: {
+          ...saved.libraryByProfile,
+          [defaultProfileId]: {
+            // Imports keep most pages in folders.
+            folders: [{ id: "docs", label: "Docs" }],
+            bookmarks: [
+              {
+                id: "delta",
+                label: "Delta handbook",
+                url: `${origin}/delta`,
+                folderId: "docs",
+              },
+            ],
+          },
+        },
+      }),
+    );
+    // Main polls the file; an in-app save (a page's favicon) before the
+    // poll would write over the edit, so browse only once main has it.
+    await expect
+      .poll(
+        () =>
+          app.eval<boolean>(
+            `window.catamorphicDesktop.bookmarksGet({projectId:'none',profileId:${JSON.stringify(defaultProfileId)}}).then(data=>data.library.bookmarks.some(bookmark=>bookmark.id==='delta'))`,
+          ),
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+    const address = () =>
+      run<string>(
+        `return [...document.querySelectorAll('input[aria-label="Address and search bar"]')].find(el=>el.checkVisibility({visibilityProperty:true,opacityProperty:true}))?.value ?? ''`,
+      );
+    const visit = async (page: string, newTab: boolean) => {
+      await open();
+      await type(`${origin}/${page}`);
+      await wait(`return rows()[0]?.dataset.itemId==='web'`);
+      await run(
+        `key('Enter',${newTab ? "{metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform)}" : "{}"})`,
+      );
+      await wait(`return !input()`);
+      await expect.poll(address, { timeout: 15_000 }).toContain(`/${page}`);
+      // History keeps the title the page had when it was left.
+      const title = `${page[0]?.toUpperCase()}${page.slice(1)} handbook`;
+      await wait(
+        `return [...document.querySelectorAll('[data-point-key^="browser:"]')].some(tab=>tab.textContent.includes(${JSON.stringify(title)}))`,
+        `${title} titled`,
+      );
+    };
+    // Gamma stays in history only; Alpha and Beta are open, Beta in front.
+    await visit("gamma", true);
+    await visit("alpha", false);
+    await visit("beta", true);
+    await expect
+      .poll(
+        () =>
+          app.eval<number>(
+            `window.catamorphicDesktop.historyQuery({query:'handbook',limit:10}).then(result=>result.entries.length)`,
+          ),
+        { timeout: 15_000 },
+      )
+      .toBe(3);
+
+    await open();
+    await type("handbook");
+    await wait(
+      `const ids=rows().map(row=>row.dataset.itemId);
+       return ids[0]?.startsWith('open-tab:browser:') && ids[1]==='bookmark:library:delta' &&
+         ['Beta handbook','Gamma handbook'].every(name=>labels().some(label=>label.includes(name)))`,
+      "open tab, then bookmark, then history",
+    );
+    const order = await run<string[]>("return labels()");
+    expect(order[0]).toContain("Alpha handbook");
+    // The tab in front is not offered; its page and Gamma follow as history.
+    expect(
+      order.filter((label) => label.includes("Alpha handbook")),
+    ).toHaveLength(1);
+    const beta = order.findIndex((label) => label.includes("Beta handbook"));
+    const gamma = order.findIndex((label) => label.includes("Gamma handbook"));
+    expect(beta).toBeGreaterThan(1);
+    expect(gamma).toBeGreaterThan(1);
+    await shot("palette-open-tabs.png");
+    await run(`key('Enter')`);
+    await wait(`return !input()`);
+    await expect.poll(address, { timeout: 15_000 }).toContain("/alpha");
+
+    // The Tabs mode lists open tabs in strip order and switches to one.
+    await open();
+    await type("tabs");
+    await run(`key(' ')`);
+    await wait(`return chip()==='Tabs'`);
+    await wait(
+      `return labels().some(label=>label.includes('Alpha handbook') && label.includes('current')) && labels().some(label=>label.includes('Beta handbook'))`,
+      "open tabs listed",
+    );
+    await shot("palette-tabs-mode.png");
+    await type("beta");
+    await wait(`return labels()[0]?.includes('Beta handbook')`);
+    await run(`key('Enter')`);
+    await wait(`return !input()`);
+    await expect.poll(address, { timeout: 15_000 }).toContain("/beta");
+  } finally {
+    server.close();
+  }
 });

@@ -51,8 +51,10 @@ export function useHistoryRows({
             ? [entry.project.name]
             : [],
       kind: "navigate",
-      category:
-        entry.target.kind === "web" || entry.target.kind === "local"
+      // A page the user saved ranks as the bookmark it is.
+      category: bookmarkedUsage.has(entry.id)
+        ? "bookmark"
+        : entry.target.kind === "web" || entry.target.kind === "local"
           ? "page"
           : "resource",
       usage: entry.id,

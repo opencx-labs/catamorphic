@@ -13,7 +13,12 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { historyIdentity } from "../../shared/history.js";
 import { OPEN_ACTIONS, type OpenMode } from "../../shared/open-mode.js";
-import { webUsageKey } from "../../shared/palette.js";
+import {
+  PALETTE_SURFACE_KINDS,
+  type PaletteSurfaceKind,
+  surfaceUsageKey,
+  webUsageKey,
+} from "../../shared/palette.js";
 import type { SidebarSource } from "../../shared/sidebar.js";
 import type { WorkspaceSourceName } from "../../shared/workspace-config.js";
 import { SiteFavicon } from "../components/site-favicon.js";
@@ -143,11 +148,61 @@ const PRESENTATION: Record<
   tabs: {
     prefix: "open-tab",
     icon: PanelTop,
-    category: "resource",
-    detail: () => "Open tab",
-    keywords: () => ["tab"],
+    category: "tab",
+    detail: (item) => {
+      const url = urlOf(item);
+      return url ? hostOf(url) : undefined;
+    },
+    keywords: (item) => {
+      const url = urlOf(item);
+      return [
+        ...(url ? [hostOf(url), bareUrl(url)] : []),
+        ...(typeof item.data?.path === "string" ? [item.data.path] : []),
+        "tab",
+        "open tab",
+        "switch",
+      ];
+    },
   },
 };
+
+const isSurfaceKind = (kind: unknown): kind is PaletteSurfaceKind =>
+  PALETTE_SURFACE_KINDS.some((surface) => surface === kind);
+
+/**
+ * An open tab's usage key is that of what it shows (its page, chat, file
+ * or surface), so it ranks with that destination's use and stands in for
+ * its other rows while it is open. A tab showing nothing history knows
+ * (a terminal, a blank page) has none and learns nothing.
+ */
+function tabUsage(
+  item: AppCollectionItem,
+  projectId: string | undefined,
+): string | undefined {
+  const { kind, name, sessionId, path } = item.data ?? {};
+  const url = urlOf(item);
+  if (url?.startsWith("file:"))
+    return historyIdentity({
+      kind: "local",
+      path: decodeURIComponent(new URL(url).pathname),
+    });
+  if (url) return webUsageKey(url);
+  if (isSurfaceKind(kind)) return surfaceUsageKey(kind);
+  if (!projectId) return undefined;
+  if (kind === "chat" && typeof sessionId === "string")
+    return historyIdentity({ kind: "chat", projectId, resource: sessionId });
+  if (
+    (kind === "workflow" ||
+      kind === "app" ||
+      kind === "run" ||
+      kind === "artifact") &&
+    typeof name === "string"
+  )
+    return historyIdentity({ kind, projectId, resource: name });
+  if (kind === "editor" && typeof path === "string")
+    return historyIdentity({ kind: "file", projectId, resource: path });
+  return undefined;
+}
 
 /**
  * A workspace source row as a palette row: the same label, icon and
@@ -190,7 +245,7 @@ export function sourcePaletteRow({
     id: `${view.prefix}:${item.id}`,
     icon: lucideIcon(item.icon) ?? view.icon,
     iconNode:
-      source === "bookmarks" && url ? (
+      (source === "bookmarks" || source === "tabs") && url ? (
         <SiteFavicon url={url} faviconUrl={faviconUrl} className="size-4" />
       ) : undefined,
     label,
@@ -199,12 +254,26 @@ export function sourcePaletteRow({
     category: view.category,
     // Archived chats are found here, not kept in a sidebar.
     sidebar: listed && item.data?.visibility !== "archived",
-    usage: url
-      ? webUsageKey(url)
-      : view.history && projectId
-        ? historyIdentity({ kind: view.history, projectId, resource: item.id })
-        : `${source}:${item.id}`,
+    usage:
+      source === "tabs"
+        ? tabUsage(item, projectId)
+        : url
+          ? webUsageKey(url)
+          : view.history && projectId
+            ? historyIdentity({
+                kind: view.history,
+                projectId,
+                resource: item.id,
+              })
+            : `${source}:${item.id}`,
     ...(source === "bookmarks" ? { bookmarked: true } : {}),
+    // Open tabs and an imported bookmark library are found by typing; the
+    // tab strip already shows the tabs, and a library is too long a list.
+    ...(source === "tabs" ||
+    (source === "bookmarks" && item.data?.scope === "library")
+      ? { searchOnly: true }
+      : {}),
+    ...(source === "tabs" && item.data?.active ? { current: true } : {}),
     disabled: !opens,
     kind: "navigate",
     run: (mode) =>
@@ -275,7 +344,8 @@ export async function loadSourceRows({
  * when that source changes, so they match the sidebar without a second copy
  * of any list. Chats include archived ones (the palette is where an old
  * conversation is found) but not subsessions, which history lists.
- * Bookmarks are the pinned and project ones, not an imported library.
+ * Bookmarks include an imported library: a saved page ranks above the
+ * same page in history.
  */
 export function useSourceRows({
   names,
@@ -318,12 +388,12 @@ export function useSourceRows({
         signal: controller.signal,
         onError: (message) => errorRef.current(message),
         archived: true,
-        children: false,
+        // Chats without their subsessions (history lists those); bookmarks
+        // with their folders, where an imported library keeps most pages.
+        children: source === "bookmarks",
         listed: listedRef.current.includes(source),
-        keep: (item) =>
-          source !== "bookmarks" ||
-          item.data?.scope === "pinned" ||
-          item.data?.scope === "project",
+        // New Tab pages (the palette's own tabs) are not places to go.
+        keep: (item) => source !== "tabs" || item.data?.kind !== "palette",
       })
         .catch((): PaletteItem[] => [])
         .then((rows) => {
@@ -332,7 +402,8 @@ export function useSourceRows({
           // A beat that changed nothing keeps the rows (and their ranking).
           const signature = rows
             .map(
-              (row) => `${row.id}\u0000${row.label}\u0000${row.detail ?? ""}`,
+              (row) =>
+                `${row.id}\u0000${row.label}\u0000${row.detail ?? ""}\u0000${row.usage ?? ""}\u0000${row.keywords.join(" ")}\u0000${row.current ? 1 : 0}`,
             )
             .join("\n");
           setState((current) => {
