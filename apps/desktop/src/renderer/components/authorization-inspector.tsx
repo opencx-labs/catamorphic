@@ -65,8 +65,9 @@ export function AuthorizationInspector() {
             </summary>
             <div className="mt-2 space-y-3 text-fg-muted">
               <p>
-                Browser import brings in passwords, but does not transfer
-                passkeys. Try another method on the sign-in page.
+                Browser import brings in passwords but not passkeys. Passkeys
+                from Bitwarden or KeePassXC can be imported in Passwords.
+                Otherwise, try another method on the sign-in page.
               </p>
               <p>
                 If you still cannot sign in, continue in your usual browser.

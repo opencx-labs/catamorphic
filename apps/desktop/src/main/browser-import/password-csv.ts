@@ -39,22 +39,34 @@ function rows(source: string): string[][] {
   return result;
 }
 
-/** Parse the CSV formats exported by Chrome and Firefox. */
+/** Parse the CSV formats exported by Chrome, Firefox, Safari and Bitwarden. */
 export function parsePasswordCsv(source: string): ImportedPassword[] {
   const [header, ...records] = rows(source.replace(/^\uFEFF/, ""));
   if (!header) return [];
   const columns = header.map((name) => name.trim().toLowerCase());
   const urlIndex = columns.findIndex((name) =>
-    ["url", "origin", "website"].includes(name),
+    ["url", "origin", "website", "login_uri"].includes(name),
   );
-  const usernameIndex = columns.indexOf("username");
-  const passwordIndex = columns.indexOf("password");
+  const usernameIndex = columns.findIndex((name) =>
+    ["username", "login_username"].includes(name),
+  );
+  const passwordIndex = columns.findIndex((name) =>
+    ["password", "login_password"].includes(name),
+  );
   if (urlIndex < 0 || usernameIndex < 0 || passwordIndex < 0) {
     throw new Error("This is not a Chrome or Firefox password export");
   }
   const imported: ImportedPassword[] = [];
   for (const record of records) {
-    const rawUrl = record[urlIndex]?.trim();
+    // Bitwarden's CSV joins an item's several URIs with commas.
+    const rawUrl = (
+      columns[urlIndex] === "login_uri"
+        ? record[urlIndex]
+            ?.split(",")
+            .map((uri) => uri.trim())
+            .find((uri) => /^https?:\/\//i.test(uri))
+        : record[urlIndex]
+    )?.trim();
     const password = record[passwordIndex] ?? "";
     if (!rawUrl || !password) continue;
     try {
