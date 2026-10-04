@@ -83,6 +83,31 @@ it("ranks what a sidebar keeps with commands, above other rows of its kind", () 
   expect(chats("release").map((item) => item.id)).toEqual(["chat", "archived"]);
 });
 
+it("ranks an open tab above a bookmark, and a bookmark above a page", () => {
+  const search = createPaletteIndex([
+    row("page", "Pull requests · GitHub", { category: "page" }),
+    row("bookmark", "Issues · GitHub", { category: "bookmark" }),
+    row("tab", "Actions · GitHub", { category: "tab" }),
+  ]);
+  expect(search("github").map((item) => item.id)).toEqual([
+    "tab",
+    "bookmark",
+    "page",
+  ]);
+  // A sidebar's shortlist never pulls an open tab down to its own rank.
+  const listed = createPaletteIndex([
+    row("pinned", "Linear", { category: "bookmark", sidebar: true }),
+    row("tab", "Linear", { category: "tab", sidebar: true }),
+  ]);
+  expect(listed("linear")[0]?.id).toBe("tab");
+  // A command the query starts still comes before a tab merely containing it.
+  const commands = createPaletteIndex([
+    row("tab", "Asset pipeline", { category: "tab" }),
+    row("settings", "Settings", { category: "surface" }),
+  ]);
+  expect(commands("set")[0]?.id).toBe("settings");
+});
+
 it("lets a much better match or heavy use lift a page", () => {
   const search = createPaletteIndex([
     row("action", "Toggle pull request panel", {

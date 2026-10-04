@@ -14,7 +14,7 @@ import { customPaletteModes } from "./custom.js";
 import { useFileModes } from "./files.js";
 import { useHistoryMode } from "./history.js";
 import { useInputModes } from "./input.js";
-import { commandsMode, settingsMode } from "./lists.js";
+import { commandsMode, settingsMode, tabsMode } from "./lists.js";
 import { sectionMode } from "./section.js";
 import { useSitesMode } from "./sites.js";
 
@@ -28,6 +28,7 @@ export function usePaletteModes({
   historyRow,
   settingItems,
   commandItems,
+  tabItems,
   sectionSearch,
   projectAgents,
 }: {
@@ -36,6 +37,8 @@ export function usePaletteModes({
   historyRow: (entry: HistoryEntry) => PaletteItem;
   settingItems: readonly PaletteItem[];
   commandItems: readonly PaletteItem[];
+  /** Open tabs in strip order, the one in front marked current. */
+  tabItems: readonly PaletteItem[];
   sectionSearch: Extract<PaletteModeRequest, { mode: "section" }> | null;
 }) {
   const {
@@ -68,6 +71,7 @@ export function usePaletteModes({
   const modes = useMemo<PaletteMode[]>(
     () => [
       history,
+      tabsMode(tabItems),
       ...files,
       settingsMode(settingItems),
       sites,
@@ -79,6 +83,7 @@ export function usePaletteModes({
     ],
     [
       history,
+      tabItems,
       files,
       settingItems,
       sites,

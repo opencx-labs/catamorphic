@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { InProcessRunner } from "@catamorphic/agent-runner";
 import { afterEach, describe, expect, it } from "vitest";
-import { createClaudeCodeAdapter } from "../index.js";
+import { type ClaudeQuery, createClaudeCodeAdapter } from "../index.js";
 import {
   CLAUDE_SCENARIOS,
   loadClaudeTranscript,
@@ -189,4 +189,72 @@ it("a replay refuses an adapter that asks the SDK for something else", async () 
   expect(completed?.status).toBe("failed");
   expect(completed?.error?.message).toContain("differs from the recording");
   expect(new ReplayDivergenceError("x").name).toBe("ReplayDivergenceError");
+});
+
+it("an interrupt the CLI does not stop for aborts it and still reads as interrupted", async () => {
+  const places = await directories();
+  const base = CLAUDE_SCENARIOS.find((entry) => entry.name === "interrupt");
+  const step = base?.attempts[0];
+  if (!base || !step) throw new Error("interrupt is missing");
+  // The provider is slow and the CLI never answers the interrupt; when the
+  // adapter aborts it, the SDK throws its own words, which are not the
+  // agent's and must not reach the conversation.
+  const query: ClaudeQuery = ({ options }) => {
+    const signal = options.abortController?.signal;
+    if (!signal) throw new Error("The adapter passed no abort controller");
+    return {
+      async *[Symbol.asyncIterator]() {
+        yield {
+          type: "system",
+          subtype: "api_retry",
+          attempt: 1,
+          max_retries: 10,
+          retry_delay_ms: 1_000,
+          error_status: 529,
+          error: "overloaded",
+          uuid: "00000000-0000-4000-8000-000000000001",
+          session_id: "session-slow",
+        };
+        await new Promise((_resolve, reject) => {
+          const aborted = () =>
+            reject(new Error("Claude Code process aborted by user"));
+          if (signal.aborted) aborted();
+          else signal.addEventListener("abort", aborted, { once: true });
+        });
+      },
+      interrupt: () => new Promise(() => {}),
+      close: () => {},
+    };
+  };
+  const [outcome] = await runScenario({
+    scenario: {
+      ...base,
+      attempts: [
+        {
+          ...step,
+          host: {
+            onEvent: (event, control) => {
+              if (event.type === "diagnostic") control.interrupt("Stopped");
+            },
+          },
+        },
+      ],
+    },
+    directories: places,
+    modelUrl: MODEL_URL,
+    fixtureServer: { transport: "stdio", command: "fixture-mcp-server" },
+    runner: () =>
+      new InProcessRunner({
+        adapters: {
+          "claude-code": createClaudeCodeAdapter({
+            query,
+            interruptGraceMs: 50,
+          }),
+        },
+        version: "replay",
+      }),
+  });
+  expect(outcome?.completed).toMatchObject({ status: "interrupted" });
+  expect(outcome?.completed?.error).toBeUndefined();
+  expect(JSON.stringify(outcome?.events)).not.toContain("aborted by user");
 });

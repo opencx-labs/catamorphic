@@ -1455,6 +1455,8 @@ export function App({
               : undefined,
           chatIcon: icons[chat.localId] ?? null,
           fork: forks[chat.localId] ?? false,
+          // Incognito chats stay out of what lists remember (ADR 0062).
+          sessionId: chat.incognito ? undefined : chat.sessionId,
           // Hover card: which agent runs this conversation (+ lineage).
           detail:
             [
@@ -3539,6 +3541,20 @@ export function App({
     );
   };
 
+  /** An open tab, from a list (the palette's tab rows): opened the way asked. */
+  const focusTab = (key: string, mode?: CommitMode) => {
+    if (mode === "floating") {
+      if (workspaceRef.current.floatingKey !== key) floatSurface(key);
+      return;
+    }
+    if (mode === "side") {
+      dropTabToSide(key, "right");
+      return;
+    }
+    // As a click on the tab strip: a split keeps its panes.
+    updateWorkspace((ws) => transitionWorkspace(ws, { type: "select", key }));
+  };
+
   const toggleFloatingTerminal = () => {
     const existing = workspaceRef.current.terminals.find(
       (terminal) => terminal.floatingTool === "terminal",
@@ -5291,7 +5307,9 @@ export function App({
   const workspaceSources = useWorkspaceSources({
     projectId: projectId ?? "",
     profileId: activeProfile?.id,
-    tabs: presentedTabs,
+    tabs: allTabs,
+    activeTabKey: focusedTabKey,
+    onFocusTab: focusTab,
     onOpenUrl: (url, mode) => void openUrl(url, mode ?? "replace"),
     surface: sidebarSurface,
     writesProgram: !memberShell,

@@ -19,13 +19,13 @@ import {
 import type { SidebarSource, SidebarSurface } from "../../shared/sidebar.js";
 import { isWorkspaceSource } from "../../shared/workspace-config.js";
 import { buildTree, isVisibleProjectFile } from "../components/files-nav.js";
-import type { WorkspaceTab } from "../components/workspace-tabs.js";
 import { appsQuery } from "./apps.js";
 import { desktopApi } from "./desktop-api.js";
 import {
   readSidebarSessionPage,
   subscribeSidebarSessions,
 } from "./sidebar-sessions.js";
+import { tabKey, type WorkspaceTab } from "./workspace-types.js";
 
 /**
  * The one data layer for workspace lists (ADR 0186). Sidebar app widgets
@@ -57,10 +57,31 @@ export interface WorkspaceSources extends AppCollections {
   }) => Promise<AppCollectionItem[]>;
 }
 
+/** Lucide icon per tab kind, for tab rows outside the tab strip. */
+const TAB_ICONS: Partial<Record<WorkspaceTab["kind"], string>> = {
+  browser: "Globe",
+  chat: "MessageSquare",
+  terminal: "SquareTerminal",
+  editor: "FileCode",
+  workflow: "Workflow",
+  app: "LayoutGrid",
+  run: "Play",
+  diff: "FileDiff",
+  settings: "Settings",
+  "profile-settings": "Settings",
+  history: "History",
+  sites: "SlidersHorizontal",
+  passwords: "KeyRound",
+  downloads: "Download",
+  usage: "ChartColumn",
+};
+
 export function useWorkspaceSources({
   projectId,
   profileId,
   tabs,
+  activeTabKey,
+  onFocusTab,
   onOpenUrl,
   surface,
   writesProgram,
@@ -71,7 +92,12 @@ export function useWorkspaceSources({
 }: {
   projectId: string;
   profileId?: string;
+  /** Every open tab, in strip order. */
   tabs: readonly WorkspaceTab[];
+  /** The tab in front (a floating one first). */
+  activeTabKey: string | undefined;
+  /** Bring an open tab to the front, tile it beside, or float it. */
+  onFocusTab: (key: string, mode?: OpenMode) => void;
   onOpenUrl: (url: string, mode?: OpenMode) => void;
   surface: SidebarSurface;
   /** Whether the viewer edits the program (`program:write`): Git sources and program files. */
@@ -89,26 +115,46 @@ export function useWorkspaceSources({
   const actions = useRef({
     onOpenSession,
     onOpenTab,
+    onFocusTab,
     onOpenFile,
     onSessionAction,
     onOpenUrl,
     tabs,
+    activeTabKey,
   });
   actions.current = {
     onOpenSession,
     onOpenTab,
+    onFocusTab,
     onOpenFile,
     onSessionAction,
     onOpenUrl,
     tabs,
+    activeTabKey,
   };
   const tabListeners = useRef(new Set<() => void>());
-  const previousTabs = useRef(tabs);
+  // The strip is rebuilt every render: only what a tab row shows (or which
+  // tab is in front) changing refreshes the source.
+  const tabsSignature = [
+    activeTabKey,
+    ...tabs.map((tab) =>
+      [
+        tabKey(tab),
+        tab.label,
+        tab.detail,
+        tab.bookmarkUrl,
+        tab.kind === "browser" ? tab.faviconUrl : "",
+        tab.kind === "chat" ? tab.sessionId : "",
+        tab.groupId,
+      ].join("\u0000"),
+    ),
+  ].join("\n");
+  const previousTabs = useRef(tabsSignature);
   useEffect(() => {
-    if (previousTabs.current === tabs) return;
-    previousTabs.current = tabs;
+    if (previousTabs.current === tabsSignature) return;
+    previousTabs.current = tabsSignature;
     for (const listener of tabListeners.current) listener();
-  }, [tabs]);
+  }, [tabsSignature]);
   return useMemo(() => {
     const sessions = new Map<string, AgentSession>();
     const openers = new Map<string, (mode?: OpenMode) => void>();
@@ -133,8 +179,11 @@ export function useWorkspaceSources({
         const queue: Array<string | null> = [null];
         // Activity already lists running children beside their parents.
         const walk = children && source !== "activity";
+        // Bookmark folders read one in-memory tree; other sources may call
+        // the server per page.
+        const pageBudget = source === "bookmarks" ? limit : 50;
         let pages = 0;
-        while (queue.length && rows.size < limit && pages < 50) {
+        while (queue.length && rows.size < limit && pages < pageBudget) {
           const parentId = queue.shift() ?? null;
           let cursor: string | undefined;
           do {
@@ -154,7 +203,7 @@ export function useWorkspaceSources({
             }
             // A page can be empty after filtering and still have more.
             cursor = page.cursor;
-          } while (cursor && rows.size < limit && pages < 50);
+          } while (cursor && rows.size < limit && pages < pageBudget);
         }
         return [...rows.values()].slice(0, limit);
       },
@@ -448,17 +497,33 @@ export function useWorkspaceSources({
               })
             : [];
         } else if (source === "tabs") {
-          items = actions.current.tabs.map((tab) => {
-            const id = `${tab.kind}:${tab.name}`;
+          const { tabs: open, activeTabKey: front } = actions.current;
+          items = open.map((tab) => {
+            const id = tabKey(tab);
             openers.set(`tabs:${id}`, (mode) =>
-              actions.current.onOpenTab(tab, mode),
+              actions.current.onFocusTab(id, mode),
             );
             return {
               id,
               label: tab.label ?? tab.name,
-              icon: "PanelTop",
+              icon: TAB_ICONS[tab.kind] ?? "PanelTop",
+              description: tab.detail,
               parentId: tab.groupId ?? null,
-              actions: [{ id: "open", label: "Focus tab" }],
+              actions: [{ id: "open", label: "Switch to tab" }],
+              data: {
+                kind: tab.kind,
+                name: tab.name,
+                active: id === front,
+                ...(tab.kind === "browser"
+                  ? { url: tab.bookmarkUrl, faviconUrl: tab.faviconUrl ?? null }
+                  : {}),
+                ...(tab.kind === "chat" && tab.sessionId
+                  ? { sessionId: tab.sessionId }
+                  : {}),
+                ...(tab.kind === "editor" && tab.detail
+                  ? { path: tab.detail }
+                  : {}),
+              },
             };
           });
         }

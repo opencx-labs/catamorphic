@@ -497,6 +497,26 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-04: The palette goes to open tabs first; the dock fits its screen edge
+
+Typing in the palette now finds open tabs, and a tab ranks above a bookmark
+or a page in history with the same match: switching back is the likely
+intent. An open tab stands in for its page, bookmark, chat or file, so each
+destination is one row; app surfaces keep their own row, which already
+brings their tab forward. The tab in front is not offered. `tabs` + Space
+lists every open tab in strip order (ADR 0186). Imported bookmarks are now
+searched too, so a saved page ranks above the same page in history; they
+stay out of the empty palette, as do open tabs.
+
+The downloads popover opens toward the middle of the screen when the strip
+rests at a side, instead of hanging past the window's edge, and the
+detached dock's window grows while it is open, as it does for dialogs.
+Like a chat bubble, the downloads bubble shows a close control on hover
+once nothing is downloading; closed, it stays away until the next download.
+Dragging the strip over a page or app frame no longer stalls: while the
+handle is held, a shield over the window keeps the frame from taking the
+pointer, so the middle resting spot lights and takes the drop.
+
 ### 2026-10-01: Pages load like Chrome's; unused tabs sleep
 
 Pages loaded slower than in Chrome, and Meet sometimes showed its icon

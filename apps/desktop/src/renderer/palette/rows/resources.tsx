@@ -16,6 +16,7 @@ import { bareUrl, hostOf } from "../urls.js";
 
 /** The workspace sources the unscoped palette lists (ADR 0186). */
 const RESOURCE_SOURCES: readonly WorkspaceSourceName[] = [
+  "tabs",
   "workflows",
   "apps",
   "chats",
@@ -23,8 +24,8 @@ const RESOURCE_SOURCES: readonly WorkspaceSourceName[] = [
 ];
 
 /**
- * Project resources the palette opens: workflows, apps, chats and
- * bookmarks from the workspace sources the sidebar reads, plus custom
+ * Project resources the palette opens: open tabs, workflows, apps, chats
+ * and bookmarks from the workspace sources the sidebar reads, plus custom
  * sidebar links. Each ranks by its history counts.
  */
 export function useResourceRows({ active }: { active: boolean }) {
@@ -49,6 +50,28 @@ export function useResourceRows({ active }: { active: boolean }) {
     projectId,
     onError: (message) => onError?.(message),
   });
+  // Bookmarked pages carry a star wherever they appear, history included.
+  const bookmarkedUsage = useMemo(
+    () =>
+      new Set(
+        sourceRows.flatMap((row) =>
+          row.bookmarked && row.usage ? [row.usage] : [],
+        ),
+      ),
+    [sourceRows],
+  );
+  // Every open tab in strip order (the Tabs mode), the one in front marked.
+  const tabItems = useMemo(
+    () =>
+      sourceRows
+        .filter((row) => row.category === "tab")
+        .map((row) =>
+          row.usage && bookmarkedUsage.has(row.usage)
+            ? { ...row, bookmarked: true }
+            : row,
+        ),
+    [sourceRows, bookmarkedUsage],
+  );
   const resourceItems = useMemo<PaletteItem[]>(() => {
     const items: PaletteItem[] = [];
     if (canCreateWorkflows)
@@ -64,7 +87,17 @@ export function useResourceRows({ active }: { active: boolean }) {
         run: (mode) =>
           onSendToAgent(NEW_WORKFLOW_PROMPT, mode === "tab" ? "tab" : "float"),
       });
-    items.push(...sourceRows);
+    // Among everything else, a tab says it is open. The tab in front is
+    // where the user already is.
+    items.push(
+      ...tabItems
+        .filter((row) => !row.current)
+        .map((row) => ({
+          ...row,
+          detail: row.detail ? `${row.detail} · Open tab` : "Open tab",
+        })),
+      ...sourceRows.filter((row) => row.category !== "tab"),
+    );
     // Static links in custom sections have no source: they are the config.
     const addCustomItems = (customItems: SidebarItem[] | undefined) => {
       for (const item of customItems ?? []) {
@@ -104,18 +137,9 @@ export function useResourceRows({ active }: { active: boolean }) {
     canCreateWorkflows,
     onSendToAgent,
     sourceRows,
+    tabItems,
     workspaceConfig,
     onOpenUrl,
   ]);
-  // Bookmarked pages carry a star wherever they appear, history included.
-  const bookmarkedUsage = useMemo(
-    () =>
-      new Set(
-        sourceRows.flatMap((row) =>
-          row.bookmarked && row.usage ? [row.usage] : [],
-        ),
-      ),
-    [sourceRows],
-  );
-  return { resourceItems, bookmarkedUsage };
+  return { resourceItems, tabItems, bookmarkedUsage };
 }

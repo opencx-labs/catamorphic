@@ -85,6 +85,9 @@ export function DockHost({
   // starts, and resizing then would move the window out from under the
   // pointer.
   const [dragging, setDragging] = useState(false);
+  // The strip's handle is held: a shield covers the window so pages and
+  // app frames under a quick drag never take the pointer's moves.
+  const [held, setHeld] = useState(false);
   const [dragTarget, setDragTarget] = useState<
     "left" | "center" | "right" | null
   >(null);
@@ -92,6 +95,7 @@ export function DockHost({
   const [positionError, setPositionError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [region, setRegion] = useState<CSSProperties>({ inset: 0 });
   const actions = useRef(
     new Map<
@@ -253,8 +257,10 @@ export function DockHost({
   // Transparent headroom above the strip gives hints room to open above a
   // bubble instead of being clamped onto it.
   const DOCK_HEADROOM = 48;
-  const windowWidth = expanded || dialogOpen ? 780 : railWidth;
-  const windowHeight = expanded || dialogOpen ? 560 : 76 + DOCK_HEADROOM;
+  // Dialogs and the downloads popover need more room than the strip.
+  const roomy = expanded || dialogOpen || downloadsOpen;
+  const windowWidth = roomy ? 780 : railWidth;
+  const windowHeight = roomy ? 560 : 76 + DOCK_HEADROOM;
   // Collapsing the strip with a chat open plays the chat's exit first; the
   // window keeps the open placement until that chat has minimized, then
   // moves to the collapsed corner with the bubble.
@@ -264,8 +270,10 @@ export function DockHost({
   const sentSizeRef = useRef("");
   const sizeKey = `${windowWidth}x${windowHeight}:${windowExpanded}`;
   useEffect(() => {
-    // Never mid-drag: resizing would move the window from under the pointer.
-    if (!detachedWindow || dragging || sentSizeRef.current === sizeKey) return;
+    // Never while the handle is held: main took the window's bounds when
+    // the press began, and resizing would move it from under the pointer.
+    if (!detachedWindow || dragging || held || sentSizeRef.current === sizeKey)
+      return;
     sentSizeRef.current = sizeKey;
     void desktopApi.dockResize({
       width: windowWidth,
@@ -279,6 +287,7 @@ export function DockHost({
     windowExpanded,
     sizeKey,
     dragging,
+    held,
   ]);
   // Over the headroom, the margins around the chat, or any other empty
   // space, the window lets clicks through to whatever is behind it (where
@@ -578,6 +587,7 @@ export function DockHost({
       nativeDrag("cancel", dragStart.current.x);
     suppressClick.current = dragStart.current?.moved ?? false;
     dragStart.current = null;
+    setHeld(false);
     setDragging(false);
     setDragLeft(null);
     setDragTarget(null);
@@ -608,6 +618,7 @@ export function DockHost({
       };
       if (detachedWindow) nativeDrag("start", event.screenX);
       event.currentTarget.setPointerCapture(event.pointerId);
+      setHeld(true);
     },
     onPointerMove: (event: PointerEvent<HTMLButtonElement>) => {
       const start = dragStart.current;
@@ -647,6 +658,12 @@ export function DockHost({
       if (!start) return;
       dragStart.current = null;
       suppressClick.current = start.moved;
+      // The click a drag's release makes arrives in this same task; one
+      // that never comes must not swallow the next real click.
+      if (start.moved)
+        setTimeout(() => {
+          suppressClick.current = false;
+        });
       if (detachedWindow)
         nativeDrag(start.moved ? "end" : "cancel", event.screenX);
       else if (start.moved) {
@@ -664,6 +681,7 @@ export function DockHost({
                 : "center",
           );
       }
+      setHeld(false);
       setDragging(false);
       setDragLeft(null);
       setDragTarget(null);
@@ -706,6 +724,8 @@ export function DockHost({
     },
   });
   showing.current = new Set();
+  // Where the strip rests: a corner while collapsed, its placement open.
+  const railSpot = collapsed ? snapshot.side : snapshot.placement;
   return (
     <div
       data-dock-host
@@ -838,6 +858,17 @@ export function DockHost({
       })}
       {isPresentation && (currentProjectId || scoped.length > 0) && (
         <>
+          {/* A browser page or app frame under the pointer would take its
+              moves despite the pointer capture, stranding the drag short
+              of the resting spot it was headed for. The detached window
+              moves with the pointer instead. */}
+          {held && !detachedWindow && (
+            <div
+              aria-hidden="true"
+              data-dock-drag-shield
+              className="pointer-events-auto fixed inset-0 z-30 cursor-grabbing"
+            />
+          )}
           <ChatBubbles
             attention={Object.fromEntries(
               scoped.map((chat) => [chat.entry.localId, chat.attention]),
@@ -914,6 +945,16 @@ export function DockHost({
             onClose={(id) => actions.current.get(id)?.close?.()}
             trailing={
               <DownloadsBubble
+                // The bubble ends the strip: at a side of the screen its
+                // popover opens toward the middle.
+                align={
+                  railSpot === "right"
+                    ? "end"
+                    : railSpot === "left"
+                      ? "start"
+                      : "center"
+                }
+                onOpenChange={setDownloadsOpen}
                 onOpenAll={() =>
                   navigateSurface({
                     url: "downloads",
