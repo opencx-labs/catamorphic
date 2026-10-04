@@ -32,6 +32,11 @@ import {
 } from "../components/password-prompt.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import {
+  moveFocusAsApp,
+  personInputCount,
+  personMovedOn,
+} from "../lib/app-focus.js";
+import {
   type Bookmark,
   type BookmarksData,
   desktopApi,
@@ -842,19 +847,31 @@ export function BrowserScreen({
   revealToolbarRef.current = onRevealToolbar;
   // Cmd+L from the app (renderer keydown) and from inside page content
   // (forwarded by main via before-input-event on the guest).
-  const focusAddress = useCallback(() => {
-    const input = inputRef.current;
-    if (!input) return;
-    const focus = () => {
-      setEditing(true);
-      input.focus();
-      input.select();
-    };
-    if (sidebarToolbar) {
-      revealToolbarRef.current?.();
-      requestAnimationFrame(focus);
-    } else focus();
-  }, [sidebarToolbar]);
+  const focusAddress = useCallback(
+    ({ greetingSince }: { greetingSince?: number | null } = {}) => {
+      const input = inputRef.current;
+      if (!input) return;
+      const greeting = greetingSince !== undefined;
+      const focus = () => {
+        // A greeting answers what brought the tab forward: not once the
+        // person has acted since, even a frame later. It is the app's own
+        // move, so a chat about to focus its composer keeps doing so.
+        if (greeting && personMovedOn(greetingSince ?? null)) return;
+        setEditing(true);
+        const move = () => {
+          input.focus();
+          input.select();
+        };
+        if (greeting) moveFocusAsApp(move);
+        else move();
+      };
+      if (sidebarToolbar) {
+        revealToolbarRef.current?.();
+        requestAnimationFrame(focus);
+      } else focus();
+    },
+    [sidebarToolbar],
+  );
 
   // Chrome reloads: Cmd+R, Cmd+Shift+R (hard, cache-ignoring).
   const reload = useCallback((hard: boolean) => {
@@ -924,12 +941,28 @@ export function BrowserScreen({
     return () => registerCommandsRef.current?.(null);
   }, [focusAddress, reload]);
 
-  // A fresh New Tab greets with the address bar focused (Chrome behavior).
+  // A fresh New Tab greets with the address bar focused (Chrome behavior);
+  // a page takes focus as its tab comes forward. Both answer what brought
+  // the tab forward, so neither happens once the person has done something
+  // since (opened a chat over it, say), and both are the app's own moves.
+  const cameForwardAt = useRef<number | null>(null);
+  if (!active) cameForwardAt.current = null;
+  else cameForwardAt.current ??= personInputCount();
+  const firstUrlRef = useRef(firstUrl);
+  firstUrlRef.current = firstUrl;
   useEffect(() => {
-    if (!active) return;
-    if (firstUrl === null) focusAddress();
-    else webviewRef.current?.focus();
-  }, [active, firstUrl, focusAddress]);
+    if (!active || personMovedOn(cameForwardAt.current)) return;
+    if (firstUrlRef.current === null)
+      focusAddress({ greetingSince: cameForwardAt.current });
+    else moveFocusAsApp(() => webviewRef.current?.focus());
+  }, [active, focusAddress]);
+  // A New Tab's first address hands focus to its page, as Enter does.
+  const hadUrl = useRef(firstUrl !== null);
+  useEffect(() => {
+    if (firstUrl === null || hadUrl.current) return;
+    hadUrl.current = true;
+    if (active) webviewRef.current?.focus();
+  }, [firstUrl, active]);
 
   // Follow bookmark changes from anywhere (this star, another tab's star,
   // the sidebar's delete/pin) so the star never drifts from the sidebar.
@@ -1198,8 +1231,13 @@ export function BrowserScreen({
             setEditing(true);
             setInputValue(pageUrl);
             lastInputLength.current = pageUrl.length;
-            // Chrome selects the full URL on focus.
-            requestAnimationFrame(() => event.target.select());
+            // Chrome selects the full URL on focus, a frame later. select()
+            // also focuses, so only while the address bar still has focus
+            // (a chat opened in that frame keeps its composer).
+            requestAnimationFrame(() => {
+              if (document.activeElement === event.target)
+                event.target.select();
+            });
           }}
           onBlur={() => {
             setEditing(false);

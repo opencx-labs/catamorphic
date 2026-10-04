@@ -1623,3 +1623,47 @@ describe("subagents and background watchers", () => {
     );
   });
 });
+
+describe("arriving surfaces and focus", () => {
+  it("a New Tab whose greeting lands after a chat opened over it leaves the chat focused", async () => {
+    const { tabPlacement, headerPlacement } = await run<{
+      tabPlacement: string;
+      headerPlacement: string;
+    }>(`return window.catamorphicDesktop.getPrefs();`);
+    // With the toolbar in the sidebar, a New Tab focuses its address bar a
+    // frame after it arrives; hold frames so a chat opens in between.
+    await run(
+      `return window.catamorphicDesktop.setPrefs({ tabPlacement: 'sidebar', headerPlacement: 'sidebar' }).then(() => true);`,
+    );
+    await runWait(`return !!$('[data-header-placement="sidebar"]');`, {
+      label: "toolbar in the sidebar",
+    });
+    try {
+      await settleAnimationFrame();
+      await holdAnimationFrames();
+      await run(`pressKey('t', { metaKey: true, altKey: true }); return true;`);
+      await run(`pressKey('n', { metaKey: true }); return true;`);
+      await runWait(`return !!floatingDock();`, {
+        label: "a chat over the New Tab",
+      });
+      await waitForHeldAnimationFrame();
+      await releaseAnimationFrames();
+      await settleAnimationFrame();
+      // The person's last act was opening the chat: it keeps focus.
+      await runWait(
+        `return document.activeElement?.matches?.('[data-composer-input]') &&
+          document.activeElement.closest('[data-floating-chat]') !== null;`,
+        { label: "composer focused, not the New Tab's address bar" },
+      );
+    } finally {
+      await restoreAnimationFrames();
+      await run(
+        `return window.catamorphicDesktop.setPrefs(${JSON.stringify({ tabPlacement, headerPlacement })}).then(() => true);`,
+      );
+      await runWait(
+        `return !!$('[data-header-placement="${headerPlacement}"]');`,
+        { label: "layout restored" },
+      );
+    }
+  });
+});
