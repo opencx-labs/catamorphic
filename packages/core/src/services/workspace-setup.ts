@@ -355,10 +355,24 @@ export function workspaceSetupFailedNote(input: {
       : []),
   ];
   const log = outcome.log.trimEnd().slice(-8_000);
+  const commands =
+    where.length === 0
+      ? ""
+      : ` ${where.length === 1 ? "The command is" : "The commands are"} ${where.join(" and ")}.`;
   return [
-    `[Workspace] Setting up this workspace ${what}, so what it installs may be missing. It runs again before the next turn. The commands are ${where.join(" and ")}.`,
+    `[Workspace] Setting up this workspace ${what}, so what it installs may be missing. It runs again before the next turn.${commands}`,
     log
       ? `The end of ${input.logPath}:\n\n\`\`\`\n${log}\n\`\`\``
       : `Its output is in ${input.logPath}.`,
   ].join("\n\n");
+}
+
+/**
+ * What the agent is told when its workspace's setup could not run at all,
+ * such as when the sandbox did not answer (ADR 0207).
+ */
+export function workspaceSetupUnavailableNote(input: {
+  reason: string;
+}): string {
+  return `[Workspace] Setting up this workspace could not run (${input.reason.slice(0, 500)}), so what it installs may be missing. It runs again before the next turn.`;
 }

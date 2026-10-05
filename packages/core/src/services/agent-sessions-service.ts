@@ -234,7 +234,9 @@ import { EnvironmentCapacityError } from "./worker-capacity.js";
 import {
   runWorkspaceSetup,
   sessionDirectory,
+  type WorkspaceSetupOutcome,
   workspaceSetupFailedNote,
+  workspaceSetupUnavailableNote,
 } from "./workspace-setup.js";
 
 export type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
@@ -5557,7 +5559,9 @@ export class AgentSessionsService {
     const timeoutMinutes =
       input.environment?.timeoutMinutes ?? DEFAULT_SETUP_TIMEOUT_MINUTES;
     let shown = false;
-    const outcome = await withSpan(
+    const outcome:
+      | WorkspaceSetupOutcome
+      | { status: "unavailable"; reason: string } = await withSpan(
       {
         tracer,
         name: "agent.session.workspace.setup",
@@ -5589,13 +5593,21 @@ export class AgentSessionsService {
             });
           },
         }),
-    );
+    ).catch((error: unknown) => ({
+      // The turn goes on without it, as after a failed command (ADR 0207).
+      status: "unavailable" as const,
+      reason: error instanceof Error ? error.message : String(error),
+    }));
     if (shown)
       await this.showPreparing({
         sessionId: session.id,
         turnId: input.turn.id,
         activity: "Preparing agent",
       });
+    if (outcome.status === "unavailable")
+      return input.signal.aborted
+        ? undefined
+        : workspaceSetupUnavailableNote({ reason: outcome.reason });
     if (outcome.status !== "failed") return undefined;
     return workspaceSetupFailedNote({
       outcome,

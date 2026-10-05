@@ -12,6 +12,7 @@ import {
   setupFingerprint,
   workspaceSetupFailedNote,
   workspaceSetupScript,
+  workspaceSetupUnavailableNote,
 } from "../services/workspace-setup.js";
 
 /*
@@ -145,19 +146,31 @@ describe("planning a workspace's setup", () => {
     expect(note).toContain(".work/project.json");
     expect(note).toContain(".work/personal/environment.json");
     expect(note).toContain("boom");
+    expect(note).toContain("The commands are");
+    const timedOut = workspaceSetupFailedNote({
+      outcome: {
+        status: "failed",
+        exitCode: null,
+        timedOut: true,
+        log: "",
+        parts: ["environment"],
+      },
+      timeoutMinutes: 1,
+      logPath: "/workspace/.work-session/setup.log",
+    });
+    expect(timedOut).toContain(
+      "did not finish within 1 minute and was stopped",
+    );
+    expect(timedOut).toContain("The command is the Environment's `setup`");
+    expect(timedOut).toContain(
+      "Its output is in /workspace/.work-session/setup.log",
+    );
     expect(
-      workspaceSetupFailedNote({
-        outcome: {
-          status: "failed",
-          exitCode: null,
-          timedOut: true,
-          log: "",
-          parts: ["environment"],
-        },
-        timeoutMinutes: 1,
-        logPath: "/workspace/.work-session/setup.log",
-      }),
-    ).toContain("did not finish within 1 minute and was stopped");
+      workspaceSetupUnavailableNote({ reason: "The machine did not answer" }),
+    ).toBe(
+      "[Workspace] Setting up this workspace could not run (The machine did not answer), so what it installs may be missing. It runs again before the next turn.",
+    );
+    for (const text of [note, timedOut]) expect(text).not.toMatch(/[–—]/);
   });
 });
 
