@@ -581,6 +581,8 @@ const tracer = getTracer("@catamorphic/core");
  * another server) preparing it at that moment (ADR 0208).
  */
 const PERSON_WORKSPACE_WAIT_MS = 60_000;
+/** Steps (readmit, wait, create) one opening takes at most. */
+const PERSON_WORKSPACE_PASSES = 200;
 
 /** Shown in place of a turn that died with the process. */
 export const INTERRUPTED_TURN_MESSAGE =
@@ -7373,7 +7375,14 @@ export class AgentSessionsService {
             WORKSPACE_NOT_RUNNING_MESSAGE,
           );
         const deadline = Date.now() + PERSON_WORKSPACE_WAIT_MS;
-        for (;;) {
+        const starting = () =>
+          new SessionWorkspaceUnavailableError(
+            "starting",
+            "This chat's workspace is starting. Try again in a moment.",
+          );
+        // Each pass waits on, or does, one step of starting it.
+        for (let pass = 0; ; pass++) {
+          if (pass >= PERSON_WORKSPACE_PASSES) throw starting();
           const session = await this.db
             .selectFrom("agent_sessions")
             .selectAll()
@@ -7413,11 +7422,7 @@ export class AgentSessionsService {
           if (!claim) {
             // A turn is opening the workspace, or another server is saving
             // it: wait for that rather than racing it.
-            if (Date.now() >= deadline)
-              throw new SessionWorkspaceUnavailableError(
-                "starting",
-                "This chat's workspace is starting. Try again in a moment.",
-              );
+            if (Date.now() >= deadline) throw starting();
             await delay(500);
             continue;
           }
