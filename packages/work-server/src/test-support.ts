@@ -3,7 +3,44 @@ import type { AgentTurnUsage, Item, Turn } from "@catamorphic/agent-protocol";
 import type { AgentSessionsService, Identity } from "@catamorphic/core";
 import pg from "pg";
 import { workServerConfigFromEnv } from "./config.js";
+import {
+  type DirectoryAccountStatus,
+  type DirectoryProvider,
+  DirectoryUnavailableError,
+} from "./identity/directory.js";
 import type { WorkServerOptions } from "./server.js";
+
+/**
+ * A directory (ADR 0161) governing Better Auth's local "credential"
+ * accounts, whose account id is the user id, so every lifecycle path runs
+ * through the real OAuth server and token gate. Accounts it does not know
+ * are active in no group; it answers only about the groups it is asked.
+ */
+export class FakeDirectory implements DirectoryProvider {
+  readonly providerId = "credential";
+  readonly requiredGroups: string[] = [];
+  readonly accounts = new Map<string, DirectoryAccountStatus>();
+  unavailable = false;
+  calls = 0;
+
+  async check(args: {
+    accountId: string;
+    groups: readonly string[];
+  }): Promise<DirectoryAccountStatus> {
+    this.calls += 1;
+    if (this.unavailable) throw new DirectoryUnavailableError("offline");
+    const status = this.accounts.get(args.accountId) ?? {
+      active: true,
+      groups: [],
+    };
+    return status.active
+      ? {
+          active: true,
+          groups: status.groups.filter((group) => args.groups.includes(group)),
+        }
+      : status;
+  }
+}
 
 /** Test servers boot from the same env parser as the image. */
 export function testServerOptions(args: {

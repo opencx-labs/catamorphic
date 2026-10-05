@@ -31,6 +31,7 @@ import {
   type Catamorphic,
   connectionAuthorizationPage,
   createCatamorphic,
+  DIRECTORY_TRIGGER_KINDS,
   defineGithubConnectionProvider,
   EncryptedCredentialVault,
   FsBackend,
@@ -558,7 +559,15 @@ async function createWorkServerInner(
       objectStore ?? new FsBundleStore(path.join(data, "app-bundles")),
     documentBlobStore:
       objectStore ?? new FsBundleStore(path.join(data, "document-blobs")),
-    triggerKinds: [aiToolCall, schedule, webhook, ...SESSION_TRIGGER_KINDS],
+    // Directory events (ADR 0209) start onboarding and offboarding
+    // automations; the account lifecycle below appends them.
+    triggerKinds: [
+      aiToolCall,
+      schedule,
+      webhook,
+      ...SESSION_TRIGGER_KINDS,
+      ...DIRECTORY_TRIGGER_KINDS,
+    ],
     // Workflows bound to `ai.tool-call` are tools on the project MCP, for
     // project agents and members' own MCP clients alike.
     mcpToolKinds: [aiToolKind],
@@ -800,6 +809,8 @@ async function createWorkServerInner(
     directories,
     sessions: workAuthConfig.sessions,
     directory: workAuthConfig.directory,
+    tenantId: SERVER_TENANT_ID,
+    projectEvents: core.projectEvents,
     // Groups that decide roles or whose work a worker takes (ADR 0167).
     mappedGroups: async () => [
       ...new Set([

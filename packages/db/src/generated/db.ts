@@ -1065,8 +1065,11 @@ export interface WorkAccounts {
   administrator: Generated<boolean>;
   directory_checked_at: Timestamp | null;
   directory_groups: Generated<Json>;
+  directory_tracked_groups: Generated<Json>;
   disabled_at: Timestamp | null;
   disabled_reason: string | null;
+  joined_at: Timestamp | null;
+  lifecycle_revision: Generated<number>;
   updated_at: Generated<Timestamp>;
   user_id: string;
 }

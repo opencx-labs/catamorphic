@@ -206,6 +206,17 @@ export {
   hole,
   mcpToolKind,
 } from "./define-trigger-kind.js";
+export {
+  DIRECTORY_EVENT_KINDS,
+  DIRECTORY_EVENT_SOURCE,
+  DIRECTORY_TRIGGER_KINDS,
+  type DirectoryEventKind,
+  type DirectoryMember,
+  directoryGroupsChanged,
+  directoryMemberJoined,
+  directoryMemberLeft,
+  directoryProjectEvent,
+} from "./directory-trigger-kinds.js";
 export { FsBundleStore } from "./fs-bundle-store.js";
 export {
   defineGitConnectionProvider,
