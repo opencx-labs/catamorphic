@@ -207,11 +207,11 @@ export class HetznerCloudClient {
   }
 
   /** The server with this id, or undefined once it is gone. */
-  async server(id: number): Promise<HetznerServer | undefined> {
+  async server(args: { id: number }): Promise<HetznerServer | undefined> {
     try {
       const body = await this.request({
         method: "GET",
-        path: `/servers/${id}`,
+        path: `/servers/${args.id}`,
       });
       return z.object({ server: HetznerServerSchema }).parse(body).server;
     } catch (error) {

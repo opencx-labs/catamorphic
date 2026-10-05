@@ -201,7 +201,7 @@ export class HetznerCloudMachines {
   }): Promise<HetznerServer[]> {
     const id = args.ref && /^\d+$/.test(args.ref) ? Number(args.ref) : null;
     if (id !== null) {
-      const server = await this.client.server(id);
+      const server = await this.client.server({ id });
       if (server && server.labels[MACHINE_LABEL] === args.name) return [server];
     }
     return this.client.servers({
