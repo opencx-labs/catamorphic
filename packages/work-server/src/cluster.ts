@@ -54,6 +54,8 @@ export async function registerWorkMachine(args: {
   labels?: Readonly<Record<string, string>>;
   /** What this machine offers beside its sandbox provider (ADR 0184). */
   capabilities?: readonly string[];
+  /** What runs its sandboxes and why (ADR 0203), for operators. */
+  backend?: EnvironmentBinding["backend"];
   /**
    * Members' sign-ins on this machine (ADR 0199), read again every few
    * seconds: a sign-in made or removed here reaches placement without a
@@ -94,6 +96,7 @@ export async function registerWorkMachine(args: {
     },
     resourceLimits: args.sandboxProvider.resourceLimits,
     labels: { ...args.labels, node: args.nodeId, plane: "control" },
+    ...(args.backend ? { backend: args.backend } : {}),
   });
   // A single server that died without releasing its lease restarts into
   // that lease: wait for it to lapse rather than refuse to boot. A

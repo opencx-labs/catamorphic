@@ -48,6 +48,8 @@ export const WorkerOfferSchema = z.strictObject({
           "images.build",
           "containers",
           "network.policy",
+          // It keeps volumes across sandboxes (ADR 0207).
+          "volumes",
           // What the machine offers beside its provider (ADR 0184).
           "credentials.personal",
           "harness.claude-code",
@@ -73,6 +75,14 @@ export const WorkerOfferSchema = z.strictObject({
     })
     .default({}),
   version: z.string().max(100).optional(),
+  /** What runs its sandboxes and why it was chosen (ADR 0203). */
+  backend: z
+    .strictObject({
+      kind: z.enum(["microsandbox", "container", "local-process"]),
+      runtime: z.enum(["runsc", "runc"]).optional(),
+      reason: z.string().max(1000),
+    })
+    .optional(),
 });
 export type WorkerOffer = z.infer<typeof WorkerOfferSchema>;
 
@@ -88,7 +98,7 @@ export const WorkerConnectSchema = z.strictObject({
 export class WorkerIsolationError extends Error {
   constructor(name: string) {
     super(
-      `Worker '${name}' serves more than one person, so it must isolate agents with microsandbox (WORK_SANDBOX=microsandbox), or be marked trusted by the operator`,
+      `Worker '${name}' serves more than one person, so it must isolate agents with microsandbox or with gVisor containers (WORK_SANDBOX=container with a runsc runtime), or be marked trusted by the operator`,
     );
     this.name = "WorkerIsolationError";
   }
@@ -452,6 +462,7 @@ export class WorkWorkerRegistry {
       },
       resourceLimits: args.offer.resourceLimits,
       labels: { ...policy.labels, node: args.nodeId, plane: "worker" },
+      ...(args.offer.backend ? { backend: args.offer.backend } : {}),
     };
     try {
       const connected = await this.deps.nodes.connectRemote({

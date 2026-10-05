@@ -72,7 +72,10 @@ describe("a worker's epoch (ADR 0192)", () => {
     const worker = await startWorkWorker({
       controlPlaneUrl: "http://127.0.0.1:1",
       dataDir: workerDir(),
-      execution: executionSettingsFromEnv({ PATH: process.env.PATH }),
+      execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
+        PATH: process.env.PATH,
+      }),
       fetch: plane.fetch,
       log: (line) => log.push(line),
     });
@@ -101,7 +104,10 @@ describe("a worker's epoch (ADR 0192)", () => {
     const worker = await startWorkWorker({
       controlPlaneUrl: "http://127.0.0.1:1",
       dataDir: workerDir(),
-      execution: executionSettingsFromEnv({ PATH: process.env.PATH }),
+      execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
+        PATH: process.env.PATH,
+      }),
       fetch: plane.fetch,
       log: (line) => log.push(line),
     });

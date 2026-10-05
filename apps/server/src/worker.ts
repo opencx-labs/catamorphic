@@ -18,6 +18,12 @@ import { workerCommand } from "./worker-cli.js";
  *                            sign-ins (/data)
  *   WORK_SANDBOX, WORK_MAX_WORKSPACES, WORK_CAPACITY_*, WORK_WORKSPACE_*
  *                            execution backend and budgets, as on a server
+ *                            (auto by default: microsandbox, gVisor
+ *                            containers, runc containers, local processes)
+ *   DOCKER_HOST, WORK_CONTAINER_RUNTIME
+ *                            the container backend's daemon and runtime
+ *   WORK_VOLUME_RETENTION_DAYS
+ *                            days an unused volume is kept (30)
  *
  * `sign-in`, `sign-out` and `sign-ins` manage members' own harness sign-ins
  * on this machine (ADR 0199); `help` lists them.

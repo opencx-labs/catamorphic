@@ -612,6 +612,7 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
         dataDir: workerDir,
         enrollmentCode: enrollment.json().code,
         execution: executionSettingsFromEnv({
+          WORK_SANDBOX: "local-process",
           PATH: process.env.PATH,
           WORK_MAX_WORKSPACES: "2",
           WORK_UNENFORCED_EGRESS: "accept",

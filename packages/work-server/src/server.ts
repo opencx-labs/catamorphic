@@ -73,7 +73,7 @@ import {
 import { startCompanyProjectSync } from "./company-sync.js";
 import type { WorkServerConfig } from "./config.js";
 import { EncryptedFileCredentialVault } from "./credential-vault.js";
-import { workExecution } from "./execution-config.js";
+import { resolveExecutionSettings, workExecution } from "./execution-config.js";
 import {
   gatewayProviders,
   parseGatewayConfig,
@@ -108,6 +108,7 @@ import {
   MachineReconciler,
 } from "./workers/machine-rules.js";
 import { signInCapabilities } from "./workers/sign-ins.js";
+import { startVolumePruning } from "./workers/volume-pruning.js";
 import { WorkWorkerRegistry } from "./workers/worker-registry.js";
 import { registerWorkerRoutes } from "./workers/worker-routes.js";
 
@@ -333,25 +334,45 @@ async function createWorkServerInner(
     databaseConfig = { db: ownDb };
   }
 
-  // --- execution: the container is the sandbox (ADR 0047) -------------
+  // --- execution: the best backend this machine offers (ADR 0203) ------
   // A shared control plane holds every member's credentials. Agent code run
   // as its plain subprocess could read them from the server's environment,
-  // so it needs a VM sandbox, enrolled workers, or an explicit opt-in.
+  // so it needs a VM or container sandbox, enrolled workers, or an explicit
+  // opt-in. The policy is known before the machine is probed.
+  const agentsHere =
+    config.execution.workloads.includes("agent") &&
+    !config.execution.trustControlPlaneAgents;
+  const agentRefusal =
+    "A Postgres deployment runs agents on the control plane only in a sandbox: set WORK_SANDBOX=microsandbox or container (or auto on a machine that offers one), or WORK_CONTROL_PLANE_WORKLOADS=workflow and enroll workers (ADR 0164).";
   if (
     config.databaseUrl &&
-    config.execution.backend === "local-process" &&
-    config.execution.workloads.includes("agent") &&
-    !config.execution.trustControlPlaneAgents
-  ) {
-    throw new Error(
-      "A Postgres deployment runs agents on the control plane only in microsandbox. Set WORK_SANDBOX=microsandbox, or WORK_CONTROL_PLANE_WORKLOADS=workflow and enroll workers (ADR 0164).",
-    );
-  }
-  const execution = workExecution({
+    agentsHere &&
+    config.execution.backend === "local-process"
+  )
+    throw new Error(agentRefusal);
+  const resolvedExecution = await resolveExecutionSettings({
     settings: config.execution,
+  });
+  log(`Sandboxes: ${resolvedExecution.backend} (${resolvedExecution.reason})`);
+  if (
+    config.databaseUrl &&
+    agentsHere &&
+    resolvedExecution.backend === "local-process"
+  )
+    throw new Error(agentRefusal);
+  const execution = workExecution({
+    settings: resolvedExecution,
     dataDir: data,
+    log,
   });
   const sandboxProvider = execution.provider;
+  // Volumes nobody used for long leave this machine too (ADR 0207).
+  const stopVolumePruning = startVolumePruning({
+    provider: sandboxProvider,
+    retentionMs: execution.volumeRetentionMs,
+    log,
+  });
+  disposers.push(async () => stopVolumePruning());
   if (!ownDb) throw new Error("Database was not initialized");
   await migrateToLatest({ db: ownDb });
   const objectStore = config.databaseUrl
@@ -452,6 +473,7 @@ async function createWorkServerInner(
     isolation: execution.isolation,
     workloads: config.execution.workloads,
     capabilities: execution.machineCapabilities,
+    backend: execution.backend,
     signIns: () => signInCapabilities(execution.signInRoot),
     sandboxProvider,
     placement: {

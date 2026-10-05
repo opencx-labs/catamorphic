@@ -140,6 +140,7 @@ it.skipIf(!process.env.DATABASE_URL)(
         dataDir: path.join(dir, "worker"),
         enrollmentCode: enrollment.json().code,
         execution: executionSettingsFromEnv({
+          WORK_SANDBOX: "local-process",
           PATH: process.env.PATH,
           WORK_MAX_WORKSPACES: "2",
         }),

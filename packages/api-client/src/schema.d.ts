@@ -9971,7 +9971,7 @@ export interface paths {
                         /** @enum {string} */
                         isolation?: "none" | "process" | "sandbox";
                         processes?: boolean;
-                        capabilities?: ("images" | "images.build" | "containers" | "network.policy")[];
+                        capabilities?: ("images" | "images.build" | "containers" | "network.policy" | "volumes")[];
                     };
                 };
             };
@@ -10113,6 +10113,13 @@ export interface paths {
                                         /** @enum {string} */
                                         harness: "claude-code" | "codex";
                                         member: string;
+                                    }[];
+                                    readonly volumes?: {
+                                        key: string;
+                                        path: string;
+                                        exclusive?: boolean;
+                                        sizeMb?: number;
+                                        temporary?: boolean;
                                     }[];
                                 };
                             } | {

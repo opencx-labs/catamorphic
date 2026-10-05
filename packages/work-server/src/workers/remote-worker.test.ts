@@ -98,6 +98,7 @@ async function enrollWorker(args: {
       dataDir,
       enrollmentCode: enrollment.json().code,
       execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
         PATH: process.env.PATH,
         WORK_MAX_WORKSPACES: args.workspaces,
         ...args.env,
@@ -189,6 +190,7 @@ describe("remote workers (ADR 0164)", () => {
       dataDir: workerDir,
       enrollmentCode: code,
       execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
         PATH: process.env.PATH,
         WORK_MAX_WORKSPACES: "2",
       }),
@@ -235,6 +237,7 @@ describe("remote workers (ADR 0164)", () => {
       controlPlaneUrl: base,
       dataDir: workerDir,
       execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
         PATH: process.env.PATH,
         WORK_MAX_WORKSPACES: "2",
       }),
