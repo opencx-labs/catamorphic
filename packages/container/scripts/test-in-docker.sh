@@ -49,9 +49,10 @@ docker exec "$name" mkdir -p /work
   docker exec -i "$name" tar -x --warning=no-unknown-keyword -C /work
 
 echo "Installing and building..."
+# Only what the container package and the root tools need.
 docker exec -w /work "$name" bash -c '
   set -euo pipefail
-  bun install --frozen-lockfile --ignore-scripts >/tmp/install.log 2>&1 || { tail -40 /tmp/install.log; exit 1; }
+  bun install --frozen-lockfile --ignore-scripts --filter @catamorphic/container --filter catamorphic >/tmp/install.log 2>&1 || { tail -40 /tmp/install.log; exit 1; }
   node_modules/.bin/turbo run build --filter=@catamorphic/container... --output-logs=errors-only >/tmp/build.log 2>&1 || { tail -60 /tmp/build.log; exit 1; }
 '
 
