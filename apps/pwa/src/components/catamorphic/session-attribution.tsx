@@ -23,6 +23,8 @@ export function SessionAttribution({
   const detail = record(metadata);
   const provenance = record(detail?.provenance);
   const action = record(detail?.sessionAction);
+  // A subsession's result names the subagent it came from.
+  const subagent = string(record(detail?.delegation)?.title);
   if (author.kind === "user") return null;
   const actor =
     author.kind === "workflow"
@@ -30,7 +32,9 @@ export function SessionAttribution({
       : author.kind === "watcher"
         ? "Watcher"
         : author.kind === "agent"
-          ? "Agent"
+          ? subagent
+            ? `Subagent · ${subagent.length > 60 ? `${subagent.slice(0, 59)}…` : subagent}`
+            : "Agent"
           : "System";
   const workflow =
     author.kind === "workflow"

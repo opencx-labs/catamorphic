@@ -502,13 +502,18 @@ export function ChatBubbles({
   const spot = collapsed ? side : placement;
   const lastRect = useRef<DOMRect | null>(null);
   const lastSpot = useRef(spot);
+  const wasDragged = useRef(false);
   useLayoutEffect(() => {
     const rail = railRef.current;
     if (!rail) return;
     const previous = lastRect.current;
     const rect = rail.getBoundingClientRect();
     lastRect.current = rect;
-    if (lastSpot.current === spot || dragLeft !== null) {
+    // A dropped strip slides to its spot from where it was let go, the
+    // spot it started from included.
+    const dropped = wasDragged.current && dragLeft === null;
+    wasDragged.current = dragLeft !== null;
+    if ((lastSpot.current === spot && !dropped) || dragLeft !== null) {
       lastSpot.current = spot;
       return;
     }

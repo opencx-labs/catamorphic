@@ -1,6 +1,6 @@
 # 0112: Browser control and host tool media
 
-Status: Accepted. Local computer-use defaults refined by [ADR 0140](0140-local-agent-freedom-and-executable-sidebar-sources.md).
+Status: Accepted. Local computer-use defaults refined by [ADR 0140](0140-local-agent-freedom-and-executable-sidebar-sources.md); uploads, downloads, page inspection and lasting uids added by [ADR 0202](0202-agents-see-the-browser-subagents-and-their-path.md).
 
 ## Context
 

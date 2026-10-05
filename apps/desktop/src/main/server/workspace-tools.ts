@@ -229,8 +229,10 @@ export const WORKSPACE_TOOL_POLICY: Readonly<
   list_project_sessions: read,
   read_project_session: read,
   send_project_session_message: write,
-  spawn_subsession: write,
-  wait_for_subsessions: read,
+  // Subsessions are the agent's subagents (ADR 0202): a model that cannot
+  // see them by name concludes it cannot delegate.
+  spawn_subsession: { ...write, eager: true },
+  wait_for_subsessions: { ...read, eager: true },
   interrupt_subsession: write,
   request_user_attention: presentation,
   set_session_activity: presentation,
@@ -246,9 +248,11 @@ export const WORKSPACE_TOOL_POLICY: Readonly<
   workspace_overview: { ...read, eager: true },
   // What is on screen is the most common workspace question (ADR 0152).
   read_tab: { ...read, eager: true },
-  open_browser: presentation,
-  browser_snapshot: read,
-  browser_act: write,
+  // Driving Work's browser is a core interaction (ADR 0202): behind
+  // discovery, models concluded the browser could only read and navigate.
+  open_browser: { ...presentation, eager: true },
+  browser_snapshot: { ...read, eager: true },
+  browser_act: { ...write, eager: true },
   // Long-running work is a core execution need for every harness (ADR 0155).
   run_background_command: { ...write, eager: true },
   read_background_output: { ...read, eager: true },
@@ -351,9 +355,14 @@ export function buildWorkspaceToolkit(
     {
       name: "spawn_subsession",
       description:
-        "Delegate one bounded task to a child session using an allowed delegation route. The child runs independently and reports its settled result back to this session.",
+        "Start a subagent: a child session that works on one bounded, self-contained task in parallel with you, through an allowed delegation route. Use it wherever you would use a subagent or Task tool (parallel research, independent reviews, exploration). Returns at once; its result arrives in this chat as a message from it, during your turn if you are still working.",
       parameters: {
-        task: z.string().min(1).describe("Concrete task for the child"),
+        task: z
+          .string()
+          .min(1)
+          .describe(
+            "The whole task: the child sees nothing else unless inherit",
+          ),
         route_id: z.string().min(1).optional().describe("Allowed route id"),
         agent_id: z
           .string()
@@ -368,29 +377,37 @@ export function buildWorkspaceToolkit(
         if (!sessionCoordination) {
           throw new Error("Session coordination is not available yet.");
         }
-        return sessionCoordination.spawn(ctx.projectId, ctx.sessionId, {
-          task: String(input.task),
-          ...(input.route_id ? { routeId: String(input.route_id) } : {}),
-          ...(input.agent_id ? { agentId: String(input.agent_id) } : {}),
-          contextMode: input.context_mode as "fresh" | "inherit",
-          ...(input.title ? { title: String(input.title) } : {}),
-        });
+        const child = await sessionCoordination.spawn(
+          ctx.projectId,
+          ctx.sessionId,
+          {
+            task: String(input.task),
+            ...(input.route_id ? { routeId: String(input.route_id) } : {}),
+            ...(input.agent_id ? { agentId: String(input.agent_id) } : {}),
+            contextMode: input.context_mode as "fresh" | "inherit",
+            ...(input.title ? { title: String(input.title) } : {}),
+          },
+        );
+        return {
+          ...subsessionSummary(child),
+          note: "Running. Its result arrives in this chat as a message from it.",
+        };
       },
     },
     {
       name: "wait_for_subsessions",
       description:
-        "Wait until at least one selected child session settles, or until the timeout. Use this when your work depends on delegated results.",
+        "Wait until one of your running subsessions (or those given) finishes, or the timeout; call again to keep waiting. Each finished one's result arrives as a message in this chat.",
       parameters: {
         session_ids: z.array(z.string().min(1)).max(100).optional(),
-        timeout_ms: z.number().int().min(0).max(60_000).default(30_000),
+        timeout_ms: z.number().int().min(0).max(60_000).default(60_000),
       },
       execute: async (input, ctx) => {
         if (!ctx.sessionId) throw new Error("This turn has no chat session.");
         if (!sessionCoordination) {
           throw new Error("Session coordination is not available yet.");
         }
-        return sessionCoordination.waitForSubsessions(
+        const children = await sessionCoordination.waitForSubsessions(
           ctx.projectId,
           ctx.sessionId,
           {
@@ -400,6 +417,12 @@ export function buildWorkspaceToolkit(
             timeoutMs: Number(input.timeout_ms),
           },
         );
+        return children.length > 0
+          ? children.map(subsessionSummary)
+          : {
+              subsessions: [],
+              note: "None of your subsessions is running; finished ones already sent their results to this chat.",
+            };
       },
     },
     {
@@ -760,7 +783,7 @@ export function buildWorkspaceToolkit(
     {
       name: "open_browser",
       description:
-        "Open a new browser tab in the user's workspace and take control of it. The tab is visible to the user (marked as agent-driven; they can watch you work live) and appears as a chip on your chat. Returns the tab key. Call browser_snapshot next to see the page's interactive elements. Prefer this over web fetching whenever a task needs logins, clicks, forms, or the user's own browser profile.",
+        "Open a tab in Work's browser, signed in as the person, and drive it with browser_snapshot and browser_act. Prefer it to fetching whenever a task needs their sign-ins, clicks, forms or uploads; open your own tab rather than driving one of theirs unless asked. They can watch and take over. Returns the tab key.",
       parameters: {
         url: z.string().describe("The http(s) URL to open"),
       },
@@ -772,14 +795,14 @@ export function buildWorkspaceToolkit(
         );
         return {
           ...result,
-          note: "Tab opened under your control. Take a browser_snapshot to see the page; release it with surface_control when you're done.",
+          note: "Tab opened under your control. Take a browser_snapshot to see the page; when done, discover surface_control to release or close it.",
         };
       },
     },
     {
       name: "browser_snapshot",
       description:
-        "List a browser tab's interactive elements (links, buttons, inputs …) as opaque uids plus the page url/title. Use format=image for a screenshot (including canvas and embedded frames); coordinates use CSS viewport pixels. Snapshot before acting, and take a fresh snapshot after anything that changes the page (navigation, submit, dynamic content): uids go stale.",
+        "A browser tab's interactive elements (links, buttons, inputs) with uids for browser_act, plus its url and title; any tab key from the workspace context works. format image is a screenshot (canvas, embedded frames) whose coordinates are CSS viewport pixels. A uid stays valid while its element stays in the page; snapshot again after the page changes.",
       parameters: {
         key: z.string().describe("Browser tab key, e.g. 'browser:<id>'"),
         format: z.enum(["dom", "image"]).optional(),
@@ -794,9 +817,9 @@ export function buildWorkspaceToolkit(
     {
       name: "browser_act",
       description:
-        "Act on a browser tab: 'click'/'hover' an element by uid or x/y CSS coordinates, 'drag' from x/y to toX/toY, 'fill' text or 'select' an option value by uid (from browser_snapshot), 'press' a key (e.g. Enter) on the focused element, 'navigate' to a url, 'scroll' up/down, 'read' the page's visible text, or 'wait_for' text to appear. Use point_at with a uid to highlight an element for the user. Fails if the user has taken over the tab. Respect that and continue without it, or reclaim with surface_control only if your task requires the tab.",
+        "Act on a browser tab with real input: click or hover (uid, or x and y), drag (x, y to toX, toY), fill (uid, text), select (uid, option value as text), press (press_key, e.g. Enter, Meta+a), navigate (url), scroll (direction), read (visible text), wait_for (text), upload (uid of a file input or the button that opens one, files as absolute paths; never hidden files or ~/Library). Inspect with evaluate (expression: JavaScript run in the page, its value returned), console and network (what the page logged and requested since the tab was last read), and downloads (files this tab saved, with paths; timeoutMs waits for them). Fails while the person has taken the tab over; respect that.",
       parameters: {
-        key: z.string().describe("Browser tab key"),
+        key: z.string().describe("Browser tab key, 'browser:<id>'"),
         action: z.enum([
           "click",
           "hover",
@@ -808,11 +831,16 @@ export function buildWorkspaceToolkit(
           "scroll",
           "read",
           "wait_for",
+          "upload",
+          "evaluate",
+          "console",
+          "network",
+          "downloads",
         ]),
         uid: z
           .string()
           .optional()
-          .describe("Element reference (click, hover, fill, select)"),
+          .describe("Element uid from browser_snapshot"),
         x: z.number().nonnegative().optional(),
         y: z.number().nonnegative().optional(),
         toX: z.number().nonnegative().optional(),
@@ -827,14 +855,25 @@ export function buildWorkspaceToolkit(
           .describe("Key for 'press', e.g. 'Enter', 'Escape', 'Tab'"),
         url: z.string().optional().describe("Target url (navigate)"),
         direction: z.enum(["up", "down"]).optional().describe("scroll only"),
-        timeoutMs: z.number().int().positive().max(10000).optional(),
+        files: z.array(z.string()).optional().describe("upload only"),
+        expression: z.string().optional().describe("evaluate only"),
+        timeoutMs: z.number().int().positive().max(600_000).optional(),
       },
-      execute: (input, ctx) =>
-        bridge.browserAct(
+      execute: (input, ctx) => {
+        const key = String(input.key);
+        if (!key.startsWith("browser:"))
+          throw new Error(
+            `key names the browser tab ('browser:<id>'), not ${JSON.stringify(key)}; a keyboard key goes in press_key.`,
+          );
+        const action = parseBrowserAction(input);
+        return bridge.browserAct(
           ctx.projectId,
-          String(input.key),
-          parseBrowserAction(input),
-        ),
+          key,
+          action.type === "upload" && ctx.workingDirectory
+            ? { ...action, workingDirectory: ctx.workingDirectory }
+            : action,
+        );
+      },
     },
     {
       name: "run_background_command",
@@ -979,7 +1018,7 @@ export function buildWorkspaceToolkit(
     {
       name: "write_terminal",
       description:
-        "Send raw input to a terminal you control: answer a prompt, drive an interactive command (REPLs, installers), or send control sequences. End a line with \\r to press Enter; '\\u0003' sends Ctrl+C to stop the foreground process. Targeting the user's own terminal takes it over first (they see the handoff). Fails if the user has taken the terminal over.",
+        "Type raw input into a terminal: answer a prompt, drive an interactive command (REPLs, ssh, installers), or send control sequences. End a line with \\r to press Enter; '\\u0003' sends Ctrl+C to stop the foreground process. Targeting the user's own terminal takes it over first (they see the handoff). Fails if the user has taken the terminal over.",
       parameters: {
         terminalId: z
           .string()
@@ -1230,6 +1269,23 @@ async function filterWorkspaceOverview(
   };
 }
 
+/** What an agent needs about a subsession: which one, and how it stands. */
+function subsessionSummary(child: unknown): Record<string, unknown> {
+  const parsed = z
+    .object({
+      status: z.string(),
+      session: z.object({ id: z.string(), title: z.string().nullable() }),
+    })
+    .safeParse(child);
+  return parsed.success
+    ? {
+        sessionId: parsed.data.session.id,
+        title: parsed.data.session.title,
+        status: parsed.data.status,
+      }
+    : { subsession: child };
+}
+
 function boundedTranscript(transcript: {
   title: string | null;
   messages: Array<{ role: string; content: string }>;
@@ -1293,7 +1349,7 @@ function parseBrowserAction(
     case "fill":
     case "select":
       if (uid === undefined || text === undefined) {
-        throw new Error("fill needs a uid and text");
+        throw new Error(`${action} needs a uid and text`);
       }
       return { type: action, uid, text };
     case "press":
@@ -1316,6 +1372,25 @@ function parseBrowserAction(
       return {
         type: "wait_for",
         text,
+        timeoutMs:
+          typeof input.timeoutMs === "number" ? input.timeoutMs : undefined,
+      };
+    case "upload": {
+      const files = z.array(z.string()).safeParse(input.files);
+      if (uid === undefined || !files.success || files.data.length === 0)
+        throw new Error("upload needs a uid and files (absolute paths)");
+      return { type: "upload", uid, files: files.data };
+    }
+    case "evaluate":
+      if (typeof input.expression !== "string" || !input.expression.trim())
+        throw new Error("evaluate needs an expression");
+      return { type: "evaluate", expression: input.expression };
+    case "console":
+    case "network":
+      return { type: action };
+    case "downloads":
+      return {
+        type: "downloads",
         timeoutMs:
           typeof input.timeoutMs === "number" ? input.timeoutMs : undefined,
       };

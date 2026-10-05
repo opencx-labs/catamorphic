@@ -38377,16 +38377,18 @@
                   },
                   "input": {
                     "default": {},
+                    "description": "The capability's own input, per its discovered schema",
                     "type": "object",
                     "additionalProperties": {}
                   },
                   "requestId": {
+                    "description": "Optional; the same id again marks a retry of one operation",
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 200
                   }
                 },
-                "required": ["name", "requestId"]
+                "required": ["name"]
               }
             }
           }

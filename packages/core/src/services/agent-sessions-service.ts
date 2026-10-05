@@ -580,6 +580,18 @@ const CHECKPOINT_AUTHOR = AGENT_COMMIT_AUTHOR;
 
 const SESSION_TASK_SUMMARY_LIMIT = 240;
 
+/** An untitled chat's name from its first message, until its harness names it. */
+function provisionalTitle(input: {
+  text: string;
+  attachments: readonly { name?: string }[];
+}): string {
+  const names = input.attachments
+    .map((attachment) => attachment.name)
+    .filter(Boolean);
+  const text = input.text.replace(/\s+/g, " ").trim() || names.join(", ");
+  return text.length > 500 ? `${text.slice(0, 499)}…` : text;
+}
+
 /** Compact, bounded peer context derived from a session's latest request. */
 export function summarizeSessionTask(message: string): string | null {
   const normalized = message.replace(/\s+/g, " ").trim();
@@ -2081,6 +2093,16 @@ export class AgentSessionsService {
     };
     // The item comes first: a turn's input is in the log before the turn.
     events.unshift({ type: "item.added", item });
+    // An untitled chat goes by what it was first asked to do from the
+    // moment it is asked, until its harness names it. Context delivered
+    // without a turn (message_only) names nothing.
+    if (input.session.title === null && dispatch !== "message_only") {
+      const title = provisionalTitle({
+        text: input.text,
+        attachments: input.attachments ?? [],
+      });
+      if (title) events.push({ type: "session.changed", session: { title } });
+    }
     if (attention)
       events.push({
         type: "session.changed",
@@ -6768,6 +6790,11 @@ export class AgentSessionsService {
     });
   }
 
+  /**
+   * Wait until one of the selected children settles, or the timeout. With
+   * no selection, the children running now: one that settled earlier is no
+   * news. Each settled result also reaches the parent as a message.
+   */
   async waitForSubsessions(
     identity: Identity,
     projectId: string,
@@ -6776,26 +6803,31 @@ export class AgentSessionsService {
   ): Promise<AgentSubsession[]> {
     const timeoutMs = Math.min(Math.max(input.timeoutMs ?? 30_000, 0), 60_000);
     const deadline = Date.now() + timeoutMs;
-    while (true) {
-      const children = await this.listSubsessions(
-        identity,
-        projectId,
-        sourceSessionId,
-      );
-      const selected = input.sessionIds?.length
+    const children = await this.listSubsessions(
+      identity,
+      projectId,
+      sourceSessionId,
+    );
+    const watched = new Set(
+      (input.sessionIds?.length
         ? children.filter((child) =>
             input.sessionIds?.includes(child.session.id),
           )
-        : children;
-      if (
-        selected.length === 0 ||
-        selected.some((child) => child.status !== "running") ||
-        Date.now() >= deadline
-      ) {
-        return selected;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 100));
+        : children.filter((child) => child.status === "running")
+      ).map((child) => child.session.id),
+    );
+    let selected = children.filter((child) => watched.has(child.session.id));
+    while (
+      selected.length > 0 &&
+      selected.every((child) => child.status === "running") &&
+      Date.now() < deadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      selected = (
+        await this.listSubsessions(identity, projectId, sourceSessionId)
+      ).filter((child) => watched.has(child.session.id));
     }
+    return selected;
   }
 
   async interruptSubsession(
@@ -8507,6 +8539,15 @@ export class AgentSessionsService {
     sourceAgent: RegisteredCodingAgent,
     allowFurtherDelegation: boolean | undefined,
   ): string {
+    // Only an agent this host gives spawn_subsession hears about it: one
+    // without it (a server's agent keeps its harness's own subagents)
+    // would be pointed at a tool it does not have.
+    const offered =
+      sourceAgent.harness.placement === "host" &&
+      (sourceAgent.harness.hostTools ?? []).some(
+        (tool) => tool.name === "spawn_subsession",
+      );
+    if (!offered) return "";
     if (allowFurtherDelegation === false) {
       return "Delegation is disabled for this subsession. Do not call spawn_subsession.";
     }
@@ -8545,7 +8586,7 @@ export class AgentSessionsService {
       return `- ${route.id}: ${target}${route.description ? ` (${route.description})` : ""}; onward delegation ${route.allowFurtherDelegation ? "allowed" : "disabled"}`;
     });
     return [
-      `You may run at most ${policy.maxConcurrentChildren} active subsessions. Call spawn_subsession with one of these route ids and, for a route listing several agents, the exact agent_id:`,
+      `Subsessions are your subagents. spawn_subsession starts one on a bounded, self-contained task that runs in parallel with you, at most ${policy.maxConcurrentChildren} at a time: use it wherever you would use a subagent or a Task tool, such as parallel research or exploration, independent reviews, or work to keep out of this conversation. Its result arrives here as a message from it, during your turn while you still work. Pass one of these route ids and, for a route listing several agents, the exact agent_id:`,
       ...routes,
     ].join("\n");
   }
@@ -9485,6 +9526,11 @@ export class AgentSessionsService {
       .executeTakeFirst();
     if (!delegation) return;
 
+    const child = await this.db
+      .selectFrom("agent_sessions")
+      .select("title")
+      .where("id", "=", input.sessionId)
+      .executeTakeFirst();
     if (input.status === "awaiting_input") {
       const delivered = await this.db
         .selectFrom("agent_items")
@@ -9513,8 +9559,16 @@ export class AgentSessionsService {
             sessionId: input.sessionId,
             agentId: null,
           },
-          mode: "queue",
+          mode: "steer",
           idempotencyKey: `delegation:${delegation.id}:awaiting-input`,
+          metadata: {
+            delegation: {
+              id: delegation.id,
+              childSessionId: input.sessionId,
+              status: "awaiting_input",
+              ...(child?.title ? { title: child.title } : {}),
+            },
+          },
         },
       );
       return;
@@ -9529,6 +9583,8 @@ export class AgentSessionsService {
       );
     const result =
       input.content.trim() || `Subsession ${input.sessionId} ${status}.`;
+    // Like a subagent's: the result joins the parent's turn while it still
+    // works (it may be waiting on it), and wakes the parent when it does not.
     await this.deliver(
       input.identity,
       input.projectId,
@@ -9540,13 +9596,14 @@ export class AgentSessionsService {
           sessionId: input.sessionId,
           agentId: null,
         },
-        mode: "queue",
+        mode: "steer",
         idempotencyKey: `delegation:${delegation.id}:result`,
         metadata: {
           delegation: {
             id: delegation.id,
             childSessionId: input.sessionId,
             status,
+            ...(child?.title ? { title: child.title } : {}),
           },
         },
       },

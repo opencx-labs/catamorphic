@@ -5,6 +5,7 @@ import { settleSidebarContent } from "./sidebar-transition.js";
 
 interface FakeTransition {
   nameAtStart: string;
+  settlingAtStart: boolean;
   finish: () => void;
 }
 
@@ -15,6 +16,7 @@ describe("settleSidebarContent", () => {
   let anchor: HTMLElement;
   let transitions: FakeTransition[];
   let resized: boolean;
+  let atPoint: () => Element[];
 
   const rect = (left: number, width: number) => ({
     left,
@@ -45,7 +47,8 @@ describe("settleSidebarContent", () => {
     Reflect.set(anchor, "getBoundingClientRect", () =>
       resized ? rect(400, 400) : rect(300, 400),
     );
-    Reflect.set(document, "elementFromPoint", () => anchor);
+    atPoint = () => [anchor, content];
+    Reflect.set(document, "elementsFromPoint", () => atPoint());
     transitions = [];
     Reflect.set(document, "startViewTransition", (update: () => void) => {
       let finish = () => {};
@@ -54,6 +57,7 @@ describe("settleSidebarContent", () => {
       });
       transitions.push({
         nameAtStart: content.style.viewTransitionName,
+        settlingAtStart: "contentSettling" in document.documentElement.dataset,
         finish,
       });
       update();
@@ -68,7 +72,7 @@ describe("settleSidebarContent", () => {
 
   afterEach(() => {
     Reflect.deleteProperty(document, "startViewTransition");
-    Reflect.deleteProperty(document, "elementFromPoint");
+    Reflect.deleteProperty(document, "elementsFromPoint");
     document.documentElement.style.removeProperty("--content-shift");
     document.body.innerHTML = "";
   });
@@ -83,11 +87,40 @@ describe("settleSidebarContent", () => {
     await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1));
     expect(transitions).toHaveLength(1);
     expect(transitions[0]?.nameAtStart).toBe("workspace-content");
+    // The chats over the content take layers of their own meanwhile.
+    expect(transitions[0]?.settlingAtStart).toBe(true);
     // The column was 300px into the box and is 200px into it now.
     expect(shift()).toBe("-100px");
     transitions[0]?.finish();
     await vi.waitFor(() => expect(content.style.viewTransitionName).toBe(""));
     expect(shift()).toBe("");
+    expect("contentSettling" in document.documentElement.dataset).toBe(false);
+  });
+
+  it("measures the content under a floating chat", async () => {
+    const dock = document.createElement("section");
+    dock.dataset.floatingChat = "";
+    const composer = dock.appendChild(document.createElement("div"));
+    document.body.append(dock);
+    atPoint = () => [composer, dock, anchor, content];
+    settleSidebarContent({ sidebar, wanted: () => true, update });
+    await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(shift()).toBe("-100px");
+  });
+
+  it("treats a chat tab over the content as a centred column", async () => {
+    const tab = document.createElement("section");
+    tab.dataset.chatTab = "";
+    document.body.append(tab);
+    atPoint = () => [tab, anchor, content];
+    // The pane under the chat keeps its left edge; the chat's column does not.
+    Reflect.set(anchor, "getBoundingClientRect", () =>
+      resized ? rect(200, 400) : rect(0, 400),
+    );
+    settleSidebarContent({ sidebar, wanted: () => true, update });
+    await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    // Half of the 200px the content gave up.
+    expect(shift()).toBe("-100px");
   });
 
   it("applies at once in a workspace that is not showing", () => {

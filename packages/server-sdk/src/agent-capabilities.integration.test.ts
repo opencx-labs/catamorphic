@@ -400,11 +400,11 @@ it("discovers only matching authorized schemas and rechecks visibility after rev
   ).rejects.toThrow();
   expect(executions).toBe(1);
 });
-it("narrows by every word and falls back to any word for descriptive queries", async () => {
+it("ranks by the words a capability matches, so descriptive queries still find it", async () => {
   const names = async (query: string) =>
     (await gateway.discover({ query })).items.map((item) => item.name);
   expect(await names("people search")).toEqual(["people.search"]);
-  // No capability matches all three words; the one that matches any does.
+  // No capability matches all three words; the one that matches most leads.
   expect(await names("find people photographs")).toContain("people.search");
   expect(await names("photographs")).toEqual([]);
 });

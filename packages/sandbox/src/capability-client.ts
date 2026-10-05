@@ -59,10 +59,31 @@ export class HttpAgentCapabilityGateway implements AgentCapabilityGateway {
       signal,
       redirect: "error",
     });
-    if (!response.ok)
+    if (!response.ok) {
+      // The caller's own refusal reads as the gateway wrote it (an invalid
+      // input names its fields and schema); a server fault stays generic.
+      const detail =
+        response.status < 500
+          ? await response.text().then(errorMessage, () => "")
+          : "";
       throw new Error(
-        `Capability gateway rejected ${operation} (${response.status})`,
+        `Capability gateway rejected ${operation} (${response.status})${detail ? `: ${detail}` : ""}`,
       );
+    }
     return response.json();
   }
+}
+
+function errorMessage(body: string): string {
+  let message = body;
+  try {
+    const parsed = z
+      .object({ message: z.string().optional(), error: z.string().optional() })
+      .safeParse(JSON.parse(body));
+    if (parsed.success)
+      message = parsed.data.message ?? parsed.data.error ?? body;
+  } catch {
+    // Not JSON: the text is the message.
+  }
+  return message.length > 4000 ? `${message.slice(0, 3999)}…` : message;
 }

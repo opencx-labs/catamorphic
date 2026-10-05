@@ -102,10 +102,10 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0087](0087-workflow-woken-session-attention.md) | Workflow-woken sessions are the notification record | Superseded by 0156 (who a workflow's chat reaches) |
 | [0088](0088-desktop-web-links-stay-in-workspace.md) | Desktop web links stay in the workspace | Accepted |
 | [0089](0089-project-shaped-member-shell.md) | Project-shaped member shell and durable session provenance | Accepted |
-| [0090](0090-first-class-subsessions-and-delegation.md) | First-class subsessions and explicit delegation grants | Accepted (amended by 0197) |
+| [0090](0090-first-class-subsessions-and-delegation.md) | First-class subsessions and explicit delegation grants | Accepted (amended by 0197, 0202) |
 | [0091](0091-on-demand-desktop-harness-components.md) | Desktop coding harnesses use verified on-demand components | Accepted |
 | [0092](0092-project-owned-capability-experiences.md) | Project-owned capability experiences | Accepted (`when.builder` superseded by 0158) |
-| [0093](0093-session-model-overrides-and-desktop-toolchain.md) | Session model overrides and the desktop toolchain | Accepted |
+| [0093](0093-session-model-overrides-and-desktop-toolchain.md) | Session model overrides and the desktop toolchain | Accepted (PATH amended by 0202) |
 | [0094](0094-durable-agent-reconnects.md) | Durable agent reconnects and unexpected-stop visibility | Accepted |
 | [0095](0095-authoritative-agent-execution.md) | Authoritative agent execution and independent connections | Accepted (turn execution superseded by 0197, 0198) |
 | [0096](0096-desktop-resource-link-routing.md) | Desktop resource links use workspace targets | Accepted |
@@ -124,7 +124,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0109](0109-desktop-state-and-settings-contracts.md) | Desktop transitions and scoped settings | Accepted |
 | [0110](0110-discoverable-desktop-settings.md) | Discoverable desktop settings | Agent tools superseded by 0111 |
 | [0111](0111-direct-desktop-configuration.md) | Direct desktop configuration editing | Accepted |
-| [0112](0112-browser-control-and-tool-media.md) | Browser control, host tool media, and Codex app-server | Accepted |
+| [0112](0112-browser-control-and-tool-media.md) | Browser control, host tool media, and Codex app-server | Accepted (amended by 0202) |
 | [0113](0113-desktop-workspace-frame-and-local-pr-access.md) | Configurable workspace frame and local PR access | Accepted (PR access refined by 0177) |
 | [0114](0114-focused-pull-request-review.md) | Focused pull request review | Accepted |
 | [0115](0115-native-review-conversation.md) | Native review conversation | Accepted |
@@ -145,7 +145,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0130](0130-macos-browser-password-import.md) | Prebuilt macOS browser password import helper | Accepted |
 | [0131](0131-content-addressed-test-reuse.md) | Content-addressed test reuse | Accepted |
 | [0132](0132-shared-contextual-sidebar-contributions.md) | Shared contextual sidebar contributions | Accepted |
-| [0133](0133-lean-agent-tool-surface.md) | Lean agent tool surface | Accepted |
+| [0133](0133-lean-agent-tool-surface.md) | Lean agent tool surface | Accepted (eager surface amended by 0202) |
 | [0134](0134-consent-and-collection-lifecycle.md) | Consent binding and collection lifecycle | Accepted |
 | [0135](0135-artifact-publication-before-admission.md) | Publish artifact candidates before admitting revisions | Accepted |
 | [0136](0136-local-work-and-project-proposals.md) | Local work and project proposals | Accepted |
@@ -214,3 +214,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0199](0199-subscription-sign-ins-stay-on-the-machine.md) | Subscription sign-ins stay on the machine they were made on | Accepted |
 | [0200](0200-sidebars-move-first-content-settles-after.md) | Sidebars move first; the content settles after them | Accepted |
 | [0201](0201-work-keeps-passkeys-in-the-profile-vault.md) | Work keeps passkeys in the profile's vault: the sheet saves and signs in, autofill offers them, Bitwarden and KeePassXC files import | Accepted (amends 0185, 0151) |
+| [0202](0202-agents-see-the-browser-subagents-and-their-path.md) | Agents see the browser, their subagents and their PATH | Accepted (amends 0133, 0090, 0112, 0093) |

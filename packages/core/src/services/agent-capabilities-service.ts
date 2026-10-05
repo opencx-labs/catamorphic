@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import {
@@ -285,25 +286,49 @@ export class AgentCapabilitiesService {
         const { query, cursor, limit } =
           DiscoverCapabilitiesSchema.parse(input);
         const context = await this.context(args);
-        const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-        const all = [...(await this.resolve(context, { query })).values()].sort(
-          (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
-        );
-        const text = (item: AgentCapability) =>
-          `${item.name} ${item.description}`.toLowerCase();
-        // Every word narrows; a descriptive query ("screenshot window
-        // capture") that no one capability matches whole falls back to
-        // any word, so discovery never comes back empty for wordiness.
-        const strict = all.filter((item) =>
-          words.every((word) => text(item).includes(word)),
-        );
-        const matching = (
-          strict.length > 0 || words.length < 2
-            ? strict
-            : all.filter((item) =>
-                words.some((word) => text(item).includes(word)),
-              )
-        ).filter((item) => !cursor || item.name > cursor);
+        // Words of two letters or fewer ("a", "to") match nearly anything.
+        const words = query
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((word) => word.length > 2);
+        const all = [...(await this.resolve(context, { query })).values()];
+        // Ranked by how many of the query's words a capability matches, a
+        // match in its name counting double: "browser terminal" lists every
+        // browser and terminal capability. Requiring every word hid the
+        // browser's own tools behind the two that mention both.
+        const score = (item: AgentCapability) =>
+          words.reduce(
+            (total, word) =>
+              total +
+              (item.name.toLowerCase().includes(word)
+                ? 2
+                : item.description.toLowerCase().includes(word)
+                  ? 1
+                  : 0),
+            0,
+          );
+        const ranked = all
+          .map((item) => ({ item, score: score(item) }))
+          .filter((entry) => words.length === 0 || entry.score > 0)
+          .sort(
+            (a, b) =>
+              b.score - a.score ||
+              (a.item.name < b.item.name
+                ? -1
+                : a.item.name > b.item.name
+                  ? 1
+                  : 0),
+          )
+          .map((entry) => entry.item);
+        // The cursor is the last name of the previous page, in this order.
+        const after = cursor
+          ? ranked.findIndex((item) => item.name === cursor)
+          : -1;
+        if (cursor && after === -1)
+          throw new Error(
+            "That cursor is not from this query's results; discover again without it.",
+          );
+        const matching = ranked.slice(after + 1);
         const visible: AgentCapability[] = [];
         for (const item of matching) {
           if (await item.authorize(context)) visible.push(item);
@@ -338,7 +363,28 @@ export class AgentCapabilitiesService {
           throw new AccessDeniedError(
             sandboxingRefusal({ sandboxing, action: `use ${command.name}` }),
           );
-        const prepared = capability.prepare(command.input);
+        const requestId = command.requestId ?? randomUUID();
+        let prepared: ReturnType<AgentCapability["prepare"]>;
+        try {
+          prepared = capability.prepare(command.input);
+        } catch (error) {
+          // A model corrects its call from the fields and the schema; raw
+          // validation JSON names neither the capability nor where input goes.
+          if (!(error instanceof z.ZodError)) throw error;
+          let schema = "";
+          try {
+            schema = JSON.stringify(z.toJSONSchema(capability.inputSchema));
+          } catch {
+            // A source's schema that cannot be rendered still gets the fields.
+          }
+          throw new Error(
+            `Invalid input for ${command.name}. ${z.prettifyError(error)}\nThe capability's fields go inside "input".${
+              schema
+                ? ` Its input schema: ${schema.length > 4000 ? `${schema.slice(0, 3999)}…` : schema}`
+                : ""
+            }`,
+          );
+        }
         const approvalDefinition = (entry: AgentCapability) =>
           JSON.stringify({
             revision: entry.revision,
@@ -357,7 +403,7 @@ export class AgentCapabilitiesService {
             await this.deps.options?.onEvent?.({
               ...context,
               capability: command.name,
-              requestId: command.requestId,
+              requestId,
               type,
               progress,
             });
@@ -367,7 +413,7 @@ export class AgentCapabilitiesService {
         };
         const invocation = (): AgentCapabilityInvocation => ({
           ...context,
-          requestId: command.requestId,
+          requestId,
           signal: input.signal,
           progress: (value) => event("progress", value),
         });

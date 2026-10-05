@@ -298,6 +298,7 @@ editor or app frame moves over it rather than animating its size.
 | `question-in` (ask_user panel) | 260ms | — |
 | `pane-in-left` / `pane-in-right` (keyboard tab cycling) | 200ms | — (content-changed signal on a persistent wrapper; no exit to pair) |
 | `content-out` / `content-in` (content settling beside a still sidebar, view transition) | 200ms | each other (the old snapshot leaves as the new one arrives) |
+| `dock-float` / `dock-rail` groups (a floating chat and the bubble strip gliding while the content settles, view transition) | 200ms | the content's settle; a chat tab (`dock-tab`) uses `content-out` / `content-in` |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
 | `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
 | `activity-leave` / `activity-arrive` (agent activity line swap) | 150ms / 200ms | — (one beat of the working pulse carries a content swap on a persistent line: the old text dims up and away, the new rises in, then `animate-pulse` resumes) |
@@ -1589,3 +1590,27 @@ saved, **Import passkeys** opens Passwords. There, one Import button takes a
 Bitwarden export, a KeePassXC database (unlocked in a small dialog, key file
 optional) or a CSV. One sentence then says what came in. Passkeys get their
 own section with delete only, since there is nothing to reveal.
+
+### 2026-10-05: Chats glide with the page; agents see what they can do
+
+A floating chat vanished while a sidebar settled and popped back at its new
+place: chats live in the dock, outside the content whose snapshot covered
+them. The dock now rests on the chat region by CSS anchoring, so it moves in
+the same frame as the region, and while the content settles a floating chat
+and the bubble strip get view-transition layers of their own and glide to
+where they land; a chat open as a tab settles as the content does.
+
+A dragged strip lands on the resting spot nearest its centre, leaving the one
+it started from after 40% of the way to the next (the pointer had to cross a
+third of the screen). Let go short of that, it slides back rather than
+jumping. The detached dock uses the same rule.
+
+A chat is named by its first message the moment it is sent, not "Chat 1"
+until its first turn settles; a harness title still replaces it. Typing a bare
+host in the palette ("localhost") offers the origins it was visited at, port
+included and the most visited first, instead of a portless URL.
+
+Agents now see the browser and their subagents as direct tools, reach the
+person's login-shell PATH, and can upload, download and inspect a page's
+console, network and JavaScript. A subagent's result arrives in its parent's
+turn, labelled with the subagent's name. See ADR 0202.

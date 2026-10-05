@@ -4716,17 +4716,13 @@ export function App({
     appMetadata,
   });
 
+  // A chat is named by its first message from the moment it is sent (or
+  // by its harness). Until then it is a new chat: a session exists a moment
+  // before its first message, and a stand-in name would flash in between.
   const chatLabels = Object.fromEntries(
-    workspace.chats.map((chat, index) => {
-      const session = sessionsById.get(chat.sessionId ?? "");
-      return [
-        chat.localId,
-        session?.title
-          ? truncateLabel(session.title)
-          : chat.sessionId
-            ? `Chat ${index + 1}`
-            : "New chat",
-      ];
+    workspace.chats.map((chat) => {
+      const title = sessionsById.get(chat.sessionId ?? "")?.title;
+      return [chat.localId, title ? truncateLabel(title) : "New chat"];
     }),
   );
   // Conversation identity beyond the label: the agent-chosen icon, and

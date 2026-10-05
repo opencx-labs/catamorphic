@@ -35,6 +35,7 @@ import { shouldUseE2ePlainTextEncryption } from "./e2e-safe-storage.js";
 import { IncognitoSessionsStore } from "./incognito-sessions.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { type Keybindings, toAccelerator } from "./keybindings.js";
+import { adoptLoginShellPath } from "./login-shell-path.js";
 import { McpAppsService } from "./mcp-apps.js";
 import { MobilePairingService } from "./mobile-pairing.js";
 import { prepareVersionBackup } from "./pre-migration-backup.js";
@@ -216,6 +217,11 @@ const telemetry = startTelemetry({
   serviceVersion: app.getVersion(),
 });
 emitLog({ scope: "catamorphic-desktop", body: "Desktop starting" });
+
+// Agents, MCP servers and tools reach what the person's terminal reaches
+// (Homebrew, nvm, gcloud): the login shell's PATH, read while the app
+// starts and in place before the server can start anything.
+const loginPathAdopted = adoptLoginShellPath({ packaged: app.isPackaged });
 
 const paths = resolveDataPaths();
 const profilesStore = new ProfilesStore(paths.profilesFile);
@@ -707,6 +713,7 @@ app.whenReady().then(async () => {
         `[desktop] Backed up the pre-migration database to ${versionBackup.backupPath}`,
       );
     }
+    await loginPathAdopted;
     server = await startEmbeddedServer(
       paths,
       profilesStore,

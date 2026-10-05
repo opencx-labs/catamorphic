@@ -31,12 +31,17 @@ describe("workspace coordination tools", () => {
         .map((tool) => tool.name)
         .sort(),
     ).toEqual([
+      "browser_act",
+      "browser_snapshot",
+      "open_browser",
       "open_surface",
       "read_background_output",
       "read_tab",
       "run_background_command",
+      "spawn_subsession",
       "stop_background_command",
       "update_todo_list",
+      "wait_for_subsessions",
       "watch_command",
       "workspace_overview",
     ]);
@@ -58,8 +63,9 @@ describe("workspace coordination tools", () => {
       ),
     }));
     // Background execution and watches are core needs for every harness
-    // (ADR 0155, 0156).
-    expect(Buffer.byteLength(JSON.stringify(wire))).toBeLessThan(8300);
+    // (ADR 0155, 0156); so are driving Work's browser and delegating to
+    // subagents (ADR 0202).
+    expect(Buffer.byteLength(JSON.stringify(wire))).toBeLessThan(13_500);
     expect(
       toolkit.tools.every(
         (tool) =>

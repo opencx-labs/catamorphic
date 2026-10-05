@@ -99,7 +99,7 @@ export function resolveInput(raw: string): string {
   ) {
     return `https://${input}`;
   }
-  if (input === "localhost" || /^localhost:\d+/.test(input)) {
+  if (/^localhost(:\d+)?(\/\S*)?$/i.test(input)) {
     return `http://${input}`;
   }
   return `https://www.google.com/search?q=${encodeURIComponent(input)}`;
@@ -1070,7 +1070,9 @@ export function BrowserScreen({
       if (seq !== suggestSeq.current) return;
 
       const urlish =
-        /^[\w-]+(\.[\w-]+)+/.test(trimmed) || /^https?:/i.test(trimmed);
+        /^[\w-]+(\.[\w-]+)+/.test(trimmed) ||
+        /^https?:/i.test(trimmed) ||
+        /^localhost(:\d+)?(\/|$)/i.test(trimmed);
       const first: Suggestion = urlish
         ? { kind: "url", label: trimmed, target: trimmed }
         : {

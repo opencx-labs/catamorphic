@@ -761,7 +761,25 @@ export class TurnEngine {
             .orderBy("position")
             .execute()
         : [];
-    const steeredItems = steeredRows.map((row) => itemFromRow(row));
+    // What an earlier attempt took in is already on the resumed thread.
+    const taken =
+      input.reason === "steer_restart"
+        ? new Set(
+            (
+              await this.deps.db
+                .selectFrom("agent_turn_attempts")
+                .select("runner")
+                .where("turn_id", "=", input.turn.id)
+                .execute()
+            ).flatMap(
+              (row) =>
+                (row.runner as unknown as RunnerState | null)?.consumed ?? [],
+            ),
+          )
+        : new Set<string>();
+    const steeredItems = steeredRows
+      .map((row) => itemFromRow(row))
+      .filter((item) => !taken.has(item.id));
     const steerTexts = steeredItems.flatMap((item) =>
       item.kind === "user_message" ? [this.deps.inputText(item)] : [],
     );
@@ -778,7 +796,7 @@ export class TurnEngine {
       base?.kind === "user_message" ? base.attachments : [];
     const body =
       input.reason === "steer_restart" && steerTexts.length > 0
-        ? `Your previous attempt at this turn was stopped so you can take in more from the person:\n\n${steerTexts.join("\n\n")}`
+        ? `Your previous attempt at this turn was stopped so you can take in these messages that arrived while you worked:\n\n${steerTexts.join("\n\n")}`
         : text;
     const full = input.handoff ? `${input.handoff}\n\n---\n\n${body}` : body;
     return {
@@ -1564,8 +1582,11 @@ export class TurnEngine {
           .set({ state_path: ingested.statePath })
           .where("id", "=", ingested.thread.id)
           .execute();
-      // Steers refused by the harness are restarted, not acknowledged.
-      const acknowledged = acked.filter((id) => !refusedSteers.includes(id));
+      // A person's steer the harness refused restarts the attempt with it.
+      // Anyone else's (a subagent's result) does not stop the work: it is
+      // acknowledged here and runs as a turn of its own when this one ends.
+      const restartSteers = await this.fromPeople(trx, refusedSteers);
+      const acknowledged = acked.filter((id) => !restartSteers.includes(id));
       await queue.markCommands({
         ids: acknowledged,
         status: "acknowledged",
@@ -1588,7 +1609,7 @@ export class TurnEngine {
         thread: ingested.thread,
         runner,
         calls,
-        refusedSteers,
+        refusedSteers: restartSteers,
         ...(ingested.completed ? { completion: ingested.completed } : {}),
       };
     });
@@ -1909,9 +1930,12 @@ export class TurnEngine {
     let reply: Item | null = null;
     await db.transaction().execute(async (trx) => {
       await this.assertOwned(local, trx);
+      // Input delivered while the turn ends either commits before the
+      // steered items are read (and runs as a turn of its own) or waits
+      // and finds no turn to join: never steered into a settled turn.
+      await log.lock(trx, input.turn.sessionId);
       // A person's stop stands: a turn they stopped is not tried again.
       if (transient) {
-        await log.lock(trx, input.turn.sessionId);
         const stop = await trx
           .selectFrom("agent_turns")
           .select("cancellation_requested_at")
@@ -1984,26 +2008,6 @@ export class TurnEngine {
             attentionRevision: Number(input.session.attention_revision) + 1,
           },
         });
-      // The title as it stands now: the harness may have set one during
-      // the turn, after `input.session` was read.
-      const current = await trx
-        .selectFrom("agent_sessions")
-        .select("title")
-        .where("id", "=", input.turn.sessionId)
-        .executeTakeFirst();
-      if ((current?.title ?? null) === null && input.turn.inputItemId) {
-        const row = await trx
-          .selectFrom("agent_items")
-          .select("payload")
-          .where("id", "=", input.turn.inputItemId)
-          .executeTakeFirst();
-        const item = row ? itemFromRow(row) : null;
-        if (item?.kind === "user_message")
-          events.push({
-            type: "session.changed",
-            session: { title: titleFrom(item) },
-          });
-      }
       await log.append(trx, { sessionId: input.turn.sessionId, events });
       await queue.markCommands({
         ids: (
@@ -2259,6 +2263,37 @@ export class TurnEngine {
    * then the turn ended) runs as turns of its own after it, in order: a
    * person's message is never dropped.
    */
+  /** The steer commands among `ids` whose message a person wrote. */
+  private async fromPeople(
+    trx: Transaction<DB>,
+    ids: readonly string[],
+  ): Promise<string[]> {
+    if (ids.length === 0) return [];
+    const commands = await trx
+      .selectFrom("agent_turn_commands")
+      .select(["id", "payload"])
+      .where("id", "in", [...ids])
+      .execute();
+    const itemOf = new Map(
+      commands.map((command) => {
+        const payload = command.payload as { itemId?: unknown } | null;
+        return [
+          command.id,
+          typeof payload?.itemId === "string" ? payload.itemId : "",
+        ];
+      }),
+    );
+    const itemIds = [...new Set(itemOf.values())].filter(Boolean);
+    if (itemIds.length === 0) return [];
+    const items = await trx
+      .selectFrom("agent_items")
+      .select(["id", "author_kind"])
+      .where("id", "in", itemIds)
+      .execute();
+    const authors = new Map(items.map((item) => [item.id, item.author_kind]));
+    return ids.filter((id) => authors.get(itemOf.get(id) ?? "") === "user");
+  }
+
   private async requeueSteers(
     trx: Transaction<DB>,
     turn: Turn,
@@ -2441,14 +2476,6 @@ function itemText(item: Item): string {
   return item.kind === "user_message" || item.kind === "notice"
     ? item.text
     : "";
-}
-
-function titleFrom(item: Extract<Item, { kind: "user_message" }>): string {
-  const names = item.attachments
-    .map((attachment) => attachment.name)
-    .filter(Boolean);
-  const text = item.text.replace(/\s+/g, " ").trim() || names.join(", ");
-  return text.length > 500 ? `${text.slice(0, 499)}…` : text;
 }
 
 /**

@@ -1,5 +1,4 @@
 import {
-  type CSSProperties,
   type PointerEvent,
   useEffect,
   useLayoutEffect,
@@ -14,6 +13,7 @@ import type {
   DockSnapshot,
 } from "../../shared/desktop-workspace.js";
 import { parseDockClicks } from "../../shared/dock-clicks.js";
+import { dockLanding } from "../../shared/dock-position.js";
 import { fileUrlFor } from "../../shared/downloads.js";
 import { localPresentations } from "../lib/chat-presentations.js";
 import { desktopApi } from "../lib/desktop-api.js";
@@ -74,8 +74,10 @@ export function DockHost({
   const dragStart = useRef<{
     x: number;
     left: number;
-    middle: number;
     max: number;
+    /** The strip's width and the region's, for where it would land. */
+    width: number;
+    hostWidth: number;
     moved: boolean;
   } | null>(null);
   const suppressClick = useRef(false);
@@ -96,7 +98,6 @@ export function DockHost({
   const [collapsed, setCollapsed] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
-  const [region, setRegion] = useState<CSSProperties>({ inset: 0 });
   const actions = useRef(
     new Map<
       string,
@@ -143,13 +144,23 @@ export function DockHost({
     void desktopApi.dockSnapshot().then(setSnapshot);
     return desktopApi.onDockSnapshot(setSnapshot);
   }, []);
+  // In the window, the dock rests on the visible workspace's chat region by
+  // CSS anchoring (styles.css), so it moves in the same frame as the region
+  // (a sidebar settling, a split) without measuring. While the dock floats
+  // in its own window, this workspace tells the main process where that
+  // region sits so the dock can rest inside it whenever this window is in
+  // front.
   useLayoutEffect(() => {
-    if (detachedWindow || !activeProjectId) return;
+    if (detachedWindow) return;
+    if (!activeProjectId || !snapshot.detached) {
+      void desktopApi.dockRegion(null);
+      return;
+    }
     const selector = `[data-project-runtime="${CSS.escape(activeProjectId)}"] [data-workspace-chat-region]`;
     // The region mounts after the project does (and remounts with it), so
-    // one lookup is not enough: giving up here left chats laid out over the
-    // whole window, their tab-mode controls buried under the tab bar.
+    // one lookup is not enough.
     let target: HTMLElement | null = null;
+    let reported: DOMRect | null = null;
     const observer = new ResizeObserver(() => measure());
     const resolve = () => {
       if (target?.isConnected) return target;
@@ -163,19 +174,20 @@ export function DockHost({
       const current = resolve();
       if (!current) return;
       const bounds = current.getBoundingClientRect();
-      setRegion((previous) =>
-        previous.left === bounds.left &&
-        previous.top === bounds.top &&
-        previous.width === bounds.width &&
-        previous.height === bounds.height
-          ? previous
-          : {
-              left: bounds.left,
-              top: bounds.top,
-              width: bounds.width,
-              height: bounds.height,
-            },
-      );
+      if (
+        reported?.left === bounds.left &&
+        reported.top === bounds.top &&
+        reported.width === bounds.width &&
+        reported.height === bounds.height
+      )
+        return;
+      reported = bounds;
+      void desktopApi.dockRegion({
+        left: bounds.left,
+        top: bounds.top,
+        width: bounds.width,
+        height: bounds.height,
+      });
     };
     measure();
     // Mounts and sidebar toggles move the region without resizing anything
@@ -190,27 +202,7 @@ export function DockHost({
       mutations.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [activeProjectId, detachedWindow]);
-  // While the dock floats in its own window, this workspace tells the main
-  // process where its chat region sits so the dock can rest inside it
-  // whenever this window is in front.
-  useEffect(() => {
-    if (detachedWindow) return;
-    const reported =
-      snapshot.detached &&
-      typeof region.left === "number" &&
-      typeof region.top === "number" &&
-      typeof region.width === "number" &&
-      typeof region.height === "number"
-        ? {
-            left: region.left,
-            top: region.top,
-            width: region.width,
-            height: region.height,
-          }
-        : null;
-    void desktopApi.dockRegion(reported);
-  }, [detachedWindow, snapshot.detached, region]);
+  }, [activeProjectId, detachedWindow, snapshot.detached]);
   useEffect(() => {
     if (detachedWindow) return;
     return () => {
@@ -593,6 +585,30 @@ export function DockHost({
     setDragTarget(null);
   };
   /**
+   * Where the strip lands if let go now: the spot nearest its centre, past
+   * 40% of the way from the one it left (shared with the detached dock).
+   */
+  const landing = (
+    start: NonNullable<typeof dragStart.current>,
+    delta: number,
+    intent: "side" | "placement",
+  ) => {
+    const left = Math.max(32, Math.min(start.max, start.left + delta));
+    const centre = left + start.width / 2;
+    const corners = [
+      { spot: "left", at: 32 + start.width / 2 },
+      { spot: "right", at: start.hostWidth - 32 - start.width / 2 },
+    ] as const;
+    return intent === "side"
+      ? (dockLanding({ from: snapshot.side, centre, spots: corners }) ??
+          snapshot.side)
+      : (dockLanding({
+          from: snapshot.placement,
+          centre,
+          spots: [...corners, { spot: "center", at: start.hostWidth / 2 }],
+        }) ?? snapshot.placement);
+  };
+  /**
    * Dragging the collapsed bubble picks its corner; dragging the arrows of
    * an expanded strip picks where open chats sit (left, center, right).
    * Release snaps; a short press without movement is still a click.
@@ -612,8 +628,9 @@ export function DockHost({
       dragStart.current = {
         x: detachedWindow ? event.screenX : event.clientX,
         left: rail.left - host.left,
-        middle: host.left + host.width / 2,
         max: Math.max(32, host.width - rail.width - 32),
+        width: rail.width,
+        hostWidth: host.width,
         moved: false,
       };
       if (detachedWindow) nativeDrag("start", event.screenX);
@@ -638,20 +655,7 @@ export function DockHost({
       event.preventDefault();
       if (detachedWindow) nativeDrag("move", event.screenX);
       else setDragLeft(Math.max(32, Math.min(start.max, start.left + delta)));
-      const host = event.currentTarget
-        .closest("[data-dock-host]")
-        ?.getBoundingClientRect();
-      const x = detachedWindow ? event.screenX : event.clientX;
-      if (intent === "side" || !host)
-        setDragTarget(x < start.middle ? "left" : "right");
-      else
-        setDragTarget(
-          x < host.left + host.width / 3
-            ? "left"
-            : x > host.left + (host.width * 2) / 3
-              ? "right"
-              : "center",
-        );
+      setDragTarget(landing(start, delta, intent));
     },
     onPointerUp: (event: PointerEvent<HTMLButtonElement>) => {
       const start = dragStart.current;
@@ -667,19 +671,9 @@ export function DockHost({
       if (detachedWindow)
         nativeDrag(start.moved ? "end" : "cancel", event.screenX);
       else if (start.moved) {
-        const host = event.currentTarget
-          .closest("[data-dock-host]")
-          ?.getBoundingClientRect();
-        if (intent === "side" || !host)
-          saveSide(event.clientX < start.middle ? "left" : "right");
-        else
-          savePlacement(
-            event.clientX < host.left + host.width / 3
-              ? "left"
-              : event.clientX > host.left + (host.width * 2) / 3
-                ? "right"
-                : "center",
-          );
+        const spot = landing(start, event.clientX - start.x, intent);
+        if (intent === "side") saveSide(spot === "left" ? "left" : "right");
+        else savePlacement(spot);
       }
       setHeld(false);
       setDragging(false);
@@ -733,7 +727,7 @@ export function DockHost({
       data-dock-side={snapshot.side}
       data-dock-placement={snapshot.placement}
       className={`pointer-events-none absolute ${detachedWindow ? "inset-0" : ""}`}
-      style={{ ...themeStyle(currentTheme), ...(detachedWindow ? {} : region) }}
+      style={themeStyle(currentTheme)}
     >
       {detachedWindow && <DockDialogs onOpenChange={setDialogOpen} />}
       {snapshot.chats.map((chat) => {

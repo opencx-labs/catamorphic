@@ -1,17 +1,39 @@
 # Browser and computer use
 
-Embedded browser tools work with every desktop harness. `open_browser` creates
-an agent-owned background tab. `open_surface` shows it. `browser_snapshot` returns
-a bounded DOM view by default; `format: "image"` returns model-visible PNG media
-and CSS viewport dimensions. Use those dimensions to scale screenshot coordinates.
+Embedded browser tools work with every desktop harness and are direct tools
+(ADR 0202). `open_browser` creates an agent-owned background tab. `open_surface`
+shows it. `browser_snapshot` returns a bounded DOM view by default; `format:
+"image"` returns model-visible PNG media and CSS viewport dimensions. Use those
+dimensions to scale screenshot coordinates.
 
-Snapshot element UIDs are opaque and expire on another DOM snapshot or navigation.
-Use `browser_act` for native clicks, hover, drag, text replacement, keyboard input,
-scroll, select options, navigation, and bounded waits. DOM references cover the
-main document and open shadow roots. For cross-origin frames and canvas, use an
-image and coordinates. Covered, disabled, hidden, and stale DOM targets fail with
-an actionable error. Password values are omitted from DOM snapshots; screenshots
-are pictures of the page and are not a redaction boundary.
+Snapshot element UIDs are opaque and stay valid while their element stays in the
+page, across snapshots; an element that leaves, or a navigation, makes its UID
+stale. Use `browser_act` for native clicks, hover, drag, text replacement,
+keyboard input, scroll, select options, navigation, and bounded waits. DOM
+references cover the main document and open shadow roots. For cross-origin frames
+and canvas, use an image and coordinates. Covered, disabled, hidden, and stale DOM
+targets fail with an actionable error; a covered one names what covers it (and
+its UID when it has one), usually a dialog or banner to close first. A label over
+its own control is not a cover. Password values are omitted from DOM snapshots;
+screenshots are pictures of the page and are not a redaction boundary.
+
+`upload` takes the UID of a file input or of the button that opens one, and
+absolute file paths: the driver intercepts the page's own file chooser over CDP
+and sets the files. Folder pickers and `showOpenFilePicker` are not intercepted;
+the person answers those. Outside the agent's own folder, hidden files and
+folders and `~/Library` (keys, tokens, keychains) are refused, symlinks
+resolved, so page text cannot talk an agent into uploading them. `downloads`
+lists the files this tab saved (recorded from the moment it opens, to the
+profile's Downloads folder) with their paths and state; with `timeoutMs` it
+waits for a download a click starts and for unfinished ones. For web
+development, `evaluate` runs JavaScript in the page without a user gesture and
+returns its JSON value, giving up after 30 seconds; `console` returns what the
+page logged since the tab was last read (recorded for every tab from the moment
+it opens), and `network` its requests (recorded, without bodies, from an
+agent's first look, action or read; a pending request comes again until it
+finishes, a redirect hop ends with its status). Evaluate and network bypass the
+snapshot's password redaction, as screenshots do; agents upload, reveal or
+paste only what the task needs.
 
 `point_at({target: browserKey, uid, note})` highlights an element inside the page.
 Show the tab first when the user needs to see the pointer. Notes are plain text.
@@ -55,7 +77,8 @@ claim every private feature of Codex's desktop UI.
 ## Verification
 
 `e2e/browser-control.e2e.ts` drives real workspace tools and guest input against a
-local fixture, including media, pointing, stale refs and takeover. Both desktop
+local fixture, including media, pointing, lasting and stale refs, covers, uploads
+through a hidden file input, console, network, evaluate, downloads and takeover. Both desktop
 E2E modes remain required. Codex's native protocol tests run the exact pinned CLI
 against loopback model/MCP fixtures, including media, elicitation acceptance and
 denial, cancellation and resume. They use disposable homes and no model credentials.

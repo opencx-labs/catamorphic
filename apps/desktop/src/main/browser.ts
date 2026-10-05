@@ -96,6 +96,7 @@ import {
   type PageSnapshot,
   registerBrowserSleep,
 } from "./browser-sleep.js";
+import { recordDownload, trackConsole } from "./browser-tab-records.js";
 import { PasswordVault } from "./browser-vault.js";
 import { DownloadsManager, DownloadsStore } from "./downloads.js";
 import type { WindowProfileRegistry } from "./index.js";
@@ -439,6 +440,8 @@ export function registerBrowserSupport(
     },
   });
   downloadHook = (profileId, item, contents) => {
+    // The tab's own record, for an agent driving it.
+    recordDownload(contents, item);
     const page = contents.isDestroyed() ? "" : contents.getURL();
     const host =
       siteHost(siteOrigin(page) ?? siteOrigin(item.getURL()) ?? "") || null;
@@ -943,6 +946,8 @@ export function registerBrowserSupport(
   // bindings as the renderer, including Ctrl/Option combinations inside pages.
   app.on("web-contents-created", (_event, contents: WebContents) => {
     if (contents.getType() !== "webview") return;
+    // What a page logs while it loads is there when an agent asks.
+    trackConsole(contents);
     if (historyForNextGuest) historyForGuest.set(contents, historyForNextGuest);
     historyForNextGuest = null;
     // Pages that set no background render on white, as in Chrome. The

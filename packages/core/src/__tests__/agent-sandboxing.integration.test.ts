@@ -141,11 +141,12 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
       name: string,
       effect: "read" | "write",
       sandboxing?: "publish",
+      description = name,
     ) =>
       defineAgentCapability({
         revision: "1",
         name,
-        description: name,
+        description,
         effect,
         ...(sandboxing ? { sandboxing } : {}),
         inputSchema: z.object({}).strict(),
@@ -165,6 +166,24 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
           capability("test.read", "read"),
           capability("test.propose", "write"),
           capability("test.deploy", "write", "publish"),
+          capability(
+            "test.browser_act",
+            "read",
+            undefined,
+            "Act on a browser tab",
+          ),
+          capability(
+            "test.terminal_write",
+            "read",
+            undefined,
+            "Type into a terminal",
+          ),
+          capability(
+            "test.surface_control",
+            "read",
+            undefined,
+            "Release or close a browser tab or terminal",
+          ),
         ],
       },
       sessionSandboxing: (args) => sessions.agentSandboxing(args),
@@ -238,5 +257,69 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
       ok: true,
     });
     expect(executed).toEqual(["test.read", "test.propose", "test.deploy"]);
+  });
+
+  it("ranks discovery by the words a capability matches, its name counting double", async () => {
+    const session = await sessions.create(root, projectId, {
+      agentId: `project:${projectId}:publisher`,
+    });
+    const discover = async (query: string) =>
+      (
+        await capabilities
+          .forSession({ identity: root, projectId, sessionId: session.id })
+          .discover({ query })
+      ).items.map((item) => item.name);
+    // Requiring every word found only the one capability that mentions both.
+    expect(await discover("browser terminal")).toEqual([
+      "test.browser_act",
+      "test.surface_control",
+      "test.terminal_write",
+    ]);
+    expect(await discover("terminal")).toEqual([
+      "test.terminal_write",
+      "test.surface_control",
+    ]);
+    const first = await capabilities
+      .forSession({ identity: root, projectId, sessionId: session.id })
+      .discover({ query: "test", limit: 2 });
+    expect(first.nextCursor).toBe(first.items[1]?.name);
+    const next = await capabilities
+      .forSession({ identity: root, projectId, sessionId: session.id })
+      .discover({ query: "test", limit: 2, cursor: first.nextCursor });
+    expect(next.items.map((item) => item.name)).not.toContain(
+      first.items[0]?.name,
+    );
+    // A cursor from another query is refused, not read as the first page.
+    await expect(
+      capabilities
+        .forSession({ identity: root, projectId, sessionId: session.id })
+        .discover({ query: "terminal", cursor: "test.deploy" }),
+    ).rejects.toThrow("discover again");
+    // Short words match nearly everything; they do not rank.
+    expect(await discover("a terminal")).toEqual(await discover("terminal"));
+  });
+
+  it("names the capability, the place of its fields and its schema for invalid input", async () => {
+    const session = await sessions.create(root, projectId, {
+      agentId: `project:${projectId}:publisher`,
+    });
+    const gateway = capabilities.forSession({
+      identity: root,
+      projectId,
+      sessionId: session.id,
+    });
+    // A request id only marks a retry; a call without one runs.
+    await expect(gateway.invoke({ name: "test.read" })).resolves.toEqual({
+      ok: true,
+    });
+    const error = await gateway
+      .invoke({ name: "test.read", input: { key: "browser:1" } })
+      .then(
+        () => null,
+        (cause: unknown) => (cause instanceof Error ? cause.message : ""),
+      );
+    expect(error).toContain("Invalid input for test.read");
+    expect(error).toContain('inside "input"');
+    expect(error).toContain('"additionalProperties":false');
   });
 });

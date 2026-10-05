@@ -19,6 +19,7 @@ import {
   EMPTY_PALETTE_SIGNALS,
   type PaletteSignals,
   paletteCountsVisit,
+  webUsageKey,
 } from "../../shared/palette.js";
 import { normalizeCommandQuery } from "../lib/command-score.js";
 import { desktopApi, projectAgentAsInfo } from "../lib/desktop-api.js";
@@ -54,6 +55,7 @@ import {
   TOP_ROW,
 } from "../palette/selection.js";
 import type { PaletteItem, PaletteModeRequest } from "../palette/types.js";
+import { bareUrl, rememberedOrigins } from "../palette/urls.js";
 import { resolveInput } from "../screens/browser-screen.js";
 import { PILL_SURFACE } from "./context-pill.js";
 import { OpenResourceButton } from "./open-resource-button.js";
@@ -69,7 +71,6 @@ import { OpenResourceButton } from "./open-resource-button.js";
  * (the palette tab is consumed).
  */
 
-/** The whole input is URL-shaped: scheme, or domain(+path) with no spaces. */
 /** The conversation a chat's usage key (its history identity) names. */
 function chatSessionOf(key: string): string | null {
   if (!key.startsWith('["chat",')) return null;
@@ -83,6 +84,7 @@ function chatSessionOf(key: string): string | null {
   }
 }
 
+/** The whole input is URL-shaped: scheme, or domain(+path) with no spaces. */
 const URLISH =
   /^(https?:\/\/\S+|[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?|localhost(:\d+)?(\/\S*)?)$/i;
 const LONG_QUERY = 60;
@@ -325,7 +327,7 @@ export function CommandPalette({
     active: variant === "tab" || open,
   });
   const { surfaceItems, historyPageItem } = useDestinationRows();
-  const { historyRow, historyItems } = useHistoryRows({
+  const { historyRow, historyItems, historyEntries } = useHistoryRows({
     query,
     enabled: (variant === "tab" || open) && !modeId,
     bookmarkedUsage,
@@ -585,9 +587,43 @@ export function CommandPalette({
         };
 
     // A pasted/typed URL is an unambiguous intent: open it. Everything
-    // else (fuzzy matches on the URL's characters) is noise below it.
+    // else (fuzzy matches on the URL's characters) is noise below it. A
+    // bare host opens where it was visited, port included ("localhost"
+    // is the app on :3000, not whatever answers on :80), most visited
+    // first; each such row stands in for its origin's own history row,
+    // never for an open tab or a bookmark of it. The plain URL stays
+    // last unless one of them is it.
     if (urlish && webItem) {
-      return [webItem, ...scored, ...sendItems];
+      const origins = rememberedOrigins(
+        trimmed,
+        historyEntries.flatMap((entry) =>
+          entry.target.kind === "web"
+            ? [{ url: entry.target.url, visitCount: entry.visitCount }]
+            : [],
+        ),
+      ).slice(0, 3);
+      if (origins.length === 0) return [webItem, ...scored, ...sendItems];
+      const originItems = origins.map(
+        (origin): PaletteItem => ({
+          id: `web:${origin}`,
+          icon: Globe,
+          label: `Open ${bareUrl(origin)}`,
+          keywords: [],
+          kind: "navigate",
+          usage: webUsageKey(`${origin}/`),
+          run: (mode) => onOpenUrl(`${origin}/`, mode),
+        }),
+      );
+      const shown = new Set(originItems.map((item) => item.usage));
+      const typedOrigin = new URL(resolveInput(trimmed)).origin;
+      return [
+        ...originItems,
+        ...(origins.includes(typedOrigin) ? [] : [webItem]),
+        ...scored.filter(
+          (item) => !(item.id.startsWith("history:") && shown.has(item.usage)),
+        ),
+        ...sendItems,
+      ];
     }
     if (scored.length === 0 || multiline || query.length > LONG_QUERY) {
       return [...sendItems, ...scored, ...(webItem ? [webItem] : [])];
@@ -615,6 +651,7 @@ export function CommandPalette({
     historyRow,
     historyItems,
     searchEverything,
+    historyEntries,
     projectId,
     onSendToAgent,
     onOpenUrl,
