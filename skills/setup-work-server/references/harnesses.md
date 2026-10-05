@@ -205,7 +205,9 @@ the project's `.work/personal/environment.json`
 writes them only into that member's own chats, at their repository paths,
 listed in `.git/info/exclude`. `GET /api/projects/:id/personal-environment`
 (their own token) shows each file's path and size, never a value; `DELETE`
-forgets them.
+forgets them. Values such as each engineer's own API key belong in project
+secrets with a value per member instead, which reach the agent and its shells
+as environment variables ([secrets in Environments](secrets-and-gateway.md#secrets-in-environments)).
 
 What the machines need:
 

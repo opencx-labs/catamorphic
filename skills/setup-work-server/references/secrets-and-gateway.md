@@ -1,10 +1,11 @@
 # Secrets, connections, and the gateway
 
 Use this when a Work server should let agents or workflows act on company
-systems: APIs, a production database, internal MCP tools (ADRs 0162, 0163).
-The rule: workloads get permission to act, never the credential. The Work
-server holds credentials in its vault and makes each call itself, after any
-guards the company added review it.
+systems: APIs, a production database, internal MCP tools (ADRs 0162, 0163),
+or when developers' remote Environments need the variables they have on their
+laptops (ADR 0205). The rule for company systems: workloads get permission to
+act, never the credential. The Work server holds credentials in its vault and
+makes each call itself, after any guards the company added review it.
 
 Simple servers need none of this. Add it when a project needs a system that
 holds company data.
@@ -18,9 +19,14 @@ holds company data.
 | Tools behind an MCP server | An `mcp` gateway connection |
 | Git with a company remote from agents' sandboxes (fetch, push a fix branch) | A Git-capable connection (`git` gateway entry, or the GitHub provider) bound with `git` rules |
 | A value a workflow's own code must read (a webhook signing secret, a non-sensitive token) | A project secret (`defineSecrets`), sealed in the vault |
+| A variable developers' code needs in remote Environments (a Sentry DSN, a test Stripe key) | A project secret listed on the Environment: [Secrets in Environments](#secrets-in-environments) |
+| A key each engineer has their own of (a ClickHouse key issued per person) | The same, with a value per member, set by them, an admin, or an onboarding workflow |
 
-Prefer a gateway connection whenever the value is a credential: the call is
-reviewed and audited, and the key never enters a sandbox.
+Prefer a gateway connection whenever the value grants access to a company
+system: the call is reviewed and audited, and the key never enters a sandbox.
+A secret listed on an Environment is readable by any code running in its
+sandboxes, a compromised dependency included; restrict egress where that
+matters.
 
 ## Keys the server itself needs
 
@@ -107,6 +113,74 @@ not declare it here.
   passes any path below the base URL through with the stored key.
   `anthropic` and `openai` are built in; see
   [Harnesses on the server](harnesses.md).
+
+## Secrets in Environments
+
+A project secret holds a shared value and may hold one value per member
+(ADR 0205). Values are sealed in the vault and write-only: APIs report which
+values exist, who set them and when, never a value.
+
+Declare the names in `.work/project.json` (or with `defineSecrets` in
+workflow code) and list on each Environment the ones its sandboxes receive;
+both are reviewed project changes:
+
+```json
+{
+  "secrets": {
+    "CLICKHOUSE_API_KEY": { "description": "Your ClickHouse key" },
+    "SENTRY_DSN": {}
+  },
+  "environments": {
+    "dev": { "workloads": ["agent"], "secrets": ["CLICKHOUSE_API_KEY", "SENTRY_DSN"] }
+  }
+}
+```
+
+Names are `SCREAMING_SNAKE_CASE` and never start with `CATAMORPHIC_` or
+`WORK_`; variables the sandbox's shells depend on (`PATH`, `HOME`, the proxy
+variables) are listed but not set. Declarations in `project.json` are for
+Environments; workflow runs keep receiving the shared values of secrets their
+code declares, as before.
+
+Who sets values:
+
+- **Shared value**: anyone holding `secrets:write`, in the app (**Secrets**
+  in a connected project's Server section) or with
+  `PUT /api/projects/:id/secrets/:name` `{ "value": … }`.
+- **A member's own value**: that member (`PUT
+  /api/projects/:id/secrets/:name/members/me`), anyone holding
+  `secrets:write` for any member (`…/members/:userId`), or a workflow that
+  declared `secrets:write`:
+  `host["catamorphic.secrets"].set({ name, value, member: "ada@example.com" })`
+  (ADR 0209), as in an onboarding workflow that issues each new engineer's
+  key. `DELETE` on the same paths clears a value.
+- `GET /api/projects/:id/secrets` lists each secret with its Environments,
+  whether a shared value exists, the caller's own, and (with `secrets:read`)
+  which members hold theirs.
+
+Where values go:
+
+- A member's own chat gets their value, else the shared one, for turns that
+  answer that member's own messages, on a placement that isolates them: a VM
+  or gVisor sandbox, a machine only they use, their own computer, or a machine
+  with `WORK_PERSONAL_CREDENTIALS=accept`.
+- A project chat gets the shared value on a sandbox or a machine only that
+  project's work reaches.
+- Elsewhere the agent is told which names it did not get and who can set
+  them, and the turn goes on without them.
+
+Before each turn the variables are written to
+`.work-session/env/secrets.sh` (mode 0600, outside the repository); the agent
+runner, shells, terminals and workspace setup load it, and it is removed
+when a turn may not have it and when the workspace is given back. Each
+delivery is audited by name and fingerprint (`project_secrets.deliver` in the
+connection audit), and values are replaced with `[secret NAME]` in the
+chat's recorded output.
+
+Verify: a member sets their own value in the app; their chat's
+`printenv CLICKHOUSE_API_KEY` works in the agent's shell and shows as
+`[secret CLICKHOUSE_API_KEY]` in the transcript; a message from someone else
+in that chat runs without it; the audit lists the delivery without the value.
 
 ## Service connections and administrators
 

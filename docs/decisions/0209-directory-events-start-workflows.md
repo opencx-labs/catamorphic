@@ -25,10 +25,12 @@ them must declare `memberships:read`.
 
 **Workflows set secrets.** `host["catamorphic.secrets"]` offers `list()`,
 `set({ name, value, member? })` and `delete({ name, member? })` on the
-project's secrets (ADR 0205), naming a member by id or email. Runs get them
-only if the workflow declared `secrets:read` or `secrets:write` and the
-enabling member holds them (ADR 0158). Values set this way are write-only
-like any other.
+project's secrets (ADR 0205), naming a member by id or email; the host
+resolves an email to its user (`memberIdForEmail`, which the Work server
+answers from its sign-ins), and the member must belong to the project. Runs
+get them only if the workflow declared `secrets:read` or `secrets:write` and
+the enabling member holds them (ADR 0158). Values set this way are
+write-only like any other.
 
 Considered: polling the directory from a scheduled workflow (every project
 would need directory credentials and its own diffing) and an organization-wide
