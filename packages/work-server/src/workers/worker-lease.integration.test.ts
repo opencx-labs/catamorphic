@@ -480,8 +480,15 @@ it.skipIf(!process.env.DATABASE_URL)(
         provider: machine.provider,
         transport: {
           renew: () => runners().renew({ ...lease, identity: runnerIdentity }),
-          poll: ({ pollId, max }) =>
-            runners().poll({ ...lease, identity: runnerIdentity, pollId, max }),
+          // Like the HTTP transport, a stopping runner cancels its long poll.
+          poll: ({ pollId, max, signal }) =>
+            runners().poll({
+              ...lease,
+              identity: runnerIdentity,
+              pollId,
+              max,
+              signal,
+            }),
           complete: async (receipt) => {
             await runners().complete({
               ...lease,
