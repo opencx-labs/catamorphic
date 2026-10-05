@@ -85,6 +85,7 @@ describe("PGlite migrations", () => {
       "046_session_rewind.sql",
       "047_session_log_reference_indexes.sql",
       "048_machine_classes_and_pools.sql",
+      "049_member_secret_values.sql",
       "050_executor_keys.sql",
       "051_workspace_setup_and_volumes.sql",
       "053_directory_events.sql",

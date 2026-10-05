@@ -48,8 +48,9 @@ export interface EnvironmentRuntimeBinding {
   sandboxProvider?: SandboxProvider;
   /**
    * The host placed the owner's work on a machine no one else's work
-   * reaches (ADR 0167 access naming only that person), so it may hold the
-   * owner's personal credentials (ADR 0184).
+   * reaches (ADR 0167 access naming only that person, or for a project's
+   * own work only that project), so it may hold the owner's personal
+   * credentials (ADR 0184) and the Environment's secrets (ADR 0205).
    */
   servesOnlyOwner?: boolean;
 }

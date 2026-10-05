@@ -2336,15 +2336,33 @@ export const PluginPackageParamsSchema = ProjectIdParamsSchema.extend({
   packageName: z.string().min(1),
 });
 
-// --- Secrets ---
+// --- Secrets (ADR 0205) ---
+export const SecretMemberValueSchema = z.object({
+  /** The member's external user id. */
+  member: z.string(),
+  updatedAt: z.string().datetime(),
+  setBy: z.string().nullable(),
+});
+
+/** One declared secret: where it is declared and which values exist, never a value. */
 export const SecretStatusSchema = z.object({
   name: z.string(),
-  hasValue: z.boolean(),
-  updatedAt: z.string().datetime().nullable(),
   label: z.string().optional(),
   description: z.string().optional(),
   required: z.boolean(),
   source: z.enum(["project", "plugin"]),
+  /** Environments whose sandboxes receive it. */
+  environments: z.array(z.string()),
+  /** A shared value is set. */
+  shared: z.boolean(),
+  /** When the shared value was stored, and by whom. */
+  updatedAt: z.string().datetime().nullable(),
+  setBy: z.string().nullable(),
+  /** The caller holds a value of their own. */
+  own: z.boolean(),
+  ownUpdatedAt: z.string().datetime().nullable(),
+  /** Members holding their own value; empty without `secrets:read`. */
+  members: z.array(SecretMemberValueSchema),
 });
 
 export const UpsertSecretSchema = z.object({
@@ -2353,6 +2371,17 @@ export const UpsertSecretSchema = z.object({
 
 export const SecretNameParamsSchema = ProjectIdParamsSchema.extend({
   name: z.string().min(1),
+});
+
+export const SecretMemberParamsSchema = SecretNameParamsSchema.extend({
+  /** A member's external user id, or `me`. */
+  member: z.string().min(1),
+});
+
+export const SecretValueChangeSchema = z.object({
+  name: z.string(),
+  member: z.string().nullable(),
+  updatedAt: z.string().datetime(),
 });
 
 // --- Code hosts (ADR 0177) ---

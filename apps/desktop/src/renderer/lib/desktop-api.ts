@@ -568,6 +568,25 @@ export interface RemoteProjectMember {
   roles: string[];
 }
 
+/**
+ * One project secret on the server (ADR 0205): where it is declared, which
+ * Environments receive it, and which values exist. Never a value.
+ */
+export interface RemoteProjectSecret {
+  name: string;
+  label?: string;
+  description?: string;
+  required: boolean;
+  source: "project" | "plugin";
+  environments: string[];
+  shared: boolean;
+  updatedAt: string | null;
+  setBy: string | null;
+  own: boolean;
+  ownUpdatedAt: string | null;
+  members: Array<{ member: string; updatedAt: string; setBy: string | null }>;
+}
+
 export interface RemoteProjectAccessRequest {
   id: string;
   externalUserId: string;
@@ -958,6 +977,27 @@ export interface CatamorphicDesktopApi {
     connectLinks: string[];
     webLinks: string[];
   }>;
+  /**
+   * The project's secrets (ADR 0205), and its members when `members` asks
+   * for them (needs `memberships:read`, else null).
+   */
+  remoteSecrets: (input: { projectId: string; members: boolean }) => Promise<{
+    secrets: RemoteProjectSecret[];
+    members: RemoteProjectMember[] | null;
+  }>;
+  /** Set a secret's shared value, or `member`'s own (`me` for yours). */
+  remoteSecretSet: (input: {
+    projectId: string;
+    name: string;
+    value: string;
+    member?: string;
+  }) => Promise<void>;
+  /** Clear a secret's shared value, or `member`'s own. */
+  remoteSecretDelete: (input: {
+    projectId: string;
+    name: string;
+    member?: string;
+  }) => Promise<void>;
   /** Organization service connections; administrators only (ADR 0172). */
   remoteServiceConnections: (projectId: string) => Promise<{
     providers: RemoteConnectionProvider[];

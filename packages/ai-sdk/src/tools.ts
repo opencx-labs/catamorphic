@@ -55,6 +55,8 @@ export interface WorkspaceToolContext {
   shell: ShellState;
   /** The Environment's budget for one foreground command (ADR 0174). */
   budgetSeconds?: number;
+  /** The session's secrets file, which every command loads (ADR 0205). */
+  envFile?: string;
 }
 
 const ASK_USER_DESCRIPTION = `Ask the user one or more questions. When the tool allows blocking=false, use it to continue independent work while awaiting answers. ALWAYS use this tool instead of writing questions as plain text whenever you are asking the user something and their answer shapes what you do next. Use it when (1) you are blocked on a decision that is genuinely the user's to make, one you cannot resolve from the request, the project, or sensible defaults, e.g. choosing between data sources, schedules, external services, or destructive vs. safe variants of an operation; or (2) the user asks you to interview them, gather their preferences, or otherwise requests that you ask them questions. A request like "ask me some questions" should go through this tool, batching up to 4 questions per call and calling it again for follow-ups. For routine implementation choices, pick a sensible default and state it instead of asking. Each option needs a concise label and a description explaining its effects, implications, or trade-offs; for open-ended questions offer plausible example answers as options. The user can always answer with free text instead of picking one. If you recommend an option, make it the first one and append " (Recommended)" to its label. Do not use it to ask "should I proceed?" or to confirm work you already described.`;
@@ -166,6 +168,7 @@ export function workspaceTools(context: WorkspaceToolContext): ToolSetWithMeta {
     root: () => context.workingDirectory,
     state: context.shell,
     ...(context.budgetSeconds ? { budgetSeconds: context.budgetSeconds } : {}),
+    ...(context.envFile ? { envFile: context.envFile } : {}),
   });
   const tools: Record<string, Tool> = {
     read: tool({

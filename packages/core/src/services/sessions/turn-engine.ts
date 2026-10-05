@@ -52,6 +52,7 @@ import {
   type RunnerLocation,
   reattachInProcessRunner,
 } from "./runner-channels.js";
+import { SecretMask } from "./secret-mask.js";
 import type { SessionLog } from "./session-log.js";
 import {
   attemptFromRow,
@@ -82,6 +83,8 @@ export interface RunnerState {
   applied?: Record<string, true>;
   /** Runs on its owner's sign-in or personal files (see {@link PreparedAttempt}). */
   ownerOnly?: boolean;
+  /** Its sandbox received the Environment's secrets (ADR 0205). */
+  secrets?: true;
   /** Steered inputs the harness could not take; the attempt restarts with them. */
   restartWith: string[];
   /** Steered inputs the harness took in (an accepted one never taken is queued again). */
@@ -120,6 +123,11 @@ export interface PreparedAttempt {
    * the owner wrote may join it (ADR 0199).
    */
   ownerOnly?: boolean;
+  /**
+   * The secrets the attempt's sandbox received, by name (ADR 0205): masked
+   * wherever the attempt's output is recorded.
+   */
+  secrets?: Readonly<Record<string, string>>;
 }
 
 /** What a settled turn's finalization produced. */
@@ -174,9 +182,17 @@ export interface TurnEngineHost {
     reply: Item | null;
     retrying: boolean;
   }): Promise<void>;
-  /** Approvals that opened and wait on approvers, after they committed. */
   /** This holder stopped working the turn, however it ended: let go of what it kept. */
   released?(input: { sessionId: string; turnId: string }): void;
+  /**
+   * Every secret value a session's sandbox could hold (ADR 0205), for a
+   * holder that took a running turn over and so never prepared it.
+   */
+  secretValues?(input: {
+    identity: Identity;
+    session: SessionRow;
+  }): Promise<Readonly<Record<string, readonly string[]>>>;
+  /** Approvals that opened and wait on approvers, after they committed. */
   approvalsOpened?(input: {
     session: SessionRow;
     requests: RuntimeRequest[];
@@ -198,6 +214,11 @@ interface LocalTurn {
   /** Host call results sent and not acknowledged yet, by frame id: sent again. */
   results: Map<string, RunnerCommandFrame>;
   resultsSentAt: number;
+  /**
+   * The secret values masked in the running attempt's output (ADR 0205);
+   * undefined until this holder prepared or took over the attempt.
+   */
+  mask?: SecretMask;
 }
 
 /**
@@ -696,6 +717,7 @@ export class TurnEngine {
     };
     const channel = await prepared.launch();
     local.channel = channel;
+    local.mask = new SecretMask(prepared.secrets ?? {});
     const runner: RunnerState = {
       location: channel.location,
       cursor: 0,
@@ -707,6 +729,9 @@ export class TurnEngine {
       consumed: steered,
       interruptSentAt: null,
       ...(prepared.ownerOnly ? { ownerOnly: true } : {}),
+      ...(Object.keys(prepared.secrets ?? {}).length > 0
+        ? { secrets: true }
+        : {}),
     };
     const running: Turn = {
       ...turn,
@@ -1013,6 +1038,15 @@ export class TurnEngine {
           reason: "The machine running this turn stopped before it finished.",
         };
       local.channel = channel;
+      // Taken over: what the sandbox may hold is masked as the attempt's
+      // preparer masked it (ADR 0205).
+      if (runner.secrets && !local.mask)
+        local.mask = new SecretMask(
+          (await this.deps.host.secretValues?.({
+            identity: ctx.identity,
+            session: ctx.session,
+          })) ?? {},
+        );
       // A holder can stop between recording the runner and sending its
       // start. A runner that never said hello never got it: stop it and
       // prepare the same attempt again, as for a preparation that died.
@@ -1150,7 +1184,9 @@ export class TurnEngine {
       });
       if (local.abort.signal.aborted) return { kind: "aborted", channel };
       for (const line of read.diagnostics)
-        console.warn(`[catamorphic] agent runner (turn ${turn.id}): ${line}`);
+        console.warn(
+          `[catamorphic] agent runner (turn ${turn.id}): ${local.mask?.text(line) ?? line}`,
+        );
       if (read.frames.length > 0 || read.cursor !== runner.cursor) {
         const outcome = await this.applyFrames(local, {
           ...ctx,
@@ -1392,6 +1428,9 @@ export class TurnEngine {
     let policy: ApprovalPolicy | undefined;
     let refused = false;
     const opened: RuntimeRequest[] = [];
+    // What a mask holds back changes only once this batch is recorded.
+    const masking =
+      local.mask && !local.mask.empty ? local.mask.begin() : undefined;
     const applied = await db.transaction().execute(async (trx) => {
       await this.assertOwned(local, trx);
       // The turn as it stands, under the lock: another replica may have
@@ -1456,6 +1495,7 @@ export class TurnEngine {
         },
         events,
         now: new Date(),
+        ...(masking ? { mask: masking } : {}),
       });
       if (ingested.consumed.length > 0)
         runner = {
@@ -1613,6 +1653,7 @@ export class TurnEngine {
         ...(ingested.completed ? { completion: ingested.completed } : {}),
       };
     });
+    masking?.commit();
     if (refused) local.wake();
     if (opened.length > 0)
       await this.deps.host

@@ -107,7 +107,9 @@ disagree with the installed source, the source wins.
   execution uses their project connection, never database credentials.
 - **Credentials reach systems only through the gateway** (ADR 0162): agents
   and workflows get reviewed actions, never keys. Workflow runs, which receive
-  project secrets, stay on the control plane. An administrator enters each
+  project secrets, stay on the control plane. Secrets a project lists on an
+  Environment, with a value per member, reach that Environment's sandboxes
+  where the placement isolates their owner (ADR 0205). An administrator enters each
   service credential once; projects bind it by name to an Environment in
   `.work/project.json` (ADR 0172).
 - **Isolation matches trust.** Local-process execution is for trusted

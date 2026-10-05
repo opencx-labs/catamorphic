@@ -40,19 +40,30 @@ Each listed name becomes an environment variable:
   project's work the same way;
 - in workflow runs, the shared value, as before.
 
+Secrets declared only in `project.json` are for Environments; runs keep
+receiving the secrets their code or plugins declare. Names a sandbox's shells
+depend on (`PATH`, `HOME`, `BASH_ENV`, the proxy variables) are reported to
+the agent, never set.
+
 This amends ADR 0175: values a project lists for an Environment may reach
 that Environment's sandboxes. Connection credentials still never do; prefer a
 gateway connection whenever a value grants access to a company system.
 
 **Delivery.** Before each sandbox turn the resolved variables are written to
 `.work-session/env/secrets.sh` (mode 0600, outside the repository), and the
-file is removed when the turn may not have them. Shells (`BASH_ENV`), the
-agent runner (read again for every attempt), terminals and workspace setup
-load it. A listed secret with no value for the owner is named to the agent
-with who can set it. Each delivery is audited by name and fingerprint.
-Values delivered to a turn are replaced with `[secret NAME]` wherever the
-turn's output is recorded. Operations that carry them to a worker are sealed
-to that worker (ADR 0206).
+file is removed when the turn may not have them and when the workspace is
+given back. The agent runner reads it again for every attempt and passes the
+variables to the harness with `BASH_ENV` pointing at the file (Bash skips
+`BASH_ENV` when its standard input is a socket, so the variables themselves
+are what shells inherit); the built-in agent's commands, terminals and
+workspace setup source it. A listed secret with no value for the owner is
+named to the agent with who can set it. Each delivery is audited by name and
+fingerprint. A turn that received them in a member's chat takes only that
+member's input, as for personal files. Values delivered to a turn are
+replaced with `[secret NAME]` wherever the turn's output is recorded, holding
+back streamed text that could be the start of a value; a process that takes
+a running turn over masks every value the sandbox could hold. Operations that
+carry them to a worker are sealed to that worker (ADR 0206).
 
 **Personal files** stay the member's own (ADR 0184): files listed in
 `.work/personal/environment.json`, behind `"personalCredentials": true`.

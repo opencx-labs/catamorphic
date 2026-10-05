@@ -11,6 +11,11 @@ import {
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  deliverSandboxSecrets,
+  removeSandboxSecrets,
+  sandboxSecretsFile,
+} from "../services/sandbox-secrets.js";
+import {
   type RunnerChannel,
   sandboxChannel,
   startSandboxRunner,
@@ -280,5 +285,64 @@ describe("sandbox runner", () => {
       frames.map((_, index) => index + 1),
     );
     await channel.kill();
+  }, 60_000);
+
+  it("gives every attempt the session's secrets file as it is then (ADR 0205)", async () => {
+    const sandbox = await provider.createSandbox({});
+    const stateDirectory = "/workspace/.work-session";
+    const target = {
+      provider,
+      sandboxId: sandbox.id,
+      projectDir: "/workspace/project",
+    };
+    const envFile = sandboxSecretsFile({
+      workspaceRoot: provider.workspaceRoot,
+    });
+    /** What the echo harness says the attempt's environment holds. */
+    const run = async () => {
+      const channel = await startSandboxRunner({
+        provider,
+        allocationId: "allocation",
+        sandboxId: sandbox.id,
+        stateDirectory,
+      });
+      await channel.send([
+        {
+          id: "start",
+          command: {
+            kind: "start",
+            attempt: {
+              ...attempt("[[env CLICKHOUSE_API_KEY]] [[env BASH_ENV]]"),
+              envFile,
+            },
+          },
+        },
+      ]);
+      const frames: RunnerFrame[] = [];
+      await readUntil({ channel, cursor: 0, frames, done: completed });
+      await channel.kill();
+      return events(frames)
+        .flatMap((event) =>
+          event.type === "item.started" &&
+          event.item.kind === "assistant_message"
+            ? [event.item.text]
+            : [],
+        )
+        .join("\n");
+    };
+    await deliverSandboxSecrets({
+      ...target,
+      variables: { CLICKHOUSE_API_KEY: "ch-key-'one'" },
+    });
+    const first = await run();
+    expect(first).toContain("CLICKHOUSE_API_KEY=ch-key-'one'");
+    // The provider's virtual path, mapped where this sandbox really is.
+    expect(first).toMatch(/BASH_ENV=\/.+\/\.work-session\/env\/secrets\.sh/);
+    expect(first).not.toContain(`BASH_ENV=${envFile}`);
+    // Read again for the next attempt: gone once removed.
+    await removeSandboxSecrets(target);
+    const second = await run();
+    expect(second).toContain("CLICKHOUSE_API_KEY is not set");
+    expect(second).toContain("BASH_ENV is not set");
   }, 60_000);
 });

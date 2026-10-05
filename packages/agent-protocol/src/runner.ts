@@ -27,6 +27,12 @@ import type {
 /** Bumped on any incompatible change to frames, commands or {@link AttemptStart}. */
 export const RUNNER_PROTOCOL_VERSION = 1;
 
+export {
+  formatEnvFile,
+  parseEnvFile,
+  shellSingleQuote,
+} from "./env-file.js";
+
 // ---------------------------------------------------------------------------
 // Capabilities
 
@@ -204,6 +210,13 @@ export interface AttemptStart {
   plugins: Array<{ name: string; path: string }>;
   /** Extra environment for the harness process (no credentials unless the host's own). */
   env: Record<string, string>;
+  /**
+   * The session's environment file in the sandbox (ADR 0205), absolute in
+   * the sandbox's own paths: a runner beside the workspace reads it as the
+   * attempt starts and adds its variables to the harness's environment,
+   * with `BASH_ENV` pointing at it. A missing file adds nothing.
+   */
+  envFile?: string;
   /** Adapter-specific settings the host configured for this agent. */
   options: JsonObject;
 }

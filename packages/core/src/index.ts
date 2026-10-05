@@ -352,6 +352,7 @@ export {
   NoCompatibleEnvironmentError,
   type PlacementReason,
   personalCredentialsDecision,
+  placementIsolatesOwner,
 } from "./services/execution-environments-service.js";
 export {
   type ExecutionJob,
@@ -616,12 +617,26 @@ export {
   type WorkflowStepAttempt,
   type WorkflowStepAttemptStatus,
 } from "./services/runs-service.js";
+export {
+  SANDBOX_SECRETS_PATH,
+  sandboxSecretsFile,
+  sandboxSecretsPrelude,
+} from "./services/sandbox-secrets.js";
 export { parseSnapshot } from "./services/sandbox-sync.js";
 export { SchedulesService } from "./services/schedules-service.js";
+export { SECRETS_CAPABILITY } from "./services/secrets-capability.js";
 export {
+  type SandboxSecretGap,
+  type SandboxSecrets,
+  SECRET_VALUE_MAX_BYTES,
   SecretDeclarationConflictError,
+  SecretMemberNotFoundError,
+  type SecretMemberValue,
   type SecretStatus,
   SecretsService,
+  type SecretValueChange,
+  SecretValueInvalidError,
+  secretFingerprint,
 } from "./services/secrets-service.js";
 export {
   SESSION_ACTION_SCHEMAS,

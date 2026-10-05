@@ -77,6 +77,35 @@ export interface EnvironmentAdmission {
    * machine isolates it.
    */
   personalCredentials: boolean;
+  /**
+   * The placement isolates the work's owner (see
+   * {@link placementIsolatesOwner}): what lets an Environment's secrets
+   * reach its sandboxes (ADR 0205).
+   */
+  isolated: boolean;
+}
+
+/**
+ * Whether a placement keeps one owner's work apart from everyone else's
+ * (ADRs 0184, 0205). A member's work: their own device, a sandbox (a VM or
+ * gVisor), a machine only they use, or a machine whose operator accepted
+ * personal credentials on shared processes. The project's own work
+ * (`owner` null): a sandbox, or a machine only that project's work
+ * reaches.
+ */
+export function placementIsolatesOwner(input: {
+  definition: Pick<ProjectEnvironmentDefinition, "device">;
+  owner: string | null;
+  runtime: Pick<EnvironmentRuntimeBinding, "descriptor" | "servesOnlyOwner">;
+}): boolean {
+  const { descriptor } = input.runtime;
+  if (descriptor.isolation === "sandbox" || input.runtime.servesOnlyOwner)
+    return true;
+  if (!input.owner) return false;
+  return (
+    input.definition.device === "member" ||
+    descriptor.capabilities.includes(MACHINE_CAPABILITIES.personalCredentials)
+  );
 }
 
 /**
@@ -107,14 +136,7 @@ export function personalCredentialsDecision(input: {
       reason:
         "Personal credentials reach only a member's own chats, and this is the project's own work. Use an agent with a model connection instead",
     };
-  const { descriptor } = input.runtime;
-  if (
-    input.definition.device === "member" ||
-    descriptor.isolation === "sandbox" ||
-    input.runtime.servesOnlyOwner === true ||
-    descriptor.capabilities.includes(MACHINE_CAPABILITIES.personalCredentials)
-  )
-    return { allowed: true };
+  if (placementIsolatesOwner(input)) return { allowed: true };
   return {
     allowed: false,
     reason: `The machine for Environment '${input.environment}' runs other people's work as plain processes, so your own sign-in may not run there. Use microsandbox, a machine only you use, or set WORK_PERSONAL_CREDENTIALS=accept on that machine`,
@@ -715,6 +737,7 @@ export class ExecutionEnvironmentsService {
           : {}),
         ...(definition.approvals ? { approvals: definition.approvals } : {}),
         personalCredentials: personal.allowed,
+        isolated: placementIsolatesOwner({ definition, owner, runtime }),
       },
     };
   }

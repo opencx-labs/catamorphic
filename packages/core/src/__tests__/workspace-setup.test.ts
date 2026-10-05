@@ -4,6 +4,7 @@ import path from "node:path";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { sandboxSecretsPrelude } from "../services/sandbox-secrets.js";
 import {
   parseSetupRecord,
   planWorkspaceSetup,
@@ -119,7 +120,7 @@ describe("planning a workspace's setup", () => {
         environment: env,
       },
     });
-    expect(script).toContain('if [ -f "$work_session/env/secrets.sh" ]; then');
+    expect(script).toContain(sandboxSecretsPrelude());
     expect(script).toContain('bash -e "$2"');
     expect(script).toContain(`'Environment setup'`);
     expect(script).not.toContain(`'Personal setup'`);
@@ -249,7 +250,7 @@ describe("running a workspace's setup", () => {
     const { id } = await provider.createSandbox({});
     await provider.uploadFiles(
       id,
-      { "secrets.sh": "DEMO_TOKEN=from-secrets\n" },
+      { "secrets.sh": "export DEMO_TOKEN=from-secrets\n" },
       "/workspace/.work-session/env",
     );
     expect(

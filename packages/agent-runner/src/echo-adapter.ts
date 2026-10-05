@@ -36,6 +36,7 @@ const CAPABILITIES: HarnessCapabilities = {
  * - `[[hang]]` works until interrupted
  * - `[[fail <message>]]` fails the turn
  * - `[[title <text>]]` sets the chat title
+ * - `[[env <NAME>]]` says the variable as the attempt's environment has it
  * - `[[big <n>]]` says, and stores under subpath `big`, n three-byte characters
  *
  * Its native state is the list of turns it saw, stored with Work, so a
@@ -173,6 +174,15 @@ export class EchoAdapter implements HarnessAdapter {
             error: { message: argument || "The echo harness failed." },
           });
           return;
+        } else if (name === "env") {
+          const value = attempt.env[argument];
+          say(
+            host,
+            `env:${randomUUID()}`,
+            value === undefined
+              ? `${argument} is not set`
+              : `${argument}=${value}`,
+          );
         } else if (name === "title") {
           host.emit({ type: "title", text: argument });
         } else if (name === "big") {

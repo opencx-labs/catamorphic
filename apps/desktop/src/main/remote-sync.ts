@@ -59,6 +59,25 @@ export interface RemoteInvitation {
   webLinks: string[];
 }
 
+/**
+ * One project secret on the server (ADR 0205): where it is declared, which
+ * Environments receive it, and which values exist. Never a value.
+ */
+export interface RemoteSecret {
+  name: string;
+  label?: string;
+  description?: string;
+  required: boolean;
+  source: "project" | "plugin";
+  environments: string[];
+  shared: boolean;
+  updatedAt: string | null;
+  setBy: string | null;
+  own: boolean;
+  ownUpdatedAt: string | null;
+  members: Array<{ member: string; updatedAt: string; setBy: string | null }>;
+}
+
 export interface RemoteAccessRequest {
   id: string;
   externalUserId: string;
@@ -259,6 +278,19 @@ export interface RemoteProjectClient extends RemoteDocumentsClient {
   personalEnvironment(): Promise<RemotePersonalEnvironment | null>;
   putPersonalEnvironment(input: RemotePersonalEnvironmentUpload): Promise<void>;
   deletePersonalEnvironment(): Promise<void>;
+  /** The project's secrets, without values (ADR 0205). */
+  listSecrets(): Promise<RemoteSecret[]>;
+  /**
+   * Set the shared value, or `member`'s own (`me` for the caller's). The
+   * value goes to the server only; nothing reads it back.
+   */
+  setSecret(input: {
+    name: string;
+    value: string;
+    member?: string;
+  }): Promise<void>;
+  /** Clear the shared value, or `member`'s own. */
+  deleteSecret(input: { name: string; member?: string }): Promise<void>;
   publish(input: {
     path: string;
     audience: "public" | "members";
@@ -351,6 +383,13 @@ export function httpDocumentsClient(args: {
   const doFetch = args.fetch ?? fetch;
   const base = `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/documents`;
   const personalEnvironmentUrl = `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/personal-environment`;
+  // A secret's shared value, or one member's own (ADR 0205).
+  const secretsUrl = (target?: { name: string; member?: string }) =>
+    [
+      `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/secrets`,
+      ...(target ? [encodeURIComponent(target.name)] : []),
+      ...(target?.member ? ["members", encodeURIComponent(target.member)] : []),
+    ].join("/");
   const authorizedFetch = async (url: string, init: RequestInit = {}) => {
     const request = async (forceRefresh: boolean) =>
       doFetch(url, {
@@ -548,6 +587,27 @@ export function httpDocumentsClient(args: {
       });
       if (!response.ok && response.status !== 404)
         return fail(response, "Removing your remote environment");
+      await response.body?.cancel();
+    },
+    async listSecrets() {
+      const response = await authorizedFetch(secretsUrl());
+      if (!response.ok) return fail(response, "Listing the project's secrets");
+      return (await response.json()) as RemoteSecret[];
+    },
+    async setSecret(input) {
+      const response = await authorizedFetch(secretsUrl(input), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: input.value }),
+      });
+      if (!response.ok) return fail(response, `Saving ${input.name}`);
+      await response.body?.cancel();
+    },
+    async deleteSecret(input) {
+      const response = await authorizedFetch(secretsUrl(input), {
+        method: "DELETE",
+      });
+      if (!response.ok) return fail(response, `Clearing ${input.name}`);
       await response.body?.cancel();
     },
     async list() {

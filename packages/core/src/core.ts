@@ -9,7 +9,7 @@ import type {
 import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import { PROJECT_SKILLS_DIR } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
-import type { Identity } from "./identity.js";
+import { type Identity, mayUseProject } from "./identity.js";
 import { HOST_SKILLS, SEED_SKILLS } from "./seeds.js";
 import type { AgentCapabilityOptions } from "./services/agent-capabilities-service.js";
 import { AgentCapabilitiesService } from "./services/agent-capabilities-service.js";
@@ -104,6 +104,7 @@ import { RunPluginsLoader } from "./services/run-plugins-loader.js";
 import { RunsService } from "./services/runs-service.js";
 import { RuntimeEventsService } from "./services/runtime-events-service.js";
 import { SchedulesService } from "./services/schedules-service.js";
+import { secretsCapability } from "./services/secrets-capability.js";
 import { SecretsService } from "./services/secrets-service.js";
 import {
   SESSION_ACTION_SCHEMAS,
@@ -191,6 +192,15 @@ export interface CatamorphicCoreConfig {
     projectId: string;
     externalUserId: string;
   }) => Promise<Identity | null>;
+  /**
+   * The external user id of whoever signs in with `email`, or null. Lets
+   * workflows name members by email (`catamorphic.secrets`, ADR 0209);
+   * without it they name members by id only.
+   */
+  memberIdForEmail?: (args: {
+    tenantId: string;
+    email: string;
+  }) => Promise<string | null>;
   /**
    * Where sandboxes reach the control plane: its public URL's host and port
    * (`work.acme.com:443`, see `gatewayHostOf`; a bare host allows every
@@ -673,6 +683,13 @@ export class CatamorphicCore {
     };
     this.capabilities = new CapabilityRegistry([
       sessionDeliveryCapability,
+      secretsCapability({
+        // Constructed further down; resolved per call.
+        secrets: () => this.secrets,
+        ...(config.memberIdForEmail
+          ? { memberIdForEmail: config.memberIdForEmail }
+          : {}),
+      }),
       ...(config.capabilityProviders ?? []),
     ]);
     this.projects = new ProjectsService(
@@ -932,15 +949,20 @@ export class CatamorphicCore {
     }
     // Secrets exist independently of plugins: a project declares its own with
     // `defineSecrets` in code, and plugins may declare additional ones.
-    this.secrets = new SecretsService(
-      this.db,
-      this.plugins,
-      (args) =>
+    this.secrets = new SecretsService({
+      db: this.db,
+      ...(this.plugins ? { plugins: this.plugins } : {}),
+      projectDeclarations: (args) =>
         args.purpose === "run"
           ? this.workflows.declaredSecretsForRun(args)
           : this.workflows.listDeclaredSecrets(args),
-      config.credentialVault,
-    );
+      ...(config.credentialVault ? { vault: config.credentialVault } : {}),
+      environments: this.projectEnvironments,
+      isMember: async (args) => {
+        const member = await this.resolveMember(args);
+        return member !== null && mayUseProject(member, args.projectId);
+      },
+    });
     this.personalEnvironments = new PersonalEnvironmentService({
       db: this.db,
       ...(config.credentialVault ? { vault: config.credentialVault } : {}),
@@ -1149,6 +1171,7 @@ export class CatamorphicCore {
         connectionMcpUrl: config.connectionMcpUrl,
         workspaces: this.sessionWorkspaces,
         personalEnvironments: this.personalEnvironments,
+        secrets: this.secrets,
         ...(config.gatewayUrl
           ? {
               sandboxGateway: {

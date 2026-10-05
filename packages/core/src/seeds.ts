@@ -535,6 +535,16 @@ provide it take the work:
   "*.npmjs.org"] }\`. A restricted image must already contain git and bash.
 - \`approvals.waitMinutes\`: how long an unattended chat waits for a person
   to approve before the action is refused (30 by default).
+- \`secrets\`: names of project secrets its workspaces get as environment
+  variables (\`["CLICKHOUSE_API_KEY"]\`). Declare each under the manifest's
+  top-level \`"secrets"\` (\`{ "CLICKHOUSE_API_KEY": { "description": "Your
+  ClickHouse key" } }\`) or with \`defineSecrets\`. A secret holds a shared
+  value and may hold one value per member, set under Secrets in Work or by a
+  workflow through \`host["catamorphic.secrets"]\`; values never belong in
+  project files. A member's own chat gets their value, else the shared one,
+  only on a machine that isolates them; read the personal-environment skill
+  before relying on one. A value that grants access to a company system
+  belongs in a connection instead.
 - \`setup\`: a shell command run in the project folder of every new
   workspace before its first turn, and again when it changes
   (\`"pnpm install --frozen-lockfile"\`), within \`setupTimeoutMinutes\` (30

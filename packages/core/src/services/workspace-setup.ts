@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { shellQuote } from "@catamorphic/git";
 import { followProcess, type SandboxProvider } from "@catamorphic/sandbox";
 import { SESSION_DIRECTORY } from "./sandbox-git.js";
+import { sandboxSecretsPrelude } from "./sandbox-secrets.js";
 
 /*
  * Workspace setup (ADR 0207): an Environment's `setup` command, then the
@@ -129,11 +130,9 @@ export function workspaceSetupScript(input: {
     'exec >>"$work_session/setup.log" 2>&1',
     ...stale.map((file) => `rm -f "$work_session/setup/${file}"`),
     `printf '\\n== Workspace setup started %s ==\\n' "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"`,
-    'if [ -f "$work_session/env/secrets.sh" ]; then',
-    "  set -a",
-    '  . "$work_session/env/secrets.sh"',
-    "  set +a",
-    "fi",
+    // The Environment's secrets (ADR 0205), from the project folder where
+    // the script starts.
+    sandboxSecretsPrelude(),
     "work_part() {",
     "  printf '\\n-- %s\\n' \"$1\"",
     '  bash -e "$2"',

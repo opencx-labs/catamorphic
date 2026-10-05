@@ -34,6 +34,27 @@ export interface ShellState {
 }
 
 /**
+ * The lines that start a command from the project folder: load the
+ * session's secrets (ADR 0205) while still there, then move to `cwd`. The
+ * command starts in the root already; a root only the provider can map (a
+ * virtual `/workspace`) stays where the provider put it.
+ */
+function commandPrelude(input: {
+  root: string;
+  cwd: string;
+  envFile?: string;
+}): string[] {
+  return [
+    ...(input.envFile
+      ? [
+          `if [ -f ${quote(input.envFile)} ]; then . ${quote(input.envFile)}; fi`,
+        ]
+      : []),
+    `cd ${quote(input.cwd)} 2>/dev/null || cd ${quote(input.root)} 2>/dev/null`,
+  ];
+}
+
+/**
  * Run one foreground command the way a terminal user expects: in the
  * directory the previous command left (so `cd` persists between calls),
  * with stdout and stderr together, bounded in time, and cancellable. Where
@@ -52,13 +73,20 @@ export async function runShell(input: {
   /** The Environment's budget for one command; ten minutes by default. */
   budgetSeconds?: number;
   signal?: AbortSignal;
+  /**
+   * The session's secrets file (ADR 0205), from the project folder or
+   * absolute: loaded before the command when it exists.
+   */
+  envFile?: string;
 }): Promise<{ exitCode: number; output: string }> {
   const marker = `__catamorphic_cwd_${crypto.randomUUID().replaceAll("-", "")}__`;
   const cwd = input.state.cwd ?? input.root;
   const script = [
-    // The command starts in the root already; a root only the provider
-    // can map (a virtual `/workspace`) stays where the provider put it.
-    `cd ${quote(cwd)} 2>/dev/null || cd ${quote(input.root)} 2>/dev/null`,
+    ...commandPrelude({
+      root: input.root,
+      cwd,
+      ...(input.envFile ? { envFile: input.envFile } : {}),
+    }),
     input.command,
     "__catamorphic_status=$?",
     `printf '\\n${marker}%s\\n' "$PWD"`,
@@ -205,6 +233,11 @@ export interface ShellToolContext {
   state: ShellState;
   /** The Environment's budget for one foreground command, in seconds. */
   budgetSeconds?: number;
+  /**
+   * The session's secrets file (ADR 0205), from the project folder or
+   * absolute: every command loads it first.
+   */
+  envFile?: string;
 }
 
 type BackgroundStatus = "running" | "finished" | "stopped";
@@ -256,6 +289,7 @@ export function shellTools(context: ShellToolContext): Record<string, Tool> {
         budgetSeconds,
         ...(timeout !== undefined ? { timeoutMs: timeout } : {}),
         ...(abortSignal ? { signal: abortSignal } : {}),
+        ...(context.envFile ? { envFile: context.envFile } : {}),
       }),
   });
   if (!processes) return { bash };
@@ -293,10 +327,20 @@ export function shellTools(context: ShellToolContext): Record<string, Tool> {
       }),
       execute: async ({ command, description }, { abortSignal }) => {
         if (!command.trim()) throw new Error("Empty command.");
+        const root = context.root();
+        // Started in the project folder, so it loads the secrets from
+        // there, then where the shell is.
         const started = await processes.startProcess({
           sandboxId: context.sandboxId,
-          command,
-          cwd: context.state.cwd ?? context.root(),
+          command: [
+            ...commandPrelude({
+              root,
+              cwd: context.state.cwd ?? root,
+              ...(context.envFile ? { envFile: context.envFile } : {}),
+            }),
+            command,
+          ].join("\n"),
+          cwd: root,
           ...(description.trim() ? { name: description.trim() } : {}),
         });
         background().set(started.processId, { cursor: 0 });

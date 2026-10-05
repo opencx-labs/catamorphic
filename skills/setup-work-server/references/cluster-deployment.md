@@ -100,7 +100,9 @@ worker whose key does not match the one it enrolled with is refused with
 `403`.
 
 Workers run agent sandboxes only. Workflow runs, which receive project secrets,
-execute on the control plane. For developer and review agents use
+execute on the control plane; a worker's sandboxes receive only the secrets a
+project lists on their Environment, where the placement isolates the work's
+owner ([secrets in Environments](secrets-and-gateway.md#secrets-in-environments)). For developer and review agents use
 `WORK_SANDBOX=microsandbox` on workers (see capacity below).
 
 ## Keep agent code away from the control plane
@@ -729,6 +731,12 @@ which advertises `credentials.personal`. Give such Environments egress to
 it, and the CLIs on the path or in the image. A company that wants these
 harnesses for everyone binds a model connection instead
 ([harnesses](harnesses.md)).
+
+The same placements receive the secrets an Environment lists, with each
+member's own value in their own chats (ADR 0205,
+[secrets in Environments](secrets-and-gateway.md#secrets-in-environments)).
+A project chat receives the shared values on a sandboxed machine or on a
+worker whose access names only that project.
 
 ## Unattended agents
 
