@@ -2117,6 +2117,30 @@ export function registerIpcHandlers(
       : null;
   });
 
+  // A remote chat's preview (ADR 0208): its own loopback address, which
+  // the browser tab opens and this desktop forwards as the member.
+  ipcMain.handle(
+    "catamorphic:remote-preview-open",
+    async (
+      event,
+      input: { projectId: string; sessionId: string; port: number },
+    ) => {
+      if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535)
+        throw new Error("A port is a number from 1 to 65535");
+      if (!storesFor(event).remoteProjects.inspect(input.projectId))
+        throw new Error("This project has no server");
+      const server = state.current;
+      if (!server) throw new Error("The workspace is still starting");
+      return {
+        url: await server.openRemotePreview({
+          projectId: input.projectId,
+          sessionId: input.sessionId,
+          port: input.port,
+        }),
+      };
+    },
+  );
+
   ipcMain.handle(
     "catamorphic:remote-status",
     async (event, projectId: string) => {

@@ -194,6 +194,8 @@ describe("preview routes (ADR 0208)", () => {
     expect(res.headers["set-cookie"]).toEqual(["a=1; Path=/", "b=2; Path=/"]);
     expect(res.headers["x-thing"]).toBe("one, two");
     expect(res.headers["content-length"]).toBe("7");
+    // The server's own answer is never taken for the route's refusal.
+    expect(res.headers["x-work-preview-refusal"]).toBeUndefined();
     const [input] = spy.mock.calls[0] ?? [];
     expect(input).toMatchObject({
       projectId: PROJECT_ID,
@@ -265,6 +267,7 @@ describe("preview routes (ADR 0208)", () => {
     const down = await app.inject({ method: "GET", url: `${PREVIEW}/down` });
     expect(down.statusCode).toBe(502);
     expect(down.json()).toMatchObject({ code: "unreachable" });
+    expect(down.headers["x-work-preview-refusal"]).toBe("1");
     const idle = await app.inject({ method: "GET", url: `${PREVIEW}/` });
     expect(idle.statusCode).toBe(409);
     expect(idle.json()).toMatchObject({ code: "not_running" });

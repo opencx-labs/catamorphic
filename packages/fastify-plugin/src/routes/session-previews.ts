@@ -14,8 +14,19 @@ const SESSION_UUID =
 /** Hosts a server in the workspace calls itself in an absolute redirect. */
 const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]"];
 
+/**
+ * Marks an answer as the preview route's own refusal (the workspace is not
+ * running, nothing listens on the port), never the previewed server's.
+ */
+export const PREVIEW_REFUSAL_HEADER = "x-work-preview-refusal";
+
 /** Response headers the route sets itself. */
-const OWN_RESPONSE_HEADERS = ["content-length", "connection", "keep-alive"];
+const OWN_RESPONSE_HEADERS = [
+  "content-length",
+  "connection",
+  "keep-alive",
+  PREVIEW_REFUSAL_HEADER,
+];
 
 /**
  * Previews of servers running in a chat's workspace (ADR 0208):
@@ -67,6 +78,9 @@ async function serve(
   request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<FastifyReply> {
+  // Until the server in the workspace answers, any answer is the route's
+  // own; a client tells the two apart by this header.
+  reply.header(PREVIEW_REFUSAL_HEADER, "1");
   const previews = ctx.core?.sessionPreviews;
   if (!previews)
     return reply.status(503).send({ error: "Agent sessions not configured" });
@@ -106,6 +120,7 @@ async function serve(
           }
         : {}),
     });
+    reply.removeHeader(PREVIEW_REFUSAL_HEADER);
     return send({ reply, response, prefix: target.prefix, port });
   } catch (error) {
     if (error instanceof SessionPreviewError)

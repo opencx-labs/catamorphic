@@ -103,6 +103,10 @@ import { MobilePairingModal } from "./components/mobile-pairing-modal.js";
 import { Modal } from "./components/modal.js";
 import { PasskeyHost } from "./components/passkey-sheet.js";
 import { PendingButton } from "./components/pending-button.js";
+import {
+  PreviewPortDialog,
+  type PreviewPortRequest,
+} from "./components/preview-port-dialog.js";
 import { ProfileBar } from "./components/profile-bar.js";
 import { ProjectAgentConsentDialog } from "./components/project-agent-consent.js";
 import { ProjectModal } from "./components/project-modal.js";
@@ -163,6 +167,11 @@ import {
   useKeybindings,
 } from "./lib/keybindings.js";
 import { notifyDesktop, playChime } from "./lib/notify.js";
+import {
+  ipcErrorText,
+  lastPreviewPort,
+  rememberPreviewPort,
+} from "./lib/remote-workspace.js";
 import { sessionLabel } from "./lib/session-label.js";
 import type { SidebarMotion } from "./lib/sidebar-motion.js";
 import { skillInvocation } from "./lib/skills.js";
@@ -494,6 +503,11 @@ export function App({
     open: boolean;
     context: { projectId?: string; sessionId?: string } | null;
   }>({ open: false, context: null });
+  // Open preview (ADR 0208): the remote chat whose port is being asked for.
+  const [previewRequest, setPreviewRequest] =
+    useState<PreviewPortRequest | null>(null);
+  const [previewPending, setPreviewPending] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [remotePublish, setRemotePublish] = useState<{
     path: string;
     features: RemoteFeatures | undefined;
@@ -1212,6 +1226,65 @@ export function App({
       case "unarchive":
         void unarchiveSession.mutateAsync(sessionId);
         break;
+      case "open-terminal":
+        openChatTerminal(sessionId);
+        break;
+      case "open-preview":
+        askChatPreview(sessionId);
+        break;
+    }
+  };
+
+  /**
+   * A remote chat's workspace is open to the person beside its agent (ADR
+   * 0208); an incognito chat stays on this computer.
+   */
+  const remoteChatSession = (sessionId: string | undefined): boolean =>
+    remoteSurfaceStatus !== null &&
+    sessionId !== undefined &&
+    !workspace.chats.some(
+      (chat) => chat.sessionId === sessionId && chat.incognito,
+    );
+
+  /** A terminal in a remote chat's workspace, named for the chat. */
+  const openChatTerminal = (sessionId: string) => {
+    if (!remoteChatSession(sessionId)) return;
+    const session = sessionsById.get(sessionId);
+    openTerminalTab({
+      remoteSessionId: sessionId,
+      title: `Terminal · ${session ? sessionLabel(session) : "Chat"}`,
+    });
+  };
+
+  /** Ask for the port of a server in a remote chat's workspace. */
+  const askChatPreview = (sessionId: string) => {
+    if (!remoteChatSession(sessionId)) return;
+    const session = sessionsById.get(sessionId);
+    setPreviewError(null);
+    setPreviewRequest({
+      sessionId,
+      chatTitle: session ? sessionLabel(session) : "this chat",
+      lastPort: lastPreviewPort(sessionId),
+    });
+  };
+
+  const openChatPreview = async (sessionId: string, port: number) => {
+    if (!projectId) return;
+    setPreviewPending(true);
+    setPreviewError(null);
+    try {
+      const { url } = await desktopApi.remotePreviewOpen({
+        projectId,
+        sessionId,
+        port,
+      });
+      rememberPreviewPort(sessionId, port);
+      setPreviewRequest(null);
+      openBrowserTab(url, { title: `Preview · ${port}` });
+    } catch (cause) {
+      setPreviewError(ipcErrorText(cause));
+    } finally {
+      setPreviewPending(false);
     }
   };
 
@@ -1265,6 +1338,7 @@ export function App({
               chatSessionMenu({
                 unread: unreadSessionIds.has(chat.sessionId),
                 archived: archivedSessionIds.has(chat.sessionId),
+                remote: remoteChatSession(chat.sessionId),
               }),
             ],
           ]
@@ -1584,6 +1658,8 @@ export function App({
     floating?: boolean;
     initialCommand?: string;
     title?: string;
+    /** A shell in this remote chat's workspace (ADR 0208). */
+    remoteSessionId?: string;
   }) => {
     const floating = opts?.floating ?? Boolean(opts?.floatingTool);
     const entry: TerminalEntry = {
@@ -1593,6 +1669,9 @@ export function App({
       floatingTool: opts?.floatingTool,
       macroId: opts?.macroId,
       initialCommand: opts?.initialCommand,
+      ...(opts?.remoteSessionId
+        ? { remoteSessionId: opts.remoteSessionId }
+        : {}),
     };
     updateWorkspace((ws) => {
       const key = terminalTabKey(entry.localId);
@@ -1977,7 +2056,14 @@ export function App({
           (terminal) => terminal.localId === localId,
         );
         // Shells re-announce the same title on every prompt — skip those.
-        if (!target || target.macroId || target.title === title) return ws;
+        // A remote chat's terminal keeps the chat's name.
+        if (
+          !target ||
+          target.macroId ||
+          target.remoteSessionId ||
+          target.title === title
+        )
+          return ws;
         return {
           ...ws,
           terminals: ws.terminals.map((terminal) =>
@@ -3706,6 +3792,14 @@ export function App({
     "remote-environment": () => {
       if (remoteSurfaceStatus) setRemoteEnvironmentOpen(true);
     },
+    "open-chat-terminal": () => {
+      const chat = actionChat(workspaceRef.current);
+      if (chat?.sessionId) openChatTerminal(chat.sessionId);
+    },
+    "open-chat-preview": () => {
+      const chat = actionChat(workspaceRef.current);
+      if (chat?.sessionId) askChatPreview(chat.sessionId);
+    },
     "continue-on-mobile": () =>
       setMobilePairing({
         open: true,
@@ -5080,6 +5174,8 @@ export function App({
     "switch-agent":
       focusedChat !== undefined && paletteSwitchableAgentIds.size > 0,
     "session-status": focusedChat !== undefined,
+    "open-chat-terminal": remoteChatSession(paletteTargetChat?.sessionId),
+    "open-chat-preview": remoteChatSession(paletteTargetChat?.sessionId),
     "archive-chat":
       focusedSession !== undefined && focusedSession.visibility !== "archived",
     // Project-agent models are committed in their project definition, so
@@ -5544,6 +5640,16 @@ export function App({
             open={mobilePairing.open}
             context={mobilePairing.context}
             onClose={() => setMobilePairing({ open: false, context: null })}
+          />
+          <PreviewPortDialog
+            request={previewRequest}
+            pending={previewPending}
+            error={previewError}
+            onClose={() => setPreviewRequest(null)}
+            onOpen={(port) => {
+              if (previewRequest)
+                void openChatPreview(previewRequest.sessionId, port);
+            }}
           />
           {projectId && (
             <RemoteEnvironmentModal
@@ -6185,6 +6291,13 @@ export function App({
                           }
                           attachSessionId={terminal.attachSessionId}
                           restoreSessionId={terminal.restoreSessionId}
+                          {...(terminal.remoteSessionId
+                            ? {
+                                remoteChat: {
+                                  sessionId: terminal.remoteSessionId,
+                                },
+                              }
+                            : {})}
                           readOnly={Boolean(terminal.agentControlled)}
                           onTitle={(title) =>
                             onTerminalTitle(terminal.localId, title)

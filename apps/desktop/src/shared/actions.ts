@@ -581,6 +581,42 @@ export const BUILTIN_ACTIONS = [
       "personal",
     ],
   },
+  {
+    id: "open-chat-terminal",
+    label: "Open terminal in this chat's workspace",
+    icon: "SquareTerminal",
+    description:
+      "open a terminal in the focused chat's workspace on the project's server, beside its agent",
+    defaultBinding: null,
+    keywords: [
+      "terminal",
+      "shell",
+      "remote",
+      "server",
+      "workspace",
+      "sandbox",
+      "machine",
+      "ssh",
+    ],
+  },
+  {
+    id: "open-chat-preview",
+    label: "Open preview of this chat's workspace…",
+    icon: "AppWindow",
+    description:
+      "open a server running in the focused chat's workspace on the project's server in a browser tab, by its port",
+    defaultBinding: null,
+    keywords: [
+      "preview",
+      "port",
+      "localhost",
+      "dev server",
+      "browser",
+      "remote",
+      "server",
+      "workspace",
+    ],
+  },
 ] as const satisfies readonly ActionDefinition[];
 
 /** Union of built-in action ids ("new-tab" | "command-palette" | …). */
