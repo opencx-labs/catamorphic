@@ -9,7 +9,10 @@ import {
   MACHINE_LABEL,
 } from "@catamorphic/hetzner";
 import { FakeHetznerCloud } from "@catamorphic/hetzner/testing";
-import { machineSignInHome } from "@catamorphic/sandbox";
+import {
+  generateExecutorKeyPair,
+  machineSignInHome,
+} from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { workAuthorityId } from "../cluster.js";
@@ -298,7 +301,7 @@ describe.skipIf(!databaseUrl)(
         method: "POST",
         url: "/api/workers/enroll",
         headers: PROTOCOL,
-        payload: { code },
+        payload: { code, publicKey: generateExecutorKeyPair().publicKey },
       });
       expect(enrolled.statusCode).toBe(200);
       expect(await reconciler.reconcile()).toMatchObject({

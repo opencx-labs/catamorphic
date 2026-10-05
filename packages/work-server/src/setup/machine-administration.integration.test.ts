@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { FakeHetznerCloud } from "@catamorphic/hetzner/testing";
+import { generateExecutorKeyPair } from "@catamorphic/sandbox";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createWorkServer, type WorkServer } from "../server.js";
@@ -214,7 +215,7 @@ describe.skipIf(!databaseUrl)("machine administration (ADR 0204)", () => {
       headers: {
         [WORKER_PROTOCOL_HEADER]: String(WORKER_PROTOCOL.server),
       },
-      payload: { code },
+      payload: { code, publicKey: generateExecutorKeyPair().publicKey },
     });
     expect(worker.statusCode).toBe(200);
     const workers = (await admin("GET", "/api/work/machines/workers")).json()
