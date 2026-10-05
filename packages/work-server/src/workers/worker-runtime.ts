@@ -317,6 +317,11 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       ],
     };
     log("Rotated this worker's credential and key");
+    // Its first use makes it current and ends the old credential: at once,
+    // not at whichever call comes next.
+    await call({ route: "renew", body: { session: epoch } }).catch(() => {
+      /* The next call does the same. */
+    });
   };
 
   /**

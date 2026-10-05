@@ -153,11 +153,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const renewed = await call(first.credential, "renew", { session });
       expect(renewed.statusCode).toBe(200);
       expect(renewed.json().rotate).toBe(true);
-      const polled = await call(first.credential, "poll", {
+      const reconnected = await call(first.credential, "connect", {
         session,
-        pollId: crypto.randomUUID(),
+        offer: OFFER,
+        publicKey: first.keys.publicKey,
       });
-      expect(polled.json()).toMatchObject({ jobs: [], rotate: true });
+      expect(reconnected.json()).toMatchObject({ session, rotate: true });
 
       // The first rotation's answer is lost on the way.
       const lostKeys = generateExecutorKeyPair();
@@ -297,6 +298,20 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(
         await provider.executeCommand(sandbox.providerId, "echo before"),
       ).toMatchObject({ exitCode: 0, result: "before\n" });
+      // One replica serves both the turn and the worker's poll: a trivial
+      // operation crosses HTTP each way without waiting for polling.
+      const times: number[] = [];
+      for (let trip = 0; trip < 10; trip++) {
+        const started = performance.now();
+        expect(await provider.getSandboxStatus(sandbox.providerId)).toBe(
+          "started",
+        );
+        times.push(performance.now() - started);
+      }
+      times.sort((a, b) => a - b);
+      console.info(
+        `[ADR 0206] worker over HTTP, one replica: median status round trip ${times[5]?.toFixed(1)} ms`,
+      );
 
       const credentialFile = path.join(dataDir, "worker-credential");
       const firstCredential = fs.readFileSync(credentialFile, "utf8").trim();

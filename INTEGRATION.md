@@ -956,8 +956,14 @@ A remote executor owns its node lease (ADR 0192): the host connects it with
 executor's own calls with `renewRemote`, and builds its sandbox provider from
 the row with `remoteProvider`; any host of the authority then claims its
 turns. `workerNode` names only the process's own local node.
-Enable `clientExecution: true` to accept authenticated member sandbox runners;
-`startClientRunner` supplies the transport-independent client loop. See the
+Every operation is sealed to its executor's X25519 public key (ADR 0206):
+register it with `registerExecutorKey({ db, executor: nodeExecutor(id),
+publicKey })` before `connectRemote`, which refuses an executor without one.
+Enable `clientExecution: true` to accept authenticated member sandbox runners,
+which register their public key when they connect; `startClientRunner`
+supplies the transport-independent client loop and opens what it receives
+with `keys: { executor, privateKeys }` (`generateExecutorKeyPair` makes a
+pair; the private key stays on the executor). See the
 [cluster setup reference](skills/setup-work-server/references/cluster-deployment.md)
 for the current limitations and required evidence. Custom hosts continue to
 inject their own infrastructure and auth.

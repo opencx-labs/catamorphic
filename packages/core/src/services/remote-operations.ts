@@ -12,6 +12,7 @@ import {
   sealOperation,
   VOLUME_KEY_PATTERN,
 } from "@catamorphic/sandbox";
+import type { Span } from "@opentelemetry/api";
 import { type Kysely, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import {
@@ -427,15 +428,15 @@ export class OperationWakeups {
 function subscribe(waiters: Map<string, Set<() => void>>, key: string): Wakeup {
   const set = waiters.get(key) ?? new Set<() => void>();
   waiters.set(key, set);
-  const wakes: Array<() => void> = [];
+  let wake = () => {};
   const woken = new Promise<void>((resolve) => {
-    wakes.push(resolve);
-    set.add(resolve);
+    wake = resolve;
   });
+  set.add(wake);
   return {
     woken,
     cancel: () => {
-      for (const wake of wakes) set.delete(wake);
+      set.delete(wake);
       if (set.size === 0 && waiters.get(key) === set) waiters.delete(key);
     },
   };
@@ -666,7 +667,7 @@ export class RemoteOperationQueue {
               "catamorphic.executor.operation": operation.kind,
             },
           },
-          async () => {
+          async (span) => {
             const leaseToken =
               typeof args.leaseToken === "function"
                 ? await args.leaseToken()
@@ -679,6 +680,7 @@ export class RemoteOperationQueue {
               operation,
               leaseHeld: args.leaseHeld,
               label: args.label,
+              span,
             });
           },
         ),
@@ -691,6 +693,7 @@ export class RemoteOperationQueue {
     operation: RemoteOperation;
     leaseHeld: (leaseToken: string) => Promise<boolean>;
     label: string;
+    span: Span;
   }): Promise<unknown> {
     const timeoutMs = operationTimeoutMs(args.operation);
     const publicKey = await executorKey({
@@ -717,7 +720,12 @@ export class RemoteOperationQueue {
         expires_at: sql`now() + make_interval(secs => ${Math.ceil(timeoutMs / 1000)})`,
       })
       .execute();
-    this.wakeups.workQueued(args.executor);
+    // Whether this replica serves the executor's poll: then the operation
+    // leaves at once rather than at the poll's next look (ADR 0206).
+    args.span.setAttribute(
+      "catamorphic.executor.local_poll",
+      this.wakeups.workQueued(args.executor) > 0,
+    );
     try {
       const deadline = Date.now() + timeoutMs;
       let leaseCheckedAt = Date.now();
