@@ -529,6 +529,50 @@ describe("agent session coordination", () => {
     provider.questions = undefined;
   });
 
+  it("waits for a message behind the chat's running turn, never calling its machine away", async () => {
+    const project = await projects.create(identity, {
+      name: "Behind a running turn",
+    });
+    const session = await sessions.create(identity, project.id);
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    provider.questions = async ({ say }) => {
+      await released;
+      say("First done");
+    };
+    const first = sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "questions: hold the turn",
+    );
+    await vi.waitFor(
+      async () => {
+        const [turn] = await turnsOf(session.id, project.id);
+        expect(turn?.status).toBe("running");
+      },
+      { timeout: 10_000 },
+    );
+    const second = sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "Then this",
+    );
+    // Longer than a turn may wait for a machine to take it.
+    await new Promise((resolve) => setTimeout(resolve, 6_000));
+    release();
+    provider.questions = undefined;
+    await expect(first).resolves.toMatchObject({
+      turn: { status: "completed" },
+    });
+    await expect(second).resolves.toMatchObject({
+      turn: { status: "completed" },
+    });
+  }, 30_000);
+
   it("keeps unanswered questions after a turn, and a late answer runs as a turn", async () => {
     const project = await projects.create(identity, { name: "Late answers" });
     const session = await sessions.create(identity, project.id);

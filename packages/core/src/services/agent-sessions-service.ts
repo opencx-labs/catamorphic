@@ -2435,7 +2435,19 @@ export class AgentSessionsService {
       if (turn.status === "held")
         throw new AgentTurnUnsettledError(sessionId, turnId, "held");
       if (turn.status === "queued") {
-        if (Date.now() - unclaimedSince > 5_000)
+        // Waiting behind the chat's own earlier turn, which a machine is
+        // running, is not waiting for a machine.
+        const ahead = await this.db
+          .selectFrom("agent_turns")
+          .select("id")
+          .where("session_id", "=", row.session_id)
+          .where("ordinal", "<", row.ordinal)
+          .where("status", "in", [...ACTIVE_TURN_STATUSES])
+          .where(sql<boolean>`lease_expires_at > now()`)
+          .limit(1)
+          .executeTakeFirst();
+        if (ahead) unclaimedSince = Date.now();
+        else if (Date.now() - unclaimedSince > 5_000)
           throw new AgentTurnUnsettledError(sessionId, turnId, "queued");
       } else {
         unclaimedSince = Date.now();

@@ -349,8 +349,9 @@ it("an authenticated member executes on this machine and loses execution immedia
       provider,
       transport: {
         renew: () => service.renew({ ...lease, identity }),
-        poll: ({ pollId, max }) =>
-          service.poll({ ...lease, identity, pollId, max }),
+        // Like the HTTP transport, a stopping runner cancels its long poll.
+        poll: ({ pollId, max, signal }) =>
+          service.poll({ ...lease, identity, pollId, max, signal }),
         complete: async (receipt) => {
           // The receipt route's bound on an error message.
           if ((receipt.error?.length ?? 0) > 4000)
@@ -507,8 +508,8 @@ it("an authenticated member executes on this machine and loses execution immedia
       provider,
       transport: {
         renew: () => service.renew({ ...reconnected, identity }),
-        poll: ({ pollId, max }) =>
-          service.poll({ ...reconnected, identity, pollId, max }),
+        poll: ({ pollId, max, signal }) =>
+          service.poll({ ...reconnected, identity, pollId, max, signal }),
         complete: async (receipt) => {
           await service.complete({ ...reconnected, identity, ...receipt });
         },
