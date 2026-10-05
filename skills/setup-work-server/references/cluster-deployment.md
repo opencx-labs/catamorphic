@@ -510,6 +510,33 @@ them, and they may answer its approval card without otherwise holding the chat.
 It waits `approvals.waitMinutes` (30 by default) and then is denied with a
 reason. A chat with no approvers refuses at once.
 
+## Terminals and previews
+
+A member works in a chat's workspace beside its agent (ADR 0208): the chat's
+owner, or anyone with `sessions:write` for a project chat. A terminal is a
+login shell (bash, else sh) started as one of the workspace's background
+processes, on a pseudo-terminal when the sandbox has util-linux `script` (or
+the BSD `script` of macOS for local-process there), else an interactive shell
+on a pipe, which the open answer reports as `pty: false`. It starts in the
+project folder with the Environment's secrets (ADR 0205) loaded when the
+workspace has them. `POST /api/projects/:id/agent/sessions/:sessionId/terminals`
+opens one, readmitting and starting the chat's workspace when it was given
+back; its output is read with `GET .../terminals/:terminalId/output?cursor&waitMs`,
+and `POST .../input`, `POST .../resize` and `DELETE .../terminals/:terminalId`
+follow. Only the person who opened a terminal reaches it. A terminal ends
+with its workspace, and typing in one keeps the workspace from being released
+as idle.
+
+`/api/projects/:id/agent/sessions/:sessionId/previews/:port/*` forwards any
+HTTP request to that port inside a running workspace, made by the sandbox's
+own Bun or Node (20 or later), so it works on every backend and behind
+restricted egress. Bodies travel as sent, every `Set-Cookie` comes back, and
+a redirect to the server itself stays below the preview. Responses are capped
+at 16 MiB, and WebSocket upgrades (live reload) are not forwarded. A preview
+never starts a workspace. The desktop opens a remote chat's terminal as a
+terminal tab and its preview in a browser tab, adding the member's
+credentials itself; other clients send the member's bearer token.
+
 ## Docker, development services, and private HTTP
 
 Catamorphic does not require a team service manifest or parse Compose files.
