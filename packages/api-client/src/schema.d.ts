@@ -9983,7 +9983,7 @@ export interface paths {
                         /** @enum {string} */
                         isolation?: "none" | "process" | "sandbox";
                         processes?: boolean;
-                        capabilities?: ("images" | "images.build" | "containers" | "network.policy")[];
+                        capabilities?: ("images" | "images.build" | "containers" | "network.policy" | "volumes")[];
                     };
                 };
             };

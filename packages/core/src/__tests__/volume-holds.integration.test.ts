@@ -11,6 +11,7 @@ import {
   environmentSatisfies,
   SANDBOX_CAPABILITIES,
   type SandboxProvider,
+  type SandboxVolume,
   volumeKey,
 } from "@catamorphic/sandbox";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
@@ -268,7 +269,7 @@ describeIf("volumes and exclusive holds (ADR 0207)", () => {
       return allocation;
     };
     const created = () => machine.created.at(-1)?.volumes ?? [];
-    const docker = (volumes: readonly { path: string }[]) =>
+    const docker = (volumes: readonly SandboxVolume[]) =>
       volumes.find((volume) => volume.path === "/var/lib/docker");
 
     const first = await allocate(adas);

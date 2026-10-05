@@ -28337,7 +28337,8 @@
                         "images",
                         "images.build",
                         "containers",
-                        "network.policy"
+                        "network.policy",
+                        "volumes"
                       ]
                     }
                   }

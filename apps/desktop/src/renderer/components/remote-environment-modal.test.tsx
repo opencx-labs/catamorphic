@@ -60,6 +60,7 @@ function view(
         server: null,
       },
     ],
+    setup: null,
     lastSyncAt: new Date(Date.now() - 3 * 60_000).toISOString(),
     lastCheckedAt: new Date().toISOString(),
     error: null,
@@ -113,6 +114,50 @@ describe("RemoteEnvironmentModal", () => {
     ).toBeNull();
     expect(document.body.querySelector('input[type="checkbox"]')).toBeNull();
     expect(text).not.toMatch(/[–—]/);
+  });
+
+  it("shows the member's own setup command and whether the server has it", async () => {
+    desktop.personalEnvironment.mockResolvedValue(
+      view({
+        setup: {
+          command: "mise install && direnv allow",
+          server: {
+            updatedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+          },
+        },
+      }),
+    );
+    await render();
+    const section = document.body.querySelector(
+      '[data-testid="remote-environment-setup"]',
+    );
+    expect(section?.querySelector("pre")?.textContent).toBe(
+      "mise install && direnv allow",
+    );
+    expect(section?.textContent).toContain("On the server, sent 5m ago");
+    expect(section?.textContent).not.toMatch(/[–—]/);
+  });
+
+  it("says a changed setup is not sent yet, and how to add one", async () => {
+    desktop.personalEnvironment.mockResolvedValueOnce(
+      view({ setup: { command: "make tools", server: null } }),
+    );
+    await render();
+    expect(
+      document.body.querySelector('[data-testid="remote-environment-setup"]')
+        ?.textContent,
+    ).toContain("Not sent yet");
+    act(() => {
+      for (const root of roots.splice(0)) root.unmount();
+    });
+    document.body.replaceChildren();
+    desktop.personalEnvironment.mockResolvedValue(view());
+    await render();
+    const empty = document.body.querySelector(
+      '[data-testid="remote-environment-setup"]',
+    );
+    expect(empty?.querySelector("pre")).toBeNull();
+    expect(empty?.textContent).toContain("No setup command");
   });
 
   it("explains that nothing is sent until an Environment allows it", async () => {

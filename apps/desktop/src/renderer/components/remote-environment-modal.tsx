@@ -1,4 +1,4 @@
-import { FileText, Plus, RefreshCw, ServerCog } from "lucide-react";
+import { FileText, Plus, RefreshCw, ServerCog, Terminal } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type {
   PersonalEnvironmentServerState,
@@ -24,10 +24,11 @@ const SERVER_NOTE: Record<PersonalEnvironmentServerState, string | null> = {
 
 /**
  * The member's remote environment for a linked project (ADR 0184): which
- * project files reach their sessions on the server. Sign-ins never leave
- * the machine they were made on (ADR 0199), so the modal says where a
- * subscription runs instead of offering to send it. Everything here edits
- * `.work/personal/environment.json`.
+ * project files reach their sessions on the server, and their own setup
+ * command for new workspaces there (ADR 0207), shown as the config says it.
+ * Sign-ins never leave the machine they were made on (ADR 0199), so the
+ * modal says where a subscription runs instead of offering to send it.
+ * Everything here edits `.work/personal/environment.json`.
  */
 export function RemoteEnvironmentModal({
   open,
@@ -118,9 +119,9 @@ export function RemoteEnvironmentModal({
             </h2>
           </div>
           <p className="mt-1 text-xs leading-5 text-fg-muted">
-            Files you choose, for your sessions on this project's server. Only
-            your sessions receive them, and they are never committed or shared
-            with other members.
+            Files you choose and your own setup, for your sessions on this
+            project's server. Only your sessions receive them, and they are
+            never committed or shared with other members.
           </p>
         </header>
 
@@ -230,6 +231,38 @@ export function RemoteEnvironmentModal({
                 </PendingButton>
               </article>
             ))}
+          </section>
+
+          <section
+            className="flex flex-col gap-2"
+            data-testid="remote-environment-setup"
+          >
+            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-fg-faint">
+              Setup
+            </h3>
+            {view?.setup ? (
+              <article className="flex items-start gap-3 rounded-xl border border-border p-3">
+                <Terminal className="mt-0.5 size-4 shrink-0 text-fg-faint" />
+                <div className="min-w-0 flex-1">
+                  <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all font-mono text-[12px] text-fg">
+                    {view.setup.command}
+                  </pre>
+                  <p className="mt-1 truncate text-xs text-fg-faint">
+                    {view.setup.server
+                      ? `On the server, sent ${ago(view.setup.server.updatedAt, now)}`
+                      : view.server === "allowed"
+                        ? "Not sent yet"
+                        : "Runs after the project's setup"}
+                  </p>
+                </div>
+              </article>
+            ) : (
+              <p className="text-xs leading-5 text-fg-muted">
+                No setup command. Add <code className="font-mono">"setup"</code>{" "}
+                to the config to install your own tools in each new workspace,
+                after the project's setup runs.
+              </p>
+            )}
           </section>
         </div>
 
