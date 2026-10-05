@@ -28,7 +28,9 @@ for availability. A replica is disposable (ADR 0190): its node lives one
 process, keeps nothing durable on disk, and any replica recovers the work of
 one that is gone; the image exits when its lease lapsed.
 Execution capacity comes from enrolled workers (`bun apps/server/src/worker.ts`)
-that hold only a machine credential and dial out to the control plane. A
+that hold only a machine credential and the private key their operations are
+sealed to, both rotated every 30 days (ADR 0206), and dial out to the control
+plane. A
 worker owns its node lease (ADR 0192): any replica runs its agents and
 forwards their sandbox operations, and no replica keeps a worker in memory. Workflow runs and credentials stay on the control plane. Never
 give a worker database, vault, or sign-in secrets, and never add a replica for
