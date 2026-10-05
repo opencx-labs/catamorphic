@@ -30,8 +30,13 @@ brain become replicas. Never add a replica just for capacity.
    default, or `{ "people": ["dana@example.com"], "groups": ["eng@example.com"] }`,
    or `{ "projects": ["<project id>"] }` for one project's own work),
    and `trusted`.
-2. On the worker machine, run the same image version with the worker command
-   and its own empty data volume:
+2. On a Linux worker machine, run the control plane's
+   [install script](#the-install-script) as root with the code
+   (`curl -fsSL https://brain.example.com/api/workers/install.sh | sudo sh -s -- --code <code>`;
+   the enrollment response's `install` is that command). It installs Docker,
+   and gVisor on a machine without KVM, and starts the worker. Or run the
+   same image version with the worker command and its own empty data volume
+   yourself:
 
    ```bash
    docker run -d --name work-worker -v work-worker-data:/data \
@@ -132,31 +137,167 @@ lists, machine rules, and project role mappings name.
 
 ## A machine for every person or team
 
-Machine rules create and destroy workers to match the directory. They need a
-platform: extend the Work server with a `machineProvisioner` hook
-(`create({ name, class, labels, enrollment })` returns a platform reference;
-`destroy({ name, ref })` deletes the machine). A created machine starts the
-worker command with `WORK_CONTROL_PLANE_URL` and the one-time
-`WORK_WORKER_ENROLLMENT` code it received, for example through cloud-init.
+Machine rules keep workers in step with the directory (ADRs 0167, 0204):
+every active member of a group gets a machine of their own, or the group
+shares a fixed number. A rule names a machine **class**, and classes live in
+the JSON file `WORK_MACHINES_CONFIG` names:
 
-- `PUT /_work/operator/machine-rules/desks` with
-  `{ "group": "eng@example.com", "machines": "each-member", "class": "standard-4" }`
-  gives every active member of the group their own machine.
-- `PUT /_work/operator/machine-rules/support` with
-  `{ "group": "support@example.com", "machines": { "shared": 3 }, "class": "small" }`
-  gives the group three shared machines (add `"trusted": true` only for
-  process-isolated machines among people who trust each other).
-- `GET /_work/operator/machine-rules` lists rules; `DELETE` removes one and its
-  machines; `POST /_work/operator/machine-rules/reconcile` runs a pass now.
+```json
+{
+  "classes": {
+    "desk": {
+      "platform": "hetzner-cloud",
+      "serverType": "cpx41",
+      "location": "fsn1",
+      "image": "ubuntu-24.04",
+      "sshKeys": ["ops"],
+      "firewalls": [1234567],
+      "labels": { "team": "eng" },
+      "snapshot": true
+    },
+    "office": { "platform": "pool" }
+  }
+}
+```
 
-The server reconciles every minute and when an account is disabled, one
-replica at a time: a pass holds a lease in Postgres, renews it while platform
-calls run, and stops changing anything once another replica took it over; a
-machine whose enrollment code is still waiting is never provisioned twice.
-Members who left the group or were suspended lose their machine (revoked,
-then destroyed), and a machine that never enrolls within an hour is destroyed
-and replaced. A person gets a machine after their first sign-in, once the
-directory has placed them in the group.
+- `hetzner-cloud`: one Hetzner Cloud server per machine. `serverType`,
+  `location` and `image` are Hetzner's names; `sshKeys` (names or ids),
+  `firewalls` and `networks` (ids) and extra server `labels` are optional;
+  `snapshot: true` keeps an image of a machine's disk when it is destroyed.
+  The API token is `WORK_HETZNER_TOKEN` (read and write), never the file.
+- `pool`: machines you enrolled yourself ([pools](#dedicated-servers-and-other-machines-pools)).
+- `custom`: a custom server's `machineProvisioner` hook creates and destroys
+  them (`create({ name, class, labels, enrollment })` returns a platform
+  reference, `destroy({ name, ref })`). `enrollment.cloudInit` is the same
+  cloud-init a Hetzner machine gets. A server with the hook and no classes
+  file treats every class as custom.
+
+The server refuses to start when a class needs what it lacks (a Hetzner
+class without the token, a custom class without the hook), and refuses a
+rule that names a class it does not know.
+
+### Hetzner Cloud
+
+1. Set `WORK_PUBLIC_URL` (the HTTPS origin machines dial),
+   `WORK_HETZNER_TOKEN`, and `WORK_MACHINES_CONFIG`. The published image
+   knows its release and gives machines the worker image of the same
+   release; `WORK_WORKER_IMAGE` overrides it (a server built from source must
+   set it).
+2. Write a rule: `PUT /_work/operator/machine-rules/desks` with
+   `{ "group": "eng@example.com", "machines": "each-member", "class": "desk" }`.
+   `{ "machines": { "shared": 3 } }` gives the group three shared machines
+   instead (add `"trusted": true` only for process-isolated machines among
+   people who trust each other).
+3. Each machine is a server named after it and labeled `work-machine`,
+   `work-rule` and `work-class`. Cloud-init writes the
+   [install script](#the-install-script) to it with the machine's one-time
+   enrollment code and runs it; nothing is fetched to start it, but the
+   machine must reach the control plane and the container registry. A
+   machine that does not enroll within an hour is destroyed and replaced.
+
+Creation is idempotent: a server already named for the machine and labeled
+as it is that machine. Destruction finds the server by its id, or by its
+label when no id was recorded, and succeeds when it is already gone.
+
+### Dedicated servers and other machines: pools
+
+Machines that cannot be created on demand (dedicated servers, machines on
+premises, existing VMs) join a pool:
+
+1. Declare a pool class: `"office": { "platform": "pool" }`.
+2. Create an enrollment code for each machine:
+   `POST /_work/operator/workers` with
+   `{ "name": "office-1", "pool": true, "labels": { "class": "office" } }`.
+   A pooled machine has no access of its own; leave out `access` and
+   `trusted`. The response's `install` is the command for that machine.
+3. On the machine: `curl -fsSL https://brain.example.com/api/workers/install.sh | sudo sh -s -- --code <code>`.
+4. A rule on the pool's class assigns one free machine of that class to each
+   member, or `{ "shared": n }` of them to the group, with the access the
+   rule gives. A rule on a pool takes no `labels`: pooled machines keep the
+   labels they enrolled with.
+
+A pooled machine nobody holds takes no work. When no machine is free, a
+member waits: `GET /_work/operator/machine-rules` reports, for each rule,
+`desired`, `ready`, `starting` (created, not yet enrolled), `waiting` (no
+machine yet) and `released`, and a `problem` when a rule names a class that
+is no longer configured, whose machines are then left as they are.
+
+### The install script
+
+`GET /api/workers/install.sh` is public and holds no secret: a POSIX sh
+script with this server's public URL and worker image in it. Run it as root
+with `--code` (required) and optionally `--image`, `--data-dir` (default
+`/var/lib/work`) and `--name` (the container's, default `work-worker`). It:
+
+- installs Docker with Docker's convenience script when `docker` is missing;
+- with a usable `/dev/kvm`, gives the worker the device and its group, so
+  agents run in microVMs. libkrun needs nothing more: never `--privileged`
+  or added capabilities;
+- without KVM, installs gVisor from its apt repository (Debian and Ubuntu;
+  elsewhere install `runsc` first) and registers the `runsc` runtime with
+  `--host-uds=open --net-raw` (ADR 0203), restarting Docker only when that
+  changed;
+- creates the data directory for the image's user (uid 1000, mode 0700),
+  pulls the image, replaces any container of that name, and runs the worker
+  with `--restart unless-stopped`, the Docker socket and its group, the data
+  directory mounted at the same path, and `WORK_SANDBOX=auto`.
+
+Running it again is safe: the worker keeps its enrollment in its data
+directory. The endpoint answers 503 naming what is missing when the server
+does not know its worker image or has no public URL.
+
+### Retention
+
+When a member leaves the group or is disabled, or the rule is removed or
+changes class, their machine is **released**: it takes nobody's work from
+that moment (a chat placed on it is refused there at its next turn; move
+it), and it keeps its disk for the rule's `retainDays` (0 to 365, default 7;
+kept with the machine, so it outlives the rule). A member back within that
+time gets the same machine again. Afterwards:
+
+- a cloud machine is destroyed, after a snapshot when its class says
+  `snapshot: true`;
+- a pooled machine is reset: its worker destroys every sandbox on it and
+  deletes every volume and every member's sign-in, and the machine returns
+  to its pool. A machine that is not connected is reset when it reconnects.
+
+Chats on a released machine give their workspaces back, saved to their
+session branch, once they idle (`idleReleaseMinutes`, ADR 0173): a connected
+machine is destroyed or reset only after that, so a chat that keeps its
+workspace (`idleReleaseMinutes: 0`) holds it until the chat is closed or
+moved. `retainDays: 0` acts in the same pass otherwise. A machine that never
+enrolled holds nothing and goes at once. `GET /_work/operator/workers` shows
+each worker's `state` (`serving`, `released`, `resetting`, `free`, or
+`revoked`) and `released: { at, retainDays }`.
+
+### Passes
+
+The server reconciles every minute and when an account is disabled. One
+replica at a time runs a pass, under a claim in Postgres (ADR 0193) renewed
+while platform calls run and checked before every change; a replica whose
+claim moved stops changing anything. A machine whose enrollment code is
+still waiting is never provisioned twice. A person gets a machine after
+their first sign-in, once the directory has placed them in the group.
+`POST /_work/operator/machine-rules/reconcile` runs a pass now, and
+`DELETE /_work/operator/machine-rules/:name` removes a rule and releases its
+machines.
+
+### Through the API
+
+Organization administrators (ADR 0172) manage machines with their own
+sign-in, through the same handlers as the operator:
+
+| Operator listener | Administrators |
+| --- | --- |
+| `GET /_work/operator/machines` | `GET /api/work/machines` |
+| `GET`, `POST /_work/operator/workers` | `GET`, `POST /api/work/machines/workers` |
+| `PATCH`, `DELETE /_work/operator/workers/:name` | `PATCH`, `DELETE /api/work/machines/workers/:name` |
+| `GET /_work/operator/machine-rules` | `GET /api/work/machines/rules` |
+| `PUT`, `DELETE /_work/operator/machine-rules/:name` | `PUT`, `DELETE /api/work/machines/rules/:name` |
+| `POST /_work/operator/machine-rules/reconcile` | `POST /api/work/machines/rules/reconcile` |
+
+Members are refused (403). Enabling and disabling machines and confirming
+destroyed workspaces stay on the operator listener.
 
 ## Add a control-plane replica
 
@@ -403,17 +544,21 @@ are rejected before use, and requested limits travel with sandbox creation.
 
 ## Assign a development machine to one user
 
-Use an ordinary named project Environment bound to the intended machine, and
-an ordinary role granting that Environment to the selected member. Keep that
-grant out of other roles; membership managers can grant it to additional members
-when sharing is intended. No developer-owner machine type or separate assignment
-permission exists. A grant controls admission, not OS accounts or network access.
+Environments say what work needs; they never name a machine (ADR 0167). A
+machine for one person is a worker whose access names only them: enroll it
+with `"access": { "people": ["dana@example.com"] }`, change an enrolled
+worker's access with `PATCH /_work/operator/workers/:name`, or let a machine
+rule give every member of a group one ([above](#a-machine-for-every-person-or-team)).
+Their chats prefer it to shared machines, nobody else's work lands on it, and
+it may run their own sign-ins and files (ADR 0184). Access decides placement,
+not OS accounts or network access on the machine.
 
 Choose the trust boundary before provisioning. Control-plane replicas carry
 the whole deployment's authority. Put developer machines in as workers (or as a
 member's **This machine** runner); neither receives Postgres, vault, or
-sign-in secrets. A private Environment grant alone does not make unrestricted
-processes safe on a shared worker: use microsandbox for code you do not trust.
+sign-in secrets. A worker that serves several people must isolate their
+agents from each other: microVMs or gVisor, never plain processes unless the
+operator marks those people as trusting each other.
 
 ## Images, containers, and egress
 

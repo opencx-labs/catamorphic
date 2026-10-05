@@ -21,7 +21,8 @@ keep a snapshot when a machine is destroyed; the API token comes from
 `WORK_HETZNER_TOKEN`, never the file. A `pool` class draws on machines the
 operator already enrolled. A `custom` class goes to the `machineProvisioner`
 hook, which stays for other platforms. A rule naming a class the server does
-not know is refused when it is written. `@catamorphic/hetzner` holds the
+not know is refused when it is written; a rule whose class later leaves the
+file keeps its machines as they are. `@catamorphic/hetzner` holds the
 Hetzner Cloud client and provisioner: creation is idempotent by name, and
 destruction finds a machine by its id or its labels.
 
@@ -33,24 +34,33 @@ overrides it) with `WORK_SANDBOX=auto`, the Docker socket, `/dev/kvm` when
 present, and its data directory mounted at the same path. Cloud classes pass
 it to cloud-init with the machine's enrollment code; a pooled machine runs it
 once: `curl -fsSL <server>/api/workers/install.sh | sudo sh -s -- --code
-<code>`. The script holds no secret.
+<code>`. The script holds no secret. The worker container gets `/dev/kvm` and
+its group, never extra privileges: libkrun needs nothing more. A server that
+knows no worker image or has no public URL answers 503 saying which.
 
 **Pools.** An operator enrolls a machine into a pool with a class label and
 `"pool": true`. A pooled machine nobody holds takes no work. A rule whose
 class is a pool assigns one free machine of that class to each member (or the
-group's count to a group), and the reconciler reports when none is free.
+group's count to a group), giving it the rule's access; the machine keeps its
+own labels. Each rule reports how many machines are waiting for a free one.
 
 **Retention.** When a member leaves the group, is disabled, or the rule goes,
 their machine is released: it stops taking anyone's work at once and keeps
-its disk for the rule's `retainDays` (default 7). If the member comes back
-within that time, the machine is theirs again. Afterwards a cloud machine is
+its disk for the rule's `retainDays` (default 7, recorded with the machine so
+it outlives the rule). If the member comes back within that time, the
+machine is theirs again. Afterwards, once its chats have given their
+workspaces back saved (they do when they idle, ADR 0173; a machine that is
+not connected cannot save them and does not wait), a cloud machine is
 destroyed (snapshotted first when its class says so) and a pooled machine is
-reset: the worker destroys every sandbox and deletes members' sign-ins and
-volumes, and the machine returns to the pool. `retainDays: 0` acts at once.
+reset: a `machine.reset` operation has the worker destroy every sandbox and
+delete members' sign-ins and volumes, and once its receipt arrives the
+machine returns to the pool. A disconnected machine is reset when it
+reconnects. `retainDays: 0` acts at once. A machine that never enrolled is
+destroyed at once.
 
-**The reconciler runs under a replica claim** (ADR 0193) and its lease table
-goes. Administrators manage rules and machines through the API as the
-operator does through the loopback listener.
+**The reconciler runs under a replica claim** (ADR 0193) named for the
+tenant, and its lease table goes. Administrators manage rules and machines
+through the API (`/api/work/machines`) with the operator's handlers.
 
 Considered: ordering dedicated servers through Hetzner's Robot API (monthly
 contracts that take hours to deliver are bought deliberately, not by a

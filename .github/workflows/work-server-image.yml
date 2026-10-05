@@ -92,6 +92,8 @@ jobs:
           file: apps/server/Dockerfile
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Machines this server provisions run this release's worker image.
+          build-args: WORK_VERSION=${{ needs.release.outputs.version }}
           load: true
           tags: work-server:smoke
           cache-from: type=gha,scope=work-server-${{ matrix.arch }}
@@ -136,6 +138,7 @@ jobs:
           file: apps/server/Dockerfile
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: WORK_VERSION=${{ needs.release.outputs.version }}
           outputs: type=image,name=${{ needs.release.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=work-server-${{ matrix.arch }}
 

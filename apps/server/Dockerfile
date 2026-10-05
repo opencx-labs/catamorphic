@@ -52,6 +52,11 @@ RUN bun install --frozen-lockfile --ignore-scripts \
   && mkdir -p /data \
   && chown bun:bun /data
 
+# The release this image is: machines the server provisions run the worker
+# image of the same release (ADR 0204). Release builds pass it.
+ARG WORK_VERSION
+ENV WORK_VERSION=$WORK_VERSION
+
 # The server and every local-process sandbox run as the unprivileged image
 # user. The application tree stays root-owned and read-only to them.
 USER bun
