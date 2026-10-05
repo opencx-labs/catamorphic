@@ -10219,6 +10219,9 @@ export interface paths {
                                 /** @enum {string} */
                                 kind: "process.list";
                                 sandboxId: string;
+                            } | {
+                                /** @enum {string} */
+                                kind: "machine.reset";
                             };
                         }[];
                     };

@@ -14,7 +14,7 @@ import {
   type WorkExecutionSettings,
   workExecution,
 } from "../execution-config.js";
-import { signInCapabilities } from "./sign-ins.js";
+import { removeMachineSignIns, signInCapabilities } from "./sign-ins.js";
 import {
   upgradeMessage,
   WORKER_PROTOCOL,
@@ -267,6 +267,14 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       provider,
       transport,
       sandboxes,
+      // A pooled machine returns to its pool (ADR 0204).
+      resetMachine: () =>
+        resetMachine({
+          provider,
+          sandboxes,
+          signInRoot: execution.signInRoot,
+          log,
+        }),
       keepSandboxes: true,
       maxSandboxes: execution.capacity.workspaces,
       // One slot per workspace, so one long command never blocks the others.
@@ -363,6 +371,42 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       );
     },
   };
+}
+
+/**
+ * Return this machine to its pool (ADR 0204): destroy every sandbox it
+ * holds, then remove every volume and member's sign-in on it, so the next
+ * person it serves finds nothing of the last. A sandbox that cannot be
+ * destroyed fails the reset, and the control plane asks again.
+ */
+async function resetMachine(args: {
+  provider: SandboxProvider;
+  sandboxes: Set<string>;
+  signInRoot: string;
+  log: (line: string) => void;
+}): Promise<void> {
+  const failures: string[] = [];
+  let destroyed = 0;
+  for (const id of [...args.sandboxes]) {
+    try {
+      await args.provider.destroySandbox(id);
+      args.sandboxes.delete(id);
+      destroyed += 1;
+    } catch (error) {
+      failures.push(
+        `${id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  if (failures.length > 0)
+    throw new Error(
+      `The machine was not reset: ${failures.length} sandbox(es) could not be destroyed (${failures.join("; ")})`,
+    );
+  await args.provider.volumes?.removeAll();
+  const signIns = removeMachineSignIns(args.signInRoot);
+  args.log(
+    `Machine reset for its pool: ${destroyed} sandbox(es), every volume and ${signIns} sign-in(s) removed`,
+  );
 }
 
 /**

@@ -28,6 +28,7 @@
     "@catamorphic/core": "workspace:*",
     "@catamorphic/db": "workspace:*",
     "@catamorphic/fastify-plugin": "workspace:*",
+    "@catamorphic/hetzner": "workspace:*",
     "@catamorphic/local-process": "workspace:*",
     "@catamorphic/mcp": "workspace:*",
     "@catamorphic/microsandbox": "workspace:*",

@@ -28982,6 +28982,17 @@
                             },
                             "required": ["kind", "sandboxId"],
                             "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": ["machine.reset"]
+                              }
+                            },
+                            "required": ["kind"],
+                            "additionalProperties": false
                           }
                         ]
                       }

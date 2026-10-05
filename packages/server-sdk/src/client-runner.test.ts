@@ -258,4 +258,37 @@ describe("client runner transport (ADR 0187)", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(plane.receipts).toEqual([]);
   });
+
+  it("resets a pooled machine only when its worker supplies the reset", async () => {
+    const { provider } = recordingProvider();
+    const reset = { calls: 0 };
+    const pooled = controlPlane([
+      { id: "job-1", operation: { kind: "machine.reset" } },
+    ]);
+    const worker = startClientRunner({
+      provider,
+      transport: pooled.transport,
+      resetMachine: async () => {
+        reset.calls += 1;
+      },
+    });
+    await until(() => pooled.receipts.length === 1, "the reset receipt");
+    await worker.stop();
+    expect(reset.calls).toBe(1);
+    expect(pooled.receipts).toEqual([{ jobId: "job-1", response: null }]);
+
+    // A member's runner has no machine to give back.
+    const member = controlPlane([
+      { id: "job-2", operation: { kind: "machine.reset" } },
+    ]);
+    const runner = startClientRunner({
+      provider,
+      transport: member.transport,
+    });
+    await until(() => member.receipts.length === 1, "the refusal");
+    await runner.stop();
+    expect(member.receipts).toEqual([
+      { jobId: "job-2", error: "This runner does not reset machines" },
+    ]);
+  });
 });

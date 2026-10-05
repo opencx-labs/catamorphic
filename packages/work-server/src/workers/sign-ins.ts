@@ -134,6 +134,17 @@ export function signInOnMachine(input: {
   return { home, exitCode };
 }
 
+/**
+ * Delete every member's sign-in home from this machine, when a pooled
+ * machine returns to its pool (ADR 0204). Returns how many went.
+ */
+export function removeMachineSignIns(root: string): number {
+  const homes = listMachineSignIns(root);
+  for (const signIn of homes)
+    fs.rmSync(signIn.home, { recursive: true, force: true });
+  return homes.length;
+}
+
 /** Delete a member's sign-in home from this machine. */
 export function signOutOnMachine(input: {
   dataDir: string;

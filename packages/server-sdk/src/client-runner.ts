@@ -108,6 +108,12 @@ export function startClientRunner(args: {
   maxSandboxes?: number;
   /** Operations run at once; 4 by default. */
   concurrency?: number;
+  /**
+   * Return this machine to its pool (ADR 0204): destroy every sandbox it
+   * holds and delete members' volumes and sign-ins. Only a pooled worker
+   * supplies it; a runner without it refuses the operation.
+   */
+  resetMachine?: () => Promise<void>;
 }) {
   const stopping = new AbortController();
   const stopped = () => stopping.signal.aborted;
@@ -227,7 +233,11 @@ export function startClientRunner(args: {
         reserved = true;
       }
       const response = owned
-        ? await executeClientOperation({ provider: args.provider, operation })
+        ? await executeClientOperation({
+            provider: args.provider,
+            operation,
+            ...(args.resetMachine ? { resetMachine: args.resetMachine } : {}),
+          })
         : null;
       if (operation.kind === "create") {
         const handle = response;
@@ -302,9 +312,11 @@ export function startClientRunner(args: {
 async function executeClientOperation({
   provider,
   operation,
+  resetMachine,
 }: {
   provider: SandboxProvider;
   operation: RemoteOperation;
+  resetMachine?: () => Promise<void>;
 }): Promise<unknown> {
   switch (operation.kind) {
     case "create":
@@ -365,6 +377,10 @@ async function executeClientOperation({
       return processesOf(provider).listProcesses({
         sandboxId: operation.sandboxId,
       });
+    case "machine.reset":
+      if (!resetMachine) throw new Error("This runner does not reset machines");
+      await resetMachine();
+      return null;
   }
 }
 

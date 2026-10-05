@@ -15,6 +15,8 @@ import type { EnvironmentBinding } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
 import {
+  accessGroupsOf,
+  servesNobody,
   servesOneOwner,
   storedPlacement,
   type WorkerPlacement,
@@ -92,6 +94,47 @@ export class WorkerIsolationError extends Error {
     );
     this.name = "WorkerIsolationError";
   }
+}
+
+/** Nobody may hold a pooled machine's access but its rule (ADR 0204). */
+const NOBODY = { nobody: true } as const;
+
+/**
+ * What a worker is doing for machine rules (ADR 0204): serving its access,
+ * released (serving nobody, its disk kept for its retention), free in its
+ * pool, being reset before it returns to its pool, or revoked.
+ */
+export type WorkerState =
+  | "serving"
+  | "released"
+  | "free"
+  | "resetting"
+  | "revoked";
+
+/** A machine of a pool (`"pool": true` at enrollment), for the reconciler. */
+export interface PooledMachine {
+  name: string;
+  nodeId: string;
+  /** The rule that holds it; absent while it is free or being reset. */
+  rule: string | null;
+  /** The user id it serves under an `each-member` rule. */
+  member: string | null;
+  /** Its place among a group's shared machines. */
+  slot: number | null;
+  releasedAt: Date | null;
+  retainDays: number | null;
+  placement: WorkerPlacement;
+}
+
+/** A machine a rule provisioned on a platform, for the reconciler. */
+export interface ProvisionedMachine {
+  name: string;
+  ref: string | null;
+  rule: string;
+  state: "enrolled" | "pending" | "expired" | "revoked";
+  releasedAt: Date | null;
+  retainDays: number | null;
+  placement: WorkerPlacement;
 }
 
 /** The operator disabled this worker's node; it may connect once enabled. */
@@ -247,13 +290,25 @@ export class WorkWorkerRegistry {
     return new RemoteExecutorLeaseLostError();
   }
 
-  /** Operator: a one-time code a new worker exchanges for its credential. */
+  /**
+   * Operator: a one-time code a new worker exchanges for its credential. A
+   * pooled machine (ADR 0204) enrolls serving nobody, with only its labels;
+   * a machine rule assigns it.
+   */
   async createEnrollment(args: {
     name: string;
     ttlMinutes?: number;
     placement?: z.input<typeof WorkerPlacementSchema>;
+    pool?: boolean;
   }): Promise<{ code: string; nodeId: string; expiresAt: Date }> {
-    const enrollment = await this.issueEnrollment(args);
+    const enrollment = await this.issueEnrollment(
+      args.pool
+        ? {
+            ...args,
+            placement: { labels: args.placement?.labels ?? {}, access: NOBODY },
+          }
+        : args,
+    );
     if (!enrollment) {
       throw new Error(
         `A worker named '${args.name}' is already enrolled; revoke it first`,
@@ -282,6 +337,7 @@ export class WorkWorkerRegistry {
     ttlMinutes?: number;
     placement?: z.input<typeof WorkerPlacementSchema>;
     machineRule?: string;
+    pool?: boolean;
   }): Promise<{ code: string; nodeId: string; expiresAt: Date } | null> {
     const name = WorkerName.parse(args.name);
     const placement = WorkerPlacementSchema.parse(args.placement ?? {});
@@ -324,6 +380,7 @@ export class WorkWorkerRegistry {
           trusted: placement.trusted,
           machine_rule: args.machineRule ?? null,
           machine_ref: null,
+          pool: args.pool ?? false,
           expires_at: expiresAt,
         })
         .execute();
@@ -350,6 +407,7 @@ export class WorkWorkerRegistry {
           "trusted",
           "machine_rule",
           "machine_ref",
+          "pool",
         ])
         .executeTakeFirst();
       if (!enrollment) {
@@ -381,6 +439,7 @@ export class WorkWorkerRegistry {
           trusted: enrollment.trusted,
           machine_rule: enrollment.machine_rule,
           machine_ref: enrollment.machine_ref,
+          pool: enrollment.pool,
         })
         .execute();
       return {
@@ -428,6 +487,7 @@ export class WorkWorkerRegistry {
     if (
       args.offer.isolation === "process" &&
       !servesOneOwner(policy.access) &&
+      !servesNobody(policy.access) &&
       !policy.trusted
     ) {
       throw new WorkerIsolationError(args.name);
@@ -479,24 +539,33 @@ export class WorkWorkerRegistry {
     }
   }
 
-  /** One enrolled worker's placement policy. */
+  /**
+   * One enrolled worker's placement policy as placement sees it: a
+   * released machine serves nobody (ADR 0204), whatever access it keeps.
+   */
   async placement(nodeId: string): Promise<WorkerPlacement> {
     const row = await this.deps.db
       .selectFrom("work_workers")
-      .select(["labels", "access", "trusted"])
+      .select(["labels", "access", "trusted", "released_at"])
       .where("node_id", "=", nodeId)
       .where("tenant_id", "=", this.deps.tenantId)
       .executeTakeFirstOrThrow();
-    return storedPlacement(row);
+    const stored = storedPlacement(row);
+    return row.released_at ? { ...stored, access: NOBODY } : stored;
   }
 
-  /** Placement policy of every enrolled worker, for the scheduler. */
+  /**
+   * Placement policy of every worker that takes work, for the scheduler. A
+   * released machine is missing: it serves nobody from the moment it is
+   * released, and a session placed on it re-checks on its next turn.
+   */
   async placements(): Promise<Map<string, WorkerPlacement>> {
     const rows = await this.deps.db
       .selectFrom("work_workers")
       .select(["node_id", "labels", "access", "trusted"])
       .where("tenant_id", "=", this.deps.tenantId)
       .where("revoked_at", "is", null)
+      .where("released_at", "is", null)
       .execute();
     return new Map(rows.map((row) => [row.node_id, storedPlacement(row)]));
   }
@@ -507,7 +576,13 @@ export class WorkWorkerRegistry {
     placement: Partial<z.input<typeof WorkerPlacementSchema>>;
   }): Promise<WorkerPlacement> {
     const nodeId = `${WORKER_NODE_PREFIX}${WorkerName.parse(args.name)}`;
-    const current = await this.placement(nodeId);
+    const row = await this.deps.db
+      .selectFrom("work_workers")
+      .select(["labels", "access", "trusted"])
+      .where("node_id", "=", nodeId)
+      .where("tenant_id", "=", this.deps.tenantId)
+      .executeTakeFirstOrThrow();
+    const current = storedPlacement(row);
     const next = WorkerPlacementSchema.parse({ ...current, ...args.placement });
     await this.deps.db
       .updateTable("work_workers")
@@ -525,10 +600,8 @@ export class WorkWorkerRegistry {
   /** Directory groups worker access names, for the directory mirror. */
   async accessGroups(): Promise<string[]> {
     const groups = new Set<string>();
-    for (const placement of (await this.placements()).values()) {
-      if (!("everyone" in placement.access))
-        for (const group of placement.access.groups) groups.add(group);
-    }
+    for (const placement of (await this.placements()).values())
+      for (const group of accessGroupsOf(placement.access)) groups.add(group);
     return [...groups];
   }
 
@@ -623,15 +696,7 @@ export class WorkWorkerRegistry {
    * Machines a reconciler provisioned, by state: enrolled, still pending
    * enrollment, expired before enrolling, or revoked but not yet destroyed.
    */
-  async machines(): Promise<
-    Array<{
-      name: string;
-      ref: string | null;
-      rule: string;
-      state: "enrolled" | "pending" | "expired" | "revoked";
-      placement: WorkerPlacement;
-    }>
-  > {
+  async machines(): Promise<ProvisionedMachine[]> {
     const [workers, enrollments] = await Promise.all([
       this.deps.db
         .selectFrom("work_workers")
@@ -640,12 +705,15 @@ export class WorkWorkerRegistry {
           "machine_ref",
           "machine_rule",
           "revoked_at",
+          "released_at",
+          "retain_days",
           "labels",
           "access",
           "trusted",
         ])
         .where("tenant_id", "=", this.deps.tenantId)
         .where("machine_rule", "is not", null)
+        .where("pool", "=", false)
         .where((eb) =>
           eb.or([
             eb("revoked_at", "is", null),
@@ -675,6 +743,8 @@ export class WorkWorkerRegistry {
         ref: row.machine_ref,
         rule: row.machine_rule ?? "",
         state: row.revoked_at ? ("revoked" as const) : ("enrolled" as const),
+        releasedAt: row.released_at,
+        retainDays: row.retain_days,
         placement: storedPlacement(row),
       })),
       ...enrollments.map((row) => ({
@@ -682,9 +752,205 @@ export class WorkWorkerRegistry {
         ref: row.machine_ref,
         rule: row.machine_rule ?? "",
         state: row.expired ? ("expired" as const) : ("pending" as const),
+        releasedAt: null,
+        retainDays: null,
         placement: storedPlacement(row),
       })),
     ];
+  }
+
+  /** Every pooled machine still enrolled, free or held (ADR 0204). */
+  async pooledMachines(): Promise<PooledMachine[]> {
+    const rows = await this.deps.db
+      .selectFrom("work_workers")
+      .select([
+        "name",
+        "node_id",
+        "machine_rule",
+        "machine_member",
+        "machine_slot",
+        "released_at",
+        "retain_days",
+        "labels",
+        "access",
+        "trusted",
+      ])
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("pool", "=", true)
+      .where("revoked_at", "is", null)
+      .orderBy("name")
+      .execute();
+    return rows.map((row) => ({
+      name: row.name,
+      nodeId: row.node_id,
+      rule: row.machine_rule,
+      member: row.machine_member,
+      slot: row.machine_slot,
+      releasedAt: row.released_at,
+      retainDays: row.retain_days,
+      placement: storedPlacement(row),
+    }));
+  }
+
+  /**
+   * Hand a free pooled machine to a rule: one member's machine, or one of a
+   * group's shared ones. False when it is no longer free.
+   */
+  async assignPooled(args: {
+    name: string;
+    rule: string;
+    holder: { member: string } | { slot: number };
+    placement: WorkerPlacement;
+    retainDays: number;
+  }): Promise<boolean> {
+    const assigned = await this.deps.db
+      .updateTable("work_workers")
+      .set({
+        machine_rule: args.rule,
+        machine_member: "member" in args.holder ? args.holder.member : null,
+        machine_slot: "slot" in args.holder ? args.holder.slot : null,
+        retain_days: args.retainDays,
+        access: JSON.stringify(args.placement.access),
+        trusted: args.placement.trusted,
+      })
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("name", "=", args.name)
+      .where("pool", "=", true)
+      .where("machine_rule", "is", null)
+      .where("released_at", "is", null)
+      .where("revoked_at", "is", null)
+      .returning("node_id")
+      .executeTakeFirst();
+    return Boolean(assigned);
+  }
+
+  /**
+   * Release a machine nobody should have any more (ADR 0204): it serves
+   * nobody from now on and keeps its disk for `retainDays`.
+   */
+  async release(args: {
+    name: string;
+    at: Date;
+    retainDays: number;
+  }): Promise<void> {
+    await this.deps.db
+      .updateTable("work_workers")
+      .set({ released_at: args.at, retain_days: args.retainDays })
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("name", "=", args.name)
+      .where("revoked_at", "is", null)
+      .where("released_at", "is", null)
+      .execute();
+  }
+
+  /**
+   * A released machine's person or group is back within its retention: it
+   * is theirs again, with the placement its rule gives it now.
+   */
+  async reassign(args: {
+    name: string;
+    placement: WorkerPlacement;
+    retainDays: number;
+  }): Promise<void> {
+    await this.deps.db
+      .updateTable("work_workers")
+      .set({
+        released_at: null,
+        retain_days: args.retainDays,
+        labels: JSON.stringify(args.placement.labels),
+        access: JSON.stringify(args.placement.access),
+        trusted: args.placement.trusted,
+      })
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("name", "=", args.name)
+      .where("revoked_at", "is", null)
+      .where("released_at", "is not", null)
+      .execute();
+  }
+
+  /** Keep the retention a machine's rule gives it, for after the rule. */
+  async setRetainDays(args: { name: string; retainDays: number }) {
+    await this.deps.db
+      .updateTable("work_workers")
+      .set({ retain_days: args.retainDays })
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("name", "=", args.name)
+      .where("revoked_at", "is", null)
+      .execute();
+  }
+
+  /**
+   * A released pooled machine's retention ended: it leaves its rule, and
+   * stays released (serving nobody) until its reset is done.
+   */
+  async beginReset(args: { name: string }): Promise<void> {
+    await this.deps.db
+      .updateTable("work_workers")
+      .set({
+        machine_rule: null,
+        machine_member: null,
+        machine_slot: null,
+        access: JSON.stringify(NOBODY),
+        trusted: false,
+      })
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("name", "=", args.name)
+      .where("pool", "=", true)
+      .where("released_at", "is not", null)
+      .where("revoked_at", "is", null)
+      .execute();
+  }
+
+  /**
+   * Workspaces still active on a worker: chats keep theirs until they idle
+   * and give it back, saved to their session branch (ADR 0173).
+   */
+  async activeWorkspaces(args: { name: string }): Promise<number> {
+    const row = await this.deps.db
+      .selectFrom("execution_allocations")
+      .select((eb) => eb.fn.countAll<number>().as("count"))
+      .where("worker_node_id", "=", `${WORKER_NODE_PREFIX}${args.name}`)
+      .where("status", "=", "active")
+      .executeTakeFirst();
+    return Number(row?.count ?? 0);
+  }
+
+  /** The worker's lease is live: an operation sent to it now runs. */
+  async connected(args: { name: string }): Promise<boolean> {
+    return Boolean(
+      await this.deps.nodes.liveToken({
+        nodeId: `${WORKER_NODE_PREFIX}${args.name}`,
+      }),
+    );
+  }
+
+  /**
+   * Reset a pooled machine through the operation queue: the worker destroys
+   * every sandbox it holds and deletes members' volumes and sign-ins.
+   * Resolves once its receipt arrived; fails while it is not connected.
+   */
+  async resetPooled(args: { name: string }): Promise<void> {
+    const nodeId = `${WORKER_NODE_PREFIX}${args.name}`;
+    await this.queue.resetMachine({
+      executor: nodeExecutor(nodeId),
+      leaseToken: () => this.deps.nodes.liveToken({ nodeId }),
+      leaseHeld: async (token) =>
+        (await this.deps.nodes.liveToken({ nodeId })) === token,
+      label: `Worker ${args.name}`,
+      attributes: { "catamorphic.worker.id": nodeId },
+    });
+  }
+
+  /** A reset pooled machine is free in its pool again. */
+  async freePooled(args: { name: string }): Promise<void> {
+    await this.deps.db
+      .updateTable("work_workers")
+      .set({ released_at: null, retain_days: null })
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("name", "=", args.name)
+      .where("pool", "=", true)
+      .where("machine_rule", "is", null)
+      .execute();
   }
 
   /** A provisioned machine was destroyed: stop tracking it. */
@@ -719,8 +985,18 @@ export class WorkWorkerRegistry {
       enrolledAt: string;
       lastSeenAt: string | null;
       revoked: boolean;
+      /** Enrolled into a pool rules draw on (ADR 0204). */
+      pool: boolean;
+      state: WorkerState;
+      /** Since when it serves nobody, and for how many days it is kept. */
+      released: { at: string; retainDays: number | null } | null;
       placement: WorkerPlacement;
-      machine: { rule: string; ref: string | null } | null;
+      machine: {
+        rule: string;
+        ref: string | null;
+        member?: string;
+        slot?: number;
+      } | null;
     }>
   > {
     const rows = await this.deps.db
@@ -735,9 +1011,19 @@ export class WorkWorkerRegistry {
       enrolledAt: row.enrolled_at.toISOString(),
       lastSeenAt: row.last_seen_at?.toISOString() ?? null,
       revoked: row.revoked_at !== null,
+      pool: row.pool,
+      state: workerState(row),
+      released: row.released_at
+        ? { at: row.released_at.toISOString(), retainDays: row.retain_days }
+        : null,
       placement: storedPlacement(row),
       machine: row.machine_rule
-        ? { rule: row.machine_rule, ref: row.machine_ref }
+        ? {
+            rule: row.machine_rule,
+            ref: row.machine_ref,
+            ...(row.machine_member ? { member: row.machine_member } : {}),
+            ...(row.machine_slot !== null ? { slot: row.machine_slot } : {}),
+          }
         : null,
     }));
   }
@@ -745,6 +1031,18 @@ export class WorkWorkerRegistry {
 
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function workerState(row: {
+  revoked_at: Date | null;
+  released_at: Date | null;
+  pool: boolean;
+  machine_rule: string | null;
+}): WorkerState {
+  if (row.revoked_at) return "revoked";
+  if (row.released_at) return row.machine_rule ? "released" : "resetting";
+  if (row.pool && !row.machine_rule) return "free";
+  return "serving";
 }
 
 export function isWorkerNode(nodeId: string): boolean {

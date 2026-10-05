@@ -49,6 +49,17 @@ export {
   type WorkServerOptions,
 } from "./server.js";
 export {
+  type MachineClass,
+  MachineClassSchema,
+  type MachinesConfig,
+  MachinesConfigSchema,
+} from "./workers/machine-classes.js";
+export type {
+  MachineProvisioner,
+  MachineRule,
+  ReconcileSummary,
+} from "./workers/machine-rules.js";
+export {
   listMachineSignIns,
   type MachineSignIn,
   signInOnMachine,
