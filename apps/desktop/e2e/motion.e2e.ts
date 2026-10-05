@@ -695,3 +695,75 @@ describe("animate-before-unmount", () => {
     );
   });
 });
+
+describe("chats over a settling sidebar", () => {
+  it("a floating chat glides with the content instead of vanishing under it", async () => {
+    await run(`$('button[aria-label="New chat"]').click(); return true;`);
+    await runWait(
+      `const dock = visibleDock();
+       return !!dock && getComputedStyle(dock).opacity === '1' && dock.getAnimations().every((a) => a.playState !== 'running');`,
+      { label: "floating chat at rest" },
+    );
+    const settled = (open: boolean) =>
+      runWait(
+        `const side = $('[data-workspace-visible="true"] [data-sidebar="left"]');
+         return side?.getAttribute('aria-hidden') === '${!open}' && side.dataset.settled === 'true' &&
+           !document.getAnimations().some((a) => a.effect?.pseudoElement?.startsWith('::view-transition')) &&
+           !('contentSettling' in document.documentElement.dataset);`,
+        { label: `left sidebar ${open ? "open" : "closed"} and settled` },
+      );
+    // Where everything rests: the dock on the visible chat region (anchored),
+    // the chat centred in it.
+    const geometry = () =>
+      run<{ host: number[]; region: number[]; offCentre: number }>(`
+        const box = (el) => { const r = el.getBoundingClientRect(); return [r.left, r.top, r.width, r.height].map(Math.round); };
+        const region = $('[data-workspace-visible="true"] [data-workspace-chat-region]').getBoundingClientRect();
+        const chat = visibleDock().getBoundingClientRect();
+        return {
+          host: box($('[data-dock-host]')),
+          region: box($('[data-workspace-visible="true"] [data-workspace-chat-region]')),
+          offCentre: Math.round(Math.abs(chat.left + chat.width / 2 - (region.left + region.width / 2))),
+        };
+      `);
+    const before = await geometry();
+    expect(before.host).toEqual(before.region);
+    expect(before.offCentre).toBeLessThanOrEqual(1);
+    // While the content settles, the chat is in a layer of its own above
+    // the content's snapshot (the content would otherwise cover it).
+    const seen = await run<{ layered: boolean; dockGroup: boolean }>(`
+      $('[aria-label="Collapse sidebar"]').click();
+      return new Promise((resolve) => {
+        const started = performance.now();
+        const seen = { layered: false, dockGroup: false };
+        const tick = () => {
+          const dock = visibleDock();
+          if (dock && 'contentSettling' in document.documentElement.dataset) {
+            const style = getComputedStyle(dock);
+            seen.layered ||= style.getPropertyValue('view-transition-name') === 'match-element' && style.getPropertyValue('view-transition-class') === 'dock-float';
+            // A group beyond the content's, the sidebars' and the root's:
+            // the chat's own layer, whatever name the browser generates.
+            seen.dockGroup ||= document.getAnimations().some((a) => {
+              const name = /^::view-transition-group((.+))$/.exec(a.effect?.pseudoElement ?? '')?.[1];
+              return !!name && !['root', 'workspace-content', 'sidebar-left', 'sidebar-right'].includes(name);
+            });
+          }
+          if ((seen.layered && seen.dockGroup) || performance.now() - started > 5000) resolve(seen);
+          else requestAnimationFrame(tick);
+        };
+        tick();
+      });
+    `);
+    expect(seen).toEqual({ layered: true, dockGroup: true });
+    await settled(false);
+    const collapsed = await geometry();
+    expect(collapsed.host).toEqual(collapsed.region);
+    expect(collapsed.offCentre).toBeLessThanOrEqual(1);
+    const [, , widthBefore = 0] = before.region;
+    const [, , widthCollapsed = 0] = collapsed.region;
+    expect(widthCollapsed).toBeGreaterThan(widthBefore);
+    await run(`$('[aria-label="Expand sidebar"]').click(); return true;`);
+    await settled(true);
+    expect(await geometry()).toEqual(before);
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+});

@@ -1835,6 +1835,22 @@ kbd {
   }
 }
 
+/* The in-window dock rests on the visible workspace's chat region wherever
+   layout puts it: anchored, it moves in the same frame as the region (a
+   sidebar settling, a split, a window resize). With no region yet it
+   covers the window. */
+[data-workspace-visible="true"] [data-workspace-chat-region] {
+  anchor-name: --workspace-chat-region;
+}
+[data-dock-host]:not([data-dock-native]) {
+  position-anchor: --workspace-chat-region;
+  /* The chats stay visible whatever clips the region. */
+  position-visibility: always;
+  top: anchor(top, 0px);
+  right: anchor(right, 0px);
+  bottom: anchor(bottom, 0px);
+  left: anchor(left, 0px);
+}
 [data-dock-host] [data-floating-chat] {
   max-width: min(100%, 52rem);
 }
@@ -1872,6 +1888,72 @@ html[data-surface="dock"] #root {
   [data-dock-rail] {
     transition: none;
   }
+}
+
+/* Chats live in the dock, outside the content, so the content's snapshot
+   would cover them for the whole settle. While it settles they get layers
+   of their own: a floating chat and the bubble strip glide from where they
+   were to where they land, and a chat tab settles exactly as the content
+   does. Names are per element (match-element) because several chats can
+   be on screen while one leaves. */
+:root[data-content-settling]
+  [data-dock-host]:not([data-dock-native])
+  [data-floating-chat] {
+  view-transition-name: match-element;
+  view-transition-class: dock-float;
+}
+:root[data-content-settling]
+  [data-dock-host]:not([data-dock-native])
+  [data-dock-rail] {
+  view-transition-name: match-element;
+  view-transition-class: dock-rail;
+}
+:root[data-content-settling]
+  [data-dock-host]:not([data-dock-native])
+  [data-chat-tab] {
+  view-transition-name: match-element;
+  view-transition-class: dock-tab;
+}
+::view-transition-group(*.dock-float),
+::view-transition-group(*.dock-rail),
+::view-transition-group(*.dock-tab),
+::view-transition-old(*.dock-float),
+::view-transition-new(*.dock-float),
+::view-transition-old(*.dock-rail),
+::view-transition-new(*.dock-rail),
+::view-transition-old(*.dock-tab),
+::view-transition-new(*.dock-tab) {
+  animation-duration: 200ms;
+  animation-timing-function: var(--ease-standard);
+}
+/* The strip stays above a sliding sidebar, as it is live; a floating chat
+   stays under it, as it is live too. */
+::view-transition-group(*.dock-rail) {
+  z-index: 2;
+}
+/* A chat whose width changes keeps its text unscaled: its snapshots keep
+   their own size, resting on the chat's bottom edge, centred. */
+::view-transition-old(*.dock-float),
+::view-transition-new(*.dock-float) {
+  inline-size: auto;
+  block-size: auto;
+  inset-block: auto 0;
+  inset-inline: 0;
+  margin-inline: auto;
+}
+::view-transition-image-pair(*.dock-tab) {
+  overflow: clip;
+}
+::view-transition-old(*.dock-tab),
+::view-transition-new(*.dock-tab) {
+  inline-size: auto;
+  block-size: auto;
+}
+::view-transition-old(*.dock-tab) {
+  animation-name: content-out;
+}
+::view-transition-new(*.dock-tab) {
+  animation-name: content-in;
 }
 
 /* Browser setup actions keep their footprint when they become status rows. */

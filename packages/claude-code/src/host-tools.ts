@@ -80,6 +80,11 @@ export function hostToolServers(input: {
         name: tool.name,
         description: tool.description,
         inputSchema: { ...tool.inputSchema, type: "object" as const },
+        // The host offers a turn only the tools it means to be in view
+        // (the rest wait behind its own discovery): Claude Code's tool
+        // search must not defer them, or the agent sees no browser,
+        // subsessions or background commands until it searches.
+        _meta: { "anthropic/alwaysLoad": true },
       })),
     }));
     mcp.server.setRequestHandler(

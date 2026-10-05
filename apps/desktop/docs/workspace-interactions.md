@@ -83,7 +83,9 @@ window hides it; explicit Quit owns shutdown.
 
 The profile can show chats from the current project or all its projects, attach
 or detach the dock, and choose edge or centered expansion. Drag the collapsed
-bubble or expanded handle horizontally to change bottom corners. Persist only
+bubble or expanded handle horizontally to change bottom corners. It lands on
+the resting spot nearest its centre, leaving its own after 40% of the way to
+the next, and slides there, back to where it started included. Persist only
 left/right, never coordinates. Dragging must not trigger expansion; Escape
 cancels and arrow keys select a corner. Settling respects reduced motion.
 A detached dock stays above other apps and follows macOS desktops. Chat cards

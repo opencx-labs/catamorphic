@@ -454,3 +454,64 @@ it("centers expanded chats on request and drags the collapsed bubble between bot
     `return $('[data-dock-host]')?.dataset.dockSide==='left' && $('[data-dock-host]')?.dataset.dockPlacement==='right';`,
   );
 });
+
+it("lands a dragged strip after a short drag, and slides it back when let go near its start", async () => {
+  await run(
+    `await window.catamorphicDesktop.setPrefs({dockPlacement:'left'});`,
+  );
+  await wait(
+    `const button=$('[aria-label="Expand chat bubbles"]'); if(button && !button.inert) button.click(); return $('[data-dock-rail]')?.dataset.dockCollapsed === 'false' && $('[data-dock-host]')?.dataset.dockPlacement==='left';`,
+  );
+  const settled = () =>
+    wait(
+      `return !document.getAnimations().some(a=>a.playState==='running' && a.effect?.getTiming().iterations!==Infinity);`,
+    );
+  /** Drag the strip's handle by dx and let go; resolves once it has slid. */
+  const drag = async (dx: number) => {
+    await settled();
+    const handle = await app.eval<{ x: number; y: number }>(
+      `(() => {const b=document.querySelector('[data-dock-arrows]').getBoundingClientRect(); return {x:b.left+b.width/2,y:b.top+b.height/2};})()`,
+    );
+    await run(`const rail=$('[data-dock-rail]'); const animate=rail.animate.bind(rail);
+      window.__dockSlid=false; rail.animate=(...args)=>{window.__dockSlid=true; return animate(...args);};`);
+    const move = (
+      x: number,
+      type: "mousePressed" | "mouseMoved" | "mouseReleased",
+    ) =>
+      app.cdp("Input.dispatchMouseEvent", {
+        type,
+        x,
+        y: handle.y,
+        button: "left",
+        ...(type === "mouseMoved" ? { buttons: 1 } : { clickCount: 1 }),
+      });
+    await move(handle.x, "mousePressed");
+    await move(handle.x + Math.sign(dx) * 10, "mouseMoved");
+    await move(handle.x + dx, "mouseMoved");
+    await wait(
+      `return $('[data-dock-rail]')?.dataset.dockDragging === 'true';`,
+    );
+    await move(handle.x + dx, "mouseReleased");
+    await wait(
+      `return !$('[data-dock-dragging]') && window.__dockSlid === true;`,
+    );
+  };
+  // 45% of the way from its spot to the centre is enough to land there.
+  await settled();
+  const way = await app.eval<number>(
+    `(() => {const h=document.querySelector('[data-dock-host]').getBoundingClientRect(), r=document.querySelector('[data-dock-rail]').getBoundingClientRect(); return h.width/2-(r.left-h.left+r.width/2);})()`,
+  );
+  await drag(Math.round(way * 0.45));
+  await wait(`return $('[data-dock-host]')?.dataset.dockPlacement==='center';`);
+  // Let go near where it started (well short of 40% of the way), it slides
+  // back there instead of jumping.
+  await drag(Math.max(20, Math.round(way * 0.15)));
+  expect(await run(`return $('[data-dock-host]').dataset.dockPlacement;`)).toBe(
+    "center",
+  );
+  await settled();
+  expect(
+    await run(`const h=$('[data-dock-host]').getBoundingClientRect(), r=$('[data-dock-rail]').getBoundingClientRect();
+      return Math.round(Math.abs((r.left+r.right-h.left-h.right)/2));`),
+  ).toBeLessThanOrEqual(1);
+});

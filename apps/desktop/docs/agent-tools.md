@@ -1,13 +1,17 @@
 # Agent tool surface
 
 Accepted in ADR 0133, following the September 2026 audit of desktop tools and
-review apps. The default desktop projection has ten fixed host registrations:
+review apps. The default desktop projection has fifteen fixed host registrations:
 `discover_capabilities`, `invoke_capability`, `workspace_overview`, `read_tab`,
 `open_surface`, `update_todo_list`, the three background-command tools
 (`run_background_command`, `read_background_output`, `stop_background_command`,
-ADR 0155), and `watch_command` (ADR 0156). Harness-native execution and question adapters are
-additional. Previously up to 57 fixed host registrations were offered, before
-connectors, workflow tools, native tools and duplicate gateway mounts.
+ADR 0155), `watch_command` (ADR 0156), the browser's `open_browser`,
+`browser_snapshot` and `browser_act`, and the subagent pair `spawn_subsession`
+and `wait_for_subsessions` (ADR 0202). Harness-native execution and question
+adapters are additional. Claude Code receives every host tool with
+`_meta["anthropic/alwaysLoad"]`, so its own tool search never defers them.
+Previously up to 57 fixed host registrations were offered, before connectors,
+workflow tools, native tools and duplicate gateway mounts.
 
 ## Admission standard
 
@@ -42,12 +46,14 @@ Availability also depends on identity, services, agent sandboxing and topology.
 |---|---|
 | `workspace_overview`, `read_tab`, `open_surface`, `update_todo_list` | Eager, bounded workspace context, reading what is on screen, and visible handoff/progress |
 | `list_project_sessions`, `read_project_session`, `send_project_session_message` | Deferred, authorized peer coordination; `children_only` filters the listing |
-| `spawn_subsession`, `wait_for_subsessions`, `interrupt_subsession` | Deferred, host-owned child sessions and delivery |
+| `spawn_subsession`, `wait_for_subsessions` | Eager, the agent's subagents: host-owned child sessions whose results steer into the parent's working turn (ADR 0202) |
+| `interrupt_subsession` | Deferred, stops a direct child |
 | `request_user_attention`, `set_session_activity`, `read_todo_list` | Deferred, session state |
 | `list_worktrees`, `create_worktree`, `use_worktree` | Deferred and native-only; `path: null` returns to primary. Git facts use shell; assignment uses the host |
 | `point_at`, `set_chat_icon` | Deferred, optional presentation; `target: null` clears highlighting |
 | `desktop_settings` | Deferred, the owning profile's settings files, scopes and validation errors for the configuration skill |
-| `open_browser`, `browser_snapshot`, `browser_act`, `surface_control` | Deferred, signed-in browser and user takeover |
+| `open_browser`, `browser_snapshot`, `browser_act` | Eager, the signed-in browser: real input, uploads, downloads, and the page's console, network and JavaScript (ADR 0202) |
+| `surface_control` | Deferred, release, reclaim or close a browser tab or terminal |
 | `run_background_command`, `read_background_output`, `stop_background_command` | Eager, long-running processes in their own agent terminals; they outlive the turn and wake the chat when they finish (ADR 0155). Foreground commands use each harness's native shell |
 | `watch_command` | Eager. A quick check re-run on an interval in the chat's working directory; wakes the chat once on success or on every output change. Durable across restarts, missed checks coalesce, `stop_background_command` ends it (ADR 0156) |
 | `write_terminal` | Deferred, raw input to a terminal (prompts, REPLs, Ctrl+C, the person's own terminal on request) |
@@ -134,3 +140,16 @@ discovery falls back to any word when no capability matches every word of a
 descriptive query. The playbook and the desktop-workspace skill say to look
 before asking. The question adapters gained `close_questions`, which withdraws
 the agent's own open questions after a chat reply settled them.
+
+## The browser and subagents join the eager surface (ADR 0202)
+
+A Claude Code agent audited its own limits against twelve earlier chats. One
+told the person Work's browser could only read and navigate, because discovery
+for "browser terminal" required both words and returned the two capabilities
+that mention them, not the browser's own tools; four failed `invoke_capability`
+on `requestId` or on fields placed beside `input`. The delegation prompt named
+`spawn_subsession`, a tool the agent could not see, so it concluded it had no
+subagents. The five tools cost about 4.7 KB of schemas; the eager budget is
+13.5 KB. Discovery now ranks by matched words with name matches counting double,
+`requestId` is optional, and invalid input returns the capability's schema.
+

@@ -90,10 +90,14 @@ async function anchorShift(
   // The page sits at the box's left: a page is resized, not moved.
   if (view) return (await pageCentred(view)) ? centred : () => 0;
   const rect = content.getBoundingClientRect();
-  let element = document.elementFromPoint(
-    rect.left + rect.width / 2,
-    rect.top + rect.height * 0.4,
-  );
+  // A floating chat over the middle has a layer of its own: what counts is
+  // the content under it. A chat tab is the content there, a centred column.
+  let element = document
+    .elementsFromPoint(rect.left + rect.width / 2, rect.top + rect.height * 0.4)
+    .find(
+      (candidate) =>
+        !candidate.closest("[data-floating-chat], [data-dock-rail]"),
+    );
   if (!element || !content.contains(element)) return centred;
   while (
     element.parentElement &&
@@ -158,7 +162,9 @@ export function settleSidebarContent({
     }
     const root = document.documentElement;
     // Named for this transition only; config reloads leave the content be.
+    // The chats over it take layers of their own (styles.css).
     content.style.viewTransitionName = "workspace-content";
+    root.dataset.contentSettling = "";
     const transition = document.startViewTransition(() => {
       flushSync(update);
       const change = content.getBoundingClientRect().width - widthBefore;
@@ -175,6 +181,7 @@ export function settleSidebarContent({
       if (settling?.transition !== transition) return;
       settling = undefined;
       content.style.viewTransitionName = "";
+      delete root.dataset.contentSettling;
       root.style.removeProperty("--content-shift");
     });
   };

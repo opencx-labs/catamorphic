@@ -4,15 +4,26 @@ export const BROWSER_GUEST = String.raw`
   if (globalThis.catamorphicBrowser) return;
   const generation = crypto.randomUUID();
   let sequence = 0;
+  // An element keeps its uid for as long as it stays in the page, across
+  // snapshots; one that leaves (or a navigation) makes its uid stale.
   const references = new Map();
+  const uids = new WeakMap();
   const pointers = new Map();
   let frame = 0;
   const visible = (el) => el.isConnected && el.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}) && !el.closest('[inert]');
   const roots = (root = document) => [root, ...Array.from(root.querySelectorAll('*')).flatMap(el => el.shadowRoot ? roots(el.shadowRoot) : [])];
   const resolve = (uid) => {
     const el = references.get(uid);
-    if (!el || !visible(el)) throw Error('Stale or hidden element. Take a fresh browser_snapshot.');
+    if (!el || !visible(el)) throw Error('Stale or hidden element: it left the page or is hidden now. Take a fresh browser_snapshot.');
     return el;
+  };
+  const labelOf = (el) => (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || '').trim().replace(/\s+/g, ' ').slice(0, 160);
+  // What sits over an element, with the nearest uid inside it to act on.
+  const describe = (el) => {
+    let owner = el;
+    while (owner && !uids.has(owner)) owner = owner.parentElement || owner.getRootNode().host;
+    const text = labelOf(el).slice(0, 60);
+    return '<' + el.localName + (el.id ? '#' + el.id : '') + '>' + (text ? ' "' + text + '"' : '') + (owner && references.get(uids.get(owner)) === owner ? ' (uid ' + uids.get(owner) + ')' : '');
   };
   const clear = () => {
     for (const pointer of pointers.values()) pointer.remove();
@@ -53,23 +64,25 @@ export const BROWSER_GUEST = String.raw`
   };
   globalThis.catamorphicBrowser = {
     snapshot() {
-      references.clear();
+      for (const [uid, el] of references) if (!el.isConnected) references.delete(uid);
       const elements = roots().flatMap(root => Array.from(root.querySelectorAll('a[href],button,input,textarea,select,summary,[role],h1,h2,h3,label,[contenteditable="true"]'))).filter(visible);
       return {
         url: location.href, title: document.title, viewport: { width: innerWidth, height: innerHeight },
         elements: elements.slice(0, 300).map(el => {
-          const uid = generation + ':' + (++sequence);
+          let uid = uids.get(el);
+          if (!uid) { uid = generation + ':' + (++sequence); uids.set(el, uid); }
           references.set(uid, el);
-          const label = (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || '').trim().replace(/\s+/g, ' ').slice(0, 160);
+          const label = labelOf(el);
           return {uid, tag:el.localName, role:el.getAttribute('role'), label,
             disabled:el.matches(':disabled,[aria-disabled="true"]'),
             ...(el instanceof HTMLSelectElement ? {options:Array.from(el.options).map(o => ({value:o.value,label:o.label,selected:o.selected}))} : {}),
             ...(el instanceof HTMLInputElement && el.type !== 'password' ? {value:el.value,checked:el.checked} : {}),
+          ...(el instanceof HTMLInputElement && el.type === 'file' ? {type:'file'} : {}),
           };
         }),
         truncated:elements.length > 300,
         frames: Array.from(document.querySelectorAll('iframe')).map(el => ({title:el.title,src:el.src})),
-        note: 'Element references cover this document and open shadow roots. Use an image snapshot and coordinates for embedded frames or canvas.',
+        note: 'Element uids cover this document and open shadow roots, and stay valid while the element stays in the page. Use an image snapshot and coordinates for embedded frames or canvas.',
       };
     },
     viewport() { return {width:innerWidth,height:innerHeight}; },
@@ -82,7 +95,10 @@ export const BROWSER_GUEST = String.raw`
       const x = Math.max(0,rect.left) + (Math.min(innerWidth,rect.right)-Math.max(0,rect.left))/2;
       const y = Math.max(0,rect.top) + (Math.min(innerHeight,rect.bottom)-Math.max(0,rect.top))/2;
       const hit = el.getRootNode().elementFromPoint(x,y);
-      if (!hit || !(el === hit || el.contains(hit))) throw Error('Element is covered. Take a fresh snapshot before acting.');
+      // A label activates its control, so a styled label over its own
+      // input is no cover.
+      const reaches = (target) => target && (el === target || el.contains(target) || Array.from(el.labels || []).some(label => label === target || label.contains(target)));
+      if (!reaches(hit)) throw Error('Element is covered by ' + (hit ? describe(hit) : 'something') + '. Close or act on what covers it (a dialog, banner or overlay), then try again.');
       if (editing) {
         if (!(el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && /^(text|search|email|url|tel|password|number)$/.test(el.type)) || el.isContentEditable)) throw Error('fill requires a text input or contenteditable. Use select for a dropdown.');
         el.focus({preventScroll:true});

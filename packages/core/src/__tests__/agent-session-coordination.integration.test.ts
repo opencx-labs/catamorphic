@@ -62,6 +62,8 @@ class CoordinationAdapter implements HarnessAdapter {
   readonly id = "echo";
   private readonly echo = new EchoAdapter();
   interrupts = 0;
+  /** Refuse steers, as a harness between steps of its own may. */
+  refuseSteers = false;
   slowStarted: Promise<void> = Promise.resolve();
   private markSlowStarted: (() => void) | undefined;
   private releaseSlow: (() => void) | undefined;
@@ -237,6 +239,7 @@ class CoordinationAdapter implements HarnessAdapter {
     );
     return {
       steer: async (input) => {
+        if (this.refuseSteers) return false;
         steered.push(input.text);
         host.emit({ type: "input.consumed", itemIds: [input.itemId] });
         return true;
@@ -337,13 +340,31 @@ describe("agent session coordination", () => {
       input: Pick<RegisteredCodingAgent, "sandboxing" | "delegation"> = {},
     ): RegisteredCodingAgent => ({
       id,
-      harness: { placement: "host", adapter: provider },
+      harness: {
+        placement: "host",
+        adapter: provider,
+        // The host's delegation tool, which the delegation prompt names.
+        hostTools: [
+          {
+            name: "spawn_subsession",
+            description: "Start a subagent",
+            parameters: {},
+            execute: async () => null,
+          },
+        ],
+      },
       topology: "native",
       ...input,
     });
     const agents = new Map(
       [
         registeredAgent("worker"),
+        // A host that offers no delegation tool (a server's agent).
+        {
+          id: "plain",
+          harness: { placement: "host", adapter: provider },
+          topology: "native",
+        } satisfies RegisteredCodingAgent,
         registeredAgent("small", { sandboxing: "contained" }),
         registeredAgent("builder", { sandboxing: "publish" }),
         registeredAgent("orchestrator", {
@@ -1208,6 +1229,242 @@ describe("agent session coordination", () => {
     ).toMatchObject({
       visibility: "promoted",
     });
+  });
+
+  it("names an untitled chat by its first message as it is sent, until its harness names it", async () => {
+    const project = await projects.create(identity, { name: "Chat names" });
+    const session = await sessions.create(identity, project.id);
+    // Context that starts no work names nothing.
+    await sessions.deliver(identity, project.id, session.id, {
+      content: "For context: the offsite is in May",
+      author: { kind: "user", externalUserId: identity.externalUserId },
+      mode: "message_only",
+    });
+    expect((await sessions.get(identity, project.id, session.id)).title).toBe(
+      null,
+    );
+    // Named while its first turn still runs, not when the turn settles.
+    await send(project.id, session.id, "Plan the offsite\n\n[[wait 2000]]");
+    expect((await sessions.get(identity, project.id, session.id)).title).toBe(
+      "Plan the offsite [[wait 2000]]",
+    );
+    await vi.waitFor(
+      async () =>
+        expect(
+          (await turnsOf(session.id, project.id)).map((turn) => turn.status),
+        ).toEqual(["completed"]),
+      { timeout: 10_000 },
+    );
+    // A later message keeps the name; a harness's own title replaces it.
+    await sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "And the budget [[title Offsite plan]]",
+    );
+    expect((await sessions.get(identity, project.id, session.id)).title).toBe(
+      "Offsite plan",
+    );
+  });
+
+  it("steers a subsession's result into its parent's working turn, like a subagent's", async () => {
+    const project = await projects.create(identity, { name: "Subagents" });
+    const parent = await sessions.create(identity, project.id);
+    const children: string[] = [];
+    provider.questions = async ({ steered, say }) => {
+      const child = await sessions.createSubsession(
+        identity,
+        project.id,
+        parent.id,
+        { task: "Summarize the release notes" },
+      );
+      children.push(child.session.id);
+      // The parent waits as it would on a subagent; the result reaches it
+      // in this same turn.
+      await sessions.waitForSubsessions(identity, project.id, parent.id, {
+        timeoutMs: 10_000,
+      });
+      await vi.waitFor(
+        () =>
+          expect(steered.some((text) => text.includes(child.session.id))).toBe(
+            true,
+          ),
+        { timeout: 10_000 },
+      );
+      say("Combined the child's summary");
+    };
+    try {
+      const { reply } = await sessions.sendMessage(
+        identity,
+        project.id,
+        parent.id,
+        "questions: delegate and combine",
+      );
+      expect(reply?.kind === "assistant_message" && reply.text).toBe(
+        "Combined the child's summary",
+      );
+      // No second turn: the parent already had the result.
+      expect(
+        (await turnsOf(parent.id, project.id)).map((turn) => turn.status),
+      ).toEqual(["completed"]);
+      expect(
+        (await snapshot(parent.id, project.id)).items.filter(
+          (item) =>
+            item.kind === "user_message" &&
+            item.author.kind === "agent" &&
+            item.author.sessionId === children[0],
+        ),
+      ).toHaveLength(1);
+    } finally {
+      provider.questions = undefined;
+    }
+  });
+
+  it("runs a refused subsession result as the parent's next turn, without stopping its work", async () => {
+    const project = await projects.create(identity, {
+      name: "Refused subagent results",
+    });
+    const parent = await sessions.create(identity, project.id);
+    let child = "";
+    provider.questions = async ({ attempt, say }) => {
+      provider.refuseSteers = true;
+      child = (
+        await sessions.createSubsession(identity, project.id, parent.id, {
+          task: "Count the open issues",
+        })
+      ).session.id;
+      // The harness refuses the result's steer; the work goes on.
+      await vi.waitFor(
+        async () =>
+          expect(
+            await db
+              .selectFrom("agent_turn_commands")
+              .select("status")
+              .where("turn_id", "=", attempt.turnId)
+              .where("kind", "=", "steer")
+              .execute(),
+          ).toEqual([{ status: "acknowledged" }]),
+        { timeout: 10_000 },
+      );
+      say("Finished my own part");
+    };
+    try {
+      const { reply } = await sessions.sendMessage(
+        identity,
+        project.id,
+        parent.id,
+        "questions: delegate and keep going",
+      );
+      expect(reply?.kind === "assistant_message" && reply.text).toBe(
+        "Finished my own part",
+      );
+    } finally {
+      provider.questions = undefined;
+      provider.refuseSteers = false;
+    }
+    // The work was not restarted to take the result in.
+    expect((await turnsOf(parent.id, project.id))[0]?.attemptCount).toBe(1);
+    // The result was never lost: it ran as a turn of its own after.
+    await vi.waitFor(
+      async () => {
+        const turns = await turnsOf(parent.id, project.id);
+        expect(turns.map((turn) => turn.status)).toEqual([
+          "completed",
+          "completed",
+        ]);
+        const items = (await snapshot(parent.id, project.id)).items;
+        const result = items.find(
+          (item) =>
+            item.kind === "user_message" &&
+            item.author.kind === "agent" &&
+            item.author.sessionId === child,
+        );
+        expect(turns[1]?.inputItemId).toBe(result?.id);
+      },
+      { timeout: 10_000 },
+    );
+  });
+
+  it("waits on the subsessions still running, not one that settled before", async () => {
+    const project = await projects.create(identity, {
+      name: "Waiting on subagents",
+    });
+    const parent = await sessions.create(identity, project.id);
+    const done = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { task: "Answer quickly" },
+    );
+    await vi.waitFor(
+      async () =>
+        expect(
+          (await sessions.listSubsessions(identity, project.id, parent.id))[0]
+            ?.status,
+        ).toBe("completed"),
+      { timeout: 10_000 },
+    );
+    // A fresh start signal: no earlier test's slow turn can answer for it.
+    provider.release();
+    const slowStarted = provider.slowStarted;
+    const slow = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { task: "Prepare the Globex renewal deck" },
+    );
+    try {
+      await slowStarted;
+      const started = Date.now();
+      const waited = await sessions.waitForSubsessions(
+        identity,
+        project.id,
+        parent.id,
+        { timeoutMs: 600 },
+      );
+      expect(Date.now() - started).toBeGreaterThanOrEqual(500);
+      expect(waited.map((child) => [child.session.id, child.status])).toEqual([
+        [slow.session.id, "running"],
+      ]);
+      expect(waited.map((child) => child.session.id)).not.toContain(
+        done.session.id,
+      );
+    } finally {
+      provider.release();
+    }
+    await vi.waitFor(
+      async () =>
+        expect(
+          (await sessions.listSubsessions(identity, project.id, parent.id)).map(
+            (child) => child.status,
+          ),
+        ).toEqual(["completed", "completed"]),
+      { timeout: 10_000 },
+    );
+  });
+
+  it("tells only an agent given spawn_subsession about its subagents", async () => {
+    const project = await projects.create(identity, {
+      name: "Subagent prompt",
+    });
+    const promptOf = async (agentId: string) =>
+      (
+        await db
+          .selectFrom("agent_sessions")
+          .select("system_prompt")
+          .where(
+            "id",
+            "=",
+            (
+              await sessions.create(identity, project.id, { agentId })
+            ).id,
+          )
+          .executeTakeFirstOrThrow()
+      ).system_prompt ?? "";
+    expect(await promptOf("worker")).toContain(
+      "Subsessions are your subagents",
+    );
+    expect(await promptOf("plain")).not.toContain("subsession");
   });
 
   it("inherits the parent agent for a manually created subsession", async () => {

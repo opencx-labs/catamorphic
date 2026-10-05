@@ -20,6 +20,7 @@ import {
   type DockDrag,
   type DockRegion,
   type DockSize,
+  dockLanding,
   dockPosition,
   fitDockSize,
 } from "../shared/dock-position.js";
@@ -490,23 +491,53 @@ export class DesktopWorkspaces {
       if (landing) this.dockExpanded.set(profileId, landing.expanded === true);
       const { width, height } = landing ?? bounds;
       // Collapsed drags pick a corner; expanded drags pick where open chats
-      // sit: left, center or right thirds of the display.
+      // sit: left, center or right. The strip lands on the spot nearest its
+      // centre, as in a workspace window (shared/dock-position.ts).
       const expanded = this.dockExpanded.get(profileId) === true;
       const current = prefs.load();
+      // Where the strip is let go, not where the last move left it: a
+      // coalesced final move must not skew the landing.
+      const centre =
+        Math.max(
+          area.x,
+          Math.min(
+            area.x + area.width - bounds.width,
+            drag.left + input.screenX - drag.x,
+          ),
+        ) +
+        bounds.width / 2;
+      const restsAt = (spot: "left" | "center" | "right") =>
+        dockPosition({
+          area,
+          width: bounds.width,
+          height: bounds.height,
+          side: spot === "right" ? "right" : "left",
+          centered: spot === "center",
+        }).x +
+        bounds.width / 2;
       const side =
         input.phase === "cancel"
           ? drag.side
-          : input.screenX < area.x + area.width / 2
-            ? "left"
-            : "right";
+          : (dockLanding({
+              from: drag.side,
+              centre,
+              spots: [
+                { spot: "left", at: restsAt("left") },
+                { spot: "right", at: restsAt("right") },
+              ],
+            }) ?? drag.side);
       const placement =
         input.phase === "cancel"
           ? current.dockPlacement
-          : input.screenX < area.x + area.width / 3
-            ? "left"
-            : input.screenX > area.x + (area.width * 2) / 3
-              ? "right"
-              : "center";
+          : (dockLanding({
+              from: current.dockPlacement,
+              centre,
+              spots: [
+                { spot: "left", at: restsAt("left") },
+                { spot: "center", at: restsAt("center") },
+                { spot: "right", at: restsAt("right") },
+              ],
+            }) ?? current.dockPlacement);
       const position = dockPosition({
         area,
         width,

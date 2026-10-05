@@ -188,7 +188,10 @@ per-profile agent rosters work across harnesses. MCP goes both directions:
 agents consume MCP connectors (registry search, plugin marketplaces,
 elicitation via `@catamorphic/mcp`), and a project's workflows are served
 *as* MCP tools to any MCP client. In the desktop, agents also drive the
-workspace itself: browser tabs, terminals, `open_surface`, `point_at`.
+workspace itself: browser tabs (real input, uploads, downloads, and a page's
+console and network for web development), terminals, `open_surface`,
+`point_at`. Local harnesses get the person's login-shell PATH, so they reach
+the same tools as their terminal.
 (ADRs [0038](docs/decisions/0038-coding-agent-registry-and-host-execution.md),
 [0042](docs/decisions/0042-parameterized-trigger-kinds-and-workflow-tools-mcp.md))
 
@@ -213,7 +216,9 @@ using a project secret need no personal consent and work headlessly.
 
 Delegation is also first-class. A subagent works in an ordinary durable child
 session with explicit delegation authority, its own transcript, and the same
-message, interrupt, attention, and policy machinery as any other session.
+message, interrupt, attention, and policy machinery as any other session. Its
+result reaches the parent like a subagent's: during the parent's turn while it
+still works, or as a new turn after it.
 Archive recursively stops active work only after reporting its impact, while
 keeping the session tree restorable and searchable. Session source records
 whether a conversation began on desktop, mobile, Slack, Claude, MCP, or API.

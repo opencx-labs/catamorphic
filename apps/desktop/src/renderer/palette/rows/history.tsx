@@ -66,5 +66,5 @@ export function useHistoryRows({
     () => historyResults.entries.map(historyRow),
     [historyResults.entries, historyRow],
   );
-  return { historyRow, historyItems };
+  return { historyRow, historyItems, historyEntries: historyResults.entries };
 }

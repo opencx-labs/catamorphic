@@ -2094,6 +2094,7 @@ function ChatDockContent({
         }}
         data-palette-target={(paletteTargeted && !isTab) || undefined}
         data-floating-chat={entry.mode === "partial" || undefined}
+        data-chat-tab={(presentsAsTab && tabActive) || undefined}
         data-lurking={lurking || undefined}
         data-chat-local-id={entry.localId}
         data-chat-project={projectId}

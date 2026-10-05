@@ -15218,11 +15218,15 @@ export interface paths {
                 content: {
                     "application/json": {
                         name: string;
-                        /** @default {} */
+                        /**
+                         * @description The capability's own input, per its discovered schema
+                         * @default {}
+                         */
                         input?: {
                             [key: string]: unknown;
                         };
-                        requestId: string;
+                        /** @description Optional; the same id again marks a retry of one operation */
+                        requestId?: string;
                     };
                 };
             };

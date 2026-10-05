@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { InstalledClaudeCode } from "../shared/claude-code-install.js";
+import { loginShellPath } from "./login-shell-path.js";
 
 export type { InstalledClaudeCode };
 
@@ -70,22 +71,6 @@ function run(
       },
     );
   });
-}
-
-/** The PATH an interactive login shell would have, where installers add theirs. */
-async function loginShellPath(): Promise<string | undefined> {
-  if (process.platform === "win32") return undefined;
-  const shell = process.env.SHELL ?? "/bin/zsh";
-  const marker = "__WORK_LOGIN_PATH__";
-  const output = await run(
-    shell,
-    ["-ilc", `printf '\\n${marker}%s\\n' "$PATH"`],
-    5000,
-  ).catch(() => undefined);
-  return output
-    ?.split("\n")
-    .find((line) => line.startsWith(marker))
-    ?.slice(marker.length);
 }
 
 export interface InstalledClaudeCodeFinderOptions {

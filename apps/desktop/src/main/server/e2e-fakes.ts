@@ -1490,11 +1490,7 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
         request.name === "browser_snapshot" && request.input.format === "image"
           ? {
               content: (
-                await turn.toolResult("invoke_capability", {
-                  name: "workspace.browser_snapshot",
-                  input: request.input,
-                  requestId: randomUUID(),
-                })
+                await turn.toolResult("browser_snapshot", request.input)
               ).content,
             }
           : await turn.tool(request.name, request.input);

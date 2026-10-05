@@ -16,8 +16,16 @@ export const DiscoverCapabilitiesSchema = z.object({
 });
 export const InvokeCapabilitySchema = z.object({
   name: z.string().min(1).max(200),
-  input: z.record(z.string(), z.unknown()).default({}),
-  requestId: z.string().min(1).max(200),
+  input: z
+    .record(z.string(), z.unknown())
+    .default({})
+    .describe("The capability's own input, per its discovered schema"),
+  requestId: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe("Optional; the same id again marks a retry of one operation"),
 });
 export const CapabilityPageSchema = z.object({
   items: z.array(CapabilityDescriptorSchema),
@@ -52,10 +60,15 @@ export function agentCapabilityTools(
     {
       name: "invoke_capability",
       description:
-        "Invoke a capability using its discovered name and input schema. Reuse the requestId when explicitly retrying the same operation; never assume an uncertain write failed. Live authorization applies to every call.",
+        "Invoke a capability by its discovered name, with its fields inside input. Never assume an uncertain write failed; check before retrying. Live authorization applies to every call.",
       parameters: InvokeCapabilitySchema.shape,
+      // Strict as discovery is: a field beside input (say key) would
+      // otherwise vanish, and the capability would run on defaults.
       execute: (input) =>
-        gateway.invoke({ ...InvokeCapabilitySchema.parse(input), signal }),
+        gateway.invoke({
+          ...InvokeCapabilitySchema.strict().parse(input),
+          signal,
+        }),
     },
   ];
 }
