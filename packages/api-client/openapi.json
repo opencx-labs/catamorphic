@@ -28611,6 +28611,38 @@
                                       "required": ["harness", "member"],
                                       "additionalProperties": false
                                     }
+                                  },
+                                  "volumes": {
+                                    "readOnly": true,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "key": {
+                                          "type": "string",
+                                          "pattern": "^[a-z0-9][a-z0-9-]{0,39}-[0-9a-f]{24}$"
+                                        },
+                                        "path": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 1024
+                                        },
+                                        "exclusive": {
+                                          "type": "boolean"
+                                        },
+                                        "sizeMb": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "exclusiveMinimum": true,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "temporary": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": ["key", "path"],
+                                      "additionalProperties": false
+                                    }
                                   }
                                 },
                                 "additionalProperties": false
@@ -28907,6 +28939,17 @@
                               }
                             },
                             "required": ["kind", "sandboxId"],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": ["machine.reset"]
+                              }
+                            },
+                            "required": ["kind"],
                             "additionalProperties": false
                           }
                         ]

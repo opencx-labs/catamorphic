@@ -10114,6 +10114,13 @@ export interface paths {
                                         harness: "claude-code" | "codex";
                                         member: string;
                                     }[];
+                                    readonly volumes?: {
+                                        key: string;
+                                        path: string;
+                                        exclusive?: boolean;
+                                        sizeMb?: number;
+                                        temporary?: boolean;
+                                    }[];
                                 };
                             } | {
                                 /** @enum {string} */
@@ -10199,6 +10206,9 @@ export interface paths {
                                 /** @enum {string} */
                                 kind: "process.list";
                                 sandboxId: string;
+                            } | {
+                                /** @enum {string} */
+                                kind: "machine.reset";
                             };
                         }[];
                     };
