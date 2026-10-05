@@ -473,6 +473,61 @@ no machine satisfies reports which capability is missing. VM budgets include
 nested containers; the Docker disk has its own size, and local-process
 containers are not budgeted.
 
+### Setup and volumes
+
+Images hold a team's toolchain; setup and volumes hold what the project
+installs with it, so the second workspace on a machine starts from warm
+caches (ADR 0207):
+
+```json
+{
+  "environments": {
+    "dev": {
+      "workloads": ["agent"],
+      "image": ".work/images/dev.Dockerfile",
+      "requirements": { "containers": true },
+      "setup": "corepack enable && pnpm install --frozen-lockfile",
+      "setupTimeoutMinutes": 45,
+      "volumes": {
+        "pnpm": "~/.local/share/pnpm/store",
+        "docker": { "path": "/var/lib/docker", "exclusive": true, "sizeMb": 20480 }
+      }
+    }
+  }
+}
+```
+
+- `setup` is a shell command run in the project folder of every new
+  workspace before its first turn, once the chat's secrets and the member's
+  personal files are in place, and again when the command changes. A
+  workspace rebuilt after idle release runs it again. Its first failing
+  command stops it. Output is appended to `.work-session/setup.log` beside
+  the project, and the chat shows that the workspace is being set up. A
+  failure, or a run longer than `setupTimeoutMinutes` (30 by default), is
+  told to the agent with the end of the log; the turn goes on, and setup
+  runs again before the next turn. A member may add their own `setup` in
+  `.work/personal/environment.json`: it runs after the Environment's, only
+  in their own chats in Environments with `"personalCredentials": true`,
+  and only for turns they wrote.
+- `volumes` name directories kept on the machine for each owner (a member,
+  or the project for its own chats and runs) and project: the owner's next
+  sandbox on that machine mounts the same directory, and nobody else's does.
+  A path is absolute or starts with `~/`, the sandbox user's home. Point
+  package stores and caches at them, such as pnpm's store above.
+- An `exclusive` volume, such as a Docker data root or a database's data
+  directory, is mounted into one sandbox at a time. Placement records which
+  sandbox holds it, in Postgres, so every replica agrees; a sandbox that
+  starts while another of the same owner's holds it gets an empty temporary
+  one that goes away with it, and its agent is told. The hold ends when the
+  holding sandbox is destroyed. `sizeMb` sizes the disk a backend gives an
+  exclusive volume when it needs one.
+- Volumes stay on their machine: moving to another machine starts cold.
+  They hold whatever the owner's code writes there, credentials included.
+  Machines advertise `volumes` when their backend keeps them; local-process
+  keeps only paths under `~`. A machine forgets volumes nobody used for 30
+  days (`WORK_VOLUME_RETENTION_DAYS`) and a member's volumes when a pooled
+  machine is reset.
+
 ## Members' own sign-ins and files
 
 An Environment with `"personalCredentials": true` lets a member's chats run
