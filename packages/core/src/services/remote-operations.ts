@@ -165,6 +165,9 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
     kind: z.literal("process.list"),
     sandboxId: z.string(),
   }),
+  // A pooled machine returns to its pool (ADR 0204): the executor destroys
+  // every sandbox it holds and deletes members' volumes and sign-ins.
+  z.object({ kind: z.literal("machine.reset") }),
 ]);
 export type RemoteOperation = z.infer<typeof RemoteOperationSchema>;
 const statusSchema = z.enum([
@@ -325,6 +328,8 @@ function operationTimeoutMs(operation: RemoteOperation): number {
     operation.options.image?.kind === "dockerfile"
   )
     return 35 * 60_000;
+  // Destroying every sandbox and deleting large volumes.
+  if (operation.kind === "machine.reset") return 15 * 60_000;
   // A command's own timeout plus a margin, never less than five minutes.
   const commandSeconds =
     operation.kind === "execute" ? (operation.options?.timeout ?? 0) : 0;
@@ -401,6 +406,43 @@ export class RemoteOperationQueue {
           },
         ),
     });
+  }
+
+  /**
+   * Return a pooled machine to its pool (ADR 0204): its executor destroys
+   * every sandbox it holds and deletes members' volumes and sign-ins.
+   * Resolves once the receipt arrives; fails at once while the executor is
+   * not connected, so a caller tries again after it reconnects.
+   */
+  resetMachine(args: {
+    executor: string;
+    leaseToken: () => Promise<string | undefined>;
+    leaseHeld: (leaseToken: string) => Promise<boolean>;
+    label: string;
+    attributes?: SpanAttributes;
+  }): Promise<void> {
+    return withSpan(
+      {
+        tracer,
+        name: "remote.machine_reset",
+        attributes: {
+          ...args.attributes,
+          "catamorphic.executor": args.executor,
+        },
+      },
+      async () => {
+        const leaseToken = await args.leaseToken();
+        if (!leaseToken)
+          throw new Error(`${args.label} is not connected right now`);
+        await this.dispatch({
+          executor: args.executor,
+          leaseToken,
+          operation: { kind: "machine.reset" },
+          leaseHeld: args.leaseHeld,
+          label: args.label,
+        });
+      },
+    );
   }
 
   private async dispatch(args: {

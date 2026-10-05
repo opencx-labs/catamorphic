@@ -1268,12 +1268,6 @@ export interface WorkGithubAppRegistrations {
   tenant_id: string;
 }
 
-export interface WorkMachineReconciler {
-  expires_at: Timestamp;
-  holder: string;
-  tenant_id: string;
-}
-
 export interface WorkMachineRules {
   created_at: Generated<Timestamp>;
   definition: Json;
@@ -1369,6 +1363,7 @@ export interface WorkWorkerEnrollments {
   machine_ref: string | null;
   machine_rule: string | null;
   name: string;
+  pool: Generated<boolean>;
   tenant_id: string;
   trusted: Generated<boolean>;
   used_at: Timestamp | null;
@@ -1380,10 +1375,15 @@ export interface WorkWorkers {
   enrolled_at: Generated<Timestamp>;
   labels: Generated<Json>;
   last_seen_at: Timestamp | null;
+  machine_member: string | null;
   machine_ref: string | null;
   machine_rule: string | null;
+  machine_slot: number | null;
   name: string;
   node_id: string;
+  pool: Generated<boolean>;
+  released_at: Timestamp | null;
+  retain_days: number | null;
   revoked_at: Timestamp | null;
   tenant_id: string;
   trusted: Generated<boolean>;
@@ -1462,7 +1462,6 @@ export interface DB {
   work_accounts: WorkAccounts;
   work_directory_grants: WorkDirectoryGrants;
   work_github_app_registrations: WorkGithubAppRegistrations;
-  work_machine_reconciler: WorkMachineReconciler;
   work_machine_rules: WorkMachineRules;
   work_project_access_requests: WorkProjectAccessRequests;
   work_project_admission_policies: WorkProjectAdmissionPolicies;

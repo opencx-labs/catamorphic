@@ -162,7 +162,7 @@ describe("machine rules", () => {
     expect(again).toMatchObject({ created: [], removed: [], failed: [] });
   });
 
-  it("removes a disabled member's machine and a deleted rule's pool", async () => {
+  it("releases and, kept for no days, removes a disabled member's machine and a deleted rule's pool", async () => {
     const [alice] = (
       await sql<{ user_id: string }>`
         SELECT user_id FROM work_accounts
@@ -170,6 +170,22 @@ describe("machine rules", () => {
       `.execute(server.catamorphic.core.db)
     ).rows;
     if (!alice) throw new Error("No member");
+    // No retention (ADR 0204): a released machine goes in the same pass.
+    const retained = await operator(
+      "PUT",
+      "/_work/operator/machine-rules/desk",
+      {
+        group: "eng@example.com",
+        machines: "each-member",
+        class: "standard-4",
+        retainDays: 0,
+      },
+    );
+    expect(retained.json().reconcile).toMatchObject({
+      created: [],
+      released: [],
+      removed: [],
+    });
     await sql`
       UPDATE work_accounts SET disabled_at = now() WHERE user_id = ${alice.user_id}
     `.execute(server.catamorphic.core.db);
@@ -179,6 +195,7 @@ describe("machine rules", () => {
     const failed = (
       await operator("POST", "/_work/operator/machine-rules/reconcile")
     ).json();
+    expect(failed.released).toEqual([name]);
     expect(failed.failed).toEqual([{ name, error: "platform unavailable" }]);
     platform.failDestroy = false;
     const pass = (
@@ -203,7 +220,7 @@ describe("machine rules", () => {
     );
   });
 
-  it("issues one code per machine and leaves a pass to the replica holding the lease", async () => {
+  it("issues one code per machine and leaves a pass to the replica holding the claim", async () => {
     const db = server.catamorphic.core.db;
     const registry = new WorkWorkerRegistry({
       db,
@@ -229,17 +246,19 @@ describe("machine rules", () => {
     await registry.cancelEnrollments({ name: "desk-once" });
 
     const carol = await member("carol", ["eng@example.com"]);
+    const claim = `machine-reconciler:${SERVER_TENANT_ID}`;
     await sql`
-      INSERT INTO work_machine_reconciler (tenant_id, holder, expires_at)
-      VALUES (${SERVER_TENANT_ID}, 'another-replica', now() + interval '1 minute')
+      INSERT INTO replica_claims (name, holder, expires_at)
+      VALUES (${claim}, 'another-replica', now() + interval '1 minute')
     `.execute(db);
     const skipped = (
       await operator("POST", "/_work/operator/machine-rules/reconcile")
     ).json();
-    expect(skipped.created).toEqual([]);
-    // The other replica stopped without releasing; its lease runs out.
+    expect(skipped).toMatchObject({ created: [], busy: true });
+    // The other replica stopped without releasing; its claim runs out.
     await sql`
-      UPDATE work_machine_reconciler SET expires_at = now() - interval '1 second'
+      UPDATE replica_claims SET expires_at = now() - interval '1 second'
+      WHERE name = ${claim}
     `.execute(db);
     const taken = (
       await operator("POST", "/_work/operator/machine-rules/reconcile")

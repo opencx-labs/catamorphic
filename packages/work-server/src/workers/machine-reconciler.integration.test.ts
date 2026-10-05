@@ -141,7 +141,8 @@ it.skipIf(!process.env.DATABASE_URL)(
       const stalled = onA("/_work/operator/machine-rules/reconcile");
       await entered;
       await sql`
-        UPDATE work_machine_reconciler SET expires_at = now() - interval '1 second'
+        UPDATE replica_claims SET expires_at = now() - interval '1 second'
+        WHERE name = ${`machine-reconciler:${SERVER_TENANT_ID}`}
       `.execute(db);
       const takeover = (
         await onB("/_work/operator/machine-rules/reconcile")

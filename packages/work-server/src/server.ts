@@ -23,6 +23,10 @@ import {
   instrumentHttpServer,
   serveSpaDist,
 } from "@catamorphic/fastify-plugin";
+import {
+  type HetznerCloudClientOptions,
+  HetznerCloudMachines,
+} from "@catamorphic/hetzner";
 import { gatewayHostOf } from "@catamorphic/sandbox";
 import {
   aiToolCall,
@@ -48,7 +52,7 @@ import { createPushTransport } from "@catamorphic/server-sdk/web-push";
 import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { z } from "zod";
 import { WorkAdmissionService } from "./admission/admission-service.js";
@@ -85,7 +89,10 @@ import type { DirectoryProvider } from "./identity/directory.js";
 import { GoogleWorkspaceDirectory } from "./identity/google-directory.js";
 import { registerConnectionSetup } from "./setup/connections.js";
 import { registerGithubAppSetup } from "./setup/github-app.js";
-import { registerMachineSetup } from "./setup/machines.js";
+import {
+  registerMachineAdministration,
+  registerMachineSetup,
+} from "./setup/machines.js";
 import {
   loadWorkOperatorSecret,
   verifyWorkOperatorSecret,
@@ -103,6 +110,11 @@ import {
 import { registerShareRoutes } from "./shares/share-routes.js";
 import { shareTools } from "./shares/share-tools.js";
 import { WorkSharesService } from "./shares/shares-service.js";
+import {
+  installTarget,
+  registerInstallScriptRoute,
+} from "./workers/install-script.js";
+import { machineClassesProblem } from "./workers/machine-classes.js";
 import {
   type MachineProvisioner,
   MachineReconciler,
@@ -162,10 +174,16 @@ export interface WorkServerHooks {
    */
   directories?: readonly DirectoryProvider[];
   /**
-   * Creates and destroys worker machines on a platform, so machine rules
-   * can give directory groups dedicated or shared machines (ADR 0167).
+   * Creates and destroys worker machines on a platform Work does not ship,
+   * for `custom` machine classes (ADRs 0167, 0204). With no classes
+   * configured, every class a rule names is custom.
    */
   machineProvisioner?: MachineProvisioner;
+  /**
+   * Hetzner Cloud API options for `hetzner-cloud` classes: another
+   * endpoint, or a `fetch` for tests. The token is `config.hetznerToken`.
+   */
+  hetzner?: Omit<HetznerCloudClientOptions, "token">;
   /** Mount additional host routes on the public application. */
   routes?: (args: {
     app: FastifyInstance;
@@ -262,6 +280,14 @@ async function createWorkServerInner(
       "Postgres deployments require the same WORK_SECRET on every instance",
     );
   }
+  // Machine classes (ADR 0204) need what their platforms need.
+  const machineClasses = config.machines?.classes ?? {};
+  const machinesProblem = machineClassesProblem({
+    classes: machineClasses,
+    hetznerToken: Boolean(config.hetznerToken),
+    provisioner: Boolean(hooks.machineProvisioner),
+  });
+  if (machinesProblem) throw new Error(machinesProblem);
   // Every replica must answer the same loopback operator credential; one
   // generated into a replica's disposable data directory would not.
   if (config.databaseUrl && !config.operatorSecret) {
@@ -763,18 +789,36 @@ async function createWorkServerInner(
       groups: groups.map((group) => group.toLowerCase()),
     };
   };
-  const machineReconciler = hooks.machineProvisioner
-    ? new MachineReconciler({
-        db: core.db,
-        tenantId: SERVER_TENANT_ID,
-        workers,
-        provisioner: hooks.machineProvisioner,
-        controlPlaneUrl: publicBase,
-        emailOf: async (userId) =>
-          (await workAuth.findUserById({ userId }))?.email?.toLowerCase(),
-        log,
-      })
-    : undefined;
+  // Every machine installs the same way (ADR 0204): the script this
+  // server serves, with its public origin and worker image baked in.
+  const install = installTarget({
+    publicBase,
+    ...(config.workerImage ? { workerImage: config.workerImage } : {}),
+  });
+  const machineReconciler =
+    Object.keys(machineClasses).length > 0 || hooks.machineProvisioner
+      ? new MachineReconciler({
+          db: core.db,
+          tenantId: SERVER_TENANT_ID,
+          workers,
+          classes: machineClasses,
+          ...(hooks.machineProvisioner
+            ? { provisioner: hooks.machineProvisioner }
+            : {}),
+          ...(config.hetznerToken
+            ? {
+                hetzner: new HetznerCloudMachines({
+                  client: { ...hooks.hetzner, token: config.hetznerToken },
+                }),
+              }
+            : {}),
+          install,
+          controlPlaneUrl: publicBase,
+          emailOf: async (userId) =>
+            (await workAuth.findUserById({ userId }))?.email?.toLowerCase(),
+          log,
+        })
+      : undefined;
   const reconcileMachines = () => {
     void machineReconciler
       ?.reconcile()
@@ -791,7 +835,7 @@ async function createWorkServerInner(
     machineTimer.unref();
     disposers.push(async () => {
       clearInterval(machineTimer);
-      await machineReconciler.reconcile().catch(() => undefined);
+      await machineReconciler.settle();
     });
   }
   const accountLifecycle = new AccountLifecycle({
@@ -1006,6 +1050,19 @@ async function createWorkServerInner(
     done(null, payload);
   });
   registerWorkerRoutes(app, workers);
+  registerInstallScriptRoute(app, install);
+  // Workers and machine rules: the operator on the loopback listener, and
+  // organization administrators through the API (ADR 0204).
+  const machineManagement = {
+    nodes: machine.nodes,
+    workers,
+    tenantId: SERVER_TENANT_ID,
+    authorityId: hostId,
+    publicBase,
+    classes: machineClasses,
+    install,
+    ...(machineReconciler ? { machines: machineReconciler } : {}),
+  };
   registerWorkAuthRoutes(app, {
     auth: workAuth,
     baseURL: publicBase,
@@ -1040,13 +1097,19 @@ async function createWorkServerInner(
       });
     },
   });
-  registerAdministratorRoutes(app, {
+  const administratorAccess = {
     administrators,
-    caller: async (request) => {
+    caller: async (request: FastifyRequest) => {
       const header = request.headers.authorization;
       const authorization = Array.isArray(header) ? header[0] : header;
       return authorization ? memberIdentity(authorization) : null;
     },
+  };
+  registerAdministratorRoutes(app, administratorAccess);
+  registerMachineAdministration({
+    app,
+    ...administratorAccess,
+    ...machineManagement,
   });
   registerWorkAdmissionRoutes(app, {
     publicBases: config.publicBases,
@@ -1096,13 +1159,8 @@ async function createWorkServerInner(
   disposers.push(() => operatorApp.close());
   registerMachineSetup({
     app: operatorApp,
-    nodes: machine.nodes,
-    workers,
-    tenantId: SERVER_TENANT_ID,
-    authorityId: hostId,
     operatorSecret,
-    publicBase,
-    ...(machineReconciler ? { machines: machineReconciler } : {}),
+    ...machineManagement,
   });
   registerConnectionSetup({
     app: operatorApp,
