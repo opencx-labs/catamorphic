@@ -531,6 +531,12 @@ const api = {
   }) => invoke("catamorphic:remote-enable-local-execution", input),
   remoteAuthority: (projectId: string): Promise<unknown> =>
     invoke("catamorphic:remote-authority", projectId),
+  remotePreviewOpen: (input: {
+    projectId: string;
+    sessionId: string;
+    port: number;
+  }): Promise<{ url: string }> =>
+    invoke("catamorphic:remote-preview-open", input),
   remoteStatus: (projectId: string): Promise<unknown> =>
     invoke("catamorphic:remote-status", projectId),
   remoteSync: (projectId: string): Promise<unknown> =>
@@ -969,6 +975,7 @@ const api = {
     projectId?: string;
     cols?: number;
     rows?: number;
+    remoteChat?: { sessionId: string };
   }): Promise<{ sessionId: string; cwd: string }> =>
     invoke("catamorphic:terminal-create", input),
   terminalWrite: (sessionId: string, data: string): Promise<void> =>
@@ -1023,11 +1030,15 @@ const api = {
       ipcRenderer.removeListener("catamorphic:terminal-busy", handler);
   },
   onTerminalExit: (
-    listener: (payload: { sessionId: string; exitCode: number }) => void,
+    listener: (payload: {
+      sessionId: string;
+      exitCode: number;
+      message?: string;
+    }) => void,
   ): (() => void) => {
     const handler = (
       _event: unknown,
-      payload: { sessionId: string; exitCode: number },
+      payload: { sessionId: string; exitCode: number; message?: string },
     ) => listener(payload);
     ipcRenderer.on("catamorphic:terminal-exit", handler);
     return () =>

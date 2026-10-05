@@ -59,6 +59,7 @@ import { SignalBadge, SignalGlyph } from "./chat-signals.js";
 import { Collapsible } from "./collapsible.js";
 import { FilesNav } from "./files-nav.js";
 import { GitNav } from "./git-nav.js";
+import { useRemoteProject } from "./project-authority-provider.js";
 import { PrsNav } from "./prs-nav.js";
 import { type RemoteFeatures, RemoteNav } from "./remote-nav.js";
 import { ShortcutHint } from "./shortcut-hint.js";
@@ -1008,6 +1009,8 @@ function SessionsNav({
 }) {
   const contribution = useSidebarContribution();
   const visible = contribution?.visible ?? true;
+  // A server's chats open their workspaces to terminals and previews.
+  const remote = useRemoteProject(projectId);
   const { collection, root } = useSidebarSessions({
     projectId,
     sessionId: contribution?.surface.sessionId,
@@ -1163,6 +1166,7 @@ function SessionsNav({
               defaultMenu={chatSessionMenu({
                 unread: unreadSessionIds.has(session.id),
                 archived: false,
+                remote,
               })}
               preview={{
                 title: sessionLabel(session),

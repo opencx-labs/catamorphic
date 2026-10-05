@@ -56,6 +56,8 @@ import { registerPublicationRoutes } from "./routes/publications.js";
 import { registerRunRoutes } from "./routes/runs.js";
 import { registerSessionArtifactRoutes } from "./routes/session-artifacts.js";
 import { registerSessionMailboxRoutes } from "./routes/session-mailboxes.js";
+import { registerSessionPreviewRoutes } from "./routes/session-previews.js";
+import { registerSessionTerminalRoutes } from "./routes/session-terminals.js";
 import { registerTriggerRoutes } from "./routes/triggers.js";
 import { registerWatcherRoutes } from "./routes/watchers.js";
 import { registerWebhookRoutes } from "./routes/webhooks.js";
@@ -309,6 +311,8 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerAgentRoutes(app, ctx);
   registerClientRunnerRoutes(app, ctx);
   registerSessionMailboxRoutes(app, ctx);
+  registerSessionTerminalRoutes(app, ctx);
+  registerSessionPreviewRoutes(app, ctx);
   registerNotificationRoutes(app, ctx);
   registerWatcherRoutes(app, ctx);
   registerMembershipRoutes(app, ctx);

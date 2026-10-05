@@ -88,6 +88,7 @@ describe("PGlite migrations", () => {
       "049_member_secret_values.sql",
       "050_executor_keys.sql",
       "051_workspace_setup_and_volumes.sql",
+      "052_session_terminals.sql",
       "053_directory_events.sql",
     ]);
 
@@ -114,7 +115,7 @@ describe("PGlite migrations", () => {
       WHERE table_schema = ${DEFAULT_SCHEMA}
         AND table_type = 'BASE TABLE'
     `.execute(db);
-    expect(tables.rows[0]?.count).toBe(96);
+    expect(tables.rows[0]?.count).toBe(97);
   });
 
   it("supports the runtime primitives core relies on", {

@@ -498,6 +498,22 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-06: Work beside a server chat
+
+A chat that runs on the project's server now offers Open terminal and Open
+preview in its menu (dock bubble and sidebar row) and in the palette (ADR
+0208). The terminal is an ordinary terminal tab named "Terminal · <chat>":
+its session in the main process is a remote backend beside the local PTYs,
+so the emulator, keys, scrollback and Cmd+Shift+T behave as they do for a
+local shell. Closing the tab closes the shell. When the shell itself exits
+the tab closes; when the workspace went away the tab stays and says so.
+Open preview asks for a port (the chat's last one filled in) and opens a
+browser tab on that preview's own loopback origin, so a dev server's
+`/assets/...` URLs and its cookies work as on the person's own machine; the
+port stays the same across restarts, so a restored tab still opens. The
+server's own refusals (nothing listens, the workspace is not running) show
+as a plain page in the tab.
+
 ### 2026-10-04: Bookmarks read and write their file like every other config file
 
 `bookmarks.json` was the one config file the app kept in memory and wrote

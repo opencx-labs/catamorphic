@@ -952,6 +952,12 @@ export interface CatamorphicDesktopApi {
     credentialEpoch: string;
   } | null>;
   remoteStatus: (projectId: string) => Promise<RemoteProjectStatus | null>;
+  /** A remote chat's preview on its own loopback address (ADR 0208). */
+  remotePreviewOpen: (input: {
+    projectId: string;
+    sessionId: string;
+    port: number;
+  }) => Promise<{ url: string }>;
   remoteMembers: (projectId: string) => Promise<{
     roles: RemoteProjectRole[];
     members: RemoteProjectMember[];
@@ -1391,6 +1397,8 @@ export interface CatamorphicDesktopApi {
     projectId?: string;
     cols?: number;
     rows?: number;
+    /** A shell in this remote chat's workspace (ADR 0208). */
+    remoteChat?: { sessionId: string };
   }) => Promise<{ sessionId: string; cwd: string }>;
   terminalWrite: (sessionId: string, data: string) => Promise<void>;
   terminalResize: (
@@ -1416,7 +1424,12 @@ export interface CatamorphicDesktopApi {
     listener: (payload: { sessionId: string; data: string }) => void,
   ) => () => void;
   onTerminalExit: (
-    listener: (payload: { sessionId: string; exitCode: number }) => void,
+    listener: (payload: {
+      sessionId: string;
+      exitCode: number;
+      /** Why it ended, when its shell did not exit: shown, not closed. */
+      message?: string;
+    }) => void,
   ) => () => void;
 
   onBridgeRequest: (

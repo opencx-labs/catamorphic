@@ -145,6 +145,15 @@ same and send now.
 Never ask for passwords, tokens or API keys in chat, and never copy a
 sign-in from one machine to another.
 
+## Working beside a remote chat
+
+The person can open a terminal in a server chat's workspace (the chat's menu,
+or "Open terminal in this chat's workspace" in the command palette) and see a
+server running there in a browser tab ("Open preview", by its port). Previews
+reload by hand: live reload does not reach them. A terminal ends when the
+workspace is given back after the chat idles; opening another starts the
+workspace again, and a preview needs a running workspace.
+
 ## Example: include apps/api/.env.local in my remote environment
 
 1. Check that \`apps/api/.env.local\` exists in the project folder and that

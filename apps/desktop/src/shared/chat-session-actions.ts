@@ -3,7 +3,11 @@ export type ChatSessionAction =
   | "mark-read"
   | "mark-unread"
   | "archive"
-  | "unarchive";
+  | "unarchive"
+  /** A terminal in a remote chat's workspace (ADR 0208). */
+  | "open-terminal"
+  /** A server in a remote chat's workspace, in a browser tab (ADR 0208). */
+  | "open-preview";
 
 export interface ChatSessionMenuEntry {
   label: string;

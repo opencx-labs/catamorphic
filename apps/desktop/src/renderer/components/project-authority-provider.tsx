@@ -24,6 +24,20 @@ const RemoteAuthority = createContext<{
   externalUserId: string | undefined;
 } | null>(null);
 export const useRemoteAuthority = () => useContext(RemoteAuthority);
+
+/**
+ * Whether the project lives on a server, from outside its authority
+ * provider: the same query the provider reads.
+ */
+export function useRemoteProject(projectId: string | undefined): boolean {
+  const authority = useQuery({
+    queryKey: ["desktop", "project-authority", projectId],
+    queryFn: () => desktopApi.remoteAuthority(projectId ?? ""),
+    enabled: Boolean(projectId),
+    staleTime: 0,
+  });
+  return Boolean(authority.data);
+}
 const authorityCaches = new Map<string, QueryClient>();
 const authorityUsers = new Map<QueryClient, number>();
 

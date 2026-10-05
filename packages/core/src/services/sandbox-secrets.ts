@@ -16,8 +16,11 @@ import { type SandboxSecrets, secretFingerprint } from "./secrets-service.js";
  * have it, and when the workspace is given back.
  */
 
+/** The secrets file, relative to the session directory. */
+export const SECRETS_IN_SESSION_DIRECTORY = "env/secrets.sh";
+
 /** The secrets file, relative to the sandbox's workspace root. */
-export const SANDBOX_SECRETS_PATH = `${SESSION_DIRECTORY}/env/secrets.sh`;
+export const SANDBOX_SECRETS_PATH = `${SESSION_DIRECTORY}/${SECRETS_IN_SESSION_DIRECTORY}`;
 
 /** The same file seen from the project folder, where commands start. */
 const FROM_PROJECT = `../${SANDBOX_SECRETS_PATH}`;

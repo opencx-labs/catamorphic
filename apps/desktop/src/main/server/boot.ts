@@ -52,9 +52,11 @@ import { desktopPersonalEnvironment } from "../personal-environment-host.js";
 import type { PersonalEnvironmentSync } from "../personal-environment-sync.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
-import { forwardRemoteApi } from "../remote-api.js";
+import { forwardRemoteApi, remoteTerminalRequest } from "../remote-api.js";
 import { RemoteClientRunners } from "../remote-client-runner.js";
 import { RemoteSessionMirror } from "../remote-mirror.js";
+import { forwardPreview, RemotePreviewOrigins } from "../remote-previews.js";
+import type { RemoteTerminalRequest } from "../remote-terminal.js";
 import { shutdownDesktopServices } from "../shutdown.js";
 import { userSkillFiles, userSkillInfos } from "../user-skills.js";
 import {
@@ -140,6 +142,20 @@ export interface EmbeddedServer {
     projectId: string,
     sessionId: string,
   ) => Promise<{ ok: true; serverUrl: string; remoteProjectId: string }>;
+  /**
+   * Requests to a remote chat's terminals on its project's server, as the
+   * member (ADR 0208); undefined when the project has no server.
+   */
+  remoteTerminalRequest: (input: {
+    projectId: string;
+    sessionId: string;
+  }) => RemoteTerminalRequest | undefined;
+  /** A remote chat's preview on its own loopback origin (ADR 0208). */
+  openRemotePreview: (input: {
+    projectId: string;
+    sessionId: string;
+    port: number;
+  }) => Promise<string>;
   shutdown: () => Promise<void>;
 }
 
@@ -1056,6 +1072,80 @@ export async function startEmbeddedServer(
           .send({ error: "Project has no remote authority" });
     },
   });
+  // A remote chat's previews through the same proxy (ADR 0208): any
+  // method, the body as sent, every response header and cookie, and the
+  // server's redirects kept below the local address.
+  await app.register(async (previews) => {
+    previews.removeAllContentTypeParsers();
+    previews.addContentTypeParser(
+      "*",
+      { parseAs: "buffer", bodyLimit: 16 * 1024 * 1024 },
+      (_request, body, done) => done(null, body),
+    );
+    previews.route<{
+      Params: {
+        projectId: string;
+        sessionId: string;
+        port: string;
+        "*": string;
+      };
+    }>({
+      method: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      url: "/desktop/projects/:projectId/remote-api/api/projects/:pathProjectId/agent/sessions/:sessionId/previews/:port/*",
+      handler: async (request, reply) => {
+        const { projectId, sessionId } = request.params;
+        const port = Number(request.params.port);
+        if (!Number.isInteger(port) || port < 1 || port > 65535)
+          return reply.status(400).send({ error: "Invalid preview port" });
+        const query = request.url.includes("?")
+          ? request.url.slice(request.url.indexOf("?"))
+          : "";
+        const pairs: Array<[string, string]> = [];
+        const raw = request.raw.rawHeaders;
+        for (let index = 0; index + 1 < raw.length; index += 2) {
+          const name = raw[index];
+          const value = raw[index + 1];
+          if (name !== undefined && value !== undefined)
+            pairs.push([name, value]);
+        }
+        const localPrefix = `/desktop/projects/${encodeURIComponent(projectId)}/remote-api/api/projects/${encodeURIComponent(projectId)}/agent/sessions/${sessionId}/previews/${port}`;
+        const answer = await forwardPreview({
+          profiles: profileConfig,
+          address: { projectId, sessionId, port },
+          path: `/${request.params["*"]}${query}`,
+          method: request.method,
+          headers: pairs,
+          ...(Buffer.isBuffer(request.body) ? { body: request.body } : {}),
+          localPrefix,
+        }).catch((error: unknown) => ({
+          status: 502,
+          headers: [["content-type", "application/json"]] satisfies Array<
+            [string, string]
+          >,
+          body: Buffer.from(
+            JSON.stringify({
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "The project server is unavailable",
+            }),
+          ),
+        }));
+        if (!answer)
+          return reply
+            .status(404)
+            .send({ error: "Project has no remote authority" });
+        reply.status(answer.status);
+        const cookies = answer.headers
+          .filter(([name]) => name === "set-cookie")
+          .map(([, value]) => value);
+        for (const [name, value] of answer.headers)
+          if (name !== "set-cookie") reply.header(name, value);
+        if (cookies.length > 0) reply.header("set-cookie", cookies);
+        return reply.send(answer.body);
+      },
+    });
+  });
   app.addHook("onSend", (request, reply, payload, done) => {
     if (
       request.method === "GET" &&
@@ -1120,6 +1210,17 @@ export async function startEmbeddedServer(
   const url = `http://127.0.0.1:${address.port}`;
   apiBaseUrl = url;
   console.log(`[desktop] API ready on ${url}/api`);
+  // Remote chats' previews, each on its own loopback origin; restored tabs
+  // find theirs again (ADR 0208).
+  const remotePreviews = new RemotePreviewOrigins({
+    file: path.join(paths.root, "remote-previews.json"),
+    profiles: profileConfig,
+  });
+  void remotePreviews
+    .restore()
+    .catch((error) =>
+      console.warn("[desktop] Previews could not listen again", error),
+    );
 
   let shutdownDone: Promise<void> | undefined;
 
@@ -1271,6 +1372,7 @@ export async function startEmbeddedServer(
             dispose: () => eventDispatcher.stop(),
           },
           { name: "workflow execution", dispose: suspendExecution },
+          { name: "previews", dispose: () => remotePreviews.close() },
           { name: "HTTP server", dispose: () => app.close() },
           { name: "framework services", dispose: () => catamorphic.close() },
           // The host owns Kysely. Always attempt its WAL flush last and report
@@ -1304,6 +1406,9 @@ export async function startEmbeddedServer(
       sessionMirror.eligibility(projectId, sessionId),
     moveSessionToServer: (projectId, sessionId) =>
       sessionMirror.moveToServer(projectId, sessionId),
+    remoteTerminalRequest: ({ projectId, sessionId }) =>
+      remoteTerminalRequest({ profiles: profileConfig, projectId, sessionId }),
+    openRemotePreview: (address) => remotePreviews.open(address),
     shutdown,
   };
 }

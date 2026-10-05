@@ -2,10 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { type IPty, spawn as spawnPty } from "@lydell/node-pty";
+import { spawn as spawnPty } from "@lydell/node-pty";
 import { BrowserWindow, ipcMain, type WebContents } from "electron";
 import { scanOsc133 } from "../shared/terminal-text.js";
 import type { ServerState } from "./ipc.js";
+import { openRemoteTerminal, type TerminalBackend } from "./remote-terminal.js";
 import { shellBinShimDir, shellIntegrationEnv } from "./shell-integration.js";
 import { readGhosttyAppearance } from "./terminal-appearance.js";
 import { TerminalLifecycle } from "./terminal-lifecycle.js";
@@ -28,7 +29,8 @@ import { TerminalLifecycle } from "./terminal-lifecycle.js";
 const BUFFER_CAP = 200_000;
 
 interface TerminalSession {
-  pty: IPty;
+  /** A local PTY, or a shell in a remote chat's workspace (ADR 0208). */
+  pty: TerminalBackend;
   releaseSender?: () => void;
   /** User sessions stream to their window; agent sessions broadcast. */
   sender: WebContents | null;
@@ -234,6 +236,32 @@ export function registerTerminalSupport(
     }
   };
 
+  /**
+   * A terminal in a remote chat's workspace (ADR 0208): the shell runs
+   * there, so it has no local folder or shell integration.
+   */
+  const openRemoteSession = async (input: {
+    projectId: string;
+    chatSessionId: string;
+    cols?: number;
+    rows?: number;
+    sender: WebContents;
+  }): Promise<TerminalBackend> => {
+    const request = state.current?.remoteTerminalRequest({
+      projectId: input.projectId,
+      sessionId: input.chatSessionId,
+    });
+    if (!request)
+      throw new Error("This project has no server to open a terminal on");
+    if (lifecycle.disposed)
+      throw new Error("Terminal support is shutting down");
+    return openRemoteTerminal({
+      request,
+      cols: input.cols ?? 80,
+      rows: input.rows ?? 24,
+    });
+  };
+
   const spawnSession = async (input: {
     projectId?: string;
     workingDirectory?: string;
@@ -241,7 +269,26 @@ export function registerTerminalSupport(
     rows?: number;
     sender: WebContents | null;
     agent?: { projectId: string; sessionId: string };
+    /** The remote chat whose workspace the shell runs in. */
+    remoteChat?: { sessionId: string };
   }): Promise<{ sessionId: string; cwd: string }> => {
+    if (input.remoteChat) {
+      if (!input.projectId || !input.sender)
+        throw new Error("A remote terminal belongs to a project's window");
+      const backend = await openRemoteSession({
+        projectId: input.projectId,
+        chatSessionId: input.remoteChat.sessionId,
+        cols: input.cols,
+        rows: input.rows,
+        sender: input.sender,
+      });
+      // No project: this desktop's terminal triggers are about its own
+      // shells, not ones on the server.
+      return {
+        sessionId: track({ pty: backend, shellName: "", sender: input.sender }),
+        cwd: "",
+      };
+    }
     const rootPath = input.projectId
       ? await state.current?.projectRoots.get(input.projectId)
       : null;
@@ -289,6 +336,27 @@ export function registerTerminalSupport(
         },
       },
     );
+    return {
+      sessionId: track({
+        pty,
+        shellName: path.basename(shell),
+        projectId: input.projectId ?? input.agent?.projectId,
+        agent: input.agent,
+        sender: input.sender,
+      }),
+      cwd,
+    };
+  };
+
+  /** Follow a started terminal: buffer, markers, exit, its window. */
+  const track = (input: {
+    pty: TerminalBackend;
+    shellName: string;
+    projectId?: string;
+    agent?: { projectId: string; sessionId: string };
+    sender: WebContents | null;
+  }): string => {
+    const { pty } = input;
     lifecycle.track(pty);
     const sessionId = crypto.randomUUID();
     const session: TerminalSession = {
@@ -298,9 +366,9 @@ export function registerTerminalSupport(
       chunksLength: 0,
       shed: 0,
       running: true,
-      shellName: path.basename(shell),
+      shellName: input.shellName,
       busy: false,
-      projectId: input.projectId ?? input.agent?.projectId,
+      projectId: input.projectId,
       agent: input.agent,
       integration: {
         seen: false,
@@ -337,12 +405,16 @@ export function registerTerminalSupport(
       });
       emit(session, "catamorphic:terminal-data", { sessionId, data });
     });
-    pty.onExit(({ exitCode }) => {
+    pty.onExit(({ exitCode, message }) => {
       session.running = false;
       session.exitCode = exitCode;
       session.releaseSender?.();
       if (!sessions.has(sessionId)) return;
-      emit(session, "catamorphic:terminal-exit", { sessionId, exitCode });
+      emit(session, "catamorphic:terminal-exit", {
+        sessionId,
+        exitCode,
+        ...(message ? { message } : {}),
+      });
       // Agent sessions stay readable (buffer) until explicitly killed or
       // the app quits; user sessions are done once their tab reacts —
       // their scrollback moves to the morgue for Cmd+Shift+T.
@@ -361,7 +433,7 @@ export function registerTerminalSupport(
         session.releaseSender = undefined;
       };
     }
-    return { sessionId, cwd };
+    return sessionId;
   };
 
   ipcMain.handle("catamorphic:terminal-ghostty-appearance", () =>
@@ -370,8 +442,24 @@ export function registerTerminalSupport(
 
   ipcMain.handle(
     "catamorphic:terminal-create",
-    (event, input: { projectId?: string; cols?: number; rows?: number }) =>
-      spawnSession({ ...input, sender: event.sender }),
+    (
+      event,
+      input: {
+        projectId?: string;
+        cols?: number;
+        rows?: number;
+        remoteChat?: { sessionId: string };
+      },
+    ) =>
+      spawnSession({
+        ...(input.projectId ? { projectId: input.projectId } : {}),
+        ...(input.cols ? { cols: input.cols } : {}),
+        ...(input.rows ? { rows: input.rows } : {}),
+        ...(typeof input.remoteChat?.sessionId === "string"
+          ? { remoteChat: { sessionId: input.remoteChat.sessionId } }
+          : {}),
+        sender: event.sender,
+      }),
   );
 
   ipcMain.handle(

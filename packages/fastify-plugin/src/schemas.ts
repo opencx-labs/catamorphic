@@ -1954,6 +1954,66 @@ export const WatcherIdParamsSchema = AgentSessionIdParamsSchema.extend({
 
 export const OkSchema = z.object({ ok: z.literal(true) });
 
+// --- Terminals in a chat's workspace (ADR 0208) ---
+
+const TerminalSizeSchema = z.number().int().min(1).max(1000);
+
+export const SessionTerminalParamsSchema = AgentSessionIdParamsSchema.extend({
+  /** The terminal's process in the workspace's sandbox. */
+  terminalId: z.string().regex(/^proc-[a-z0-9]{8,32}$/),
+});
+
+export const OpenSessionTerminalSchema = z.object({
+  cols: TerminalSizeSchema.default(80),
+  rows: TerminalSizeSchema.default(24),
+});
+
+export const SessionTerminalSchema = z.object({
+  terminalId: z.string(),
+  /**
+   * The shell runs on a pseudo-terminal. Without one it is an interactive
+   * shell on a pipe: line by line, and resizing does nothing.
+   */
+  pty: z.boolean(),
+});
+
+export const SessionTerminalOutputQuerySchema = z.object({
+  cursor: z.coerce.number().int().min(0).default(0),
+  /** Answer as soon as there is output, at the latest after this long. */
+  waitMs: z.coerce.number().int().min(0).max(20_000).default(0),
+});
+
+export const SessionTerminalOutputSchema = z.object({
+  /** UTF-8 text from `cursor` to `nextCursor`. */
+  data: z.string(),
+  cursor: z.number().int().nonnegative(),
+  nextCursor: z.number().int().nonnegative(),
+  /** More output waits past `nextCursor`; read again at once. */
+  more: z.boolean(),
+  /** The shell ended and all its output has been read. */
+  exited: z.boolean(),
+  exitCode: z.number().int().nullable(),
+});
+
+export const SessionTerminalInputSchema = z.object({
+  /** Keys as the terminal sends them, control characters included. */
+  data: z
+    .string()
+    .min(1)
+    .max(1024 * 1024),
+});
+
+export const ResizeSessionTerminalSchema = z.object({
+  cols: TerminalSizeSchema,
+  rows: TerminalSizeSchema,
+});
+
+/** Why a chat's workspace is not open to a person right now (409). */
+export const SessionWorkspaceErrorSchema = z.object({
+  error: z.string(),
+  code: z.string(),
+});
+
 // --- Skills ---
 export const SkillSchema = z.object({
   name: z.string(),
