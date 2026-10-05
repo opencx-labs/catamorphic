@@ -7509,14 +7509,19 @@
                       },
                       "required": ["path", "content"]
                     }
+                  },
+                  "setup": {
+                    "description": "The caller's own setup command, run after the Environment's in each new workspace of their own chats (ADR 0207); absent or blank for none",
+                    "type": "string",
+                    "maxLength": 16384
                   }
                 },
                 "additionalProperties": false,
-                "description": "The caller's personal files for this project; replaces what the server holds"
+                "description": "The caller's personal files and setup for this project; replaces what the server holds"
               }
             }
           },
-          "description": "The caller's personal files for this project; replaces what the server holds"
+          "description": "The caller's personal files and setup for this project; replaces what the server holds"
         },
         "parameters": [
           {
@@ -7570,9 +7575,24 @@
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "setup": {
+                      "nullable": true,
+                      "description": "The caller's own setup command, when they sent one",
+                      "type": "object",
+                      "properties": {
+                        "command": {
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["command", "updatedAt"],
+                      "additionalProperties": false
                     }
                   },
-                  "required": ["allowed", "files"],
+                  "required": ["allowed", "files", "setup"],
                   "additionalProperties": false
                 }
               }
@@ -7711,9 +7731,24 @@
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "setup": {
+                      "nullable": true,
+                      "description": "The caller's own setup command, when they sent one",
+                      "type": "object",
+                      "properties": {
+                        "command": {
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["command", "updatedAt"],
+                      "additionalProperties": false
                     }
                   },
-                  "required": ["allowed", "files"],
+                  "required": ["allowed", "files", "setup"],
                   "additionalProperties": false
                 }
               }
@@ -28609,6 +28644,38 @@
                                         }
                                       },
                                       "required": ["harness", "member"],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "volumes": {
+                                    "readOnly": true,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "key": {
+                                          "type": "string",
+                                          "pattern": "^[a-z0-9][a-z0-9-]{0,39}-[0-9a-f]{24}$"
+                                        },
+                                        "path": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 1024
+                                        },
+                                        "exclusive": {
+                                          "type": "boolean"
+                                        },
+                                        "sizeMb": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "exclusiveMinimum": true,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "temporary": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": ["key", "path"],
                                       "additionalProperties": false
                                     }
                                   }

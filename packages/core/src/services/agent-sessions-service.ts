@@ -141,6 +141,7 @@ import {
   readProgramFile,
   withProgram,
 } from "./program-reader.js";
+import { DEFAULT_SETUP_TIMEOUT_MINUTES } from "./project-environments-service.js";
 import { requireTenantProject } from "./projects-service.js";
 import {
   ReplicaClaimBusyError,
@@ -228,7 +229,13 @@ import {
   syncRemoteProject,
 } from "./store-sync.js";
 import { UserNotificationsService } from "./user-notifications-service.js";
+import { temporaryVolumes, temporaryVolumesNote } from "./volume-holds.js";
 import { EnvironmentCapacityError } from "./worker-capacity.js";
+import {
+  runWorkspaceSetup,
+  sessionDirectory,
+  workspaceSetupFailedNote,
+} from "./workspace-setup.js";
 
 export type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
 
@@ -252,6 +259,10 @@ interface AgentExecutionRuntime {
   personalCredentials?: boolean;
   /** Where the sandbox sees the owner's sign-in for the agent's harness. */
   signInHome?: string;
+  /** The Environment's setup for new workspaces (ADR 0207). */
+  setup?: { command: string; timeoutMinutes: number };
+  /** The Allocation the workspace belongs to. */
+  allocation?: ExecutionAllocation;
 }
 
 export interface SessionOperationOrigin {
@@ -4180,6 +4191,7 @@ export class AgentSessionsService {
           move: workspaceMove,
         }),
       );
+    const hadSandbox = session.sandbox_id !== null;
     const workspace = await this.ensureWorkspace(
       identity,
       projectId,
@@ -4251,6 +4263,30 @@ export class AgentSessionsService {
       });
       if (files.note) notes.push(files.note);
       if (files.delivered) ownerOnly = true;
+      // A new workspace that could not have an exclusive volume of its own
+      // (ADR 0207) says so once.
+      if (!hadSandbox && runtime.allocation) {
+        const volumes = temporaryVolumesNote({
+          volumes: await temporaryVolumes({
+            db: this.db,
+            allocation: runtime.allocation,
+          }),
+          projectChat: isProjectPrincipal(session.external_user_id),
+        });
+        if (volumes) notes.push(volumes);
+      }
+      const setup = await this.prepareWorkspaceSetup({
+        identity,
+        projectId,
+        session,
+        turn,
+        provider: runtime.provider,
+        sandboxProviderId: workspace.sandboxProviderId,
+        environment: runtime.setup,
+        personalAllowed: runtime.personalCredentials === true && ownerAuthored,
+        signal: input.signal,
+      });
+      if (setup) notes.push(setup);
       if (session.allocation_id)
         this.startGrantRenewal({
           identity,
@@ -5482,6 +5518,124 @@ export class AgentSessionsService {
     return notes.length > 0
       ? { note: notes.join("\n\n"), delivered }
       : { delivered };
+  }
+
+  /**
+   * Set up a sandbox turn's workspace (ADR 0207), after its secrets and
+   * personal files are in place: the Environment's `setup`, then the
+   * owner's own where their personal files may go, run in the project
+   * folder when this workspace has not run them yet. The chat shows the
+   * setup while it runs. Returns a note for the agent when it failed; it
+   * runs again before the next turn.
+   */
+  private async prepareWorkspaceSetup(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    turn: Turn;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+    environment?: { command: string; timeoutMinutes: number };
+    /** The placement may hold the owner's credentials and the owner wrote the turn. */
+    personalAllowed: boolean;
+    signal: AbortSignal;
+  }): Promise<string | undefined> {
+    const { session, provider } = input;
+    const owner = session.external_user_id;
+    const personalAllowed =
+      input.personalAllowed &&
+      Boolean(this.personalEnvironments) &&
+      !isProjectPrincipal(owner);
+    const personal = personalAllowed
+      ? await this.personalEnvironments?.setup({
+          tenantId: input.identity.tenantId,
+          projectId: input.projectId,
+          owner,
+        })
+      : undefined;
+    if (!input.environment && !personal) return undefined;
+    const timeoutMinutes =
+      input.environment?.timeoutMinutes ?? DEFAULT_SETUP_TIMEOUT_MINUTES;
+    let shown = false;
+    const outcome = await withSpan(
+      {
+        tracer,
+        name: "agent.session.workspace.setup",
+        attributes: {
+          "catamorphic.project.id": input.projectId,
+          "catamorphic.agent.session.id": session.id,
+          "catamorphic.agent.turn.id": input.turn.id,
+        },
+      },
+      () =>
+        runWorkspaceSetup({
+          provider,
+          sandboxId: input.sandboxProviderId,
+          projectDir: this.projectDir(provider),
+          ...(input.environment
+            ? { environment: input.environment.command }
+            : {}),
+          ...(personal ? { personal } : {}),
+          personalAllowed,
+          timeoutMinutes,
+          signal: input.signal,
+          onRun: async () => {
+            if (shown) return;
+            shown = true;
+            await this.showPreparing({
+              sessionId: session.id,
+              turnId: input.turn.id,
+              activity: "Setting up the workspace",
+            });
+          },
+        }),
+    );
+    if (shown)
+      await this.showPreparing({
+        sessionId: session.id,
+        turnId: input.turn.id,
+        activity: "Preparing agent",
+      });
+    if (outcome.status !== "failed") return undefined;
+    return workspaceSetupFailedNote({
+      outcome,
+      timeoutMinutes,
+      logPath: `${sessionDirectory(provider)}/setup.log`,
+    });
+  }
+
+  /** What a preparing turn shows its chat, while it is still preparing. */
+  private async showPreparing(input: {
+    sessionId: string;
+    turnId: string;
+    activity: string;
+  }): Promise<void> {
+    await this.db.transaction().execute(async (trx) => {
+      await this.log.lock(trx, input.sessionId);
+      const row = await trx
+        .selectFrom("agent_turns")
+        .selectAll()
+        .where("id", "=", input.turnId)
+        .where("session_id", "=", input.sessionId)
+        .where("status", "=", "preparing")
+        .executeTakeFirst();
+      if (!row) return;
+      const now = new Date().toISOString();
+      await this.log.append(trx, {
+        sessionId: input.sessionId,
+        events: [
+          {
+            type: "turn.changed",
+            turn: {
+              ...turnFromRow(row),
+              activity: input.activity,
+              activityAt: now,
+              updatedAt: now,
+            },
+          },
+        ],
+      });
+    });
   }
 
   /**
@@ -8663,6 +8817,7 @@ export class AgentSessionsService {
           })
         : selectedProvider &&
           withAllocationSandboxPolicy({
+            db: this.db,
             allocation,
             provider: selectedProvider,
           });
@@ -8685,7 +8840,9 @@ export class AgentSessionsService {
       provider,
       bindingId: allocation.bindingId,
       environmentName: allocation.environmentName,
+      allocation,
       ...(commandTimeoutSeconds ? { commandTimeoutSeconds } : {}),
+      ...(admitted.setup ? { setup: admitted.setup } : {}),
       personalCredentials: admitted.personalCredentials,
       ...(signIn
         ? {

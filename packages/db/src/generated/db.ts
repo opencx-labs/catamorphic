@@ -664,6 +664,14 @@ export interface PersonalEnvironmentEntries {
   updated_at: Generated<Timestamp>;
 }
 
+export interface PersonalEnvironmentSetups {
+  command: string;
+  external_user_id: string;
+  project_id: string;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface ProjectEventDeliveries {
   activation_id: string;
   attempt_count: Generated<number>;
@@ -1022,6 +1030,13 @@ export interface UserNotificationEvents {
   session_id: string | null;
   tenant_id: string;
   title: string;
+}
+
+export interface VolumeHolds {
+  allocation_id: string;
+  created_at: Generated<Timestamp>;
+  node: string;
+  volume_key: string;
 }
 
 export interface WatcherRuns {
@@ -1428,6 +1443,7 @@ export interface DB {
   model_usage: ModelUsage;
   notification_deliveries: NotificationDeliveries;
   personal_environment_entries: PersonalEnvironmentEntries;
+  personal_environment_setups: PersonalEnvironmentSetups;
   project_event_deliveries: ProjectEventDeliveries;
   project_event_monitors: ProjectEventMonitors;
   project_events: ProjectEvents;
@@ -1456,6 +1472,7 @@ export interface DB {
   trigger_definition_scans: TriggerDefinitionScans;
   trigger_definitions: TriggerDefinitions;
   user_notification_events: UserNotificationEvents;
+  volume_holds: VolumeHolds;
   watcher_runs: WatcherRuns;
   watchers: Watchers;
   webhook_endpoints: WebhookEndpoints;

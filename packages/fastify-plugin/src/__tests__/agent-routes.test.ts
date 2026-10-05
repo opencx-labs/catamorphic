@@ -382,7 +382,11 @@ describe("keyed chats a caller may not see (ADR 0173)", () => {
 
 describe("personal environments (ADR 0199)", () => {
   it("refuses sign-ins: they stay on the machine they were made on", async () => {
-    const replace = vi.fn(async () => ({ allowed: true, files: [] }));
+    const replace = vi.fn(async () => ({
+      allowed: true,
+      files: [],
+      setup: null,
+    }));
     const server = createTestApp({
       core: { personalEnvironments: { replace } } as never,
     });
@@ -404,8 +408,39 @@ describe("personal environments (ADR 0199)", () => {
     });
     expect([kept.statusCode, kept.json()]).toEqual([
       200,
-      { allowed: true, files: [] },
+      { allowed: true, files: [], setup: null },
     ]);
+    await server.close();
+  });
+
+  it("takes the member's own setup command with their files (ADR 0207)", async () => {
+    const replace = vi.fn(async () => ({
+      allowed: true,
+      files: [],
+      setup: { command: "mise install", updatedAt: "2026-10-06T00:00:00.000Z" },
+    }));
+    const server = createTestApp({
+      core: { personalEnvironments: { replace } } as never,
+    });
+    const url = `/api/projects/${PROJECT_ID}/personal-environment`;
+    const sent = await server.inject({
+      method: "PUT",
+      url,
+      payload: { files: [], setup: "mise install" },
+    });
+    expect(sent.statusCode).toBe(200);
+    expect(sent.json().setup).toMatchObject({ command: "mise install" });
+    expect(replace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: { files: [], setup: "mise install" },
+      }),
+    );
+    const tooLong = await server.inject({
+      method: "PUT",
+      url,
+      payload: { files: [], setup: "x".repeat(16_385) },
+    });
+    expect(tooLong.statusCode).toBe(400);
     await server.close();
   });
 });

@@ -6,6 +6,7 @@ import type {
   SandboxImage,
   WorkloadKind,
 } from "@catamorphic/sandbox";
+import { VOLUME_KEY_PATTERN, VOLUME_NAME_PATTERN } from "@catamorphic/sandbox";
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
@@ -100,6 +101,17 @@ const AllocationPolicySchema = z.object({
           }),
         ])
         .optional(),
+      volumes: z
+        .array(
+          z.object({
+            name: z.string().regex(VOLUME_NAME_PATTERN),
+            key: z.string().regex(VOLUME_KEY_PATTERN),
+            path: z.string(),
+            exclusive: z.boolean().optional(),
+            sizeMb: z.number().int().positive().optional(),
+          }),
+        )
+        .optional(),
     })
     .optional(),
   approvals: z.object({ waitMinutes: z.number() }).optional(),
@@ -110,6 +122,20 @@ export interface EnvironmentSandbox {
   image?: SandboxImage;
   containers?: boolean;
   egress?: SandboxEgress;
+  /** The Environment's volumes, keyed for the work's owner (ADR 0207). */
+  volumes?: readonly EnvironmentSandboxVolume[];
+}
+
+/**
+ * One volume an Allocation's sandbox mounts (ADR 0207): the Environment's
+ * name for it, and the machine-unique key of the owner's copy.
+ */
+export interface EnvironmentSandboxVolume {
+  name: string;
+  key: string;
+  path: string;
+  exclusive?: boolean;
+  sizeMb?: number;
 }
 
 export interface EnvironmentAllocationPolicy {

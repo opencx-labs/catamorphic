@@ -265,6 +265,9 @@ export const DEFAULT_ENVIRONMENT = "default";
 /** Minutes an idle chat keeps its workspace unless its Environment says otherwise. */
 export const DEFAULT_IDLE_RELEASE_MINUTES = 30;
 
+/** Minutes a workspace's setup may run unless its Environment says otherwise (ADR 0207). */
+export const DEFAULT_SETUP_TIMEOUT_MINUTES = 30;
+
 /** The image an Environment declares, before a Dockerfile is read. */
 export type EnvironmentImage =
   | { kind: "oci"; reference: string }

@@ -335,6 +335,8 @@ export {
 export {
   type AllocationReleaseReason,
   type EnvironmentAllocationPolicy,
+  type EnvironmentSandbox,
+  type EnvironmentSandboxVolume,
   type ExecutionAllocation,
   ExecutionAllocationConflictError,
   ExecutionAllocationsService,
@@ -418,6 +420,7 @@ export {
 export {
   PERSONAL_FILE_MAX_BYTES,
   PERSONAL_FILES_MAX,
+  PERSONAL_SETUP_MAX_LENGTH,
   type PersonalEnvironmentInput,
   PersonalEnvironmentInvalidError,
   PersonalEnvironmentService,
@@ -426,6 +429,7 @@ export {
   type PersonalFileStatus,
   personalFilePathProblem,
   personalFingerprint,
+  personalSetupProblem,
   validatePersonalEnvironment,
 } from "./services/personal-environment-service.js";
 export {
@@ -438,6 +442,7 @@ export {
 export {
   DEFAULT_ENVIRONMENT,
   DEFAULT_IDLE_RELEASE_MINUTES,
+  DEFAULT_SETUP_TIMEOUT_MINUTES,
   type ProjectEnvironmentDefinition,
   type ProjectEnvironmentEntry,
   type ProjectEnvironmentPolicy,
