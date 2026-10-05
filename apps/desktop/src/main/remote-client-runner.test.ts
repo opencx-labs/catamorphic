@@ -1,5 +1,10 @@
-import type { SandboxProvider } from "@catamorphic/sandbox";
+import { createPublicKey, type KeyObject } from "node:crypto";
 import {
+  generateExecutorKeyPair,
+  type SandboxProvider,
+} from "@catamorphic/sandbox";
+import {
+  type ClientRunnerKeys,
   type ClientRunnerTransport,
   ReceiptRefusedError,
   ResultRejectedError,
@@ -14,12 +19,14 @@ const started = vi.hoisted(
     [] as Array<{
       onError?: (error: unknown) => void;
       transport: ClientRunnerTransport;
+      keys: ClientRunnerKeys;
     }>,
 );
 vi.mock("@catamorphic/server-sdk", () => ({
   startClientRunner: (args: {
     onError?: (error: unknown) => void;
     transport: ClientRunnerTransport;
+    keys: ClientRunnerKeys;
   }) => {
     started.push(args);
     return { stop: async () => {} };
@@ -35,6 +42,9 @@ const link = {
   remoteProjectId: "remote-project",
 };
 
+/** The profile's runner key (ADR 0206). */
+const KEYS = generateExecutorKeyPair();
+
 function runners(linked: { current: boolean }) {
   const profiles = {
     forProject: () => ({
@@ -42,6 +52,7 @@ function runners(linked: { current: boolean }) {
         inspect: () => (linked.current ? { link } : null),
         accessToken: async () => "token",
       },
+      runnerKey: { keyPair: () => KEYS },
     }),
   } as unknown as ProfileConfigManager;
   const provider = {
@@ -53,14 +64,17 @@ function runners(linked: { current: boolean }) {
 
 describe("RemoteClientRunners", () => {
   const registrations: string[] = [];
+  const bodies: unknown[] = [];
   let refuse = false;
   beforeEach(() => {
     refuse = false;
     vi.useFakeTimers();
     started.length = 0;
     registrations.length = 0;
+    bodies.length = 0;
     vi.stubGlobal("fetch", async (request: Request) => {
       registrations.push(new URL(request.url).pathname);
+      bodies.push(await request.clone().json());
       if (refuse)
         return Response.json({ error: "Not a member" }, { status: 403 });
       return Response.json({
@@ -72,6 +86,24 @@ describe("RemoteClientRunners", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("registers the profile's public key and opens operations with its private key", async () => {
+    const machine = runners({ current: true });
+    await machine.connect({ projectId: "local", environment: "laptop" });
+    expect(bodies[0]).toMatchObject({
+      id: link.connectionId,
+      publicKey: KEYS.publicKey,
+    });
+    const keys = started[0]?.keys;
+    expect(keys?.executor).toBe(`client:${link.connectionId}`);
+    const [privateKey] = keys?.privateKeys() ?? [];
+    const publicHalf = (key: KeyObject | string | undefined) =>
+      key === undefined
+        ? undefined
+        : createPublicKey(key).export({ type: "spki", format: "der" });
+    expect(publicHalf(privateKey)).toEqual(publicHalf(KEYS.privateKey));
+    await machine.stop();
   });
 
   it("reconnects this machine after the connection drops, until stopped", async () => {

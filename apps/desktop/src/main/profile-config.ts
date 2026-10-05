@@ -13,6 +13,7 @@ import { type Keybindings, KeybindingsStore } from "./keybindings.js";
 import { PrefsStore } from "./prefs.js";
 import type { ProfilesStore } from "./profiles.js";
 import { RemoteProjectsStore } from "./remote-projects-store.js";
+import { RunnerKeyStore } from "./runner-key-store.js";
 import type { DataPaths } from "./server/paths.js";
 import {
   type SettingsFiles,
@@ -52,6 +53,8 @@ export interface ProfileStores {
   connections: ConnectionsStore;
   /** Remote projects: local folders synced from a hosting backend (ADR 0055). */
   remoteProjects: RemoteProjectsStore;
+  /** The key servers seal this machine's operations to (ADR 0206). */
+  runnerKey: RunnerKeyStore;
 }
 
 /**
@@ -140,6 +143,7 @@ export class ProfileConfigManager {
       remoteProjects: new RemoteProjectsStore(
         path.join(dir, "remote-projects.json"),
       ),
+      runnerKey: new RunnerKeyStore(path.join(dir, "runner-key.json")),
     };
     stores.workspace.ensureFile();
     stores.theme.watch((theme) => {
