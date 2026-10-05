@@ -125,6 +125,13 @@ describeIf("terminals and previews in a chat's workspace (ADR 0208)", () => {
   }, 120_000);
 
   afterAll(async () => {
+    // Every workspace goes, and whatever still runs in it.
+    const sandboxes = await db
+      .selectFrom("project_sandboxes")
+      .select("provider_id")
+      .execute();
+    for (const sandbox of sandboxes)
+      await provider.destroySandbox(sandbox.provider_id).catch(() => {});
     await sql.raw(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`).execute(db);
     await db.destroy();
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5 });
@@ -224,6 +231,90 @@ describeIf("terminals and previews in a chat's workspace (ADR 0208)", () => {
     await expect(
       terminals().read({ ...base, projectId, cursor, waitMs: 0 }),
     ).rejects.toBeInstanceOf(SessionTerminalNotFoundError);
+  }, 120_000);
+
+  it("ends with a workspace given back, and opening one admits the chat again", async () => {
+    const sessionId = await chat(alice);
+    const opened = await terminals().open({
+      identity: alice,
+      projectId,
+      sessionId,
+      cols: 80,
+      rows: 24,
+    });
+    const before = await db
+      .selectFrom("agent_sessions")
+      .select(["allocation_id", "sandbox_id"])
+      .where("id", "=", sessionId)
+      .executeTakeFirstOrThrow();
+    // Released while idle (ADR 0173).
+    await core.executionAllocations.release({
+      identity: alice,
+      allocationId: before.allocation_id ?? "",
+      reason: "idle",
+    });
+    await expect(
+      terminals().read({
+        identity: alice,
+        projectId,
+        sessionId,
+        terminalId: opened.terminalId,
+        cursor: 0,
+      }),
+    ).rejects.toThrow("This terminal ended with its chat's workspace.");
+    await expect(
+      previews().request({
+        identity: alice,
+        projectId,
+        sessionId,
+        port: 3000,
+        method: "GET",
+        path: "/",
+        headers: [],
+      }),
+    ).rejects.toMatchObject({ reason: "not_running" });
+
+    const again = await terminals().open({
+      identity: alice,
+      projectId,
+      sessionId,
+      cols: 80,
+      rows: 24,
+    });
+    const after = await db
+      .selectFrom("agent_sessions")
+      .select(["allocation_id", "sandbox_id"])
+      .where("id", "=", sessionId)
+      .executeTakeFirstOrThrow();
+    expect(after.allocation_id).not.toBe(before.allocation_id);
+    expect(after.sandbox_id).not.toBe(before.sandbox_id);
+    await terminals().write({
+      identity: alice,
+      projectId,
+      sessionId,
+      terminalId: again.terminalId,
+      data: "echo again-$((2+3))\n",
+    });
+    await readUntil({
+      identity: alice,
+      sessionId,
+      terminalId: again.terminalId,
+      cursor: 0,
+      match: /again-5/,
+    });
+    // The earlier workspace's terminal is forgotten with it.
+    const kept = await db
+      .selectFrom("session_terminals")
+      .select("process_id")
+      .where("session_id", "=", sessionId)
+      .execute();
+    expect(kept.map((row) => row.process_id)).toEqual([again.terminalId]);
+    await terminals().close({
+      identity: alice,
+      projectId,
+      sessionId,
+      terminalId: again.terminalId,
+    });
   }, 120_000);
 
   it("loads the Environment's secrets into the shell when the workspace has them", async () => {
