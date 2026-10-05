@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Identity } from "@catamorphic/core";
+import { generateExecutorKeyPair } from "@catamorphic/sandbox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { executionSettingsFromEnv } from "../execution-config.js";
 import {
@@ -200,9 +201,10 @@ describe("remote workers (ADR 0164)", () => {
       method: "POST",
       url: "/api/workers/enroll",
       headers: PROTOCOL,
-      payload: { code },
+      payload: { code, publicKey: generateExecutorKeyPair().publicKey },
     });
     expect(replay.statusCode).toBe(400);
+    expect(replay.json().error).toContain("invalid, used, or expired");
 
     const sessions = server.catamorphic.core.agentSessions;
     if (!sessions) throw new Error("Agent sessions are unavailable");
@@ -249,15 +251,15 @@ describe("remote workers (ADR 0164)", () => {
       ),
     );
     expect(afterRestart.content).toContain(path.join(workerDir, "sandboxes"));
-    // The worker holds its credential and sandboxes, nothing else.
+    // The worker holds its credential, its key and sandboxes, nothing else.
     expect(fs.readdirSync(workerDir).sort()).toEqual([
       "sandboxes",
       "sandboxes.json",
       "worker-credential",
+      "worker-key",
     ]);
-    expect(
-      fs.statSync(path.join(workerDir, "worker-credential")).mode & 0o777,
-    ).toBe(0o600);
+    for (const file of ["worker-credential", "worker-key"])
+      expect(fs.statSync(path.join(workerDir, file)).mode & 0o777).toBe(0o600);
   }, 60_000);
 
   it("runs background processes on the worker and ends them with the chat (ADR 0174)", async () => {
@@ -422,11 +424,12 @@ describe("placement by owner (ADR 0167)", () => {
       name: "team-box",
       access: { groups: ["eng@example.com"] },
     });
+    const keys = generateExecutorKeyPair();
     const enrolled = await server.app.inject({
       method: "POST",
       url: "/api/workers/enroll",
       headers: PROTOCOL,
-      payload: { code: enrollment.json().code },
+      payload: { code: enrollment.json().code, publicKey: keys.publicKey },
     });
     const connect = await server.app.inject({
       method: "POST",
@@ -443,6 +446,7 @@ describe("placement by owner (ADR 0167)", () => {
           workspaceRoot: "/workspace",
           capacity: { workspaces: 1 },
         },
+        publicKey: keys.publicKey,
       },
     });
     expect(connect.statusCode).toBe(403);

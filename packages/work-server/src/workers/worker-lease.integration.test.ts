@@ -5,10 +5,16 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import {
+  clientExecutor,
   EXECUTOR_RESTARTED_ERROR,
   type Identity,
+  openRemoteOperation,
   WorkerNodesService,
 } from "@catamorphic/core";
+import {
+  executorPublicKey,
+  generateExecutorKeyPair,
+} from "@catamorphic/sandbox";
 import { startClientRunner } from "@catamorphic/server-sdk";
 import { sql } from "kysely";
 import { expect, it } from "vitest";
@@ -281,24 +287,42 @@ it.skipIf(!process.env.DATABASE_URL)(
       };
       const count = (content: string) =>
         content.split("\n---\n").at(-1)?.trim();
-      /** Wait until the turn is inside its `sleep`, on the worker. */
+      /**
+       * Wait until the turn is inside its `sleep`, on the worker. Only the
+       * worker's key reads a queued command (ADR 0206).
+       */
       const sleeping = async (since = new Date(Date.now() - 1_000)) =>
         expect
           .poll(
-            async () =>
-              (
-                await db()
-                  .selectFrom("remote_operations")
-                  .select("id")
-                  .where("executor", "=", "node:worker.builder")
-                  .where("status", "=", "running")
-                  .where("created_at", ">", since)
-                  .where(sql<string>`operation->>'command'`, "like", "%sleep%")
-                  .executeTakeFirst()
-              )?.id,
+            async () => {
+              const privateKey = await fs.readFile(
+                path.join(workerDir, "worker-key"),
+                "utf8",
+              );
+              const running = await db()
+                .selectFrom("remote_operations")
+                .select(["id", "operation"])
+                .where("executor", "=", "node:worker.builder")
+                .where("status", "=", "running")
+                .where("created_at", ">", since)
+                .where(sql<string>`operation->>'kind'`, "=", "execute")
+                .execute();
+              return running.some((job) => {
+                const operation = openRemoteOperation({
+                  operationId: job.id,
+                  executor: "node:worker.builder",
+                  envelope: job.operation,
+                  privateKeys: [privateKey],
+                });
+                return (
+                  operation.kind === "execute" &&
+                  operation.command.includes("sleep")
+                );
+              });
+            },
             { timeout: 30_000, interval: 100 },
           )
-          .toBeTruthy();
+          .toBe(true);
       /** The replica whose process is running the chat's turn. */
       const runningOn = async (sessionId: string) => {
         const turn = await db()
@@ -404,6 +428,9 @@ it.skipIf(!process.env.DATABASE_URL)(
             capacity: connected.capacity,
             defaults: connected.defaults,
           },
+          publicKey: executorPublicKey(
+            await fs.readFile(path.join(workerDir, "worker-key"), "utf8"),
+          ),
         },
       });
       expect(reconnect.statusCode).toBe(200);
@@ -468,6 +495,7 @@ it.skipIf(!process.env.DATABASE_URL)(
         settings: execution,
         dataDir: path.join(root, "laptop"),
       });
+      const laptopKeys = generateExecutorKeyPair();
       const lease = await runners().register({
         identity: runnerIdentity,
         projectId: project.id,
@@ -475,9 +503,14 @@ it.skipIf(!process.env.DATABASE_URL)(
         environment: "laptop",
         label: "Laptop",
         workspaceRoot: machine.provider.workspaceRoot ?? "/workspace",
+        publicKey: laptopKeys.publicKey,
       });
       runner = startClientRunner({
         provider: machine.provider,
+        keys: {
+          executor: clientExecutor(runnerId),
+          privateKeys: () => [laptopKeys.privateKey],
+        },
         transport: {
           renew: () => runners().renew({ ...lease, identity: runnerIdentity }),
           // Like the HTTP transport, a stopping runner cancels its long poll.

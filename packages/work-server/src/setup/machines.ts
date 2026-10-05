@@ -114,6 +114,24 @@ export function registerMachineSetup(args: {
         });
       }
     });
+    // The worker rotates its credential and key at its next call (ADR 0206);
+    // it also does so on its own every 30 days.
+    app.post("/_work/operator/workers/:name/rotate", async (request, reply) => {
+      const params = z
+        .object({ name: z.string().min(1) })
+        .safeParse(request.params);
+      if (!params.success)
+        return reply.status(400).send({ error: "Provide a worker name" });
+      try {
+        return (await args.workers.requestRotation(params.data))
+          ? { ok: true }
+          : reply.status(404).send({ error: "Worker not found" });
+      } catch (error) {
+        if (error instanceof z.ZodError)
+          return reply.status(400).send({ error: firstIssue(error) });
+        throw error;
+      }
+    });
     app.delete("/_work/operator/workers/:name", async (request, reply) => {
       const params = z
         .object({ name: z.string().min(1) })

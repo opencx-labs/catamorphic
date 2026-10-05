@@ -2,6 +2,7 @@ import {
   RemoteExecutorLeaseLostError,
   RemoteReceiptRefusedError,
 } from "@catamorphic/core";
+import { ExecutorPublicKeySchema } from "@catamorphic/sandbox";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
@@ -9,9 +10,11 @@ import {
   workerProtocolRefusal,
 } from "./worker-protocol.js";
 import {
+  type AuthenticatedWorker,
   WorkerConnectSchema,
   WorkerDisabledError,
   WorkerIsolationError,
+  WorkerKeyMismatchError,
   WorkerSupersededError,
   type WorkWorkerRegistry,
 } from "./worker-registry.js";
@@ -31,13 +34,16 @@ const Completion = z.strictObject({
 });
 
 /**
- * The worker protocol (ADRs 0164, 0187, 0192). Every call but enrollment
- * carries the worker's machine credential; a session is the epoch the worker
- * process chose at start, and it is the node's lease token. Any replica
- * answers any call, and each call renews the lease: operations and leases
- * live in Postgres. A 409 from poll or renew ends the session, with
- * `superseded: true` once a newer process of the worker took over; a 409
- * from complete refuses only that receipt. Every call states the worker's
+ * The worker protocol (ADRs 0164, 0187, 0192, 0206). Every call but
+ * enrollment carries the worker's machine credential; a session is the epoch
+ * the worker process chose at start, and it is the node's lease token. Any
+ * replica answers any call, and each call renews the lease: operations and
+ * leases live in Postgres. Operations reach the worker sealed to the public
+ * key it enrolled or last rotated with. A 409 from poll or renew ends the
+ * session, with `superseded: true` once a newer process of the worker took
+ * over; a 409 from complete refuses only that receipt. Connect, poll and
+ * renew answer `rotate: true` while the worker should rotate its credential
+ * and key, which it does with `rotate`. Every call states the worker's
  * protocol (`work-protocol`); one this control plane cannot drive is
  * answered 426 naming which side to update (ADR 0198).
  */
@@ -64,13 +70,18 @@ export function registerWorkerRoutes(
   app.post("/api/workers/enroll", async (request, reply) => {
     if (await refusedProtocol(request, reply)) return reply;
     const body = z
-      .strictObject({ code: z.string().min(10) })
+      .strictObject({
+        code: z.string().min(10),
+        publicKey: ExecutorPublicKeySchema,
+      })
       .safeParse(request.body);
     if (!body.success) {
-      return reply.status(400).send({ error: "Provide an enrollment code" });
+      return reply.status(400).send({
+        error: "Provide an enrollment code and the worker's public key",
+      });
     }
     try {
-      return await registry.enroll({ code: body.data.code });
+      return await registry.enroll(body.data);
     } catch (error) {
       return reply.status(400).send({
         error: error instanceof Error ? error.message : "Enrollment failed",
@@ -89,18 +100,38 @@ export function registerWorkerRoutes(
     }
     try {
       await registry.connect({ ...worker, ...body.data });
-      return { session: body.data.session, nodeId: worker.nodeId };
+      return {
+        session: body.data.session,
+        nodeId: worker.nodeId,
+        ...rotation(worker),
+      };
     } catch (error) {
       if (error instanceof WorkerDisabledError) {
         return reply.status(409).send({ error: error.message });
       }
       if (error instanceof WorkerSupersededError)
         return sessionEnded(reply, error);
-      if (error instanceof WorkerIsolationError) {
+      if (
+        error instanceof WorkerIsolationError ||
+        error instanceof WorkerKeyMismatchError
+      ) {
         return reply.status(403).send({ error: error.message });
       }
       throw error;
     }
+  });
+
+  // A new credential for a new key (ADR 0206). The credential this call
+  // carries keeps working until the worker first uses the new one.
+  app.post("/api/workers/rotate", async (request, reply) => {
+    const worker = await authenticated(request, reply);
+    if (!worker) return reply;
+    const body = z
+      .strictObject({ publicKey: ExecutorPublicKeySchema })
+      .safeParse(request.body);
+    if (!body.success)
+      return reply.status(400).send({ error: "Provide the new public key" });
+    return registry.rotate({ nodeId: worker.nodeId, ...body.data });
   });
 
   app.post("/api/workers/poll", async (request, reply) => {
@@ -114,7 +145,7 @@ export function registerWorkerRoutes(
         ...body.data,
         signal: hungUp(reply),
       });
-      return { jobs };
+      return { jobs, ...rotation(worker) };
     } catch (error) {
       if (error instanceof RemoteExecutorLeaseLostError)
         return sessionEnded(reply, error);
@@ -130,7 +161,7 @@ export function registerWorkerRoutes(
     if (!body.success) return reply.status(400).send({ error: "No session" });
     try {
       await registry.renew({ nodeId: worker.nodeId, ...body.data });
-      return { ok: true };
+      return { ok: true, ...rotation(worker) };
     } catch (error) {
       if (error instanceof RemoteExecutorLeaseLostError)
         return sessionEnded(reply, error);
@@ -169,6 +200,11 @@ export function registerWorkerRoutes(
       }
     },
   );
+}
+
+/** Tells a worker to rotate its credential; never refuses it work. */
+function rotation(worker: AuthenticatedWorker): { rotate?: true } {
+  return worker.rotate ? { rotate: true } : {};
 }
 
 /** Answers 426 when the worker's protocol is not one this plane drives. */
