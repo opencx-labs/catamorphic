@@ -55,6 +55,8 @@ export default defineConfig({
     passWithNoTests: true,
     exclude: [...configDefaults.exclude, "**/.claude/worktrees/**"],
     env: loadDotEnv(),
+    // apps/desktop's tests run with --pool=forks: in worker threads, Node
+    // 24's V8 crashed freeing their WebAssembly code (UnregisterWasmAllocation).
     pool: "threads",
     fileParallelism: true,
     maxWorkers: 2,
