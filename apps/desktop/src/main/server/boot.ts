@@ -75,6 +75,7 @@ import {
   type HostSkillsRuntime,
   materializeHostSkills,
 } from "./host-skills.js";
+import { localApiRefusal, newDesktopApiToken } from "./local-api-guard.js";
 import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
 import { REMOTE_ENVIRONMENT_SKILL } from "./remote-environment-skill.js";
@@ -98,6 +99,11 @@ export const DESKTOP_USER_ID = "desktop-user";
 
 export interface EmbeddedServer {
   url: string;
+  /**
+   * What the desktop's own windows send in {@link DESKTOP_API_TOKEN_HEADER}
+   * so the API tells them from web pages; the main process adds it.
+   */
+  apiToken: string;
   clientRunners: RemoteClientRunners;
   catamorphic: Catamorphic;
   /**
@@ -1166,6 +1172,19 @@ export async function startEmbeddedServer(
     } else done(null, payload);
   });
   instrumentHttpServer(app);
+  // The API answers as the person at this computer: web pages in any
+  // browser on it must not reach it (local-api-guard.ts).
+  const apiToken = newDesktopApiToken();
+  app.addHook("onRequest", async (request, reply) => {
+    const refusal = localApiRefusal({
+      method: request.method,
+      url: request.url,
+      headers: request.headers,
+      port: request.socket.localPort ?? 0,
+      token: apiToken,
+    });
+    if (refusal) return reply.status(403).send({ error: refusal });
+  });
   await app.register(cors, {
     origin: true,
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -1386,6 +1405,7 @@ export async function startEmbeddedServer(
 
   return {
     url,
+    apiToken,
     clientRunners,
     catamorphic,
     github,

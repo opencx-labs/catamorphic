@@ -69,10 +69,14 @@ describe("previews of a remote chat's workspace (ADR 0208)", () => {
           error: "Nothing in this chat's workspace answers on port 3000.",
           code: "unreachable",
         });
-      return reply
-        .status(request.method === "POST" ? 201 : 200)
-        .type("text/plain")
-        .send(`answer to ${request.method}`);
+      return (
+        reply
+          .status(request.method === "POST" ? 201 : 200)
+          .type("text/plain")
+          // Dev servers often allow any origin; the preview does not.
+          .header("access-control-allow-origin", "*")
+          .send(`answer to ${request.method}`)
+      );
     });
     const base = await remote.listen({ port: 0, host: "127.0.0.1" });
     store = new RemoteProjectsStore(path.join(directory, "remote.json"));
@@ -119,6 +123,7 @@ describe("previews of a remote chat's workspace (ADR 0208)", () => {
       });
       expect(page.status).toBe(200);
       expect(await page.text()).toBe("answer to GET");
+      expect(page.headers.get("access-control-allow-origin")).toBeNull();
       expect(seen.at(-1)).toMatchObject({
         url: `${PREVIEW}/assets/app.js?v=1`,
         authorization: "Bearer member-token",
@@ -129,19 +134,28 @@ describe("previews of a remote chat's workspace (ADR 0208)", () => {
 
       const posted = await fetch(`${url}submit`, {
         method: "POST",
+        headers: { "content-type": "application/octet-stream", origin: own },
+        body: "payload",
+      });
+      expect(posted.status).toBe(201);
+      expect(seen.at(-1)).toMatchObject({ method: "POST", body: "payload" });
+
+      // Another site, in any browser, gets nothing from the preview.
+      const forwarded = seen.length;
+      const foreign = await fetch(`${url}submit`, {
+        method: "POST",
         headers: {
           "content-type": "application/octet-stream",
           origin: "https://elsewhere.example",
         },
         body: "payload",
       });
-      expect(posted.status).toBe(201);
-      expect(seen.at(-1)).toMatchObject({
-        method: "POST",
-        body: "payload",
-        // Another site stays another site.
-        origin: "https://elsewhere.example",
+      expect(foreign.status).toBe(403);
+      const embedded = await fetch(`${url}assets/app.js`, {
+        headers: { "sec-fetch-site": "cross-site" },
       });
+      expect(embedded.status).toBe(403);
+      expect(seen.length).toBe(forwarded);
 
       const redirected = await fetch(`${url}go`, { redirect: "manual" });
       expect(redirected.status).toBe(302);

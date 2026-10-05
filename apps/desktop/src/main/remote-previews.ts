@@ -6,6 +6,7 @@ import {
   type RemoteProjectProfiles,
   remoteProjectFetch,
 } from "./remote-api.js";
+import { previewRequestRefusal } from "./server/local-api-guard.js";
 
 /*
  * Previews of servers running in a remote chat's workspace (ADR 0208). The
@@ -113,7 +114,13 @@ export async function forwardPreview(input: {
     return refusalPage({ status: response.status, body });
   const pairs: Array<[string, string]> = [];
   response.headers.forEach((value, name) => {
-    if (name === "set-cookie" || RESPONSE_HEADERS_DROPPED.includes(name))
+    // A preview is its tab's alone: no other site may read it, whatever
+    // the dev server allows.
+    if (
+      name === "set-cookie" ||
+      name.startsWith("access-control-") ||
+      RESPONSE_HEADERS_DROPPED.includes(name)
+    )
       return;
     pairs.push([
       name,
@@ -289,6 +296,16 @@ export class RemotePreviewOrigins {
     response: http.ServerResponse;
   }): Promise<void> {
     const { request, response } = input;
+    const refusal = previewRequestRefusal({
+      headers: request.headers,
+      port: request.socket.localPort ?? 0,
+    });
+    if (refusal) {
+      response
+        .writeHead(403, { "content-type": "text/plain; charset=utf-8" })
+        .end(refusal);
+      return;
+    }
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const chunk of request) {
