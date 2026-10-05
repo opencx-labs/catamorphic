@@ -25,8 +25,11 @@ import {
 
 const tracer = getTracer("@catamorphic/core");
 
-/** A terminal ends after this long once asked to; then it is killed. */
-const CLOSE_GRACE_MS = 3_000;
+/**
+ * A terminal ends this long after it is asked to, or is killed: util-linux
+ * `script` outlives a TERM until killed.
+ */
+const CLOSE_GRACE_MS = 1_500;
 /** Typing refreshes a terminal's use at most this often (idle release). */
 const USE_REFRESH_SECONDS = 30;
 const SIZE_LIMIT = 1_000;
