@@ -16,6 +16,8 @@ interface FakeSandbox {
   provider: Pick<SandboxProvider, "executeCommand" | "processes">;
   sandboxId: string;
   workingDirectory: string;
+  /** The session's secrets file from the working directory (ADR 0205). */
+  envFile?: string;
 }
 
 /**
@@ -82,7 +84,8 @@ function isFakeSandbox(value: unknown): value is FakeSandbox {
     isRecord(value.provider) &&
     typeof value.provider.executeCommand === "function" &&
     typeof value.sandboxId === "string" &&
-    typeof value.workingDirectory === "string"
+    typeof value.workingDirectory === "string" &&
+    (value.envFile === undefined || typeof value.envFile === "string")
   );
 }
 
@@ -175,8 +178,12 @@ async function answer(input: {
   }
   const sandbox = input.sandbox;
   if (!sandbox) throw new Error("Allocated provider missing");
+  // Commands load the session's secrets first, as the built-in agent's do.
+  const prelude = sandbox.envFile
+    ? `if [ -f '${sandbox.envFile}' ]; then . '${sandbox.envFile}'; fi\n`
+    : "";
   const exec = (shell: string) =>
-    sandbox.provider.executeCommand(sandbox.sandboxId, shell, {
+    sandbox.provider.executeCommand(sandbox.sandboxId, `${prelude}${shell}`, {
       cwd: sandbox.workingDirectory,
       signal,
     });
