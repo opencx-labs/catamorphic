@@ -1,4 +1,11 @@
-import { Download, KeyRound, ServerCog, Upload, Users } from "lucide-react";
+import {
+  Download,
+  KeyRound,
+  LockKeyhole,
+  ServerCog,
+  Upload,
+  Users,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   desktopApi,
@@ -20,6 +27,7 @@ export type RemoteFeatures = RemoteCapabilities["features"];
 import { PendingButton } from "./pending-button.js";
 import { RemoteEnvironmentModal } from "./remote-environment-modal.js";
 import { RemoteMembersModal } from "./remote-members-modal.js";
+import { RemoteSecretsModal } from "./remote-secrets-modal.js";
 import { RemoteServiceConnectionsModal } from "./remote-service-connections-modal.js";
 
 /**
@@ -53,6 +61,7 @@ export function RemoteNav({
   const [membersOpen, setMembersOpen] = useState(false);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [environmentOpen, setEnvironmentOpen] = useState(false);
+  const [secretsOpen, setSecretsOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
 
   const refresh = useCallback(async () => {
@@ -133,6 +142,12 @@ export function RemoteNav({
   const canPropose = features ? features.proposals : true;
   const canManageMembers =
     status.capabilities?.permissions.includes("memberships:write") ?? false;
+  // Every member sets their own secret values (ADR 0205); `secrets:write`
+  // also sets the shared value and anyone's.
+  const canManageSecrets =
+    status.capabilities?.permissions.includes("secrets:write") ?? false;
+  const canListMembers =
+    status.capabilities?.permissions.includes("memberships:read") ?? false;
   // Organization administrators manage service connections (ADR 0172).
   const canManageConnections = status.capabilities?.administrator ?? false;
   const reconnectNeeded =
@@ -202,6 +217,15 @@ export function RemoteNav({
         >
           <ServerCog className="size-3.5" />
           Remote environment
+        </button>
+        <button
+          type="button"
+          onClick={() => setSecretsOpen(true)}
+          data-testid="remote-secrets"
+          className="flex h-7 items-center justify-center gap-1.5 rounded-md border border-border text-xs text-fg-muted hover:bg-bg-overlay hover:text-fg"
+        >
+          <LockKeyhole className="size-3.5" />
+          Secrets
         </button>
         {canManageMembers && (
           <button
@@ -323,6 +347,13 @@ export function RemoteNav({
         projectId={projectId}
         onClose={() => setEnvironmentOpen(false)}
         onOpenFile={onOpenFile}
+      />
+      <RemoteSecretsModal
+        open={secretsOpen}
+        projectId={projectId}
+        canManage={canManageSecrets}
+        canListMembers={canListMembers}
+        onClose={() => setSecretsOpen(false)}
       />
     </>
   );

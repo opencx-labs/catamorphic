@@ -35,6 +35,14 @@ export interface AttemptRunnerOptions {
   version: string;
   /** Host objects for in-process adapters (never serialized). */
   local?: Record<string, unknown>;
+  /**
+   * Reads an attempt's environment file (ADR 0205) where the runner runs
+   * beside the workspace; undefined when the file is missing. Its
+   * variables join the harness's environment for that attempt, read again
+   * for every attempt. In-process runners leave it out: their harness's
+   * commands load the file in the sandbox themselves.
+   */
+  envFile?: (path: string) => Record<string, string> | undefined;
 }
 
 interface Pending<T> {
@@ -213,7 +221,8 @@ export class AttemptRunner {
     });
     let control: AttemptControl;
     try {
-      control = adapter.start(attempt, this.host(attempt), this.options.local);
+      const started = this.withEnvFile(attempt);
+      control = adapter.start(started, this.host(started), this.options.local);
     } catch (error) {
       this.emitEvent({
         type: "turn.completed",
@@ -243,6 +252,21 @@ export class AttemptRunner {
           });
         this.exit();
       });
+  }
+
+  /**
+   * The attempt with its environment file's variables (ADR 0205), and
+   * `BASH_ENV` so the harness's shells load the file too. The attempt's
+   * own variables win.
+   */
+  private withEnvFile(attempt: AttemptStart): AttemptStart {
+    const file = attempt.envFile;
+    const variables = file ? this.options.envFile?.(file) : undefined;
+    if (!file || !variables) return attempt;
+    return {
+      ...attempt,
+      env: { ...variables, BASH_ENV: file, ...attempt.env },
+    };
   }
 
   private stop(): void {

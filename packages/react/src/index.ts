@@ -174,6 +174,13 @@ export {
   type ForkAgentSessionInput,
   useForkAgentSession,
 } from "./hooks/use-fork-agent-session.js";
+// Secrets (Track A); members' own values (ADR 0205)
+export {
+  type DeleteMemberSecretInput,
+  type SetMemberSecretInput,
+  useDeleteMemberSecret,
+  useSetMemberSecret,
+} from "./hooks/use-member-secret.js";
 export { type UseOnParseOptions, useOnParse } from "./hooks/use-on-parse.js";
 export type {
   ParseWorkflowRequest,
@@ -213,7 +220,6 @@ export type {
 } from "./hooks/use-project-git-state.js";
 export { useProjectGitState } from "./hooks/use-project-git-state.js";
 export { useProjectPlugins } from "./hooks/use-project-plugins.js";
-// Secrets (Track A)
 export { useProjectSecrets } from "./hooks/use-project-secrets.js";
 export { type UseProjectsOptions, useProjects } from "./hooks/use-projects.js";
 // Runs
@@ -384,7 +390,9 @@ export type {
   RunStep,
   RunsList,
   Secret,
+  SecretMemberValue,
   SecretStatus,
+  SecretValueChange,
   SignalRunInput,
   SubmitRunInput,
   TriggeredRun,

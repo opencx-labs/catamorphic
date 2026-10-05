@@ -10114,6 +10114,13 @@ export interface paths {
                                         harness: "claude-code" | "codex";
                                         member: string;
                                     }[];
+                                    readonly volumes?: {
+                                        key: string;
+                                        path: string;
+                                        exclusive?: boolean;
+                                        sizeMb?: number;
+                                        temporary?: boolean;
+                                    }[];
                                 };
                             } | {
                                 /** @enum {string} */
@@ -16052,14 +16059,25 @@ export interface paths {
                     content: {
                         "application/json": {
                             name: string;
-                            hasValue: boolean;
-                            /** Format: date-time */
-                            updatedAt: string | null;
                             label?: string;
                             description?: string;
                             required: boolean;
                             /** @enum {string} */
                             source: "project" | "plugin";
+                            environments: string[];
+                            shared: boolean;
+                            /** Format: date-time */
+                            updatedAt: string | null;
+                            setBy: string | null;
+                            own: boolean;
+                            /** Format: date-time */
+                            ownUpdatedAt: string | null;
+                            members: {
+                                member: string;
+                                /** Format: date-time */
+                                updatedAt: string;
+                                setBy: string | null;
+                            }[];
                         }[];
                     };
                 };
@@ -16118,14 +16136,25 @@ export interface paths {
                     content: {
                         "application/json": {
                             name: string;
-                            hasValue: boolean;
-                            /** Format: date-time */
-                            updatedAt: string | null;
                             label?: string;
                             description?: string;
                             required: boolean;
                             /** @enum {string} */
                             source: "project" | "plugin";
+                            environments: string[];
+                            shared: boolean;
+                            /** Format: date-time */
+                            updatedAt: string | null;
+                            setBy: string | null;
+                            own: boolean;
+                            /** Format: date-time */
+                            ownUpdatedAt: string | null;
+                            members: {
+                                member: string;
+                                /** Format: date-time */
+                                updatedAt: string;
+                                setBy: string | null;
+                            }[];
                         };
                     };
                 };
@@ -16174,6 +16203,136 @@ export interface paths {
                     content: {
                         "application/json": {
                             deleted: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/secrets/{name}/members/{member}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    name: string;
+                    member: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        value: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            name: string;
+                            member: string | null;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    name: string;
+                    member: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            deleted: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
                         };
                     };
                 };

@@ -22,22 +22,22 @@ const owner: Identity = { tenantId, externalUserId: "owner" };
 
 describe("sealed project secrets (ADR 0162)", () => {
   const vault = new MemoryCredentialVault();
-  const secrets = new SecretsService(
+  const secrets = new SecretsService({
     db,
-    undefined,
-    async () => [
+    projectDeclarations: async () => [
       { name: "API_KEY", required: true },
       { name: "WEBHOOK_SECRET", required: false },
       { name: "SIGNING_SECRET", required: true, use: "webhook" as const },
     ],
     vault,
-  );
+  });
   const row = (name: string) =>
     db
       .selectFrom("project_secrets")
       .select(["value", "credential_ref"])
       .where("project_id", "=", projectId)
       .where("name", "=", name)
+      .where("member_external_user_id", "is", null)
       .executeTakeFirst();
 
   beforeAll(async () => {
@@ -159,7 +159,11 @@ describe("sealed project secrets (ADR 0162)", () => {
     ];
 
     it("is refused a value and refuses runs instead of reaching them", async () => {
-      const secrets = new SecretsService(db, plugin("SIGNING_SECRET"), project);
+      const secrets = new SecretsService({
+        db,
+        plugins: plugin("SIGNING_SECRET"),
+        projectDeclarations: project,
+      });
       await expect(
         secrets.upsert({
           identity: owner,
@@ -176,7 +180,11 @@ describe("sealed project secrets (ADR 0162)", () => {
     });
 
     it("still wins over a project run secret of the same name", async () => {
-      const secrets = new SecretsService(db, plugin("API_KEY"), project);
+      const secrets = new SecretsService({
+        db,
+        plugins: plugin("API_KEY"),
+        projectDeclarations: project,
+      });
       const [status] = (
         await secrets.list({ identity: owner, projectId })
       ).filter((secret) => secret.name === "API_KEY");

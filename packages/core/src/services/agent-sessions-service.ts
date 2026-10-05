@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   ACTIVE_TURN_STATUSES,
@@ -155,11 +156,18 @@ import {
   seedSandboxRepository,
 } from "./sandbox-git.js";
 import {
+  deliverSandboxSecrets,
+  removeSandboxSecrets,
+  sandboxSecretsFile,
+  sandboxSecretsNote,
+} from "./sandbox-secrets.js";
+import {
   SandboxSyncError,
   type SyncedFileChange,
   syncSandboxChanges,
 } from "./sandbox-sync.js";
 import { nextScheduledTime } from "./schedules-service.js";
+import type { SecretsService } from "./secrets-service.js";
 import {
   SessionMailboxesService,
   type SessionMailboxItem,
@@ -250,6 +258,8 @@ interface AgentExecutionRuntime {
   commandTimeoutSeconds?: number;
   /** The placement may run the owner's own sign-ins (ADR 0199). */
   personalCredentials?: boolean;
+  /** The placement isolates the work's owner (ADR 0205). */
+  isolated?: boolean;
   /** Where the sandbox sees the owner's sign-in for the agent's harness. */
   signInHome?: string;
 }
@@ -794,6 +804,11 @@ interface AgentSessionsDeps {
    * own chats' sandboxes where the Environment and placement allow.
    */
   personalEnvironments?: PersonalEnvironmentService;
+  /**
+   * Project secrets (ADR 0205), delivered into sandboxes of Environments
+   * that list them where the placement isolates the work's owner.
+   */
+  secrets?: SecretsService;
   plugins?: PluginsService;
   pluginResolver?: PluginResolver;
   /**
@@ -898,6 +913,7 @@ export class AgentSessionsService {
   private readonly workspaces?: SessionWorkspaces;
   private readonly sandboxGateway?: AgentSessionsDeps["sandboxGateway"];
   private readonly personalEnvironments?: PersonalEnvironmentService;
+  private readonly secrets?: SecretsService;
   /** Replica memory (a): sandbox grant renewals of this process's turns. */
   private readonly grantRenewals = new Map<string, NodeJS.Timeout>();
   /**
@@ -1214,6 +1230,7 @@ export class AgentSessionsService {
     this.workspaces = deps.workspaces;
     this.sandboxGateway = deps.sandboxGateway;
     this.personalEnvironments = deps.personalEnvironments;
+    this.secrets = deps.secrets;
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
     this.onTurnSettled = deps.onTurnSettled;
@@ -3970,7 +3987,32 @@ export class AgentSessionsService {
         this.stopGrantRenewal(sessionId);
         this.workingDirectories.delete(turnId);
       },
+      secretValues: (input) => this.sandboxSecretValues(input),
     };
+  }
+
+  /**
+   * Every secret value a session's sandbox could hold (ADR 0205): the
+   * shared values its Environment lists and its owner's own. What a holder
+   * that took a running turn over masks in the turn's output.
+   */
+  private async sandboxSecretValues(input: {
+    identity: Identity;
+    session: SessionRow;
+  }): Promise<Record<string, string[]>> {
+    const { identity, session } = input;
+    if (!this.secrets || !session.allocation_id) return {};
+    const allocation = await this.executionAllocations.get({
+      identity,
+      allocationId: session.allocation_id,
+    });
+    if (!allocation) return {};
+    return this.secrets.valuesForMasking({
+      identity,
+      projectId: session.project_id,
+      environment: allocation.environmentName,
+      owner: placementOwner(session.external_user_id),
+    });
   }
 
   /** The tools a turn's agent is served by this host, by name. */
@@ -4205,6 +4247,7 @@ export class AgentSessionsService {
     await this.keepConnectionGrants(sessionId);
 
     let modelAccess: AttemptStart["modelAccess"] = { kind: "host" };
+    let secrets: Record<string, string> = {};
     if (workspace.sandboxProviderId && runtime.provider) {
       const models = await this.prepareSandboxGit({
         identity,
@@ -4240,6 +4283,19 @@ export class AgentSessionsService {
           keyFile: gateway.keyFile,
         };
       }
+      const delivery = await this.prepareSandboxSecrets({
+        identity,
+        projectId,
+        session,
+        environment: runtime.environmentName,
+        isolated: runtime.isolated === true,
+        provider: runtime.provider,
+        sandboxProviderId: workspace.sandboxProviderId,
+        ownerAuthored,
+      });
+      if (delivery.note) notes.push(delivery.note);
+      if (delivery.ownerOnly) ownerOnly = true;
+      secrets = delivery.values;
       const files = await this.preparePersonalFiles({
         identity,
         projectId,
@@ -4410,16 +4466,27 @@ export class AgentSessionsService {
           ? [...(agent.harness.plugins ?? [])]
           : [],
       env: agent.harness.placement === "host" ? { ...agent.harness.env } : {},
+      // A runner beside the workspace loads the session's secrets for
+      // every attempt (ADR 0205); a missing file adds nothing.
+      ...(agent.harness.placement === "sandbox" && runtime.provider
+        ? {
+            envFile: sandboxSecretsFile({
+              workspaceRoot: runtime.provider.workspaceRoot,
+            }),
+          }
+        : {}),
       options: protocolJson(agent.options ?? {}),
     };
     const harness = agent.harness;
     const provider = runtime.provider;
     const sandboxProviderId = workspace.sandboxProviderId;
+    const delivered = Object.keys(secrets).length > 0;
     return {
       start,
       notes: notes.filter(Boolean),
       checkpointBefore,
       ownerOnly,
+      ...(delivered ? { secrets } : {}),
       launch: async () => {
         if (harness.placement === "host")
           return startInProcessRunner({
@@ -4432,6 +4499,14 @@ export class AgentSessionsService {
                       provider,
                       sandboxId: sandboxProviderId,
                       workingDirectory,
+                      // Its commands load the session's secrets (ADR
+                      // 0205), named from where they start.
+                      envFile: path.posix.relative(
+                        workingDirectory,
+                        sandboxSecretsFile({
+                          workspaceRoot: provider.workspaceRoot,
+                        }),
+                      ),
                       ...(runtime.commandTimeoutSeconds
                         ? {
                             commandBudgetSeconds: runtime.commandTimeoutSeconds,
@@ -4451,6 +4526,9 @@ export class AgentSessionsService {
           allocationId: session.allocation_id,
           sandboxId: sandboxProviderId,
           stateDirectory,
+          ...(delivered && start.envFile
+            ? { env: { BASH_ENV: start.envFile } }
+            : {}),
         });
       },
     };
@@ -5409,6 +5487,122 @@ export class AgentSessionsService {
   }
 
   /**
+   * The Environment's secrets in a sandbox turn (ADR 0205): written to the
+   * session's secrets file where the placement isolates the work's owner
+   * and, in a member's own chat, the owner wrote everything the turn
+   * answers; taken back out otherwise. Returns the values delivered (the
+   * turn's output masks them), whether the turn must stay the owner's
+   * own, and a note for the agent about listed secrets it did not get.
+   */
+  private async prepareSandboxSecrets(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    environment: string;
+    /** The placement isolates the work's owner. */
+    isolated: boolean;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+    /** The owner wrote everything the turn answers. */
+    ownerAuthored: boolean;
+  }): Promise<{
+    values: Record<string, string>;
+    ownerOnly: boolean;
+    note?: string;
+  }> {
+    const { identity, projectId, session, environment } = input;
+    const service = this.secrets;
+    const none = { values: {}, ownerOnly: false };
+    if (!service) return none;
+    const target = {
+      provider: input.provider,
+      sandboxId: input.sandboxProviderId,
+      projectDir: this.projectDir(input.provider),
+    };
+    const owner = placementOwner(session.external_user_id);
+    const listed = await service.environmentSecrets({
+      identity,
+      projectId,
+      environment,
+    });
+    if (listed.length === 0) {
+      // Listed no longer (or never): take out what an earlier turn left.
+      if (await this.secretsMayLinger(session.id))
+        await removeSandboxSecrets(target);
+      return none;
+    }
+    const names = listed.join(", ");
+    if (!input.isolated || (owner !== null && !input.ownerAuthored)) {
+      await removeSandboxSecrets(target);
+      return {
+        ...none,
+        note: !input.isolated
+          ? `Environment '${environment}' lists secrets (${names}), but the machine this chat runs on also runs other people's work as plain processes, so Work did not set them in this workspace. Tell the user if the work needs them: a sandboxed machine, or one only ${owner ? "they use" : "this project uses"}, receives them.`
+          : `Environment '${environment}' lists secrets (${names}), but Work sets them only for turns that answer the chat owner's own messages, so this turn runs without them.`,
+      };
+    }
+    const resolved = await service.resolveForSandbox({
+      identity,
+      projectId,
+      environment,
+      owner,
+    });
+    if (Object.keys(resolved.variables).length === 0)
+      await removeSandboxSecrets(target);
+    else {
+      const { changed } = await deliverSandboxSecrets({
+        ...target,
+        variables: resolved.variables,
+      });
+      if (changed)
+        await service.auditDelivery({
+          identity,
+          projectId,
+          sessionId: session.id,
+          ...(session.allocation_id
+            ? { allocationId: session.allocation_id }
+            : {}),
+          delivered: resolved.delivered,
+          missing: resolved.missing,
+        });
+    }
+    const note = sandboxSecretsNote({
+      environment,
+      owner,
+      missing: resolved.missing,
+    });
+    return {
+      values: resolved.variables,
+      // Set because the owner wrote the input (ADR 0205): only the owner's
+      // input may join the turn, as for personal files.
+      ownerOnly: owner !== null && resolved.delivered.length > 0,
+      ...(note ? { note } : {}),
+    };
+  }
+
+  /**
+   * Whether the session's sandbox may still hold a secrets file: the last
+   * attempt that started received secrets (ADR 0205).
+   */
+  private async secretsMayLinger(sessionId: string): Promise<boolean> {
+    const last = await this.db
+      .selectFrom("agent_turn_attempts")
+      .select("runner")
+      .where("session_id", "=", sessionId)
+      .where("runner", "is not", null)
+      .orderBy("created_at", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    const runner = last?.runner;
+    return (
+      typeof runner === "object" &&
+      runner !== null &&
+      !Array.isArray(runner) &&
+      runner.secrets === true
+    );
+  }
+
+  /**
    * The owner's personal files in a sandbox turn (ADR 0184, files only
    * since ADR 0199): placed where the turn's placement allows personal
    * credentials and the owner wrote the input it answers; taken back out
@@ -5630,9 +5824,10 @@ export class AgentSessionsService {
   }
 
   /**
-   * Withdraw the owner's personal environment from a chat's current
-   * sandbox, wherever it runs (ADR 0184). Best effort, and a no-op for
-   * chats without a sandbox and for project chats.
+   * Withdraw the owner's personal environment (ADR 0184) and the
+   * Environment's secrets (ADR 0205) from a chat's current sandbox,
+   * wherever it runs. Best effort, and a no-op for chats without a
+   * sandbox; a project chat has only secrets to withdraw.
    */
   private async withdrawFromSessionSandbox(input: {
     identity: Identity;
@@ -5641,7 +5836,7 @@ export class AgentSessionsService {
     allocation?: ExecutionAllocation;
     sandboxProviderId?: string;
   }): Promise<void> {
-    if (!this.personalEnvironments) return;
+    if (!this.personalEnvironments && !this.secrets) return;
     try {
       const row = await this.db
         .selectFrom("agent_sessions")
@@ -5659,9 +5854,9 @@ export class AgentSessionsService {
         .executeTakeFirst();
       const sandboxProviderId = input.sandboxProviderId ?? row?.provider_id;
       if (!row || !sandboxProviderId) return;
-      if (isProjectPrincipal(row.external_user_id)) return;
       // A renewal tick must not write the login back after it leaves.
-      this.stopGrantRenewal(input.sessionId);
+      if (!isProjectPrincipal(row.external_user_id))
+        this.stopGrantRenewal(input.sessionId);
       const allocation =
         input.allocation ??
         (row.allocation_id
@@ -5696,6 +5891,17 @@ export class AgentSessionsService {
         provider,
         sandboxProviderId,
       });
+      if (this.secrets)
+        await removeSandboxSecrets({
+          provider,
+          sandboxId: sandboxProviderId,
+          projectDir: this.projectDir(provider),
+        }).catch((error: unknown) =>
+          console.warn(
+            `[catamorphic] Could not remove the secrets of session ${input.sessionId}`,
+            error,
+          ),
+        );
     } catch (error) {
       console.warn(
         `[catamorphic] Could not withdraw the personal environment of session ${input.sessionId}`,
@@ -8687,6 +8893,7 @@ export class AgentSessionsService {
       environmentName: allocation.environmentName,
       ...(commandTimeoutSeconds ? { commandTimeoutSeconds } : {}),
       personalCredentials: admitted.personalCredentials,
+      isolated: admitted.isolated,
       ...(signIn
         ? {
             signInHome: signInHomePath({

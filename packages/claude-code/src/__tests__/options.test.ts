@@ -84,6 +84,31 @@ describe("model access", () => {
     }
   });
 
+  it("gives the CLI the session's secrets the runner read, under Work's own settings (ADR 0205)", () => {
+    const built = options(
+      attempt({
+        modelAccess: {
+          kind: "gateway",
+          api: "anthropic",
+          baseUrl: "https://gateway.test/anthropic",
+          keyFile: "/state/grant",
+        },
+        envFile: "/workspace/.work-session/env/secrets.sh",
+        // What the runner adds from the file before the adapter starts.
+        env: {
+          CLICKHOUSE_API_KEY: "ch-key",
+          BASH_ENV: "/workspace/.work-session/env/secrets.sh",
+          ANTHROPIC_BASE_URL: "https://elsewhere.test",
+        },
+      }),
+    );
+    expect(built.env?.CLICKHOUSE_API_KEY).toBe("ch-key");
+    expect(built.env?.BASH_ENV).toBe("/workspace/.work-session/env/secrets.sh");
+    expect(built.env?.ANTHROPIC_BASE_URL).toBe(
+      "https://gateway.test/anthropic",
+    );
+  });
+
   it("refuses a gateway that speaks another API", () => {
     expect(() =>
       options(

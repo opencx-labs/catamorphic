@@ -7,11 +7,16 @@ import type { HarnessAdapter } from "@catamorphic/agent-protocol/runner";
 import {
   AGENT_RUNNER_VERSION,
   EchoAdapter,
+  readEnvFile,
   runStdioRunner,
 } from "@catamorphic/agent-runner";
 import { createClaudeCodeAdapter } from "@catamorphic/claude-code";
 import { createCodexAdapter } from "@catamorphic/codex";
-import { parseSandboxPaths, SANDBOX_PATHS_ENV } from "@catamorphic/sandbox";
+import {
+  parseSandboxPaths,
+  remapPaths,
+  SANDBOX_PATHS_ENV,
+} from "@catamorphic/sandbox";
 import { withSandboxPaths } from "./sandbox-paths.js";
 
 const adapters: Record<string, HarnessAdapter> = {
@@ -32,5 +37,8 @@ await runStdioRunner({
       )
     : adapters,
   version: AGENT_RUNNER_VERSION,
+  // The session's environment file (ADR 0205), where it really is.
+  envFile: (file) =>
+    readEnvFile(paths ? remapPaths(file, paths.virtual, paths.real) : file),
 });
 process.exit(0);

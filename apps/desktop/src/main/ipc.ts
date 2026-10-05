@@ -2505,6 +2505,55 @@ export function registerIpcHandlers(
     },
   );
 
+  // Project secrets (ADR 0205): every member reads them and sets their own
+  // value; the people listing members need `memberships:read`.
+  ipcMain.handle(
+    "catamorphic:remote-secrets",
+    async (event, input: { projectId: string; members: boolean }) => {
+      const link = requireLink(event, input.projectId);
+      const client = storedRemoteClient(event, input.projectId, link);
+      const [secrets, members] = await Promise.all([
+        client.listSecrets(),
+        input.members ? client.listMembers() : Promise.resolve(null),
+      ]);
+      return { secrets, members };
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-secret-set",
+    async (
+      event,
+      input: {
+        projectId: string;
+        name: string;
+        value: string;
+        member?: string;
+      },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      await storedRemoteClient(event, input.projectId, link).setSecret({
+        name: input.name,
+        value: input.value,
+        ...(input.member ? { member: input.member } : {}),
+      });
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-secret-delete",
+    async (
+      event,
+      input: { projectId: string; name: string; member?: string },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      await storedRemoteClient(event, input.projectId, link).deleteSecret({
+        name: input.name,
+        ...(input.member ? { member: input.member } : {}),
+      });
+    },
+  );
+
   // Organization service connections (ADR 0172), reached through any
   // project linked to the server; the server refuses non-administrators.
   ipcMain.handle(

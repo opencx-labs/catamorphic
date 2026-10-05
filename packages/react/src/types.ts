@@ -137,6 +137,12 @@ export type Secret =
 
 export type SecretStatus = Secret;
 
+/** One member's own value of a secret: who and when, never the value. */
+export type SecretMemberValue = Secret["members"][number];
+
+export type SecretValueChange =
+  paths["/api/projects/{projectId}/secrets/{name}/members/{member}"]["put"]["responses"][200]["content"]["application/json"];
+
 // --- Agent sessions -----------------------------------------------------
 
 export type AgentSession =

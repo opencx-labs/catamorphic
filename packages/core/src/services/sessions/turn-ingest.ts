@@ -19,6 +19,7 @@ import type {
 } from "@catamorphic/agent-protocol/runner";
 import type { DB } from "@catamorphic/db";
 import type { Transaction } from "kysely";
+import type { SecretMaskBatch, StreamKey } from "./secret-mask.js";
 import { itemFromRow, requestFromRow } from "./session-rows.js";
 
 /** A stable id derived from an attempt and an adapter's key. */
@@ -66,20 +67,26 @@ export interface IngestResult {
 /** Live lines are bounded; long tool output is cut by the runner already. */
 const STATUS_MAX = 200;
 
+/** The fields a harness streams into. */
+const STREAMED_FIELDS = ["text", "output"] as const;
+
 /**
  * Turn one batch of an attempt's harness events into session events
  * (ADR 0197). Item and request ids derive from the attempt and the
  * adapter's keys, so ingesting a frame twice (a replica took over and read
  * from its cursor again) changes nothing: an item that exists is merged,
  * never duplicated. Deltas of one item in a batch arrive as one append.
+ * With `mask`, the values the turn's sandbox received are replaced in
+ * everything recorded (ADR 0205).
  */
 export async function ingestHarnessEvents(input: {
   trx: Transaction<DB>;
   state: IngestState;
   events: readonly HarnessEvent[];
   now: Date;
+  mask?: SecretMaskBatch;
 }): Promise<IngestResult> {
-  const { trx, state } = input;
+  const { trx, state, mask } = input;
   const at = input.now.toISOString();
   const attemptId = state.attempt.id;
   const out: SessionEvent[] = [];
@@ -140,6 +147,13 @@ export async function ingestHarnessEvents(input: {
     if (item) items.set(item.id, appendLocal(item, pendingDelta, at));
     pendingDelta = undefined;
   };
+  // Text a mask held back, recorded once its item ends.
+  const release = (key: StreamKey) => {
+    const rest = mask?.flush(key);
+    if (!rest || !items.has(key.itemId)) return;
+    pendingDelta = { ...key, text: rest };
+    flushDelta();
+  };
   // The agent's own status line wins over one derived from its work.
   let status: string | undefined;
   let derived: string | undefined;
@@ -177,7 +191,7 @@ export async function ingestHarnessEvents(input: {
         if (items.has(id) || !HARNESS_ITEM_KINDS.has(event.item.kind)) break;
         const item = newItem({
           id,
-          draft: event.item,
+          draft: mask ? mask.value(event.item) : event.item,
           state: { ...state, turn, attempt },
           parentItemId: event.item.parentKey
             ? derivedId(attemptId, event.item.parentKey)
@@ -194,23 +208,36 @@ export async function ingestHarnessEvents(input: {
       case "item.delta": {
         const id = derivedId(attemptId, event.key);
         if (!items.has(id)) break;
+        const text = mask
+          ? mask.stream({ itemId: id, field: event.field }, event.text)
+          : event.text;
+        if (text.length === 0) break;
         if (
           pendingDelta &&
           (pendingDelta.itemId !== id || pendingDelta.field !== event.field)
         )
           flushDelta();
         pendingDelta = pendingDelta
-          ? { ...pendingDelta, text: pendingDelta.text + event.text }
-          : { itemId: id, field: event.field, text: event.text };
+          ? { ...pendingDelta, text: pendingDelta.text + text }
+          : { itemId: id, field: event.field, text };
         break;
       }
       case "item.updated":
       case "item.completed": {
         const id = derivedId(attemptId, event.key);
+        if (!items.has(id)) break;
+        const changes = mask ? mask.value(event.item) : event.item;
+        // A field given whole replaces what streamed into it; an item that
+        // ends records what its stream still held.
+        for (const field of STREAMED_FIELDS) {
+          if (changes && field in changes) mask?.drop({ itemId: id, field });
+          else if (event.type === "item.completed")
+            release({ itemId: id, field });
+        }
         const current = items.get(id);
         if (!current) break;
         // A harness changes an item's content, never what Work owns of it.
-        const content: Record<string, unknown> = { ...event.item };
+        const content: Record<string, unknown> = { ...changes };
         for (const field of WORK_OWNED_ITEM_FIELDS) delete content[field];
         const merged = {
           ...current,
@@ -228,22 +255,23 @@ export async function ingestHarnessEvents(input: {
         const id = derivedId(attemptId, `request:${event.key}`);
         if (requests.has(id)) break;
         const itemId = derivedId(attemptId, `request-item:${event.key}`);
+        const opened = mask ? mask.value(event.request) : event.request;
         const request: RuntimeRequest = {
           id,
           sessionId: state.sessionId,
           turnId: turn.id,
           attemptId,
           itemId,
-          kind: event.request.kind,
+          kind: opened.kind,
           status: "pending",
           answerable: true,
-          blocking: event.request.blocking,
-          title: event.request.title,
-          description: event.request.description ?? null,
-          origin: event.request.origin,
-          questions: event.request.questions ?? null,
-          approval: event.request.approval ?? null,
-          elicitation: event.request.elicitation ?? null,
+          blocking: opened.blocking,
+          title: opened.title,
+          description: opened.description ?? null,
+          origin: opened.origin,
+          questions: opened.questions ?? null,
+          approval: opened.approval ?? null,
+          elicitation: opened.elicitation ?? null,
           approvers: [],
           expiresAt: null,
           response: null,
@@ -283,7 +311,7 @@ export async function ingestHarnessEvents(input: {
           ...current,
           status: "cancelled",
           answerable: false,
-          reason: event.reason,
+          reason: mask ? mask.text(event.reason) : event.reason,
           resolvedAt: at,
         };
         requests.set(id, closed);
@@ -291,10 +319,15 @@ export async function ingestHarnessEvents(input: {
         break;
       }
       case "status":
-        status = event.text.replace(/\s+/g, " ").trim().slice(0, STATUS_MAX);
+        status = (mask ? mask.text(event.text) : event.text)
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, STATUS_MAX);
         break;
       case "title":
-        result.title = event.text.trim().slice(0, 500);
+        result.title = (mask ? mask.text(event.text) : event.text)
+          .trim()
+          .slice(0, 500);
         break;
       case "usage":
         result.usage = event.usage;
@@ -305,9 +338,13 @@ export async function ingestHarnessEvents(input: {
       case "diagnostic":
         break;
       case "turn.completed":
+        // Whatever a mask still held is the end of its stream.
+        for (const key of mask?.holding() ?? []) release(key);
         result.completed = {
           status: event.status,
-          ...(event.error ? { error: event.error } : {}),
+          ...(event.error
+            ? { error: mask ? mask.value(event.error) : event.error }
+            : {}),
           ...(event.ref ? { ref: event.ref } : {}),
         };
         break;

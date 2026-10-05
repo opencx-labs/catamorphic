@@ -205,12 +205,17 @@ export async function registerWorkMachine(args: {
         ...chosen.node,
         descriptor: { ...chosen.node.descriptor, labels: chosen.labels },
       };
-      // A worker whose access names only this owner takes no one else's
-      // work, so it may hold their personal credentials (ADR 0184).
+      // A worker whose access names only this owner (a member, or for a
+      // project's own work that project) takes no one else's work, so it
+      // may hold their personal credentials (ADR 0184) and secrets (ADR
+      // 0205).
       const servesOnlyOwner = Boolean(
-        owner &&
-          chosen.policy &&
-          accessTier({ access: nodeAccess(chosen.policy.access), owner }) === 0,
+        chosen.policy &&
+          accessTier({
+            access: nodeAccess(chosen.policy.access),
+            owner,
+            ...(projectId ? { projectId } : {}),
+          }) === 0,
       );
       return {
         descriptor: selected.descriptor,

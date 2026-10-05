@@ -560,6 +560,12 @@ const api = {
     invoke("catamorphic:remote-member-set-roles", input),
   remoteMemberInvite: (input: unknown): Promise<unknown> =>
     invoke("catamorphic:remote-member-invite", input),
+  remoteSecrets: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-secrets", input),
+  remoteSecretSet: (input: unknown): Promise<void> =>
+    invoke("catamorphic:remote-secret-set", input),
+  remoteSecretDelete: (input: unknown): Promise<void> =>
+    invoke("catamorphic:remote-secret-delete", input),
   remoteServiceConnections: (projectId: string): Promise<unknown> =>
     invoke("catamorphic:remote-service-connections", projectId),
   remoteServiceConnectionCreate: (input: unknown): Promise<unknown> =>

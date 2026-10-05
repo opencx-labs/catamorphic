@@ -509,6 +509,9 @@ async function createWorkServerInner(
             externalUserId,
           })
         : null,
+    // Workflows name members by the email they sign in with (ADR 0209).
+    memberIdForEmail: async ({ email }) =>
+      (await workAuth.findUserByEmail({ email }))?.id ?? null,
     workerNode: machine.lease,
     clientExecution: true,
     database: databaseConfig,

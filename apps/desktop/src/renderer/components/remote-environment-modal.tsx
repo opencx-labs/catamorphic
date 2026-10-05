@@ -120,7 +120,8 @@ export function RemoteEnvironmentModal({
           <p className="mt-1 text-xs leading-5 text-fg-muted">
             Files you choose, for your sessions on this project's server. Only
             your sessions receive them, and they are never committed or shared
-            with other members.
+            with other members. Keys and other values your sessions need as
+            environment variables belong under Secrets.
           </p>
         </header>
 
