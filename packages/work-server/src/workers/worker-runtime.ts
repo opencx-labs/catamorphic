@@ -192,12 +192,14 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     });
     if (response.ok) {
       const answer: unknown = await response.json();
-      // The control plane wants a new credential and key; work goes on.
+      // The control plane wants a new credential and key; work goes on. An
+      // answer to a call made before this worker rotated is out of date.
       if (
         typeof answer === "object" &&
         answer !== null &&
         "rotate" in answer &&
-        answer.rotate === true
+        answer.rotate === true &&
+        credential === identity.credential
       )
         rotateSoon();
       return answer;
