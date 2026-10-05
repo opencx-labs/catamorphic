@@ -210,6 +210,18 @@ const events = startEventDispatcher({ core: catamorphic.core });
 // on shutdown: await events.stop();
 ```
 
+Directory events (ADR 0209) are Project Events about a whole tenant: register
+`DIRECTORY_TRIGGER_KINDS` from `@catamorphic/server-sdk`, and when an account
+joins, leaves, or changes groups, append
+`directoryProjectEvent({ kind, member, groups, occurredAt, revision })` with
+`core.projectEvents.appendToSubscribers({ tenantId, transaction, ...event })`
+in the transaction that records the change. Only projects with an active
+automation of that kind store it; `revision` counts the account's
+transitions, so a replay is stored once. A kind may require permissions of
+the workflows that bind it (`defineTriggerKind({ requiredPermissions })`);
+these require `memberships:read`, enforced at scan and by the project check.
+The Work server does all of this for every `DirectoryProvider`.
+
 Webhooks are a built-in trigger kind: register `webhook` from
 `@catamorphic/server-sdk` in `triggerKinds`, and pass `publicApiBase` (the
 public URL of the mounted API, including its prefix) to `catamorphicPlugin` or

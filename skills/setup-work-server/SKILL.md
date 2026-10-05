@@ -55,7 +55,7 @@ Start small and add only what the situation needs:
 | --- | --- |
 | Nothing installed; "a brain on this machine" an MCP client can reach | [A first brain on one machine](references/first-brain.md) |
 | Work server image or `apps/server` | [Work server](references/stock-server.md) |
-| Company sign-in through Google Workspace, deprovisioning, groups as roles | [Company identity](references/company-identity.md) |
+| Company sign-in through Google Workspace, deprovisioning, groups as roles, onboarding and offboarding automations | [Company identity](references/company-identity.md) |
 | Credentials, API keys, a production database, query review, vault keys | [Secrets and the gateway](references/secrets-and-gateway.md) |
 | GitHub: a GitHub App, company repositories, pull requests, webhooks | [Connect GitHub](references/connect-github.md) |
 | Slack: a project answering mentions in threads, reading and searching Slack | [Connect Slack](references/connect-slack.md) |

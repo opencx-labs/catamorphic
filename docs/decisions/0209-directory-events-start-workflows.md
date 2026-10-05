@@ -14,14 +14,22 @@ value of their own.
 ## Decision
 
 **Directory trigger kinds.** The Work server fires `directory.member-joined`
-when an account becomes active (its first sign-in, or re-enabled in the
-directory), `directory.member-left` when it is disabled, and
-`directory.groups-changed` when its directory groups change (`added`,
-`removed`). Each carries the member's id, email, name and current groups.
-They are durable project events (ADR 0171), appended only to projects with an
-active subscription, so each subscribed automation sees a change once, and
-`where` filters narrow them (a group, a domain). A workflow subscribing to
-them must declare `memberships:read`.
+when an account becomes active (its first sign-in, or a sign-in the directory
+approves after it was disabled), `directory.member-left` when it is disabled,
+and `directory.groups-changed` when an active member's directory groups change
+(`added`, `removed`). Each carries the member's id, email, name, email domain
+and current groups: the groups the server asks the directory about, which
+include groups a directory binding names; a group it starts or stops asking
+about is no change. They are durable project events (ADR 0171), appended in
+the transaction that records the transition (an account row counts its
+transitions, which name each event) and only to projects with an active
+subscription, so each subscribed automation sees a change once. A `groups`
+config narrows them to members of any of those groups (`where` cannot test
+arrays) and `where` narrows the rest (a domain). A trigger kind may require
+permissions of its subscribers (`requiredPermissions`); these require
+`memberships:read`, which the deploy scan and the project check enforce. The
+sweep checks every member who joined and is not disabled, signed in or not,
+so a departure is always noticed.
 
 **Workflows set secrets.** `host["catamorphic.secrets"]` offers `list()`,
 `set({ name, value, member? })` and `delete({ name, member? })` on the
@@ -39,4 +47,8 @@ values).
 
 An onboarding workflow mints a key on `directory.member-joined`, stores it as
 the member's value, and revokes it on `directory.member-left`. Hosts with
-their own directories fire the same kinds through their `DirectoryProvider`.
+their own directories fire the same kinds through their `DirectoryProvider`,
+or register `DIRECTORY_TRIGGER_KINDS` and append `directoryProjectEvent`s
+with `projectEvents.appendToSubscribers`. Changes from before an automation
+is turned on are not replayed. The sweep asks the directory about every
+member each interval, not only those signed in.
