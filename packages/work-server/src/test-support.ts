@@ -19,6 +19,7 @@ import type { WorkServerOptions } from "./server.js";
 export class FakeDirectory implements DirectoryProvider {
   readonly providerId = "credential";
   readonly requiredGroups: string[] = [];
+  /** Replica memory (single process): a test's directory, never a host's. */
   readonly accounts = new Map<string, DirectoryAccountStatus>();
   unavailable = false;
   calls = 0;
