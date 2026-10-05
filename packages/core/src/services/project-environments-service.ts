@@ -4,6 +4,7 @@ import {
   type EnvironmentNetworkPolicy,
   type EnvironmentRequirements,
   isEgressPattern,
+  VOLUME_NAME_PATTERN,
   type WorkloadKind,
 } from "@catamorphic/sandbox";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
@@ -123,6 +124,58 @@ const NetworkSchema = z.discriminatedUnion("egress", [
   }),
 ]);
 
+/**
+ * A secret name an Environment may list or `project.json` may declare (ADR
+ * 0205): an environment variable name, outside the prefixes Work sets.
+ */
+export const ENVIRONMENT_SECRET_NAME =
+  /^(?!CATAMORPHIC_|WORK_)[A-Z][A-Z0-9_]*$/;
+
+const SecretNameSchema = z
+  .string()
+  .max(128)
+  .regex(
+    ENVIRONMENT_SECRET_NAME,
+    "Secret names are SCREAMING_SNAKE_CASE and do not start with CATAMORPHIC_ or WORK_",
+  );
+
+/** Where a volume mounts: absolute, or `~/...` under the sandbox user's home. */
+const VolumePathSchema = z
+  .string()
+  .min(1)
+  .max(1024)
+  .refine(
+    (path) =>
+      (path === "~" || path.startsWith("~/") || path.startsWith("/")) &&
+      !path.split("/").some((part) => part === ".." || part === ".") &&
+      !/[\0\n]/.test(path),
+    { message: "A volume path is absolute or starts with ~/" },
+  );
+
+const VolumeSchema = z.union([
+  VolumePathSchema,
+  z.strictObject({
+    path: VolumePathSchema,
+    /** Mounted into one sandbox at a time (ADR 0207). */
+    exclusive: z.boolean().optional(),
+    sizeMb: z
+      .number()
+      .int()
+      .positive()
+      .max(1024 * 1024)
+      .optional(),
+  }),
+]);
+
+/** `project.json`'s own secret declarations (ADR 0205). */
+const ProjectSecretDeclarationsSchema = z.record(
+  SecretNameSchema,
+  z.strictObject({
+    label: z.string().max(120).optional(),
+    description: z.string().max(2000).optional(),
+  }),
+);
+
 const ProjectEnvironmentDefinitionSchema = z
   .strictObject({
     description: z.string().optional(),
@@ -177,6 +230,23 @@ const ProjectEnvironmentDefinitionSchema = z
      * credentials: harness logins and listed files (ADR 0184).
      */
     personalCredentials: z.boolean().optional(),
+    /** Project secrets this Environment's sandboxes receive (ADR 0205). */
+    secrets: z.array(SecretNameSchema).max(200).optional(),
+    /** Run in every new workspace's project folder (ADR 0207). */
+    setup: z.string().min(1).max(16_384).optional(),
+    setupTimeoutMinutes: z.number().int().positive().max(240).optional(),
+    /** Directories kept on the machine for each owner (ADR 0207). */
+    volumes: z
+      .record(
+        z
+          .string()
+          .regex(
+            VOLUME_NAME_PATTERN,
+            "Volume names are lowercase letters, digits and dashes",
+          ),
+        VolumeSchema,
+      )
+      .optional(),
     /** Connection aliases, keyed by alias (ADR 0172). */
     connections: z
       .record(
@@ -216,6 +286,26 @@ export interface ProjectEnvironmentDefinition {
   approvals?: { waitMinutes: number };
   /** Members' own chats here may carry their personal credentials (ADR 0184). */
   personalCredentials?: boolean;
+  /** Project secrets this Environment's sandboxes receive (ADR 0205). */
+  secrets?: readonly string[];
+  /** Run in every new workspace's project folder (ADR 0207). */
+  setup?: string;
+  setupTimeoutMinutes?: number;
+  /** Directories kept on the machine for each owner (ADR 0207). */
+  volumes?: Readonly<Record<string, EnvironmentVolume>>;
+}
+
+/** One volume an Environment declares (ADR 0207). */
+export interface EnvironmentVolume {
+  path: string;
+  exclusive?: boolean;
+  sizeMb?: number;
+}
+
+/** A secret `project.json` declares for Environments (ADR 0205). */
+export interface ProjectSecretDeclaration {
+  label?: string;
+  description?: string;
 }
 
 /** Parse an Environment's `image`: a Dockerfile path or an OCI reference. */
@@ -235,6 +325,8 @@ export interface ProjectEnvironmentPolicy {
   environments: Readonly<Record<string, ProjectEnvironmentDefinition>>;
   defaultEnvironment?: string;
   entries: readonly ProjectEnvironmentEntry[];
+  /** Secrets `project.json` declares for Environments (ADR 0205). */
+  secrets: Readonly<Record<string, ProjectSecretDeclaration>>;
   invalid?: { error: string };
 }
 
@@ -247,6 +339,7 @@ function defaultEnvironmentPolicy(): ProjectEnvironmentPolicy {
     environments: { [DEFAULT_ENVIRONMENT]: definition },
     defaultEnvironment: DEFAULT_ENVIRONMENT,
     entries: [{ name: DEFAULT_ENVIRONMENT, definition }],
+    secrets: {},
   };
 }
 
@@ -257,13 +350,29 @@ export function parseProjectEnvironmentPolicy(
     return {
       environments: {},
       entries: [],
+      secrets: {},
       invalid: { error: "Project manifest must be a JSON object" },
     };
   }
   const manifest = raw as Record<string, unknown>;
+  const declared = ProjectSecretDeclarationsSchema.safeParse(
+    manifest.secrets ?? {},
+  );
+  if (!declared.success) {
+    const issue = declared.error.issues[0];
+    return {
+      environments: {},
+      entries: [],
+      secrets: {},
+      invalid: {
+        error: `secrets${issue?.path.length ? `.${issue.path.join(".")}` : ""}: ${issue?.message ?? "invalid"}`,
+      },
+    };
+  }
+  const secrets = declared.data;
   const rawEnvironments = manifest.environments;
   if (rawEnvironments === undefined) {
-    return defaultEnvironmentPolicy();
+    return { ...defaultEnvironmentPolicy(), secrets };
   }
   if (
     typeof rawEnvironments !== "object" ||
@@ -273,6 +382,7 @@ export function parseProjectEnvironmentPolicy(
     return {
       environments: {},
       entries: [],
+      secrets,
       invalid: { error: "Project manifest must declare environments" },
     };
   }
@@ -296,10 +406,20 @@ export function parseProjectEnvironmentPolicy(
           },
         };
       }
-      const { image, ...rest } = parsed.data;
+      const { image, volumes, ...rest } = parsed.data;
       const definition: ProjectEnvironmentDefinition = {
         ...rest,
         ...(image ? { image: environmentImage(image) } : {}),
+        ...(volumes
+          ? {
+              volumes: Object.fromEntries(
+                Object.entries(volumes).map(([name, volume]) => [
+                  name,
+                  typeof volume === "string" ? { path: volume } : volume,
+                ]),
+              ),
+            }
+          : {}),
       };
       return { name, definition };
     })
@@ -318,6 +438,7 @@ export function parseProjectEnvironmentPolicy(
     return {
       environments,
       entries,
+      secrets,
       invalid: {
         error: "defaultEnvironment must name a valid declared Environment",
       },
@@ -326,6 +447,7 @@ export function parseProjectEnvironmentPolicy(
   return {
     environments,
     entries,
+    secrets,
     ...(typeof defaultEnvironment === "string" ? { defaultEnvironment } : {}),
   };
 }
@@ -371,6 +493,7 @@ export class ProjectEnvironmentsService {
       return {
         environments: {},
         entries: [],
+        secrets: {},
         invalid: {
           error: `Project manifest is not valid JSON: ${
             cause instanceof Error ? cause.message : String(cause)

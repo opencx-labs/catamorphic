@@ -11,6 +11,7 @@ import type {
   WorkflowTypeError,
 } from "./json.js";
 import type { WorkflowPermission } from "./permissions.js";
+import type { SecretHostOperations } from "./secret-operations.js";
 import type { SessionHostOperations } from "./session-operations.js";
 
 export interface RetryBackoff {
@@ -296,6 +297,7 @@ export interface BoundaryContext<Input> {
   /** Host-executed capability calls, caller-bound (ADR 0055). */
   readonly host: HostNamespace & {
     readonly "catamorphic.sessions": SessionHostOperations;
+    readonly "catamorphic.secrets": SecretHostOperations;
   };
   /** The documents surface, caller-bound (ADR 0055). */
   readonly documents: DocumentsCalls;

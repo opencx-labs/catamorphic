@@ -213,6 +213,8 @@ export type {
   SandboxResources,
   SandboxStatus,
   SandboxType,
+  SandboxVolume,
+  SandboxVolumeProvider,
   StepEntry,
 } from "./types.js";
 export {
@@ -224,6 +226,9 @@ export {
   type SignInHarness,
   signInCapability,
   signInHomePath,
+  VOLUME_KEY_PATTERN,
+  VOLUME_NAME_PATTERN,
+  volumeKey,
 } from "./types.js";
 export type { WorkflowPackagePayload } from "./workflow-package.js";
 export {

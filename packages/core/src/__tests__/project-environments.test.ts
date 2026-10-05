@@ -20,6 +20,7 @@ describe("project Environment policy", () => {
           },
         },
       ],
+      secrets: {},
     });
   });
 
@@ -227,5 +228,68 @@ describe("project Environment policy", () => {
       },
     });
     expect(parsed.entries[0]?.invalid).toBeDefined();
+  });
+
+  it("parses secrets, setup and volumes (ADRs 0205, 0207)", () => {
+    const parsed = parseProjectEnvironmentPolicy({
+      secrets: {
+        CLICKHOUSE_API_KEY: { description: "Your ClickHouse key" },
+        SENTRY_DSN: {},
+      },
+      environments: {
+        dev: {
+          workloads: ["agent"],
+          secrets: ["CLICKHOUSE_API_KEY", "SENTRY_DSN"],
+          setup: "pnpm install --frozen-lockfile",
+          setupTimeoutMinutes: 45,
+          volumes: {
+            pnpm: "~/.local/share/pnpm/store",
+            docker: { path: "/var/lib/docker", exclusive: true, sizeMb: 20480 },
+          },
+        },
+      },
+    });
+    expect(parsed.invalid).toBeUndefined();
+    expect(parsed.secrets).toEqual({
+      CLICKHOUSE_API_KEY: { description: "Your ClickHouse key" },
+      SENTRY_DSN: {},
+    });
+    expect(parsed.environments.dev).toMatchObject({
+      secrets: ["CLICKHOUSE_API_KEY", "SENTRY_DSN"],
+      setup: "pnpm install --frozen-lockfile",
+      setupTimeoutMinutes: 45,
+      volumes: {
+        pnpm: { path: "~/.local/share/pnpm/store" },
+        docker: { path: "/var/lib/docker", exclusive: true, sizeMb: 20480 },
+      },
+    });
+  });
+
+  it.each([
+    ["a lowercase secret", { secrets: ["api_key"] }, "secrets"],
+    ["a reserved secret prefix", { secrets: ["WORK_TOKEN"] }, "secrets"],
+    [
+      "a relative volume path",
+      { volumes: { cache: "node_modules" } },
+      "volumes",
+    ],
+    [
+      "a volume path that climbs",
+      { volumes: { cache: "~/../etc" } },
+      "volumes",
+    ],
+    ["an invalid volume name", { volumes: { Cache: "~/.cache" } }, "volumes"],
+  ])("reports %s as an invalid Environment", (_name, extra, message) => {
+    const parsed = parseProjectEnvironmentPolicy({
+      environments: { dev: { workloads: ["agent"], ...extra } },
+    });
+    expect(parsed.entries[0]?.invalid?.error).toContain(message);
+  });
+
+  it("reports invalid secret declarations for the whole manifest", () => {
+    const parsed = parseProjectEnvironmentPolicy({
+      secrets: { "not-a-name": {} },
+    });
+    expect(parsed.invalid?.error).toContain("secrets");
   });
 });

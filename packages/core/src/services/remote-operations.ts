@@ -4,6 +4,7 @@ import {
   PROCESS_SIGNALS,
   type SandboxProcessProvider,
   type SandboxProvider,
+  VOLUME_KEY_PATTERN,
 } from "@catamorphic/sandbox";
 import { type Kysely, sql, type Transaction } from "kysely";
 import { z } from "zod";
@@ -61,6 +62,19 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
           z.object({
             harness: z.enum(["claude-code", "codex"]),
             member: z.string().min(1),
+          }),
+        )
+        .readonly()
+        .optional(),
+      // Directories the executor keeps across sandboxes (ADR 0207).
+      volumes: z
+        .array(
+          z.object({
+            key: z.string().regex(VOLUME_KEY_PATTERN),
+            path: z.string().min(1).max(1024),
+            exclusive: z.boolean().optional(),
+            sizeMb: z.number().int().positive().optional(),
+            temporary: z.boolean().optional(),
           }),
         )
         .readonly()
