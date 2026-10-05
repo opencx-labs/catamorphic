@@ -1463,6 +1463,11 @@ export interface paths {
                                 bytes: number;
                                 updatedAt: string;
                             }[];
+                            /** @description The caller's own setup command, when they sent one */
+                            setup: {
+                                command: string;
+                                updatedAt: string;
+                            } | null;
                         };
                     };
                 };
@@ -1510,7 +1515,7 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            /** @description The caller's personal files for this project; replaces what the server holds */
+            /** @description The caller's personal files and setup for this project; replaces what the server holds */
             requestBody: {
                 content: {
                     "application/json": {
@@ -1521,6 +1526,8 @@ export interface paths {
                             /** @description The file's bytes, base64 */
                             content: string;
                         }[];
+                        /** @description The caller's own setup command, run after the Environment's in each new workspace of their own chats (ADR 0207); absent or blank for none */
+                        setup?: string;
                     };
                 };
             };
@@ -1540,6 +1547,11 @@ export interface paths {
                                 bytes: number;
                                 updatedAt: string;
                             }[];
+                            /** @description The caller's own setup command, when they sent one */
+                            setup: {
+                                command: string;
+                                updatedAt: string;
+                            } | null;
                         };
                     };
                 };
@@ -9972,7 +9984,7 @@ export interface paths {
                         /** @enum {string} */
                         isolation?: "none" | "process" | "sandbox";
                         processes?: boolean;
-                        capabilities?: ("images" | "images.build" | "containers" | "network.policy")[];
+                        capabilities?: ("images" | "images.build" | "containers" | "network.policy" | "volumes")[];
                     };
                 };
             };
@@ -10114,6 +10126,13 @@ export interface paths {
                                         /** @enum {string} */
                                         harness: "claude-code" | "codex";
                                         member: string;
+                                    }[];
+                                    readonly volumes?: {
+                                        key: string;
+                                        path: string;
+                                        exclusive?: boolean;
+                                        sizeMb?: number;
+                                        temporary?: boolean;
                                     }[];
                                 };
                             } | {

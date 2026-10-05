@@ -43,6 +43,7 @@ const remote = (
 ): RemotePersonalEnvironment => ({
   allowed: true,
   files: [],
+  setup: null,
   ...overrides,
 });
 
@@ -117,6 +118,35 @@ describe("shouldUpload", () => {
     ).toBe(false);
   });
 
+  it("sends again when the server's setup differs from the local one", () => {
+    const withSetup: PersonalEnvironmentSnapshot = {
+      ...local,
+      setup: "mise install",
+      fingerprint: snapshotFingerprint({ ...local, setup: "mise install" }),
+    };
+    expect(withSetup.fingerprint).not.toBe(local.fingerprint);
+    expect(
+      shouldUpload({
+        snapshot: withSetup,
+        lastSentFingerprint: withSetup.fingerprint,
+        remote: matching,
+      }),
+    ).toBe(true);
+    expect(
+      shouldUpload({
+        snapshot: withSetup,
+        lastSentFingerprint: withSetup.fingerprint,
+        remote: {
+          ...matching,
+          setup: { command: "mise install", updatedAt: at(-1) },
+        },
+      }),
+    ).toBe(false);
+    expect(uploadFromSnapshot(withSetup)).toMatchObject({
+      setup: "mise install",
+    });
+  });
+
   it("sends again when the server's copy drifted", () => {
     const sent = local.fingerprint;
     expect(
@@ -176,11 +206,14 @@ describe("PersonalEnvironmentSync", () => {
                 bytes: Buffer.from(entry.content, "base64").length,
                 updatedAt: at(0),
               })),
+              setup: body.setup
+                ? { command: body.setup, updatedAt: at(0) }
+                : null,
             };
         },
       ),
       deletePersonalEnvironment: vi.fn(async () => {
-        if (server) server = { ...server, files: [] };
+        if (server) server = { ...server, files: [], setup: null };
       }),
     };
     const sync = new PersonalEnvironmentSync({
@@ -264,6 +297,30 @@ describe("PersonalEnvironmentSync", () => {
     });
     expect(JSON.stringify(status)).not.toContain("B=3");
     expect(status).not.toHaveProperty("logins");
+  });
+
+  it("sends the member's own setup, shows it, and sends again when it changes", async () => {
+    const env = setup({ config: { files: [], setup: "mise install" } });
+    const view = await env.sync.syncNow(env.target);
+    expect(env.puts).toEqual([{ files: [], setup: "mise install" }]);
+    expect(view.setup).toEqual({
+      command: "mise install",
+      server: { updatedAt: at(0) },
+    });
+    const status = JSON.parse(
+      fs.readFileSync(
+        path.join(env.root, PERSONAL_ENVIRONMENT_STATUS_PATH),
+        "utf8",
+      ),
+    );
+    expect(status.setup).toEqual({ command: "mise install", onServer: true });
+    fs.writeFileSync(
+      path.join(env.root, PERSONAL_ENVIRONMENT_PATH),
+      JSON.stringify({ files: [] }),
+    );
+    const cleared = await env.sync.syncNow(env.target);
+    expect(env.puts.at(-1)).toEqual({ files: [] });
+    expect(cleared.setup).toBeNull();
   });
 
   it("sends nothing where no Environment allows it and takes back an old copy", async () => {

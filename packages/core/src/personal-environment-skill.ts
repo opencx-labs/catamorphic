@@ -49,6 +49,15 @@ A listed file the repository already tracks, or one whose path goes
 through a symbolic link, is left alone rather than overwritten; change
 tracked files in the repository instead.
 
+## The person's own setup
+
+The same file may hold a \`setup\` command beside \`files\`, such as
+\`"setup": "mise install"\`: their own tools, run in the project folder of
+each new workspace of their own chats, after the Environment's \`setup\`, and
+again when it changes. Its output is in \`.work-session/setup.log\` beside the
+project. Like the files, it runs only in their own chats, for messages they
+wrote. Change it in that file on their computer, not here.
+
 ## When something is missing
 
 - A missing private file: check \`git ls-files --error-unmatch <path>\`

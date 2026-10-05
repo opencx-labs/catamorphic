@@ -2468,6 +2468,13 @@ export const PutPersonalEnvironmentSchema = z
         )
         .max(50)
         .default([]),
+      setup: z
+        .string()
+        .max(16_384)
+        .optional()
+        .describe(
+          "The caller's own setup command, run after the Environment's in each new workspace of their own chats (ADR 0207); absent or blank for none",
+        ),
     },
     {
       error: (issue) =>
@@ -2477,7 +2484,7 @@ export const PutPersonalEnvironmentSchema = z
     },
   )
   .describe(
-    "The caller's personal files for this project; replaces what the server holds",
+    "The caller's personal files and setup for this project; replaces what the server holds",
   );
 
 export const PersonalEnvironmentSchema = z.object({
@@ -2494,6 +2501,10 @@ export const PersonalEnvironmentSchema = z.object({
       updatedAt: z.string(),
     }),
   ),
+  setup: z
+    .object({ command: z.string(), updatedAt: z.string() })
+    .nullable()
+    .describe("The caller's own setup command, when they sent one"),
 });
 
 export const PersonalEnvironmentInvalidSchema = z.object({

@@ -1,7 +1,16 @@
+import type { DB } from "@catamorphic/db";
 import type { CreateSandboxOpts, SandboxProvider } from "@catamorphic/sandbox";
+import type { Kysely } from "kysely";
 import { describe, expect, it } from "vitest";
 import { withAllocationSandboxPolicy } from "../services/allocation-sandbox-provider.js";
 import type { ExecutionAllocation } from "../services/execution-allocations-service.js";
+
+/** No volumes here, so the policy never asks the database for holds. */
+const db = new Proxy({} as Kysely<DB>, {
+  get() {
+    throw new Error("The database must not be used");
+  },
+});
 
 class MemberMachine {
   readonly workspaceRoot = "/workspace";
@@ -62,6 +71,7 @@ describe("withAllocationSandboxPolicy", () => {
       digest: "abc",
     };
     const provider = withAllocationSandboxPolicy({
+      db,
       allocation: allocation({ image, egress: { mode: "open" } }),
       provider: machine as unknown as SandboxProvider,
     });
@@ -76,6 +86,7 @@ describe("withAllocationSandboxPolicy", () => {
     const machine = new MemberMachine() as unknown as SandboxProvider;
     expect(
       withAllocationSandboxPolicy({
+        db,
         allocation: allocation(undefined),
         provider: machine,
       }),

@@ -6,17 +6,22 @@ import { PROJECT_PERSONAL_DIR } from "@catamorphic/workflow/project-layout";
 
 /**
  * `.work/personal/environment.json` (ADR 0184): which project files reach
- * the member's sessions on the linked Work server. Sign-ins never do (ADR
- * 0199). Inside the git-excluded personal folder, so it never ships.
+ * the member's sessions on the linked Work server, and the member's own
+ * `setup` command for their workspaces there (ADR 0207). Sign-ins never do
+ * (ADR 0199). Inside the git-excluded personal folder, so it never ships.
  */
 export const PERSONAL_ENVIRONMENT_PATH = `${PROJECT_PERSONAL_DIR}/environment.json`;
 /** Status for agents and people: no secrets, rewritten only on change. */
 export const PERSONAL_ENVIRONMENT_STATUS_PATH = `${PROJECT_PERSONAL_DIR}/environment-status.json`;
 export const PERSONAL_FILE_MAX_BYTES = 256 * 1024;
 export const PERSONAL_FILES_MAX = 50;
+/** The longest setup command the server keeps. */
+export const PERSONAL_SETUP_MAX_LENGTH = 16_384;
 
 export interface PersonalEnvironmentConfig {
   files: string[];
+  /** Runs after the Environment's setup in each new workspace (ADR 0207). */
+  setup?: string;
 }
 
 export type ParsedPersonalEnvironment =
@@ -69,13 +74,26 @@ export function parsePersonalEnvironmentConfig(
       ok: false,
       error: `Remove "logins": sign-ins stay on the machine they were made on and are never sent to the server`,
     };
-  const unknown = Object.keys(value).filter((key) => key !== "files");
+  const unknown = Object.keys(value).filter(
+    (key) => key !== "files" && key !== "setup",
+  );
   if (unknown.length > 0)
     return {
       ok: false,
       error: `Unknown ${unknown.length === 1 ? "key" : "keys"} ${unknown
         .map((key) => `"${key}"`)
-        .join(", ")}; use "files"`,
+        .join(", ")}; use "files" and "setup"`,
+    };
+  const setup = "setup" in value ? value.setup : undefined;
+  if (setup !== undefined && typeof setup !== "string")
+    return {
+      ok: false,
+      error: `"setup" must be a shell command, like "mise install"`,
+    };
+  if (setup !== undefined && setup.length > PERSONAL_SETUP_MAX_LENGTH)
+    return {
+      ok: false,
+      error: `"setup" is longer than ${PERSONAL_SETUP_MAX_LENGTH} characters`,
     };
   const files: string[] = [];
   if ("files" in value) {
@@ -98,13 +116,20 @@ export function parsePersonalEnvironmentConfig(
         error: `List at most ${PERSONAL_FILES_MAX} files`,
       };
   }
-  return { ok: true, config: { files } };
+  return {
+    ok: true,
+    config: { files, ...(setup?.trim() ? { setup } : {}) },
+  };
 }
 
 export function serializePersonalEnvironmentConfig(
   config: PersonalEnvironmentConfig,
 ): string {
-  return `${JSON.stringify({ files: config.files }, null, 2)}\n`;
+  return `${JSON.stringify(
+    { files: config.files, ...(config.setup ? { setup: config.setup } : {}) },
+    null,
+    2,
+  )}\n`;
 }
 
 export interface PersonalEnvironmentFile {

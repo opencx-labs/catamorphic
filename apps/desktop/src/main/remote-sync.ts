@@ -157,12 +157,12 @@ type DeployResult =
   DeployRoute["post"]["responses"][200]["content"]["application/json"];
 /**
  * `PUT /projects/:projectId/personal-environment` (ADR 0184): replaces the
- * caller's own files for the project, contents as base64. Sign-ins are never
- * sent (ADR 0199).
+ * caller's own files for the project, contents as base64, and their own
+ * setup command (ADR 0207). Sign-ins are never sent (ADR 0199).
  */
 export type RemotePersonalEnvironmentUpload = PersonalEnvironmentInput;
 
-/** `GET /projects/:projectId/personal-environment`: never any contents. */
+/** `GET /projects/:projectId/personal-environment`: never any file contents. */
 export type RemotePersonalEnvironment = PersonalEnvironmentStatus;
 
 /** Reads the status defensively: sync decisions depend on it. */
@@ -191,7 +191,19 @@ export function parseRemotePersonalEnvironment(
       ];
     },
   );
-  return { allowed: body.allowed, files };
+  const setup = object(body.setup);
+  return {
+    allowed: body.allowed,
+    files,
+    setup:
+      setup && typeof setup.command === "string"
+        ? {
+            command: setup.command,
+            updatedAt:
+              typeof setup.updatedAt === "string" ? setup.updatedAt : "",
+          }
+        : null,
+  };
 }
 
 /** A 401 from the host: the token no longer works. */

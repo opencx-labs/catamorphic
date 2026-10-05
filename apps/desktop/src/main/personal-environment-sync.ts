@@ -24,9 +24,10 @@ import {
 
 /**
  * Keeps each linked project's remote environment (ADR 0184) current: the
- * member's listed files, sent to the Work server when they change and
- * checked on a timer and on focus. Sign-ins are never sent: they stay on
- * the machine they were made on (ADR 0199).
+ * member's listed files and their own setup command (ADR 0207), sent to
+ * the Work server when they change and checked on a timer and on focus.
+ * Sign-ins are never sent: they stay on the machine they were made on
+ * (ADR 0199).
  */
 
 /** How often each linked server is asked about the environment. */
@@ -49,17 +50,21 @@ export interface PersonalEnvironmentLink {
 
 export interface PersonalEnvironmentSnapshot {
   files: ListedFile[];
+  /** The member's own setup command (ADR 0207). */
+  setup?: string;
   fingerprint: string;
 }
 
 export function snapshotFingerprint(args: {
   files: readonly ListedFile[];
+  setup?: string;
 }): string {
   return sha256(
     JSON.stringify({
       files: args.files.flatMap((file) =>
         file.fingerprint ? [[file.path, file.fingerprint]] : [],
       ),
+      setup: args.setup ?? null,
     }),
   );
 }
@@ -73,6 +78,7 @@ export function uploadFromSnapshot(
         ? [{ path: file.path, content: file.content.toString("base64") }]
         : [],
     ),
+    ...(snapshot.setup ? { setup: snapshot.setup } : {}),
   };
 }
 
@@ -91,7 +97,10 @@ export function shouldUpload(args: {
     .filter((file) => file.content)
     .map((file) => file.path)
     .sort();
-  return remoteFiles.join("\u0000") !== localFiles.join("\u0000");
+  return (
+    remoteFiles.join("\u0000") !== localFiles.join("\u0000") ||
+    (args.remote.setup?.command ?? null) !== (args.snapshot.setup ?? null)
+  );
 }
 
 interface LinkState {
@@ -304,13 +313,18 @@ export class PersonalEnvironmentSync {
       };
     const config = file.parsed.config;
     const files = await readListedFiles({ root, files: config.files });
+    const setup = config.setup ? { setup: config.setup } : {};
     return {
       configFingerprint: file.fingerprint,
       config,
       exists: file.exists,
       error: null,
       files,
-      snapshot: { files, fingerprint: snapshotFingerprint({ files }) },
+      snapshot: {
+        files,
+        ...setup,
+        fingerprint: snapshotFingerprint({ files, ...setup }),
+      },
     };
   }
 
@@ -357,7 +371,7 @@ export class PersonalEnvironmentSync {
     try {
       if (!remote.allowed) {
         // Nothing may use it: take back what an earlier Environment allowed.
-        if (remote.files.length > 0) {
+        if (remote.files.length > 0 || remote.setup) {
           await link.client.deletePersonalEnvironment();
           state.remote = await link.client.personalEnvironment();
           state.lastSentFingerprint = null;
@@ -436,6 +450,8 @@ export class PersonalEnvironmentSync {
     const localFiles = new Map(
       (state?.files ?? []).map((file) => [file.path, file]),
     );
+    const setup = config?.setup;
+    const remoteSetup = state?.remote?.setup;
     return {
       projectId,
       configPath: PERSONAL_ENVIRONMENT_PATH,
@@ -454,6 +470,15 @@ export class PersonalEnvironmentSync {
             : null,
         };
       }),
+      setup: setup
+        ? {
+            command: setup,
+            server:
+              remoteSetup?.command === setup
+                ? { updatedAt: remoteSetup.updatedAt }
+                : null,
+          }
+        : null,
       lastSyncAt: state?.lastSyncAt ?? null,
       lastCheckedAt: state?.lastCheckedAt ?? null,
       error: state?.error ?? null,
@@ -476,6 +501,9 @@ export class PersonalEnvironmentSync {
         problem: file.problem,
         onServer: file.server !== null,
       })),
+      setup: view.setup
+        ? { command: view.setup.command, onServer: view.setup.server !== null }
+        : null,
     };
     const text = `${JSON.stringify(status, null, 2)}\n`;
     if (text === state.statusText) return;

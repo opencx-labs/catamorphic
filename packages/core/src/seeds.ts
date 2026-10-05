@@ -535,6 +535,21 @@ provide it take the work:
   "*.npmjs.org"] }\`. A restricted image must already contain git and bash.
 - \`approvals.waitMinutes\`: how long an unattended chat waits for a person
   to approve before the action is refused (30 by default).
+- \`setup\`: a shell command run in the project folder of every new
+  workspace before its first turn, and again when it changes
+  (\`"pnpm install --frozen-lockfile"\`), within \`setupTimeoutMinutes\` (30
+  by default). The image holds the toolchain; setup installs the project's
+  dependencies. Its output is in \`.work-session/setup.log\` beside the
+  project; a failure is told to the agent and runs again next turn. A
+  member may add their own \`setup\` in their
+  \`.work/personal/environment.json\`, run after this one in their own chats.
+- \`volumes\`: directories kept on the machine for each owner and project,
+  so later workspaces start warm: \`{ "pnpm": "~/.local/share/pnpm/store",
+  "docker": { "path": "/var/lib/docker", "exclusive": true, "sizeMb":
+  20480 } }\`. A path is absolute or starts with \`~/\`. An \`exclusive\`
+  volume (a Docker data root, a database) is mounted into one sandbox at a
+  time; a workspace that finds it held gets an empty one and is told. Only
+  machines that keep volumes take such work.
 
 An agent definition's \`sandboxing\` says what may leave its sandbox, and the
 host enforces it: \`contained\` agents may do anything inside their sandbox,

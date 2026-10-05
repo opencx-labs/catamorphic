@@ -9,27 +9,41 @@ import type {
 } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import type { ExecutionAllocation } from "./execution-allocations-service.js";
+import { holdVolumes, sweepVolumeHolds } from "./volume-holds.js";
 
 /**
- * The Allocation's image, containers and egress (ADR 0176) on a provider
- * that keeps its own sandbox lifecycle, such as a member's computer: the
- * Environment decides what its sandboxes boot, wherever they run.
+ * The Allocation's image, containers and egress (ADR 0176) and volumes (ADR
+ * 0207) on a provider that keeps its own sandbox lifecycle, such as a
+ * member's computer: the Environment decides what its sandboxes boot,
+ * wherever they run.
  */
 export function withAllocationSandboxPolicy(args: {
+  db: Kysely<DB>;
   allocation: ExecutionAllocation;
   provider: SandboxProvider;
 }): SandboxProvider {
   const { provider } = args;
   const sandbox = args.allocation.policy.sandbox;
-  if (!sandbox?.image && !sandbox?.containers && !sandbox?.egress)
+  if (
+    !sandbox?.image &&
+    !sandbox?.containers &&
+    !sandbox?.egress &&
+    !sandbox?.volumes?.length
+  )
     return provider;
-  const createSandbox = (opts: CreateSandboxOpts) =>
-    provider.createSandbox({
+  const createSandbox = async (opts: CreateSandboxOpts) => {
+    const volumes = await holdVolumes({
+      db: args.db,
+      allocation: args.allocation,
+    });
+    return provider.createSandbox({
       ...opts,
       ...(sandbox.image ? { image: sandbox.image } : {}),
       ...(sandbox.containers ? { containers: true } : {}),
       ...(sandbox.egress ? { egress: sandbox.egress } : {}),
+      ...(volumes.length > 0 ? { volumes } : {}),
     });
+  };
   return new Proxy(provider, {
     get(target, property) {
       if (property === "createSandbox") return createSandbox;
@@ -117,13 +131,16 @@ export function allocationSandboxProvider(args: {
     // Keep the reservation on an uncertain create. Lease expiry does not prove
     // that the provider failed to allocate a machine.
     // The Environment's image, containers and egress were fixed when the
-    // Allocation was admitted; no caller can widen them (ADR 0176).
+    // Allocation was admitted; no caller can widen them (ADR 0176). Its
+    // exclusive volumes are held for this sandbox on the node (ADR 0207).
     const sandbox = allocation.policy.sandbox;
+    const volumes = await holdVolumes({ db, allocation });
     const handle = await provider.createSandbox({
       ...opts,
       ...(sandbox?.image ? { image: sandbox.image } : {}),
       ...(sandbox?.containers ? { containers: true } : {}),
       ...(sandbox?.egress ? { egress: sandbox.egress } : {}),
+      ...(volumes.length > 0 ? { volumes } : {}),
       resources,
       labels: {
         ...opts.labels,
@@ -466,6 +483,11 @@ export async function cleanupWorkerAllocations(args: {
           failures.push(error);
         }
       }
+      // Holds end with their sandboxes (migration 051's trigger); any whose
+      // Allocation is gone some other way are let go here.
+      await sweepVolumeHolds({ db: args.db, node: node.id }).catch(
+        (error: unknown) => failures.push(error),
+      );
       if (failures.length > 0)
         throw new AggregateError(
           failures,

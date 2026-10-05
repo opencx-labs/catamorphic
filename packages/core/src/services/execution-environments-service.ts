@@ -18,6 +18,7 @@ import {
   resolveEgress,
   SANDBOX_CAPABILITIES,
   signInCapability,
+  volumeKey,
 } from "@catamorphic/sandbox";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import type { Identity } from "../identity.js";
@@ -26,15 +27,18 @@ import {
   identityMayUseEnvironment,
   isProjectPrincipal,
   mayUseProject,
+  PROJECT_PRINCIPAL_ID,
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ResolvedConnectionBinding } from "./connection-types.js";
 import type {
   EnvironmentAllocationPolicy,
   EnvironmentSandbox,
+  EnvironmentSandboxVolume,
 } from "./execution-allocations-service.js";
 import {
   DEFAULT_IDLE_RELEASE_MINUTES,
+  DEFAULT_SETUP_TIMEOUT_MINUTES,
   type ProjectEnvironmentDefinition,
   type ProjectEnvironmentsService,
 } from "./project-environments-service.js";
@@ -58,8 +62,13 @@ export interface EnvironmentAdmission {
   runtime: EnvironmentRuntimeBinding;
   binding: EnvironmentBinding;
   effectiveRequirements: EnvironmentRequirements;
-  /** What the sandbox is given: image, containers, egress (ADR 0176). */
+  /** What the sandbox is given: image, containers, egress (ADR 0176), volumes (ADR 0207). */
   sandbox: EnvironmentSandbox;
+  /**
+   * What runs in each new workspace's project folder before its first turn
+   * (ADR 0207), as the Environment says now: a changed command runs again.
+   */
+  setup?: { command: string; timeoutMinutes: number };
   /** How long unattended escalations wait for a person (ADR 0176). */
   approvals?: { waitMinutes: number };
   /**
@@ -163,7 +172,36 @@ export function sandboxCapabilitiesFor(
     ...(definition.network && definition.network.egress !== "open"
       ? [SANDBOX_CAPABILITIES.egressPolicy]
       : []),
+    ...(Object.keys(definition.volumes ?? {}).length > 0
+      ? [SANDBOX_CAPABILITIES.volumes]
+      : []),
   ];
+}
+
+/**
+ * An Environment's volumes as one owner's sandboxes mount them (ADR 0207):
+ * each keyed by project, owner and name, so every sandbox of that owner on
+ * a machine sees the same directory and nobody else's does. `owner` is a
+ * member, or null for the project's own work.
+ */
+export function environmentSandboxVolumes(input: {
+  projectId: string;
+  owner: string | null;
+  volumes: ProjectEnvironmentDefinition["volumes"];
+}): EnvironmentSandboxVolume[] {
+  return Object.entries(input.volumes ?? {})
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([name, volume]) => ({
+      name,
+      key: volumeKey({
+        projectId: input.projectId,
+        owner: input.owner ?? PROJECT_PRINCIPAL_ID,
+        name,
+      }),
+      path: volume.path,
+      ...(volume.exclusive ? { exclusive: true } : {}),
+      ...(volume.sizeMb ? { sizeMb: volume.sizeMb } : {}),
+    }));
 }
 
 export interface EnvironmentDiscoveryItem {
@@ -654,7 +692,7 @@ export class ExecutionEnvironmentsService {
           ],
         };
     }
-    const sandbox = await this.sandboxFor({ ...args, definition });
+    const sandbox = await this.sandboxFor({ ...args, definition, owner });
     if ("reason" in sandbox)
       return { bindingUnavailable: false, reasons: [sandbox.reason] };
     return {
@@ -665,26 +703,46 @@ export class ExecutionEnvironmentsService {
         binding: runtime.descriptor,
         effectiveRequirements,
         sandbox,
+        ...(definition.setup
+          ? {
+              setup: {
+                command: definition.setup,
+                timeoutMinutes:
+                  definition.setupTimeoutMinutes ??
+                  DEFAULT_SETUP_TIMEOUT_MINUTES,
+              },
+            }
+          : {}),
         ...(definition.approvals ? { approvals: definition.approvals } : {}),
         personalCredentials: personal.allowed,
       },
     };
   }
 
-  /** Resolve the image, containers and egress one Allocation's sandbox gets. */
+  /**
+   * Resolve the image, containers, egress and volumes one Allocation's
+   * sandbox gets; volumes are the placement owner's.
+   */
   private async sandboxFor(args: {
     identity: Identity;
     projectId: string;
     definition: ProjectEnvironmentDefinition;
+    owner: string | null;
   }): Promise<EnvironmentSandbox | { reason: string }> {
     const { definition } = args;
     const egress = resolveEgress({
       policy: definition.network,
       gatewayHosts: this.options.gatewayHosts ?? [],
     });
+    const volumes = environmentSandboxVolumes({
+      projectId: args.projectId,
+      owner: args.owner,
+      volumes: definition.volumes,
+    });
     const common: EnvironmentSandbox = {
       ...(definition.requirements?.containers ? { containers: true } : {}),
       ...(egress.mode === "open" ? {} : { egress }),
+      ...(volumes.length > 0 ? { volumes } : {}),
     };
     const image = definition.image;
     if (!image) return common;
