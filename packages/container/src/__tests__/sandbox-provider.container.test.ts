@@ -3,6 +3,7 @@ import http from "node:http";
 import type net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { RUNTIME_PROTOCOL_VERSION } from "@catamorphic/runtime";
 import {
   dockerfileDigest,
   followProcess,
@@ -469,6 +470,74 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0203)", () => {
       expect(fs.readFileSync(path.join(home, "refresh"), "utf8")).toBe(
         "refreshed\n",
       );
+    },
+    10 * MINUTES,
+  );
+
+  it(
+    "runs a warm deployment runtime over the command's input and output",
+    async () => {
+      const sandboxProvider = provider();
+      const id = await created(sandboxProvider);
+      await sandboxProvider.uploadFiles(
+        id,
+        {
+          "workflow.mjs": `export const greeter = {
+  steps: [
+    {
+      run: async ({ input }) =>
+        globalThis.__catamorphicRunStep(
+          "greet-node",
+          "Greet",
+          async () => ({ message: \`hello \${input.name}\` }),
+          input,
+        ),
+    },
+  ],
+};`,
+        },
+        "/workspace/project",
+      );
+      const identity = {
+        deploymentArtifactId: "artifact-1",
+        artifactDigest: "digest-1",
+        transformVersion: "transform-1",
+        runtimeVersion: "runtime-1",
+      };
+      const runtime = await sandboxProvider.deploymentRuntime.ensureRuntime({
+        sandboxId: id,
+        ...identity,
+        workingDirectory: "/workspace/project",
+        maxConcurrency: 1,
+      });
+      const receipt = await sandboxProvider.deploymentRuntime.invoke({
+        runtimeId: runtime.runtimeId,
+        protocolVersion: RUNTIME_PROTOCOL_VERSION,
+        invocationId: "invocation-1",
+        ...identity,
+        kind: "durable-boundary",
+        target: {
+          modulePath: "workflow.mjs",
+          exportName: "greeter",
+          stepIndex: 0,
+        },
+        input: { value: { name: "Ada" } },
+        attempt: 1,
+        deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+      });
+      expect(receipt.terminal).toMatchObject({
+        status: "completed",
+        result: { type: "completed", output: { message: "hello Ada" } },
+      });
+      // Releasing the sandbox stops its supervisor.
+      await sandboxProvider.deploymentRuntime.releaseSandbox?.({
+        sandboxId: id,
+      });
+      const left = await sandboxProvider.executeCommand(
+        id,
+        "ps -o args | grep -c '[e]ntry.mjs' || true",
+      );
+      expect(left.result.trim()).toBe("0");
     },
     10 * MINUTES,
   );

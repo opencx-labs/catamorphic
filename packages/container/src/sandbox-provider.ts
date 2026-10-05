@@ -33,11 +33,7 @@ import {
   APP_DATA_ENV,
   APP_DATA_MOUNT,
 } from "@catamorphic/workflow/project-layout";
-import {
-  DockerApiError,
-  DockerClient,
-  dockerEndpoint,
-} from "./docker-client.js";
+import { DockerApiError, DockerClient } from "./docker-client.js";
 import {
   type EgressLookup,
   type EgressPolicy,
@@ -121,7 +117,10 @@ const KILL_TRACKED = [
 ].join("\n");
 
 export interface ContainerProviderConfig {
-  /** The Docker Engine API; `DOCKER_HOST` or the default socket otherwise. */
+  /**
+   * The Docker Engine API; `/var/run/docker.sock` by default. Hosts pass
+   * a client for `DOCKER_HOST` (see `dockerEndpoint`).
+   */
   docker?: DockerClient;
   /**
    * The runtime every sandbox runs under, as {@link probeContainerSupport}
@@ -223,9 +222,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
 
   constructor(config: ContainerProviderConfig) {
     this.config = config;
-    this.docker =
-      config.docker ??
-      new DockerClient(dockerEndpoint(process.env.DOCKER_HOST));
+    this.docker = config.docker ?? new DockerClient();
     this.usage = new VolumeUsageLog(
       path.join(config.stateDirectory, "volumes.json"),
     );

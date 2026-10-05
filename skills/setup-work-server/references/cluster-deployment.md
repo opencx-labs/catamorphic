@@ -24,7 +24,7 @@ Every machine (control plane or worker) runs its sandboxes with one backend
 | --- | --- | --- |
 | `auto` (default) | The best this machine offers, in this order: microsandbox, the container backend under gVisor, the container backend under runc, local processes | As chosen |
 | `microsandbox` | One microVM each. Needs an Apple silicon Mac, or Linux (x64, arm64) with a `/dev/kvm` the server can open read-write, and the `msb` runtime (`MSB_PATH`, `~/.microsandbox/bin/msb`, or the SDK's own) | `sandbox` |
-| `container` | One OCI container each through the Docker Engine API (`DOCKER_HOST`, or `/var/run/docker.sock`; Podman's compatible socket works), under `WORK_CONTAINER_RUNTIME=runsc` (gVisor) or `runc`. Unset, gVisor when the daemon has a `runsc` runtime, else runc | `sandbox` under gVisor, `process` under runc |
+| `container` | One OCI container each through the Docker Engine API (`DOCKER_HOST` as `unix://` or plain `tcp://`, or `/var/run/docker.sock`), under `WORK_CONTAINER_RUNTIME=runsc` (gVisor) or `runc`. Unset, gVisor when the daemon has a `runsc` runtime, else runc | `sandbox` under gVisor, `process` under runc |
 | `local-process` | Plain processes of the server, for a trusted single-tenant machine (ADR 0047) | `process` |
 
 The machine logs its choice and the reason at start (`Sandboxes: container
