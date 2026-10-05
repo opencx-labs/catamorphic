@@ -4831,6 +4831,7 @@ export interface paths {
                             payloadJsonSchema: unknown;
                             configJsonSchema: unknown;
                             outputJsonSchema?: unknown;
+                            requiredPermissions?: string[];
                         }[];
                     };
                 };

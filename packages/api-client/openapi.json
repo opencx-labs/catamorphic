@@ -15067,7 +15067,13 @@
                       },
                       "payloadJsonSchema": {},
                       "configJsonSchema": {},
-                      "outputJsonSchema": {}
+                      "outputJsonSchema": {},
+                      "requiredPermissions": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
                     },
                     "required": [
                       "name",

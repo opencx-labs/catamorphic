@@ -52,6 +52,13 @@ export interface TriggerKindRuntime {
   matches?(input: { config: Json; payload: Json }): boolean;
   /** Derives an enrollment correlation key from the payload (ADR 0027). */
   correlationKey?(payload: Json): string | undefined;
+  /**
+   * Project permissions (ADR 0158) a workflow must declare to bind this
+   * kind, because its events disclose what only they may read: directory
+   * events name people, so they need `memberships:read` (ADR 0209). The
+   * deploy scan and each project's check refuse a binding without them.
+   */
+  requiredPermissions?: readonly string[];
 }
 
 /** Static kind metadata, safe to serve over HTTP (no functions). */
@@ -63,6 +70,7 @@ export interface TriggerKindInfo {
   payloadJsonSchema: Json;
   configJsonSchema: Json;
   outputJsonSchema?: Json;
+  requiredPermissions?: readonly string[];
 }
 
 export function triggerKindInfo(kind: TriggerKindRuntime): TriggerKindInfo {
@@ -75,6 +83,9 @@ export function triggerKindInfo(kind: TriggerKindRuntime): TriggerKindInfo {
     configJsonSchema: kind.configJsonSchema,
     ...(kind.outputJsonSchema !== undefined
       ? { outputJsonSchema: kind.outputJsonSchema }
+      : {}),
+    ...(kind.requiredPermissions?.length
+      ? { requiredPermissions: kind.requiredPermissions }
       : {}),
   };
 }

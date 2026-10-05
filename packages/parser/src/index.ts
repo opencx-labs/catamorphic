@@ -39,6 +39,7 @@ export {
   jsonSchemaFromType,
   WORKFLOW_STUB_DTS,
 } from "./schema-extract.js";
+export { triggerPermissionError } from "./trigger-permissions.js";
 export {
   matchesAllWhere,
   matchesWhere,

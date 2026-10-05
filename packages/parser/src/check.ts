@@ -7,6 +7,7 @@ import { holeSchemaErrors } from "./holes.js";
 import { validateAgainstSchema } from "./json-schema-validate.js";
 import { parseProject } from "./parser.js";
 import { resolveTriggerBinding } from "./project-triggers.js";
+import { triggerPermissionError } from "./trigger-permissions.js";
 import {
   webhookSettingsConflicts,
   webhookSettingsIssues,
@@ -22,7 +23,8 @@ import {
  * - project trigger kinds (ADR 0171) resolved through their chains, and
  *   cycles reported;
  * - trigger bindings validated against the host's kind catalog, when the
- *   caller fetched one (`GET /trigger-kinds` on any Catamorphic host);
+ *   caller fetched one (`GET /trigger-kinds` on any Catamorphic host),
+ *   including the permissions a kind requires its workflows to declare;
  * - webhook settings checked by the rules the host applies at deploy:
  *   placeholders, replay protection, header or query, handshake filters,
  *   and one set of settings per webhook name;
@@ -45,6 +47,8 @@ export interface CheckTriggerKind {
   configJsonSchema?: unknown;
   /** Enables hole validation (ADR 0042) when present. */
   payloadJsonSchema?: unknown;
+  /** Permissions a binding workflow must declare (ADR 0209). */
+  requiredPermissions?: readonly string[];
 }
 
 export interface CheckResult {
@@ -168,6 +172,12 @@ export function checkProject(
       })) {
         errors.push(holeError);
       }
+      const permissionError = triggerPermissionError({
+        kind: kind.name,
+        required: kind.requiredPermissions,
+        declared: workflow.graph.permissions,
+      });
+      if (permissionError) errors.push(permissionError);
       for (const error of errors) {
         findings.push({
           level: "error",

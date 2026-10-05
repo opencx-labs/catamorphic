@@ -15,6 +15,7 @@ import {
   parseProject,
   renderAppApiTypesModule,
   resolveTriggerBinding,
+  triggerPermissionError,
   webhookSettingsConflicts,
 } from "@catamorphic/parser";
 import {
@@ -943,6 +944,19 @@ export class TriggersService {
         if (!configCheck.ok) {
           errors.push(
             `Workflow '${workflow.functionName}' trigger '${written.kind}' config: ${configCheck.errors.join("; ")}`,
+          );
+          continue;
+        }
+        // A kind whose events name what only some members may read is bound
+        // only by workflows that ask for it when turned on (ADR 0209).
+        const permissionError = triggerPermissionError({
+          kind: kind.name,
+          required: kind.requiredPermissions,
+          declared: workflow.graph.permissions,
+        });
+        if (permissionError) {
+          errors.push(
+            `Workflow '${workflow.functionName}' trigger '${written.kind}': ${permissionError}`,
           );
           continue;
         }

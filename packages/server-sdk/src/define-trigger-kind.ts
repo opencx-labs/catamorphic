@@ -2,6 +2,7 @@ import {
   HOLE_SCHEMA_KEY,
   type McpToolKindSpec,
   type McpToolMetadata,
+  type ProjectPermissionName,
   type TriggerKindDisplay,
   type TriggerKindRuntime,
   type TriggerMode,
@@ -61,6 +62,12 @@ export function defineTriggerKind<
   }) => boolean;
   /** Derives an enrollment correlation key from a validated payload. */
   correlationKey?: (payload: z.output<PayloadSchema>) => string | undefined;
+  /**
+   * Project permissions a workflow must declare to bind this kind, when its
+   * events disclose what only some members may read (ADR 0209), e.g.
+   * `memberships:read` for events that name people.
+   */
+  requiredPermissions?: readonly ProjectPermissionName[];
 }): TriggerKindDefinition<z.output<PayloadSchema>, z.output<ConfigSchema>> {
   // Strict: a kind that declares no config should reject a workflow that
   // passes one — that binding is almost certainly a mistake.
@@ -89,6 +96,9 @@ export function defineTriggerKind<
     correlationKey: args.correlationKey
       ? (payload) => args.correlationKey?.(payload as z.output<PayloadSchema>)
       : undefined,
+    ...(args.requiredPermissions?.length
+      ? { requiredPermissions: args.requiredPermissions }
+      : {}),
   };
 }
 

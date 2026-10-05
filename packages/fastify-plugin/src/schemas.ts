@@ -213,6 +213,8 @@ export const TriggerKindInfoSchema = z.object({
   payloadJsonSchema: JsonOutSchema,
   configJsonSchema: JsonOutSchema,
   outputJsonSchema: JsonOutSchema.optional(),
+  /** Permissions a workflow must declare to bind the kind (ADR 0209). */
+  requiredPermissions: z.array(z.string()).optional(),
 });
 
 export const TriggerBindingInfoSchema = z.object({

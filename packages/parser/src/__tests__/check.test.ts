@@ -126,6 +126,48 @@ export const bad = defineWorkflow(({ defineBoundary }) => ({
     expect(badConfig.findings[0]?.message).toContain("onlyPriority");
   });
 
+  it("refuses a binding whose kind needs permissions the workflow does not declare", () => {
+    const onboarding = (permissions: string) => ({
+      ".work/triggers/engineers.ts": `
+import { defineTrigger, trigger } from "@catamorphic/workflow";
+export const engineerJoined = defineTrigger({
+  name: "engineer.joined",
+  from: trigger("directory.member-joined", { groups: ["eng@example.com"] }),
+});
+`,
+      ".work/workflows/src/onboard.ts": `
+import { type BoundaryContext, defineWorkflow, trigger } from "@catamorphic/workflow";
+export const onboard = defineWorkflow(({ defineBoundary }) => ({
+  ${permissions}
+  triggers: [trigger("directory.member-joined"), trigger("engineer.joined")],
+  steps: [defineBoundary({ run: async ({ input }: BoundaryContext<{ id: string }>) => input })],
+}));
+`,
+    });
+    const kinds = [
+      {
+        name: "directory.member-joined",
+        configJsonSchema: {
+          type: "object",
+          properties: { groups: { type: "array", items: { type: "string" } } },
+        },
+        requiredPermissions: ["memberships:read"],
+      },
+    ];
+    const missing = checkProject(onboarding(""), { triggerKinds: kinds });
+    expect(missing.ok).toBe(false);
+    // Bound directly or through a project kind, the root kind decides.
+    expect(missing.findings.map((finding) => finding.message)).toEqual([
+      `Workflow 'onboard' trigger 'directory.member-joined': 'directory.member-joined' events need memberships:read: declare permissions: ["memberships:read"] in the workflow`,
+      `Workflow 'onboard' trigger 'engineer.joined': 'directory.member-joined' events need memberships:read: declare permissions: ["memberships:read"] in the workflow`,
+    ]);
+    const declared = checkProject(
+      onboarding(`permissions: ["memberships:read"],`),
+      { triggerKinds: kinds },
+    );
+    expect(declared.findings).toEqual([]);
+  });
+
   it("applies the host's webhook settings rules without a host", () => {
     const hook = (name: string, config: string) => `
 export const ${name} = defineWorkflow(({ defineBoundary }) => ({
