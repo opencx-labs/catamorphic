@@ -919,6 +919,17 @@ export interface SessionSyncIntents {
   updated_at: Generated<Timestamp>;
 }
 
+export interface SessionTerminals {
+  external_user_id: string;
+  opened_at: Generated<Timestamp>;
+  process_id: string;
+  pty: boolean;
+  sandbox_id: string;
+  session_id: string;
+  terminal_key: string;
+  used_at: Generated<Timestamp>;
+}
+
 export interface StoredObjects {
   data: Buffer;
   etag: Generated<string>;
@@ -1447,6 +1458,7 @@ export interface DB {
   session_artifacts: SessionArtifacts;
   session_mailbox_items: SessionMailboxItems;
   session_sync_intents: SessionSyncIntents;
+  session_terminals: SessionTerminals;
   store_document_versions: StoreDocumentVersions;
   store_documents: StoreDocuments;
   stored_objects: StoredObjects;

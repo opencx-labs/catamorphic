@@ -111,7 +111,9 @@ import {
 } from "./services/session-actions-service.js";
 import { SessionArtifactsService } from "./services/session-artifacts-service.js";
 import type { SessionMailboxesService } from "./services/session-mailboxes-service.js";
+import { SessionPreviewsService } from "./services/session-previews-service.js";
 import { SessionSyncService } from "./services/session-sync-service.js";
+import { SessionTerminalsService } from "./services/session-terminals-service.js";
 import { SessionWorkspaces } from "./services/session-workspaces.js";
 import { SkillsService } from "./services/skills-service.js";
 import { TenantPoliciesService } from "./services/tenant-policies-service.js";
@@ -432,6 +434,10 @@ export class CatamorphicCore {
   readonly sessionSync?: SessionSyncService;
   readonly watchers?: WatchersService;
   readonly sessionActions?: SessionActionsService;
+  /** Terminals people open in a chat's workspace (ADR 0208). */
+  readonly sessionTerminals?: SessionTerminalsService;
+  /** Previews of servers running in a chat's workspace (ADR 0208). */
+  readonly sessionPreviews?: SessionPreviewsService;
   readonly apps?: AppsService;
   readonly sessionArtifacts: SessionArtifactsService;
   readonly appPolicies: AppPoliciesService;
@@ -1242,6 +1248,13 @@ export class CatamorphicCore {
         this.agentSessions,
         () => this.watchers,
       );
+      this.sessionTerminals = new SessionTerminalsService({
+        db: this.db,
+        sessions: this.agentSessions,
+      });
+      this.sessionPreviews = new SessionPreviewsService({
+        sessions: this.agentSessions,
+      });
       this.agentSessions.setSessionActionHandler(async (input) => {
         const action = SESSION_ACTION_SCHEMAS[input.operation];
         if (!action || !this.sessionActions)

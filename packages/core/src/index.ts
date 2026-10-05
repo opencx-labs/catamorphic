@@ -638,12 +638,31 @@ export {
   type SessionMirrorInput,
 } from "./services/session-mirror.js";
 export {
+  PREVIEW_REQUEST_MAX_BYTES,
+  type PreviewRequest,
+  type PreviewResponse,
+  SessionPreviewError,
+  type SessionPreviewErrorReason,
+  SessionPreviewsService,
+} from "./services/session-previews-service.js";
+export {
   type SessionSyncIntent,
   SessionSyncLeaseError,
   SessionSyncService,
   type SessionSyncStatus,
   SessionSyncWatermarkError,
 } from "./services/session-sync-service.js";
+export {
+  type SessionTerminal,
+  SessionTerminalNotFoundError,
+  type SessionTerminalOutput,
+  SessionTerminalsService,
+} from "./services/session-terminals-service.js";
+export {
+  type SessionWorkspaceHandle,
+  SessionWorkspaceUnavailableError,
+  type SessionWorkspaceUnavailableReason,
+} from "./services/session-workspace.js";
 export {
   basePin,
   movePin,
