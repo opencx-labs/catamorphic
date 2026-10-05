@@ -5,6 +5,7 @@ import {
   machineSignInHome,
   parseSandboxPaths,
   signInHomePath,
+  volumeKey,
 } from "@catamorphic/sandbox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { LocalProcessSandboxProvider } from "../sandbox-provider.js";
@@ -41,6 +42,61 @@ describe("LocalProcessSandboxProvider", () => {
     } finally {
       fs.rmSync(isolatedRoot, { recursive: true, force: true });
     }
+  });
+
+  it("keeps volumes under ~ across sandboxes and refuses other paths (ADR 0207)", async () => {
+    const machine = new LocalProcessSandboxProvider({
+      root: path.join(root, "volume-sandboxes"),
+    });
+    expect(machine.capabilities).toContain("volumes");
+    const cache = volumeKey({ projectId: "p", owner: "m", name: "cache" });
+    const scratch = volumeKey({ projectId: "p", owner: "m", name: "scratch" });
+    await expect(
+      machine.createSandbox({ volumes: [{ key: cache, path: "/var/cache" }] }),
+    ).rejects.toThrow("only under ~");
+    const first = await machine.createSandbox({
+      volumes: [
+        { key: cache, path: "~/.cache/tool" },
+        { key: scratch, path: "~/scratch", temporary: true },
+      ],
+    });
+    await machine.executeCommand(
+      first.id,
+      "echo kept > ~/.cache/tool/file && echo gone > ~/scratch/file",
+    );
+    // Removing the sandbox's directory never follows the link.
+    await machine.destroySandbox(first.id);
+    const second = await machine.createSandbox({
+      volumes: [
+        { key: cache, path: "~/.cache/tool" },
+        { key: scratch, path: "~/scratch", temporary: true },
+      ],
+    });
+    const seen = await machine.executeCommand(
+      second.id,
+      "cat ~/.cache/tool/file; ls -A ~/scratch | wc -l",
+    );
+    expect(seen.result.replace(/ +/g, "")).toBe("kept\n0\n");
+    expect(await machine.volumes.prune({ unusedForMs: 0 })).toEqual([]);
+    await machine.destroySandbox(second.id);
+    expect(await machine.volumes.prune({ unusedForMs: 60_000 })).toEqual([]);
+    expect(await machine.volumes.prune({ unusedForMs: 0 })).toEqual([cache]);
+    const third = await machine.createSandbox({
+      volumes: [{ key: cache, path: "~/.cache/tool" }],
+    });
+    const fresh = await machine.executeCommand(
+      third.id,
+      "ls -A ~/.cache/tool | wc -l",
+    );
+    expect(fresh.result.trim()).toBe("0");
+    await expect(machine.volumes.removeAll()).rejects.toThrow(
+      "still linked by sandboxes",
+    );
+    await machine.destroySandbox(third.id);
+    await machine.volumes.removeAll();
+    expect(
+      fs.readdirSync(path.join(root, "volume-sandboxes", ".volumes")),
+    ).toEqual(["usage.json"]);
   });
 
   it("links exactly the owner's sign-in home from the machine (ADR 0199)", async () => {
