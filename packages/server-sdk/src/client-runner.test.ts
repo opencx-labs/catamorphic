@@ -1,6 +1,11 @@
-import type { SandboxProvider } from "@catamorphic/sandbox";
+import { sealRemoteOperation } from "@catamorphic/core";
+import {
+  generateExecutorKeyPair,
+  type SandboxProvider,
+} from "@catamorphic/sandbox";
 import { describe, expect, it } from "vitest";
 import {
+  type ClientRunnerKeys,
   type ClientRunnerTransport,
   ReceiptRefusedError,
   ResultRejectedError,
@@ -104,10 +109,36 @@ function controlPlane(jobs: Job[]) {
   return plane;
 }
 
-function execute(id: string, command: string): Job {
+const EXECUTOR = "client:laptop";
+const KEYS = generateExecutorKeyPair();
+const RUNNER_KEYS: ClientRunnerKeys = {
+  executor: EXECUTOR,
+  privateKeys: () => [KEYS.privateKey],
+};
+
+/** A pooled machine's reset (ADR 0204), sealed like every operation. */
+function sealedReset(id: string): Job {
   return {
     id,
-    operation: { kind: "execute", sandboxId: "sandbox-1", command },
+    operation: sealRemoteOperation({
+      operationId: id,
+      executor: EXECUTOR,
+      operation: { kind: "machine.reset" },
+      publicKey: KEYS.publicKey,
+    }),
+  };
+}
+
+/** A queued command, sealed to `publicKey` as the control plane does. */
+function execute(id: string, command: string, publicKey = KEYS.publicKey): Job {
+  return {
+    id,
+    operation: sealRemoteOperation({
+      operationId: id,
+      executor: EXECUTOR,
+      operation: { kind: "execute", sandboxId: "sandbox-1", command },
+      publicKey,
+    }),
   };
 }
 
@@ -130,6 +161,7 @@ describe("client runner transport (ADR 0187)", () => {
     const runner = startClientRunner({
       provider,
       transport: plane.transport,
+      keys: RUNNER_KEYS,
       sandboxes: new Set(["sandbox-1"]),
       onRetry: (error) => retries.push(error),
       onError: (error) => errors.push(error),
@@ -159,6 +191,7 @@ describe("client runner transport (ADR 0187)", () => {
     const runner = startClientRunner({
       provider,
       transport: plane.transport,
+      keys: RUNNER_KEYS,
       sandboxes: new Set(["sandbox-1"]),
       concurrency: 1,
       onError: (error) => errors.push(error),
@@ -177,6 +210,7 @@ describe("client runner transport (ADR 0187)", () => {
     const runner = startClientRunner({
       provider,
       transport: plane.transport,
+      keys: RUNNER_KEYS,
       sandboxes: new Set(["sandbox-1"]),
     });
     await until(() => plane.receipts.length === 1, "the failure receipt");
@@ -198,6 +232,7 @@ describe("client runner transport (ADR 0187)", () => {
       startClientRunner({
         provider,
         transport: plane.transport,
+        keys: RUNNER_KEYS,
         onError: (error) => {
           errors.push(error);
           resolve();
@@ -212,7 +247,11 @@ describe("client runner transport (ADR 0187)", () => {
   it("stops without waiting for a long poll to return", async () => {
     const { provider } = recordingProvider();
     const plane = controlPlane([]);
-    const runner = startClientRunner({ provider, transport: plane.transport });
+    const runner = startClientRunner({
+      provider,
+      transport: plane.transport,
+      keys: RUNNER_KEYS,
+    });
     await until(() => plane.pollIds.length === 1, "the first poll");
     const started = Date.now();
     await runner.stop();
@@ -229,6 +268,7 @@ describe("client runner transport (ADR 0187)", () => {
     const runner = startClientRunner({
       provider,
       transport: plane.transport,
+      keys: RUNNER_KEYS,
       sandboxes: new Set(["sandbox-1"]),
       concurrency: 3,
     });
@@ -247,6 +287,7 @@ describe("client runner transport (ADR 0187)", () => {
     const runner = startClientRunner({
       provider,
       transport: plane.transport,
+      keys: RUNNER_KEYS,
       sandboxes: new Set(["sandbox-1"]),
     });
     await until(() => plane.pollIds.length === 2, "the command to start");
@@ -262,12 +303,11 @@ describe("client runner transport (ADR 0187)", () => {
   it("resets a pooled machine only when its worker supplies the reset", async () => {
     const { provider } = recordingProvider();
     const reset = { calls: 0 };
-    const pooled = controlPlane([
-      { id: "job-1", operation: { kind: "machine.reset" } },
-    ]);
+    const pooled = controlPlane([sealedReset("job-1")]);
     const worker = startClientRunner({
       provider,
       transport: pooled.transport,
+      keys: RUNNER_KEYS,
       resetMachine: async () => {
         reset.calls += 1;
       },
@@ -278,17 +318,74 @@ describe("client runner transport (ADR 0187)", () => {
     expect(pooled.receipts).toEqual([{ jobId: "job-1", response: null }]);
 
     // A member's runner has no machine to give back.
-    const member = controlPlane([
-      { id: "job-2", operation: { kind: "machine.reset" } },
-    ]);
+    const member = controlPlane([sealedReset("job-2")]);
     const runner = startClientRunner({
       provider,
       transport: member.transport,
+      keys: RUNNER_KEYS,
     });
     await until(() => member.receipts.length === 1, "the refusal");
     await runner.stop();
     expect(member.receipts).toEqual([
       { jobId: "job-2", error: "This runner does not reset machines" },
     ]);
+  });
+});
+
+describe("operations sealed to the runner (ADR 0206)", () => {
+  it("runs nothing it cannot open with its own keys", async () => {
+    const { provider, commands } = recordingProvider();
+    const stranger = generateExecutorKeyPair();
+    const plane = controlPlane([
+      execute("job-1", "echo not-for-me", stranger.publicKey),
+      // A plain operation, as a control plane before sealing sent them.
+      {
+        id: "job-2",
+        operation: { kind: "execute", sandboxId: "sandbox-1", command: "id" },
+      },
+      execute("job-3", "echo mine"),
+    ]);
+    const runner = startClientRunner({
+      provider,
+      transport: plane.transport,
+      keys: RUNNER_KEYS,
+      sandboxes: new Set(["sandbox-1"]),
+      concurrency: 1,
+    });
+    await until(() => plane.receipts.length === 3, "every receipt");
+    await runner.stop();
+    expect(commands).toEqual(["echo mine"]);
+    expect(plane.receipts[0]).toEqual({
+      jobId: "job-1",
+      error:
+        "This operation was not sealed to this machine's key; it did not run",
+    });
+    expect(plane.receipts[1]?.error).toBeTruthy();
+    expect(plane.receipts[2]).toEqual({
+      jobId: "job-3",
+      response: { exitCode: 0, result: "echo mine" },
+    });
+  });
+
+  it("opens what was sealed before a rotation with its previous key", async () => {
+    const { provider, commands } = recordingProvider();
+    const next = generateExecutorKeyPair();
+    const plane = controlPlane([
+      execute("job-1", "echo sealed-before"),
+      execute("job-2", "echo sealed-after", next.publicKey),
+    ]);
+    const runner = startClientRunner({
+      provider,
+      transport: plane.transport,
+      keys: {
+        executor: EXECUTOR,
+        privateKeys: () => [next.privateKey, KEYS.privateKey],
+      },
+      sandboxes: new Set(["sandbox-1"]),
+      concurrency: 1,
+    });
+    await until(() => plane.receipts.length === 2, "both receipts");
+    await runner.stop();
+    expect(commands).toEqual(["echo sealed-before", "echo sealed-after"]);
   });
 });

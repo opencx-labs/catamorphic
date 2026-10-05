@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Identity } from "@catamorphic/core";
+import { generateExecutorKeyPair } from "@catamorphic/sandbox";
 import pg from "pg";
 import { expect, it } from "vitest";
 import { executionSettingsFromEnv } from "../execution-config.js";
@@ -227,6 +228,7 @@ it.skipIf(!process.env.DATABASE_URL)(
         workspaceRoot: "/workspace",
         resourceLimits: ["cpuMillis"],
         capabilities: ["images"],
+        publicKey: generateExecutorKeyPair().publicKey,
       });
       const binding = await runners.binding({
         tenantId: SERVER_TENANT_ID,

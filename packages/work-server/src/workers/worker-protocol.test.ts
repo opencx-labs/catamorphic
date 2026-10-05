@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { generateExecutorKeyPair } from "@catamorphic/sandbox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { executionSettingsFromEnv } from "../execution-config.js";
 import { createWorkServer, type WorkServer } from "../server.js";
@@ -41,7 +42,10 @@ describe("worker protocol versions", () => {
       method: "POST",
       url: "/api/workers/enroll",
       headers: { "content-type": "application/json", ...headers },
-      payload: JSON.stringify({ code: "wke_not-a-real-code" }),
+      payload: JSON.stringify({
+        code: "wke_not-a-real-code",
+        publicKey: generateExecutorKeyPair().publicKey,
+      }),
     });
 
   it("answers 426 to a worker it cannot drive, naming which side to update", async () => {
@@ -111,7 +115,10 @@ describe("worker protocol versions", () => {
         "content-type": "application/json",
         [WORKER_PROTOCOL_HEADER]: String(WORKER_PROTOCOL.server),
       },
-      payload: JSON.stringify({ code: enrollment.json().code }),
+      payload: JSON.stringify({
+        code: enrollment.json().code,
+        publicKey: generateExecutorKeyPair().publicKey,
+      }),
     });
     expect(enrolled.statusCode).toBe(200);
     const dataDir = path.join(root, "old-box");

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { AgentTurnInProgressError, type Identity } from "@catamorphic/core";
+import { generateExecutorKeyPair } from "@catamorphic/sandbox";
 import { expect, it } from "vitest";
 import { executionSettingsFromEnv } from "./execution-config.js";
 import {
@@ -413,6 +414,7 @@ it.skipIf(!process.env.DATABASE_URL)(
           environment: "laptop",
           label: "Laptop",
           workspaceRoot: "/workspace",
+          publicKey: generateExecutorKeyPair().publicKey,
         });
       };
       await expect(register()).rejects.toThrow();

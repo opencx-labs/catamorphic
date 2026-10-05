@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { WorkerNodesService } from "@catamorphic/core";
+import { generateExecutorKeyPair } from "@catamorphic/sandbox";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -139,7 +140,10 @@ describe("machine rules", () => {
       method: "POST",
       url: "/api/workers/enroll",
       headers: PROTOCOL,
-      payload: { code: aliceMachine.code },
+      payload: {
+        code: aliceMachine.code,
+        publicKey: generateExecutorKeyPair().publicKey,
+      },
     });
     expect(enrolled.statusCode).toBe(200);
     const listed = (await operator("GET", "/_work/operator/workers")).json();

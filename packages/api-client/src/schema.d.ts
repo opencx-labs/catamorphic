@@ -9985,6 +9985,7 @@ export interface paths {
                         isolation?: "none" | "process" | "sandbox";
                         processes?: boolean;
                         capabilities?: ("images" | "images.build" | "containers" | "network.policy" | "volumes")[];
+                        publicKey?: string;
                     };
                 };
             };
@@ -10000,6 +10001,17 @@ export interface paths {
                             id: string;
                             /** Format: uuid */
                             token: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
                         };
                     };
                 };
@@ -10084,144 +10096,14 @@ export interface paths {
                             /** Format: uuid */
                             id: string;
                             operation: {
-                                /** @enum {string} */
-                                kind: "create";
-                                options: {
-                                    resources?: {
-                                        cpuMillis?: number;
-                                        memoryMb?: number;
-                                        storageMb?: number;
-                                        gpu?: boolean;
-                                    };
-                                    snapshotName?: string;
-                                    image?: {
-                                        /** @enum {string} */
-                                        kind: "oci";
-                                        reference: string;
-                                    } | {
-                                        /** @enum {string} */
-                                        kind: "dockerfile";
-                                        path: string;
-                                        content: string;
-                                        digest: string;
-                                    };
-                                    containers?: boolean;
-                                    egress?: {
-                                        /** @enum {string} */
-                                        mode: "open";
-                                    } | {
-                                        /** @enum {string} */
-                                        mode: "allowlist";
-                                        readonly allow: string[];
-                                    };
-                                    language?: string;
-                                    envVars?: {
-                                        [key: string]: string;
-                                    };
-                                    autoStopInterval?: number;
-                                    labels?: {
-                                        [key: string]: string;
-                                    };
-                                    readonly signIns?: {
-                                        /** @enum {string} */
-                                        harness: "claude-code" | "codex";
-                                        member: string;
-                                    }[];
-                                    readonly volumes?: {
-                                        key: string;
-                                        path: string;
-                                        exclusive?: boolean;
-                                        sizeMb?: number;
-                                        temporary?: boolean;
-                                    }[];
+                                kind: string;
+                                sealed: {
+                                    /** @enum {number} */
+                                    v: 1;
+                                    epk: string;
+                                    nonce: string;
+                                    ct: string;
                                 };
-                            } | {
-                                /** @enum {string} */
-                                kind: "start" | "stop" | "destroy" | "status";
-                                sandboxId: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "execute";
-                                sandboxId: string;
-                                command: string;
-                                options?: {
-                                    cwd?: string;
-                                    timeout?: number;
-                                    env?: {
-                                        [key: string]: string;
-                                    };
-                                };
-                            } | {
-                                /** @enum {string} */
-                                kind: "upload";
-                                sandboxId: string;
-                                files: {
-                                    [key: string]: string;
-                                };
-                                basePath: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "download";
-                                sandboxId: string;
-                                path: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "clone";
-                                sandboxId: string;
-                                url: string;
-                                path: string;
-                                options?: {
-                                    branch?: string;
-                                    commitId?: string;
-                                    username?: string;
-                                    password?: string;
-                                };
-                            } | {
-                                /** @enum {string} */
-                                kind: "checkout";
-                                sandboxId: string;
-                                path: string;
-                                ref: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "process.start";
-                                sandboxId: string;
-                                command: string;
-                                cwd?: string;
-                                env?: {
-                                    [key: string]: string;
-                                };
-                                name?: string;
-                                stdin?: boolean;
-                            } | {
-                                /** @enum {string} */
-                                kind: "process.write";
-                                sandboxId: string;
-                                processId: string;
-                                data: string;
-                                end?: boolean;
-                            } | {
-                                /** @enum {string} */
-                                kind: "process.read";
-                                sandboxId: string;
-                                processId: string;
-                                cursor?: number;
-                                maxBytes?: number;
-                                waitMs?: number;
-                            } | {
-                                /** @enum {string} */
-                                kind: "process.signal";
-                                sandboxId: string;
-                                processId: string;
-                                /** @enum {string} */
-                                signal: "SIGINT" | "SIGTERM" | "SIGKILL" | "SIGHUP";
-                            } | {
-                                /** @enum {string} */
-                                kind: "process.list";
-                                sandboxId: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "machine.reset";
                             };
                         }[];
                     };

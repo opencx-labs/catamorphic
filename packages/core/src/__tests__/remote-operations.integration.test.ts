@@ -1,14 +1,18 @@
 import crypto from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import { migrateToLatest } from "@catamorphic/db";
+import { generateExecutorKeyPair } from "@catamorphic/sandbox";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  openRemoteOperation,
   RemoteExecutorLeaseLostError,
   RemoteOperationQueue,
   RemoteReceiptRefusedError,
+  registerExecutorKey,
+  sealRemoteOperation,
 } from "../services/remote-operations.js";
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
@@ -18,12 +22,17 @@ const db = new Kysely<DB>({
   plugins: [new WithSchemaPlugin(schema)],
 });
 
-/** One executor whose lease the test holds or drops. */
-function executor() {
+/**
+ * One executor whose lease the test holds or drops. Its operations are
+ * sealed to its key (ADR 0206); `poll` opens what it takes.
+ */
+async function executor() {
   const lease = {
     executor: `node:${crypto.randomUUID()}`,
     leaseToken: crypto.randomUUID(),
   };
+  const keys = generateExecutorKeyPair();
+  await registerExecutorKey({ db, ...lease, publicKey: keys.publicKey });
   let held = true;
   const queue = new RemoteOperationQueue(db);
   const provider = queue.provider({
@@ -35,20 +44,31 @@ function executor() {
   });
   return {
     lease,
+    keys,
     queue,
     provider,
     drop: () => {
       held = false;
     },
-    poll: async (pollId: string) =>
-      (
-        await queue.poll({
-          ...lease,
-          pollId,
-          waitMs: 5_000,
-          leaseHeld: async () => held,
-        })
-      )[0] ?? null,
+    poll: async (pollId: string) => {
+      const [job] = await queue.poll({
+        ...lease,
+        pollId,
+        waitMs: 5_000,
+        leaseHeld: async () => held,
+      });
+      return job
+        ? {
+            id: job.id,
+            operation: openRemoteOperation({
+              operationId: job.id,
+              executor: lease.executor,
+              envelope: job.operation,
+              privateKeys: [keys.privateKey],
+            }),
+          }
+        : null;
+    },
   };
 }
 
@@ -61,7 +81,7 @@ describe("remote operation queue (ADR 0187)", () => {
   });
 
   it("delivers an operation and its receipt, then forgets both", async () => {
-    const remote = executor();
+    const remote = await executor();
     const result = remote.provider.executeCommand("sandbox-1", "pwd");
     const job = await remote.poll(crypto.randomUUID());
     expect(job?.operation).toEqual({
@@ -87,7 +107,7 @@ describe("remote operation queue (ADR 0187)", () => {
   });
 
   it("resets a pooled machine through its executor, and only while it is connected (ADR 0204)", async () => {
-    const remote = executor();
+    const remote = await executor();
     const reset = (connected: boolean) =>
       remote.queue.resetMachine({
         executor: remote.lease.executor,
@@ -111,7 +131,7 @@ describe("remote operation queue (ADR 0187)", () => {
   });
 
   it("gives a retried poll the operation it took, and no other poll", async () => {
-    const remote = executor();
+    const remote = await executor();
     const result = remote.provider.executeCommand("sandbox-1", "echo once");
     const pollId = crypto.randomUUID();
     const taken = await remote.poll(pollId);
@@ -144,7 +164,7 @@ describe("remote operation queue (ADR 0187)", () => {
   });
 
   it("fails an operation whose executor lost its lease, and refuses its late receipt", async () => {
-    const remote = executor();
+    const remote = await executor();
     const result = remote.provider.executeCommand("sandbox-1", "sleep 60");
     const job = await remote.poll(crypto.randomUUID());
     remote.drop();
@@ -162,7 +182,7 @@ describe("remote operation queue (ADR 0187)", () => {
   });
 
   it("records a failed operation's error", async () => {
-    const remote = executor();
+    const remote = await executor();
     const result = remote.provider.downloadFile("sandbox-1", "/missing");
     const job = await remote.poll(crypto.randomUUID());
     await remote.queue.complete({
@@ -174,7 +194,7 @@ describe("remote operation queue (ADR 0187)", () => {
   });
 
   it("takes several operations in one poll, and a retry takes no more", async () => {
-    const remote = executor();
+    const remote = await executor();
     const results = ["one", "two", "three"].map((word) =>
       remote.provider.executeCommand("sandbox-1", `echo ${word}`),
     );
@@ -227,10 +247,22 @@ describe("remote operation queue (ADR 0187)", () => {
   });
 
   it("answers a retried poll whose operation was abandoned with nothing", async () => {
-    const remote = executor();
+    const remote = await executor();
     const pollId = crypto.randomUUID();
-    const operation = (command: string) =>
-      JSON.stringify({ kind: "execute", sandboxId: "sandbox-1", command });
+    const operation = (command: string) => {
+      const id = crypto.randomUUID();
+      return {
+        id,
+        operation: JSON.stringify(
+          sealRemoteOperation({
+            operationId: id,
+            executor: remote.lease.executor,
+            operation: { kind: "execute", sandboxId: "sandbox-1", command },
+            publicKey: remote.keys.publicKey,
+          }),
+        ),
+      };
+    };
     // The poll's operation was abandoned by a controller that stopped before
     // it could delete the row; another operation waits.
     const row = {
@@ -245,9 +277,9 @@ describe("remote operation queue (ADR 0187)", () => {
           ...row,
           poll_id: pollId,
           status: "failed",
-          operation: operation("sleep 60"),
+          ...operation("sleep 60"),
         },
-        { ...row, operation: operation("echo next") },
+        { ...row, ...operation("echo next") },
       ])
       .execute();
     expect(
@@ -263,7 +295,7 @@ describe("remote operation queue (ADR 0187)", () => {
   });
 
   it("takes nothing for a poll whose executor hung up", async () => {
-    const remote = executor();
+    const remote = await executor();
     const result = remote.provider.executeCommand("sandbox-1", "echo later");
     const hungUp = new AbortController();
     hungUp.abort();

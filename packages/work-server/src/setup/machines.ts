@@ -234,6 +234,23 @@ function machineRoutes(args: MachineManagement): MachineRoute[] {
         }
       },
     },
+    // The worker rotates its credential and key at its next call (ADR 0206);
+    // it also does so on its own every 30 days.
+    {
+      method: "POST",
+      operator: "/_work/operator/workers/:name/rotate",
+      admin: "/api/work/machines/workers/:name/rotate",
+      handler: async (request, reply) => {
+        const params = z
+          .object({ name: z.string().min(1) })
+          .safeParse(request.params);
+        if (!params.success)
+          return reply.status(400).send({ error: "Provide a worker name" });
+        return (await args.workers.requestRotation(params.data))
+          ? { ok: true }
+          : reply.status(404).send({ error: "Worker not found" });
+      },
+    },
     {
       method: "DELETE",
       operator: "/_work/operator/workers/:name",

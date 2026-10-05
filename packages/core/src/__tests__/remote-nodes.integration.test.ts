@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import { migrateToLatest } from "@catamorphic/db";
-import type { EnvironmentBinding } from "@catamorphic/sandbox";
+import {
+  type EnvironmentBinding,
+  generateExecutorKeyPair,
+} from "@catamorphic/sandbox";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
@@ -15,9 +18,12 @@ import {
 } from "../services/allocation-sandbox-provider.js";
 import {
   EXECUTOR_RESTARTED_ERROR,
+  ExecutorKeyMissingError,
   nodeExecutor,
+  openRemoteOperation,
   RemoteOperationQueue,
   RemoteReceiptRefusedError,
+  registerExecutorKey,
 } from "../services/remote-operations.js";
 import {
   RemoteEpochSupersededError,
@@ -61,8 +67,19 @@ function descriptor(id: string): EnvironmentBinding {
 }
 
 const offer = { workspaceRoot: "/workspace", processes: false };
+/** Every executor here seals to the same key (ADR 0206). */
+const KEYS = generateExecutorKeyPair();
 
 async function connect(id: string, epoch: string) {
+  await registerExecutorKey({
+    db,
+    executor: nodeExecutor(id),
+    publicKey: KEYS.publicKey,
+  });
+  return connectWithoutKey(id, epoch);
+}
+
+function connectWithoutKey(id: string, epoch: string) {
   return nodes.connectRemote({
     tenantId,
     authorityId,
@@ -185,7 +202,14 @@ describe("remote nodes own their lease (ADR 0192)", () => {
     // New operations go to the new epoch.
     const next = provider.executeCommand("sandbox-1", "true");
     const [delivered] = await poll(second);
-    expect(delivered?.operation).toMatchObject({ command: "true" });
+    expect(
+      openRemoteOperation({
+        operationId: delivered?.id ?? "",
+        executor: nodeExecutor(id),
+        envelope: delivered?.operation,
+        privateKeys: [KEYS.privateKey],
+      }),
+    ).toMatchObject({ command: "true" });
     await queue.complete({
       executor: nodeExecutor(id),
       leaseToken: second,
@@ -296,6 +320,14 @@ describe("remote nodes own their lease (ADR 0192)", () => {
       .where("id", "=", released.allocationId)
       .execute();
     expect(await claim(released.sessionId)).toBeNull();
+  });
+
+  it("refuses a remote executor that registered no key (ADR 0206)", async () => {
+    const id = `worker.${crypto.randomUUID().slice(0, 8)}`;
+    await expect(
+      connectWithoutKey(id, epochAt(Date.now())),
+    ).rejects.toBeInstanceOf(ExecutorKeyMissingError);
+    expect(await nodes.liveToken({ nodeId: id })).toBeUndefined();
   });
 
   it("takes over a lease an executor held before it had epochs", async () => {

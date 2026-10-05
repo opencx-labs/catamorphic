@@ -1,5 +1,9 @@
-import { type RemoteOperation, RemoteOperationSchema } from "@catamorphic/core";
-import type { SandboxProvider } from "@catamorphic/sandbox";
+import type { KeyObject } from "node:crypto";
+import { openRemoteOperation, type RemoteOperation } from "@catamorphic/core";
+import {
+  type SandboxProvider,
+  SealedOperationOpenError,
+} from "@catamorphic/sandbox";
 
 /**
  * The control plane ended this runner's session: its lease moved on, its
@@ -45,9 +49,10 @@ export class ResultRejectedError extends Error {
 export interface ClientRunnerTransport {
   renew(): Promise<void>;
   /**
-   * Take up to `max` operations, long-polling. A retry repeats `pollId`,
-   * and the control plane answers it with what that poll took, so an
-   * operation is never lost with a response.
+   * Take up to `max` operations, long-polling, each still sealed to this
+   * runner's key (ADR 0206). A retry repeats `pollId`, and the control plane
+   * answers it with what that poll took, so an operation is never lost with
+   * a response.
    */
   poll(args: {
     pollId: string;
@@ -84,6 +89,18 @@ function definite(error: unknown): boolean {
 class RunnerStoppedError extends Error {}
 
 /**
+ * How a runner opens what it receives (ADR 0206): its address in the queue
+ * (`node:<id>` for a worker, `client:<id>` for a member's runner) and its
+ * private keys, the current one first. A worker that rotated keeps its
+ * previous key, since operations sealed before the rotation may still
+ * arrive. Read for every operation.
+ */
+export interface ClientRunnerKeys {
+  executor: string;
+  privateKeys(): readonly (string | KeyObject)[];
+}
+
+/**
  * Runs only operations the remote authority admitted for this runner. A
  * member's desktop runner stops its sandboxes when the connection ends; a
  * remote worker (ADR 0164) passes `sandboxes` to keep ownership across
@@ -93,11 +110,13 @@ class RunnerStoppedError extends Error {}
  * failures retry the same call in place while the lease lasts, so a load
  * balancer's 502 or an instance restarting never costs running work its
  * executor (ADR 0187). An operation runs at most once; only its receipt is
- * ever retried.
+ * ever retried. Every operation arrives sealed to this runner's key, and one
+ * that does not open with `keys` fails without running (ADR 0206).
  */
 export function startClientRunner(args: {
   provider: SandboxProvider;
   transport: ClientRunnerTransport;
+  keys: ClientRunnerKeys;
   /** The session ended: {@link RunnerSessionEndedError} or a fault. */
   onError?: (error: unknown) => void;
   /** A transient failure the runner is riding out. */
@@ -215,7 +234,7 @@ export function startClientRunner(args: {
     let receipt: { jobId: string; response?: unknown; error?: string };
     let reserved = false;
     try {
-      const operation = RemoteOperationSchema.parse(job.operation);
+      const operation = openOperationFor({ job, keys: args.keys });
       // A server may only address sandboxes created for this connection.
       // Destroying one that is already gone succeeds, so a cleanup whose
       // receipt was lost can be retried.
@@ -307,6 +326,27 @@ export function startClientRunner(args: {
       await args.transport.disconnect().catch(() => {});
     },
   };
+}
+
+/** One received operation, opened with this runner's keys. */
+function openOperationFor(args: {
+  job: { id: string; operation: unknown };
+  keys: ClientRunnerKeys;
+}): RemoteOperation {
+  try {
+    return openRemoteOperation({
+      operationId: args.job.id,
+      executor: args.keys.executor,
+      envelope: args.job.operation,
+      privateKeys: args.keys.privateKeys(),
+    });
+  } catch (error) {
+    if (error instanceof SealedOperationOpenError)
+      throw new Error(
+        "This operation was not sealed to this machine's key; it did not run",
+      );
+    throw error;
+  }
 }
 
 async function executeClientOperation({

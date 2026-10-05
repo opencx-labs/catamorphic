@@ -14,8 +14,9 @@ deployment.
 | Each person or team gets their own machine | Workers with **access** lists, created by hand or by **machine rules** |
 | The brain must survive a machine failure | Control-plane **replicas** on shared Postgres, plus workers |
 
-A worker holds only its own machine credential: no `DATABASE_URL`,
-`WORK_SECRET`, `WORK_VAULT_KEY`, member tokens, or connection credentials.
+A worker holds only its own machine credential and the private key its
+operations are sealed to: no `DATABASE_URL`, `WORK_SECRET`, `WORK_VAULT_KEY`,
+member tokens, or connection credentials.
 A replica holds all of them, so only machines you would trust with the whole
 brain become replicas. Never add a replica just for capacity.
 
@@ -51,10 +52,13 @@ brain become replicas. Never add a replica just for capacity.
    control plane that cannot drive it answers `426` with
    `{ "code": "upgrade_required", "serverProtocol", "minimum" }`, and the
    worker logs which side to update and asks again every few minutes. Run
-   workers of the control plane's release. The worker stores its credential in
-   `/data/worker-credential` (owner-only) and refuses to start if
-   `DATABASE_URL`, `WORK_SECRET`, or `WORK_VAULT_KEY` is set. It dials out; open
-   no inbound port.
+   workers of the control plane's release: a worker older than sealed
+   operations (protocol 1) is answered `426`. The worker generates an X25519
+   key pair when it enrolls and sends only the public key. It stores its
+   credential in `/data/worker-credential` and the private key in
+   `/data/worker-key` (both owner-only), and refuses to start if
+   `DATABASE_URL`, `WORK_SECRET`, or `WORK_VAULT_KEY` is set. It dials out;
+   open no inbound port.
 3. Check `GET /_work/operator/machines` for `worker.build-1` with
    `available: true`, and `GET /_work/operator/workers` for its last contact
    (its last call to any replica).
@@ -68,6 +72,32 @@ brain become replicas. Never add a replica just for capacity.
 
 Revoke a worker with `DELETE /_work/operator/workers/:name`; its credential and
 node stop working at once. Re-enroll the same name with a new code.
+
+### Sealed operations and credential rotation
+
+Every operation queued for a worker (commands, uploaded files, members'
+secrets and personal files) is sealed to that worker's public key before it
+is written to Postgres (ADR 0206): the row, the write-ahead log, and backups
+hold only the operation's kind and ciphertext that only the worker's private
+key opens. Even the ciphertext is dropped once the operation has run.
+Results are not sealed; they enter the chat's record anyway.
+
+A worker replaces its credential and key pair every 30 days on its own. To
+ask for a rotation now, for example after a credential may have leaked, call
+`POST /_work/operator/workers/:name/rotate`. The worker hears it in its next
+answer from the control plane (its heartbeat calls every 10 seconds), writes
+the new credential and key to its data volume, and then uses them. The old
+credential keeps working until the new one is first used, then stops, so a
+rotation never interrupts running work and a lost answer is simply asked
+again. `GET /_work/operator/workers` shows each worker's
+`credentialIssuedAt` and whether a rotation it was asked for is still
+`rotationRequested`. A worker enrolled by an earlier release generates and
+registers its key the first time it connects after its update.
+
+The data volume is the worker's identity. Losing it, or replacing its key
+file, means enrolling the worker again: revoke it and create a new code. A
+worker whose key does not match the one it enrolled with is refused with
+`403`.
 
 Workers run agent sandboxes only. Workflow runs, which receive project secrets,
 execute on the control plane. For developer and review agents use
@@ -348,7 +378,12 @@ fresh one with an empty disk at any time.
    worker that is away for more than 45 seconds is unavailable: its chats'
    turns wait, and in-flight operations its controllers stopped waiting for
    fail as uncertain. When it calls again, the same process simply carries
-   on.
+   on. A replica that queues an operation wakes the worker's poll it is
+   serving at once, and one that receives a result wakes its own waiting
+   turn at once (ADR 0206). Across replicas, a waiting poll checks the queue every
+   250 milliseconds and a waiting turn checks for its result every 100
+   milliseconds, so each operation takes a little longer with several
+   replicas.
 6. No replica keeps state another replica needs in memory (ADR 0193).
    Whether a chat is running, and whether it may be changed, comes from its
    turn's lease in Postgres, so every replica answers the same. An interrupt,
@@ -423,7 +458,9 @@ replica, so losing one loses no draft.
 Declare a project Environment with `device: "member"`, workload `agent`,
 and appropriate role grants. The desktop's **Connect This machine** action starts
 an authenticated SDK runner using its local sandbox provider. It receives no
-Postgres credentials. Discovery and every operation retain the member's current
+Postgres credentials. Its operations are sealed to a key kept in the member's
+desktop profile, whose public half the runner registers each time it
+connects (ADR 0206). Discovery and every operation retain the member's current
 project and Environment permissions. Closing the desktop or losing authorization
 stops the runner. A new connection lifetime cannot revive an old allocation.
 The runner renews its own lease through any replica, so its chats belong to no

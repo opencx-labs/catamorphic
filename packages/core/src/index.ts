@@ -511,8 +511,14 @@ export {
   RateReservationsService,
 } from "./services/rate-reservations-service.js";
 export {
+  clientExecutor,
   EXECUTOR_RESTARTED_ERROR,
+  ExecutorKeyMissingError,
+  executorKey,
+  forgetExecutorKey,
   nodeExecutor,
+  OperationWakeups,
+  openRemoteOperation,
   type RemoteExecutorLease,
   RemoteExecutorLeaseLostError,
   type RemoteOperation,
@@ -520,6 +526,10 @@ export {
   RemoteOperationResultSchema,
   RemoteOperationSchema,
   RemoteReceiptRefusedError,
+  registerExecutorKey,
+  type SealedRemoteOperation,
+  SealedRemoteOperationSchema,
+  sealRemoteOperation,
 } from "./services/remote-operations.js";
 export {
   type RemoteSyncOutcome,

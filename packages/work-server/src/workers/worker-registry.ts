@@ -1,17 +1,22 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   cleanupWorkerAllocations,
+  forgetExecutorKey,
   nodeExecutor,
   REMOTE_EPOCH_PATTERN,
   RemoteEpochSupersededError,
   RemoteExecutorLeaseLostError,
   RemoteOperationQueue,
+  registerExecutorKey,
   type WorkerCapacity,
   WorkerNodeLeaseHeldError,
   type WorkerNodesService,
 } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
-import type { EnvironmentBinding } from "@catamorphic/sandbox";
+import {
+  type EnvironmentBinding,
+  ExecutorPublicKeySchema,
+} from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
 import {
@@ -80,12 +85,29 @@ export type WorkerOffer = z.infer<typeof WorkerOfferSchema>;
 
 /**
  * What a worker sends to connect: the epoch its process chose at start
- * (ADR 0192), which every later call repeats as its session, and its offer.
+ * (ADR 0192), which every later call repeats as its session, its offer, and
+ * the public key its operations are sealed to (ADR 0206).
  */
 export const WorkerConnectSchema = z.strictObject({
   session: z.string().regex(REMOTE_EPOCH_PATTERN, "Use a UUIDv7 epoch"),
   offer: WorkerOfferSchema,
+  publicKey: ExecutorPublicKeySchema,
 });
+
+/** A credential older than this is due for rotation on its own (ADR 0206). */
+export const WORKER_CREDENTIAL_MAX_AGE_DAYS = 30;
+
+/** The enrolled worker a request's credential proves. */
+export interface AuthenticatedWorker {
+  nodeId: string;
+  name: string;
+  /**
+   * Its credential should be rotated: the operator asked, or it is older
+   * than {@link WORKER_CREDENTIAL_MAX_AGE_DAYS}. Answers tell the worker;
+   * nothing is refused for it.
+   */
+  rotate: boolean;
+}
 
 export class WorkerIsolationError extends Error {
   constructor(name: string) {
@@ -146,6 +168,19 @@ export class WorkerDisabledError extends Error {
 }
 
 /**
+ * The worker connected with a key other than the one it enrolled or last
+ * rotated with (ADR 0206): its data directory was replaced or altered.
+ */
+export class WorkerKeyMismatchError extends Error {
+  constructor(name: string) {
+    super(
+      `Worker '${name}' holds a key other than the one it enrolled with; revoke it and enroll it again`,
+    );
+    this.name = "WorkerKeyMismatchError";
+  }
+}
+
+/**
  * A newer process of this worker connected under a new epoch (ADR 0192).
  * The old process must stop: connecting again would take the lease back.
  */
@@ -160,12 +195,14 @@ export class WorkerSupersededError extends RemoteExecutorLeaseLostError {
 
 /**
  * Enrolled remote workers (ADR 0164). A worker proves itself with a machine
- * credential issued once at enrollment; it never receives database, vault,
- * or sign-in secrets. The worker owns its node lease (ADR 0192): its token
- * is the epoch the worker process chose at start, and each of its calls to
- * any replica renews it. Any replica runs the worker's agents and forwards
- * their sandbox operations through the queue in Postgres. Nothing about a
- * worker lives in a replica's memory.
+ * credential issued at enrollment and rotated every 30 days or when the
+ * operator asks (ADR 0206); it never receives database, vault, or sign-in
+ * secrets. Its operations are sealed to the public key it registered with
+ * that credential. The worker owns its node lease (ADR 0192): its token is
+ * the epoch the worker process chose at start, and each of its calls to any
+ * replica renews it. Any replica runs the worker's agents and forwards their
+ * sandbox operations through the queue in Postgres. Nothing about a worker
+ * lives in a replica's memory.
  */
 export class WorkWorkerRegistry {
   private readonly queue: RemoteOperationQueue;
@@ -388,10 +425,15 @@ export class WorkWorkerRegistry {
     });
   }
 
-  /** Worker: exchange a one-time code for a machine credential. */
+  /**
+   * Worker: exchange a one-time code for a machine credential, registering
+   * the public key its operations will be sealed to (ADR 0206).
+   */
   async enroll(args: {
     code: string;
+    publicKey: string;
   }): Promise<{ nodeId: string; name: string; credential: string }> {
+    const publicKey = ExecutorPublicKeySchema.parse(args.publicKey);
     return this.deps.db.transaction().execute(async (trx) => {
       const enrollment = await trx
         .updateTable("work_worker_enrollments")
@@ -442,6 +484,11 @@ export class WorkWorkerRegistry {
           pool: enrollment.pool,
         })
         .execute();
+      await registerExecutorKey({
+        db: trx,
+        executor: nodeExecutor(nodeId),
+        publicKey,
+      });
       return {
         nodeId,
         name: enrollment.name,
@@ -450,25 +497,142 @@ export class WorkWorkerRegistry {
     });
   }
 
-  /** The enrolled worker a request's credential proves, if any. */
+  /**
+   * The enrolled worker a request's credential proves, if any. The first
+   * call made with a rotated credential makes it current (ADR 0206): its key
+   * is registered and the previous credential stops working.
+   */
   async authenticate(
     authorization: string | undefined,
-  ): Promise<{ nodeId: string; name: string } | undefined> {
+  ): Promise<AuthenticatedWorker | undefined> {
     const match = authorization?.match(/^Worker\s+(worker\.[a-z0-9-]+):(\S+)$/);
     if (!match?.[1] || !match[2]) return undefined;
+    const nodeId = match[1];
+    const presented = hash(match[2]);
     const row = await this.deps.db
       .selectFrom("work_workers")
-      .select(["node_id", "name", "credential_hash"])
-      .where("node_id", "=", match[1])
+      .select(["name", "credential_hash", "pending_credential_hash"])
+      .select(
+        sql<boolean>`rotation_requested_at IS NOT NULL OR credential_issued_at < now() - make_interval(days => ${WORKER_CREDENTIAL_MAX_AGE_DAYS})`.as(
+          "rotate",
+        ),
+      )
+      .where("node_id", "=", nodeId)
       .where("tenant_id", "=", this.deps.tenantId)
       .where("revoked_at", "is", null)
       .executeTakeFirst();
     if (!row) return undefined;
-    const expected = Buffer.from(row.credential_hash, "hex");
-    const actual = Buffer.from(hash(match[2]), "hex");
-    if (expected.length !== actual.length || !timingSafeEqual(expected, actual))
-      return undefined;
-    return { nodeId: row.node_id, name: row.name };
+    if (sameHash(row.credential_hash, presented))
+      return { nodeId, name: row.name, rotate: row.rotate };
+    if (
+      row.pending_credential_hash &&
+      sameHash(row.pending_credential_hash, presented)
+    )
+      return this.promote({ nodeId, credentialHash: presented });
+    return undefined;
+  }
+
+  /**
+   * The worker used its rotated credential for the first time: it holds
+   * the new credential and key on disk, so operations are sealed to the new
+   * key from now on and the previous credential ends. Concurrent first
+   * calls promote it once.
+   */
+  private async promote(args: {
+    nodeId: string;
+    credentialHash: string;
+  }): Promise<AuthenticatedWorker | undefined> {
+    return this.deps.db.transaction().execute(async (trx) => {
+      const row = await trx
+        .selectFrom("work_workers")
+        .select([
+          "name",
+          "credential_hash",
+          "pending_credential_hash",
+          "pending_public_key",
+        ])
+        .where("node_id", "=", args.nodeId)
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("revoked_at", "is", null)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!row) return undefined;
+      // Another call made with this credential promoted it just now.
+      if (row.credential_hash === args.credentialHash)
+        return { nodeId: args.nodeId, name: row.name, rotate: false };
+      if (
+        row.pending_credential_hash !== args.credentialHash ||
+        !row.pending_public_key
+      )
+        return undefined;
+      const promoted = await trx
+        .updateTable("work_workers")
+        .set({
+          credential_hash: args.credentialHash,
+          credential_issued_at: sql`COALESCE(pending_issued_at, now())`,
+          pending_credential_hash: null,
+          pending_public_key: null,
+          pending_issued_at: null,
+          // An operator's request made after this credential was issued
+          // still wants another.
+          rotation_requested_at: sql`CASE WHEN rotation_requested_at <= pending_issued_at THEN NULL ELSE rotation_requested_at END`,
+        })
+        .where("node_id", "=", args.nodeId)
+        .returning(sql<boolean>`rotation_requested_at IS NOT NULL`.as("rotate"))
+        .executeTakeFirstOrThrow();
+      await registerExecutorKey({
+        db: trx,
+        executor: nodeExecutor(args.nodeId),
+        publicKey: row.pending_public_key,
+      });
+      this.deps.log?.(`Worker ${row.name} rotated its credential and key`);
+      return { nodeId: args.nodeId, name: row.name, rotate: promoted.rotate };
+    });
+  }
+
+  /**
+   * Worker: a new credential for the public key it generated (ADR 0206).
+   * The new credential stays pending, and the one this call was made with
+   * keeps working, until the worker first uses the new one; asking again
+   * before then replaces the pending credential. So an answer lost on the
+   * way never strands the worker, and a retry is always safe.
+   */
+  async rotate(args: {
+    nodeId: string;
+    publicKey: string;
+  }): Promise<{ credential: string }> {
+    const publicKey = ExecutorPublicKeySchema.parse(args.publicKey);
+    const secret = randomBytes(32).toString("base64url");
+    const pending = await this.deps.db
+      .updateTable("work_workers")
+      .set({
+        pending_credential_hash: hash(secret),
+        pending_public_key: publicKey,
+        pending_issued_at: sql`now()`,
+      })
+      .where("node_id", "=", args.nodeId)
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("revoked_at", "is", null)
+      .returning("node_id")
+      .executeTakeFirst();
+    if (!pending) throw new Error("This worker is not enrolled");
+    return { credential: `${args.nodeId}:${secret}` };
+  }
+
+  /**
+   * Operator: ask a worker to rotate its credential and key. It is told at
+   * its next call and rotates on its own; nothing it runs is interrupted.
+   */
+  async requestRotation(args: { name: string }): Promise<boolean> {
+    const row = await this.deps.db
+      .updateTable("work_workers")
+      .set({ rotation_requested_at: sql`now()` })
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("name", "=", WorkerName.parse(args.name))
+      .where("revoked_at", "is", null)
+      .returning("node_id")
+      .executeTakeFirst();
+    return Boolean(row);
   }
 
   /**
@@ -476,12 +640,16 @@ export class WorkWorkerRegistry {
    * Any replica accepts it; the machine credential is the authority. The
    * same epoch again only refreshes the offer and the lease. A new epoch
    * takes over at once and fails the old epoch's operations as uncertain.
+   * Its key must be the one it enrolled or last rotated with (ADR 0206); a
+   * worker enrolled before operations were sealed registers its key here,
+   * on the authority of its credential.
    */
   async connect(args: {
     nodeId: string;
     name: string;
     session: string;
     offer: WorkerOffer;
+    publicKey: string;
   }): Promise<void> {
     const policy = await this.placement(args.nodeId);
     if (
@@ -492,6 +660,14 @@ export class WorkWorkerRegistry {
     ) {
       throw new WorkerIsolationError(args.name);
     }
+    const registered = await registerExecutorKey({
+      db: this.deps.db,
+      executor: nodeExecutor(args.nodeId),
+      publicKey: args.publicKey,
+      ifAbsent: true,
+    });
+    if (registered !== args.publicKey)
+      throw new WorkerKeyMismatchError(args.name);
     const descriptor: EnvironmentBinding = {
       id: args.nodeId,
       label: args.name,
@@ -651,17 +827,29 @@ export class WorkWorkerRegistry {
     await this.cleaning;
   }
 
-  /** Operator: end a worker's authority now. Its credential stops working. */
+  /**
+   * Operator: end a worker's authority now. Its credential, any rotated one
+   * still pending, and its key stop working.
+   */
   async revoke(args: { name: string }): Promise<boolean> {
     const row = await this.deps.db
       .updateTable("work_workers")
-      .set({ revoked_at: sql`now()` })
+      .set({
+        revoked_at: sql`now()`,
+        pending_credential_hash: null,
+        pending_public_key: null,
+        pending_issued_at: null,
+      })
       .where("tenant_id", "=", this.deps.tenantId)
       .where("name", "=", args.name)
       .where("revoked_at", "is", null)
       .returning("node_id")
       .executeTakeFirst();
     if (!row) return false;
+    await forgetExecutorKey({
+      db: this.deps.db,
+      executor: nodeExecutor(row.node_id),
+    });
     await this.deps.nodes.setEnabled({
       tenantId: this.deps.tenantId,
       authorityId: this.deps.authorityId,
@@ -990,6 +1178,10 @@ export class WorkWorkerRegistry {
       state: WorkerState;
       /** Since when it serves nobody, and for how many days it is kept. */
       released: { at: string; retainDays: number | null } | null;
+      /** When its current credential was issued (ADR 0206). */
+      credentialIssuedAt: string;
+      /** The operator asked for a rotation the worker has not made yet. */
+      rotationRequested: boolean;
       placement: WorkerPlacement;
       machine: {
         rule: string;
@@ -1016,6 +1208,8 @@ export class WorkWorkerRegistry {
       released: row.released_at
         ? { at: row.released_at.toISOString(), retainDays: row.retain_days }
         : null,
+      credentialIssuedAt: row.credential_issued_at.toISOString(),
+      rotationRequested: row.rotation_requested_at !== null,
       placement: storedPlacement(row),
       machine: row.machine_rule
         ? {
@@ -1043,6 +1237,13 @@ function workerState(row: {
   if (row.released_at) return row.machine_rule ? "released" : "resetting";
   if (row.pool && !row.machine_rule) return "free";
   return "serving";
+}
+
+/** Two hex digests compared in constant time. */
+function sameHash(expected: string, actual: string): boolean {
+  const a = Buffer.from(expected, "hex");
+  const b = Buffer.from(actual, "hex");
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 export function isWorkerNode(nodeId: string): boolean {

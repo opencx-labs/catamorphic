@@ -597,6 +597,12 @@ export interface ExecutionJobs {
   workflow_step_attempt_id: string | null;
 }
 
+export interface ExecutorKeys {
+  executor: string;
+  public_key: string;
+  registered_at: Generated<Timestamp>;
+}
+
 export interface MemberConnectionAttachments {
   alias: string;
   connection_id: string;
@@ -1390,6 +1396,7 @@ export interface WorkWorkerEnrollments {
 export interface WorkWorkers {
   access: Generated<Json>;
   credential_hash: string;
+  credential_issued_at: Generated<Timestamp>;
   enrolled_at: Generated<Timestamp>;
   labels: Generated<Json>;
   last_seen_at: Timestamp | null;
@@ -1399,10 +1406,14 @@ export interface WorkWorkers {
   machine_slot: number | null;
   name: string;
   node_id: string;
+  pending_credential_hash: string | null;
+  pending_issued_at: Timestamp | null;
+  pending_public_key: string | null;
   pool: Generated<boolean>;
   released_at: Timestamp | null;
   retain_days: number | null;
   revoked_at: Timestamp | null;
+  rotation_requested_at: Timestamp | null;
   tenant_id: string;
   trusted: Generated<boolean>;
 }
@@ -1441,6 +1452,7 @@ export interface DB {
   deployment_runtimes: DeploymentRuntimes;
   execution_allocations: ExecutionAllocations;
   execution_jobs: ExecutionJobs;
+  executor_keys: ExecutorKeys;
   member_connection_attachments: MemberConnectionAttachments;
   memberships: Memberships;
   model_usage: ModelUsage;
