@@ -106,6 +106,17 @@ export {
 } from "./execution-environment.js";
 export { instrumentSandboxProvider } from "./instrumented-provider.js";
 export {
+  type ExecutorKeyPair,
+  ExecutorPublicKeySchema,
+  executorPublicKey,
+  generateExecutorKeyPair,
+  openOperation,
+  type SealedOperation,
+  SealedOperationOpenError,
+  SealedOperationSchema,
+  sealOperation,
+} from "./operation-sealing.js";
+export {
   type PluginPayload,
   uploadPluginPayloads,
 } from "./plugin-upload.js";

@@ -84,6 +84,7 @@ describe("PGlite migrations", () => {
       "045_agent_session_log.sql",
       "046_session_rewind.sql",
       "047_session_log_reference_indexes.sql",
+      "050_executor_keys.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

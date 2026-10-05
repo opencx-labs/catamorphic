@@ -178,6 +178,11 @@ export type {
   EnvironmentRuntimeBinding,
   SandboxProvider,
 } from "@catamorphic/sandbox";
+export {
+  type ExecutorKeyPair,
+  executorPublicKey,
+  generateExecutorKeyPair,
+} from "@catamorphic/sandbox";
 export { aiToolCall, aiToolKind } from "./ai-tool-trigger-kind.js";
 export { connectionAuthorizationPage } from "./authorization-page.js";
 export type {
@@ -188,6 +193,7 @@ export type {
 } from "./catamorphic.js";
 export { Catamorphic, createCatamorphic } from "./catamorphic.js";
 export {
+  type ClientRunnerKeys,
   type ClientRunnerTransport,
   ReceiptRefusedError,
   ResultRejectedError,
