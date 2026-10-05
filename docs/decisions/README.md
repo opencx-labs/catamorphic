@@ -222,3 +222,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0207](0207-workspaces-keep-what-members-build.md) | Workspaces keep what members build: setup and volumes | Accepted |
 | [0208](0208-people-reach-their-sandboxes.md) | People reach their sandboxes: terminals and previews | Accepted |
 | [0209](0209-directory-events-start-workflows.md) | Directory events start workflows; workflows set members' secrets | Accepted |
+| [0210](0210-the-desktop-api-refuses-web-pages.md) | The desktop's loopback API refuses web pages | Accepted |
