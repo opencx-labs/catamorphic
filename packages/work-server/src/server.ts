@@ -114,7 +114,10 @@ import {
   installTarget,
   registerInstallScriptRoute,
 } from "./workers/install-script.js";
-import { machineClassesProblem } from "./workers/machine-classes.js";
+import {
+  MachinesConfigSchema,
+  machineClassesProblem,
+} from "./workers/machine-classes.js";
 import {
   type MachineProvisioner,
   MachineReconciler,
@@ -281,7 +284,9 @@ async function createWorkServerInner(
     );
   }
   // Machine classes (ADR 0204) need what their platforms need.
-  const machineClasses = config.machines?.classes ?? {};
+  const machineClasses = config.machines
+    ? MachinesConfigSchema.parse(config.machines).classes
+    : {};
   const machinesProblem = machineClassesProblem({
     classes: machineClasses,
     hetznerToken: Boolean(config.hetznerToken),

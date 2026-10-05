@@ -1,13 +1,24 @@
 import fs from "node:fs";
 import { z } from "zod";
 
-/** Machine class and rule names: lowercase letters, digits, dashes. */
+/**
+ * Machine class and rule names: lowercase letters, digits, dashes inside.
+ * They become parts of host names and cloud labels.
+ */
 export const MachineName = z
   .string()
-  .regex(/^[a-z0-9][a-z0-9-]{0,30}$/, "Use lowercase letters, digits, dashes");
+  .regex(
+    /^[a-z0-9]([a-z0-9-]{0,29}[a-z0-9])?$/,
+    "Use lowercase letters, digits, and dashes between them",
+  );
 
 /** Labels Work sets on Hetzner resources itself. */
-const RESERVED_HETZNER_LABELS = ["work-machine", "work-server-id"];
+const RESERVED_HETZNER_LABELS = [
+  "work-machine",
+  "work-server-id",
+  "work-rule",
+  "work-class",
+];
 
 /** Hetzner Cloud label keys and values (an optional `prefix/` on keys). */
 const HetznerLabels = z
@@ -27,7 +38,7 @@ const HetznerLabels = z
   )
   .refine(
     (labels) => RESERVED_HETZNER_LABELS.every((key) => !(key in labels)),
-    `Work sets ${RESERVED_HETZNER_LABELS.join(" and ")} itself`,
+    `Work sets ${RESERVED_HETZNER_LABELS.join(", ")} itself`,
   );
 
 /**

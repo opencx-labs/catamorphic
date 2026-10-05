@@ -86,6 +86,30 @@ describe("remote operation queue (ADR 0187)", () => {
     expect(left).toEqual([]);
   });
 
+  it("resets a pooled machine through its executor, and only while it is connected (ADR 0204)", async () => {
+    const remote = executor();
+    const reset = (connected: boolean) =>
+      remote.queue.resetMachine({
+        executor: remote.lease.executor,
+        leaseToken: async () =>
+          connected ? remote.lease.leaseToken : undefined,
+        leaseHeld: async (token) => token === remote.lease.leaseToken,
+        label: "Worker office-1",
+      });
+    await expect(reset(false)).rejects.toThrow(
+      "Worker office-1 is not connected right now",
+    );
+    const done = reset(true);
+    const job = await remote.poll(crypto.randomUUID());
+    expect(job?.operation).toEqual({ kind: "machine.reset" });
+    await remote.queue.complete({
+      ...remote.lease,
+      operationId: job?.id ?? "",
+      response: null,
+    });
+    await expect(done).resolves.toBeUndefined();
+  });
+
   it("gives a retried poll the operation it took, and no other poll", async () => {
     const remote = executor();
     const result = remote.provider.executeCommand("sandbox-1", "echo once");

@@ -50,6 +50,8 @@ describe("machine classes (ADR 0204)", () => {
     for (const classes of [
       { "": { platform: "pool" } },
       { "-desk": { platform: "pool" } },
+      // Rule and class names end up in host names and cloud labels.
+      { "desk-": { platform: "pool" } },
       { [`d${"e".repeat(31)}`]: { platform: "pool" } },
       {
         desk: {
