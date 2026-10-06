@@ -39,4 +39,33 @@ describe("default browser links", () => {
       await app.eval("window.catamorphicDesktop.defaultBrowserRequest()"),
     ).toMatchObject({ available: false, isDefault: false });
   });
+  it("opens the link that launched it in the project it reopens", async () => {
+    // A person's next launch: a profile with a project to go back to. The
+    // project list and the last project load after the window does.
+    const directory = app.userDataDir;
+    const project = await app.eval<{ id: string }>(
+      `window.catamorphicDesktop.createProject({name:'Link project',rootPath:${JSON.stringify(`${directory}/link-project`)}})`,
+    );
+    await app.reload();
+    await app.waitFor(
+      `window.catamorphicDesktop.getPrefs().then((prefs) => prefs.lastProjectId === ${JSON.stringify(project.id)})`,
+      { label: "project remembered" },
+    );
+    await app.stop({ preserveUserData: true });
+    app = await launchApp({
+      userDataDir: directory,
+      urls: [`${origin}/three`],
+    });
+    await app.waitFor(
+      `[...document.querySelectorAll('webview')].some((view) => view.getAttribute('src') === ${JSON.stringify(`${origin}/three`)})`,
+      { timeoutMs: 45_000, label: "launching link opened" },
+    );
+    expect(
+      await app.eval(`document.body.innerText.includes('Link project')`),
+    ).toBe(true);
+    expect(
+      await app.eval("window.catamorphicDesktop.browserTakePendingUrls()"),
+    ).toEqual([]);
+    expect(app.getRendererErrors()).toEqual([]);
+  }, 180_000);
 });
