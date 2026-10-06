@@ -249,6 +249,40 @@ describe("ContainerSandboxProvider without Docker", () => {
     expect(fake.volumes.size).toBe(0);
   });
 
+  it("reports a command whose sandbox the kernel killed, and starts it for the next", async () => {
+    // gVisor: past its memory limit the whole sandbox dies, and runsc says
+    // it lost the sandbox before Docker notices.
+    const { fake, provider } = await setup(undefined, {
+      onExec: ({ container, cmd }) => {
+        if (!cmd.join(" ").includes("allocate-forever")) return undefined;
+        container.running = false;
+        container.oomKilled = true;
+        return {
+          exitCode: 128,
+          stderr:
+            'waiting on PID 10: urpc method "containerManager.WaitPID" failed: EOF',
+        };
+      },
+    });
+    const sandboxProvider = provider();
+    const sandbox = await sandboxProvider.createSandbox({});
+    const hog = await sandboxProvider.executeCommand(
+      sandbox.id,
+      "allocate-forever",
+    );
+    expect(hog.exitCode).toBe(137);
+    expect(hog.result).toContain(
+      "the sandbox ran out of memory, which ended every process in it",
+    );
+    const next = await sandboxProvider.executeCommand(sandbox.id, "true");
+    expect(next.exitCode).toBe(0);
+    expect(
+      fake.requests.filter(
+        (request) => request === `POST /containers/${sandbox.id}/start`,
+      ),
+    ).toHaveLength(2);
+  });
+
   it("starts a sandbox the daemon stopped behind its back, once, and goes on", async () => {
     const { fake, provider } = await setup();
     const sandboxProvider = provider();

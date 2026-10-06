@@ -252,7 +252,8 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
           PidsLimit: 4096,
         },
       });
-      // Within the limit a process runs; past it, the kernel kills it.
+      // Within the limit a process runs; past it, the kernel kills it (the
+      // whole sandbox under gVisor), and the sandbox serves the next command.
       const fits = await sandboxProvider.executeCommand(
         id,
         "bun -e 'const kept = Buffer.alloc(32 * 1024 * 1024, 1); console.log(kept.length)'",
@@ -264,6 +265,9 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
         { timeout: 120 },
       );
       expect(hog.exitCode, hog.result).toBe(137);
+      const after = await sandboxProvider.executeCommand(id, "echo alive");
+      expect(after.exitCode, after.result).toBe(0);
+      expect(after.result.trim()).toBe("alive");
     },
     10 * MINUTES,
   );

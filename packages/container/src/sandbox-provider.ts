@@ -644,7 +644,41 @@ export class ContainerSandboxProvider implements SandboxProvider {
         exitCode: 130,
         result: `${result}\n[container] command was cancelled`,
       };
+    if (output.exitCode !== 0) {
+      const died = await this.diedUnder(sandboxId, output.stderr);
+      if (died)
+        return {
+          exitCode: 137,
+          result: `${result}\n[container] the sandbox ${died.outOfMemory ? "ran out of memory" : "stopped"}, which ended every process in it; the next command starts it again`,
+        };
+    }
     return { exitCode: output.exitCode, result };
+  }
+
+  /**
+   * Whether a failed command's sandbox stopped under it. Under gVisor the
+   * kernel kills a sandbox past its memory limit whole, not just the
+   * process that used the memory (runc kills only that process), and
+   * runsc reports the lost sandbox as a failed `urpc` call; Docker may
+   * notice it a moment later. The next call starts it again.
+   */
+  private async diedUnder(
+    sandboxId: string,
+    stderr: string,
+  ): Promise<{ outOfMemory: boolean } | undefined> {
+    const attempts = /urpc method/.test(stderr) ? 10 : 1;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (attempt > 0) await new Promise((wake) => setTimeout(wake, 200));
+      const inspected = await this.docker
+        .inspectContainer(sandboxId)
+        .catch(() => undefined);
+      if (!inspected) return undefined;
+      const state = objectField(inspected, "State");
+      if (state.Running === true) continue;
+      (await this.record(sandboxId)).ready = false;
+      return { outOfMemory: state.OOMKilled === true };
+    }
+    return undefined;
   }
 
   /** One `tar -x` of an in-memory archive (Bun cannot half-close, so `head -c` bounds it). */

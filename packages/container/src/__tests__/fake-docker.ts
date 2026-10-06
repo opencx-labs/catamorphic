@@ -10,18 +10,26 @@ export interface FakeContainer {
   id: string;
   body: Record<string, unknown>;
   running: boolean;
+  /** The kernel killed it for memory. */
+  oomKilled?: boolean;
 }
 
 /**
  * A Docker Engine API on a Unix socket that keeps containers, volumes,
  * networks and execs in memory: enough of the daemon for the container
- * provider's own logic, with no Docker. Every exec succeeds with no output.
+ * provider's own logic, with no Docker. Every exec succeeds with no output
+ * unless `onExec` answers otherwise.
  */
 export async function startFakeDocker(options?: {
   /** The image's `Config`. */
   image?: { User?: string; Env?: string[] };
   /** Fail container starts with this message. */
   failStart?: string;
+  /** How an exec ends, when not with success and no output. */
+  onExec?: (exec: {
+    container: FakeContainer;
+    cmd: string[];
+  }) => { exitCode: number; stderr?: string } | undefined;
 }) {
   // Unix socket paths are short; macOS's temporary directory is not.
   const directory = fs.mkdtempSync(
@@ -31,7 +39,10 @@ export async function startFakeDocker(options?: {
   const containers = new Map<string, FakeContainer>();
   const volumes = new Map<string, Record<string, unknown>>();
   const networks = new Map<string, Record<string, unknown>>();
-  const execs = new Map<string, { container: string; cmd: string[] }>();
+  const execs = new Map<
+    string,
+    { container: string; cmd: string[]; exitCode?: number }
+  >();
   const requests: string[] = [];
   let nextExec = 0;
 
@@ -162,6 +173,7 @@ export async function startFakeDocker(options?: {
             State: {
               Running: container.running,
               Status: container.running ? "running" : "exited",
+              OOMKilled: container.oomKilled === true,
             },
             Mounts: (Array.isArray(mounts) ? mounts : []).map(
               (mount: Record<string, unknown>) => ({
@@ -187,18 +199,33 @@ export async function startFakeDocker(options?: {
         }
       }
       const execMatch = url.pathname.match(/^\/exec\/([^/]+)\/json$/);
-      if (execMatch) return json(200, { Running: false, ExitCode: 0 });
+      if (execMatch)
+        return json(200, {
+          Running: false,
+          ExitCode: execs.get(execMatch[1] ?? "")?.exitCode ?? 0,
+        });
       return json(500, { message: `The fake daemon has no ${route}` });
     });
   });
-  // Exec streams: no output, then the end.
+  // Exec streams: no output (or what onExec says), then the end.
   server.on("upgrade", (request, socket) => {
     requests.push(`${request.method} ${request.url} upgrade`);
     socket.on("error", () => {});
     socket.write(
       "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.multiplexed-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n",
     );
-    socket.end(dockerFrame(1, Buffer.alloc(0)));
+    const exec = execs.get(request.url?.match(/^\/exec\/([^/]+)\//)?.[1] ?? "");
+    const container = exec ? containers.get(exec.container) : undefined;
+    const ended =
+      exec && container
+        ? options?.onExec?.({ container, cmd: exec.cmd })
+        : undefined;
+    if (exec && ended) exec.exitCode = ended.exitCode;
+    socket.end(
+      ended?.stderr
+        ? dockerFrame(2, Buffer.from(ended.stderr))
+        : dockerFrame(1, Buffer.alloc(0)),
+    );
   });
   await new Promise<void>((resolve) =>
     server.listen(socketPath, () => resolve()),

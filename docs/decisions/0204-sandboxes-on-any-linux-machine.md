@@ -35,7 +35,10 @@ its network namespace and reach the machine, so such a machine advertises no
 The workspace is a Docker volume of the sandbox's own, removed with it:
 gVisor's root filesystem (`--overlay2=root:self`, its default) starts over
 from the image when a container restarts, so a restarted sandbox keeps its
-workspace and volumes, and runs its setup again. Persistent volumes are
+workspace and volumes, and runs its setup again. Past its memory limit a
+gVisor sandbox is killed whole, not just the process that used the memory:
+the running command reports the kill (exit 137), every process in the
+sandbox ends, and the next command starts it again. Persistent volumes are
 Docker volumes too, which the daemon removes whatever user wrote into them.
 Every sandbox runs at most 4096 processes (`PidsLimit`,
 `WORK_SANDBOX_PIDS_LIMIT`). The provider records each sandbox while creating
