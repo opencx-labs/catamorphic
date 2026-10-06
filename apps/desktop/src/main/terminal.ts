@@ -259,6 +259,10 @@ export function registerTerminalSupport(
       request,
       cols: input.cols ?? 80,
       rows: input.rows ?? 24,
+    }).catch((error: unknown) => {
+      // The tab writes the reason: a plain Error crosses IPC as its
+      // words alone, without a class name in front.
+      throw new Error(error instanceof Error ? error.message : String(error));
     });
   };
 

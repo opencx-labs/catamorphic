@@ -162,13 +162,47 @@ describe("RemoteEnvironmentModal", () => {
 
   it("explains that nothing is sent until an Environment allows it", async () => {
     desktop.personalEnvironment.mockResolvedValue(
-      view({ server: "not-allowed" }),
+      view({
+        server: "not-allowed",
+        setup: { command: "make tools", server: null },
+      }),
     );
     await render();
     expect(
       document.body.querySelector('[data-testid="remote-environment-server"]')
         ?.textContent,
     ).toContain('"personalCredentials": true');
+    const setup = document.body.querySelector(
+      '[data-testid="remote-environment-setup"]',
+    )?.textContent;
+    expect(setup).toContain(
+      "Not sent: no Environment allows personal credentials",
+    );
+    expect(setup).not.toContain("Runs after");
+  });
+
+  it("says why a setup is not sent when the server cannot take it", async () => {
+    for (const [server, reason] of [
+      ["sign-in", "Not sent: sign in to the project's server again"],
+      ["unreachable", "Not sent: the project's server could not be reached"],
+      [
+        "unsupported",
+        "Not sent: the server does not support remote environments",
+      ],
+    ] as const) {
+      desktop.personalEnvironment.mockResolvedValue(
+        view({ server, setup: { command: "make tools", server: null } }),
+      );
+      await render();
+      expect(
+        document.body.querySelector('[data-testid="remote-environment-setup"]')
+          ?.textContent,
+      ).toContain(reason);
+      act(() => {
+        for (const root of roots.splice(0)) root.unmount();
+      });
+      document.body.replaceChildren();
+    }
   });
 
   it("edits the config through the desktop: files and removal", async () => {

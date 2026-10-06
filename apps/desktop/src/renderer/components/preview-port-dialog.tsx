@@ -28,12 +28,14 @@ export function PreviewPortDialog({
   onOpen: (port: number) => void;
 }) {
   const titleId = useId();
+  const hintId = useId();
   const [value, setValue] = useState("");
   useEffect(() => {
     setValue(request?.lastPort ? String(request.lastPort) : "");
   }, [request]);
   const port = Number(value);
   const valid = /^\d+$/.test(value.trim()) && validPreviewPort(port);
+  const invalid = value !== "" && !valid;
   return (
     <Modal
       open={request !== null}
@@ -65,12 +67,13 @@ export function PreviewPortDialog({
               value={value}
               onChange={(event) => setValue(event.target.value)}
               placeholder="3000"
-              aria-invalid={value !== "" && !valid}
+              aria-invalid={invalid}
+              aria-describedby={invalid ? hintId : undefined}
               className="mt-1.5 h-9 w-full rounded-md border border-border bg-bg-inset px-2.5 text-[13px] text-fg outline-none placeholder:text-fg-faint focus:border-accent"
             />
           </label>
-          {value !== "" && !valid ? (
-            <p className="mt-2 text-xs text-fg-muted">
+          {invalid ? (
+            <p id={hintId} className="mt-2 text-xs text-fg-muted">
               A port is a number from 1 to 65535.
             </p>
           ) : null}

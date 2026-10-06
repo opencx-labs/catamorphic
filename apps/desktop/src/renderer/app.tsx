@@ -508,6 +508,9 @@ export function App({
     useState<PreviewPortRequest | null>(null);
   const [previewPending, setPreviewPending] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  // Counts preview opens: an answer to one cancelled or replaced since is
+  // ignored, so it never opens a tab or touches the next dialog.
+  const previewAttemptRef = useRef(0);
   const [remotePublish, setRemotePublish] = useState<{
     path: string;
     features: RemoteFeatures | undefined;
@@ -1260,6 +1263,8 @@ export function App({
   const askChatPreview = (sessionId: string) => {
     if (!remoteChatSession(sessionId)) return;
     const session = sessionsById.get(sessionId);
+    previewAttemptRef.current += 1;
+    setPreviewPending(false);
     setPreviewError(null);
     setPreviewRequest({
       sessionId,
@@ -1268,8 +1273,19 @@ export function App({
     });
   };
 
+  /** Cancelled: an open still travelling is ignored when it answers. */
+  const closeChatPreview = () => {
+    previewAttemptRef.current += 1;
+    setPreviewRequest(null);
+    setPreviewPending(false);
+    setPreviewError(null);
+  };
+
   const openChatPreview = async (sessionId: string, port: number) => {
     if (!projectId) return;
+    previewAttemptRef.current += 1;
+    const attempt = previewAttemptRef.current;
+    const current = () => attempt === previewAttemptRef.current;
     setPreviewPending(true);
     setPreviewError(null);
     try {
@@ -1278,13 +1294,14 @@ export function App({
         sessionId,
         port,
       });
+      if (!current()) return;
       rememberPreviewPort(sessionId, port);
       setPreviewRequest(null);
       openBrowserTab(url, { title: `Preview · ${port}` });
     } catch (cause) {
-      setPreviewError(ipcErrorText(cause));
+      if (current()) setPreviewError(ipcErrorText(cause));
     } finally {
-      setPreviewPending(false);
+      if (current()) setPreviewPending(false);
     }
   };
 
@@ -5645,7 +5662,7 @@ export function App({
             request={previewRequest}
             pending={previewPending}
             error={previewError}
-            onClose={() => setPreviewRequest(null)}
+            onClose={closeChatPreview}
             onOpen={(port) => {
               if (previewRequest)
                 void openChatPreview(previewRequest.sessionId, port);

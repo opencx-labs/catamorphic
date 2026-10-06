@@ -218,6 +218,27 @@ describe("a terminal in a remote chat's workspace (ADR 0209)", () => {
     );
   });
 
+  it("gives up on a server that never answers the open, saying so", async () => {
+    const calls: Call[] = [];
+    const request: RemoteTerminalRequest = (call) => {
+      calls.push(call);
+      return new Promise((_resolve, reject) =>
+        call.signal?.addEventListener("abort", () =>
+          reject(new DOMException("This operation was aborted", "AbortError")),
+        ),
+      );
+    };
+    await expect(
+      openRemoteTerminal({ request, cols: 80, rows: 24, timeoutMs: 20 }),
+    ).rejects.toEqual(
+      new RemoteTerminalError(
+        0,
+        "The project's server took too long to open the terminal. The chat's workspace may still be starting: open the terminal again in a moment.",
+      ),
+    );
+    expect(calls[0]?.signal?.aborted).toBe(true);
+  });
+
   it("refuses to open with the server's reason", async () => {
     const server = fakeServer({ open: 409 });
     await expect(
