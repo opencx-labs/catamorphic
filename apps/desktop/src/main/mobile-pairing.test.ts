@@ -1,10 +1,19 @@
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { MobilePairingService } from "./mobile-pairing.js";
+import {
+  forwardToEmbeddedApi,
+  MobilePairingService,
+} from "./mobile-pairing.js";
 import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
+import {
+  DESKTOP_API_TOKEN_HEADER,
+  localApiRefusal,
+  newDesktopApiToken,
+} from "./server/local-api-guard.js";
 import type { DataPaths } from "./server/paths.js";
 
 const roots: string[] = [];
@@ -149,5 +158,52 @@ describe("MobilePairingService readiness", () => {
     await Promise.all([first, second]);
     await service.ensureListening();
     expect(listenCount).toBe(1);
+  });
+});
+
+describe("a paired phone's requests to the embedded API (ADR 0210)", () => {
+  it("carry this run's token, which the API's guard accepts", async () => {
+    const token = newDesktopApiToken();
+    const seen: http.IncomingHttpHeaders[] = [];
+    const bodies: string[] = [];
+    const embedded = http.createServer((request, response) => {
+      seen.push(request.headers);
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        bodies.push(Buffer.concat(chunks).toString());
+        response.end("{}");
+      });
+    });
+    await new Promise<void>((resolve) =>
+      embedded.listen(0, "127.0.0.1", () => resolve()),
+    );
+    const address = embedded.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    try {
+      const response = await forwardToEmbeddedApi({
+        url: `http://127.0.0.1:${port}/api/projects`,
+        method: "POST",
+        contentType: "application/json",
+        body: Buffer.from('{"name":"x"}'),
+        token,
+      });
+      expect(response.status).toBe(200);
+      const [headers] = seen;
+      expect(headers?.[DESKTOP_API_TOKEN_HEADER]).toBe(token);
+      expect(headers?.["content-type"]).toBe("application/json");
+      expect(bodies).toEqual(['{"name":"x"}']);
+      expect(
+        localApiRefusal({
+          method: "POST",
+          url: "/api/projects",
+          headers: headers ?? {},
+          port,
+          token,
+        }),
+      ).toBeUndefined();
+    } finally {
+      await new Promise<void>((resolve) => embedded.close(() => resolve()));
+    }
   });
 });

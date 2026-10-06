@@ -3,6 +3,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { refreshRemoteCredentials } from "./remote-oauth.js";
 import type { RemoteProjectsStore } from "./remote-projects-store.js";
 import type { RemoteTerminalRequest } from "./remote-terminal.js";
+import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 
 /** Where the desktop finds each linked project's server and credentials. */
 export interface RemoteProjectProfiles {
@@ -62,7 +63,12 @@ export async function remoteProjectFetch(args: {
     return fetch(target, {
       method: args.method,
       headers: {
-        ...args.headers,
+        // This computer's own API credential never leaves it.
+        ...Object.fromEntries(
+          Object.entries(args.headers ?? {}).filter(
+            ([name]) => name.toLowerCase() !== DESKTOP_API_TOKEN_HEADER,
+          ),
+        ),
         authorization: `Bearer ${token}`,
         "x-catamorphic-runner": link.connectionId,
       },

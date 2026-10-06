@@ -152,6 +152,7 @@ import {
   listAgentModels,
   type ModelCatalogAgent,
 } from "./server/harness-models.js";
+import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 import type { DataPaths } from "./server/paths.js";
 import { parseProjectAgentId } from "./server/project-agents.js";
 import { THEME_PRESETS } from "./theme.js";
@@ -949,15 +950,16 @@ export function registerIpcHandlers(
 
   // The project's workflow-tools MCP server, listed for the agent-policy
   // editor (which workflows an agent may run). Same endpoint agents mount
-  // per session; the embedded server's URL is local, so no auth rides it.
+  // per session; the embedded server answers this run's token (ADR 0210).
   ipcMain.handle(
     "catamorphic:project-workflow-tools",
     async (_event, projectId: string) => {
-      const base = state.current?.url;
-      if (!base) return [];
+      const server = state.current;
+      if (!server) return [];
       const probe = await probeMcpServer({
         transport: "http",
-        url: `${base}/api/projects/${encodeURIComponent(String(projectId))}/mcp`,
+        url: `${server.url}/api/projects/${encodeURIComponent(String(projectId))}/mcp`,
+        headers: { [DESKTOP_API_TOKEN_HEADER]: server.apiToken },
       });
       return probe.ok ? (probe.tools ?? []) : [];
     },

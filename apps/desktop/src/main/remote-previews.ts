@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import http, { type IncomingHttpHeaders } from "node:http";
 import path from "node:path";
@@ -6,20 +7,30 @@ import {
   type RemoteProjectProfiles,
   remoteProjectFetch,
 } from "./remote-api.js";
-import { previewRequestRefusal } from "./server/local-api-guard.js";
+import {
+  DESKTOP_API_TOKEN_HEADER,
+  previewRequestRefusal,
+} from "./server/local-api-guard.js";
 
 /*
  * Previews of servers running in a remote chat's workspace (ADR 0208). The
  * project's server forwards each request into the sandbox; the desktop adds
- * the member's credentials. Each preview gets its own loopback origin here,
- * so a page's root-relative URLs (`/assets/app.js`, `/@vite/client`) and its
- * cookies stay its own, as on the developer's own machine.
+ * the member's credentials. Each preview gets a loopback host of its own
+ * here (`p-<id>.localhost`, which Chromium resolves to loopback), so a
+ * page's root-relative URLs (`/assets/app.js`, `/@vite/client`) and its
+ * cookies stay its own, as on the developer's own machine: cookies ignore
+ * ports, and a host-only cookie of one preview never reaches another, nor
+ * do the person's own `127.0.0.1` cookies reach a sandbox.
  */
 
 /** Largest request body a preview carries, as the server accepts. */
 const PREVIEW_BODY_LIMIT = 16 * 1024 * 1024;
 
-/** Headers that belong to one connection, or that this side sets. */
+/**
+ * Headers that belong to one connection, that this side sets, or that
+ * carry this computer's own credentials: the member's bearer reaches the
+ * server only as the authorization this side adds.
+ */
 const REQUEST_HEADERS_DROPPED = [
   "connection",
   "keep-alive",
@@ -32,9 +43,26 @@ const REQUEST_HEADERS_DROPPED = [
   "host",
   "authorization",
   "content-length",
+  "forwarded",
+  "x-real-ip",
+  DESKTOP_API_TOKEN_HEADER,
   // The server's answer is decoded here; the page gets it plain.
   "accept-encoding",
 ];
+
+/** Header families the host uses for itself, never a page's. */
+const REQUEST_HEADER_PREFIXES_DROPPED = [
+  "x-catamorphic-",
+  "x-work-",
+  "x-forwarded-",
+];
+
+function droppedRequestHeader(name: string): boolean {
+  return (
+    REQUEST_HEADERS_DROPPED.includes(name) ||
+    REQUEST_HEADER_PREFIXES_DROPPED.some((prefix) => name.startsWith(prefix))
+  );
+}
 const RESPONSE_HEADERS_DROPPED = [
   "connection",
   "keep-alive",
@@ -58,18 +86,29 @@ export interface PreviewAnswer {
   body: Buffer;
 }
 
-/** Where a page under `localPrefix` sends a redirect the server pointed below its preview. */
+/**
+ * The preview's own host: one per project, chat and port, the same across
+ * restarts, so a restored tab's address still names it.
+ */
+export function previewHost(address: PreviewAddress): string {
+  const id = createHash("sha256")
+    .update(key(address))
+    .digest("hex")
+    .slice(0, 20);
+  return `p-${id}.localhost`;
+}
+
+/** Where the page goes for a redirect the server pointed below its preview. */
 export function localPreviewLocation(input: {
   location: string;
   sessionId: string;
   port: number;
-  localPrefix: string;
 }): string {
   const marker = `/agent/sessions/${input.sessionId}/previews/${input.port}`;
   const at = input.location.indexOf(marker);
   if (at < 0) return input.location;
   const rest = input.location.slice(at + marker.length);
-  return `${input.localPrefix}${rest.startsWith("/") ? rest : `/${rest}`}`;
+  return rest.startsWith("/") ? rest : `/${rest}`;
 }
 
 /**
@@ -84,15 +123,13 @@ export async function forwardPreview(input: {
   method: string;
   headers: Array<[string, string]>;
   body?: Buffer;
-  /** What the preview's root is where the page is: `""` for its own origin. */
-  localPrefix: string;
   signal?: AbortSignal;
 }): Promise<PreviewAnswer | undefined> {
   const { address } = input;
   const headers: Record<string, string> = {};
   for (const [name, value] of input.headers) {
     const key = name.toLowerCase();
-    if (REQUEST_HEADERS_DROPPED.includes(key)) continue;
+    if (droppedRequestHeader(key)) continue;
     headers[key] =
       key in headers
         ? `${headers[key]}${key === "cookie" ? "; " : ", "}${value}`
@@ -129,7 +166,6 @@ export async function forwardPreview(input: {
             location: value,
             sessionId: address.sessionId,
             port: address.port,
-            localPrefix: input.localPrefix,
           })
         : value,
     ]);
@@ -184,8 +220,9 @@ interface StoredPreview extends PreviewAddress {
 const KEPT_PREVIEWS = 20;
 
 /**
- * Each preview's own loopback origin. A preview keeps its port across
- * restarts (remembered in `file`), so a restored browser tab still opens.
+ * Each preview's own loopback origin: its own host, and a port it keeps
+ * across restarts (remembered in `file`), so a restored browser tab still
+ * opens.
  */
 export class RemotePreviewOrigins {
   private readonly servers = new Map<
@@ -207,7 +244,7 @@ export class RemotePreviewOrigins {
     const stored = this.load().find((entry) => key(entry) === key(address));
     const { listenPort } = await this.listen(address, stored?.listenPort);
     this.remember({ ...address, listenPort });
-    return `http://${this.host}:${listenPort}/`;
+    return `http://${previewHost(address)}:${listenPort}/`;
   }
 
   /** Listen again for the previews open tabs may still show. */
@@ -238,6 +275,7 @@ export class RemotePreviewOrigins {
     );
   }
 
+  /** The loopback address previews listen on. */
   private get host(): string {
     return this.deps.host ?? "127.0.0.1";
   }
@@ -296,9 +334,10 @@ export class RemotePreviewOrigins {
     response: http.ServerResponse;
   }): Promise<void> {
     const { request, response } = input;
+    const ownOrigin = `http://${previewHost(input.address)}:${request.socket.localPort ?? 0}`;
     const refusal = previewRequestRefusal({
       headers: request.headers,
-      port: request.socket.localPort ?? 0,
+      origin: ownOrigin,
     });
     if (refusal) {
       response
@@ -319,8 +358,6 @@ export class RemotePreviewOrigins {
       }
       chunks.push(bytes);
     }
-    const listenPort = request.socket.localPort;
-    const ownOrigin = `http://${this.host}:${listenPort}`;
     const controller = new AbortController();
     response.once("close", () => {
       if (!response.writableEnded) controller.abort();
@@ -335,7 +372,6 @@ export class RemotePreviewOrigins {
         sandboxOrigin: `http://127.0.0.1:${input.address.port}`,
       }),
       ...(chunks.length > 0 ? { body: Buffer.concat(chunks) } : {}),
-      localPrefix: "",
       signal: controller.signal,
     });
     if (!answer) {
@@ -414,17 +450,23 @@ function key(address: PreviewAddress): string {
 
 /**
  * A request's headers as pairs. The page's own origin becomes the one the
- * server in the sandbox knows itself by, so its same-origin checks hold;
- * another site's origin passes unchanged and is refused there as it would
- * be on the developer's machine.
+ * server in the sandbox knows itself by, so its same-origin checks hold.
+ * Cookies go only with a request to the preview's own host from itself (or
+ * a typed address): none of another site's, nor the person's own.
  */
 function headerPairs(
   headers: IncomingHttpHeaders,
   origins: { ownOrigin: string; sandboxOrigin: string },
 ): Array<[string, string]> {
+  const own = new URL(origins.ownOrigin);
+  const host = headers.host?.toLowerCase();
+  const origin = headers.origin;
+  const ownRequest =
+    host === own.host && (origin === undefined || origin === own.origin);
   const pairs: Array<[string, string]> = [];
   for (const [name, value] of Object.entries(headers)) {
     if (value === undefined) continue;
+    if (name === "cookie" && !ownRequest) continue;
     for (const one of Array.isArray(value) ? value : [value])
       pairs.push([
         name,
