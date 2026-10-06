@@ -89,6 +89,10 @@ describe("design lint", () => {
     ).toEqual([]);
     expect(count(/outline:\s*\d+px\s+solid/g)).toEqual([]);
   });
+  it("switches are checkboxes with role=switch, never a private control", () => {
+    // DESIGN.md "Switches": form-controls.css draws the one switch.
+    expect(count(/<(?!input\b)[a-z]+\b[^>]*\brole="switch"/g)).toEqual([]);
+  });
   it("checkboxes carry no private chrome", () => {
     // form-controls.css draws every checkbox; per-site sizes and accent
     // colors made some 14px and fought the shared mark.

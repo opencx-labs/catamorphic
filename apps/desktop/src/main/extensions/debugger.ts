@@ -192,6 +192,8 @@ export interface DebuggerEvents {
   ) => void;
   onDetach: (client: string, tabId: number, reason: string) => void;
   onChange: (tabId: number) => void;
+  /** `Target.closeTarget` on the tab itself: Work closes the tab. */
+  closeTab?: (tabId: number) => Promise<void>;
 }
 
 /**
@@ -362,6 +364,16 @@ export class ExtensionDebuggers {
     const session = this.sessions.get(tabId);
     if (session?.client !== client)
       throw new Error(`Debugger is not attached to the tab with id: ${tabId}.`);
+    // Agents close the tab they drive this way (its id as getTargets
+    // names it); Work closes it as a tab, never another target.
+    if (method === "Target.closeTarget" && sessionId === undefined) {
+      const targetId = params?.targetId;
+      if (targetId !== undefined && targetId !== `tab-${tabId}`)
+        throw new Error("Target.closeTarget only closes this tab");
+      if (!this.events.closeTab) throw new Error("Not supported.");
+      await this.events.closeTab(tabId);
+      return { success: true };
+    }
     const refusal = debuggerCommandRefusal(method, params);
     if (refusal) throw new Error(refusal);
     if (session.guest.isDestroyed())

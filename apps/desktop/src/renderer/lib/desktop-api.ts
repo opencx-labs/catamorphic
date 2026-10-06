@@ -1496,6 +1496,8 @@ export interface CatamorphicDesktopApi {
       height: number;
     }) => void,
   ) => () => void;
+  /** A page in this window was pressed or got Escape: popups close. */
+  onExtensionsClosePopups: (listener: () => void) => () => void;
   onExtensionSidePanel: (
     listener: (change: {
       guestId: number;
@@ -1861,6 +1863,9 @@ export const desktopApi: CatamorphicDesktopApi = {
   ),
   onExtensionPopupSize: shareEvent((publish) =>
     nativeApi.onExtensionPopupSize(publish),
+  ),
+  onExtensionsClosePopups: shareEvent((publish) =>
+    nativeApi.onExtensionsClosePopups(() => publish(undefined)),
   ),
   onExtensionSidePanel: shareEvent((publish) =>
     nativeApi.onExtensionSidePanel(publish),

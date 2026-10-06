@@ -30,6 +30,8 @@ interface Queued {
 
 const QUEUE_LIMIT = 200;
 const QUEUE_TTL_MS = 30_000;
+/** How long events wait for a starting worker before trying anyway. */
+const HOLD_MS = 3_000;
 /** How long one event keeps an otherwise idle worker running. */
 const EVENT_KEEPALIVE_MS = 5_000;
 
@@ -67,6 +69,14 @@ export class ExtensionEvents {
   private readonly workerEvents = new Map<string, Set<string>>();
   private readonly queued = new Map<string, Queued[]>();
   private readonly watchedContents = new WeakSet<WebContents>();
+  private readonly runningWorkers = new Set<number>();
+  private readonly held = new Map<
+    number,
+    {
+      events: { name: string; args: unknown[] }[];
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   constructor(
     private readonly startWorker: (
@@ -134,6 +144,13 @@ export class ExtensionEvents {
       alive: () => !worker.isDestroyed(),
       send: (name, args) => {
         if (worker.isDestroyed()) return;
+        // A worker runs its script while still starting, and listens then,
+        // but Electron delivers nothing to it until it is running: hold
+        // what arrives meanwhile (runtime.onInstalled, woken events).
+        if (!this.runningWorkers.has(worker.versionId)) {
+          this.holdForWorker(worker, name, args);
+          return;
+        }
         keepWorkerAlive(worker, EVENT_KEEPALIVE_MS);
         try {
           worker.send(EXTENSION_CHANNELS.event, name, args);
@@ -144,6 +161,35 @@ export class ExtensionEvents {
     };
     this.contexts.set(key, context);
     return context;
+  }
+
+  /** A worker is running: what was held for it goes now. */
+  workerRunning(versionId: number): void {
+    this.runningWorkers.add(versionId);
+    const held = this.held.get(versionId);
+    this.held.delete(versionId);
+    const context = this.contexts.get(`worker:${versionId}`);
+    if (!held || !context) return;
+    clearTimeout(held.timer);
+    for (const { name, args } of held.events) context.send(name, args);
+  }
+
+  private holdForWorker(
+    worker: ServiceWorkerMain,
+    name: string,
+    args: unknown[],
+  ): void {
+    let held = this.held.get(worker.versionId);
+    if (!held) {
+      const versionId = worker.versionId;
+      held = {
+        events: [],
+        // A running state this host never heard of still gets them.
+        timer: setTimeout(() => this.workerRunning(versionId), HOLD_MS),
+      };
+      this.held.set(versionId, held);
+    }
+    if (held.events.length < QUEUE_LIMIT) held.events.push({ name, args });
   }
 
   context(key: string): ExtensionContext | null {
@@ -157,6 +203,10 @@ export class ExtensionEvents {
   }
 
   workerStopped(versionId: number): void {
+    this.runningWorkers.delete(versionId);
+    const held = this.held.get(versionId);
+    if (held) clearTimeout(held.timer);
+    this.held.delete(versionId);
     const key = `worker:${versionId}`;
     const context = this.contexts.get(key);
     this.contexts.delete(key);

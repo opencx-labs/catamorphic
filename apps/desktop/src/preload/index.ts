@@ -828,6 +828,15 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:extensions-popup-size", handler);
   },
+  onExtensionsClosePopups: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("catamorphic:extensions-close-popups", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:extensions-close-popups",
+        handler,
+      );
+  },
   onExtensionSidePanel: (listener: (payload: unknown) => void) => {
     const handler = (_event: unknown, payload: unknown) => listener(payload);
     ipcRenderer.on("catamorphic:extensions-side-panel", handler);

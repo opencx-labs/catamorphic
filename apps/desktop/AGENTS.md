@@ -137,10 +137,12 @@ test without an explicit request. Prefer the isolated Electron harness.
 | Styling and animation | [Design system](DESIGN.md) | tokens, list motion and native motion tests |
 | Loading buttons and modal stability | [Button contract](DESIGN.md#buttons) | `@catamorphic/ui` PendingButton, reserved status space |
 | Dropdowns and checkboxes | [Control contract](DESIGN.md#dropdowns-and-checkboxes) | `renderer/form-controls.css`, semantic select/checkbox HTML |
+| Switches (on/off at once) | [Switches](DESIGN.md#switches) | `<input type="checkbox" role="switch">`, `renderer/form-controls.css`, design lint |
 | Focus rings | [Focus rings](DESIGN.md#focus-rings) | ring tokens in `styles.css`, `lib/focus-modality.ts`, design lint |
 
-All desktop dropdowns and checkboxes use the app's shared control styling, never
-OS-native dropdown menus or browser-default checkboxes. Read the linked control
+All desktop dropdowns, checkboxes and switches use the app's shared control
+styling, never OS-native dropdown menus, browser-default checkboxes or custom
+switch components. Read the linked control
 contract before changing a form. Onboarding and Settings reuse the same import
 and default-browser actions.
 

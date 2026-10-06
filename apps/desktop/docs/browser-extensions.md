@@ -89,7 +89,8 @@ store check runs on its own), and `fontSettings` reports default fonts.
   `Browser`, `Target` beyond auto-attaching (flattened) frames, `Debugger`
   or `HeapProfiler` (both reach every world in the page), tracing, memory,
   file inputs or file drags, other sites' cookies, downloads or certificate
-  commands; `Page.navigate` only to web addresses. A tab Work's own browser
+  commands; `Page.navigate` only to web addresses. `Target.closeTarget` on
+  the tab itself closes it as a tab. A tab Work's own browser
   driver holds is shared, and the extension's end detaches it all the
   same, so nothing it set up stays. The tab shows who is controlling it,
   with Stop.
@@ -103,8 +104,37 @@ store check runs on its own), and `fontSettings` reports default fonts.
   other page of the window closes it, as does focus leaving it: a page can
   take focus back while it loads, since a window's guests share its focus.
 - **Workers.** An event a stopped service worker listened to starts it
-  again and waits until it listens. Events, API calls, debugger sessions
-  and native ports keep it alive while they last.
+  again and waits until it listens. A worker runs its script and listens
+  while still starting, but Electron delivers nothing to it until it is
+  running: events wait for that. Events, API calls, debugger sessions and
+  native ports keep it alive while they last.
+- **Lifecycle.** Electron fires neither `runtime.onInstalled` nor
+  `runtime.onStartup`. Work does, to the background context (the worker, or
+  an MV2 background page): `install` or `update` (with `previousVersion`)
+  once per version, the first time it listens, and `onStartup` once per run
+  for one installed before. Extensions set themselves up there: ChatGPT
+  names its browser instance, and without it Codex has no browser to drive.
+- **Storage.** `storage.local` and `session` are Electron's, `sync` is
+  Work's, and `managed` is an empty area (no administrator policy).
+
+## Agents that drive the browser
+
+The Claude and ChatGPT extensions are how those agents use a browser, and
+both work in Work as in Chrome, through native messaging:
+
+- **ChatGPT** (Codex): the Codex app's Chrome plugin registers its host for
+  Chrome (`com.openai.codexextension`), which Work reads. The side panel
+  chats with your local Codex login, and Codex drives the tab through the
+  extension's debugger. Codex must have its Chrome plugin enabled; an
+  update of the plugin while a host runs needs the side panel (or Work)
+  reopened.
+- **Claude**: the Claude app registers `com.anthropic.claude_browser_extension`
+  for Chrome. The extension signs in to claude.ai in a tab (its redirect to
+  `chrome-extension://…/oauth_callback.html` is caught by its
+  `webNavigation.onBeforeNavigate` listener), then Claude can drive the tab.
+
+Neither reads anything from Chrome itself: sign-ins happen in the Work
+profile, and hosts run as Chrome would run them.
 
 ## Installing and updating
 

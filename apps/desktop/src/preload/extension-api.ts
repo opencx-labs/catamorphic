@@ -614,6 +614,10 @@ export function installExtensionApis(): void {
     return entry.port;
   };
   extend("runtime", {
+    // Electron fires neither: Work does, as Chrome does (install and
+    // update once per version, startup once per run).
+    onInstalled: event("runtime.onInstalled"),
+    onStartup: event("runtime.onStartup"),
     openOptionsPage: method("runtime.openOptionsPage"),
     setUninstallURL: method("runtime.setUninstallURL"),
     getContexts: method("runtime.getContexts"),
@@ -697,6 +701,17 @@ export function installExtensionApis(): void {
       for (const [key, value] of [
         ["sync", area],
         ["onChanged", onChanged],
+        // No administrator sets policies for Work's extensions: the
+        // managed area exists and is empty, as in Chrome without policy.
+        [
+          "managed",
+          object.managed ?? {
+            get: answer({}),
+            getBytesInUse: answer(0),
+            getKeys: answer([]),
+            onChanged: event("storage.managed.onChanged"),
+          },
+        ],
       ] as const) {
         try {
           Object.defineProperty(object, key, {

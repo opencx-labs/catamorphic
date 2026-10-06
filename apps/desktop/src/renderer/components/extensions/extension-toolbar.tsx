@@ -199,6 +199,17 @@ export function ExtensionToolbar({
     return () => window.removeEventListener(OPEN_EXTENSION_POPUP_EVENT, open);
   }, [guestId, anchorFor]);
 
+  // A press or Escape in a page closes the popup (main/extensions/host.ts),
+  // even one still loading.
+  useEffect(
+    () =>
+      desktopApi.onExtensionsClosePopups(() => {
+        pressedOpen.current = null;
+        setPopup(null);
+      }),
+    [],
+  );
+
   useEffect(
     () =>
       desktopApi.onExtensionInstalled((notice) => {
@@ -417,7 +428,9 @@ function ExtensionsMenu({
               <ExtensionIcon action={{ ...action, badgeText: "" }} />
               <span className="truncate">{action.name}</span>
             </button>
-            <ShortcutHint label={action.pinned ? "Unpin" : "Pin to toolbar"}>
+            <ShortcutHint
+              label={action.pinned ? "Unpin from toolbar" : "Pin to toolbar"}
+            >
               <button
                 type="button"
                 onClick={() =>

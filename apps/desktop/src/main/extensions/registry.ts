@@ -46,6 +46,8 @@ const installedSchema = z.object({
     .nullable()
     .default(null),
   uninstallUrl: z.string().nullable().default(null),
+  /** The version `runtime.onInstalled` was delivered for (null: never). */
+  installedEventFor: z.string().nullable().default(null),
   /**
    * A downloaded update that asks for nothing new, waiting for the running
    * version to be idle (or for the next start).

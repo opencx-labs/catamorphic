@@ -215,6 +215,16 @@ interface StoreApproval {
 const key = (profileId: string, extensionId: string) =>
   `${profileId}:${extensionId}`;
 
+function hasServiceWorker(manifest: LoadedExtension["manifest"]): boolean {
+  const background = manifest.background;
+  return Boolean(
+    background !== null &&
+      typeof background === "object" &&
+      "service_worker" in background &&
+      background.service_worker,
+  );
+}
+
 const portKey = (context: ExtensionContext, portId: string) =>
   `${context.key}|${portId}`;
 
@@ -262,6 +272,9 @@ export class ExtensionsHost {
     number,
     Map<string, ExtensionTabsReport>
   >();
+  /** Extensions told `runtime.onInstalled` or `onStartup` this run. */
+  private readonly installedThisRun = new Set<string>();
+  private readonly startedThisRun = new Set<string>();
   /** When the person last acted on each extension (`profile:id`). */
   private readonly gestures = new Map<string, number>();
   /** Tabs whose closing already clears their side panel. */
@@ -325,6 +338,17 @@ export class ExtensionsHost {
             ]);
         },
         onChange: (tabId) => this.debuggingChanged(tabId),
+        closeTab: async (tabId) => {
+          const tab = this.tabs.tab(tabId);
+          const window = tab ? this.tabs.window(tab.windowId) : null;
+          if (!tab || !window) return;
+          if (window.type === "popup") window.window.close();
+          else
+            await this.requestWindow(window.window, {
+              kind: "close-tab",
+              guestId: tabId,
+            });
+        },
       },
       (url) => scriptableUrl(url) && !isWebStorePage(url),
     );
@@ -401,6 +425,7 @@ export class ExtensionsHost {
       }
       const worker = session.serviceWorkers.getWorkerFromVersionID(versionId);
       if (worker) this.wireWorker(session, profileId, worker);
+      if (runningStatus === "running") this.events.workerRunning(versionId);
     });
     // An extension worker's errors and warnings reach the app's log, the
     // way Chrome lists them on its extensions page.
@@ -685,6 +710,43 @@ export class ExtensionsHost {
     }
   }
 
+  /**
+   * `runtime.onInstalled` and `runtime.onStartup`, which Electron never
+   * fires and extensions set themselves up in (ChatGPT names its browser
+   * instance there): install or update once per version, as the extension
+   * first listens; startup once per run for one installed before it.
+   */
+  private lifecycleListened(extension: LoadedExtension, name: string): void {
+    const { profileId, id } = extension;
+    const record = this.registry.get(profileId, id);
+    if (!record) return;
+    if (name === "runtime.onInstalled") {
+      if (record.installedEventFor === extension.version) return;
+      const previous = record.installedEventFor;
+      this.registry.update(profileId, id, (current) => ({
+        ...current,
+        installedEventFor: extension.version,
+      }));
+      this.installedThisRun.add(key(profileId, id));
+      queueMicrotask(() =>
+        this.events.dispatch(profileId, id, "runtime.onInstalled", [
+          previous === null
+            ? { reason: "install" }
+            : { reason: "update", previousVersion: previous },
+        ]),
+      );
+    } else if (name === "runtime.onStartup") {
+      const id_ = key(profileId, id);
+      if (this.startedThisRun.has(id_) || this.installedThisRun.has(id_))
+        return;
+      if (record.installedEventFor === null) return;
+      this.startedThisRun.add(id_);
+      queueMicrotask(() =>
+        this.events.dispatch(profileId, id, "runtime.onStartup", []),
+      );
+    }
+  }
+
   /** The rulesets an extension's version should run with now. */
   private wantedRulesets(extension: LoadedExtension): string[] | null {
     const all = allRulesets(extension.manifest);
@@ -773,8 +835,9 @@ export class ExtensionsHost {
     );
     worker.ipc.on(EXTENSION_CHANNELS.listen, (_event, name, on) => {
       const resolved = contextOf();
-      if (resolved && typeof name === "string")
-        this.events.listen(resolved.context, name, on === true);
+      if (!resolved || typeof name !== "string") return;
+      this.events.listen(resolved.context, name, on === true);
+      if (on === true) this.lifecycleListened(resolved.extension, name);
     });
     this.wireNative<Electron.IpcMainServiceWorkerEvent>(
       (channel, listener) => worker.ipc.on(channel, listener),
@@ -1075,8 +1138,12 @@ export class ExtensionsHost {
     this.disposers.push(() => ipcMain.removeHandler(EXTENSION_CHANNELS.call));
     this.on(EXTENSION_CHANNELS.listen, (event, name, on) => {
       const caller = this.frameCaller(event, false);
-      if (caller && typeof name === "string")
-        this.events.listen(caller.context, name, on === true);
+      if (!caller || typeof name !== "string") return;
+      this.events.listen(caller.context, name, on === true);
+      // Lifecycle events go to the background: a worker's, or an MV2
+      // background page's (no worker), never a popup that listened first.
+      if (on === true && !hasServiceWorker(caller.ext.manifest))
+        this.lifecycleListened(caller.ext, name);
     });
     this.wireNative<IpcMainEvent>(
       (channel, listener) => this.on(channel, listener),
@@ -2338,16 +2405,15 @@ export class ExtensionsHost {
    */
   closePopupsBeside(guest: WebContents): boolean {
     if (this.views.get(guest.id)?.kind === "popup") return false;
-    let closed = false;
+    const host = guest.hostWebContents;
+    if (!host || host.isDestroyed()) return false;
+    // The window closes its popup, loaded or still loading.
+    host.send("catamorphic:extensions-close-popups");
     for (const [id, view] of this.views) {
       if (view.kind !== "popup") continue;
-      const popup = webContents.fromId(id);
-      if (!popup || popup.isDestroyed()) continue;
-      if (popup.hostWebContents !== guest.hostWebContents) continue;
-      popup.send(EXTENSION_CHANNELS.popupClose);
-      closed = true;
+      if (webContents.fromId(id)?.hostWebContents === host) return true;
     }
-    return closed;
+    return false;
   }
 
   private async runCommand(
@@ -2847,6 +2913,7 @@ export class ExtensionsHost {
         pendingUpdate: null,
         uninstallUrl: null,
         stagedUpdate: null,
+        installedEventFor: null,
       };
       this.registry.put(profileId, record);
       this.pruneVersions(profileId, extensionId, dir);
@@ -2961,6 +3028,7 @@ export class ExtensionsHost {
       pendingUpdate: null,
       uninstallUrl: null,
       stagedUpdate: null,
+      installedEventFor: null,
     };
     this.registry.put(profileId, record);
     await this.load(profileId, record);

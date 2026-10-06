@@ -1,4 +1,4 @@
-import { ChevronRight, Puzzle, RotateCw } from "lucide-react";
+import { ChevronRight, Pin, Puzzle, RotateCw, Trash2 } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import {
   CHROME_WEB_STORE_URL,
@@ -78,9 +78,12 @@ export function ExtensionsScreen({
           htmlFor={developerId}
           className="flex cursor-pointer items-center gap-2 text-xs text-fg-muted"
         >
+          Developer mode
           <input
             id={developerId}
             type="checkbox"
+            role="switch"
+            aria-checked={state?.developerMode ?? false}
             checked={state?.developerMode ?? false}
             disabled={!state}
             data-testid="extensions-developer-mode"
@@ -90,7 +93,6 @@ export function ExtensionsScreen({
                 .then(refresh)
             }
           />
-          Developer mode
         </label>
         <button
           type="button"
@@ -207,16 +209,20 @@ function ExtensionCard({
 }) {
   const [details, setDetails] = useState(false);
   const [busy, setBusy] = useState(false);
-  const switchId = useId();
-  const status = extension.pendingUpdate
-    ? "An update needs your approval."
-    : extension.error
-      ? extension.error
-      : !extension.enabled
-        ? extension.disabledReason === "permissions"
-          ? "Turned off until you accept its new access."
-          : "Turned off."
-        : null;
+  // The switch moves at once; a failure moves it back with the reason.
+  const [turning, setTurning] = useState<boolean | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const status = failure
+    ? failure
+    : extension.pendingUpdate
+      ? "An update needs your approval."
+      : extension.error
+        ? extension.error
+        : !extension.enabled
+          ? extension.disabledReason === "permissions"
+            ? "Turned off until you accept its new access."
+            : "Turned off."
+          : null;
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true);
     try {
@@ -275,28 +281,79 @@ function ExtensionCard({
             </p>
           )}
         </div>
-        <label
-          htmlFor={switchId}
-          className="flex shrink-0 cursor-pointer items-center gap-2 pt-1 text-xs text-fg-muted"
-        >
+        {/* Pin, remove, and on or off: the card's own actions, as in Chrome. */}
+        <div className="flex shrink-0 items-center gap-1">
+          {extension.enabled && extension.hasAction && (
+            <ShortcutHint
+              label={extension.pinned ? "Unpin from toolbar" : "Pin to toolbar"}
+            >
+              <button
+                type="button"
+                aria-label={
+                  extension.pinned
+                    ? `Unpin ${extension.name} from the toolbar`
+                    : `Pin ${extension.name} to the toolbar`
+                }
+                aria-pressed={extension.pinned}
+                data-testid="extension-card-pin"
+                data-pinned={extension.pinned}
+                onClick={() =>
+                  void desktopApi.extensionsSetPinned({
+                    id: extension.id,
+                    pinned: !extension.pinned,
+                  })
+                }
+                className={`grid size-7 cursor-pointer place-items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay ${
+                  extension.pinned
+                    ? "text-accent"
+                    : "text-fg-muted hover:text-fg"
+                }`}
+              >
+                <Pin
+                  className={`size-3.5 transition-[fill] duration-150 ${extension.pinned ? "fill-current" : ""}`}
+                />
+              </button>
+            </ShortcutHint>
+          )}
+          <ShortcutHint label="Remove">
+            <button
+              type="button"
+              aria-label={`Remove ${extension.name}`}
+              data-testid="extension-card-remove"
+              onClick={() =>
+                void desktopApi.extensionsRemove({ id: extension.id })
+              }
+              className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-danger"
+            >
+              <Trash2 className="size-3.5" />
+            </button>
+          </ShortcutHint>
           <input
-            id={switchId}
             type="checkbox"
-            checked={extension.enabled}
-            disabled={busy || Boolean(extension.pendingUpdate)}
+            role="switch"
+            className="ml-1.5"
+            aria-checked={turning ?? extension.enabled}
+            checked={turning ?? extension.enabled}
+            disabled={Boolean(extension.pendingUpdate)}
             data-testid="extension-card-enabled"
-            aria-label={`${extension.name} on`}
-            onChange={(event) =>
-              void run(() =>
-                desktopApi.extensionsSetEnabled({
-                  id: extension.id,
-                  enabled: event.target.checked,
-                }),
-              )
-            }
+            aria-label={extension.name}
+            onChange={(event) => {
+              const enabled = event.target.checked;
+              setTurning(enabled);
+              setFailure(null);
+              void desktopApi
+                .extensionsSetEnabled({ id: extension.id, enabled })
+                .catch((error: unknown) =>
+                  setFailure(
+                    error instanceof Error
+                      ? error.message
+                      : "It could not be changed.",
+                  ),
+                )
+                .finally(() => setTurning(null));
+            }}
           />
-          On
-        </label>
+        </div>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {extension.pendingUpdate && (
@@ -321,27 +378,13 @@ function ExtensionCard({
             Options
           </button>
         )}
-        {extension.enabled && extension.hasAction && (
-          <button
-            type="button"
-            className="button-secondary button-sm"
-            data-testid="extension-card-pin"
-            onClick={() =>
-              void desktopApi.extensionsSetPinned({
-                id: extension.id,
-                pinned: !extension.pinned,
-              })
-            }
-          >
-            {extension.pinned ? "Unpin" : "Pin to toolbar"}
-          </button>
-        )}
         {extension.source === "unpacked" && extension.enabled && (
           <ShortcutHint label="Reload">
             <button
               type="button"
               aria-label={`Reload ${extension.name}`}
               className="button-secondary button-sm"
+              disabled={busy}
               onClick={() =>
                 void run(() =>
                   desktopApi.extensionsReload({ id: extension.id }),
@@ -352,14 +395,6 @@ function ExtensionCard({
             </button>
           </ShortcutHint>
         )}
-        <button
-          type="button"
-          className="button-secondary button-sm"
-          data-testid="extension-card-remove"
-          onClick={() => void desktopApi.extensionsRemove({ id: extension.id })}
-        >
-          Remove
-        </button>
         <span className="flex-1" />
         <button
           type="button"

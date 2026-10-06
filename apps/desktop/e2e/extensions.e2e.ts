@@ -82,7 +82,8 @@ const log = (entry) => {
     .then(() => chrome.storage.local.get({ log: [] }))
     .then(({ log }) => chrome.storage.local.set({ log: [...log, entry].slice(-100) }));
 };
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
+  log({ event: "installed", reason: details.reason });
   chrome.contextMenus.create({ id: "work-test", title: "Work Test: %s", contexts: ["selection"] });
 });
 chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
@@ -357,13 +358,30 @@ describe("an unpacked extension", () => {
     expect(await app.eval(`${card}.dataset.enabled`)).toBe("true");
     // Pin it, then go back to the page and reload it: the content script,
     // the badge it asked for and the blocked script all show.
+    // On and off is a switch; pinning is the card's pin button.
+    expect(
+      await app.eval(
+        `${card}.querySelector('[data-testid="extension-card-enabled"]').getAttribute('role')`,
+      ),
+    ).toBe("switch");
     await click('[data-testid="extension-card-pin"]');
     await app.waitFor(
-      `${card}.querySelector('[data-testid="extension-card-pin"]').textContent === 'Unpin'`,
+      `${card}.querySelector('[data-testid="extension-card-pin"]').getAttribute('aria-pressed') === 'true'`,
       { label: "pinned" },
     );
     // Nothing the person did asks for it yet: as in Chrome, it may not ask.
     const worker = await app.connectToFrame(`${extensionId}/sw.js`);
+    // Electron fires no runtime.onInstalled; Work does, once per version,
+    // and the managed storage area exists (empty, as without policy).
+    await worker.waitFor(
+      `chrome.storage.local.get('log').then(({ log }) => (log || []).some((entry) => entry.event === 'installed' && entry.reason === 'install'))`,
+      { label: "runtime.onInstalled delivered" },
+    );
+    expect(
+      await worker.eval(
+        "chrome.storage.managed.get().then((v) => JSON.stringify(v))",
+      ),
+    ).toBe("{}");
     expect(
       await worker.eval(
         "chrome.permissions.request({ permissions: ['bookmarks'] }).then(() => 'asked', (error) => error.message)",
@@ -789,6 +807,23 @@ process.stdin.on("data", (chunk) => {
       ),
     ).toBe("Access to the specified native messaging host is forbidden.");
     worker.close();
+  });
+
+  it("unpins and pins again from the toolbar's extensions menu", async () => {
+    await selectFirstBrowserTab();
+    const button = `document.querySelector('[data-testid="extension-action"][data-extension-id="${extensionId}"]')`;
+    const menuPin = `document.querySelector('[data-testid="extensions-menu"] [data-testid="extensions-menu-item"][data-extension-id="${extensionId}"]')?.parentElement.querySelector('[data-testid="extensions-menu-pin"]')`;
+    await app.waitFor(`!!${button}`, { label: "pinned button in the toolbar" });
+    await click('[data-testid="extensions-button"]');
+    await app.waitFor(`${menuPin}?.getAttribute('aria-pressed') === 'true'`, {
+      label: "menu shows it pinned",
+    });
+    await app.eval(`${menuPin}.click(); true`);
+    await app.waitFor(`!${button}`, { label: "unpinned from the toolbar" });
+    await app.waitFor(`${menuPin}?.getAttribute('aria-pressed') === 'false'`);
+    await app.eval(`${menuPin}.click(); true`);
+    await app.waitFor(`!!${button}`, { label: "pinned again" });
+    await app.press("Escape");
   });
 
   it("turns off and is removed after the person confirms", async () => {

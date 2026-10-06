@@ -78,6 +78,7 @@ describe("the registry", () => {
     pendingUpdate: null,
     uninstallUrl: null,
     stagedUpdate: null,
+    installedEventFor: null,
     ...patch,
   });
 
