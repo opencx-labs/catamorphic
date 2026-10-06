@@ -157,7 +157,11 @@ answer from the control plane (its heartbeat calls every 10 seconds), writes
 the new credential and key to its data volume, and then uses them. The old
 credential keeps working until the new one is first used, then stops, so a
 rotation never interrupts running work and a lost answer is simply asked
-again. `GET /_work/operator/workers` shows each worker's
+again. Rotation requests are ordered, so one delayed on its way never
+replaces a later one's credential. Until the new credential is accepted
+once, the worker keeps the pair it replaces in
+`/data/worker-identity.previous` and goes back to it if the new one is
+refused. `GET /_work/operator/workers` shows each worker's
 `credentialIssuedAt` and whether a rotation it was asked for is still
 `rotationRequested`. A worker enrolled by an earlier release generates and
 registers its key the first time it connects after its update.
