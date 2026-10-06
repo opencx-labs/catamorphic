@@ -124,6 +124,25 @@ describe("Codex sign-in", () => {
         "ada-devbox is not connected.",
       ],
       [
+        409,
+        {
+          error:
+            "Another person's Codex sign-in is on this machine, and a machine holds one person's only. Ask an administrator for a machine of your own",
+          code: "sign_in_refused",
+        },
+        "Another person's Codex sign-in is on this machine, and a machine holds one person's only. Ask an administrator for a machine of your own",
+      ],
+      [
+        409,
+        { code: "machine_offline" },
+        "This machine is not connected right now.",
+      ],
+      [
+        409,
+        { code: "sign_in_refused" },
+        "This machine would not start a Codex sign-in.",
+      ],
+      [
         502,
         { error: "Enable device code authorization for Codex in ChatGPT." },
         "Enable device code authorization for Codex in ChatGPT.",

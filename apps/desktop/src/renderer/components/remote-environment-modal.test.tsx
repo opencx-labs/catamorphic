@@ -366,7 +366,7 @@ describe("RemoteEnvironmentModal: your machines", () => {
     const text = machinesSection()?.textContent ?? "";
     expect(text).toContain("Your machines");
     expect(text).toContain(
-      "An administrator can give you a machine of your own. Codex on this computer uses this computer's sign-in.",
+      "Codex sign-ins need a machine of your own: ask an administrator for one. Codex on this computer uses this computer's sign-in.",
     );
     expect(machineRow()).toBeNull();
   });
@@ -508,10 +508,12 @@ describe("RemoteEnvironmentModal: your machines", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     desktop.personalEnvironment.mockResolvedValue(view());
     desktop.remoteMachines.mockResolvedValue([machine()]);
+    // The machine refused the login (409 sign_in_refused): its words, as
+    // written, with a way to try again.
+    const refused =
+      "Another person's Codex sign-in is on this machine, and a machine holds one person's only. Ask an administrator for a machine of your own";
     desktop.remoteCodexSignIn
-      .mockRejectedValueOnce(
-        new Error("Enable device code authorization for Codex in ChatGPT."),
-      )
+      .mockRejectedValueOnce(new Error(refused))
       .mockResolvedValueOnce(codeFor("att-2"))
       .mockResolvedValueOnce(codeFor("att-3", "WXYZ-9K8L7"));
     desktop.remoteCodexSignInStatus
@@ -524,8 +526,9 @@ describe("RemoteEnvironmentModal: your machines", () => {
 
     await act(async () => labelled("Sign in to Codex on ada-devbox")?.click());
     expect(signInDialog()?.querySelector('[role="alert"]')?.textContent).toBe(
-      "Enable device code authorization for Codex in ChatGPT.",
+      refused,
     );
+    expect(code()).toBeNull();
     expect(document.activeElement?.textContent?.trim()).toBe("Try again");
 
     await act(async () => inDialog("Try again")?.click());

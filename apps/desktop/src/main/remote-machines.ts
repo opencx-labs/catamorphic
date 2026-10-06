@@ -58,7 +58,12 @@ export async function listRemoteMachines(input: {
   });
 }
 
-/** Start Codex's device code sign-in on one of the member's machines. */
+/**
+ * Start Codex's device code sign-in on one of the member's machines. A 409
+ * is either the machine being offline (`machine_offline`) or the machine
+ * refusing a login (`sign_in_refused`, such as another person's sign-in
+ * already there); either way the server's words say which.
+ */
 export async function beginCodexSignIn(input: {
   request: RemoteMachinesRequest;
   machineId: string;
@@ -71,7 +76,10 @@ export async function beginCodexSignIn(input: {
     throw new Error(
       failure(response, {
         403: "You cannot sign in to Codex on this machine.",
-        409: "This machine is not connected right now.",
+        409:
+          field(response.body, "code") === "machine_offline"
+            ? "This machine is not connected right now."
+            : "This machine would not start a Codex sign-in.",
         502: "Codex could not start a sign-in on this machine.",
       }),
     );

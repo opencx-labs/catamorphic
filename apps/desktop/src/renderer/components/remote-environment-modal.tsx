@@ -236,8 +236,9 @@ export function RemoteEnvironmentModal({
                     </div>
                   ) : machines?.length === 0 ? (
                     <p className="text-xs leading-5 text-fg-muted">
-                      An administrator can give you a machine of your own. Codex
-                      on this computer uses this computer's sign-in.
+                      Codex sign-ins need a machine of your own: ask an
+                      administrator for one. Codex on this computer uses this
+                      computer's sign-in.
                     </p>
                   ) : (
                     machines?.map((machine) => (
