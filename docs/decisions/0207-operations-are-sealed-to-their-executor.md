@@ -25,10 +25,16 @@ and AES-256-GCM with the operation's id, executor and kind as associated
 data. A row holds the kind in the clear and the ciphertext; Postgres, its
 log and its backups hold nothing else of it. An executor without a key
 cannot connect and receives nothing; a worker presenting another key than
-the one it enrolled with is refused. Receipts stay plain: their results
-enter the session log anyway. Their errors lose any URL's credentials on
-the executor and again before they are stored, and a failed clone never
-names its credentialed URL. Workers older than this speak protocol 1 and
+the one it enrolled with is refused. Receipts are sealed as well: the
+controller waiting for an operation makes a key pair for its answer and
+holds the private key in memory as working state of that wait (ADR 0193);
+the row carries the public key, and the replica that receives the receipt
+seals the response to it before writing, bound to the operation's id and
+executor. A terminal's output, a downloaded file or a setup log never
+reaches Postgres in the clear; the session log keeps only what Work masks
+(ADR 0206). Errors stay plain: they lose any URL's credentials on the
+executor and again before they are stored, and a failed clone never names
+its credentialed URL. Workers older than this speak protocol 1 and
 are refused.
 
 **Credentials rotate.** A worker replaces its credential and key pair when
@@ -53,13 +59,14 @@ own waiting polls and controllers at once, as working state of requests it
 is serving (ADR 0193). Other replicas still find the rows by polling, so
 correctness never depends on the wakeup.
 
-Considered: sealing receipts too (the session log stores their content
-anyway), and per-operation keys from the vault (the control plane would hold
-what decrypts every queued payload).
+Considered: leaving receipts plain because results enter the session log
+(terminals, previews and downloads made that untrue, and the log masks
+secrets), and per-operation keys from the vault (the control plane would
+hold what decrypts every queued payload).
 
 ## Consequences
 
-A database dump reveals no queued file, secret or command. Losing a worker's
+A database dump reveals no queued file, secret or command, and no answer. Losing a worker's
 data directory means enrolling it again. A single replica forwards an
 operation in one network round trip each way; several replicas fall back to
 polling for operations queued on another.

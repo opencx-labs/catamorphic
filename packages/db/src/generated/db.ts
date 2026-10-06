@@ -817,6 +817,7 @@ export interface RemoteOperations {
   lease_token: string;
   operation: Json;
   poll_id: string | null;
+  reply_key: string;
   response: Json | null;
   status: Generated<string>;
 }

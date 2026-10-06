@@ -3,6 +3,7 @@ import type { DB } from "@catamorphic/db";
 import { getTracer, type SpanAttributes, withSpan } from "@catamorphic/otel";
 import {
   ExecutorPublicKeySchema,
+  generateExecutorKeyPair,
   openOperation,
   PROCESS_SIGNALS,
   redactUrlCredentials,
@@ -265,6 +266,37 @@ export function sealRemoteOperation(args: {
       aad: operationAad({ ...args, kind: args.operation.kind }),
     }),
   };
+}
+
+/** What a sealed receipt is bound to: its row and its executor. */
+function receiptAad(args: { operationId: string; executor: string }): string {
+  return JSON.stringify(["receipt", args.operationId, args.executor]);
+}
+
+/**
+ * Receipts are sealed too (ADR 0207): the controller waiting for an
+ * operation holds, in memory, the private key of a pair made for its answer,
+ * and the replica receiving the receipt seals the response to the public key
+ * before writing it. A response (a terminal's output, a downloaded file, a
+ * setup log) never reaches Postgres in the clear.
+ */
+const SealedReceiptSchema = z.strictObject({ sealed: SealedOperationSchema });
+
+/** Controller side: the response of a receipt sealed to this wait's key. */
+function openReceipt(args: {
+  stored: unknown;
+  privateKey: string;
+  operationId: string;
+  executor: string;
+}): unknown {
+  const { sealed } = SealedReceiptSchema.parse(args.stored);
+  return JSON.parse(
+    openOperation({
+      sealed,
+      privateKey: args.privateKey,
+      aad: receiptAad(args),
+    }),
+  );
 }
 
 /**
@@ -813,12 +845,15 @@ export class RemoteOperationQueue {
     if (!publicKey) throw new ExecutorKeyMissingError(args.label);
     // The id is chosen here, before the row exists: the seal is bound to it.
     const id = randomUUID();
+    // Its answer is sealed to a key only this wait holds.
+    const reply = generateExecutorKeyPair();
     await this.db
       .insertInto("remote_operations")
       .values({
         id,
         executor: args.executor,
         lease_token: args.leaseToken,
+        reply_key: reply.publicKey,
         operation: toJson(
           sealRemoteOperation({
             operationId: id,
@@ -847,7 +882,13 @@ export class RemoteOperationQueue {
             .select(["status", "response", "error"])
             .where("id", "=", id)
             .executeTakeFirstOrThrow();
-          if (job.status === "completed") return job.response;
+          if (job.status === "completed")
+            return openReceipt({
+              stored: job.response,
+              privateKey: reply.privateKey,
+              operationId: id,
+              executor: args.executor,
+            });
           if (job.status === "failed")
             throw job.error === OPERATION_NOT_OPENED_ERROR
               ? new OperationNotOpenedError()
@@ -1012,22 +1053,42 @@ export class RemoteOperationQueue {
       args.error === undefined
         ? null
         : withoutNul(redactUrlCredentials(args.error));
-    const updated = await this.db
-      .updateTable("remote_operations")
-      .set({
-        status,
-        // A bare string result must reach jsonb as JSON, not raw text.
-        response: jsonColumn(storableJson(args.response)),
-        error,
-        // The sealed payload leaves Postgres once the operation has run.
-        operation: sql`jsonb_build_object('kind', operation->'kind')`,
-      })
+    const pending = await this.db
+      .selectFrom("remote_operations")
+      .select("reply_key")
       .where("id", "=", args.operationId)
       .where("executor", "=", args.executor)
       .where("lease_token", "=", args.leaseToken)
       .where("status", "=", "running")
-      .returning("id")
       .executeTakeFirst();
+    const updated = pending
+      ? await this.db
+          .updateTable("remote_operations")
+          .set({
+            status,
+            response:
+              status === "completed"
+                ? jsonColumn(
+                    toJson({
+                      sealed: sealOperation({
+                        plaintext: JSON.stringify(storableJson(args.response)),
+                        recipientPublicKey: pending.reply_key,
+                        aad: receiptAad(args),
+                      }),
+                    }),
+                  )
+                : null,
+            error,
+            // The sealed payload leaves Postgres once the operation has run.
+            operation: sql`jsonb_build_object('kind', operation->'kind')`,
+          })
+          .where("id", "=", args.operationId)
+          .where("executor", "=", args.executor)
+          .where("lease_token", "=", args.leaseToken)
+          .where("status", "=", "running")
+          .returning("id")
+          .executeTakeFirst()
+      : undefined;
     if (updated) {
       this.wakeups.receiptRecorded(args.operationId);
       return;

@@ -4,7 +4,7 @@ import { migrateToLatest } from "@catamorphic/db";
 import { generateExecutorKeyPair } from "@catamorphic/sandbox";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
-import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
+import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   OPERATION_NOT_OPENED_ERROR,
@@ -105,6 +105,46 @@ describe("remote operation queue (ADR 0187)", () => {
       .where("executor", "=", remote.lease.executor)
       .execute();
     expect(left).toEqual([]);
+  });
+
+  it("stores a receipt only sealed to the waiting controller (ADR 0207)", async () => {
+    // Every response written to a queued row, as Postgres stores it.
+    for (const statement of [
+      `CREATE TABLE ${schema}.receipts_seen (response text)`,
+      `CREATE FUNCTION ${schema}.receipt_seen() RETURNS trigger AS $$
+       BEGIN
+         INSERT INTO ${schema}.receipts_seen VALUES (NEW.response::text);
+         RETURN NEW;
+       END $$ LANGUAGE plpgsql`,
+      `CREATE TRIGGER receipt_seen AFTER UPDATE OF response
+         ON ${schema}.remote_operations FOR EACH ROW
+         WHEN (NEW.response IS NOT NULL)
+         EXECUTE FUNCTION ${schema}.receipt_seen()`,
+    ])
+      await sql.raw(statement).execute(db);
+    const remote = await executor();
+    const output = "STRIPE_KEY=sk_live_terminal_output";
+    const result = remote.provider.executeCommand("sandbox-1", "env");
+    const job = await remote.poll(crypto.randomUUID());
+    await remote.queue.complete({
+      ...remote.lease,
+      operationId: job?.id ?? "",
+      response: { exitCode: 0, result: output },
+    });
+    await expect(result).resolves.toEqual({ exitCode: 0, result: output });
+    const seen = await sql<{ response: string }>`
+      SELECT response FROM ${sql.raw(schema)}.receipts_seen
+    `.execute(db);
+    expect(seen.rows.length).toBeGreaterThan(0);
+    for (const row of seen.rows) {
+      expect(row.response).not.toContain("sk_live_terminal_output");
+      expect(JSON.parse(row.response)).toMatchObject({
+        sealed: { v: 1 },
+      });
+    }
+    await sql
+      .raw(`DROP TRIGGER receipt_seen ON ${schema}.remote_operations`)
+      .execute(db);
   });
 
   it("resets a pooled machine through its executor, and only while it is connected (ADR 0205)", async () => {
@@ -292,6 +332,7 @@ describe("remote operation queue (ADR 0187)", () => {
     const row = {
       executor: remote.lease.executor,
       lease_token: remote.lease.leaseToken,
+      reply_key: generateExecutorKeyPair().publicKey,
       expires_at: new Date(Date.now() + 60_000),
     };
     await db
