@@ -98,6 +98,7 @@ import {
   ElicitationModal,
   type PendingElicitation,
 } from "./components/elicitation-modal.js";
+import { ExtensionPromptHost } from "./components/extensions/extension-dialogs.js";
 import { FloatingPanelBar } from "./components/floating-panel-bar.js";
 import { MobilePairingModal } from "./components/mobile-pairing-modal.js";
 import { Modal } from "./components/modal.js";
@@ -155,6 +156,10 @@ import {
   type WorkspaceConfig,
 } from "./lib/desktop-api.js";
 import { readEditorSelection } from "./lib/editor-selection.js";
+import {
+  OPEN_EXTENSION_POPUP_EVENT,
+  type OpenExtensionPopupDetail,
+} from "./lib/extensions.js";
 import { useFloatingMotion } from "./lib/floating-motion.js";
 import { historyDestination } from "./lib/history.js";
 import {
@@ -226,6 +231,7 @@ import {
   BrowserScreen,
 } from "./screens/browser-screen.js";
 import { DownloadsScreen } from "./screens/downloads-screen.js";
+import { ExtensionsScreen } from "./screens/extensions-screen.js";
 import { HistoryScreen } from "./screens/history-screen.js";
 import { McpAppScreen } from "./screens/mcp-app-screen.js";
 import { PasswordsScreen } from "./screens/passwords-screen.js";
@@ -1534,7 +1540,7 @@ export function App({
         floating?: boolean;
       },
     ) => {
-      if (!activeProfile) return;
+      if (!activeProfile) return null;
       const entry: BrowserEntry = {
         localId: crypto.randomUUID(),
         profileId: activeProfile.id,
@@ -1571,6 +1577,7 @@ export function App({
           split,
         };
       });
+      return entry.localId;
     },
     [activeProfile, updateWorkspace],
   );
@@ -4794,6 +4801,104 @@ export function App({
   const activeTerminalTabId = focusedTabKey?.startsWith("terminal:")
     ? focusedTabKey.slice("terminal:".length)
     : undefined;
+  // Chrome extensions (ADR 0203): this window's browser tabs as extensions
+  // see them (their order and the window's active tab, which stays the last
+  // browser tab used while another kind of tab is in front), and what
+  // extensions ask the window to do.
+  const lastBrowserTabRef = useRef<string | null>(null);
+  if (activeBrowserTabId) lastBrowserTabRef.current = activeBrowserTabId;
+  const tabsReportTimer = useRef<number | undefined>(undefined);
+  const reportExtensionTabs = useCallback(() => {
+    if (document.documentElement.dataset.surface === "dock") return;
+    window.clearTimeout(tabsReportTimer.current);
+    tabsReportTimer.current = window.setTimeout(() => {
+      const guests = browserGuestIdsRef.current;
+      const guestIds = workspaceRef.current.browsers
+        .map((browser) => guests.get(browser.localId))
+        .filter((id): id is number => id !== undefined);
+      const last = lastBrowserTabRef.current;
+      void desktopApi
+        .extensionsTabsReport({
+          guestIds,
+          activeGuestId: (last ? guests.get(last) : undefined) ?? null,
+        })
+        .catch(() => {});
+    }, 0);
+  }, []);
+  const reportExtensionTabsRef = useRef(reportExtensionTabs);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the report reads the latest tabs and active tab through refs
+  useEffect(() => {
+    reportExtensionTabs();
+  }, [workspace.browsers, activeBrowserTabId, reportExtensionTabs]);
+  useEffect(() => {
+    if (document.documentElement.dataset.surface === "dock") return;
+    return desktopApi.onExtensionWindowRequest(({ id, request }) => {
+      const respond = (result: { guestId?: number } | null) =>
+        desktopApi.extensionsWindowRespond({ id, result });
+      const localIdOf = (guestId: number) =>
+        [...browserGuestIdsRef.current].find(
+          ([, guest]) => guest === guestId,
+        )?.[0];
+      switch (request.kind) {
+        case "create-tab": {
+          const localId = openBrowserTabRef.current(request.url, {
+            background: !request.active,
+          });
+          if (!localId) {
+            respond(null);
+            return;
+          }
+          // Its page reports its guest once the webview attaches.
+          const deadline = Date.now() + 10_000;
+          const wait = () => {
+            const guestId = browserGuestIdsRef.current.get(localId);
+            if (guestId) respond({ guestId });
+            else if (Date.now() > deadline) respond(null);
+            else window.setTimeout(wait, 50);
+          };
+          wait();
+          return;
+        }
+        case "select-tab": {
+          const localId = localIdOf(request.guestId);
+          if (localId) selectTabRef.current(browserTabKey(localId));
+          respond(localId ? {} : null);
+          return;
+        }
+        case "close-tab": {
+          const localId = localIdOf(request.guestId);
+          if (localId)
+            closeTabRef.current(browserTabKey(localId), { force: true });
+          respond(localId ? {} : null);
+          return;
+        }
+        case "open-popup":
+          window.dispatchEvent(
+            new CustomEvent<OpenExtensionPopupDetail>(
+              OPEN_EXTENSION_POPUP_EVENT,
+              {
+                detail: {
+                  extensionId: request.extensionId,
+                  guestId: request.guestId,
+                  url: request.url,
+                },
+              },
+            ),
+          );
+          respond({});
+          return;
+        case "open-extensions":
+          openTabRef.current({
+            kind: "extensions",
+            name: "extensions",
+            label: "Extensions",
+          });
+          respond({});
+          return;
+      }
+    });
+  }, []);
+
   // The split renders only while valid: both panes still exist and one of
   // them is focused. Any mutation that breaks that (a close, a chat mode
   // change, a plain tab open) silently falls back to the single view —
@@ -5519,6 +5624,7 @@ export function App({
             onClose={() => setSiteSettingsOrigin(null)}
           />
           <ScreenShareHost />
+          <ExtensionPromptHost />
           <PasskeyHost onOpenPasswords={() => openPasswords()} />
           <UpdateBanner
             hasActiveWork={hasActiveWork}
@@ -5977,6 +6083,11 @@ export function App({
                             active={Boolean(viewSlots[tabKey(tab)])}
                             onOpen={openDownload}
                           />
+                        ) : tab.kind === "extensions" ? (
+                          <ExtensionsScreen
+                            active={Boolean(viewSlots[tabKey(tab)])}
+                            onOpenUrl={(url) => openBrowserTab(url)}
+                          />
                         ) : tab.kind === "usage" ? (
                           <Suspense fallback={<div className="flex-1 bg-bg" />}>
                             <UsageScreen />
@@ -6077,6 +6188,14 @@ export function App({
                         }
                         onOpenSiteSettings={setSiteSettingsOrigin}
                         onOpenPasswords={() => openPasswords(browser.profileId)}
+                        onOpenExtensions={() =>
+                          openTab({
+                            kind: "extensions",
+                            name: "extensions",
+                            label: "Extensions",
+                          })
+                        }
+                        onOpenUrl={(url) => openBrowserTab(url)}
                         previewLinksWithAlt={prefs?.previewLinksWithAlt ?? true}
                         floatingDismissShortcut={
                           keybindings["dismiss-floating"]
@@ -6123,6 +6242,7 @@ export function App({
                               guestId,
                             );
                           }
+                          reportExtensionTabsRef.current();
                         }}
                         onUnsplit={
                           isSplitSlot(browserTabKey(browser.localId))
@@ -6570,6 +6690,8 @@ export function App({
               <SitesScreen onOpenSite={setSiteSettingsOrigin} />
             ) : activeTab?.kind === "downloads" ? (
               <DownloadsScreen onOpen={openDownload} />
+            ) : activeTab?.kind === "extensions" ? (
+              <ExtensionsScreen onOpenUrl={(url) => openBrowserTab(url)} />
             ) : activeTab?.kind === "profile-settings" && profilesData ? (
               <ProfileSettingsScreen
                 profileId={activeTab.name}
@@ -6614,6 +6736,14 @@ export function App({
                       }
                       onOpenSiteSettings={setSiteSettingsOrigin}
                       onOpenPasswords={() => openPasswords(browser.profileId)}
+                      onOpenExtensions={() =>
+                        openTab({
+                          kind: "extensions",
+                          name: "extensions",
+                          label: "Extensions",
+                        })
+                      }
+                      onOpenUrl={(url) => openBrowserTab(url)}
                       registerCommands={(commands) => {
                         if (commands)
                           browserCommandsRef.current.set(
@@ -6643,6 +6773,7 @@ export function App({
                             guestId,
                           );
                         }
+                        reportExtensionTabsRef.current();
                       }}
                     />
                   </div>

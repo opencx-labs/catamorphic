@@ -89,6 +89,7 @@ export const PALETTE_SURFACE_KINDS = [
   "sites",
   "downloads",
   "passwords",
+  "extensions",
 ] as const;
 export type PaletteSurfaceKind = (typeof PALETTE_SURFACE_KINDS)[number];
 export const surfaceUsageKey = (kind: PaletteSurfaceKind): string =>

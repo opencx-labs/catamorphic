@@ -498,6 +498,32 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-06: Chrome extensions install from the store and live in the toolbar
+
+The browser runs Chrome extensions (ADR 0203). "Add to Chrome" on the
+Chrome Web Store opens Work's own dialog: the extension's icon, its name
+as a question, and what it can do in Chrome's words, with Cancel and Add
+extension. The same centered dialog asks before an extension gets more
+access, before an update that wants more is applied, and before an
+extension is removed. After an install a card under the puzzle button
+says where the extension lives and offers to pin it.
+
+The toolbar follows Chrome: pinned extensions' buttons sit after the site
+settings gear, with their badge in the corner and a right-click menu
+(Options, Pin, Remove, Manage, and the extension's own items). The puzzle
+button lists every extension with a pin toggle, Manage extensions and the
+Chrome Web Store; it is absent while a profile has none. A popup hangs
+under its button, right edges aligned, sized by its page, and leaves on
+Escape, a click elsewhere or focus moving away. A side panel opens beside
+the tab it was asked for, with the extension's name and a close button,
+and resizes from its left edge. A tab an extension drives through the
+debugger shows a bar naming it, with Stop.
+
+The Extensions page is a page surface: one card per extension with its
+switch, actions and a Details disclosure (what it can do, shortcuts, id,
+source). Developer mode, in the header, adds Load unpacked and Update.
+`chrome://extensions` typed in the address bar opens it.
+
 ### 2026-10-04: Bookmarks read and write their file like every other config file
 
 `bookmarks.json` was the one config file the app kept in memory and wrote

@@ -18,6 +18,11 @@ export function electronLaunchArgs({
     ...(platform === "darwin" && useMockKeychain
       ? ["--use-mock-keychain"]
       : []),
-    ...(ci === "true" && platform === "linux" ? ["--no-sandbox"] : []),
+    // Linux CI runners cannot use Chromium's OS sandbox. Renderers still
+    // run as Electron's sandboxed renderers, as they do for users: service
+    // worker preloads (extension APIs, ADR 0203) exist only there.
+    ...(ci === "true" && platform === "linux"
+      ? ["--no-sandbox", "--enable-sandbox"]
+      : []),
   ];
 }

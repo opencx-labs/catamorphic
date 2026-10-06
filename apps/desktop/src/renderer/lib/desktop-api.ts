@@ -40,6 +40,20 @@ import type {
   DockSize,
 } from "../../shared/dock-position.js";
 import type { DownloadRecord } from "../../shared/downloads.js";
+import type {
+  ExtensionActionResult,
+  ExtensionActionState,
+  ExtensionDebugging,
+  ExtensionInstalled,
+  ExtensionPrompt,
+  ExtensionPromptAnswer,
+  ExtensionSidePanel,
+  ExtensionSummary,
+  ExtensionsState,
+  ExtensionTabsReport,
+  ExtensionView,
+  ExtensionWindowRequestEnvelope,
+} from "../../shared/extensions.js";
 import type { FilePreviewInput } from "../../shared/file-preview.js";
 import type {
   FileSearchInput,
@@ -1425,6 +1439,84 @@ export interface CatamorphicDesktopApi {
   onScreenShareWithdrawn: (
     listener: (payload: { ids: string[] }) => void,
   ) => () => void;
+  extensionsState: () => Promise<ExtensionsState>;
+  extensionsSetEnabled: (input: {
+    id: string;
+    enabled: boolean;
+  }) => Promise<void>;
+  extensionsSetPinned: (input: {
+    id: string;
+    pinned: boolean;
+  }) => Promise<void>;
+  /** Asks the person first; true when the extension went. */
+  extensionsRemove: (input: { id: string }) => Promise<boolean>;
+  extensionsDeveloperMode: (input: { enabled: boolean }) => Promise<void>;
+  extensionsLoadUnpacked: () => Promise<ExtensionSummary | null>;
+  extensionsReload: (input: { id: string }) => Promise<void>;
+  extensionsUpdateNow: () => Promise<void>;
+  extensionsReviewUpdate: (input: { id: string }) => Promise<void>;
+  extensionsOpenOptions: (input: { id: string }) => Promise<void>;
+  extensionsActions: (input: {
+    guestId: number | null;
+  }) => Promise<ExtensionActionState[]>;
+  extensionsActionClick: (input: {
+    id: string;
+    guestId: number | null;
+  }) => Promise<ExtensionActionResult>;
+  extensionsActionMenu: (input: {
+    id: string;
+    guestId: number | null;
+  }) => Promise<void>;
+  extensionsTabsReport: (input: ExtensionTabsReport) => Promise<void>;
+  extensionsWindowRespond: (payload: {
+    id: number;
+    result: { guestId?: number } | null;
+  }) => void;
+  extensionsViewAttached: (input: ExtensionView) => Promise<void>;
+  extensionsFocusPopup: (input: { guestId: number }) => Promise<void>;
+  extensionsSidePanels: () => Promise<ExtensionSidePanel[]>;
+  extensionsSidePanelClose: (input: { guestId: number }) => Promise<void>;
+  extensionsDebugging: () => Promise<ExtensionDebugging[]>;
+  extensionsDebuggerStop: (input: { guestId: number }) => Promise<void>;
+  extensionsPromptAnswer: (input: ExtensionPromptAnswer) => Promise<void>;
+  extensionsPrompts: () => Promise<ExtensionPrompt[]>;
+  onExtensionsChanged: (
+    listener: (payload: { profileId: string }) => void,
+  ) => () => void;
+  onExtensionActionsChanged: (
+    listener: (payload: { profileId: string }) => void,
+  ) => () => void;
+  onExtensionWindowRequest: (
+    listener: (envelope: ExtensionWindowRequestEnvelope) => void,
+  ) => () => void;
+  onExtensionPopupSize: (
+    listener: (size: {
+      guestId: number;
+      width: number;
+      height: number;
+    }) => void,
+  ) => () => void;
+  onExtensionSidePanel: (
+    listener: (change: {
+      guestId: number;
+      panel: ExtensionSidePanel | null;
+    }) => void,
+  ) => () => void;
+  onExtensionDebuggingChanged: (
+    listener: (change: {
+      guestId: number;
+      debugging: ExtensionDebugging | null;
+    }) => void,
+  ) => () => void;
+  onExtensionPrompt: (
+    listener: (prompt: ExtensionPrompt) => void,
+  ) => () => void;
+  onExtensionPromptWithdrawn: (
+    listener: (payload: { id: string }) => void,
+  ) => () => void;
+  onExtensionInstalled: (
+    listener: (installed: ExtensionInstalled) => void,
+  ) => () => void;
   sitePermissionAnswer: (answer: SitePermissionAnswer) => Promise<boolean>;
   onSitePermissionRequest: (
     listener: (request: SitePermissionRequest) => void,
@@ -1760,6 +1852,22 @@ declare global {
 const nativeApi = window.catamorphicDesktop;
 export const desktopApi: CatamorphicDesktopApi = {
   ...nativeApi,
+  // Every browser tab's toolbar and page area follow these.
+  onExtensionsChanged: shareEvent((publish) =>
+    nativeApi.onExtensionsChanged(publish),
+  ),
+  onExtensionActionsChanged: shareEvent((publish) =>
+    nativeApi.onExtensionActionsChanged(publish),
+  ),
+  onExtensionPopupSize: shareEvent((publish) =>
+    nativeApi.onExtensionPopupSize(publish),
+  ),
+  onExtensionSidePanel: shareEvent((publish) =>
+    nativeApi.onExtensionSidePanel(publish),
+  ),
+  onExtensionDebuggingChanged: shareEvent((publish) =>
+    nativeApi.onExtensionDebuggingChanged(publish),
+  ),
   onGitChanged: shareEvent((publish) => nativeApi.onGitChanged(publish)),
   onBookmarksChanged: shareEvent((publish) =>
     nativeApi.onBookmarksChanged(publish),

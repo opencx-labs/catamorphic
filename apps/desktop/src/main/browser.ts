@@ -99,6 +99,7 @@ import {
 import { recordDownload, trackConsole } from "./browser-tab-records.js";
 import { PasswordVault } from "./browser-vault.js";
 import { DownloadsManager, DownloadsStore } from "./downloads.js";
+import { ExtensionsHost } from "./extensions/host.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { LoginCapture, type LoginSubmission } from "./login-capture.js";
 import { PaletteUsageStore } from "./palette-usage.js";
@@ -230,6 +231,12 @@ let downloadHook:
   | null = null;
 
 /**
+ * Chrome extensions (ADR 0203) load into each profile session as it is
+ * prepared, through the host `registerBrowserSupport` owns.
+ */
+let extensionsHost: ExtensionsHost | null = null;
+
+/**
  * Chrome's client-hint brand list, derived from the session UA. Google's
  * supported-browser gate reads these; Electron would otherwise advertise
  * only "Chromium". The UA string itself is already Chrome-clean app-wide
@@ -253,31 +260,18 @@ export function partitionFor(profileId: string): string {
   return `persist:profile-${profileId}`;
 }
 
-function extensionsDir(profilesDir: string, profileId: string): string {
-  return path.join(profilesDir, profileId, "extensions");
-}
-
-function prepareProfileSession(
-  profilesDir: string,
-  profileId: string,
-): Promise<void> {
-  const partition = partitionFor(profileId);
-  const existing = preparedSessions.get(partition);
-  if (existing) return existing;
-  const prepare = doPrepareProfileSession(profilesDir, partition, profileId);
-  preparedSessions.set(partition, prepare);
-  prepare.catch(() => preparedSessions.delete(partition));
-  return prepare;
-}
-
-async function doPrepareProfileSession(
-  profilesDir: string,
-  partition: string,
-  profileId: string,
-): Promise<void> {
-  const ses = session.fromPartition(partition);
+/**
+ * The Sec-CH-UA rewrite as a webRequest listener. A profile whose
+ * extensions filter requests turns it off (Electron runs extension
+ * webRequest and declarativeNetRequest only without one) and rewrites
+ * through the hidden brand extension instead (ADR 0203).
+ */
+function setBrandHeaderListener(ses: Session, on: boolean): void {
+  if (!on) {
+    ses.webRequest.onBeforeSendHeaders(null);
+    return;
+  }
   const { brands, fullVersionList } = chromeBrands(ses.getUserAgent());
-
   // Header layer: Chromium sends Sec-CH-UA built from its own brand list,
   // which no setUserAgent call covers. Only documents and page requests
   // (fetch, XHR) are rewritten, where a site reads the brand. A listener
@@ -299,6 +293,24 @@ async function doPrepareProfileSession(
       callback({ requestHeaders: headers });
     },
   );
+}
+
+function prepareProfileSession(profileId: string): Promise<void> {
+  const partition = partitionFor(profileId);
+  const existing = preparedSessions.get(partition);
+  if (existing) return existing;
+  const prepare = doPrepareProfileSession(partition, profileId);
+  preparedSessions.set(partition, prepare);
+  prepare.catch(() => preparedSessions.delete(partition));
+  return prepare;
+}
+
+async function doPrepareProfileSession(
+  partition: string,
+  profileId: string,
+): Promise<void> {
+  const ses = session.fromPartition(partition);
+  setBrandHeaderListener(ses, true);
 
   // Chrome-like site permissions: the profile's stored choices answer
   // outright; anything undecided prompts in the site settings modal.
@@ -345,31 +357,9 @@ async function doPrepareProfileSession(
     policy.displayMedia(profileId, request, callback);
   });
 
-  // Unpacked Chrome extensions: drop a folder under the profile's
-  // extensions dir and it loads on next launch (content scripts, e.g.
-  // password-manager extensions' fill logic, work in webviews).
-  const dir = extensionsDir(profilesDir, profileId);
-  if (fs.existsSync(dir)) {
-    // `session.extensions` on modern Electron; fall back to the older
-    // session-level API.
-    const extensionHost =
-      (ses as { extensions?: { loadExtension: Session["loadExtension"] } })
-        .extensions ?? ses;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const extPath = path.join(dir, entry.name);
-      if (!fs.existsSync(path.join(extPath, "manifest.json"))) continue;
-      try {
-        await extensionHost.loadExtension(extPath);
-        console.log(`[desktop] loaded extension ${entry.name} (${profileId})`);
-      } catch (cause) {
-        console.warn(
-          `[desktop] failed to load extension ${entry.name}:`,
-          cause,
-        );
-      }
-    }
-  }
+  // Chrome extensions (ADR 0203): the profile's installed extensions load
+  // before its first tab does, so their content scripts see every page.
+  await extensionsHost?.prepare(ses, profileId);
 }
 
 export interface BrowserSupport {
@@ -385,6 +375,8 @@ export function registerBrowserSupport(
   /** Project root lookup for layered sidebar resolution (embedded server). */
   projectRootFor: (projectId: string) => Promise<string | null>,
   sidebarExecutable: () => Promise<string>,
+  /** The detached chat dock is no browser window (ADR 0203 tab reports). */
+  isDock: (window: BrowserWindow) => boolean,
 ): BrowserSupport {
   const disposeSidebarSources = registerSidebarSources({
     windows,
@@ -427,9 +419,20 @@ export function registerBrowserSupport(
     ScreenShareRequest,
     ScreenShareAnswer
   >();
+  // Names an extension asked for (downloads.download), by profile and URL.
+  const expectedNames = new Map<string, { name: string; at: number }>();
+  const downloadListeners = new Set<(profileId: string) => void>();
   const downloads = new DownloadsManager(new DownloadsStore(profilesDir), {
     downloadsDir: () =>
       process.env.CATAMORPHIC_DOWNLOADS_DIR || app.getPath("downloads"),
+    nameFor: (profileId, item) => {
+      const key = `${profileId}\n${item.getURL()}`;
+      const expected = expectedNames.get(key);
+      expectedNames.delete(key);
+      return expected && Date.now() - expected.at < 60_000
+        ? expected.name
+        : null;
+    },
     broadcast: (profileId, list) => {
       for (const window of windows.windowsFor(profileId))
         if (!window.isDestroyed())
@@ -437,6 +440,7 @@ export function registerBrowserSupport(
             profileId,
             downloads: list,
           });
+      for (const listener of downloadListeners) listener(profileId);
     },
   });
   downloadHook = (profileId, item, contents) => {
@@ -488,9 +492,57 @@ export function registerBrowserSupport(
     siteIcons.releaseProfile(profileId);
     vault.releaseProfile(profileId);
     siteSettings.releaseProfile(profileId);
+    extensions.releaseProfile(profileId);
     preparedSessions.delete(partitionFor(profileId));
   });
   const bookmarks = profileConfig.bookmarks;
+  const extensions = new ExtensionsHost({
+    profilesDir,
+    userData,
+    profileFor: (sender) => windows.profileFor(sender),
+    windowsFor: (profileId) => windows.windowsFor(profileId),
+    isDock,
+    brands: (ses) => chromeBrands(ses.getUserAgent()),
+    setBrandListener: setBrandHeaderListener,
+    keybindings: (profileId) =>
+      profileConfig.forProfile(profileId).keybindings.load(),
+    pickFolder: async (sender) => {
+      const scripted = process.env.CATAMORPHIC_E2E_PICK_FILE;
+      if (process.env.CATAMORPHIC_E2E_DATA_DIR && scripted) {
+        const next = fs.readFileSync(scripted, "utf8").trim();
+        return next || null;
+      }
+      const window = BrowserWindow.fromWebContents(sender);
+      if (!window) return null;
+      const picked = await dialog.showOpenDialog(window, {
+        title: "Load unpacked extension",
+        buttonLabel: "Select",
+        properties: ["openDirectory"],
+      });
+      return picked.canceled ? null : (picked.filePaths[0] ?? null);
+    },
+    history: { entries: (profileId) => history.entries(profileId) },
+    bookmarks: () => profileConfig.bookmarks,
+    downloads: {
+      list: (profileId) => downloads.list(profileId),
+      pause: (id) => downloads.pause(id),
+      resume: (id) => downloads.resume(id),
+      cancel: (id) => downloads.cancel(id),
+      remove: (profileId, id) => downloads.remove(profileId, id),
+      onChange: (listener) => {
+        downloadListeners.add(listener);
+        return () => downloadListeners.delete(listener);
+      },
+      expect: (profileId, url, filename) => {
+        if (filename)
+          expectedNames.set(`${profileId}\n${url}`, {
+            name: filename,
+            at: Date.now(),
+          });
+      },
+    },
+  });
+  extensionsHost = extensions;
   const appCommandListeners = new Map<
     BrowserWindow,
     (event: Electron.Event, command: string) => void
@@ -955,6 +1007,9 @@ export function registerBrowserSupport(
     // User-origin CSS: any rule of the page's own wins over it.
     contents.on("dom-ready", () => {
       if (contents.isDestroyed()) return;
+      // Extension pages (popups, side panels, options) paint as Chrome
+      // paints them, in the scheme the person uses (ADR 0203).
+      if (contents.getURL().startsWith("chrome-extension:")) return;
       void contents
         // color-scheme too: Chromium's plain-text and image viewers
         // otherwise pick dark text colors from the app's dark scheme and
@@ -1030,6 +1085,12 @@ export function registerBrowserSupport(
       }
       const host = contents.hostWebContents;
       if (!host || host.isDestroyed()) return;
+      // Extension shortcuts never collide with Work's (they are assigned
+      // only where Work has none).
+      if (extensions.handleKey(contents, input)) {
+        event.preventDefault();
+        return;
+      }
       const profileId = windows.profileFor(host);
       const bindings =
         guestBindings.get(profileId) ??
@@ -1079,9 +1140,24 @@ export function registerBrowserSupport(
     });
 
     contents.on("context-menu", (_event, params) => {
+      // Extensions' own items (chrome.contextMenus) follow Work's entries.
+      const extensionItems = extensions.pageMenu(contents, params);
+      const popup = (template: Electron.MenuItemConstructorOptions[]) => {
+        const items =
+          extensionItems.length === 0
+            ? template
+            : template.length === 0
+              ? extensionItems
+              : [
+                  ...template,
+                  { type: "separator" as const },
+                  ...extensionItems,
+                ];
+        if (items.length > 0) Menu.buildFromTemplate(items).popup();
+      };
       if (/^https?:\/\//i.test(params.linkURL)) {
         const url = params.linkURL;
-        Menu.buildFromTemplate(
+        popup(
           OPEN_ACTIONS.map(({ label, mode }) => ({
             label,
             click: () => {
@@ -1094,12 +1170,17 @@ export function registerBrowserSupport(
               }
             },
           })),
-        ).popup();
+        );
         return;
       }
-      if (params.formControlType !== "input-password") return;
-      const context = guestContext(contents);
-      if (!context) return;
+      const context =
+        params.formControlType === "input-password"
+          ? guestContext(contents)
+          : null;
+      if (!context) {
+        popup([]);
+        return;
+      }
       void vault.list(context.profileId, context.origin).then((credentials) => {
         if (contents.isDestroyed()) return;
         const stillHere = () =>
@@ -1129,7 +1210,7 @@ export function registerBrowserSupport(
               fillGenerated(contents, context.origin, generateStrongPassword());
           },
         });
-        Menu.buildFromTemplate(template).popup();
+        popup(template);
       });
     });
     // A request to open another app belongs to the page that made it: once
@@ -1526,7 +1607,7 @@ export function registerBrowserSupport(
   });
 
   const siteCookies = async (profileId: string, host: string) => {
-    await prepareProfileSession(profilesDir, profileId);
+    await prepareProfileSession(profileId);
     const jar = session.fromPartition(partitionFor(profileId)).cookies;
     return (await jar.get({})).filter((cookie) =>
       cookieCoversHost(cookie.domain ?? "", host),
@@ -1631,7 +1712,7 @@ export function registerBrowserSupport(
       const origins = new Set<string>(siteSettings.origins(profileId));
       const visits = history.siteVisits(profileId);
       for (const origin of visits.keys()) origins.add(origin);
-      await prepareProfileSession(profilesDir, profileId);
+      await prepareProfileSession(profileId);
       const cookies = await session
         .fromPartition(partitionFor(profileId))
         .cookies.get({});
@@ -1708,7 +1789,7 @@ export function registerBrowserSupport(
   ipcMain.handle(
     "catamorphic:browser-prepare-profile",
     async (_event, profileId: string) => {
-      await prepareProfileSession(profilesDir, profileId);
+      await prepareProfileSession(profileId);
       return partitionFor(profileId);
     },
   );
@@ -2108,7 +2189,10 @@ export function registerBrowserSupport(
       ? guest
       : null;
   };
-  const disposeSleep = registerBrowserSleep({ hostedGuest });
+  const disposeSleep = registerBrowserSleep({
+    hostedGuest,
+    keepsAwake: (guestId) => extensions.keepsAwake(guestId),
+  });
   ipcMain.handle(
     "catamorphic:browser-navigation-history",
     (event, input: { guestId: number }) => {
@@ -2486,7 +2570,7 @@ export function registerBrowserSupport(
           });
         if (cookies)
           await attempt(async () => {
-            await prepareProfileSession(profilesDir, profileId);
+            await prepareProfileSession(profileId);
             const jar = session.fromPartition(partitionFor(profileId)).cookies;
             await importBrowserCookies({
               cookies: readBrowserCookies({ source: cookies, key }),
@@ -2787,6 +2871,8 @@ export function registerBrowserSupport(
       vault.dispose();
       sitePermissionPolicy = null;
       downloadHook = null;
+      extensionsHost = null;
+      extensions.dispose();
       downloads.dispose();
       for (const channel of [
         "catamorphic:downloads-list",

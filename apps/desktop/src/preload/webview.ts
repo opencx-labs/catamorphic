@@ -20,99 +20,14 @@ import {
  * Guest preload for browser-tab webviews. Runs inside untrusted pages with
  * context isolation. Credential secrets travel directly between this guest
  * and the trusted main process; the embedding renderer receives metadata
- * and status only. Jobs, all Chrome-like:
- *  - present Chrome's client-hint brands to JS (see below),
+ * and status only. (Chrome's client-hint brands come from the browsing
+ * session's preload, session.ts.) Jobs, all Chrome-like:
  *  - place password suggestions under login fields and report submitted
  *    logins (offer-to-save, auto-save of generated passwords),
  *  - fill saved or generated passwords on command,
  *  - answer passkey requests from the profile's vault, keeping a security
  *    key, a deadline and a cancel.
  */
-
-/**
- * `navigator.userAgentData.brands` is the JS-visible twin of the Sec-CH-UA
- * header (rewritten in main/browser.ts). Electron reports Chromium only;
- * leaving JS and headers disagreeing is exactly the mismatch a
- * supported-browser check keys on. Injected into the page's main world —
- * the preload's isolated world isn't what site scripts read.
- */
-interface UaBrand {
-  brand: string;
-  version: string;
-}
-
-interface UaData {
-  brands: UaBrand[];
-  getHighEntropyValues: (
-    hints: string[],
-  ) => Promise<{ brands?: UaBrand[]; fullVersionList?: UaBrand[] }>;
-}
-
-function alignClientHintBrands(): void {
-  const major = /Chrome\/(\d+)/.exec(navigator.userAgent)?.[1];
-  if (!major) return;
-  // executeInMainWorld runs in the page's world (where site scripts look);
-  // the preload's isolated world is invisible to them. `args` is the only
-  // channel across the boundary — the function body can't close over
-  // preload scope.
-  if (typeof contextBridge.executeInMainWorld !== "function") {
-    ipcRenderer.sendToHost("catamorphic:brand-align-failed", {
-      reason: "executeInMainWorld unavailable",
-    });
-    return;
-  }
-  contextBridge.executeInMainWorld({
-    func: (version: string) => {
-      const data = (navigator as Navigator & { userAgentData?: UaData })
-        .userAgentData;
-      if (!data) return;
-      const brands = [
-        { brand: "Google Chrome", version },
-        { brand: "Chromium", version },
-        { brand: "Not;A=Brand", version: "8" },
-      ];
-      const copy = () => brands.map((brand) => ({ ...brand }));
-      // Patch the prototype, not the instance: `navigator.userAgentData`
-      // yields a fresh object per access, so an own-property override is
-      // discarded on the next read.
-      const proto = Object.getPrototypeOf(data) as object;
-      Object.defineProperty(proto, "brands", {
-        get: copy,
-        configurable: true,
-      });
-      const getHighEntropyValues = data.getHighEntropyValues;
-      Object.defineProperty(proto, "getHighEntropyValues", {
-        value: function (this: UaData, hints: string[]) {
-          return getHighEntropyValues.call(this, hints).then((values) => {
-            if (!values.fullVersionList) {
-              return { ...values, brands: copy() };
-            }
-            // Real Chrome lists Google Chrome at the *Chrome* version;
-            // mapping the placeholder brand's version onto it (8.0.0.0)
-            // is precisely the tell a checker looks for.
-            const chromium = values.fullVersionList.find(
-              (entry) => entry.brand === "Chromium",
-            );
-            const fullVersion = chromium?.version ?? version;
-            return {
-              ...values,
-              brands: copy(),
-              fullVersionList: [
-                { brand: "Google Chrome", version: fullVersion },
-                { brand: "Chromium", version: fullVersion },
-                { brand: "Not;A=Brand", version: "8.0.0.0" },
-              ],
-            };
-          });
-        },
-        configurable: true,
-        writable: true,
-      });
-    },
-    args: [major],
-  });
-}
-alignClientHintBrands();
 
 /**
  * Page notifications go through the main process so macOS shows the site

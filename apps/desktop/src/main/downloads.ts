@@ -188,13 +188,18 @@ export class DownloadsManager {
     private readonly options: {
       downloadsDir: () => string;
       broadcast: (profileId: string, downloads: DownloadRecord[]) => void;
+      /** A file name someone asked for (an extension's download). */
+      nameFor?: (profileId: string, item: DownloadItemLike) => string | null;
     },
   ) {}
 
   attach(profileId: string, item: DownloadItemLike, host: string | null) {
     const dir = this.options.downloadsDir();
     fs.mkdirSync(dir, { recursive: true });
-    item.setSavePath(uniqueSavePath(dir, item.getFilename()));
+    const asked = this.options.nameFor?.(profileId, item);
+    item.setSavePath(
+      uniqueSavePath(dir, asked ? path.basename(asked) : item.getFilename()),
+    );
     const id = randomUUID();
     const record = (): DownloadRecord => ({
       id,

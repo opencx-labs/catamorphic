@@ -1,6 +1,14 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { cp, lstat, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import {
+  chmod,
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { writeCliError } from "./cli-error.js";
@@ -65,6 +73,9 @@ async function main(): Promise<void> {
       path.join("test-results", `desktop-${randomUUID()}`),
   );
   await mkdir(artifacts, { recursive: true });
+  // The container's unprivileged user writes diagnostics here, whatever this
+  // host user's id is.
+  if (!native) await chmod(artifacts, 0o777);
   const signals = new TestSignalController();
   const container = `catamorphic-desktop-test-${randomUUID()}`;
   const context = native

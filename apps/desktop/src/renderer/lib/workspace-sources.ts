@@ -73,6 +73,7 @@ const TAB_ICONS: Partial<Record<WorkspaceTab["kind"], string>> = {
   sites: "SlidersHorizontal",
   passwords: "KeyRound",
   downloads: "Download",
+  extensions: "Puzzle",
   usage: "ChartColumn",
 };
 

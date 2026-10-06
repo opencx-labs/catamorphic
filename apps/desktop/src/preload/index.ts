@@ -730,6 +730,138 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:downloads-changed", handler);
   },
+  // --- Chrome extensions (ADR 0203) ---
+  extensionsState: (): Promise<unknown> =>
+    invoke("catamorphic:extensions-state"),
+  extensionsSetEnabled: (input: {
+    id: string;
+    enabled: boolean;
+  }): Promise<void> => invoke("catamorphic:extensions-set-enabled", input),
+  extensionsSetPinned: (input: {
+    id: string;
+    pinned: boolean;
+  }): Promise<void> => invoke("catamorphic:extensions-set-pinned", input),
+  extensionsRemove: (input: { id: string }): Promise<boolean> =>
+    invoke("catamorphic:extensions-remove", input),
+  extensionsDeveloperMode: (input: { enabled: boolean }): Promise<void> =>
+    invoke("catamorphic:extensions-developer-mode", input),
+  extensionsLoadUnpacked: (): Promise<unknown> =>
+    invoke("catamorphic:extensions-load-unpacked"),
+  extensionsReload: (input: { id: string }): Promise<void> =>
+    invoke("catamorphic:extensions-reload", input),
+  extensionsUpdateNow: (): Promise<void> =>
+    invoke("catamorphic:extensions-update-now"),
+  extensionsReviewUpdate: (input: { id: string }): Promise<void> =>
+    invoke("catamorphic:extensions-review-update", input),
+  extensionsOpenOptions: (input: { id: string }): Promise<void> =>
+    invoke("catamorphic:extensions-open-options", input),
+  extensionsActions: (input: { guestId: number | null }): Promise<unknown> =>
+    invoke("catamorphic:extensions-actions", input),
+  extensionsActionClick: (input: {
+    id: string;
+    guestId: number | null;
+  }): Promise<unknown> => invoke("catamorphic:extensions-action-click", input),
+  extensionsActionMenu: (input: {
+    id: string;
+    guestId: number | null;
+  }): Promise<void> => invoke("catamorphic:extensions-action-menu", input),
+  extensionsTabsReport: (input: {
+    guestIds: number[];
+    activeGuestId: number | null;
+  }): Promise<void> => invoke("catamorphic:extensions-tabs-report", input),
+  extensionsWindowRespond: (payload: {
+    id: number;
+    result: { guestId?: number } | null;
+  }): void =>
+    ipcRenderer.send("catamorphic:extensions-window-response", payload),
+  extensionsViewAttached: (input: {
+    guestId: number;
+    extensionId: string;
+    kind: "popup" | "side-panel";
+    tabGuestId: number | null;
+  }): Promise<void> => invoke("catamorphic:extensions-view-attached", input),
+  extensionsFocusPopup: (input: { guestId: number }): Promise<void> =>
+    invoke("catamorphic:extensions-focus-popup", input),
+  extensionsSidePanels: (): Promise<unknown> =>
+    invoke("catamorphic:extensions-side-panels"),
+  extensionsSidePanelClose: (input: { guestId: number }): Promise<void> =>
+    invoke("catamorphic:extensions-side-panel-close", input),
+  extensionsDebugging: (): Promise<unknown> =>
+    invoke("catamorphic:extensions-debugging"),
+  extensionsDebuggerStop: (input: { guestId: number }): Promise<void> =>
+    invoke("catamorphic:extensions-debugger-stop", input),
+  extensionsPromptAnswer: (input: {
+    id: string;
+    accept: boolean;
+  }): Promise<void> => invoke("catamorphic:extensions-prompt-answer", input),
+  extensionsPrompts: (): Promise<unknown> =>
+    invoke("catamorphic:extensions-prompts"),
+  onExtensionsChanged: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:extensions-changed", handler);
+  },
+  onExtensionActionsChanged: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-actions-changed", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:extensions-actions-changed",
+        handler,
+      );
+  },
+  onExtensionWindowRequest: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-window-request", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:extensions-window-request",
+        handler,
+      );
+  },
+  onExtensionPopupSize: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-popup-size", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:extensions-popup-size", handler);
+  },
+  onExtensionSidePanel: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-side-panel", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:extensions-side-panel", handler);
+  },
+  onExtensionDebuggingChanged: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-debugging-changed", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:extensions-debugging-changed",
+        handler,
+      );
+  },
+  onExtensionPrompt: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-prompt", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:extensions-prompt", handler);
+  },
+  onExtensionPromptWithdrawn: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-prompt-withdrawn", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:extensions-prompt-withdrawn",
+        handler,
+      );
+  },
+  onExtensionInstalled: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-installed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:extensions-installed", handler);
+  },
   sitePermissionAnswer: (input: {
     id: string;
     decision: string;

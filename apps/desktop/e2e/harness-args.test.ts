@@ -28,6 +28,7 @@ describe("electronLaunchArgs", () => {
       "--remote-debugging-port=9342",
       "--use-fake-device-for-media-stream",
       "--no-sandbox",
+      "--enable-sandbox",
     ]);
   });
 
