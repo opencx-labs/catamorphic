@@ -161,6 +161,19 @@ change in anyone's groups.
 - A workflow that binds these kinds must declare `memberships:read`. The
   project check and the server refuse the binding otherwise, and only someone
   who holds every permission the workflow declares can turn it on.
+- Directory events name people. Every project with such an automation
+  receives the email, name and tracked groups of everyone who joins, leaves
+  or changes groups on the server, including people who are not members of
+  that project, and its workflows can send them anywhere they can reach.
+  Only someone whose role in that project grants `memberships:read` can turn
+  one on, and only someone who can publish there can add the workflow; only
+  the operator creates projects. Grant those roles, in any project whose
+  automations may listen to the directory, only to people the company
+  trusts with its directory, and review changes that add these triggers.
+- A transition is recorded with its event; delivering the event to the
+  projects happens right after and retries until it succeeds. A departure
+  disables the account and signs it out whether or not that delivery
+  works, and one account's events always arrive in the order they happened.
 - Events reach only projects with the automation turned on, and each
   automation sees each change once. Changes from before an automation was
   turned on are not replayed: issue keys to existing members by hand or with a

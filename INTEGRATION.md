@@ -212,12 +212,15 @@ const events = startEventDispatcher({ core: catamorphic.core });
 
 Directory events (ADR 0209) are Project Events about a whole tenant: register
 `DIRECTORY_TRIGGER_KINDS` from `@catamorphic/server-sdk`, and when an account
-joins, leaves, or changes groups, append
-`directoryProjectEvent({ kind, member, groups, occurredAt, revision })` with
-`core.projectEvents.appendToSubscribers({ tenantId, transaction, ...event })`
-in the transaction that records the change. Only projects with an active
-automation of that kind store it; `revision` counts the account's
-transitions, so a replay is stored once. A kind may require permissions of
+joins, leaves, or changes groups, build
+`directoryProjectEvent({ kind, member, groups, occurredAt, revision })`,
+record it with the change, and once that commits deliver it with
+`core.projectEvents.appendToSubscribers({ tenantId, ...event })`, retrying
+until it succeeds: a failed delivery must never undo the change (a departed
+member stays disabled). Only projects with an active automation of that kind
+store it; `revision` counts the account's transitions, so a replay is stored
+once, and delivering one account's events in revision order keeps a join
+from arriving after the departure that followed it. A kind may require permissions of
 the workflows that bind it (`defineTriggerKind({ requiredPermissions })`);
 these require `memberships:read`, enforced at scan and by the project check.
 The Work server does all of this for every `DirectoryProvider`.

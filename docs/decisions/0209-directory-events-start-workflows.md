@@ -20,10 +20,13 @@ and `directory.groups-changed` when an active member's directory groups change
 (`added`, `removed`). Each carries the member's id, email, name, email domain
 and current groups: the groups the server asks the directory about, which
 include groups a directory binding names; a group it starts or stops asking
-about is no change. They are durable project events (ADR 0171), appended in
-the transaction that records the transition (an account row counts its
-transitions, which name each event) and only to projects with an active
-subscription, so each subscribed automation sees a change once. A `groups`
+about is no change. They are durable project events (ADR 0171), appended only
+to projects with an active subscription, so each subscribed automation sees a
+change once. The transaction that records a transition (an account row counts
+its transitions, which name each event) queues its event in an outbox;
+delivery to projects happens after commit and retries with backoff, so a
+failed delivery never undoes the transition (a departed member stays disabled
+and signed out), and one account's events are delivered in order. A `groups`
 config narrows them to members of any of those groups (`where` cannot test
 arrays) and `where` narrows the rest (a domain). A trigger kind may require
 permissions of its subscribers (`requiredPermissions`); these require
@@ -53,4 +56,9 @@ their own directories fire the same kinds through their `DirectoryProvider`,
 or register `DIRECTORY_TRIGGER_KINDS` and append `directoryProjectEvent`s
 with `projectEvents.appendToSubscribers`. Changes from before an automation
 is turned on are not replayed. The sweep asks the directory about every
-member each interval, not only those signed in.
+member each interval, not only those signed in. A project with a directory
+automation sees the email, name and groups of everyone on the server, so
+`memberships:read` (and publishing) in such a project amounts to reading the
+directory; requiring an organization administrator to turn these on was
+considered and left out, since control-plane permissions are not part of
+enablement checks today.
