@@ -565,6 +565,18 @@ describe("a pull request review chat with Git through the gateway", () => {
     const refused = await infoRefs();
     expect(refused.status).toBe(401);
     expect(refused.headers.get("www-authenticate")).toContain("Basic");
+    // A released workspace holds its slot until the worker destroyed it, in
+    // the background: the next chat needs the slots of this one's.
+    await waitFor(async () => {
+      const held = await server.catamorphic.core.db
+        .selectFrom("execution_allocations")
+        .select("id")
+        .where("worker_node_id", "=", "worker.reviewer")
+        .where("status", "=", "released")
+        .where("capacity_released_at", "is", null)
+        .execute();
+      return held.length === 0;
+    }, "the worker to free the closed chat's workspaces");
   }, 60_000);
 
   it("refuses a contained agent's push and says why (ADR 0182)", async () => {

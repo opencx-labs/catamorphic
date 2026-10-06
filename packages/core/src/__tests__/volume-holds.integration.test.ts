@@ -304,31 +304,24 @@ describeIf("volumes and exclusive holds (ADR 0208)", () => {
     await allocate(bobs);
     expect(docker(created())?.temporary).toBeUndefined();
 
-    // Released but not yet destroyed, the sandbox may still use it.
+    // Released, with nothing running in it, before its cleanup came: the
+    // next sandbox there destroys it first and takes the volume over, its
+    // capacity released and its hold gone with it.
     await allocations().release({
       identity: ada,
       allocationId: first.id,
       reason: "idle",
     });
-    await allocate(adas);
-    expect(docker(created())).toMatchObject({ temporary: true });
-
-    // Cleanup destroys the sandbox and releases its capacity: the hold
-    // goes with it, and the next sandbox takes the volume.
-    await cleanupWorkerAllocations({
-      db,
-      workerNode: lease,
-      provider: machine.provider,
-    });
-    expect(machine.destroyed).toContain(
-      (
-        await db
-          .selectFrom("execution_allocations")
-          .select("sandbox_provider_id")
-          .where("id", "=", first.id)
-          .executeTakeFirstOrThrow()
-      ).sandbox_provider_id,
-    );
+    const next = await allocate(adas);
+    expect(docker(created())?.temporary).toBeUndefined();
+    expect(await temporaryVolumes({ db, allocation: next })).toEqual([]);
+    const retired = await db
+      .selectFrom("execution_allocations")
+      .select(["sandbox_provider_id", "capacity_released_at"])
+      .where("id", "=", first.id)
+      .executeTakeFirstOrThrow();
+    expect(machine.destroyed).toContain(retired.sandbox_provider_id);
+    expect(retired.capacity_released_at).not.toBeNull();
     expect(
       await db
         .selectFrom("volume_holds")
@@ -336,9 +329,14 @@ describeIf("volumes and exclusive holds (ADR 0208)", () => {
         .where("allocation_id", "=", first.id)
         .execute(),
     ).toEqual([]);
-    const next = await allocate(adas);
-    expect(docker(created())?.temporary).toBeUndefined();
-    expect(await temporaryVolumes({ db, allocation: next })).toEqual([]);
+    // Its cleanup finds nothing left to do.
+    expect(
+      await cleanupWorkerAllocations({
+        db,
+        workerNode: lease,
+        provider: machine.provider,
+      }),
+    ).toBe(0);
   });
 
   it("releases a member machine's hold when its Allocation is released, and sweeps holds whose sandbox is gone", async () => {

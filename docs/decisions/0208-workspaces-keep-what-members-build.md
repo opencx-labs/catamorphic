@@ -32,8 +32,10 @@ sandbox user's home. A volume is mounted into every sandbox of its owner on
 that machine. An `exclusive` volume, such as a Docker data root or a
 database, is mounted into one sandbox at a time: placement records which, and
 a sandbox that starts while it is held gets an empty temporary one and is
-told. Machines advertise `volumes`; local-process supports only paths under
-`~`. A machine forgets volumes nobody used for 30 days
+told. A released workspace on the machine that still holds it and runs
+nothing is destroyed first, so a chat readmitted right after it idled gets
+its volume back. Machines advertise `volumes`; local-process supports only
+paths under `~`. A machine forgets volumes nobody used for 30 days
 (`WORK_VOLUME_RETENTION_DAYS`) and a member's volumes when a pooled machine
 is reset (ADR 0205).
 

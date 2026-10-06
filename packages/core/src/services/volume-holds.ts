@@ -13,7 +13,8 @@ import type {
  * sees it, and it ends with that sandbox (migration 051's trigger, on
  * capacity release or, for a machine that keeps its own sandboxes, on
  * release). A sandbox created while another holds the key gets an empty
- * temporary volume that goes away with it.
+ * temporary volume that goes away with it; a released holder on a worker
+ * that runs nothing is destroyed first (`allocationSandboxProvider`).
  */
 
 /**

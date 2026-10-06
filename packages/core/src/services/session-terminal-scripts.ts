@@ -21,30 +21,40 @@ export function sessionDirectoryFromProject(input: {
   return posix.relative(input.projectDirectory, input.sessionDirectory);
 }
 
+/** What a terminal opened without the workspace's secrets says first. */
+export const TERMINAL_WITHOUT_SECRETS =
+  "This terminal does not load the project's secrets: only people who manage them get them here.";
+
 /**
- * Loads the gateway's variables (ADR 0212) and the Environment's secrets
- * (ADR 0206) into a shell, each when this workspace has it: the files
- * `sandboxSecretsPrelude` loads, named from a shell word for the session
- * directory instead of the project folder, since a terminal records where
- * it started.
+ * Loads the gateway's variables (ADR 0212) and, when `secrets`, the
+ * Environment's secrets (ADR 0206) into a shell, each when this workspace
+ * has it: the files `sandboxSecretsPrelude` loads, named from a shell word
+ * for the session directory instead of the project folder, since a
+ * terminal records where it started. Without them, a workspace that has
+ * secrets says so in one line.
  */
-export function terminalSecretsSnippet(sessionDirectory: string): string {
-  return [GATEWAY_ENV_IN_SESSION_DIRECTORY, SECRETS_IN_SESSION_DIRECTORY]
-    .map((name) => {
-      const file = `${sessionDirectory}/${name}`;
-      return `if [ -f ${file} ]; then . ${file}; fi`;
-    })
-    .join("; ");
+export function terminalSecretsSnippet(input: {
+  sessionDirectory: string;
+  secrets: boolean;
+}): string {
+  const gateway = `${input.sessionDirectory}/${GATEWAY_ENV_IN_SESSION_DIRECTORY}`;
+  const secrets = `${input.sessionDirectory}/${SECRETS_IN_SESSION_DIRECTORY}`;
+  return [
+    `if [ -f ${gateway} ]; then . ${gateway}; fi`,
+    input.secrets
+      ? `if [ -f ${secrets} ]; then . ${secrets}; fi`
+      : `if [ -f ${secrets} ]; then printf '%s\\n' ${shellQuote(TERMINAL_WITHOUT_SECRETS)}; fi`,
+  ].join("; ");
 }
 
 /**
  * Runs inside the terminal (POSIX sh): `$1` is its state directory, `$2`
  * says whether it has a pseudo-terminal. It records the terminal device
  * and the shell's process id (a resize needs both), sizes the device,
- * loads the gateway's variables and the secrets, and becomes the login
- * shell: bash when present.
+ * loads the gateway's variables and, when `secrets`, the secrets, and
+ * becomes the login shell: bash when present.
  */
-function startScript(): string {
+function startScript(input: { secrets: boolean }): string {
   return [
     'd=$1; mode=$2; s=$(cd "$d/../.." && pwd)',
     'tty > "$d/tty" 2>/dev/null || :',
@@ -56,7 +66,7 @@ function startScript(): string {
     "  unset COLUMNS LINES",
     "fi",
     `printf '%s\\n' "$$" > "$d/pid"`,
-    `${terminalSecretsSnippet('"$s"')} || :`,
+    `${terminalSecretsSnippet({ sessionDirectory: '"$s"', secrets: input.secrets })} || :`,
     "if command -v bash >/dev/null 2>&1; then SHELL=$(command -v bash); else SHELL=$(command -v sh); fi",
     "export SHELL",
     'if [ "$mode" = pty ]; then exec "$SHELL" -l; fi',
@@ -69,11 +79,13 @@ const START_END = "WORK_TERMINAL_START";
 /**
  * Prepares a terminal's state directory and says which pseudo-terminal the
  * sandbox offers, as one line `pty=<kind>`: util-linux `script`, the BSD
- * `script` of macOS (a local-process sandbox there), or none.
+ * `script` of macOS (a local-process sandbox there), or none. `secrets`
+ * says whether its shell loads the workspace's secrets.
  */
 export function prepareTerminalCommand(input: {
   sessionFromProject: string;
   key: string;
+  secrets: boolean;
 }): string {
   const directory = shellQuote(
     `${input.sessionFromProject}/terminals/${input.key}`,
@@ -82,7 +94,7 @@ export function prepareTerminalCommand(input: {
     "set -e",
     `mkdir -p ${directory}`,
     `cat > ${directory}/start.sh <<'${START_END}'`,
-    startScript(),
+    startScript({ secrets: input.secrets }),
     START_END,
     "set +e",
     "if script --version 2>/dev/null | grep -q util-linux; then echo pty=util-linux",

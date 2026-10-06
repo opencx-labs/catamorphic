@@ -6,13 +6,16 @@ import os from "node:os";
 import path from "node:path";
 import type { Identity } from "@catamorphic/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { executionSettingsFromEnv } from "../execution-config.js";
 import {
   createWorkServer,
   SERVER_TENANT_ID,
   type WorkServer,
 } from "../server.js";
-import { replyOf, testServerOptions } from "../test-support.js";
+import {
+  replyOf,
+  testExecutionSettings,
+  testServerOptions,
+} from "../test-support.js";
 import { startWorkWorker } from "./worker-runtime.js";
 
 /**
@@ -230,7 +233,7 @@ beforeAll(async () => {
       controlPlaneUrl: base,
       dataDir: workerDir,
       enrollmentCode: enrollment.json().code,
-      execution: executionSettingsFromEnv({
+      execution: testExecutionSettings({
         PATH: process.env.PATH,
         WORK_MAX_WORKSPACES: "2",
       }),

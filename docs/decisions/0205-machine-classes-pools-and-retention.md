@@ -56,16 +56,18 @@ A group's shared machine belongs to that group: when a rule's group
 changes, its machines are released, never handed to the new group.
 
 **Retention.** When a member leaves the group, is disabled, or the rule goes,
-their machine is released: it stops taking anyone's work at once and keeps
-its disk for the rule's `retainDays` (default 7, recorded with the machine so
-it outlives the rule), counted by the database's clock. If the member comes
-back within that time, the machine is theirs again. Afterwards, once its
-chats have given their workspaces back saved (they do when they idle, ADR
-0173; a machine that is not connected cannot save them and does not wait),
-a cloud machine is destroyed (snapshotted first when its class says so) and
-a pooled machine is reset: a `machine.reset` operation has the worker
-destroy every sandbox and delete members' sign-ins and volumes, and once its
-receipt arrives the machine returns to the pool. A disconnected machine is
+their machine is released: it takes no new work at once and keeps its disk
+for the rule's `retainDays` (default 7, recorded with the machine so it
+outlives the rule), counted by the database's clock. Chats already on it
+keep reaching it, with the access it had, so their workspaces can finish
+and be given back saved. If the member comes back within that time, the
+machine is theirs again. Afterwards, once its chats have given their
+workspaces back saved (they do when they idle, ADR 0173; a machine that is
+not connected cannot save them and does not wait), a cloud machine is
+destroyed (snapshotted first when its class says so) and a pooled machine
+is reset: a `machine.reset` operation has the worker destroy every sandbox
+and delete members' sign-ins and volumes, and once its receipt arrives the
+machine returns to the pool, serving nobody. A disconnected machine is
 reset when it reconnects. `retainDays: 0` acts at once. A machine that
 never enrolled is destroyed at once.
 

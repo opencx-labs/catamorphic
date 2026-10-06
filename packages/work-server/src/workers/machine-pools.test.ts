@@ -380,7 +380,7 @@ describe("machine classes, pools and retention (ADR 0205)", () => {
     await setGroups(ada.userId, []);
     const left = await reconciler.reconcile();
     expect(left).toMatchObject({ released: [adaMachine], removed: [] });
-    expect((await registry.placements()).has(nodeId)).toBe(false);
+    expect((await registry.placements()).get(nodeId)?.released).toBe(true);
     expect((await registry.placement(nodeId)).access).toEqual({
       nobody: true,
     });
@@ -526,24 +526,30 @@ describe("machine classes, pools and retention (ADR 0205)", () => {
     await setGroups(holder.userId, []);
     const left = await reconciler.reconcile();
     expect(left).toMatchObject({ released: [machine.name], assigned: [] });
-    expect((await registry.placements()).has(machine.nodeId)).toBe(false);
+    expect((await registry.placements()).get(machine.nodeId)?.released).toBe(
+      true,
+    );
     expect((await reconciler.status()).lab).toMatchObject({
       desired: 2,
       ready: 1,
       released: 1,
       waiting: 1,
     });
-    // Their chat re-checks access on its next turn: not there any more.
-    expect(await where()).not.toContain(path.join(dir, "sandboxes"));
+    // The chat already there keeps reaching its workspace.
+    expect(await where()).toContain(path.join(dir, "sandboxes"));
 
     // Their retention ends. The reset waits while their chat holds its
-    // workspace, then the worker wipes the machine, and the waiting
-    // member gets it in the same pass.
+    // workspace, which it gives back saved once idle; then the worker
+    // wipes the machine, and the waiting member gets it in the same pass.
     await age(machine.name, 1.5);
     const holding = await reconciler.reconcile();
     expect(holding.reset).toEqual([]);
     expect(await stateOf(machine.name)).toMatchObject({ state: "resetting" });
-    await sessions.close(identity, projectId, session.id);
+    expect(
+      await sessions.releaseIdleWorkspaces({
+        now: new Date(Date.now() + 60 * 60_000),
+      }),
+    ).toBe(1);
     const reset = await reconciler.reconcile();
     expect(reset).toMatchObject({
       reset: [machine.name],
