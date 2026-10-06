@@ -1,5 +1,12 @@
 import { ChevronRight, LockKeyhole } from "lucide-react";
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import {
   desktopApi,
   type RemoteProjectMember,
@@ -54,6 +61,7 @@ export function RemoteSecretsModal({
   const [busy, setBusy] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const titleId = useId();
 
   const load = useCallback(async () => {
     const data = await desktopApi.remoteSecrets({
@@ -119,13 +127,21 @@ export function RemoteSecretsModal({
     isSet: boolean;
   }) => {
     const key = targetKey(input.secret.name, input.target);
+    const name = input.secret.name;
     return (
       <ValueRow
         key={key}
         title={input.title}
         detail={input.detail}
         isSet={input.isSet}
-        secretName={input.secret.name}
+        secretName={name}
+        clearQuestion={
+          input.target.kind === "shared"
+            ? `Clear the shared value of ${name}? Chats lose it at their next turn.`
+            : input.target.kind === "member"
+              ? `Clear the value of ${name} for ${input.title}? Their chats lose it at their next turn.`
+              : undefined
+        }
         editing={editing === key}
         pending={busy === key}
         disabled={busy !== null}
@@ -143,12 +159,14 @@ export function RemoteSecretsModal({
   const now = Date.now();
 
   return (
-    <Modal open={open} onClose={onClose} width={560}>
+    <Modal open={open} onClose={onClose} width={560} labelledBy={titleId}>
       <div className="flex max-h-[min(720px,82vh)] flex-col">
         <header className="border-b border-border px-5 py-4">
           <div className="flex items-center gap-2">
             <LockKeyhole className="size-4 text-fg-muted" />
-            <h2 className="text-[15px] font-semibold text-fg">Secrets</h2>
+            <h2 id={titleId} className="text-[15px] font-semibold text-fg">
+              Secrets
+            </h2>
           </div>
           <p className="mt-1 text-xs leading-5 text-fg-muted">
             Values such as API keys that this project's Environments set for its
@@ -321,6 +339,7 @@ function ValueRow({
   detail,
   isSet,
   secretName,
+  clearQuestion,
   editing,
   pending,
   disabled,
@@ -333,6 +352,8 @@ function ValueRow({
   detail: string;
   isSet: boolean;
   secretName: string;
+  /** Asked in place before clearing a value other people's chats use. */
+  clearQuestion?: string;
   editing: boolean;
   pending: boolean;
   disabled: boolean;
@@ -341,15 +362,46 @@ function ValueRow({
   onSave: (value: string) => void;
   onClear: () => void;
 }) {
-  const [value, setValue] = useState("");
+  // The field stays uncontrolled: React copies a controlled input's value
+  // into its `value` attribute, which puts the secret in the page's markup.
+  // Only whether it is empty is state.
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [empty, setEmpty] = useState(true);
   useEffect(() => {
-    if (!editing) setValue("");
+    if (!editing) return;
+    const input = inputRef.current;
+    return () => {
+      // Saved, cancelled or closed: the value never outlives the field.
+      if (input) input.value = "";
+      setEmpty(true);
+    };
   }, [editing]);
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => {
+    if (!isSet || editing) setConfirming(false);
+  }, [isSet, editing]);
+  const questionId = useId();
+  const rowRef = useRef<HTMLDivElement>(null);
+  const keepButton = useRef<HTMLButtonElement>(null);
+  const refocusClear = useRef(false);
+  useEffect(() => {
+    // Keyboard focus follows the question in and back out.
+    if (confirming) {
+      keepButton.current?.focus();
+      return;
+    }
+    if (!refocusClear.current) return;
+    refocusClear.current = false;
+    rowRef.current
+      ?.querySelector<HTMLButtonElement>("[data-row-clear]")
+      ?.focus();
+  }, [confirming]);
   const waitReason = "Wait for the current change to finish";
 
   if (editing) {
     const submit = (event: FormEvent) => {
       event.preventDefault();
+      const value = inputRef.current?.value ?? "";
       if (value.length > 0) onSave(value);
     };
     return (
@@ -357,9 +409,11 @@ function ValueRow({
         <p className="text-[13px] text-fg">{title}</p>
         <div className="flex items-center gap-2">
           <input
+            ref={inputRef}
             type="password"
-            value={value}
-            onChange={(event) => setValue(event.target.value)}
+            onChange={(event) =>
+              setEmpty(event.currentTarget.value.length === 0)
+            }
             autoComplete="off"
             spellCheck={false}
             // biome-ignore lint/a11y/noAutofocus: the field the person asked to fill
@@ -374,7 +428,7 @@ function ValueRow({
           <PendingButton
             type="submit"
             pending={pending}
-            disabled={value.length === 0 || disabled}
+            disabled={empty || disabled}
             data-disabled-reason="Paste a value first"
             className="button-primary button-sm"
           >
@@ -385,8 +439,49 @@ function ValueRow({
     );
   }
 
+  if (confirming && clearQuestion) {
+    return (
+      <div
+        className="flex items-center gap-3 py-2.5"
+        data-testid="remote-secret-clear-confirm"
+      >
+        <p
+          id={questionId}
+          className="min-w-0 flex-1 text-[13px] leading-5 text-fg"
+        >
+          {clearQuestion}
+        </p>
+        <button
+          ref={keepButton}
+          type="button"
+          disabled={pending}
+          data-disabled-reason={waitReason}
+          aria-describedby={questionId}
+          onClick={() => {
+            refocusClear.current = true;
+            setConfirming(false);
+          }}
+          className="button-ghost button-sm"
+        >
+          Cancel
+        </button>
+        <PendingButton
+          type="button"
+          pending={pending}
+          disabled={disabled}
+          data-disabled-reason={waitReason}
+          aria-describedby={questionId}
+          onClick={onClear}
+          className="button-danger button-sm"
+        >
+          Clear
+        </PendingButton>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex items-center gap-3 py-2.5">
+    <div ref={rowRef} className="flex items-center gap-3 py-2.5">
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13px] text-fg">{title}</p>
         <p className="truncate text-xs text-fg-faint">{detail}</p>
@@ -397,7 +492,8 @@ function ValueRow({
           pending={pending}
           disabled={disabled}
           data-disabled-reason={waitReason}
-          onClick={onClear}
+          data-row-clear=""
+          onClick={clearQuestion ? () => setConfirming(true) : onClear}
           aria-label={`Clear ${title} of ${secretName}`}
           className="button-ghost button-sm"
         >

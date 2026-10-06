@@ -108,6 +108,12 @@ const buttonText = (text: string) =>
   Array.from(document.body.querySelectorAll("button")).find(
     (candidate) => candidate.textContent?.trim() === text,
   );
+const confirmRow = () =>
+  document.body.querySelector('[data-testid="remote-secret-clear-confirm"]');
+const confirmButton = (text: string) =>
+  Array.from(confirmRow()?.querySelectorAll("button") ?? []).find(
+    (candidate) => candidate.textContent?.trim() === text,
+  );
 
 describe("RemoteSecretsModal", () => {
   it("shows what each secret is for and where it is set, never a value", async () => {
@@ -169,11 +175,13 @@ describe("RemoteSecretsModal", () => {
       value: "ch-key-123456",
       member: "me",
     });
-    // The field is gone and the value is never shown back.
+    // The field is gone, emptied, and the value is never shown back.
     expect(document.body.querySelector("input")).toBeNull();
+    expect(input?.value).toBe("");
     expect(document.body.textContent).not.toContain("ch-key-123456");
     expect(document.body.textContent).toContain("Set 1h ago");
 
+    // Clearing your own value takes one click.
     desktop.remoteSecretDelete.mockResolvedValue(undefined);
     await act(async () =>
       button("Clear Your value of CLICKHOUSE_API_KEY")?.click(),
@@ -240,12 +248,94 @@ describe("RemoteSecretsModal", () => {
       member: "u-ada",
     });
 
+    // Clearing someone else's value asks first, in place.
     await act(async () => button("Clear Bob of CLICKHOUSE_API_KEY")?.click());
+    expect(confirmRow()?.textContent).toContain(
+      "Clear the value of CLICKHOUSE_API_KEY for Bob? Their chats lose it at their next turn.",
+    );
+    expect(document.activeElement?.textContent).toBe("Cancel");
+    expect(desktop.remoteSecretDelete).not.toHaveBeenCalled();
+    await act(async () => confirmButton("Cancel")?.click());
+    expect(confirmRow()).toBeNull();
+    expect(document.activeElement).toBe(
+      button("Clear Bob of CLICKHOUSE_API_KEY"),
+    );
+    expect(desktop.remoteSecretDelete).not.toHaveBeenCalled();
+
+    await act(async () => button("Clear Bob of CLICKHOUSE_API_KEY")?.click());
+    await act(async () => confirmButton("Clear")?.click());
     expect(desktop.remoteSecretDelete).toHaveBeenCalledWith({
       projectId: "project-1",
       name: "CLICKHOUSE_API_KEY",
       member: "u-bob",
     });
+  });
+
+  it("asks before clearing the shared value", async () => {
+    desktop.remoteSecrets.mockResolvedValue({
+      secrets: [secret({ shared: true, updatedAt: hourAgo })],
+      members: null,
+    });
+    desktop.remoteSecretDelete.mockResolvedValue(undefined);
+    await render({ canManage: true });
+
+    await act(async () =>
+      button("Clear Shared value of CLICKHOUSE_API_KEY")?.click(),
+    );
+    expect(confirmRow()?.textContent).toContain(
+      "Clear the shared value of CLICKHOUSE_API_KEY? Chats lose it at their next turn.",
+    );
+    expect(desktop.remoteSecretDelete).not.toHaveBeenCalled();
+    desktop.remoteSecrets.mockResolvedValue({
+      secrets: [secret()],
+      members: null,
+    });
+    await act(async () => confirmButton("Clear")?.click());
+    expect(desktop.remoteSecretDelete).toHaveBeenCalledWith({
+      projectId: "project-1",
+      name: "CLICKHOUSE_API_KEY",
+    });
+    expect(confirmRow()).toBeNull();
+    expect(document.body.textContent).not.toMatch(/[–—]/);
+  });
+
+  it("keeps a typed value out of the page's markup", async () => {
+    desktop.remoteSecrets.mockResolvedValue({
+      secrets: [secret()],
+      members: null,
+    });
+    await render();
+    const dialog = document.body.querySelector('[role="dialog"]');
+    const titleId = dialog?.getAttribute("aria-labelledby");
+    expect(titleId).toBeTruthy();
+    expect(titleId ? document.getElementById(titleId)?.textContent : null).toBe(
+      "Secrets",
+    );
+
+    await act(async () =>
+      button("Set Your value of CLICKHOUSE_API_KEY")?.click(),
+    );
+    const input = document.body.querySelector<HTMLInputElement>(
+      'input[type="password"]',
+    );
+    await act(async () => {
+      if (input) typeInto(input, "typed-secret-98765");
+    });
+    expect(input?.value).toBe("typed-secret-98765");
+    expect(buttonText("Save")?.disabled).toBe(false);
+    const attributes = Array.from(
+      document.querySelectorAll("[value]"),
+      (element) => element.getAttribute("value") ?? "",
+    );
+    expect(
+      attributes.filter((value) => value.includes("typed-secret-98765")),
+    ).toEqual([]);
+    expect(document.body.outerHTML).not.toContain("typed-secret-98765");
+
+    await act(async () => buttonText("Cancel")?.click());
+    expect(document.body.querySelector("input")).toBeNull();
+    expect(input?.value).toBe("");
+    expect(desktop.remoteSecretSet).not.toHaveBeenCalled();
   });
 
   it("shows why a change was refused", async () => {
