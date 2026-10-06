@@ -1,4 +1,5 @@
 import {
+  REMOTE_EPOCH_PATTERN,
   RemoteExecutorLeaseLostError,
   RemoteReceiptRefusedError,
 } from "@catamorphic/core";
@@ -15,6 +16,7 @@ import {
   WorkerDisabledError,
   WorkerIsolationError,
   WorkerKeyMismatchError,
+  WorkerRotationSupersededError,
   WorkerSupersededError,
   type WorkWorkerRegistry,
 } from "./worker-registry.js";
@@ -122,16 +124,31 @@ export function registerWorkerRoutes(
   });
 
   // A new credential for a new key (ADR 0206). The credential this call
-  // carries keeps working until the worker first uses the new one.
+  // carries keeps working until the worker first uses the new one. A
+  // request older than one already seen (its UUIDv7 `rotation`) is refused
+  // with 409: it was delayed on its way and issues nothing.
   app.post("/api/workers/rotate", async (request, reply) => {
     const worker = await authenticated(request, reply);
     if (!worker) return reply;
     const body = z
-      .strictObject({ publicKey: ExecutorPublicKeySchema })
+      .strictObject({
+        publicKey: ExecutorPublicKeySchema,
+        rotation: z
+          .string()
+          .regex(REMOTE_EPOCH_PATTERN, "Use a UUIDv7 rotation id"),
+      })
       .safeParse(request.body);
     if (!body.success)
-      return reply.status(400).send({ error: "Provide the new public key" });
-    return registry.rotate({ nodeId: worker.nodeId, ...body.data });
+      return reply
+        .status(400)
+        .send({ error: "Provide the new public key and a rotation id" });
+    try {
+      return await registry.rotate({ nodeId: worker.nodeId, ...body.data });
+    } catch (error) {
+      if (error instanceof WorkerRotationSupersededError)
+        return reply.status(409).send({ error: error.message });
+      throw error;
+    }
   });
 
   app.post("/api/workers/poll", async (request, reply) => {

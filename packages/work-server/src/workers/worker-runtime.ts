@@ -1,7 +1,7 @@
 import { createPrivateKey, type KeyObject, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { nodeExecutor } from "@catamorphic/core";
+import { nodeExecutor, RETIRED_KEY_RETENTION_MS } from "@catamorphic/core";
 import {
   executorPublicKey,
   generateExecutorKeyPair,
@@ -23,9 +23,11 @@ import {
 import { removeMachineSignIns, signInCapabilities } from "./sign-ins.js";
 import { startVolumePruning } from "./volume-pruning.js";
 import {
+  confirmWorkerIdentity,
   loadWorkerIdentity,
   saveWorkerIdentity,
   saveWorkerKey,
+  type WorkerCredentialPair,
 } from "./worker-identity.js";
 import {
   upgradeMessage,
@@ -59,6 +61,12 @@ export interface WorkWorkerOptions {
    * 15 seconds by default. Tests shorten it.
    */
   rotationRetryMs?: number;
+  /**
+   * How long a key rotated away from stays usable for operations sealed to
+   * it before the rotation; `RETIRED_KEY_RETENTION_MS` by default. Tests
+   * shorten it.
+   */
+  retiredKeyRetentionMs?: number;
   fetch?: Fetch;
   log?: (line: string) => void;
 }
@@ -121,19 +129,76 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   });
   const nodeId = enrolled.credential.split(":")[0] ?? "";
   /**
-   * The credential this worker calls with, the public key it registered,
-   * and the keys it opens operations with, the current first. A rotation
-   * replaces them at once and keeps the previous key: operations sealed to
-   * it before the control plane saw the new credential may still arrive.
+   * The credential this worker calls with and, until the control plane has
+   * accepted it once, the one a rotation replaced (ADR 0206). Should the
+   * control plane refuse the new credential, the worker goes back to the
+   * old one, which still works, and rotates again.
    */
-  let identity: {
-    credential: string;
-    publicKey: string;
-    privateKeys: readonly KeyObject[];
-  } = {
-    credential: enrolled.credential,
-    publicKey: executorPublicKey(enrolled.privateKey),
-    privateKeys: [createPrivateKey(enrolled.privateKey)],
+  let identity: { current: HeldCredential; previous?: HeldCredential } = {
+    current: held(enrolled),
+    ...(enrolled.previous ? { previous: held(enrolled.previous) } : {}),
+  };
+  /**
+   * Keys this worker rotated away from, kept while operations sealed to
+   * them before the rotation may still be queued.
+   */
+  const retired: Array<{ key: KeyObject; until: number }> = [];
+  /** Every key an operation for this worker may be sealed to. */
+  const privateKeys = (): KeyObject[] => {
+    const now = Date.now();
+    retired.splice(
+      0,
+      retired.length,
+      ...retired.filter((entry) => entry.until > now),
+    );
+    return [
+      identity.current.privateKey,
+      ...(identity.previous ? [identity.previous.privateKey] : []),
+      ...retired.map((entry) => entry.key),
+    ];
+  };
+  /**
+   * The control plane accepted the current credential: it sealed to the
+   * previous key until now, so that key is kept a while longer, and the
+   * previous credential, which no longer works, leaves the disk.
+   */
+  const confirm = () => {
+    const { previous } = identity;
+    if (!previous) return;
+    identity = { current: identity.current };
+    retired.push({
+      key: previous.privateKey,
+      until:
+        Date.now() +
+        (options.retiredKeyRetentionMs ?? RETIRED_KEY_RETENTION_MS),
+    });
+    try {
+      confirmWorkerIdentity(options.dataDir);
+    } catch (error) {
+      log(
+        `Could not remove this worker's previous credential: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  };
+  /**
+   * The control plane does not know the credential a rotation issued: a
+   * rotation request that was delayed on its way replaced it before the
+   * worker used it. The previous credential, never ended, still works; the
+   * worker goes back to it and rotates again. Nothing was sealed to the
+   * refused credential's key.
+   */
+  const fallBack = (previous: HeldCredential) => {
+    saveWorkerIdentity(options.dataDir, {
+      credential: previous.credential,
+      privateKey: previous.privateKeyPem,
+    });
+    identity = { current: previous };
+    lastRotation = Number.NEGATIVE_INFINITY;
+    log(
+      "The control plane refused this worker's new credential; using the previous one and rotating again",
+    );
   };
   const resolved = await resolveExecutionSettings({
     settings: options.execution,
@@ -194,7 +259,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     signal?: AbortSignal;
   }): Promise<unknown> => {
     const timeout = AbortSignal.timeout(CALL_TIMEOUT_MS[route]);
-    const { credential } = identity;
+    const { credential } = identity.current;
     const response = await doFetch(`${base}/api/workers/${route}`, {
       method: "POST",
       headers: {
@@ -205,6 +270,8 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     });
     if (response.ok) {
+      // The control plane accepted this credential.
+      if (credential === identity.current.credential) confirm();
       const answer: unknown = await response.json();
       // The control plane wants a new credential and key; work goes on. An
       // answer to a call made before this worker rotated is out of date.
@@ -213,7 +280,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         answer !== null &&
         "rotate" in answer &&
         answer.rotate === true &&
-        credential === identity.credential
+        credential === identity.current.credential
       )
         rotateSoon();
       return answer;
@@ -226,11 +293,19 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       typeof answer.error === "string"
         ? answer.error
         : `Control plane answered ${response.status} on ${route}`;
-    // A call that left with the previous credential, which ended once the
-    // rotated one was first used: the same call goes again with the new one.
-    if (response.status === 401 && credential !== identity.credential)
-      throw new CredentialRotatedError();
-    if (response.status === 401) throw new WorkerRevokedError();
+    if (response.status === 401) {
+      // A call that left with a credential this worker has since replaced:
+      // the same call goes again with the current one.
+      if (credential !== identity.current.credential)
+        throw new CredentialRotatedError();
+      // A rotated credential the control plane never accepted: back to the
+      // one before it, and the same call goes again.
+      if (identity.previous) {
+        fallBack(identity.previous);
+        throw new CredentialRotatedError();
+      }
+      throw new WorkerRevokedError();
+    }
     if (response.status === 426)
       throw new WorkerUpgradeRequiredError(upgradeAnswer({ answer, protocol }));
     if (response.status === 403) throw new WorkerRefusedError(reason);
@@ -304,9 +379,11 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   };
   const rotate = async () => {
     const next = generateExecutorKeyPair();
+    // Later requests carry later ids: one delayed on its way can never
+    // replace the credential a later one issued.
     const answer = await call({
       route: "rotate",
-      body: { publicKey: next.publicKey },
+      body: { publicKey: next.publicKey, rotation: uuidV7() },
       signal: stopping.signal,
     });
     const credential =
@@ -318,19 +395,23 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         ? answer.credential
         : undefined;
     if (!credential) throw new Error("The control plane sent no credential");
-    // On disk before its first use: until then the control plane keeps
-    // accepting the current credential, so a crash here loses nothing.
+    // The rotate call itself was accepted, so the current credential is
+    // confirmed and becomes the one to go back to.
+    const previous = identity.current;
+    // On disk, with the credential it replaces, before its first use: until
+    // then the control plane keeps accepting the current credential, so a
+    // crash here loses nothing.
     saveWorkerIdentity(options.dataDir, {
       credential,
       privateKey: next.privateKey,
+      previous: {
+        credential: previous.credential,
+        privateKey: previous.privateKeyPem,
+      },
     });
     identity = {
-      credential,
-      publicKey: next.publicKey,
-      privateKeys: [
-        createPrivateKey(next.privateKey),
-        ...identity.privateKeys.slice(0, 1),
-      ],
+      current: held({ credential, privateKey: next.privateKey }),
+      previous,
     };
     log("Rotated this worker's credential and key");
     // Its first use makes it current and ends the old credential: at once,
@@ -348,7 +429,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     let offer = currentOffer();
     await call({
       route: "connect",
-      body: { session: epoch, offer, publicKey: identity.publicKey },
+      body: { session: epoch, offer, publicKey: identity.current.publicKey },
       signal: stopping.signal,
     });
     connectedOnce = true;
@@ -403,7 +484,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       transport,
       keys: {
         executor: nodeExecutor(nodeId),
-        privateKeys: () => identity.privateKeys,
+        privateKeys,
       },
       sandboxes,
       // A pooled machine returns to its pool (ADR 0204).
@@ -443,7 +524,11 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         return;
       void call({
         route: "connect",
-        body: { session: token, offer: next, publicKey: identity.publicKey },
+        body: {
+          session: token,
+          offer: next,
+          publicKey: identity.current.publicKey,
+        },
       })
         .then(() => {
           offer = next;
@@ -554,6 +639,25 @@ async function resetMachine(args: {
   );
 }
 
+/** A credential this worker holds, with the key that came with it. */
+interface HeldCredential {
+  credential: string;
+  /** PKCS8 PEM, as the data directory keeps it. */
+  privateKeyPem: string;
+  privateKey: KeyObject;
+  /** What the control plane registered for this credential. */
+  publicKey: string;
+}
+
+function held(pair: WorkerCredentialPair): HeldCredential {
+  return {
+    credential: pair.credential,
+    privateKeyPem: pair.privateKey,
+    privateKey: createPrivateKey(pair.privateKey),
+    publicKey: executorPublicKey(pair.privateKey),
+  };
+}
+
 /**
  * A UUIDv7: the millisecond clock, then random bits. A later process's
  * epoch sorts after an earlier one's (ADR 0192).
@@ -579,10 +683,15 @@ async function loadOrEnroll(args: {
   code?: string;
   fetch: Fetch;
   protocol: number;
-}): Promise<{ credential: string; privateKey: string }> {
+}): Promise<WorkerCredentialPair & { previous?: WorkerCredentialPair }> {
   const existing = loadWorkerIdentity(args.dataDir);
   if (existing?.privateKey)
-    return { credential: existing.credential, privateKey: existing.privateKey };
+    return {
+      credential: existing.credential,
+      privateKey: existing.privateKey,
+      // A rotation the control plane has not accepted yet.
+      ...(existing.previous ? { previous: existing.previous } : {}),
+    };
   if (existing) {
     const { privateKey } = generateExecutorKeyPair();
     saveWorkerKey(args.dataDir, privateKey);

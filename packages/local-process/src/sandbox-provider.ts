@@ -29,6 +29,8 @@ import {
   assertSandboxVolumes,
   assertWriteSize,
   decodeProcessChunk,
+  gitCloneFailure,
+  gitCloneUrl,
   machineSignInHome,
   newProcessId,
   PROCESS_SIGNALS,
@@ -495,14 +497,17 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     clonePath: string,
     opts?: GitCloneOpts,
   ): Promise<void> {
-    const cloneUrl = withCredentials(url, opts);
+    const cloneUrl = gitCloneUrl(url, opts);
     const target = this.resolvePath(sandboxId, clonePath);
     const args = ["clone"];
     if (opts?.branch) args.push("--branch", opts.branch);
     args.push(cloneUrl, target);
     const clone = await this.git(sandboxId, args, 120_000);
     if (clone.exitCode !== 0) {
-      throw new Error(`git clone failed: ${clone.result}`);
+      throw gitCloneFailure({
+        output: clone.result,
+        ...(opts ? { opts } : {}),
+      });
     }
     if (opts?.commitId) {
       await this.gitCheckout(sandboxId, clonePath, opts.commitId);
@@ -942,14 +947,6 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
 
 function logSize(file: string): number {
   return fs.statSync(file, { throwIfNoEntry: false })?.size ?? 0;
-}
-
-function withCredentials(url: string, opts?: GitCloneOpts): string {
-  if (!opts?.username && !opts?.password) return url;
-  const parsed = new URL(url);
-  if (opts.username) parsed.username = opts.username;
-  if (opts.password) parsed.password = opts.password;
-  return parsed.toString();
 }
 
 function restoreOwnerWrite(directory: string): void {

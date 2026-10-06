@@ -1,13 +1,23 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  OPERATION_NOT_OPENED_ERROR,
+  sealRemoteOperation,
+} from "@catamorphic/core";
+import {
+  type ExecutorKeyPair,
   executorPublicKey,
   generateExecutorKeyPair,
 } from "@catamorphic/sandbox";
 import { afterEach, describe, expect, it } from "vitest";
 import { executionSettingsFromEnv } from "../execution-config.js";
-import { loadWorkerIdentity, saveWorkerIdentity } from "./worker-identity.js";
+import {
+  confirmWorkerIdentity,
+  loadWorkerIdentity,
+  saveWorkerIdentity,
+} from "./worker-identity.js";
 import { startWorkWorker } from "./worker-runtime.js";
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -77,6 +87,35 @@ describe("a worker's identity on disk (ADR 0206)", () => {
     });
   });
 
+  it("keeps the pair a rotation replaced until the new credential is confirmed", () => {
+    const dir = dataDir();
+    const first = generateExecutorKeyPair();
+    const second = generateExecutorKeyPair();
+    saveWorkerIdentity(dir, {
+      credential: "worker.disk:second",
+      privateKey: second.privateKey,
+      previous: {
+        credential: "worker.disk:first",
+        privateKey: first.privateKey,
+      },
+    });
+    expect(loadWorkerIdentity(dir)).toEqual({
+      credential: "worker.disk:second",
+      privateKey: second.privateKey,
+      previous: {
+        credential: "worker.disk:first",
+        privateKey: first.privateKey,
+      },
+    });
+    expect(mode(path.join(dir, "worker-identity.previous"))).toBe(0o600);
+    confirmWorkerIdentity(dir);
+    expect(loadWorkerIdentity(dir)?.previous).toBeUndefined();
+    expect(fs.readdirSync(dir).sort()).toEqual([
+      "worker-credential",
+      "worker-key",
+    ]);
+  });
+
   it("reads a worker enrolled before sealing, which has no key yet", () => {
     const dir = dataDir();
     fs.writeFileSync(path.join(dir, "worker-credential"), "worker.old:x\n");
@@ -136,13 +175,13 @@ function publicKeyOf(body: unknown): string | undefined {
 }
 
 /** A worker whose data directory already holds an enrolled credential. */
-function enrolledDir(credential: string, withKey = true) {
+function enrolledDir(
+  credential: string,
+  keys: ExecutorKeyPair | false = generateExecutorKeyPair(),
+) {
   const dir = dataDir();
-  if (withKey)
-    saveWorkerIdentity(dir, {
-      credential,
-      privateKey: generateExecutorKeyPair().privateKey,
-    });
+  if (keys)
+    saveWorkerIdentity(dir, { credential, privateKey: keys.privateKey });
   else
     fs.writeFileSync(path.join(dir, "worker-credential"), `${credential}\n`, {
       mode: 0o600,
@@ -190,6 +229,13 @@ describe("a worker rotates its credential and key (ADR 0206)", () => {
       expect(rotations).toHaveLength(1);
       const saved = loadWorkerIdentity(dir);
       expect(saved?.credential).toBe("worker.rotor:new-secret");
+      // Accepted once, the new credential leaves no previous one behind.
+      expect(saved?.previous).toBeUndefined();
+      // Each request names its rotation with a UUIDv7.
+      const request = plane.calls.find((call) => call.route === "rotate");
+      expect(JSON.stringify(request?.body)).toMatch(
+        /"rotation":"[0-9a-f]{8}-[0-9a-f]{4}-7/,
+      );
       // The key on disk is the one whose public half the worker sent.
       expect(executorPublicKey(saved?.privateKey ?? "")).toBe(rotations[0]);
       expect(mode(path.join(dir, "worker-key"))).toBe(0o600);
@@ -361,4 +407,197 @@ describe("a worker rotates its credential and key (ADR 0206)", () => {
       await worker.stop();
     }
   }, 20_000);
+
+  it("goes back to its previous credential when the control plane refuses the rotated one, and rotates again", async () => {
+    const dir = enrolledDir(OLD);
+    // What the control plane accepts, as the real one: the first rotation's
+    // credential was replaced, before the worker used it, by a request that
+    // had been delayed on its way, so it is never accepted.
+    const accepted = new Set([OLD]);
+    const issued: string[] = [];
+    const plane = controlPlane((call) => {
+      if (!accepted.has(call.credential))
+        return json(401, { error: "Worker credential required" });
+      if (call.route === "rotate") {
+        const credential = `worker.rotor:rotated-${issued.length + 1}`;
+        issued.push(credential);
+        if (issued.length > 1) accepted.add(credential);
+        return json(200, { credential });
+      }
+      // A rotated credential's first use ends the one before it.
+      if (call.credential !== OLD) accepted.delete(OLD);
+      const rotate = call.credential === OLD ? { rotate: true } : {};
+      if (call.route === "connect")
+        return json(200, { session: "s", nodeId: "worker.rotor", ...rotate });
+      if (call.route === "poll") return json(200, { jobs: [], ...rotate });
+      return json(200, { ok: true, ...rotate });
+    });
+    const log: string[] = [];
+    const worker = await startWorkWorker({
+      controlPlaneUrl: "http://127.0.0.1:1",
+      dataDir: dir,
+      execution: executionSettingsFromEnv({ PATH: process.env.PATH }),
+      fetch: plane.fetch,
+      rotationRetryMs: 100,
+      log: (line) => log.push(line),
+    });
+    try {
+      await expect
+        .poll(() =>
+          plane.calls.some(
+            (call) =>
+              call.route === "poll" &&
+              call.credential === "worker.rotor:rotated-2",
+          ),
+        )
+        .toBe(true);
+      // Refused once, it went back to the old credential, which still
+      // worked, and rotated again from there.
+      const refused = plane.calls.findIndex(
+        (call) => call.credential === "worker.rotor:rotated-1",
+      );
+      expect(refused).toBeGreaterThan(-1);
+      expect(
+        plane.calls.slice(refused).some((call) => call.credential === OLD),
+      ).toBe(true);
+      expect(
+        log.some((line) =>
+          line.includes("refused this worker's new credential"),
+        ),
+      ).toBe(true);
+      expect(log.some((line) => line.includes("revoked"))).toBe(false);
+      expect(loadWorkerIdentity(dir)).toMatchObject({
+        credential: "worker.rotor:rotated-2",
+      });
+      expect(loadWorkerIdentity(dir)?.previous).toBeUndefined();
+    } finally {
+      await worker.stop();
+    }
+  }, 20_000);
+
+  it("after a restart, goes back to the previous credential when the rotated one was never accepted", async () => {
+    const dir = dataDir();
+    const old = generateExecutorKeyPair();
+    // The worker stopped after saving a rotated credential the control
+    // plane never accepted.
+    saveWorkerIdentity(dir, {
+      credential: "worker.rotor:never-accepted",
+      privateKey: generateExecutorKeyPair().privateKey,
+      previous: { credential: OLD, privateKey: old.privateKey },
+    });
+    const plane = controlPlane((call) =>
+      call.credential !== OLD
+        ? json(401, { error: "Worker credential required" })
+        : call.route === "connect"
+          ? json(200, { session: "s", nodeId: "worker.rotor" })
+          : call.route === "poll"
+            ? json(200, { jobs: [] })
+            : json(200, { ok: true }),
+    );
+    const log: string[] = [];
+    const worker = await startWorkWorker({
+      controlPlaneUrl: "http://127.0.0.1:1",
+      dataDir: dir,
+      execution: executionSettingsFromEnv({ PATH: process.env.PATH }),
+      fetch: plane.fetch,
+      log: (line) => log.push(line),
+    });
+    try {
+      await expect
+        .poll(() =>
+          plane.calls.some(
+            (call) => call.route === "poll" && call.credential === OLD,
+          ),
+        )
+        .toBe(true);
+      const connected = plane.calls.find(
+        (call) => call.route === "connect" && call.credential === OLD,
+      );
+      expect(publicKeyOf(connected?.body)).toBe(old.publicKey);
+      expect(loadWorkerIdentity(dir)).toEqual({
+        credential: OLD,
+        privateKey: old.privateKey,
+      });
+      expect(log.some((line) => line.includes("revoked"))).toBe(false);
+    } finally {
+      await worker.stop();
+    }
+  }, 20_000);
+
+  it("keeps the keys it rotated away from while operations sealed to them may still be queued", async () => {
+    const first = generateExecutorKeyPair();
+    const dir = enrolledDir(OLD, first);
+    // The control plane accepts its current credential and, once issued,
+    // a rotated one; the rotated one's first use ends the one before.
+    const accepted = new Set([OLD]);
+    let current = OLD;
+    let rotations = 0;
+    const queued: Array<{ id: string; operation: unknown }> = [];
+    const receipts: unknown[] = [];
+    const plane = controlPlane((call) => {
+      if (!accepted.has(call.credential))
+        return json(401, { error: "Worker credential required" });
+      if (call.credential !== current) {
+        accepted.delete(current);
+        current = call.credential;
+      }
+      if (call.route === "rotate") {
+        rotations += 1;
+        const credential = `worker.rotor:rotated-${rotations}`;
+        accepted.add(credential);
+        return json(200, { credential });
+      }
+      if (call.route === "complete") {
+        receipts.push(call.body);
+        return json(200, { ok: true });
+      }
+      // Two rotations in quick succession.
+      const rotate = rotations < 2 ? { rotate: true } : {};
+      if (call.route === "connect")
+        return json(200, { session: "s", nodeId: "worker.rotor", ...rotate });
+      if (call.route === "poll")
+        return json(200, { jobs: queued.splice(0), ...rotate });
+      return json(200, { ok: true, ...rotate });
+    });
+    /** Queued before both rotations, sealed to the first key. */
+    const sealedToFirst = () => {
+      const id = randomUUID();
+      queued.push({
+        id,
+        operation: sealRemoteOperation({
+          operationId: id,
+          executor: "node:worker.rotor",
+          operation: { kind: "destroy", sandboxId: "already-gone" },
+          publicKey: first.publicKey,
+        }),
+      });
+      return id;
+    };
+    const worker = await startWorkWorker({
+      controlPlaneUrl: "http://127.0.0.1:1",
+      dataDir: dir,
+      execution: executionSettingsFromEnv({ PATH: process.env.PATH }),
+      fetch: plane.fetch,
+      rotationRetryMs: 0,
+      retiredKeyRetentionMs: 3_000,
+    });
+    try {
+      await expect.poll(() => current).toBe("worker.rotor:rotated-2");
+      const opened = sealedToFirst();
+      await expect.poll(() => receipts.length).toBe(1);
+      expect(receipts[0]).toMatchObject({ jobId: opened, response: null });
+      expect(receipts[0]).not.toHaveProperty("error");
+      // Past the retention, no operation sealed before the rotations can
+      // still be queued; one would be sealed again by its controller.
+      await new Promise((resolve) => setTimeout(resolve, 3_300));
+      const late = sealedToFirst();
+      await expect.poll(() => receipts.length).toBe(2);
+      expect(receipts[1]).toMatchObject({
+        jobId: late,
+        error: OPERATION_NOT_OPENED_ERROR,
+      });
+    } finally {
+      await worker.stop();
+    }
+  }, 30_000);
 });

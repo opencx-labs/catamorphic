@@ -178,6 +178,20 @@ export class WorkerDisabledError extends Error {
 }
 
 /**
+ * A rotation request arrived after a later one (ADR 0206): it was delayed on
+ * its way, and the worker may already hold the later request's credential,
+ * so it replaces nothing.
+ */
+export class WorkerRotationSupersededError extends Error {
+  constructor() {
+    super(
+      "A later rotation of this worker's credential was already asked for; this one issues nothing",
+    );
+    this.name = "WorkerRotationSupersededError";
+  }
+}
+
+/**
  * The worker connected with a key other than the one it enrolled or last
  * rotated with (ADR 0206): its data directory was replaced or altered.
  */
@@ -583,6 +597,7 @@ export class WorkWorkerRegistry {
           pending_credential_hash: null,
           pending_public_key: null,
           pending_issued_at: null,
+          pending_rotation: null,
           // An operator's request made after this credential was issued
           // still wants another.
           rotation_requested_at: sql`CASE WHEN rotation_requested_at <= pending_issued_at THEN NULL ELSE rotation_requested_at END`,
@@ -605,27 +620,48 @@ export class WorkWorkerRegistry {
    * The new credential stays pending, and the one this call was made with
    * keeps working, until the worker first uses the new one; asking again
    * before then replaces the pending credential. So an answer lost on the
-   * way never strands the worker, and a retry is always safe.
+   * way never strands the worker, and a retry is always safe. `rotation` is
+   * a UUIDv7 the worker chose for this request: a request replaces the
+   * pending credential only when it is later than the pending one's, so one
+   * delayed on its way can never replace the credential a later request
+   * issued ({@link WorkerRotationSupersededError}).
    */
   async rotate(args: {
     nodeId: string;
     publicKey: string;
+    rotation: string;
   }): Promise<{ credential: string }> {
     const publicKey = ExecutorPublicKeySchema.parse(args.publicKey);
+    if (!REMOTE_EPOCH_PATTERN.test(args.rotation))
+      throw new Error("A rotation id must be a lowercase UUIDv7");
     const secret = randomBytes(32).toString("base64url");
-    const pending = await this.deps.db
-      .updateTable("work_workers")
-      .set({
-        pending_credential_hash: hash(secret),
-        pending_public_key: publicKey,
-        pending_issued_at: sql`now()`,
-      })
-      .where("node_id", "=", args.nodeId)
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("revoked_at", "is", null)
-      .returning("node_id")
-      .executeTakeFirst();
-    if (!pending) throw new Error("This worker is not enrolled");
+    await this.deps.db.transaction().execute(async (trx) => {
+      const row = await trx
+        .selectFrom("work_workers")
+        .select("pending_rotation")
+        .where("node_id", "=", args.nodeId)
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("revoked_at", "is", null)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!row) throw new Error("This worker is not enrolled");
+      // Lowercase UUIDv7s order by the time they were made.
+      if (
+        row.pending_rotation !== null &&
+        row.pending_rotation >= args.rotation
+      )
+        throw new WorkerRotationSupersededError();
+      await trx
+        .updateTable("work_workers")
+        .set({
+          pending_credential_hash: hash(secret),
+          pending_public_key: publicKey,
+          pending_issued_at: sql`now()`,
+          pending_rotation: args.rotation,
+        })
+        .where("node_id", "=", args.nodeId)
+        .execute();
+    });
     return { credential: `${args.nodeId}:${secret}` };
   }
 
@@ -850,6 +886,7 @@ export class WorkWorkerRegistry {
         pending_credential_hash: null,
         pending_public_key: null,
         pending_issued_at: null,
+        pending_rotation: null,
       })
       .where("tenant_id", "=", this.deps.tenantId)
       .where("name", "=", args.name)

@@ -85,6 +85,11 @@ export {
 } from "./coding-agent/types.js";
 export { CommandDeploymentRuntimeProvider } from "./command-deployment-runtime.js";
 export {
+  gitCloneFailure,
+  gitCloneUrl,
+  redactUrlCredentials,
+} from "./credential-redaction.js";
+export {
   type AgentExecutionTopology,
   accessTier,
   type EnvironmentBinding,

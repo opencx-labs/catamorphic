@@ -347,4 +347,26 @@ describe("LocalProcessSandboxProvider", () => {
     await provider.destroySandbox(sandbox.id);
     expect(await provider.getSandboxStatus(sandbox.id)).toBe("stopped");
   });
+
+  it("never says a clone's credentials when it fails (ADR 0206)", async () => {
+    const sandbox = await provider.createSandbox({});
+    // Nothing listens on the discard port: the clone fails at once.
+    const failure = await provider
+      .gitClone(
+        sandbox.id,
+        "http://127.0.0.1:9/acme/app.git",
+        "/workspace/app",
+        {
+          username: "x-access-token",
+          password: "ghs_clone_secret",
+        },
+      )
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    const message = failure instanceof Error ? failure.message : "";
+    expect(message).toContain("git clone failed");
+    expect(message).not.toContain("ghs_clone_secret");
+    expect(message).not.toContain("x-access-token");
+    await provider.destroySandbox(sandbox.id);
+  });
 });

@@ -1,4 +1,7 @@
-import { sealRemoteOperation } from "@catamorphic/core";
+import {
+  OPERATION_NOT_OPENED_ERROR,
+  sealRemoteOperation,
+} from "@catamorphic/core";
 import {
   generateExecutorKeyPair,
   type SandboxProvider,
@@ -355,10 +358,10 @@ describe("operations sealed to the runner (ADR 0206)", () => {
     await until(() => plane.receipts.length === 3, "every receipt");
     await runner.stop();
     expect(commands).toEqual(["echo mine"]);
+    // Its controller seals it again to this machine's current key.
     expect(plane.receipts[0]).toEqual({
       jobId: "job-1",
-      error:
-        "This operation was not sealed to this machine's key; it did not run",
+      error: OPERATION_NOT_OPENED_ERROR,
     });
     expect(plane.receipts[1]?.error).toBeTruthy();
     expect(plane.receipts[2]).toEqual({
@@ -387,5 +390,47 @@ describe("operations sealed to the runner (ADR 0206)", () => {
     await until(() => plane.receipts.length === 2, "both receipts");
     await runner.stop();
     expect(commands).toEqual(["echo sealed-before", "echo sealed-after"]);
+  });
+
+  it("sends no URL's credentials in a receipt's error, and caps it", async () => {
+    const { provider } = recordingProvider();
+    // A provider whose message repeats the credentialed URL it was given.
+    provider.gitClone = async (_sandboxId, url, _path, opts) => {
+      const parsed = new URL(url);
+      parsed.username = opts?.username ?? "";
+      parsed.password = opts?.password ?? "";
+      throw new Error(
+        `git clone failed: fatal: unable to access '${parsed}': 403 ${"x".repeat(5_000)}`,
+      );
+    };
+    const plane = controlPlane([
+      {
+        id: "job-1",
+        operation: sealRemoteOperation({
+          operationId: "job-1",
+          executor: EXECUTOR,
+          operation: {
+            kind: "clone",
+            sandboxId: "sandbox-1",
+            url: "https://github.com/acme/app.git",
+            path: "/workspace/app",
+            options: { username: "x-access-token", password: "ghs_secret" },
+          },
+          publicKey: KEYS.publicKey,
+        }),
+      },
+    ]);
+    const runner = startClientRunner({
+      provider,
+      transport: plane.transport,
+      keys: RUNNER_KEYS,
+      sandboxes: new Set(["sandbox-1"]),
+    });
+    await until(() => plane.receipts.length === 1, "the receipt");
+    await runner.stop();
+    const error = plane.receipts[0]?.error ?? "";
+    expect(error).toContain("https://[redacted]@github.com/acme/app.git");
+    expect(error).not.toContain("ghs_secret");
+    expect(error.length).toBeLessThanOrEqual(4_000);
   });
 });

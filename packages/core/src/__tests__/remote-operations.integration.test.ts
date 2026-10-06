@@ -7,6 +7,7 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  OPERATION_NOT_OPENED_ERROR,
   openRemoteOperation,
   RemoteExecutorLeaseLostError,
   RemoteOperationQueue,
@@ -316,5 +317,87 @@ describe("remote operation queue (ADR 0187)", () => {
       response: { exitCode: 0, result: "later" },
     });
     await expect(result).resolves.toEqual({ exitCode: 0, result: "later" });
+  });
+
+  it("seals again an operation its executor could not open after rotating its key (ADR 0206)", async () => {
+    const remote = await executor();
+    const result = remote.provider.executeCommand("sandbox-1", "echo resealed");
+    const take = () =>
+      remote.queue.poll({
+        ...remote.lease,
+        pollId: crypto.randomUUID(),
+        waitMs: 5_000,
+        leaseHeld: async () => true,
+      });
+    const [stale] = await take();
+    if (!stale) throw new Error("No operation");
+    // The executor rotated twice and no longer holds the key this one was
+    // sealed to: it did not run, and says so.
+    const rotated = generateExecutorKeyPair();
+    await registerExecutorKey({
+      db,
+      executor: remote.lease.executor,
+      publicKey: rotated.publicKey,
+    });
+    const open = (job: { id: string; operation: unknown }) =>
+      openRemoteOperation({
+        operationId: job.id,
+        executor: remote.lease.executor,
+        envelope: job.operation,
+        privateKeys: [rotated.privateKey],
+      });
+    expect(() => open(stale)).toThrow();
+    await remote.queue.complete({
+      ...remote.lease,
+      operationId: stale.id,
+      error: OPERATION_NOT_OPENED_ERROR,
+    });
+    // Its controller seals it again, to the key the executor holds now.
+    const [again] = await take();
+    if (!again) throw new Error("The operation was not sealed again");
+    expect(again.id).not.toBe(stale.id);
+    expect(open(again)).toMatchObject({ command: "echo resealed" });
+    await remote.queue.complete({
+      ...remote.lease,
+      operationId: again.id,
+      response: { exitCode: 0, result: "resealed" },
+    });
+    await expect(result).resolves.toEqual({ exitCode: 0, result: "resealed" });
+  });
+
+  it("stores a receipt's error without any URL's credentials (ADR 0206)", async () => {
+    const remote = await executor();
+    const result = remote.provider.gitClone(
+      "sandbox-1",
+      "https://github.com/acme/app.git",
+      "/workspace/app",
+      { username: "x-access-token", password: "ghs_secret" },
+    );
+    const job = await remote.poll(crypto.randomUUID());
+    const error =
+      "fatal: unable to access 'https://x-access-token:ghs_secret@github.com/acme/app.git/'";
+    await remote.queue.complete({
+      ...remote.lease,
+      operationId: job?.id ?? "",
+      error,
+    });
+    const stored = await db
+      .selectFrom("remote_operations")
+      .select("error")
+      .where("id", "=", job?.id ?? "")
+      .executeTakeFirst();
+    // Its controller may already have deleted the row.
+    if (stored) expect(stored.error).not.toContain("ghs_secret");
+    const failure = await result.catch((cause: unknown) => cause);
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toContain("[redacted]@github.com");
+    expect(String(failure)).not.toContain("ghs_secret");
+    // The same receipt retried is still recognized as recorded, or refused
+    // once its controller has read it.
+    await remote.queue
+      .complete({ ...remote.lease, operationId: job?.id ?? "", error })
+      .catch((refused: unknown) =>
+        expect(refused).toBeInstanceOf(RemoteReceiptRefusedError),
+      );
   });
 });

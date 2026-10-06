@@ -1,6 +1,11 @@
 import type { KeyObject } from "node:crypto";
-import { openRemoteOperation, type RemoteOperation } from "@catamorphic/core";
 import {
+  OPERATION_NOT_OPENED_ERROR,
+  openRemoteOperation,
+  type RemoteOperation,
+} from "@catamorphic/core";
+import {
+  redactUrlCredentials,
   type SandboxProvider,
   SealedOperationOpenError,
 } from "@catamorphic/sandbox";
@@ -341,10 +346,9 @@ function openOperationFor(args: {
       privateKeys: args.keys.privateKeys(),
     });
   } catch (error) {
+    // Its controller seals it again to this machine's current key.
     if (error instanceof SealedOperationOpenError)
-      throw new Error(
-        "This operation was not sealed to this machine's key; it did not run",
-      );
+      throw new Error(OPERATION_NOT_OPENED_ERROR);
     throw error;
   }
 }
@@ -427,10 +431,16 @@ async function executeClientOperation({
 /** Receipt routes cap an error's length; its start says what went wrong. */
 const RECEIPT_ERROR_MAX = 4000;
 
+/**
+ * A receipt's error as it may leave this machine: a provider's message can
+ * repeat what the operation carried, such as a URL with credentials, so
+ * those are removed before it is capped (ADR 0206).
+ */
 function receiptError(message: string): string {
-  return message.length > RECEIPT_ERROR_MAX
-    ? `${message.slice(0, RECEIPT_ERROR_MAX - 1)}…`
-    : message;
+  const redacted = redactUrlCredentials(message);
+  return redacted.length > RECEIPT_ERROR_MAX
+    ? `${redacted.slice(0, RECEIPT_ERROR_MAX - 1)}…`
+    : redacted;
 }
 
 function processesOf(provider: SandboxProvider) {

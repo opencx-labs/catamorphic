@@ -2,6 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 
+/** A machine credential and the private key that came with it (PKCS8 PEM). */
+export interface WorkerCredentialPair {
+  credential: string;
+  privateKey: string;
+}
+
 /**
  * A worker's identity on its own disk (ADRs 0164, 0206): its machine
  * credential and the private key its operations are sealed to, each in an
@@ -12,19 +18,30 @@ export interface WorkerIdentity {
   credential: string;
   /** PKCS8 PEM. Absent only for a worker enrolled before sealing. */
   privateKey?: string;
+  /**
+   * The pair a rotation replaced, kept until the control plane has accepted
+   * the new credential once. Should it refuse the new one (a rotation it no
+   * longer knows of), the worker goes back to this pair.
+   */
+  previous?: WorkerCredentialPair;
 }
 
 const CREDENTIAL_FILE = "worker-credential";
 const KEY_FILE = "worker-key";
+/** The pair a rotation replaced, while the new one is unconfirmed. */
+const PREVIOUS_FILE = "worker-identity.previous";
 /**
- * A rotation's new credential and key, written whole before either file is
- * replaced: the pair is installed together even across a crash.
+ * A rotation's whole new state, written before any file is replaced: it is
+ * installed together even across a crash.
  */
 const NEXT_FILE = "worker-identity.next";
 
-const NextIdentitySchema = z.strictObject({
+const PairSchema = z.strictObject({
   credential: z.string().min(1),
   privateKey: z.string().min(1),
+});
+const NextIdentitySchema = PairSchema.extend({
+  previous: PairSchema.optional(),
 });
 
 /**
@@ -38,27 +55,45 @@ export function loadWorkerIdentity(
   if (next !== undefined) {
     const parsed = NextIdentitySchema.safeParse(parseJson(next));
     // A torn record never replaced anything: the current pair still holds.
-    if (parsed.success) installPair(dataDir, parsed.data);
+    if (parsed.success) install(dataDir, parsed.data);
     fs.rmSync(path.join(dataDir, NEXT_FILE), { force: true });
   }
   const credential = readIfPresent(path.join(dataDir, CREDENTIAL_FILE))?.trim();
   if (!credential) return undefined;
   const privateKey = readIfPresent(path.join(dataDir, KEY_FILE));
-  return privateKey ? { credential, privateKey } : { credential };
+  if (!privateKey) return { credential };
+  const previous = PairSchema.safeParse(
+    parseJson(readIfPresent(path.join(dataDir, PREVIOUS_FILE)) ?? ""),
+  );
+  return {
+    credential,
+    privateKey,
+    ...(previous.success ? { previous: previous.data } : {}),
+  };
 }
 
 /**
- * Save a credential and its key so that both are durable together before
- * the worker uses either: the pair is written as one record, then each file
- * is replaced atomically, then the record is removed.
+ * Save a credential, its key, and the pair it replaces (until the new one is
+ * confirmed) so that all are durable together before the worker uses any:
+ * the state is written as one record, then each file is replaced
+ * atomically, then the record is removed.
  */
 export function saveWorkerIdentity(
   dataDir: string,
-  identity: Required<WorkerIdentity>,
+  identity: WorkerCredentialPair & { previous?: WorkerCredentialPair },
 ): void {
   writeAtomically(path.join(dataDir, NEXT_FILE), JSON.stringify(identity));
-  installPair(dataDir, identity);
+  install(dataDir, identity);
   fs.rmSync(path.join(dataDir, NEXT_FILE), { force: true });
+  syncDirectory(dataDir);
+}
+
+/**
+ * The control plane accepted the current credential: the pair it replaced
+ * no longer works anywhere and leaves the disk.
+ */
+export function confirmWorkerIdentity(dataDir: string): void {
+  fs.rmSync(path.join(dataDir, PREVIOUS_FILE), { force: true });
   syncDirectory(dataDir);
 }
 
@@ -67,7 +102,16 @@ export function saveWorkerKey(dataDir: string, privateKey: string): void {
   writeAtomically(path.join(dataDir, KEY_FILE), privateKey);
 }
 
-function installPair(dataDir: string, identity: Required<WorkerIdentity>) {
+function install(
+  dataDir: string,
+  identity: WorkerCredentialPair & { previous?: WorkerCredentialPair },
+) {
+  if (identity.previous)
+    writeAtomically(
+      path.join(dataDir, PREVIOUS_FILE),
+      JSON.stringify(identity.previous),
+    );
+  else fs.rmSync(path.join(dataDir, PREVIOUS_FILE), { force: true });
   writeAtomically(path.join(dataDir, KEY_FILE), identity.privateKey);
   writeAtomically(
     path.join(dataDir, CREDENTIAL_FILE),
