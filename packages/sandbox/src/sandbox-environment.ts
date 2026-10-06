@@ -14,6 +14,8 @@ export const SANDBOX_CAPABILITIES = {
   containers: "containers",
   /** Enforces an Environment's egress policy. */
   egressPolicy: "network.policy",
+  /** Keeps volumes on the machine across sandboxes (ADR 0208). */
+  volumes: "volumes",
 } as const;
 
 export type SandboxCapability =

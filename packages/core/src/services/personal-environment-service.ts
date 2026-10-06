@@ -15,23 +15,32 @@ import { toJson } from "./run-coordinator.js";
 
 /*
  * A member's personal environment for one project (ADR 0184): the files
- * they listed in `.work/personal/environment.json`. Harness sign-ins are
- * never sent here; they stay on the machine they were made on (ADR 0199).
- * Values
+ * they listed in `.work/personal/environment.json`, and their own setup
+ * command (ADR 0208). Harness sign-ins are never sent here; they stay on
+ * the machine they were made on (ADR 0199).
+ * File values
  * are sealed in the credential vault; rows hold references, fingerprints,
  * and sizes. Only the member reads or replaces their own set, and no API
- * returns a value: core unseals it only to deliver it into that member's
- * own chats' sandboxes.
+ * returns a file's value: core unseals it only to deliver it into that
+ * member's own chats' sandboxes. The setup command is not secret, so it is
+ * kept as text, but it too is the member's alone and runs only there.
  */
 
 /** At most this many personal files per member and project. */
 export const PERSONAL_FILES_MAX = 50;
 /** The largest personal file. */
 export const PERSONAL_FILE_MAX_BYTES = 256 * 1024;
-/** What a member's desktop sends: files, replacing the set. */
+/** The longest personal setup command, as long as an Environment's. */
+export const PERSONAL_SETUP_MAX_LENGTH = 16_384;
+/** What a member's desktop sends: files and setup, replacing the set. */
 export interface PersonalEnvironmentInput {
   /** Repository-relative files; `content` is base64. */
   files: ReadonlyArray<{ path: string; content: string }>;
+  /**
+   * Run after the Environment's setup in each new workspace of the
+   * member's own chats (ADR 0208). Absent or blank, none.
+   */
+  setup?: string;
 }
 
 export interface PersonalFileStatus {
@@ -41,11 +50,13 @@ export interface PersonalFileStatus {
   updatedAt: string;
 }
 
-/** What the server holds for the caller. Never a value. */
+/** What the server holds for the caller. Never a file's value. */
 export interface PersonalEnvironmentStatus {
   /** Some Environment of the project gives this member's chats their credentials. */
   allowed: boolean;
   files: PersonalFileStatus[];
+  /** The member's own setup command (ADR 0208), shown back to them. */
+  setup: { command: string; updatedAt: string } | null;
 }
 
 /** The member's files, unsealed for delivery into a sandbox. */
@@ -96,6 +107,15 @@ export function personalFilePathProblem(path: string): string | undefined {
   return undefined;
 }
 
+/** Why a personal setup command cannot be kept, or undefined. */
+export function personalSetupProblem(command: string): string | undefined {
+  if (command.length > PERSONAL_SETUP_MAX_LENGTH)
+    return `The setup command is longer than ${PERSONAL_SETUP_MAX_LENGTH} characters`;
+  if (command.includes("\u0000"))
+    return "The setup command holds a NUL character";
+  return undefined;
+}
+
 /** `sha256:<hex>` of the bytes: names content without revealing it. */
 export function personalFingerprint(content: string | Uint8Array): string {
   return `sha256:${createHash("sha256").update(content).digest("hex")}`;
@@ -141,8 +161,61 @@ export function validatePersonalEnvironment(
     }
     entries.push({ kind: "file", name: file.path, content });
   }
+  const setupProblem =
+    input.setup === undefined ? undefined : personalSetupProblem(input.setup);
+  if (setupProblem) issues.push(setupProblem);
   if (issues.length > 0) throw new PersonalEnvironmentInvalidError(issues);
   return entries;
+}
+
+/**
+ * Keep, replace or drop a member's setup command; reports the change for
+ * the audit by fingerprint, like files.
+ */
+async function replaceSetup(input: {
+  trx: Transaction<DB>;
+  owner: { tenant_id: string; project_id: string; external_user_id: string };
+  command: string | undefined;
+}): Promise<{
+  changed?: { kind: string; name: string; fingerprint: string };
+  removed: boolean;
+}> {
+  const { trx, owner, command } = input;
+  const current = await trx
+    .selectFrom("personal_environment_setups")
+    .select("command")
+    .where("tenant_id", "=", owner.tenant_id)
+    .where("project_id", "=", owner.project_id)
+    .where("external_user_id", "=", owner.external_user_id)
+    .executeTakeFirst();
+  if (command === undefined) {
+    if (!current) return { removed: false };
+    await trx
+      .deleteFrom("personal_environment_setups")
+      .where("tenant_id", "=", owner.tenant_id)
+      .where("project_id", "=", owner.project_id)
+      .where("external_user_id", "=", owner.external_user_id)
+      .execute();
+    return { removed: true };
+  }
+  if (current?.command === command) return { removed: false };
+  await trx
+    .insertInto("personal_environment_setups")
+    .values({ ...owner, command, updated_at: new Date() })
+    .onConflict((conflict) =>
+      conflict
+        .columns(["tenant_id", "project_id", "external_user_id"])
+        .doUpdateSet({ command, updated_at: new Date() }),
+    )
+    .execute();
+  return {
+    changed: {
+      kind: "setup",
+      name: "setup",
+      fingerprint: personalFingerprint(command),
+    },
+    removed: false,
+  };
 }
 
 /** Serialize one member's changes to their set for a project. */
@@ -274,10 +347,18 @@ export class PersonalEnvironmentService {
             .execute();
           released.push(row.credential_ref);
         }
+        const setup = await replaceSetup({
+          trx,
+          owner,
+          command: args.input.setup?.trim() ? args.input.setup : undefined,
+        });
         return {
           released,
-          changed,
-          removed: removed.map((row) => ({ kind: row.kind, name: row.name })),
+          changed: [...changed, ...(setup.changed ? [setup.changed] : [])],
+          removed: [
+            ...removed.map((row) => ({ kind: row.kind, name: row.name })),
+            ...(setup.removed ? [{ kind: "setup", name: "setup" }] : []),
+          ],
         };
       });
     } catch (error) {
@@ -327,6 +408,13 @@ export class PersonalEnvironmentService {
     rows.sort((left, right) =>
       left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
     );
+    const setup = await this.deps.db
+      .selectFrom("personal_environment_setups")
+      .select(["command", "updated_at"])
+      .where("tenant_id", "=", identity.tenantId)
+      .where("project_id", "=", projectId)
+      .where("external_user_id", "=", identity.externalUserId)
+      .executeTakeFirst();
     return {
       allowed: await this.allowed(identity, projectId),
       files: rows
@@ -337,6 +425,12 @@ export class PersonalEnvironmentService {
           bytes: row.bytes,
           updatedAt: row.updated_at.toISOString(),
         })),
+      setup: setup
+        ? {
+            command: setup.command,
+            updatedAt: setup.updated_at.toISOString(),
+          }
+        : null,
     };
   }
 
@@ -344,16 +438,26 @@ export class PersonalEnvironmentService {
   async remove(args: { identity: Identity; projectId: string }): Promise<void> {
     const { identity, projectId } = args;
     await this.requireMember(identity, projectId);
-    const rows = await this.deps.db.transaction().execute(async (trx) => {
-      await lockMember({ trx, identity, projectId });
-      return trx
-        .deleteFrom("personal_environment_entries")
-        .where("tenant_id", "=", identity.tenantId)
-        .where("project_id", "=", projectId)
-        .where("external_user_id", "=", identity.externalUserId)
-        .returning(["kind", "name", "credential_ref"])
-        .execute();
-    });
+    const { rows, setup } = await this.deps.db
+      .transaction()
+      .execute(async (trx) => {
+        await lockMember({ trx, identity, projectId });
+        const rows = await trx
+          .deleteFrom("personal_environment_entries")
+          .where("tenant_id", "=", identity.tenantId)
+          .where("project_id", "=", projectId)
+          .where("external_user_id", "=", identity.externalUserId)
+          .returning(["kind", "name", "credential_ref"])
+          .execute();
+        const setup = await trx
+          .deleteFrom("personal_environment_setups")
+          .where("tenant_id", "=", identity.tenantId)
+          .where("project_id", "=", projectId)
+          .where("external_user_id", "=", identity.externalUserId)
+          .returning("command")
+          .executeTakeFirst();
+        return { rows, setup };
+      });
     for (const row of rows)
       await this.deps.vault
         ?.delete({
@@ -361,15 +465,37 @@ export class PersonalEnvironmentService {
           ref: { id: row.credential_ref },
         })
         .catch(() => {});
-    if (rows.length > 0)
+    if (rows.length > 0 || setup)
       await this.audit({
         identity,
         projectId,
         eventType: "personal_environment.remove",
         metadata: {
-          removed: rows.map((row) => ({ kind: row.kind, name: row.name })),
+          removed: [
+            ...rows.map((row) => ({ kind: row.kind, name: row.name })),
+            ...(setup ? [{ kind: "setup", name: "setup" }] : []),
+          ],
         },
       });
+  }
+
+  /**
+   * The owner's own setup command, for a workspace of one of their own
+   * chats (ADR 0208). Host-only: never an API.
+   */
+  async setup(args: {
+    tenantId: string;
+    projectId: string;
+    owner: string;
+  }): Promise<string | undefined> {
+    const row = await this.deps.db
+      .selectFrom("personal_environment_setups")
+      .select("command")
+      .where("tenant_id", "=", args.tenantId)
+      .where("project_id", "=", args.projectId)
+      .where("external_user_id", "=", args.owner)
+      .executeTakeFirst();
+    return row?.command;
   }
 
   /**

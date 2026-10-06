@@ -16,6 +16,8 @@ import type {
   SandboxProcessProvider,
   SandboxProvider,
   SandboxStatus,
+  SandboxVolume,
+  SandboxVolumeProvider,
   SignalProcessArgs,
   StartProcessArgs,
   SupervisorProcessHandle,
@@ -24,8 +26,11 @@ import type {
 import {
   assertProcessId,
   assertSandboxResources,
+  assertSandboxVolumes,
   assertWriteSize,
   decodeProcessChunk,
+  gitCloneFailure,
+  gitCloneUrl,
   machineSignInHome,
   newProcessId,
   PROCESS_SIGNALS,
@@ -34,6 +39,9 @@ import {
   SANDBOX_PATHS_ENV,
   StdioDeploymentRuntimeProvider,
   signInHomePath,
+  VOLUME_KEY_PATTERN,
+  VolumeUsageLog,
+  volumeMountPath,
 } from "@catamorphic/sandbox";
 import { APP_DATA_ENV } from "@catamorphic/workflow/project-layout";
 import {
@@ -94,6 +102,26 @@ export interface LocalProcessProviderConfig {
 }
 
 const CONTAINERS_MARKER = "containers";
+/** Beside the sandboxes: the machine's persistent volumes. */
+const VOLUME_DIRECTORY = ".volumes";
+/** In a sandbox's directory: the persistent volumes it links. */
+const VOLUMES_FILE = "volumes.json";
+
+/**
+ * The volumes a local-process sandbox can keep: only under its own home
+ * (`~`), since an absolute path names this machine's own directories.
+ */
+function homeVolumes(
+  volumes: readonly SandboxVolume[] | undefined,
+): SandboxVolume[] {
+  assertSandboxVolumes(volumes);
+  for (const volume of volumes ?? [])
+    if (volume.path !== "~" && !volume.path.startsWith("~/"))
+      throw new Error(
+        `Local-process sandboxes keep volumes only under ~ (each sandbox's own home), not at ${volume.path}: place the Environment on a microsandbox or container machine`,
+      );
+  return [...(volumes ?? [])];
+}
 
 /**
  * Sandboxless execution for trusted, single-tenant hosts (ADR 0047): each
@@ -152,6 +180,18 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
   private readonly acceptUnenforcedEgress: boolean;
   private readonly signInRoot: string | undefined;
   private readonly dockerProxies = new Map<string, Promise<DockerProxy>>();
+  /** Persistent volumes: `<root>/.volumes/<key>`, linked into homes. */
+  private readonly volumeRoot: string;
+  private readonly volumeUsage: VolumeUsageLog;
+  /**
+   * Volumes (ADR 0208), only under `~`: each sandbox's home is its own
+   * directory, so a volume is a link inside it. An absolute path would be
+   * this machine's own.
+   */
+  readonly volumes: SandboxVolumeProvider = {
+    prune: (args) => this.pruneVolumes(args),
+    removeAll: (args) => this.removeAllVolumes(args),
+  };
 
   constructor(config?: LocalProcessProviderConfig) {
     this.projectDataDirectory = config?.projectDataDirectory;
@@ -163,10 +203,15 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
       ...(this.acceptUnenforcedEgress
         ? [SANDBOX_CAPABILITIES.egressPolicy]
         : []),
+      SANDBOX_CAPABILITIES.volumes,
     ];
     this.root =
       config?.root ?? path.join(os.tmpdir(), "catamorphic-local-process");
     fs.mkdirSync(this.root, { recursive: true });
+    this.volumeRoot = path.join(this.root, VOLUME_DIRECTORY);
+    this.volumeUsage = new VolumeUsageLog(
+      path.join(this.volumeRoot, "usage.json"),
+    );
     this.baseEnv = {
       ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
       ...(config?.env ?? {}),
@@ -194,48 +239,185 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
       throw new Error("This machine does not offer containers to sandboxes");
     if (opts.egress?.mode === "allowlist" && !this.acceptUnenforcedEgress)
       throw new Error(
-        "Local-process sandboxes cannot enforce an egress policy; place the Environment on a microsandbox machine",
+        "Local-process sandboxes cannot enforce an egress policy; place the Environment on a microsandbox or gVisor container machine",
       );
     const signIns = this.signInHomes(opts);
+    const volumes = homeVolumes(opts.volumes);
     const id = `local-${crypto.randomUUID().slice(0, 12)}`;
-    for (const dir of ["workspace", "home", "tmp"]) {
-      fs.mkdirSync(path.join(this.root, id, dir), { recursive: true });
-    }
-    // The owner's own sign-in stays where they made it; the sandbox's
-    // harness home is a link to it (ADR 0199).
-    for (const signIn of signIns) {
-      const link = this.resolvePath(id, signIn.virtual);
-      fs.mkdirSync(path.dirname(link), { recursive: true });
-      fs.symlinkSync(signIn.host, link, "dir");
-    }
-    if (opts.containers) {
-      fs.writeFileSync(path.join(this.root, id, CONTAINERS_MARKER), "");
-      const plugins = this.docker?.cliPlugins;
-      if (plugins) {
-        const config = path.join(this.root, id, "home", ".docker");
-        fs.mkdirSync(config, { recursive: true });
-        fs.symlinkSync(plugins, path.join(config, "cli-plugins"));
+    try {
+      for (const dir of ["workspace", "home", "tmp"]) {
+        fs.mkdirSync(path.join(this.root, id, dir), { recursive: true });
       }
+      // The owner's own sign-in stays where they made it; the sandbox's
+      // harness home is a link to it (ADR 0199).
+      for (const signIn of signIns) {
+        const link = this.resolvePath(id, signIn.virtual);
+        fs.mkdirSync(path.dirname(link), { recursive: true });
+        fs.symlinkSync(signIn.host, link, "dir");
+      }
+      this.linkVolumes(id, volumes);
+      if (opts.containers) {
+        fs.writeFileSync(path.join(this.root, id, CONTAINERS_MARKER), "");
+        const plugins = this.docker?.cliPlugins;
+        if (plugins) {
+          const config = path.join(this.root, id, "home", ".docker");
+          fs.mkdirSync(config, { recursive: true });
+          fs.symlinkSync(plugins, path.join(config, "cli-plugins"));
+        }
+      }
+      const dataDirectory =
+        opts.labels?.purpose === "deployment-runtime" && opts.labels.projectId
+          ? await this.projectDataDirectory?.({
+              projectId: opts.labels.projectId,
+            })
+          : undefined;
+      this.sandboxes.set(id, {
+        envVars: {
+          ...opts.envVars,
+          ...(dataDirectory ? { [APP_DATA_ENV]: dataDirectory } : {}),
+        },
+      });
+      await this.ensureDocker(id);
+    } catch (error) {
+      // A sandbox that could not be made leaves nothing behind.
+      await this.destroySandbox(id).catch(() => {});
+      throw error;
     }
-    const dataDirectory =
-      opts.labels?.purpose === "deployment-runtime" && opts.labels.projectId
-        ? await this.projectDataDirectory?.({
-            projectId: opts.labels.projectId,
-          })
-        : undefined;
-    this.sandboxes.set(id, {
-      envVars: {
-        ...opts.envVars,
-        ...(dataDirectory ? { [APP_DATA_ENV]: dataDirectory } : {}),
-      },
-    });
-    await this.ensureDocker(id);
     return { id, providerId: id, sandboxType: "execution", status: "started" };
   }
 
   async startSandbox(sandboxId: string): Promise<void> {
     this.requireSandboxDir(sandboxId);
     this.stopped.delete(sandboxId);
+    this.volumeUsage.touch(this.mountedVolumes(sandboxId));
+  }
+
+  /**
+   * Link each volume into the sandbox's home (ADR 0208): a persistent one
+   * is a directory under the machine's volume root, kept across sandboxes;
+   * a temporary one is a plain directory removed with the sandbox.
+   */
+  private linkVolumes(sandboxId: string, volumes: readonly SandboxVolume[]) {
+    if (volumes.length === 0) return;
+    const home = path.join(this.root, sandboxId, "home");
+    const persistent: string[] = [];
+    for (const volume of volumes) {
+      const link = volumeMountPath({ path: volume.path, home });
+      if (volume.temporary) {
+        fs.mkdirSync(link, { recursive: true });
+        continue;
+      }
+      const target = path.join(this.volumeRoot, volume.key);
+      fs.mkdirSync(target, { recursive: true });
+      // The whole home as a volume replaces the empty one just made.
+      if (link === home) fs.rmSync(home, { recursive: true, force: true });
+      fs.mkdirSync(path.dirname(link), { recursive: true });
+      fs.symlinkSync(target, link, "dir");
+      persistent.push(volume.key);
+    }
+    fs.writeFileSync(
+      path.join(this.root, sandboxId, VOLUMES_FILE),
+      JSON.stringify(persistent),
+    );
+    this.volumeUsage.touch(persistent);
+  }
+
+  /** The persistent volumes a sandbox links. */
+  private mountedVolumes(sandboxId: string): string[] {
+    try {
+      const parsed: unknown = JSON.parse(
+        fs.readFileSync(path.join(this.root, sandboxId, VOLUMES_FILE), "utf8"),
+      );
+      return Array.isArray(parsed)
+        ? parsed.filter((key): key is string => typeof key === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Volumes that any sandbox on this machine still links. */
+  private volumesInUse(): Set<string> {
+    const keys = new Set<string>();
+    for (const entry of fs.readdirSync(this.root, { withFileTypes: true }))
+      if (entry.isDirectory() && entry.name !== VOLUME_DIRECTORY)
+        for (const key of this.mountedVolumes(entry.name)) keys.add(key);
+    return keys;
+  }
+
+  private storedVolumes(): Array<{ key: string; since: number }> {
+    try {
+      return fs
+        .readdirSync(this.volumeRoot, { withFileTypes: true })
+        .filter(
+          (entry) => entry.isDirectory() && VOLUME_KEY_PATTERN.test(entry.name),
+        )
+        .map((entry) => ({
+          key: entry.name,
+          since: fs.statSync(path.join(this.volumeRoot, entry.name)).ctimeMs,
+        }));
+    } catch {
+      return [];
+    }
+  }
+
+  private async pruneVolumes(args: { unusedForMs: number }): Promise<string[]> {
+    const inUse = this.volumesInUse();
+    const removed = this.storedVolumes()
+      .filter(
+        ({ key, since }) =>
+          !inUse.has(key) &&
+          this.volumeUsage.unused({
+            key,
+            unusedForMs: args.unusedForMs,
+            since,
+          }),
+      )
+      .map(({ key }) => {
+        fs.rmSync(path.join(this.volumeRoot, key), {
+          recursive: true,
+          force: true,
+        });
+        return key;
+      });
+    this.volumeUsage.forget(removed);
+    return removed;
+  }
+
+  /**
+   * Remove every volume. With `destroySandboxes`, the sandboxes linking
+   * any go first (a pooled machine's reset); without, linked ones are kept.
+   */
+  private async removeAllVolumes(args?: {
+    destroySandboxes?: boolean;
+  }): Promise<void> {
+    if (args?.destroySandboxes)
+      for (const entry of fs.readdirSync(this.root, { withFileTypes: true }))
+        if (
+          entry.isDirectory() &&
+          entry.name !== VOLUME_DIRECTORY &&
+          this.mountedVolumes(entry.name).length > 0
+        )
+          await this.destroySandbox(entry.name);
+    const inUse = this.volumesInUse();
+    const kept: string[] = [];
+    const removed: string[] = [];
+    for (const { key } of this.storedVolumes()) {
+      if (inUse.has(key)) {
+        kept.push(key);
+        continue;
+      }
+      fs.rmSync(path.join(this.volumeRoot, key), {
+        recursive: true,
+        force: true,
+      });
+      removed.push(key);
+    }
+    this.volumeUsage.forget(removed);
+    if (kept.length > 0)
+      throw new Error(
+        `Volumes still linked by sandboxes were kept: ${kept.join(", ")}. Destroy those sandboxes first.`,
+      );
   }
 
   async stopSandbox(sandboxId: string): Promise<void> {
@@ -335,14 +517,17 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     clonePath: string,
     opts?: GitCloneOpts,
   ): Promise<void> {
-    const cloneUrl = withCredentials(url, opts);
+    const cloneUrl = gitCloneUrl(url, opts);
     const target = this.resolvePath(sandboxId, clonePath);
     const args = ["clone"];
     if (opts?.branch) args.push("--branch", opts.branch);
     args.push(cloneUrl, target);
     const clone = await this.git(sandboxId, args, 120_000);
     if (clone.exitCode !== 0) {
-      throw new Error(`git clone failed: ${clone.result}`);
+      throw gitCloneFailure({
+        output: clone.result,
+        ...(opts ? { opts } : {}),
+      });
     }
     if (opts?.commitId) {
       await this.gitCheckout(sandboxId, clonePath, opts.commitId);
@@ -782,14 +967,6 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
 
 function logSize(file: string): number {
   return fs.statSync(file, { throwIfNoEntry: false })?.size ?? 0;
-}
-
-function withCredentials(url: string, opts?: GitCloneOpts): string {
-  if (!opts?.username && !opts?.password) return url;
-  const parsed = new URL(url);
-  if (opts.username) parsed.username = opts.username;
-  if (opts.password) parsed.password = opts.password;
-  return parsed.toString();
 }
 
 function restoreOwnerWrite(directory: string): void {

@@ -1,5 +1,6 @@
+import { createPrivateKey } from "node:crypto";
 import { createApiClient } from "@catamorphic/api-client";
-import { RemoteOperationResultSchema } from "@catamorphic/core";
+import { clientExecutor, RemoteOperationResultSchema } from "@catamorphic/core";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import {
   ReceiptRefusedError,
@@ -95,7 +96,8 @@ export class RemoteClientRunners {
     projectId: string;
     environment: string;
   }): Promise<{ id: string }> {
-    const store = this.profiles.forProject(args.projectId).remoteProjects;
+    const stores = this.profiles.forProject(args.projectId);
+    const store = stores.remoteProjects;
     const inspected = store.inspect(args.projectId);
     if (!inspected) throw new Error("Project has no remote server");
     this.wanted.set(args.projectId, args.environment);
@@ -133,6 +135,10 @@ export class RemoteClientRunners {
         halted.aborted || this.wanted.get(args.projectId) !== args.environment;
       const started: Promise<ReturnType<typeof startClientRunner>> =
         (async () => {
+          // Operations reach this machine sealed to its profile's key
+          // (ADR 0207); the private half never leaves the profile.
+          const keys = stores.runnerKey.keyPair();
+          const privateKey = createPrivateKey(keys.privateKey);
           const register = () =>
             client.POST("/api/projects/{projectId}/client-runners", {
               signal: halted,
@@ -146,6 +152,7 @@ export class RemoteClientRunners {
                 isolation: this.provider.isolation ?? "none",
                 processes: Boolean(this.provider.processes),
                 capabilities: [...(this.provider.capabilities ?? [])],
+                publicKey: keys.publicKey,
               },
             });
           let registration = await register();
@@ -167,6 +174,10 @@ export class RemoteClientRunners {
           const lease = registration.data;
           return startClientRunner({
             provider: this.provider,
+            keys: {
+              executor: clientExecutor(link.connectionId),
+              privateKeys: () => [privateKey],
+            },
             transport: {
               renew: async () => {
                 const response = await client.POST(

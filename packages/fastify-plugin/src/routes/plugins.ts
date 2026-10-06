@@ -2,6 +2,8 @@ import {
   assertProjectPermission,
   PluginNotAttachedError,
   SecretDeclarationConflictError,
+  SecretMemberNotFoundError,
+  SecretValueInvalidError,
   UndeclaredSecretError,
   UnfulfilledCapabilityError,
 } from "@catamorphic/core";
@@ -18,10 +20,28 @@ import {
   ErrorSchema,
   PluginPackageParamsSchema,
   ProjectIdParamsSchema,
+  SecretMemberParamsSchema,
   SecretNameParamsSchema,
   SecretStatusSchema,
+  SecretValueChangeSchema,
   UpsertSecretSchema,
 } from "../schemas.js";
+
+/** A refused secret write the person can fix: a 400 or 404, not a fault. */
+function secretWriteError(
+  error: unknown,
+): { status: 400 | 404; message: string } | undefined {
+  if (error instanceof SecretMemberNotFoundError)
+    return { status: 404, message: error.message };
+  if (
+    error instanceof UndeclaredSecretError ||
+    error instanceof SecretDeclarationConflictError ||
+    error instanceof SecretValueInvalidError ||
+    error instanceof PluginNotAttachedError
+  )
+    return { status: 400, message: error.message };
+  return undefined;
+}
 
 export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
   const typed = app.withTypeProvider<ZodTypeProvider>();
@@ -185,13 +205,86 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
         });
         return reply.send(status);
       } catch (err) {
-        if (
-          err instanceof UndeclaredSecretError ||
-          err instanceof SecretDeclarationConflictError ||
-          err instanceof PluginNotAttachedError
-        ) {
-          return reply.status(400).send({ error: err.message });
-        }
+        const refused = secretWriteError(err);
+        if (refused?.status === 400)
+          return reply.status(400).send({ error: refused.message });
+        throw err;
+      }
+    },
+  });
+
+  // A member's own value (ADR 0206): set by the member (`me`) or by anyone
+  // holding `secrets:write`.
+  typed.route({
+    method: "PUT",
+    url: "/projects/:projectId/secrets/:name/members/:member",
+    schema: {
+      params: SecretMemberParamsSchema,
+      body: UpsertSecretSchema,
+      response: {
+        200: SecretValueChangeSchema,
+        400: ErrorSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      if (!ctx.core?.secrets)
+        return reply.status(503).send({ error: "Secrets not configured" });
+      const identity = resolveIdentity(request);
+      try {
+        const change = await ctx.core.secrets.setMember({
+          identity,
+          projectId: request.params.projectId,
+          name: request.params.name,
+          member:
+            request.params.member === "me"
+              ? identity.externalUserId
+              : request.params.member,
+          value: request.body.value,
+        });
+        return reply.send(change);
+      } catch (err) {
+        const refused = secretWriteError(err);
+        if (refused?.status === 400)
+          return reply.status(400).send({ error: refused.message });
+        if (refused?.status === 404)
+          return reply.status(404).send({ error: refused.message });
+        throw err;
+      }
+    },
+  });
+
+  typed.route({
+    method: "DELETE",
+    url: "/projects/:projectId/secrets/:name/members/:member",
+    schema: {
+      params: SecretMemberParamsSchema,
+      response: {
+        200: z.object({ deleted: z.boolean() }),
+        400: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      if (!ctx.core?.secrets)
+        return reply.status(503).send({ error: "Secrets not configured" });
+      const identity = resolveIdentity(request);
+      try {
+        const deleted = await ctx.core.secrets.deleteMember({
+          identity,
+          projectId: request.params.projectId,
+          name: request.params.name,
+          member:
+            request.params.member === "me"
+              ? identity.externalUserId
+              : request.params.member,
+        });
+        return reply.send({ deleted });
+      } catch (err) {
+        const refused = secretWriteError(err);
+        if (refused?.status === 400)
+          return reply.status(400).send({ error: refused.message });
         throw err;
       }
     },

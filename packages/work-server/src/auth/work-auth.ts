@@ -347,6 +347,20 @@ function toGrant(row: unknown): WorkAuthGrant | null {
  * the ID token `hd` claim. A consumer Google account registered with a
  * company email address has no `hd`, so the email domain proves nothing.
  */
+/**
+ * The user who signs in with `email`, when that email is verified: an
+ * identity provider proved it, or the operator who created the local
+ * account vouched for it. How workflows name members by email (ADR 0210);
+ * an unverified address names no one.
+ */
+export async function verifiedUserIdForEmail(input: {
+  auth: Pick<WorkAuth, "findUserByEmail">;
+  email: string;
+}): Promise<string | null> {
+  const user = await input.auth.findUserByEmail({ email: input.email });
+  return user?.emailVerified ? user.id : null;
+}
+
 export function assertHostedDomainAllowed(
   profile: Record<string, unknown>,
   hostedDomains: readonly string[],

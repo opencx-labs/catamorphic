@@ -71,7 +71,12 @@ const HttpAction = z.strictObject({
   description: z.string().min(1).optional(),
 });
 
-/** An API reached through the gateway with a stored key (ADR 0162). */
+/**
+ * An API reached through the gateway with a stored key (ADR 0162), by
+ * agents' connection tools and, without `actions`, by code in sandboxes
+ * (ADR 0212). `auth` names the header the key goes in, or `basic` for a
+ * `user:password` key sent as HTTP Basic.
+ */
 const HttpEntry = z
   .strictObject({
     type: z.literal("http"),
@@ -79,10 +84,13 @@ const HttpEntry = z
     displayName: z.string().min(1),
     baseUrl: z.url(),
     auth: z
-      .strictObject({
-        header: z.string().min(1),
-        scheme: z.string().optional(),
-      })
+      .union([
+        z.strictObject({
+          header: z.string().min(1),
+          scheme: z.string().optional(),
+        }),
+        z.strictObject({ basic: z.literal(true) }),
+      ])
       .optional(),
     paths: z.array(z.string().startsWith("/")).optional(),
     /** Named operations; when present, the connection's only actions. */

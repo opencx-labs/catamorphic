@@ -1,7 +1,12 @@
-import { randomBytes } from "node:crypto";
+import { createPrivateKey, type KeyObject, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { SandboxProvider } from "@catamorphic/sandbox";
+import { nodeExecutor, RETIRED_KEY_RETENTION_MS } from "@catamorphic/core";
+import {
+  executorPublicKey,
+  generateExecutorKeyPair,
+  type SandboxProvider,
+} from "@catamorphic/sandbox";
 import {
   type ClientRunnerTransport,
   ReceiptRefusedError,
@@ -11,10 +16,20 @@ import {
 } from "@catamorphic/server-sdk";
 import { isSecurePublicUrl } from "../config.js";
 import {
+  resolveExecutionSettings,
   type WorkExecutionSettings,
   workExecution,
 } from "../execution-config.js";
-import { signInCapabilities } from "./sign-ins.js";
+import { CodexSignIns } from "./codex-sign-ins.js";
+import { removeMachineSignIns, signInCapabilities } from "./sign-ins.js";
+import { startVolumePruning } from "./volume-pruning.js";
+import {
+  confirmWorkerIdentity,
+  loadWorkerIdentity,
+  saveWorkerIdentity,
+  saveWorkerKey,
+  type WorkerCredentialPair,
+} from "./worker-identity.js";
 import {
   upgradeMessage,
   WORKER_PROTOCOL,
@@ -27,7 +42,11 @@ type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 export interface WorkWorkerOptions {
   /** The control plane's public origin, e.g. `https://brain.example.com`. */
   controlPlaneUrl: string;
-  /** Owner-only local state: the machine credential and sandboxes. */
+  /**
+   * Owner-only local state: the machine credential, the private key its
+   * operations are sealed to (ADR 0207), and sandboxes. Losing it means
+   * enrolling the worker again.
+   */
   dataDir: string;
   /** One-time code from `POST /_work/operator/workers`; first start only. */
   enrollmentCode?: string;
@@ -38,6 +57,17 @@ export interface WorkWorkerOptions {
    * speaks by default. Tests state another to see the control plane refuse.
    */
   protocol?: number;
+  /**
+   * How long a rotation that failed waits before the next one may start;
+   * 15 seconds by default. Tests shorten it.
+   */
+  rotationRetryMs?: number;
+  /**
+   * How long a key rotated away from stays usable for operations sealed to
+   * it before the rotation; `RETIRED_KEY_RETENTION_MS` by default. Tests
+   * shorten it.
+   */
+  retiredKeyRetentionMs?: number;
   fetch?: Fetch;
   log?: (line: string) => void;
 }
@@ -56,6 +86,7 @@ const CALL_TIMEOUT_MS = {
   poll: 45_000,
   renew: 30_000,
   complete: 300_000,
+  rotate: 30_000,
 } as const;
 
 /**
@@ -65,7 +96,9 @@ const CALL_TIMEOUT_MS = {
  * reaches the control plane over outbound HTTPS, so it needs no open port.
  * It owns its node lease (ADR 0192): the lease token is an epoch this
  * process chooses once at start, so any replica can serve any of its calls
- * and reconnecting never interrupts running work.
+ * and reconnecting never interrupts running work. Its operations arrive
+ * sealed to a key only it holds, and it rotates that key with its credential
+ * whenever the control plane asks (ADR 0207).
  */
 export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   nodeId: string;
@@ -88,19 +121,102 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     });
   const log = options.log ?? (() => {});
   fs.mkdirSync(options.dataDir, { recursive: true, mode: 0o700 });
-  const credential = await loadOrEnroll({
+  const enrolled = await loadOrEnroll({
     base,
     dataDir: options.dataDir,
     ...(options.enrollmentCode ? { code: options.enrollmentCode } : {}),
     fetch: doFetch,
     protocol,
   });
-  const nodeId = credential.split(":")[0] ?? "";
-  const execution = workExecution({
+  const nodeId = enrolled.credential.split(":")[0] ?? "";
+  /**
+   * The credential this worker calls with and, until the control plane has
+   * accepted it once, the one a rotation replaced (ADR 0207). Should the
+   * control plane refuse the new credential, the worker goes back to the
+   * old one, which still works, and rotates again.
+   */
+  let identity: { current: HeldCredential; previous?: HeldCredential } = {
+    current: held(enrolled),
+    ...(enrolled.previous ? { previous: held(enrolled.previous) } : {}),
+  };
+  /**
+   * Keys this worker rotated away from, kept while operations sealed to
+   * them before the rotation may still be queued.
+   */
+  const retired: Array<{ key: KeyObject; until: number }> = [];
+  /** Every key an operation for this worker may be sealed to. */
+  const privateKeys = (): KeyObject[] => {
+    const now = Date.now();
+    retired.splice(
+      0,
+      retired.length,
+      ...retired.filter((entry) => entry.until > now),
+    );
+    return [
+      identity.current.privateKey,
+      ...(identity.previous ? [identity.previous.privateKey] : []),
+      ...retired.map((entry) => entry.key),
+    ];
+  };
+  /**
+   * The control plane accepted the current credential: it sealed to the
+   * previous key until now, so that key is kept a while longer, and the
+   * previous credential, which no longer works, leaves the disk.
+   */
+  const confirm = () => {
+    const { previous } = identity;
+    if (!previous) return;
+    identity = { current: identity.current };
+    retired.push({
+      key: previous.privateKey,
+      until:
+        Date.now() +
+        (options.retiredKeyRetentionMs ?? RETIRED_KEY_RETENTION_MS),
+    });
+    try {
+      confirmWorkerIdentity(options.dataDir);
+    } catch (error) {
+      log(
+        `Could not remove this worker's previous credential: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  };
+  /**
+   * The control plane does not know the credential a rotation issued: a
+   * rotation request that was delayed on its way replaced it before the
+   * worker used it. The previous credential, never ended, still works; the
+   * worker goes back to it and rotates again. Nothing was sealed to the
+   * refused credential's key.
+   */
+  const fallBack = (previous: HeldCredential) => {
+    saveWorkerIdentity(options.dataDir, {
+      credential: previous.credential,
+      privateKey: previous.privateKeyPem,
+    });
+    identity = { current: previous };
+    lastRotation = Number.NEGATIVE_INFINITY;
+    log(
+      "The control plane refused this worker's new credential; using the previous one and rotating again",
+    );
+  };
+  const resolved = await resolveExecutionSettings({
     settings: options.execution,
+  });
+  log(`Sandboxes: ${resolved.backend} (${resolved.reason})`);
+  const execution = workExecution({
+    settings: resolved,
     dataDir: options.dataDir,
+    log,
   });
   const provider: SandboxProvider = execution.provider;
+  // Volumes nobody used for long leave the machine (ADR 0208).
+  const stopPruning = startVolumePruning({
+    provider,
+    retentionMs: execution.volumeRetentionMs,
+    log,
+  });
   /**
    * What this worker offers, read again for every connect: members'
    * sign-ins come and go on the machine (ADR 0199), and only the fact that
@@ -119,6 +235,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     capacity: execution.capacity,
     defaults: execution.defaults,
     ...(options.version ? { version: options.version } : {}),
+    backend: execution.backend,
   });
   // This process's epoch: the node's lease token while it runs. A restart
   // chooses a later one, and the control plane fails what the old one was
@@ -138,11 +255,12 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     body,
     signal,
   }: {
-    route: "connect" | "poll" | "renew" | "complete";
+    route: "connect" | "poll" | "renew" | "complete" | "rotate";
     body: unknown;
     signal?: AbortSignal;
   }): Promise<unknown> => {
     const timeout = AbortSignal.timeout(CALL_TIMEOUT_MS[route]);
+    const { credential } = identity.current;
     const response = await doFetch(`${base}/api/workers/${route}`, {
       method: "POST",
       headers: {
@@ -152,7 +270,22 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       body: JSON.stringify(body),
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     });
-    if (response.ok) return response.json();
+    if (response.ok) {
+      // The control plane accepted this credential.
+      if (credential === identity.current.credential) confirm();
+      const answer: unknown = await response.json();
+      // The control plane wants a new credential and key; work goes on. An
+      // answer to a call made before this worker rotated is out of date.
+      if (
+        typeof answer === "object" &&
+        answer !== null &&
+        "rotate" in answer &&
+        answer.rotate === true &&
+        credential === identity.current.credential
+      )
+        rotateSoon();
+      return answer;
+    }
     const answer: unknown = await response.json().catch(() => undefined);
     const reason =
       typeof answer === "object" &&
@@ -161,7 +294,19 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       typeof answer.error === "string"
         ? answer.error
         : `Control plane answered ${response.status} on ${route}`;
-    if (response.status === 401) throw new WorkerRevokedError();
+    if (response.status === 401) {
+      // A call that left with a credential this worker has since replaced:
+      // the same call goes again with the current one.
+      if (credential !== identity.current.credential)
+        throw new CredentialRotatedError();
+      // A rotated credential the control plane never accepted: back to the
+      // one before it, and the same call goes again.
+      if (identity.previous) {
+        fallBack(identity.previous);
+        throw new CredentialRotatedError();
+      }
+      throw new WorkerRevokedError();
+    }
     if (response.status === 426)
       throw new WorkerUpgradeRequiredError(upgradeAnswer({ answer, protocol }));
     if (response.status === 403) throw new WorkerRefusedError(reason);
@@ -188,6 +333,35 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   const sandboxes = new PersistedSandboxes(
     path.join(options.dataDir, "sandboxes.json"),
   );
+  // Members sign in to Codex on this machine from the app (ADR 0213).
+  // The connected session's own re-offer, run when a sign-in changes here.
+  const offerSignIns = { now: () => {} };
+  const codexSignIns = new CodexSignIns({
+    signInRoot: execution.signInRoot,
+    dataDir: options.dataDir,
+    // The machine's own PATH, where its sandboxes find their tools too.
+    env: { ...process.env, PATH: options.execution.path },
+    onChange: () => offerSignIns.now(),
+  });
+  // One reset at a time: the control plane asks again when it stopped
+  // waiting for a long one (ADR 0205), and the next one starts after it.
+  const resets = { last: Promise.resolve() };
+  const reset = (): Promise<void> => {
+    const next = resets.last
+      .catch(() => undefined)
+      .then(() => {
+        // Logins still waiting end before their homes go.
+        codexSignIns.stop();
+        return resetMachine({
+          provider,
+          sandboxes,
+          signInRoot: execution.signInRoot,
+          log,
+        });
+      });
+    resets.last = next;
+    return next;
+  };
   const stopping = new AbortController();
   /** Resolves after `ms`, or at once when the worker stops. */
   const pause = (ms: number) =>
@@ -205,6 +379,78 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   let lastRetryLog = 0;
   let backoffMs = 1_000;
 
+  let rotating = false;
+  let lastRotation = Number.NEGATIVE_INFINITY;
+  /**
+   * Rotate the credential and key once the control plane asks (ADR 0207),
+   * one rotation at a time. A rotation that fails leaves the current
+   * credential working; the next answer that asks again starts another.
+   */
+  const rotateSoon = () => {
+    if (
+      rotating ||
+      stopping.signal.aborted ||
+      Date.now() - lastRotation < (options.rotationRetryMs ?? 15_000)
+    )
+      return;
+    rotating = true;
+    lastRotation = Date.now();
+    void rotate()
+      .catch((error: unknown) =>
+        log(
+          `Could not rotate this worker's credential; trying again later: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        ),
+      )
+      .finally(() => {
+        rotating = false;
+      });
+  };
+  const rotate = async () => {
+    const next = generateExecutorKeyPair();
+    // Later requests carry later ids: one delayed on its way can never
+    // replace the credential a later one issued.
+    const answer = await call({
+      route: "rotate",
+      body: { publicKey: next.publicKey, rotation: uuidV7() },
+      signal: stopping.signal,
+    });
+    const credential =
+      typeof answer === "object" &&
+      answer !== null &&
+      "credential" in answer &&
+      typeof answer.credential === "string" &&
+      answer.credential.startsWith(`${nodeId}:`)
+        ? answer.credential
+        : undefined;
+    if (!credential) throw new Error("The control plane sent no credential");
+    // The rotate call itself was accepted, so the current credential is
+    // confirmed and becomes the one to go back to.
+    const previous = identity.current;
+    // On disk, with the credential it replaces, before its first use: until
+    // then the control plane keeps accepting the current credential, so a
+    // crash here loses nothing.
+    saveWorkerIdentity(options.dataDir, {
+      credential,
+      privateKey: next.privateKey,
+      previous: {
+        credential: previous.credential,
+        privateKey: previous.privateKeyPem,
+      },
+    });
+    identity = {
+      current: held({ credential, privateKey: next.privateKey }),
+      previous,
+    };
+    log("Rotated this worker's credential and key");
+    // Its first use makes it current and ends the old credential: at once,
+    // not at whichever call comes next.
+    await call({ route: "renew", body: { session: epoch } }).catch(() => {
+      /* The next call does the same. */
+    });
+  };
+
   /**
    * One session under this process's epoch, until the control plane ends
    * it. Connecting again with the same epoch keeps everything running.
@@ -213,7 +459,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     let offer = currentOffer();
     await call({
       route: "connect",
-      body: { session: epoch, offer },
+      body: { session: epoch, offer, publicKey: identity.current.publicKey },
       signal: stopping.signal,
     });
     connectedOnce = true;
@@ -266,7 +512,14 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     const runner = startClientRunner({
       provider,
       transport,
+      keys: {
+        executor: nodeExecutor(nodeId),
+        privateKeys,
+      },
       sandboxes,
+      // A pooled machine returns to its pool (ADR 0205).
+      resetMachine: reset,
+      codexSignIn: (request) => codexSignIns.handle(request),
       keepSandboxes: true,
       maxSandboxes: execution.capacity.workspaces,
       // One slot per workspace, so one long command never blocks the others.
@@ -286,15 +539,22 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       },
     });
     // A sign-in made or removed on this machine reaches placement within
-    // seconds: connecting again under the same epoch refreshes the offer
-    // and keeps everything running.
-    const scan = setInterval(() => {
+    // seconds, at once when made from the app: connecting again under the
+    // same epoch refreshes the offer and keeps everything running.
+    const reoffer = () => {
       const next = currentOffer();
       if (
         JSON.stringify(next.capabilities) === JSON.stringify(offer.capabilities)
       )
         return;
-      void call({ route: "connect", body: { session: token, offer: next } })
+      void call({
+        route: "connect",
+        body: {
+          session: token,
+          offer: next,
+          publicKey: identity.current.publicKey,
+        },
+      })
         .then(() => {
           offer = next;
           log("Sign-ins on this machine changed; the control plane knows");
@@ -302,8 +562,11 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         .catch(() => {
           /* Tried again on the next scan. */
         });
-    }, SIGN_IN_SCAN_MS);
+    };
+    const scan = setInterval(reoffer, SIGN_IN_SCAN_MS);
+    offerSignIns.now = reoffer;
     await ended;
+    offerSignIns.now = () => {};
     clearInterval(scan);
     await runner.stop();
     if (failure) throw failure;
@@ -336,6 +599,8 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
           await pause(5_000);
           continue;
         }
+        // Connecting again at once with the rotated credential.
+        if (error instanceof CredentialRotatedError) continue;
         log(
           error instanceof WorkerRefusedError
             ? // Reachable, but the operator's placement forbids this worker
@@ -357,11 +622,70 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     nodeId,
     stop: async () => {
       stopping.abort();
+      stopPruning();
+      codexSignIns.stop();
       await loop;
       await Promise.allSettled(
         [...sandboxes].map((id) => provider.stopSandbox(id)),
       );
     },
+  };
+}
+
+/**
+ * Return this machine to its pool (ADR 0205): destroy every sandbox it
+ * holds, then remove every volume and member's sign-in on it, so the next
+ * person it serves finds nothing of the last. A sandbox that cannot be
+ * destroyed fails the reset, and the control plane asks again.
+ */
+async function resetMachine(args: {
+  provider: SandboxProvider;
+  sandboxes: Set<string>;
+  signInRoot: string;
+  log: (line: string) => void;
+}): Promise<void> {
+  const failures: string[] = [];
+  let destroyed = 0;
+  for (const id of [...args.sandboxes]) {
+    try {
+      await args.provider.destroySandbox(id);
+      args.sandboxes.delete(id);
+      destroyed += 1;
+    } catch (error) {
+      failures.push(
+        `${id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  if (failures.length > 0)
+    throw new Error(
+      `The machine was not reset: ${failures.length} sandbox(es) could not be destroyed (${failures.join("; ")})`,
+    );
+  // Sandboxes this process never knew of (a worker that died while making
+  // one) go too: the next person finds nothing of the last.
+  await args.provider.volumes?.removeAll({ destroySandboxes: true });
+  const signIns = removeMachineSignIns(args.signInRoot);
+  args.log(
+    `Machine reset for its pool: ${destroyed} sandbox(es), every volume and ${signIns} sign-in(s) removed`,
+  );
+}
+
+/** A credential this worker holds, with the key that came with it. */
+interface HeldCredential {
+  credential: string;
+  /** PKCS8 PEM, as the data directory keeps it. */
+  privateKeyPem: string;
+  privateKey: KeyObject;
+  /** What the control plane registered for this credential. */
+  publicKey: string;
+}
+
+function held(pair: WorkerCredentialPair): HeldCredential {
+  return {
+    credential: pair.credential,
+    privateKeyPem: pair.privateKey,
+    privateKey: createPrivateKey(pair.privateKey),
+    publicKey: executorPublicKey(pair.privateKey),
   };
 }
 
@@ -378,30 +702,42 @@ function uuidV7(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+/**
+ * This worker's credential and private key, from its data directory, or
+ * from enrolling with `code` on its first start. A worker enrolled before
+ * operations were sealed generates its key now and registers it when it
+ * connects (ADR 0207).
+ */
 async function loadOrEnroll(args: {
   base: string;
   dataDir: string;
   code?: string;
   fetch: Fetch;
   protocol: number;
-}): Promise<string> {
-  const file = path.join(args.dataDir, "worker-credential");
-  try {
-    const existing = fs.readFileSync(file, "utf8").trim();
-    if (existing) return existing;
-  } catch (error) {
-    if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
-      throw error;
+}): Promise<WorkerCredentialPair & { previous?: WorkerCredentialPair }> {
+  const existing = loadWorkerIdentity(args.dataDir);
+  if (existing?.privateKey)
+    return {
+      credential: existing.credential,
+      privateKey: existing.privateKey,
+      // A rotation the control plane has not accepted yet.
+      ...(existing.previous ? { previous: existing.previous } : {}),
+    };
+  if (existing) {
+    const { privateKey } = generateExecutorKeyPair();
+    saveWorkerKey(args.dataDir, privateKey);
+    return { credential: existing.credential, privateKey };
   }
   if (!args.code) {
     throw new Error(
       "This worker is not enrolled. Set WORK_WORKER_ENROLLMENT to a code from the control plane operator.",
     );
   }
+  const keys = generateExecutorKeyPair();
   const response = await args.fetch(`${args.base}/api/workers/enroll`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code: args.code }),
+    body: JSON.stringify({ code: args.code, publicKey: keys.publicKey }),
   });
   const body: unknown = await response.json().catch(() => ({}));
   if (response.status === 426)
@@ -425,8 +761,11 @@ async function loadOrEnroll(args: {
         : `HTTP ${response.status}`;
     throw new Error(`Enrollment failed: ${message}`);
   }
-  fs.writeFileSync(file, `${credential}\n`, { mode: 0o600, flag: "wx" });
-  return credential;
+  saveWorkerIdentity(args.dataDir, {
+    credential,
+    privateKey: keys.privateKey,
+  });
+  return { credential, privateKey: keys.privateKey };
 }
 
 /** The control plane's 426: which side to update, in words. */
@@ -473,6 +812,17 @@ class WorkerSupersededError extends RunnerSessionEndedError {
   constructor(message: string) {
     super(message);
     this.name = "WorkerSupersededError";
+  }
+}
+
+/**
+ * A call left with the previous credential, which ended once the rotated one
+ * was first used (ADR 0207). Transient: the call goes again.
+ */
+class CredentialRotatedError extends Error {
+  constructor() {
+    super("This worker's credential rotated while a call was on its way");
+    this.name = "CredentialRotatedError";
   }
 }
 

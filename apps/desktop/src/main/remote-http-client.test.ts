@@ -356,6 +356,8 @@ describe("httpDocumentsClient", () => {
     await expect(client.personalEnvironment()).resolves.toEqual({
       allowed: true,
       files: [{ path: ".env", fingerprint: "g", bytes: 4, updatedAt: "x" }],
+      // A server that reports no personal setup (ADR 0208).
+      setup: null,
     });
     await client.putPersonalEnvironment({
       files: [{ path: ".env", content: "QT0x" }],

@@ -5,6 +5,7 @@ import path from "node:path";
 import type { HarnessAdapter } from "@catamorphic/agent-protocol/runner";
 import {
   AgentTurnUnsettledError,
+  clientExecutor,
   type Identity,
   type RegisteredCodingAgent,
 } from "@catamorphic/core";
@@ -13,6 +14,7 @@ import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import {
   type EnvironmentRuntimeBinding,
   followProcess,
+  generateExecutorKeyPair,
   type SandboxProvider,
 } from "@catamorphic/sandbox";
 import {
@@ -328,6 +330,12 @@ it("an authenticated member executes on this machine and loses execution immedia
     const sessions = cat.core.agentSessions;
     if (!service || !sessions || !identity.clientRunnerId)
       throw new Error("Client execution missing");
+    // Operations reach the member's machine sealed to its key (ADR 0207).
+    const machineKeys = generateExecutorKeyPair();
+    const keys = {
+      executor: clientExecutor(identity.clientRunnerId),
+      privateKeys: () => [machineKeys.privateKey],
+    };
     const lease = await service.register({
       identity,
       projectId: project.id,
@@ -337,6 +345,7 @@ it("an authenticated member executes on this machine and loses execution immedia
       workspaceRoot: provider.workspaceRoot,
       processes: true,
       capabilities: ["images", "images.build"],
+      publicKey: machineKeys.publicKey,
     });
     await expect(
       service.poll({
@@ -347,6 +356,7 @@ it("an authenticated member executes on this machine and loses execution immedia
     ).rejects.toThrow();
     runner = startClientRunner({
       provider,
+      keys,
       transport: {
         renew: () => service.renew({ ...lease, identity }),
         // Like the HTTP transport, a stopping runner cancels its long poll.
@@ -482,6 +492,7 @@ it("an authenticated member executes on this machine and loses execution immedia
       environment: "personal",
       label: "Laptop",
       workspaceRoot: provider.workspaceRoot,
+      publicKey: machineKeys.publicKey,
     });
     // A runner that does not say it runs processes is not offered them.
     expect(
@@ -506,6 +517,7 @@ it("an authenticated member executes on this machine and loses execution immedia
     // rebuilt there from the session branch, and the waiting turn runs.
     runner = startClientRunner({
       provider,
+      keys,
       transport: {
         renew: () => service.renew({ ...reconnected, identity }),
         poll: ({ pollId, max, signal }) =>

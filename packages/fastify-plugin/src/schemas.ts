@@ -213,6 +213,8 @@ export const TriggerKindInfoSchema = z.object({
   payloadJsonSchema: JsonOutSchema,
   configJsonSchema: JsonOutSchema,
   outputJsonSchema: JsonOutSchema.optional(),
+  /** Permissions a workflow must declare to bind the kind (ADR 0210). */
+  requiredPermissions: z.array(z.string()).optional(),
 });
 
 export const TriggerBindingInfoSchema = z.object({
@@ -1952,6 +1954,66 @@ export const WatcherIdParamsSchema = AgentSessionIdParamsSchema.extend({
 
 export const OkSchema = z.object({ ok: z.literal(true) });
 
+// --- Terminals in a chat's workspace (ADR 0209) ---
+
+const TerminalSizeSchema = z.number().int().min(1).max(1000);
+
+export const SessionTerminalParamsSchema = AgentSessionIdParamsSchema.extend({
+  /** The terminal's process in the workspace's sandbox. */
+  terminalId: z.string().regex(/^proc-[a-z0-9]{8,32}$/),
+});
+
+export const OpenSessionTerminalSchema = z.object({
+  cols: TerminalSizeSchema.default(80),
+  rows: TerminalSizeSchema.default(24),
+});
+
+export const SessionTerminalSchema = z.object({
+  terminalId: z.string(),
+  /**
+   * The shell runs on a pseudo-terminal. Without one it is an interactive
+   * shell on a pipe: line by line, and resizing does nothing.
+   */
+  pty: z.boolean(),
+});
+
+export const SessionTerminalOutputQuerySchema = z.object({
+  cursor: z.coerce.number().int().min(0).default(0),
+  /** Answer as soon as there is output, at the latest after this long. */
+  waitMs: z.coerce.number().int().min(0).max(20_000).default(0),
+});
+
+export const SessionTerminalOutputSchema = z.object({
+  /** UTF-8 text from `cursor` to `nextCursor`. */
+  data: z.string(),
+  cursor: z.number().int().nonnegative(),
+  nextCursor: z.number().int().nonnegative(),
+  /** More output waits past `nextCursor`; read again at once. */
+  more: z.boolean(),
+  /** The shell ended and all its output has been read. */
+  exited: z.boolean(),
+  exitCode: z.number().int().nullable(),
+});
+
+export const SessionTerminalInputSchema = z.object({
+  /** Keys as the terminal sends them, control characters included. */
+  data: z
+    .string()
+    .min(1)
+    .max(1024 * 1024),
+});
+
+export const ResizeSessionTerminalSchema = z.object({
+  cols: TerminalSizeSchema,
+  rows: TerminalSizeSchema,
+});
+
+/** Why a chat's workspace is not open to a person right now (409). */
+export const SessionWorkspaceErrorSchema = z.object({
+  error: z.string(),
+  code: z.string(),
+});
+
 // --- Skills ---
 export const SkillSchema = z.object({
   name: z.string(),
@@ -2334,15 +2396,33 @@ export const PluginPackageParamsSchema = ProjectIdParamsSchema.extend({
   packageName: z.string().min(1),
 });
 
-// --- Secrets ---
+// --- Secrets (ADR 0206) ---
+export const SecretMemberValueSchema = z.object({
+  /** The member's external user id. */
+  member: z.string(),
+  updatedAt: z.string().datetime(),
+  setBy: z.string().nullable(),
+});
+
+/** One declared secret: where it is declared and which values exist, never a value. */
 export const SecretStatusSchema = z.object({
   name: z.string(),
-  hasValue: z.boolean(),
-  updatedAt: z.string().datetime().nullable(),
   label: z.string().optional(),
   description: z.string().optional(),
   required: z.boolean(),
   source: z.enum(["project", "plugin"]),
+  /** Environments whose sandboxes receive it. */
+  environments: z.array(z.string()),
+  /** A shared value is set. */
+  shared: z.boolean(),
+  /** When the shared value was stored, and by whom. */
+  updatedAt: z.string().datetime().nullable(),
+  setBy: z.string().nullable(),
+  /** The caller holds a value of their own. */
+  own: z.boolean(),
+  ownUpdatedAt: z.string().datetime().nullable(),
+  /** Members holding their own value; empty without `secrets:read`. */
+  members: z.array(SecretMemberValueSchema),
 });
 
 export const UpsertSecretSchema = z.object({
@@ -2351,6 +2431,17 @@ export const UpsertSecretSchema = z.object({
 
 export const SecretNameParamsSchema = ProjectIdParamsSchema.extend({
   name: z.string().min(1),
+});
+
+export const SecretMemberParamsSchema = SecretNameParamsSchema.extend({
+  /** A member's external user id, or `me`. */
+  member: z.string().min(1),
+});
+
+export const SecretValueChangeSchema = z.object({
+  name: z.string(),
+  member: z.string().nullable(),
+  updatedAt: z.string().datetime(),
 });
 
 // --- Code hosts (ADR 0177) ---
@@ -2466,6 +2557,13 @@ export const PutPersonalEnvironmentSchema = z
         )
         .max(50)
         .default([]),
+      setup: z
+        .string()
+        .max(16_384)
+        .optional()
+        .describe(
+          "The caller's own setup command, run after the Environment's in each new workspace of their own chats (ADR 0208); absent or blank for none",
+        ),
     },
     {
       error: (issue) =>
@@ -2475,7 +2573,7 @@ export const PutPersonalEnvironmentSchema = z
     },
   )
   .describe(
-    "The caller's personal files for this project; replaces what the server holds",
+    "The caller's personal files and setup for this project; replaces what the server holds",
   );
 
 export const PersonalEnvironmentSchema = z.object({
@@ -2492,6 +2590,10 @@ export const PersonalEnvironmentSchema = z.object({
       updatedAt: z.string(),
     }),
   ),
+  setup: z
+    .object({ command: z.string(), updatedAt: z.string() })
+    .nullable()
+    .describe("The caller's own setup command, when they sent one"),
 });
 
 export const PersonalEnvironmentInvalidSchema = z.object({

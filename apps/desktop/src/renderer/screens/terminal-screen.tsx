@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { KEYBINDING_ACTIONS } from "../../shared/actions.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { matchesBinding, useKeybindings } from "../lib/keybindings.js";
+import { ipcErrorText } from "../lib/remote-workspace.js";
 import { sanitizeScrollback } from "../lib/scrollback.js";
 import { useTerminalAppearance } from "../lib/terminal-appearance.js";
 
@@ -43,6 +44,11 @@ export interface TerminalScreenProps {
   restoreSessionId?: string;
   /** Viewing only — keystrokes don't reach the PTY (agent in control). */
   readOnly?: boolean;
+  /**
+   * A shell in this remote chat's workspace on the project's server (ADR
+   * 0209) instead of one on this computer.
+   */
+  remoteChat?: { sessionId: string };
   /** Shell title changes (OSC 0/2) — feeds the tab label. */
   onTitle: (title: string) => void;
   /** The shell exited (Ctrl+D, `exit`) — the tab closes itself. */
@@ -64,6 +70,7 @@ export function TerminalScreen({
   floating = false,
   restoreSessionId,
   readOnly = false,
+  remoteChat,
   onTitle,
   onExit,
   onSession,
@@ -94,6 +101,8 @@ export function TerminalScreen({
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
   const initialCommandRef = useRef(initialCommand);
+  // Fixed for the terminal's life, like the shell it names.
+  const remoteChatRef = useRef(remoteChat);
   const floatingRef = useRef(floating);
   floatingRef.current = floating;
   const macroShortcutsRef = useRef(macroShortcuts);
@@ -226,15 +235,41 @@ export function TerminalScreen({
               );
             }
           }
-          const created = await desktopApi.terminalCreate({
-            projectId,
-            cols: term.cols,
-            rows: term.rows,
-          });
+          const remote = remoteChatRef.current;
+          // Opening may start the chat's workspace and run its setup,
+          // which takes a while: say so where the shell will be. One row,
+          // so erasing it once the shell is there leaves nothing behind.
+          const progress = remote
+            ? "Starting the chat's workspace on the server…".slice(
+                0,
+                Math.max(0, term.cols - 1),
+              )
+            : "";
+          if (progress) term.write(`\x1b[2m${progress}\x1b[0m`);
+          const created = await desktopApi
+            .terminalCreate({
+              projectId,
+              cols: term.cols,
+              rows: term.rows,
+              ...(remote
+                ? { remoteChat: { sessionId: remote.sessionId } }
+                : {}),
+            })
+            .catch((error: unknown) => {
+              // A remote workspace can refuse (not running, no access) or
+              // its server can stop answering: say why where the shell
+              // would have been.
+              term?.write(
+                `${progress ? "\r\x1b[2K" : ""}\x1b[31m${ipcErrorText(error)}\x1b[0m\r\n`,
+              );
+              return null;
+            });
+          if (!created) return;
           if (disposed) {
             void desktopApi.terminalKill(created.sessionId);
             return;
           }
+          if (progress) term.write("\r\x1b[2K");
           sessionId = created.sessionId;
         }
         onSessionRef.current?.(sessionId);
@@ -248,6 +283,12 @@ export function TerminalScreen({
           desktopApi.onTerminalExit((payload) => {
             if (payload.sessionId !== sessionId) return;
             sessionId = null;
+            // Ended for a reason of its own (its workspace was given back,
+            // the server went away): the tab stays to say so.
+            if (payload.message) {
+              term?.write(`\r\n\x1b[2m${payload.message}\x1b[0m\r\n`);
+              return;
+            }
             onExitRef.current();
           }),
         );

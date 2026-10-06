@@ -123,7 +123,15 @@ import {
   setProjectDefaultAgentSlug,
 } from "./project-manifest.js";
 import { createReservedProject } from "./project-path.js";
+import { remoteMachinesRequest } from "./remote-api.js";
 import { probeRemoteConnection } from "./remote-connection-status.js";
+import {
+  beginCodexSignIn,
+  cancelCodexSignIn,
+  codexSignInStatus,
+  listRemoteMachines,
+  signOutOfCodex,
+} from "./remote-machines.js";
 import {
   authorizeRemoteServer,
   type RemoteOAuthCredentials,
@@ -152,6 +160,7 @@ import {
   listAgentModels,
   type ModelCatalogAgent,
 } from "./server/harness-models.js";
+import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 import type { DataPaths } from "./server/paths.js";
 import { parseProjectAgentId } from "./server/project-agents.js";
 import { THEME_PRESETS } from "./theme.js";
@@ -949,15 +958,16 @@ export function registerIpcHandlers(
 
   // The project's workflow-tools MCP server, listed for the agent-policy
   // editor (which workflows an agent may run). Same endpoint agents mount
-  // per session; the embedded server's URL is local, so no auth rides it.
+  // per session; the embedded server answers this run's token (ADR 0211).
   ipcMain.handle(
     "catamorphic:project-workflow-tools",
     async (_event, projectId: string) => {
-      const base = state.current?.url;
-      if (!base) return [];
+      const server = state.current;
+      if (!server) return [];
       const probe = await probeMcpServer({
         transport: "http",
-        url: `${base}/api/projects/${encodeURIComponent(String(projectId))}/mcp`,
+        url: `${server.url}/api/projects/${encodeURIComponent(String(projectId))}/mcp`,
+        headers: { [DESKTOP_API_TOKEN_HEADER]: server.apiToken },
       });
       return probe.ok ? (probe.tools ?? []) : [];
     },
@@ -2117,6 +2127,30 @@ export function registerIpcHandlers(
       : null;
   });
 
+  // A remote chat's preview (ADR 0209): its own loopback address, which
+  // the browser tab opens and this desktop forwards as the member.
+  ipcMain.handle(
+    "catamorphic:remote-preview-open",
+    async (
+      event,
+      input: { projectId: string; sessionId: string; port: number },
+    ) => {
+      if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535)
+        throw new Error("A port is a number from 1 to 65535");
+      if (!storesFor(event).remoteProjects.inspect(input.projectId))
+        throw new Error("This project has no server");
+      const server = state.current;
+      if (!server) throw new Error("The workspace is still starting");
+      return {
+        url: await server.openRemotePreview({
+          projectId: input.projectId,
+          sessionId: input.sessionId,
+          port: input.port,
+        }),
+      };
+    },
+  );
+
   ipcMain.handle(
     "catamorphic:remote-status",
     async (event, projectId: string) => {
@@ -2505,6 +2539,111 @@ export function registerIpcHandlers(
     },
   );
 
+  // Project secrets (ADR 0206): every member reads them and sets their own
+  // value; the people listing members need `memberships:read`.
+  ipcMain.handle(
+    "catamorphic:remote-secrets",
+    async (event, input: { projectId: string; members: boolean }) => {
+      const link = requireLink(event, input.projectId);
+      const client = storedRemoteClient(event, input.projectId, link);
+      const [secrets, members] = await Promise.all([
+        client.listSecrets(),
+        input.members ? client.listMembers() : Promise.resolve(null),
+      ]);
+      return { secrets, members };
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-secret-set",
+    async (
+      event,
+      input: {
+        projectId: string;
+        name: string;
+        value: string;
+        member?: string;
+      },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      await storedRemoteClient(event, input.projectId, link).setSecret({
+        name: input.name,
+        value: input.value,
+        ...(input.member ? { member: input.member } : {}),
+      });
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-secret-delete",
+    async (
+      event,
+      input: { projectId: string; name: string; member?: string },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      await storedRemoteClient(event, input.projectId, link).deleteSecret({
+        name: input.name,
+        ...(input.member ? { member: input.member } : {}),
+      });
+    },
+  );
+
+  // The member's own machines on the project's server and Codex sign-ins
+  // there (ADR 0213). Codex's device code login runs on the machine, so
+  // only the one-time code passes through here.
+  const machinesRequest = (
+    event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+  ) =>
+    remoteMachinesRequest({
+      profiles: { forProject: () => storesFor(event) },
+      projectId,
+    });
+  ipcMain.handle("catamorphic:remote-machines", (event, projectId: string) =>
+    listRemoteMachines({ request: machinesRequest(event, projectId) }),
+  );
+  ipcMain.handle(
+    "catamorphic:remote-codex-sign-in",
+    (event, input: { projectId: string; machineId: string }) =>
+      beginCodexSignIn({
+        request: machinesRequest(event, input.projectId),
+        machineId: input.machineId,
+      }),
+  );
+  ipcMain.handle(
+    "catamorphic:remote-codex-sign-in-status",
+    (event, input: { projectId: string; machineId: string; attempt: string }) =>
+      codexSignInStatus({
+        request: machinesRequest(event, input.projectId),
+        machineId: input.machineId,
+        attempt: input.attempt,
+      }),
+  );
+  ipcMain.handle(
+    "catamorphic:remote-codex-sign-in-cancel",
+    (event, input: { projectId: string; machineId: string; attempt: string }) =>
+      cancelCodexSignIn({
+        request: machinesRequest(event, input.projectId),
+        machineId: input.machineId,
+        attempt: input.attempt,
+      }),
+  );
+  ipcMain.handle(
+    "catamorphic:remote-codex-sign-out",
+    (event, input: { projectId: string; machineId: string }) =>
+      signOutOfCodex({
+        request: machinesRequest(event, input.projectId),
+        machineId: input.machineId,
+      }),
+  );
+  // The device code page opens in a browser tab of the asking window, as
+  // the project's own sign-in page does.
+  ipcMain.handle("catamorphic:open-sign-in-link", (event, url: string) => {
+    if (!URL.canParse(url) || new URL(url).protocol !== "https:")
+      throw new Error("A sign-in link starts with https://");
+    openWorkspaceUrl(event.sender, url);
+  });
+
   // Organization service connections (ADR 0172), reached through any
   // project linked to the server; the server refuses non-administrators.
   ipcMain.handle(
@@ -2624,7 +2763,7 @@ export function registerIpcHandlers(
   };
   ipcMain.handle(
     "catamorphic:personal-environment",
-    (event, projectId: string): PersonalEnvironmentView =>
+    (event, projectId: string): Promise<PersonalEnvironmentView> =>
       personalEnvironment().view(personalEnvironmentTarget(event, projectId)),
   );
   ipcMain.handle(

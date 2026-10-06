@@ -4,43 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createWorkServer, type WorkServer } from "../server.js";
-import { testServerOptions } from "../test-support.js";
-import {
-  type DirectoryAccountStatus,
-  type DirectoryProvider,
-  DirectoryUnavailableError,
-} from "./directory.js";
+import { FakeDirectory, testServerOptions } from "../test-support.js";
 
 /**
  * Company identity end to end (ADR 0161). A fake directory governs Better
  * Auth's local "credential" accounts, whose account id is the user id, so
  * every lifecycle path runs through the real OAuth server and token gate.
  */
-class FakeDirectory implements DirectoryProvider {
-  readonly providerId = "credential";
-  readonly requiredGroups: string[] = [];
-  readonly accounts = new Map<string, DirectoryAccountStatus>();
-  unavailable = false;
-  calls = 0;
-
-  async check(args: {
-    accountId: string;
-    groups: readonly string[];
-  }): Promise<DirectoryAccountStatus> {
-    this.calls += 1;
-    if (this.unavailable) throw new DirectoryUnavailableError("offline");
-    const status = this.accounts.get(args.accountId) ?? {
-      active: true,
-      groups: [],
-    };
-    return status.active
-      ? {
-          active: true,
-          groups: status.groups.filter((group) => args.groups.includes(group)),
-        }
-      : status;
-  }
-}
 
 const PASSWORD = "correct horse battery staple";
 const MEMBER_ROLE = {

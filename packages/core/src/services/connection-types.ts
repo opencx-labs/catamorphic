@@ -96,6 +96,25 @@ export interface ConnectionModelPolicy {
 export const MODEL_CAPABILITY = "model";
 
 /**
+ * Capabilities of a connection whose provider is an HTTP API (ADRs 0162,
+ * 0212): the methods a binding may use, lowercase. Agents call them as
+ * connection tools; code in sandboxes sends them through the gateway's
+ * HTTP route, where `get` also allows HEAD.
+ */
+export const HTTP_METHOD_CAPABILITIES = [
+  "get",
+  "post",
+  "put",
+  "patch",
+  "delete",
+] as const;
+
+/** Whether `capability` is an HTTP method a binding may use (ADR 0212). */
+export function isHttpMethodCapability(capability: string): boolean {
+  return HTTP_METHOD_CAPABILITIES.some((method) => method === capability);
+}
+
+/**
  * Capabilities the gateway serves as protocols (Git, model APIs) rather
  * than as MCP tools: an alias holding only these is not offered to agents
  * as a connection MCP server.

@@ -4,7 +4,12 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import type { EnvironmentBinding, SandboxProvider } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
-import { nodeExecutor, RemoteOperationQueue } from "./remote-operations.js";
+import {
+  ExecutorKeyMissingError,
+  executorKey,
+  nodeExecutor,
+  RemoteOperationQueue,
+} from "./remote-operations.js";
 import { toJson } from "./run-coordinator.js";
 import {
   capacityFits,
@@ -38,6 +43,14 @@ const descriptorSchema = z.object({
     maxConcurrency: z.number().optional(),
   }),
   labels: z.record(z.string(), z.string()).optional(),
+  // What runs the machine's sandboxes and why (ADR 0204), for operators.
+  backend: z
+    .object({
+      kind: z.string().max(40),
+      runtime: z.string().max(40).optional(),
+      reason: z.string().max(1000).optional(),
+    })
+    .optional(),
 });
 
 export interface WorkerNodeLease {
@@ -213,7 +226,9 @@ export class WorkerNodesService {
    * epoch was sent as uncertain: they are never delivered again. An earlier
    * epoch is refused while the current one's lease is live, so a stale
    * process cannot take the machine back from its successor; after a lapse
-   * any epoch may. Refused while the operator has the node disabled.
+   * any epoch may. Refused while the operator has the node disabled, and
+   * with {@link ExecutorKeyMissingError} while the executor has registered
+   * no key to seal its operations to (ADR 0207).
    */
   async connectRemote(args: {
     tenantId: string;
@@ -268,6 +283,14 @@ export class WorkerNodesService {
               current.authority_id !== args.authorityId)
           )
             throw new WorkerNodeLeaseHeldError();
+          // Every operation is sealed to the executor's key (ADR 0207).
+          if (
+            !(await executorKey({
+              db: trx,
+              executor: nodeExecutor(descriptor.id),
+            }))
+          )
+            throw new ExecutorKeyMissingError("This machine");
           // Only epochs order: a lease an executor took before it had one
           // (a random token) never refuses a newer process.
           if (

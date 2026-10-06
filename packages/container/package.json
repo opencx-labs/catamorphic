@@ -1,0 +1,29 @@
+{
+  "name": "@catamorphic/container",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "dev": "tsup --watch --no-clean",
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/container --config ../../vitest.config.ts",
+    "typecheck": "tsgo --project ./tsconfig.json"
+  },
+  "dependencies": {
+    "@catamorphic/runtime": "workspace:*",
+    "@catamorphic/sandbox": "workspace:*",
+    "@catamorphic/workflow": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1"
+  }
+}

@@ -266,6 +266,10 @@ export function defineTrigger(
 export const WORKFLOW_PACKAGE_VERSION = "0.0.4";
 
 export type {
+  SecretHostOperations,
+  SecretStatusEntry,
+} from "./secret-operations.js";
+export type {
   SessionHistoryMessage,
   SessionHostOperations,
   SessionSnapshot,

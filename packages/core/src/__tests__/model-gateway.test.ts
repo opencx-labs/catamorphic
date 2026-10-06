@@ -9,6 +9,7 @@ import type {
 } from "../services/connection-types.js";
 import { ConnectionUnavailableError } from "../services/connections-service.js";
 import {
+  dotPathSegment,
   type LiveModelGrant,
   type ModelCallUsage,
   type ModelGatewayResponse,
@@ -337,8 +338,21 @@ describe("model usage", () => {
       "v1/%zz",
       "v1/a%00",
       "http://evil.test/x",
+      // Servlet containers strip path parameters, then resolve the dots.
+      "v1/..;/admin",
+      "v1/..;x=1/admin",
+      "v1/%2e%2e;/admin",
+      "v1/%2e%2e%3b/admin",
+      "v1/%2E%2E%3Bjsessionid=1/admin",
+      "v1/.;/x",
     ])
       expect(modelRequestPath(escaping), escaping).toBeNull();
+    // A parameter on an ordinary segment is the provider's business.
+    expect(modelRequestPath("v1/files;version=2/x")).toBe(
+      "v1/files;version=2/x",
+    );
+    expect(dotPathSegment("..;")).toBe(true);
+    expect(dotPathSegment("...;")).toBe(false);
   });
 });
 

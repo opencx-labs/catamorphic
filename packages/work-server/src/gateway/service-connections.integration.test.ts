@@ -173,6 +173,7 @@ describe.skipIf(!databaseUrl)("service connections (ADR 0172)", () => {
       dataDir: workerDir,
       enrollmentCode: enrollment.json().code,
       execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
         PATH: process.env.PATH,
         WORK_MAX_WORKSPACES: "2",
       }),

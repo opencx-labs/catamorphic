@@ -1,7 +1,7 @@
 /** Shared authoring guidance offered to every harness through host skill discovery. */
 export const SESSION_WORKFLOWS_SKILL = `---
 name: session-workflows
-description: Author Catamorphic workflows for timed wakeups, recurring checks, session lifecycle events, and attributed session actions. Use for ephemeral session monitors and durable agent automations.
+description: Author Catamorphic workflows for timed wakeups, recurring checks, session lifecycle events, directory events (people joining or leaving), and attributed session actions. Use for ephemeral session monitors, durable agent automations, and onboarding or offboarding automations.
 ---
 
 # Session workflows
@@ -260,6 +260,127 @@ Mentions of the Slack app become one project chat per thread, keyed
 \`slack:<channel>:<thread_ts>\`, and the agent's settled reply is posted back
 to the thread by a second automation reacting to \`session.turn-changed\`.
 Both recipes, with the trigger library they bind, are in the \`slack\` skill.
+
+## Directory events
+
+On a Work server, people joining and leaving start workflows:
+directory.member-joined (an account's first sign-in, or a sign-in after the
+directory restores it), directory.member-left (the account is disabled:
+suspended, deleted, or outside every required group), and
+directory.groups-changed. A workflow binding them must declare
+\`memberships:read\`. input.payload.member is { id, email, name, domain },
+input.payload.groups the member's groups (lowercased), and groups-changed adds
+added and removed. Config { groups: ["eng@example.com"] } selects members of
+any of those groups (on groups-changed, changes that add or remove one); where
+on payload.member.domain selects one domain. Only projects with the automation
+turned on receive them, each change once; nothing from before it was turned on
+is replayed.
+
+host["catamorphic.secrets"] sets and deletes a member's own value of a declared
+project secret (\`secrets:write\`), naming them by email or id; Environments
+that list the secret hand each member their value. Issue a credential and
+return the set call from the same boundary, so the value is never a boundary's
+output (the run keeps those). A key per engineer, revoked when they leave:
+
+\`\`\`typescript
+import { type BoundaryContext, defineSecrets, defineWorkflow, type TriggerPayload, trigger } from "@catamorphic/workflow";
+
+export const secrets = defineSecrets({
+  CLICKHOUSE_ORGANIZATION_ID: { description: "The ClickHouse Cloud organization that issues keys" },
+  CLICKHOUSE_ADMIN_KEY: { description: "A ClickHouse Cloud key that manages keys, as keyId:keySecret" },
+});
+
+/** Where the organization's keys live, and the admin key's credentials. */
+function keysApi() {
+  return {
+    url: \`https://api.clickhouse.cloud/v1/organizations/\${secrets.CLICKHOUSE_ORGANIZATION_ID}/keys\`,
+    headers: {
+      authorization: \`Basic \${Buffer.from(secrets.CLICKHOUSE_ADMIN_KEY).toString("base64")}\`,
+      "content-type": "application/json",
+    },
+  };
+}
+
+/**
+ * @displayname Revoke ClickHouse keys
+ * @icon key-round
+ * @param email - @displayname Email | @description Whose keys to revoke
+ */
+async function revokeClickHouseKeys({ email }: { email: string }) {
+  "use step";
+  const { url, headers } = keysApi();
+  const listed = await fetch(url, { headers });
+  if (!listed.ok) throw new Error(\`Listing ClickHouse keys failed: \${listed.status}\`);
+  const { result } = (await listed.json()) as { result: { id: string; name: string }[] };
+  const keys = result.filter((key) => key.name === \`work \${email}\`);
+  for (const key of keys) {
+    const revoked = await fetch(\`\${url}/\${key.id}\`, { method: "DELETE", headers });
+    if (!revoked.ok) throw new Error(\`Revoking ClickHouse key \${key.id} failed: \${revoked.status}\`);
+  }
+  return { revoked: keys.length };
+}
+
+/**
+ * @displayname Issue a ClickHouse key
+ * @icon key-round
+ * @param email - @displayname Email | @description Who the key is for
+ */
+async function issueClickHouseKey({ email }: { email: string }) {
+  "use step";
+  const { url, headers } = keysApi();
+  const created = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ name: \`work \${email}\`, roles: ["developer"], state: "enabled" }),
+  });
+  if (!created.ok) throw new Error(\`Issuing a ClickHouse key failed: \${created.status}\`);
+  const { result } = (await created.json()) as { result: { keyId: string; keySecret: string } };
+  return \`\${result.keyId}:\${result.keySecret}\`;
+}
+
+/** @displayname Issue engineers their ClickHouse key */
+export const issueEngineerKeys = defineWorkflow(({ defineBoundary }) => ({
+  permissions: ["memberships:read", "secrets:write"],
+  triggers: [trigger("directory.member-joined", { groups: ["engineering@example.com"] })],
+  steps: [
+    /** @displayname Issue and store the key */
+    defineBoundary({
+      run: async ({ input, host }: BoundaryContext<TriggerPayload<"directory.member-joined">>) => {
+        const { email } = input.payload.member;
+        // A retried run must not leave a second key behind.
+        await revokeClickHouseKeys({ email });
+        const value = await issueClickHouseKey({ email });
+        return host["catamorphic.secrets"].set({ name: "CLICKHOUSE_API_KEY", value, member: email });
+      },
+    }),
+  ],
+}));
+
+/** @displayname Revoke leavers' ClickHouse keys */
+export const revokeLeaverKeys = defineWorkflow(({ defineBoundary }) => ({
+  permissions: ["memberships:read", "secrets:write"],
+  triggers: [trigger("directory.member-left", { groups: ["engineering@example.com"] })],
+  steps: [
+    /** @displayname Revoke their keys */
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<TriggerPayload<"directory.member-left">>) => {
+        const { email } = input.payload.member;
+        await revokeClickHouseKeys({ email });
+        return { email };
+      },
+    }),
+    /** @displayname Delete their stored key */
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<{ email: string }>) =>
+        host["catamorphic.secrets"].delete({ name: "CLICKHOUSE_API_KEY", member: input.email }),
+    }),
+  ],
+}));
+\`\`\`
+
+Enable both as project automations. Declare CLICKHOUSE_API_KEY in
+\`.work/project.json\` \`secrets\` and list it in the Environments whose
+sandboxes need it.
 
 ## Session actions and delivery
 

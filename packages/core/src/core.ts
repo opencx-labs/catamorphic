@@ -9,7 +9,7 @@ import type {
 import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import { PROJECT_SKILLS_DIR } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
-import type { Identity } from "./identity.js";
+import { type Identity, mayUseProject } from "./identity.js";
 import { HOST_SKILLS, SEED_SKILLS } from "./seeds.js";
 import type { AgentCapabilityOptions } from "./services/agent-capabilities-service.js";
 import { AgentCapabilitiesService } from "./services/agent-capabilities-service.js";
@@ -73,6 +73,10 @@ import { ExecutionJobsService } from "./services/execution-jobs-service.js";
 import { ExecutionWorkerService } from "./services/execution-worker-service.js";
 import { GitGatewayService } from "./services/git-gateway.js";
 import { executeHostCall } from "./services/host-calls.js";
+import {
+  dbHttpGatewayStore,
+  HttpGatewayService,
+} from "./services/http-gateway.js";
 import { MembershipsService } from "./services/memberships-service.js";
 import {
   dbModelGatewayStore,
@@ -104,6 +108,7 @@ import { RunPluginsLoader } from "./services/run-plugins-loader.js";
 import { RunsService } from "./services/runs-service.js";
 import { RuntimeEventsService } from "./services/runtime-events-service.js";
 import { SchedulesService } from "./services/schedules-service.js";
+import { secretsCapability } from "./services/secrets-capability.js";
 import { SecretsService } from "./services/secrets-service.js";
 import {
   SESSION_ACTION_SCHEMAS,
@@ -111,7 +116,9 @@ import {
 } from "./services/session-actions-service.js";
 import { SessionArtifactsService } from "./services/session-artifacts-service.js";
 import type { SessionMailboxesService } from "./services/session-mailboxes-service.js";
+import { SessionPreviewsService } from "./services/session-previews-service.js";
 import { SessionSyncService } from "./services/session-sync-service.js";
+import { SessionTerminalsService } from "./services/session-terminals-service.js";
 import { SessionWorkspaces } from "./services/session-workspaces.js";
 import { SkillsService } from "./services/skills-service.js";
 import { TenantPoliciesService } from "./services/tenant-policies-service.js";
@@ -192,6 +199,15 @@ export interface CatamorphicCoreConfig {
     externalUserId: string;
   }) => Promise<Identity | null>;
   /**
+   * The external user id of whoever signs in with `email`, or null. Lets
+   * workflows name members by email (`catamorphic.secrets`, ADR 0210);
+   * without it they name members by id only.
+   */
+  memberIdForEmail?: (args: {
+    tenantId: string;
+    email: string;
+  }) => Promise<string | null>;
+  /**
    * Where sandboxes reach the control plane: its public URL's host and port
    * (`work.acme.com:443`, see `gatewayHostOf`; a bare host allows every
    * port). An Environment with restricted egress always reaches them, and
@@ -208,9 +224,10 @@ export interface CatamorphicCoreConfig {
    * The gateway's base URL as a session's sandbox reaches it (ADRs 0175,
    * 0180), e.g. `https://work.example.com/api/gateway`, where the host
    * mounts the plugin's gateway routes. Sandboxes get Git configured for
-   * `<gatewayUrl>/git/<alias>/` and harnesses reach models at
-   * `<gatewayUrl>/model/<alias>/`. Absent, Git and model aliases are not
-   * offered to sandboxes.
+   * `<gatewayUrl>/git/<alias>/`, harnesses reach models at
+   * `<gatewayUrl>/model/<alias>/`, and code reaches HTTP APIs at
+   * `<gatewayUrl>/http/<alias>` (ADR 0212). Absent, Git, model and HTTP
+   * aliases are not offered to sandboxes.
    */
   gatewayUrl?: (args: {
     projectId: string;
@@ -396,6 +413,8 @@ export class CatamorphicCore {
   readonly gitGateway?: GitGatewayService;
   /** Models through the gateway for sandbox harnesses (ADR 0180). */
   readonly modelGateway?: ModelGatewayService;
+  /** HTTP APIs through the gateway for code in sandboxes (ADR 0212). */
+  readonly httpGateway?: HttpGatewayService;
   /** Workspaces at a ref of a project's linked remote (ADR 0178). */
   readonly sessionWorkspaces: SessionWorkspaces;
   /** Committed `.work/roles/*.json` and their expansion into identities (ADR 0055). */
@@ -432,6 +451,10 @@ export class CatamorphicCore {
   readonly sessionSync?: SessionSyncService;
   readonly watchers?: WatchersService;
   readonly sessionActions?: SessionActionsService;
+  /** Terminals people open in a chat's workspace (ADR 0209). */
+  readonly sessionTerminals?: SessionTerminalsService;
+  /** Previews of servers running in a chat's workspace (ADR 0209). */
+  readonly sessionPreviews?: SessionPreviewsService;
   readonly apps?: AppsService;
   readonly sessionArtifacts: SessionArtifactsService;
   readonly appPolicies: AppPoliciesService;
@@ -673,6 +696,13 @@ export class CatamorphicCore {
     };
     this.capabilities = new CapabilityRegistry([
       sessionDeliveryCapability,
+      secretsCapability({
+        // Constructed further down; resolved per call.
+        secrets: () => this.secrets,
+        ...(config.memberIdForEmail
+          ? { memberIdForEmail: config.memberIdForEmail }
+          : {}),
+      }),
       ...(config.capabilityProviders ?? []),
     ]);
     this.projects = new ProjectsService(
@@ -869,6 +899,10 @@ export class CatamorphicCore {
         store: dbModelGatewayStore(this.db),
         broker: this.connectionBroker,
       });
+      this.httpGateway = new HttpGatewayService({
+        store: dbHttpGatewayStore(this.db),
+        broker: this.connectionBroker,
+      });
     }
     this.codeHosts = new CodeHostsService({
       db: this.db,
@@ -932,15 +966,20 @@ export class CatamorphicCore {
     }
     // Secrets exist independently of plugins: a project declares its own with
     // `defineSecrets` in code, and plugins may declare additional ones.
-    this.secrets = new SecretsService(
-      this.db,
-      this.plugins,
-      (args) =>
+    this.secrets = new SecretsService({
+      db: this.db,
+      ...(this.plugins ? { plugins: this.plugins } : {}),
+      projectDeclarations: (args) =>
         args.purpose === "run"
           ? this.workflows.declaredSecretsForRun(args)
           : this.workflows.listDeclaredSecrets(args),
-      config.credentialVault,
-    );
+      ...(config.credentialVault ? { vault: config.credentialVault } : {}),
+      environments: this.projectEnvironments,
+      isMember: async (args) => {
+        const member = await this.resolveMember(args);
+        return member !== null && mayUseProject(member, args.projectId);
+      },
+    });
     this.personalEnvironments = new PersonalEnvironmentService({
       db: this.db,
       ...(config.credentialVault ? { vault: config.credentialVault } : {}),
@@ -1149,6 +1188,7 @@ export class CatamorphicCore {
         connectionMcpUrl: config.connectionMcpUrl,
         workspaces: this.sessionWorkspaces,
         personalEnvironments: this.personalEnvironments,
+        secrets: this.secrets,
         ...(config.gatewayUrl
           ? {
               sandboxGateway: {
@@ -1160,6 +1200,9 @@ export class CatamorphicCore {
                 modelApi: (providerKind: string) =>
                   this.connectionProviderRegistry?.get(providerKind)?.model
                     ?.api,
+                servesHttp: (providerKind: string) =>
+                  this.connectionProviderRegistry?.get(providerKind)?.http !==
+                  undefined,
                 turnUsage: async (args: {
                   sessionId: string;
                   turnId: string;
@@ -1242,6 +1285,14 @@ export class CatamorphicCore {
         this.agentSessions,
         () => this.watchers,
       );
+      this.sessionTerminals = new SessionTerminalsService({
+        db: this.db,
+        sessions: this.agentSessions,
+      });
+      this.sessionPreviews = new SessionPreviewsService({
+        db: this.db,
+        sessions: this.agentSessions,
+      });
       this.agentSessions.setSessionActionHandler(async (input) => {
         const action = SESSION_ACTION_SCHEMAS[input.operation];
         if (!action || !this.sessionActions)

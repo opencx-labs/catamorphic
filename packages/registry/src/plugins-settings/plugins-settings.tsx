@@ -32,7 +32,7 @@ export function PluginsSettings({ projectId }: Props) {
   const catalog = catalogQuery.data ?? [];
   const loading = attachedQuery.isLoading;
   const secretValues = new Map(
-    (secretsQuery.data ?? []).map((secret) => [secret.name, secret.hasValue]),
+    (secretsQuery.data ?? []).map((secret) => [secret.name, secret.shared]),
   );
 
   const attachedNames = new Set(attached?.map((p) => p.packageName) ?? []);

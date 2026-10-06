@@ -1,6 +1,6 @@
 # 0167 — Machine pools, node access, and placement by owner
 
-- **Status:** Accepted
+- **Status:** Accepted (machine classes, pools and retention by [0205](0205-machine-classes-pools-and-retention.md))
 - **Date:** 2026-09-25
 - **Refines:** 0064, 0070, 0098, 0164, 0166
 

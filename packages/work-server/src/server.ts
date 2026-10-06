@@ -23,7 +23,11 @@ import {
   instrumentHttpServer,
   serveSpaDist,
 } from "@catamorphic/fastify-plugin";
-import { gatewayHostOf } from "@catamorphic/sandbox";
+import {
+  type HetznerCloudClientOptions,
+  HetznerCloudMachines,
+} from "@catamorphic/hetzner";
+import { gatewayHostOf, MACHINE_CAPABILITIES } from "@catamorphic/sandbox";
 import {
   aiToolCall,
   aiToolKind,
@@ -31,6 +35,7 @@ import {
   type Catamorphic,
   connectionAuthorizationPage,
   createCatamorphic,
+  DIRECTORY_TRIGGER_KINDS,
   defineGithubConnectionProvider,
   EncryptedCredentialVault,
   FsBackend,
@@ -48,7 +53,7 @@ import { createPushTransport } from "@catamorphic/server-sdk/web-push";
 import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { z } from "zod";
 import { WorkAdmissionService } from "./admission/admission-service.js";
@@ -62,6 +67,7 @@ import { registerWorkAuthRoutes } from "./auth/fastify-auth.js";
 import {
   createWorkAuth,
   loadWorkAuthSecret,
+  verifiedUserIdForEmail,
   type WorkAuth,
 } from "./auth/work-auth.js";
 import { workMark } from "./brand.js";
@@ -73,7 +79,11 @@ import {
 import { startCompanyProjectSync } from "./company-sync.js";
 import type { WorkServerConfig } from "./config.js";
 import { EncryptedFileCredentialVault } from "./credential-vault.js";
-import { workExecution } from "./execution-config.js";
+import {
+  agentsReachMachine,
+  resolveExecutionSettings,
+  workExecution,
+} from "./execution-config.js";
 import {
   gatewayProviders,
   parseGatewayConfig,
@@ -85,7 +95,10 @@ import type { DirectoryProvider } from "./identity/directory.js";
 import { GoogleWorkspaceDirectory } from "./identity/google-directory.js";
 import { registerConnectionSetup } from "./setup/connections.js";
 import { registerGithubAppSetup } from "./setup/github-app.js";
-import { registerMachineSetup } from "./setup/machines.js";
+import {
+  registerMachineAdministration,
+  registerMachineSetup,
+} from "./setup/machines.js";
 import {
   loadWorkOperatorSecret,
   verifyWorkOperatorSecret,
@@ -103,11 +116,23 @@ import {
 import { registerShareRoutes } from "./shares/share-routes.js";
 import { shareTools } from "./shares/share-tools.js";
 import { WorkSharesService } from "./shares/shares-service.js";
+import { CodexSignIns } from "./workers/codex-sign-ins.js";
+import {
+  installTarget,
+  registerInstallScriptRoute,
+} from "./workers/install-script.js";
+import {
+  MachinesConfigSchema,
+  machineClassesProblem,
+} from "./workers/machine-classes.js";
 import {
   type MachineProvisioner,
   MachineReconciler,
 } from "./workers/machine-rules.js";
+import { registerMemberMachineRoutes } from "./workers/member-machine-routes.js";
+import { MemberMachines } from "./workers/member-machines.js";
 import { signInCapabilities } from "./workers/sign-ins.js";
+import { startVolumePruning } from "./workers/volume-pruning.js";
 import { WorkWorkerRegistry } from "./workers/worker-registry.js";
 import { registerWorkerRoutes } from "./workers/worker-routes.js";
 
@@ -162,10 +187,16 @@ export interface WorkServerHooks {
    */
   directories?: readonly DirectoryProvider[];
   /**
-   * Creates and destroys worker machines on a platform, so machine rules
-   * can give directory groups dedicated or shared machines (ADR 0167).
+   * Creates and destroys worker machines on a platform Work does not ship,
+   * for `custom` machine classes (ADRs 0167, 0205). With no classes
+   * configured, every class a rule names is custom.
    */
   machineProvisioner?: MachineProvisioner;
+  /**
+   * Hetzner Cloud API options for `hetzner-cloud` classes: another
+   * endpoint, or a `fetch` for tests. The token is `config.hetznerToken`.
+   */
+  hetzner?: Omit<HetznerCloudClientOptions, "token">;
   /** Mount additional host routes on the public application. */
   routes?: (args: {
     app: FastifyInstance;
@@ -262,6 +293,16 @@ async function createWorkServerInner(
       "Postgres deployments require the same WORK_SECRET on every instance",
     );
   }
+  // Machine classes (ADR 0205) need what their platforms need.
+  const machineClasses = config.machines
+    ? MachinesConfigSchema.parse(config.machines).classes
+    : {};
+  const machinesProblem = machineClassesProblem({
+    classes: machineClasses,
+    hetznerToken: Boolean(config.hetznerToken),
+    provisioner: Boolean(hooks.machineProvisioner),
+  });
+  if (machinesProblem) throw new Error(machinesProblem);
   // Every replica must answer the same loopback operator credential; one
   // generated into a replica's disposable data directory would not.
   if (config.databaseUrl && !config.operatorSecret) {
@@ -333,25 +374,42 @@ async function createWorkServerInner(
     databaseConfig = { db: ownDb };
   }
 
-  // --- execution: the container is the sandbox (ADR 0047) -------------
+  // --- execution: the best backend this machine offers (ADR 0204) ------
   // A shared control plane holds every member's credentials. Agent code run
   // as its plain subprocess could read them from the server's environment,
-  // so it needs a VM sandbox, enrolled workers, or an explicit opt-in.
+  // so it needs a VM or container sandbox, enrolled workers, or an explicit
+  // opt-in. The policy is known before the machine is probed.
+  const agentsHere =
+    config.execution.workloads.includes("agent") &&
+    !config.execution.trustControlPlaneAgents;
+  const agentRefusal =
+    "A Postgres deployment runs agents on the control plane only in a sandbox: set WORK_SANDBOX=microsandbox or container (or auto on a machine that offers one) without privileged runc containers, or WORK_CONTROL_PLANE_WORKLOADS=workflow and enroll workers (ADR 0164).";
   if (
     config.databaseUrl &&
-    config.execution.backend === "local-process" &&
-    config.execution.workloads.includes("agent") &&
-    !config.execution.trustControlPlaneAgents
-  ) {
-    throw new Error(
-      "A Postgres deployment runs agents on the control plane only in microsandbox. Set WORK_SANDBOX=microsandbox, or WORK_CONTROL_PLANE_WORKLOADS=workflow and enroll workers (ADR 0164).",
-    );
-  }
-  const execution = workExecution({
+    agentsHere &&
+    config.execution.backend === "local-process"
+  )
+    throw new Error(agentRefusal);
+  const resolvedExecution = await resolveExecutionSettings({
     settings: config.execution,
+  });
+  log(`Sandboxes: ${resolvedExecution.backend} (${resolvedExecution.reason})`);
+  // A privileged runc container can reach the machine as a process can.
+  if (config.databaseUrl && agentsHere && agentsReachMachine(resolvedExecution))
+    throw new Error(agentRefusal);
+  const execution = workExecution({
+    settings: resolvedExecution,
     dataDir: data,
+    log,
   });
   const sandboxProvider = execution.provider;
+  // Volumes nobody used for long leave this machine too (ADR 0208).
+  const stopVolumePruning = startVolumePruning({
+    provider: sandboxProvider,
+    retentionMs: execution.volumeRetentionMs,
+    log,
+  });
+  disposers.push(async () => stopVolumePruning());
   if (!ownDb) throw new Error("Database was not initialized");
   await migrateToLatest({ db: ownDb });
   const objectStore = config.databaseUrl
@@ -439,6 +497,13 @@ async function createWorkServerInner(
     authorityId: hostId,
     log,
   });
+  // A single person's server whose operator accepted personal credentials
+  // holds its members' own sign-ins (ADR 0213); a replica never does.
+  const singleServerSignIns =
+    !disposable &&
+    execution.machineCapabilities.includes(
+      MACHINE_CAPABILITIES.personalCredentials,
+    );
   const machine = await registerWorkMachine({
     db: ownDb,
     tenantId: SERVER_TENANT_ID,
@@ -452,7 +517,9 @@ async function createWorkServerInner(
     isolation: execution.isolation,
     workloads: config.execution.workloads,
     capabilities: execution.machineCapabilities,
+    backend: execution.backend,
     signIns: () => signInCapabilities(execution.signInRoot),
+    ownSignIns: singleServerSignIns,
     sandboxProvider,
     placement: {
       workers: () => workers.placements(),
@@ -509,6 +576,10 @@ async function createWorkServerInner(
             externalUserId,
           })
         : null,
+    // Workflows name members by the email they sign in with (ADR 0210).
+    // Only a verified email names someone (ADR 0210).
+    memberIdForEmail: ({ email }) =>
+      verifiedUserIdForEmail({ auth: workAuth, email }),
     workerNode: machine.lease,
     clientExecution: true,
     database: databaseConfig,
@@ -558,7 +629,15 @@ async function createWorkServerInner(
       objectStore ?? new FsBundleStore(path.join(data, "app-bundles")),
     documentBlobStore:
       objectStore ?? new FsBundleStore(path.join(data, "document-blobs")),
-    triggerKinds: [aiToolCall, schedule, webhook, ...SESSION_TRIGGER_KINDS],
+    // Directory events (ADR 0210) start onboarding and offboarding
+    // automations; the account lifecycle below appends them.
+    triggerKinds: [
+      aiToolCall,
+      schedule,
+      webhook,
+      ...SESSION_TRIGGER_KINDS,
+      ...DIRECTORY_TRIGGER_KINDS,
+    ],
     // Workflows bound to `ai.tool-call` are tools on the project MCP, for
     // project agents and members' own MCP clients alike.
     mcpToolKinds: [aiToolKind],
@@ -763,35 +842,43 @@ async function createWorkServerInner(
       groups: groups.map((group) => group.toLowerCase()),
     };
   };
-  const machineReconciler = hooks.machineProvisioner
-    ? new MachineReconciler({
-        db: core.db,
-        tenantId: SERVER_TENANT_ID,
-        workers,
-        provisioner: hooks.machineProvisioner,
-        controlPlaneUrl: publicBase,
-        emailOf: async (userId) =>
-          (await workAuth.findUserById({ userId }))?.email?.toLowerCase(),
-        log,
-      })
-    : undefined;
-  const reconcileMachines = () => {
-    void machineReconciler
-      ?.reconcile()
-      .catch((error) =>
-        log(
-          `Machine reconciliation failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        ),
-      );
-  };
+  // Every machine installs the same way (ADR 0205): the script this
+  // server serves, with its public origin and worker image baked in.
+  const install = installTarget({
+    publicBase,
+    ...(config.workerImage ? { workerImage: config.workerImage } : {}),
+  });
+  const machineReconciler =
+    Object.keys(machineClasses).length > 0 || hooks.machineProvisioner
+      ? new MachineReconciler({
+          db: core.db,
+          tenantId: SERVER_TENANT_ID,
+          workers,
+          classes: machineClasses,
+          ...(hooks.machineProvisioner
+            ? { provisioner: hooks.machineProvisioner }
+            : {}),
+          ...(config.hetznerToken
+            ? {
+                hetzner: new HetznerCloudMachines({
+                  client: { ...hooks.hetzner, token: config.hetznerToken },
+                }),
+              }
+            : {}),
+          install,
+          controlPlaneUrl: publicBase,
+          emailOf: async (userId) =>
+            (await workAuth.findUserById({ userId }))?.email?.toLowerCase(),
+          log,
+        })
+      : undefined;
+  const reconcileMachines = () => machineReconciler?.reconcileSoon();
   if (machineReconciler) {
     const machineTimer = setInterval(reconcileMachines, 60_000);
     machineTimer.unref();
     disposers.push(async () => {
       clearInterval(machineTimer);
-      await machineReconciler.reconcile().catch(() => undefined);
+      await machineReconciler.settle();
     });
   }
   const accountLifecycle = new AccountLifecycle({
@@ -800,6 +887,8 @@ async function createWorkServerInner(
     directories,
     sessions: workAuthConfig.sessions,
     directory: workAuthConfig.directory,
+    tenantId: SERVER_TENANT_ID,
+    projectEvents: core.projectEvents,
     // Groups that decide roles or whose work a worker takes (ADR 0167).
     mappedGroups: async () => [
       ...new Set([
@@ -862,6 +951,28 @@ async function createWorkServerInner(
       await sweeping;
     });
   }
+  // Directory events a transition could not deliver at once retry here
+  // (ADR 0210); replicas share the queue through Postgres.
+  let announcing: Promise<unknown> | undefined;
+  const announceTimer = setInterval(() => {
+    announcing ??= accountLifecycle
+      .deliverAnnouncements()
+      .catch((error) =>
+        log(
+          `Directory event delivery failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        ),
+      )
+      .finally(() => {
+        announcing = undefined;
+      });
+  }, 15_000);
+  announceTimer.unref();
+  disposers.push(async () => {
+    clearInterval(announceTimer);
+    await announcing;
+  });
   const notificationWorkerId = `work-notifications:${nodeId}`;
   let notificationWork: Promise<void> | undefined;
   const notificationTimer = setInterval(() => {
@@ -1006,6 +1117,19 @@ async function createWorkServerInner(
     done(null, payload);
   });
   registerWorkerRoutes(app, workers);
+  registerInstallScriptRoute(app, install);
+  // Workers and machine rules: the operator on the loopback listener, and
+  // organization administrators through the API (ADR 0205).
+  const machineManagement = {
+    nodes: machine.nodes,
+    workers,
+    tenantId: SERVER_TENANT_ID,
+    authorityId: hostId,
+    publicBase,
+    classes: machineClasses,
+    install,
+    ...(machineReconciler ? { machines: machineReconciler } : {}),
+  };
   registerWorkAuthRoutes(app, {
     auth: workAuth,
     baseURL: publicBase,
@@ -1040,13 +1164,46 @@ async function createWorkServerInner(
       });
     },
   });
-  registerAdministratorRoutes(app, {
+  const administratorAccess = {
     administrators,
-    caller: async (request) => {
+    caller: async (request: FastifyRequest) => {
       const header = request.headers.authorization;
       const authorization = Array.isArray(header) ? header[0] : header;
       return authorization ? memberIdentity(authorization) : null;
     },
+  };
+  registerAdministratorRoutes(app, administratorAccess);
+  registerMachineAdministration({
+    app,
+    ...administratorAccess,
+    ...machineManagement,
+  });
+  // Members sign in to Codex on machines of their own from the app (ADR
+  // 0213). A single server whose operator accepted personal credentials
+  // is one of them for the first member to sign in there; a replica's own
+  // machine never is.
+  const ownSignIns = singleServerSignIns
+    ? new CodexSignIns({
+        signInRoot: execution.signInRoot,
+        dataDir: data,
+        env: { ...process.env, PATH: config.execution.path },
+        onChange: () => machine.refreshSignIns(),
+      })
+    : undefined;
+  if (ownSignIns) disposers.push(async () => ownSignIns.stop());
+  const memberNodes = new WorkerNodesService(ownDb);
+  registerMemberMachineRoutes(app, {
+    caller: administratorAccess.caller,
+    machines: new MemberMachines({
+      nodes: () =>
+        memberNodes.list({ tenantId: SERVER_TENANT_ID, authorityId: hostId }),
+      placements: () => workers.placements(),
+      owner: (userId) => placementOwner(userId),
+      ...(ownSignIns
+        ? { ownMachine: { nodeId: machine.lease.id, signIns: ownSignIns } }
+        : {}),
+      worker: (args) => workers.codexSignIn(args),
+    }),
   });
   registerWorkAdmissionRoutes(app, {
     publicBases: config.publicBases,
@@ -1096,13 +1253,8 @@ async function createWorkServerInner(
   disposers.push(() => operatorApp.close());
   registerMachineSetup({
     app: operatorApp,
-    nodes: machine.nodes,
-    workers,
-    tenantId: SERVER_TENANT_ID,
-    authorityId: hostId,
     operatorSecret,
-    publicBase,
-    ...(machineReconciler ? { machines: machineReconciler } : {}),
+    ...machineManagement,
   });
   registerConnectionSetup({
     app: operatorApp,

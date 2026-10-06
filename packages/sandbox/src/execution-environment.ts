@@ -37,6 +37,12 @@ export interface EnvironmentBinding {
   resourceLimits?: readonly ("cpuMillis" | "memoryMb" | "storageMb" | "gpu")[];
   /** Host-assigned labels an Environment's `pool` selects on (ADR 0167). */
   labels?: Readonly<Record<string, string>>;
+  /**
+   * What runs the machine's sandboxes and why it was chosen (ADR 0204),
+   * for operators: `microsandbox`, `container` with its runtime (`runsc`,
+   * `runc`), or `local-process`.
+   */
+  backend?: { kind: string; runtime?: string; reason?: string };
 }
 
 /** Internal realization. Provider objects never cross an API boundary. */
@@ -48,10 +54,18 @@ export interface EnvironmentRuntimeBinding {
   sandboxProvider?: SandboxProvider;
   /**
    * The host placed the owner's work on a machine no one else's work
-   * reaches (ADR 0167 access naming only that person), so it may hold the
-   * owner's personal credentials (ADR 0184).
+   * reaches (ADR 0167 access naming only that person, or for a project's
+   * own work only that project), so it may hold the owner's personal
+   * credentials (ADR 0184) and the Environment's secrets (ADR 0206).
    */
   servesOnlyOwner?: boolean;
+  /**
+   * The host lets this placement hold its owner's own harness sign-in (ADR
+   * 0213): a machine of theirs alone, or a single person's server whose
+   * operator accepted personal credentials on it. Never a machine several
+   * people's sign-ins would share.
+   */
+  ownSignIns?: boolean;
 }
 
 /**

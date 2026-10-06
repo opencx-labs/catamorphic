@@ -32,6 +32,11 @@ export interface TerminalEntry {
   chatLocalId?: string;
   /** Attached to an agent-owned PTY session instead of spawning one. */
   attachSessionId?: string;
+  /**
+   * A shell in this remote chat's workspace on the project's server (ADR
+   * 0209), named for the chat; closing the tab closes it.
+   */
+  remoteSessionId?: string;
   /** PTY session backing this tab (agents read terminals through it). */
   ptySessionId?: string;
   /**
@@ -86,6 +91,9 @@ export type ClosedTab = (
       chatLocalId?: string;
       /** Dead PTY whose scrollback the reopened tab replays. */
       ptySessionId?: string;
+      /** A remote chat's terminal reopens in that chat's workspace. */
+      remoteSessionId?: string;
+      title?: string;
     }
   | { kind: "editor"; filePath: string | null; chatLocalId?: string }
   | { kind: "chat"; sessionId?: string; incognito?: boolean }
@@ -593,6 +601,12 @@ function applyWorkspaceEvent(
                   ptySessionId: closing.attachSessionId
                     ? undefined
                     : closing.ptySessionId,
+                  ...(closing.remoteSessionId
+                    ? {
+                        remoteSessionId: closing.remoteSessionId,
+                        title: closing.title,
+                      }
+                    : {}),
                   ...splitContext,
                 }
               : null,
@@ -723,9 +737,12 @@ function applyWorkspaceEvent(
         case "terminal": {
           const entry: TerminalEntry = {
             localId: event.localId,
-            title: "",
+            title: record.title ?? "",
             chatLocalId: record.chatLocalId,
             restoreSessionId: record.ptySessionId,
+            ...(record.remoteSessionId
+              ? { remoteSessionId: record.remoteSessionId }
+              : {}),
           };
           key = terminalTabKey(entry.localId);
           patch = { terminals: [...ws.terminals, entry] };

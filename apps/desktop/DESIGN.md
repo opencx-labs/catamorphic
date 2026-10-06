@@ -528,6 +528,38 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-06: Codex signs in on your own machines
+
+Remote environment's Sign-ins section now says plainly where each harness
+runs on a person's behalf (ADR 0213): Claude Code on their own
+subscription only on this computer, and on the server through the
+organization's model connection. Below it, Your machines lists the
+machines that run only their work, each online or not and signed in to
+Codex or not. Sign in to Codex opens a small dialog with Codex's own
+device code steps: the sign-in page (a Work browser tab, with the link
+shown too) and the one-time code, large and copyable. The token stays on
+the machine; the desktop only ever sees the code. The dialog checks every
+two seconds, closing it cancels a waiting attempt, and an answer to an
+attempt closed since never touches it. Sign out asks in place, like
+clearing a secret. A server without the route hides the list.
+
+### 2026-10-06: Work beside a server chat
+
+A chat that runs on the project's server now offers Open terminal and Open
+preview in its menu (dock bubble and sidebar row) and in the palette (ADR
+0209). The terminal is an ordinary terminal tab named "Terminal · <chat>":
+its session in the main process is a remote backend beside the local PTYs,
+so the emulator, keys, scrollback and Cmd+Shift+T behave as they do for a
+local shell. Closing the tab closes the shell. When the shell itself exits
+the tab closes; when the workspace went away the tab stays and says so.
+Open preview asks for a port (the chat's last one filled in) and opens a
+browser tab on that preview's own loopback host (`p-<id>.localhost`,
+ADR 0211), so a dev server's `/assets/...` URLs and its cookies work as on
+the person's own machine and stay that preview's; the address stays the
+same across restarts, so a restored tab still opens. The
+server's own refusals (nothing listens, the workspace is not running) show
+as a plain page in the tab.
+
 ### 2026-10-06: Chrome extensions install from the store and live in the toolbar
 
 The browser runs Chrome extensions (ADR 0203). "Add to Chrome" on the

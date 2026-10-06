@@ -1,6 +1,6 @@
 ---
 name: setup-work-server
-description: Use when installing or operating a Work server (the prebuilt server image), provisioning its first project and user, company sign-in and deprovisioning, credentials and the connection gateway, connecting Slack, reviewing pull requests on a review pool, enrolling workers or replicas, sharing with customers, embedding Catamorphic in an existing application, mapping host authentication to Catamorphic identity, or configuring Postgres or PGlite.
+description: Use when installing or operating a Work server (the prebuilt server image), provisioning its first project and user, company sign-in and deprovisioning, credentials and the connection gateway, connecting Slack, reviewing pull requests on a review pool, enrolling workers or replicas, giving every engineer a machine on Hetzner Cloud or from a pool of servers, sharing with customers, embedding Catamorphic in an existing application, mapping host authentication to Catamorphic identity, or configuring Postgres or PGlite.
 ---
 
 # Setting up a Work server or a Catamorphic host
@@ -55,12 +55,12 @@ Start small and add only what the situation needs:
 | --- | --- |
 | Nothing installed; "a brain on this machine" an MCP client can reach | [A first brain on one machine](references/first-brain.md) |
 | Work server image or `apps/server` | [Work server](references/stock-server.md) |
-| Company sign-in through Google Workspace, deprovisioning, groups as roles | [Company identity](references/company-identity.md) |
+| Company sign-in through Google Workspace, deprovisioning, groups as roles, onboarding and offboarding automations | [Company identity](references/company-identity.md) |
 | Credentials, API keys, a production database, query review, vault keys | [Secrets and the gateway](references/secrets-and-gateway.md) |
 | GitHub: a GitHub App, company repositories, pull requests, webhooks | [Connect GitHub](references/connect-github.md) |
 | Slack: a project answering mentions in threads, reading and searching Slack | [Connect Slack](references/connect-slack.md) |
 | Code and security review of every pull request on a dedicated review pool | [Review pull requests with Work](references/review-pull-requests.md) |
-| More execution capacity, workers, replicas for availability | [Machines: control plane, replicas, and workers](references/cluster-deployment.md) |
+| More execution capacity, workers, replicas for availability; a machine for every engineer on Hetzner Cloud or from a pool of the company's own servers | [Machines: control plane, replicas, and workers](references/cluster-deployment.md) |
 | Sharing documents, folders, or apps with customers behind a sign-in | [Sharing outside the company](references/sharing.md) |
 | Members working from Claude Code, Codex, or another MCP client | [Working from your own agent](references/members-over-mcp.md) |
 | Project agents that are Claude Code or Codex, running on the server with a model key the gateway holds, or on a member's own subscription signed in on the machine | [Harnesses on the server](references/harnesses.md) |
@@ -86,8 +86,9 @@ disagree with the installed source, the source wins.
   there is no silent default role.
 - **No super-admin.** The operator credential is machine access, not a user.
   A setup agent provisions the first ordinary user and membership through the
-  server's own operations. Organization administrators manage only the named
-  service connections (ADR 0172); they gain nothing inside projects.
+  server's own operations. Organization administrators manage the named
+  service connections (ADR 0172) and the workers and machine rules
+  (ADR 0205); they gain nothing inside projects.
 - **After setup, configuration is project code.** Roles, agents,
   `.work/workspace.js`, and `.work/project.json` change through
   ordinary review. Do not create a parallel bootstrap config.
@@ -106,7 +107,9 @@ disagree with the installed source, the source wins.
   execution uses their project connection, never database credentials.
 - **Credentials reach systems only through the gateway** (ADR 0162): agents
   and workflows get reviewed actions, never keys. Workflow runs, which receive
-  project secrets, stay on the control plane. An administrator enters each
+  project secrets, stay on the control plane. Secrets a project lists on an
+  Environment, with a value per member, reach that Environment's sandboxes
+  where the placement isolates their owner (ADR 0206). An administrator enters each
   service credential once; projects bind it by name to an Environment in
   `.work/project.json` (ADR 0172).
 - **Isolation matches trust.** Local-process execution is for trusted

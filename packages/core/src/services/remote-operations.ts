@@ -1,10 +1,20 @@
+import { type KeyObject, randomUUID } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import { getTracer, type SpanAttributes, withSpan } from "@catamorphic/otel";
 import {
+  ExecutorPublicKeySchema,
+  generateExecutorKeyPair,
+  openOperation,
   PROCESS_SIGNALS,
+  redactUrlCredentials,
   type SandboxProcessProvider,
   type SandboxProvider,
+  SealedOperationOpenError,
+  SealedOperationSchema,
+  sealOperation,
+  VOLUME_KEY_PATTERN,
 } from "@catamorphic/sandbox";
+import type { Span } from "@opentelemetry/api";
 import { type Kysely, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import {
@@ -59,8 +69,21 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
       signIns: z
         .array(
           z.object({
-            harness: z.enum(["claude-code", "codex"]),
+            harness: z.literal("codex"),
             member: z.string().min(1),
+          }),
+        )
+        .readonly()
+        .optional(),
+      // Directories the executor keeps across sandboxes (ADR 0208).
+      volumes: z
+        .array(
+          z.object({
+            key: z.string().regex(VOLUME_KEY_PATTERN),
+            path: z.string().min(1).max(1024),
+            exclusive: z.boolean().optional(),
+            sizeMb: z.number().int().positive().optional(),
+            temporary: z.boolean().optional(),
           }),
         )
         .readonly()
@@ -151,6 +174,29 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
     kind: z.literal("process.list"),
     sandboxId: z.string(),
   }),
+  // A pooled machine returns to its pool (ADR 0205): the executor destroys
+  // every sandbox it holds and deletes members' volumes and sign-ins.
+  z.object({ kind: z.literal("machine.reset") }),
+  // A member signs in to Codex on their machine from the app (ADR 0213):
+  // the executor runs Codex's own device-code login and answers with its
+  // link and one-time code, then with how it ended.
+  z.object({
+    kind: z.literal("machine.codexSignIn"),
+    request: z.discriminatedUnion("action", [
+      z.object({ action: z.literal("begin"), member: z.string().min(1) }),
+      z.object({
+        action: z.literal("status"),
+        member: z.string().min(1),
+        attempt: z.string().uuid(),
+      }),
+      z.object({
+        action: z.literal("cancel"),
+        member: z.string().min(1),
+        attempt: z.string().uuid(),
+      }),
+      z.object({ action: z.literal("signOut"), member: z.string().min(1) }),
+    ]),
+  }),
 ]);
 export type RemoteOperation = z.infer<typeof RemoteOperationSchema>;
 const statusSchema = z.enum([
@@ -201,6 +247,296 @@ export const RemoteOperationResultSchema = z.union([
   processOutputSchema,
   z.array(processSchema),
 ]);
+
+/**
+ * An operation as the queue stores and delivers it (ADR 0207): its kind in
+ * the clear, everything else sealed to its executor's key. Postgres, its
+ * log and its backups never see the operation itself.
+ */
+export const SealedRemoteOperationSchema = z.strictObject({
+  kind: z.string().min(1),
+  sealed: SealedOperationSchema,
+});
+export type SealedRemoteOperation = z.infer<typeof SealedRemoteOperationSchema>;
+
+/**
+ * What a sealed operation is bound to: its row, its executor, and its kind.
+ * An operation moved to another row or executor, or relabeled, never opens.
+ */
+function operationAad(args: {
+  operationId: string;
+  executor: string;
+  kind: string;
+}): string {
+  return JSON.stringify([args.operationId, args.executor, args.kind]);
+}
+
+/** Controller side: seal one operation to its executor's public key. */
+export function sealRemoteOperation(args: {
+  operationId: string;
+  executor: string;
+  operation: RemoteOperation;
+  publicKey: string;
+}): SealedRemoteOperation {
+  return {
+    kind: args.operation.kind,
+    sealed: sealOperation({
+      plaintext: JSON.stringify(args.operation),
+      recipientPublicKey: args.publicKey,
+      aad: operationAad({ ...args, kind: args.operation.kind }),
+    }),
+  };
+}
+
+/** What a sealed receipt is bound to: its row and its executor. */
+function receiptAad(args: { operationId: string; executor: string }): string {
+  return JSON.stringify(["receipt", args.operationId, args.executor]);
+}
+
+/**
+ * Receipts are sealed too (ADR 0207): the controller waiting for an
+ * operation holds, in memory, the private key of a pair made for its answer,
+ * and the replica receiving the receipt seals the response to the public key
+ * before writing it. A response (a terminal's output, a downloaded file, a
+ * setup log) never reaches Postgres in the clear.
+ */
+const SealedReceiptSchema = z.strictObject({ sealed: SealedOperationSchema });
+
+/** Controller side: the response of a receipt sealed to this wait's key. */
+function openReceipt(args: {
+  stored: unknown;
+  privateKey: string;
+  operationId: string;
+  executor: string;
+}): unknown {
+  const { sealed } = SealedReceiptSchema.parse(args.stored);
+  return JSON.parse(
+    openOperation({
+      sealed,
+      privateKey: args.privateKey,
+      aad: receiptAad(args),
+    }),
+  );
+}
+
+/**
+ * Executor side: open an operation sealed to one of `privateKeys`, the
+ * current key first (a worker keeps its previous key while operations sealed
+ * before a rotation may still arrive). Throws
+ * {@link SealedOperationOpenError} when none opens it.
+ */
+export function openRemoteOperation(args: {
+  operationId: string;
+  executor: string;
+  envelope: unknown;
+  privateKeys: readonly (string | KeyObject)[];
+}): RemoteOperation {
+  const envelope = SealedRemoteOperationSchema.parse(args.envelope);
+  const plaintext = openWithAny({
+    sealed: envelope.sealed,
+    privateKeys: args.privateKeys,
+    aad: operationAad({ ...args, kind: envelope.kind }),
+  });
+  if (plaintext === undefined) throw new SealedOperationOpenError();
+  const operation = RemoteOperationSchema.parse(JSON.parse(plaintext));
+  if (operation.kind !== envelope.kind) throw new SealedOperationOpenError();
+  return operation;
+}
+
+function openWithAny(args: {
+  sealed: z.infer<typeof SealedOperationSchema>;
+  privateKeys: readonly (string | KeyObject)[];
+  aad: string;
+}): string | undefined {
+  for (const privateKey of args.privateKeys) {
+    try {
+      return openOperation({ ...args, privateKey });
+    } catch (error) {
+      if (!(error instanceof SealedOperationOpenError)) throw error;
+    }
+  }
+  return undefined;
+}
+
+/** A member runner's address in the remote operation queue. */
+export function clientExecutor(id: string): string {
+  return `client:${id}`;
+}
+
+/**
+ * Register the public key operations for `executor` are sealed to from now
+ * on (ADR 0207). Operations already queued stay sealed to the key they were
+ * sealed to. With `ifAbsent`, a key already registered stays. Returns the
+ * key registered after the call.
+ */
+export async function registerExecutorKey(args: {
+  db: Kysely<DB>;
+  executor: string;
+  publicKey: string;
+  ifAbsent?: boolean;
+}): Promise<string> {
+  const publicKey = ExecutorPublicKeySchema.parse(args.publicKey);
+  const written = await args.db
+    .insertInto("executor_keys")
+    .values({ executor: args.executor, public_key: publicKey })
+    .onConflict((oc) =>
+      args.ifAbsent
+        ? oc.column("executor").doNothing()
+        : oc.column("executor").doUpdateSet({
+            public_key: publicKey,
+            registered_at: sql`now()`,
+          }),
+    )
+    .returning("public_key")
+    .executeTakeFirst();
+  if (written) return written.public_key;
+  const registered = await executorKey(args);
+  if (!registered)
+    throw new Error("This executor's key was removed while it registered");
+  return registered;
+}
+
+/** The public key operations for `executor` are sealed to, if it has one. */
+export async function executorKey(args: {
+  db: Kysely<DB>;
+  executor: string;
+}): Promise<string | undefined> {
+  const row = await args.db
+    .selectFrom("executor_keys")
+    .select("public_key")
+    .where("executor", "=", args.executor)
+    .executeTakeFirst();
+  return row?.public_key;
+}
+
+/** Nothing more is sealed to this executor until it registers a key again. */
+export async function forgetExecutorKey(args: {
+  db: Kysely<DB>;
+  executor: string;
+}): Promise<void> {
+  await args.db
+    .deleteFrom("executor_keys")
+    .where("executor", "=", args.executor)
+    .execute();
+}
+
+/**
+ * The executor registered no key, so nothing can be sealed to it: it cannot
+ * connect, and nothing is queued for it.
+ */
+export class ExecutorKeyMissingError extends Error {
+  constructor(label: string) {
+    super(
+      `${label} has registered no key to seal its operations to; it receives nothing until it registers one`,
+    );
+    this.name = "ExecutorKeyMissingError";
+  }
+}
+
+/** The executor is not connected right now: nothing was sent. */
+export class ExecutorNotConnectedError extends Error {
+  constructor(label: string) {
+    super(`${label} is not connected right now`);
+    this.name = "ExecutorNotConnectedError";
+  }
+}
+
+/** One wait for a local wakeup; cancelled once it no longer waits. */
+interface Wakeup {
+  readonly woken: Promise<void>;
+  cancel(): void;
+}
+
+/**
+ * Local wakeups (ADR 0207): a replica that queues an operation wakes its own
+ * polls waiting for that executor at once, and one that records a receipt
+ * wakes its own controller waiting for that operation. A wakeup is only a
+ * hint: whoever wakes reads Postgres again, and every waiter still polls, so
+ * an operation queued or settled on another replica is found by polling and
+ * correctness never depends on a wakeup. Subscribe before reading Postgres,
+ * so a wakeup between the read and the wait is not missed.
+ */
+export class OperationWakeups {
+  /**
+   * Replica memory (a): the polls this process is serving (executors'
+   * requests in flight), by executor.
+   */
+  private readonly work = new Map<string, Set<() => void>>();
+  /**
+   * Replica memory (a): this process's controllers waiting for a receipt,
+   * by operation id.
+   */
+  private readonly receipts = new Map<string, Set<() => void>>();
+
+  /** Wait until an operation is queued here for `executor`. */
+  forWork(executor: string): Wakeup {
+    return subscribe(this.work, executor);
+  }
+
+  /** An operation was queued for `executor`; returns how many polls woke. */
+  workQueued(executor: string): number {
+    return notify(this.work, executor);
+  }
+
+  /** Wait until a receipt for `operationId` is recorded here. */
+  forReceipt(operationId: string): Wakeup {
+    return subscribe(this.receipts, operationId);
+  }
+
+  /** A receipt was recorded; returns how many controllers woke. */
+  receiptRecorded(operationId: string): number {
+    return notify(this.receipts, operationId);
+  }
+}
+
+function subscribe(waiters: Map<string, Set<() => void>>, key: string): Wakeup {
+  const set = waiters.get(key) ?? new Set<() => void>();
+  waiters.set(key, set);
+  let wake = () => {};
+  const woken = new Promise<void>((resolve) => {
+    wake = resolve;
+  });
+  set.add(wake);
+  return {
+    woken,
+    cancel: () => {
+      set.delete(wake);
+      if (set.size === 0 && waiters.get(key) === set) waiters.delete(key);
+    },
+  };
+}
+
+function notify(waiters: Map<string, Set<() => void>>, key: string): number {
+  const set = waiters.get(key);
+  if (!set) return 0;
+  waiters.delete(key);
+  for (const wake of set) wake();
+  return set.size;
+}
+
+/** Resolves when woken, after `ms`, or once `signal` aborts. */
+function nap(args: {
+  ms: number;
+  wakeup: Wakeup;
+  signal?: AbortSignal;
+}): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      args.signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, args.ms);
+    args.signal?.addEventListener("abort", done, { once: true });
+    void args.wakeup.woken.then(done);
+  });
+}
+
+/**
+ * This process's wakeups, shared by every queue it builds: controllers and
+ * the polls of the executors they address meet here.
+ */
+const LOCAL_WAKEUPS = new OperationWakeups();
 
 /**
  * A sandbox provider whose every operation is executed elsewhere: by a
@@ -302,6 +638,37 @@ export interface RemoteExecutorLease {
   leaseToken: string;
 }
 
+const IMAGE_BUILD_TIMEOUT_MS = 35 * 60_000;
+
+/**
+ * How long an executor keeps a key it rotated away from (ADR 0207): the
+ * longest an operation other than a long command can wait in the queue, so
+ * every operation sealed to that key before the rotation still opens. A
+ * command whose own timeout is longer, sealed to a key the executor no
+ * longer holds, did not run; its controller seals it again to the current
+ * key.
+ */
+export const RETIRED_KEY_RETENTION_MS = IMAGE_BUILD_TIMEOUT_MS;
+
+/**
+ * The receipt error of an operation its executor could not open: it was
+ * sealed to a key the executor no longer holds, so it did not run, and its
+ * controller seals it again to the executor's current key.
+ */
+export const OPERATION_NOT_OPENED_ERROR =
+  "This operation was not sealed to this machine's key; it did not run";
+
+/** How many times a controller seals an operation its executor could not open. */
+const RESEAL_ATTEMPTS = 3;
+
+/** The executor could not open the operation; it did not run. */
+class OperationNotOpenedError extends Error {
+  constructor() {
+    super(OPERATION_NOT_OPENED_ERROR);
+    this.name = "OperationNotOpenedError";
+  }
+}
+
 /** How long a controller waits for one operation's receipt. */
 function operationTimeoutMs(operation: RemoteOperation): number {
   // A first sandbox from a Dockerfile builds its image on the executor,
@@ -310,7 +677,11 @@ function operationTimeoutMs(operation: RemoteOperation): number {
     operation.kind === "create" &&
     operation.options.image?.kind === "dockerfile"
   )
-    return 35 * 60_000;
+    return IMAGE_BUILD_TIMEOUT_MS;
+  // Destroying every sandbox and deleting large volumes.
+  if (operation.kind === "machine.reset") return 15 * 60_000;
+  // Codex prints its sign-in code within seconds, or not at all.
+  if (operation.kind === "machine.codexSignIn") return 60_000;
   // A command's own timeout plus a margin, never less than five minutes.
   const commandSeconds =
     operation.kind === "execute" ? (operation.options?.timeout ?? 0) : 0;
@@ -319,6 +690,13 @@ function operationTimeoutMs(operation: RemoteOperation): number {
 
 const LEASE_CHECK_MS = 1_000;
 const SWEEP_EVERY_MS = 60_000;
+/**
+ * How often a waiting controller reads its operation, and a waiting poll its
+ * executor's queue, when no local wakeup comes: what an operation queued or
+ * settled on another replica waits for (ADR 0207).
+ */
+const RECEIPT_POLL_MS = 100;
+const WORK_POLL_MS = 250;
 
 /**
  * The one queue between controllers and remote executors (ADR 0187): enrolled
@@ -328,6 +706,12 @@ const SWEEP_EVERY_MS = 60_000;
  * receipt to any instance. Everything lives in Postgres, fenced by the
  * executor's lease token, so no instance keeps per-operation state.
  *
+ * Each operation is sealed to its executor's public key, read when it is
+ * queued (ADR 0207): a row holds its kind and ciphertext, which only that
+ * executor opens. The instance that queues an operation wakes its own polls
+ * for that executor at once, and the one that records a receipt its own
+ * controller; operations queued or settled elsewhere are found by polling.
+ *
  * Delivery survives a lost response: a poll carries an id the executor keeps
  * across retries, and a retried poll receives the operation it already took.
  * An operation's payload stays only until it settles; its controller deletes
@@ -336,8 +720,20 @@ const SWEEP_EVERY_MS = 60_000;
  */
 export class RemoteOperationQueue {
   private lastSweep = 0;
+  private readonly wakeups: OperationWakeups;
 
-  constructor(private readonly db: Kysely<DB>) {}
+  constructor(
+    private readonly db: Kysely<DB>,
+    options: {
+      /**
+       * Where this queue's local wakeups meet: this process's own by
+       * default. Tests give replicas sharing a process their own.
+       */
+      wakeups?: OperationWakeups;
+    } = {},
+  ) {
+    this.wakeups = options.wakeups ?? LOCAL_WAKEUPS;
+  }
 
   /**
    * A sandbox provider whose operations run on the executor. A function
@@ -370,7 +766,7 @@ export class RemoteOperationQueue {
               "catamorphic.executor.operation": operation.kind,
             },
           },
-          async () => {
+          async (span) => {
             const leaseToken =
               typeof args.leaseToken === "function"
                 ? await args.leaseToken()
@@ -383,53 +779,205 @@ export class RemoteOperationQueue {
               operation,
               leaseHeld: args.leaseHeld,
               label: args.label,
+              span,
             });
           },
         ),
     });
   }
 
+  /**
+   * Return a pooled machine to its pool (ADR 0205): its executor destroys
+   * every sandbox it holds and deletes members' volumes and sign-ins.
+   * Resolves once the receipt arrives; fails at once while the executor is
+   * not connected, so a caller tries again after it reconnects.
+   */
+  resetMachine(args: {
+    executor: string;
+    leaseToken: () => Promise<string | undefined>;
+    leaseHeld: (leaseToken: string) => Promise<boolean>;
+    label: string;
+    attributes?: SpanAttributes;
+    /**
+     * How long to wait for the receipt (default 15 minutes). A reset still
+     * running then is abandoned here; resetting again is harmless.
+     */
+    timeoutMs?: number;
+  }): Promise<void> {
+    return withSpan(
+      {
+        tracer,
+        name: "remote.machine_reset",
+        attributes: {
+          ...args.attributes,
+          "catamorphic.executor": args.executor,
+        },
+      },
+      async (span) => {
+        const leaseToken = await args.leaseToken();
+        if (!leaseToken)
+          throw new Error(`${args.label} is not connected right now`);
+        await this.dispatch({
+          executor: args.executor,
+          leaseToken,
+          operation: { kind: "machine.reset" },
+          leaseHeld: args.leaseHeld,
+          label: args.label,
+          span,
+          ...(args.timeoutMs !== undefined
+            ? { timeoutMs: args.timeoutMs }
+            : {}),
+        });
+      },
+    );
+  }
+
+  /**
+   * A member's Codex sign-in on an executor's machine (ADR 0213): begin
+   * Codex's device-code login, read how it went, cancel it, or sign out.
+   * Fails at once while the executor is not connected.
+   */
+  machineCodexSignIn(args: {
+    executor: string;
+    leaseToken: () => Promise<string | undefined>;
+    leaseHeld: (leaseToken: string) => Promise<boolean>;
+    label: string;
+    request: Extract<
+      RemoteOperation,
+      { kind: "machine.codexSignIn" }
+    >["request"];
+    attributes?: SpanAttributes;
+  }): Promise<unknown> {
+    return withSpan(
+      {
+        tracer,
+        name: "remote.machine_codex_sign_in",
+        attributes: {
+          ...args.attributes,
+          "catamorphic.executor": args.executor,
+          "catamorphic.sign_in.action": args.request.action,
+        },
+      },
+      async (span) => {
+        const leaseToken = await args.leaseToken();
+        if (!leaseToken) throw new ExecutorNotConnectedError(args.label);
+        return this.dispatch({
+          executor: args.executor,
+          leaseToken,
+          operation: { kind: "machine.codexSignIn", request: args.request },
+          leaseHeld: args.leaseHeld,
+          label: args.label,
+          span,
+        });
+      },
+    );
+  }
+
+  /**
+   * Queue one operation and wait for its receipt. An operation its executor
+   * could not open (sealed to a key it rotated away from, ADR 0207) did not
+   * run, so it is sealed again to the executor's current key.
+   */
   private async dispatch(args: {
     executor: string;
     leaseToken: string;
     operation: RemoteOperation;
     leaseHeld: (leaseToken: string) => Promise<boolean>;
     label: string;
+    span: Span;
+    /** Overrides the operation's own timeout. */
+    timeoutMs?: number;
   }): Promise<unknown> {
-    const timeoutMs = operationTimeoutMs(args.operation);
-    const row = await this.db
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.deliver(args);
+      } catch (error) {
+        if (!(error instanceof OperationNotOpenedError)) throw error;
+        args.span.setAttribute("catamorphic.executor.resealed", attempt);
+        if (attempt >= RESEAL_ATTEMPTS) throw error;
+      }
+    }
+  }
+
+  private async deliver(args: {
+    executor: string;
+    leaseToken: string;
+    operation: RemoteOperation;
+    leaseHeld: (leaseToken: string) => Promise<boolean>;
+    label: string;
+    span: Span;
+    timeoutMs?: number;
+  }): Promise<unknown> {
+    const timeoutMs = args.timeoutMs ?? operationTimeoutMs(args.operation);
+    const publicKey = await executorKey({
+      db: this.db,
+      executor: args.executor,
+    });
+    if (!publicKey) throw new ExecutorKeyMissingError(args.label);
+    // The id is chosen here, before the row exists: the seal is bound to it.
+    const id = randomUUID();
+    // Its answer is sealed to a key only this wait holds.
+    const reply = generateExecutorKeyPair();
+    await this.db
       .insertInto("remote_operations")
       .values({
+        id,
         executor: args.executor,
         lease_token: args.leaseToken,
-        operation: toJson(args.operation),
+        reply_key: reply.publicKey,
+        operation: toJson(
+          sealRemoteOperation({
+            operationId: id,
+            executor: args.executor,
+            operation: args.operation,
+            publicKey,
+          }),
+        ),
         expires_at: sql`now() + make_interval(secs => ${Math.ceil(timeoutMs / 1000)})`,
       })
-      .returning("id")
-      .executeTakeFirstOrThrow();
+      .execute();
+    // Whether this replica serves the executor's poll: then the operation
+    // leaves at once rather than at the poll's next look (ADR 0207).
+    args.span.setAttribute(
+      "catamorphic.executor.local_poll",
+      this.wakeups.workQueued(args.executor) > 0,
+    );
     try {
       const deadline = Date.now() + timeoutMs;
       let leaseCheckedAt = Date.now();
       while (Date.now() < deadline) {
-        const job = await this.db
-          .selectFrom("remote_operations")
-          .select(["status", "response", "error"])
-          .where("id", "=", row.id)
-          .executeTakeFirstOrThrow();
-        if (job.status === "completed") return job.response;
-        if (job.status === "failed")
-          throw new Error(job.error ?? "Remote execution failed");
-        if (Date.now() - leaseCheckedAt >= LEASE_CHECK_MS) {
-          leaseCheckedAt = Date.now();
-          if (!(await args.leaseHeld(args.leaseToken))) break;
+        const receipt = this.wakeups.forReceipt(id);
+        try {
+          const job = await this.db
+            .selectFrom("remote_operations")
+            .select(["status", "response", "error"])
+            .where("id", "=", id)
+            .executeTakeFirstOrThrow();
+          if (job.status === "completed")
+            return openReceipt({
+              stored: job.response,
+              privateKey: reply.privateKey,
+              operationId: id,
+              executor: args.executor,
+            });
+          if (job.status === "failed")
+            throw job.error === OPERATION_NOT_OPENED_ERROR
+              ? new OperationNotOpenedError()
+              : new Error(job.error ?? "Remote execution failed");
+          if (Date.now() - leaseCheckedAt >= LEASE_CHECK_MS) {
+            leaseCheckedAt = Date.now();
+            if (!(await args.leaseHeld(args.leaseToken))) break;
+          }
+          await nap({ ms: RECEIPT_POLL_MS, wakeup: receipt });
+        } finally {
+          receipt.cancel();
         }
-        await new Promise((resolve) => setTimeout(resolve, 100));
       }
       // Abandoned: a late receipt is refused rather than recorded.
       await this.db
         .updateTable("remote_operations")
         .set({ status: "failed" })
-        .where("id", "=", row.id)
+        .where("id", "=", id)
         .where("status", "in", ["pending", "running"])
         .execute();
       throw new Error(
@@ -440,7 +988,7 @@ export class RemoteOperationQueue {
       // behind is swept after it expires.
       await this.db
         .deleteFrom("remote_operations")
-        .where("id", "=", row.id)
+        .where("id", "=", id)
         .execute()
         .catch(() => {});
       this.sweepSoon();
@@ -449,10 +997,11 @@ export class RemoteOperationQueue {
 
   /**
    * Executor side: take up to `max` operations, waiting up to `waitMs` for
-   * one. A poll retried with the same `pollId` receives what that poll took
-   * and takes nothing more, so an answer lost on the way is never an
-   * operation lost. Once `signal` aborts (the executor hung up), the poll
-   * stops and gives back what it took. Throws
+   * one. Each is sealed to the executor's key; it opens them with
+   * {@link openRemoteOperation}. A poll retried with the same `pollId`
+   * receives what that poll took and takes nothing more, so an answer lost
+   * on the way is never an operation lost. Once `signal` aborts (the
+   * executor hung up), the poll stops and gives back what it took. Throws
    * {@link RemoteExecutorLeaseLostError} once the lease moved on.
    */
   async poll(
@@ -463,7 +1012,7 @@ export class RemoteOperationQueue {
       signal?: AbortSignal;
       leaseHeld: () => Promise<boolean>;
     },
-  ): Promise<Array<{ id: string; operation: RemoteOperation }>> {
+  ): Promise<Array<{ id: string; operation: SealedRemoteOperation }>> {
     const deadline = Date.now() + (args.waitMs ?? 0);
     const max = Math.max(1, args.max ?? 1);
     let leaseCheckedAt = 0;
@@ -474,73 +1023,94 @@ export class RemoteOperationQueue {
         leaseCheckedAt = Date.now();
         if (!(await args.leaseHeld())) throw new RemoteExecutorLeaseLostError();
       }
-      const jobs = await this.db.transaction().execute(async (trx) => {
-        // One poll id at a time: a retry and the poll it retries (still
-        // waiting on another instance) never both take operations.
-        await sql`SELECT pg_advisory_xact_lock(hashtext(${args.pollId}))`.execute(
-          trx,
-        );
-        const answered = await trx
-          .selectFrom("remote_operations")
-          .select(["id", "operation", "status"])
-          .where("executor", "=", args.executor)
-          .where("lease_token", "=", args.leaseToken)
-          .where("poll_id", "=", args.pollId)
-          .execute();
-        if (answered.length > 0)
-          return answered.filter((job) => job.status === "running");
-        const next = await trx
-          .selectFrom("remote_operations")
-          .select(["id", "operation"])
-          .where("executor", "=", args.executor)
-          .where("lease_token", "=", args.leaseToken)
-          .where("status", "=", "pending")
-          .where("expires_at", ">", sql<Date>`now()`)
-          .orderBy("created_at")
-          .limit(max)
-          .forUpdate()
-          .skipLocked()
-          .execute();
-        if (next.length === 0) return [];
-        await trx
-          .updateTable("remote_operations")
-          .set({ status: "running", poll_id: args.pollId })
-          .where(
-            "id",
-            "in",
-            next.map((job) => job.id),
-          )
-          .execute();
-        return next;
-      });
-      if (jobs.length > 0 && args.signal?.aborted) {
-        // Nobody will receive these: they wait for the next poll.
-        await this.db
-          .updateTable("remote_operations")
-          .set({ status: "pending", poll_id: null })
-          .where(
-            "id",
-            "in",
-            jobs.map((job) => job.id),
-          )
-          .where("poll_id", "=", args.pollId)
-          .where("status", "=", "running")
-          .execute();
-        return [];
+      // Subscribed before reading: an operation queued here after the read
+      // wakes this poll at once.
+      const queued = this.wakeups.forWork(args.executor);
+      try {
+        const jobs = await this.take({ ...args, max });
+        if (jobs.length > 0 && args.signal?.aborted) {
+          // Nobody will receive these: they wait for the next poll.
+          await this.db
+            .updateTable("remote_operations")
+            .set({ status: "pending", poll_id: null })
+            .where(
+              "id",
+              "in",
+              jobs.map((job) => job.id),
+            )
+            .where("poll_id", "=", args.pollId)
+            .where("status", "=", "running")
+            .execute();
+          this.wakeups.workQueued(args.executor);
+          return [];
+        }
+        if (jobs.length > 0)
+          return jobs.map((job) => ({
+            id: job.id,
+            operation: SealedRemoteOperationSchema.parse(job.operation),
+          }));
+        if (Date.now() >= deadline) return [];
+        await nap({
+          ms: Math.min(WORK_POLL_MS, Math.max(0, deadline - Date.now())),
+          wakeup: queued,
+          ...(args.signal ? { signal: args.signal } : {}),
+        });
+      } finally {
+        queued.cancel();
       }
-      if (jobs.length > 0)
-        return jobs.map((job) => ({
-          id: job.id,
-          operation: RemoteOperationSchema.parse(job.operation),
-        }));
-      if (Date.now() >= deadline) return [];
-      await new Promise((resolve) => setTimeout(resolve, 250));
     }
   }
 
+  /** One attempt of a poll: what it took before, or what it takes now. */
+  private async take(
+    args: RemoteExecutorLease & { pollId: string; max: number },
+  ) {
+    return this.db.transaction().execute(async (trx) => {
+      // One poll id at a time: a retry and the poll it retries (still
+      // waiting on another instance) never both take operations.
+      await sql`SELECT pg_advisory_xact_lock(hashtext(${args.pollId}))`.execute(
+        trx,
+      );
+      const answered = await trx
+        .selectFrom("remote_operations")
+        .select(["id", "operation", "status"])
+        .where("executor", "=", args.executor)
+        .where("lease_token", "=", args.leaseToken)
+        .where("poll_id", "=", args.pollId)
+        .execute();
+      if (answered.length > 0)
+        return answered.filter((job) => job.status === "running");
+      const next = await trx
+        .selectFrom("remote_operations")
+        .select(["id", "operation"])
+        .where("executor", "=", args.executor)
+        .where("lease_token", "=", args.leaseToken)
+        .where("status", "=", "pending")
+        .where("expires_at", ">", sql<Date>`now()`)
+        .orderBy("created_at")
+        .limit(args.max)
+        .forUpdate()
+        .skipLocked()
+        .execute();
+      if (next.length === 0) return [];
+      await trx
+        .updateTable("remote_operations")
+        .set({ status: "running", poll_id: args.pollId })
+        .where(
+          "id",
+          "in",
+          next.map((job) => job.id),
+        )
+        .execute();
+      return next;
+    });
+  }
+
   /**
-   * Executor side: record one operation's outcome and drop its payload.
-   * Idempotent: a receipt retried after its response was lost succeeds.
+   * Executor side: record one operation's outcome and drop its payload, and
+   * wake its controller if it waits in this process. An error is stored
+   * without any URL's credentials (ADR 0207). Idempotent: a receipt retried
+   * after its response was lost succeeds.
    */
   async complete(
     args: RemoteExecutorLease & {
@@ -550,24 +1120,50 @@ export class RemoteOperationQueue {
     },
   ): Promise<void> {
     const status = args.error === undefined ? "completed" : "failed";
-    const updated = await this.db
-      .updateTable("remote_operations")
-      .set({
-        status,
-        // A bare string result must reach jsonb as JSON, not raw text.
-        response: jsonColumn(storableJson(args.response)),
-        error: args.error === undefined ? null : withoutNul(args.error),
-        // The payload (uploads may carry a member's personal login, ADR
-        // 0184) leaves Postgres once the operation has run.
-        operation: sql`jsonb_build_object('kind', operation->'kind')`,
-      })
+    const error =
+      args.error === undefined
+        ? null
+        : withoutNul(redactUrlCredentials(args.error));
+    const pending = await this.db
+      .selectFrom("remote_operations")
+      .select("reply_key")
       .where("id", "=", args.operationId)
       .where("executor", "=", args.executor)
       .where("lease_token", "=", args.leaseToken)
       .where("status", "=", "running")
-      .returning("id")
       .executeTakeFirst();
-    if (updated) return;
+    const updated = pending
+      ? await this.db
+          .updateTable("remote_operations")
+          .set({
+            status,
+            response:
+              status === "completed"
+                ? jsonColumn(
+                    toJson({
+                      sealed: sealOperation({
+                        plaintext: JSON.stringify(storableJson(args.response)),
+                        recipientPublicKey: pending.reply_key,
+                        aad: receiptAad(args),
+                      }),
+                    }),
+                  )
+                : null,
+            error,
+            // The sealed payload leaves Postgres once the operation has run.
+            operation: sql`jsonb_build_object('kind', operation->'kind')`,
+          })
+          .where("id", "=", args.operationId)
+          .where("executor", "=", args.executor)
+          .where("lease_token", "=", args.leaseToken)
+          .where("status", "=", "running")
+          .returning("id")
+          .executeTakeFirst()
+      : undefined;
+    if (updated) {
+      this.wakeups.receiptRecorded(args.operationId);
+      return;
+    }
     const recorded = await this.db
       .selectFrom("remote_operations")
       .select("id")
@@ -575,11 +1171,7 @@ export class RemoteOperationQueue {
       .where("executor", "=", args.executor)
       .where("lease_token", "=", args.leaseToken)
       .where("status", "=", status)
-      .where(
-        "error",
-        args.error === undefined ? "is" : "=",
-        args.error === undefined ? null : withoutNul(args.error),
-      )
+      .where("error", error === null ? "is" : "=", error)
       .executeTakeFirst();
     if (!recorded) throw new RemoteReceiptRefusedError();
   }
@@ -610,7 +1202,8 @@ export class RemoteOperationQueue {
 
   /**
    * Drop operations whose controller stopped waiting without deleting them
-   * (its instance stopped): their payloads are project content. Runs from
+   * (its instance stopped): their payloads are sealed, but nobody waits for
+   * them any more. Runs from
    * dispatches and polls, at most once a minute per instance; hosts may also
    * call it on their own schedule.
    */

@@ -21,8 +21,12 @@ export {
   workServerConfigFromEnv,
 } from "./config.js";
 export {
+  type ExecutionProbes,
   executionSettingsFromEnv,
+  type ResolvedExecutionSettings,
+  resolveExecutionSettings,
   type WorkExecutionSettings,
+  type WorkSandboxBackend,
 } from "./execution-config.js";
 export {
   type GatewayConfig,
@@ -49,7 +53,20 @@ export {
   type WorkServerOptions,
 } from "./server.js";
 export {
+  type MachineClass,
+  MachineClassSchema,
+  type MachinesConfig,
+  MachinesConfigSchema,
+} from "./workers/machine-classes.js";
+export {
+  type MachineProvisioner,
+  MachineProvisioningRefusedError,
+  type MachineRule,
+  type ReconcileSummary,
+} from "./workers/machine-rules.js";
+export {
   listMachineSignIns,
+  MachineHeldError,
   type MachineSignIn,
   signInOnMachine,
   signInRoot,

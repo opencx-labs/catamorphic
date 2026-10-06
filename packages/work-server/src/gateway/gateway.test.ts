@@ -263,4 +263,47 @@ describe("gateway configuration", () => {
       "plain path",
     );
   });
+
+  it("serves an HTTP API without named operations to code in sandboxes, with Basic auth (ADR 0212)", () => {
+    const config = gatewayConfigFromFile({
+      path: write({
+        connections: [
+          {
+            type: "http",
+            kind: "logs",
+            displayName: "Logs",
+            baseUrl: "https://logs.example.test:8443",
+            auth: { basic: true },
+            paths: ["/"],
+          },
+        ],
+      }),
+      env: {},
+    });
+    const [logs] = gatewayProviders(config);
+    expect(logs?.http?.baseUrl).toBe("https://logs.example.test:8443");
+    expect(
+      logs?.http?.headers({
+        material: new TextEncoder().encode("reader:secret"),
+      }),
+    ).toEqual({
+      authorization: `Basic ${Buffer.from("reader:secret").toString("base64")}`,
+    });
+    expect(() =>
+      gatewayConfigFromFile({
+        path: write({
+          connections: [
+            {
+              type: "http",
+              kind: "logs",
+              displayName: "Logs",
+              baseUrl: "https://logs.example.test",
+              auth: { basic: false },
+            },
+          ],
+        }),
+        env: {},
+      }),
+    ).toThrow("Invalid gateway configuration");
+  });
 });

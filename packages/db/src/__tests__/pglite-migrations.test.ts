@@ -84,6 +84,18 @@ describe("PGlite migrations", () => {
       "045_agent_session_log.sql",
       "046_session_rewind.sql",
       "047_session_log_reference_indexes.sql",
+      "048_machine_classes_and_pools.sql",
+      "049_member_secret_values.sql",
+      "050_executor_keys.sql",
+      "051_workspace_setup_and_volumes.sql",
+      "052_session_terminals.sql",
+      "053_directory_events.sql",
+      "054_directory_announcements.sql",
+      "055_session_secrets_held.sql",
+      "056_session_workspace_use.sql",
+      "057_worker_rotation_order.sql",
+      "058_machine_teardown_and_rule_failures.sql",
+      "059_sealed_receipts.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
@@ -109,7 +121,7 @@ describe("PGlite migrations", () => {
       WHERE table_schema = ${DEFAULT_SCHEMA}
         AND table_type = 'BASE TABLE'
     `.execute(db);
-    expect(tables.rows[0]?.count).toBe(94);
+    expect(tables.rows[0]?.count).toBe(99);
   });
 
   it("supports the runtime primitives core relies on", {

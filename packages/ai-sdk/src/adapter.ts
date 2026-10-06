@@ -147,6 +147,12 @@ export type AiSdkLocal = {
     workingDirectory: string;
     /** The Environment's budget for one foreground command (ADR 0174). */
     commandBudgetSeconds?: number;
+    /**
+     * The session's environment files (ADRs 0206, 0212), relative to
+     * `workingDirectory` or absolute: every shell command loads each that
+     * exists first.
+     */
+    envFiles?: readonly string[];
   };
   /**
    * Directories outside the working directory the `read` tool may read
@@ -554,6 +560,7 @@ class AiSdkAttempt {
           ...(sandbox.commandBudgetSeconds
             ? { budgetSeconds: sandbox.commandBudgetSeconds }
             : {}),
+          ...(sandbox.envFiles ? { envFiles: sandbox.envFiles } : {}),
         }),
       );
     sets.push(
@@ -1317,7 +1324,10 @@ function isSandboxHandle(
     typeof value.sandboxId === "string" &&
     typeof value.workingDirectory === "string" &&
     (value.commandBudgetSeconds === undefined ||
-      typeof value.commandBudgetSeconds === "number")
+      typeof value.commandBudgetSeconds === "number") &&
+    (value.envFiles === undefined ||
+      (Array.isArray(value.envFiles) &&
+        value.envFiles.every((file: unknown) => typeof file === "string")))
   );
 }
 

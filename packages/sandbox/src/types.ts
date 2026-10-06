@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   RuntimeArtifactIdentity,
   RuntimeBatchStepSuspension,
@@ -80,15 +81,85 @@ export interface CreateSandboxOpts {
    * provider without the `sign-ins` capability refuses.
    */
   signIns?: ReadonlyArray<{ harness: SignInHarness; member: string }>;
+  /**
+   * Directories kept on the machine across sandboxes (ADR 0208), mounted
+   * at their paths. Needs the `volumes` capability.
+   */
+  volumes?: readonly SandboxVolume[];
 }
 
-/** A harness a member signs in to with its own flow (ADR 0199). */
-export type SignInHarness = "claude-code" | "codex";
+/**
+ * A directory that persists on the machine across sandboxes (ADR 0208).
+ * The control plane names it with {@link volumeKey}, so every sandbox of
+ * the same owner, project and volume name sees the same directory.
+ */
+export interface SandboxVolume {
+  /** Machine-unique and filesystem-safe; see {@link volumeKey}. */
+  key: string;
+  /** Absolute inside the sandbox, or `~/...` under the sandbox user's home. */
+  path: string;
+  /**
+   * One sandbox at a time (a Docker data root, a database). Providers that
+   * need a block device for that give it one, sized by `sizeMb`.
+   */
+  exclusive?: boolean;
+  sizeMb?: number;
+  /**
+   * An empty volume removed with the sandbox: the persistent one is held
+   * by another sandbox of the same owner.
+   */
+  temporary?: boolean;
+}
 
-export const SIGN_IN_HARNESSES: readonly SignInHarness[] = [
-  "claude-code",
-  "codex",
-];
+/** Volume names an Environment may declare (ADR 0208). */
+export const VOLUME_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+/**
+ * The machine-unique key of one owner's volume in one project (ADR 0208):
+ * readable name, then a digest of what identifies it.
+ */
+export function volumeKey(input: {
+  projectId: string;
+  /** A member's id, or the project principal for the project's own chats. */
+  owner: string;
+  name: string;
+}): string {
+  if (!VOLUME_NAME_PATTERN.test(input.name))
+    throw new Error(`'${input.name}' is not a volume name`);
+  const digest = createHash("sha256")
+    .update(`${input.projectId}\0${input.owner}\0${input.name}`)
+    .digest("hex")
+    .slice(0, 24);
+  return `${input.name}-${digest}`;
+}
+
+/** Keys {@link volumeKey} produces, for providers checking what they are handed. */
+export const VOLUME_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}-[0-9a-f]{24}$/;
+
+/**
+ * A provider's volumes on its machine (ADR 0208): forgotten when unused for
+ * long, and all removed when a pooled machine is reset (ADR 0205).
+ */
+export interface SandboxVolumeProvider {
+  /** Remove volumes no sandbox mounted for `unusedForMs`; returns their keys. */
+  prune(args: { unusedForMs: number }): Promise<string[]>;
+  /**
+   * Remove every volume on this machine. A volume a sandbox still mounts
+   * is kept, and the call fails naming it, unless `destroySandboxes` asks
+   * to remove every sandbox of this provider first (a pooled machine's
+   * reset, which owes the next person nothing of the last).
+   */
+  removeAll(args?: { destroySandboxes?: boolean }): Promise<void>;
+}
+
+/**
+ * A harness a member signs in to on a machine with its own flow (ADR 0199).
+ * Only Codex: Claude Code subscriptions run only on the member's own
+ * computer (ADR 0213).
+ */
+export type SignInHarness = "codex";
+
+export const SIGN_IN_HARNESSES: readonly SignInHarness[] = ["codex"];
 
 /** Where a sandbox sees its owner's sign-in for a harness (ADR 0199). */
 export function signInHomePath(input: {
@@ -183,6 +254,9 @@ export interface SandboxProvider {
    * so instead of emulating them.
    */
   readonly processes?: SandboxProcessProvider;
+
+  /** Persistent volumes (ADR 0208); present when the provider mounts them. */
+  readonly volumes?: SandboxVolumeProvider;
 }
 
 export type DeploymentRuntimeStatus =

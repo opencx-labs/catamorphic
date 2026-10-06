@@ -22,7 +22,9 @@ import {
 import {
   configureSandboxGateway,
   ensureSandboxBaseline,
+  removeSandboxGateway,
 } from "../services/sandbox-git.js";
+import { sandboxSecretsPrelude } from "../services/sandbox-secrets.js";
 import { parseSnapshot, unquoteCPath } from "../services/sandbox-sync.js";
 import { workspaceMoveNote } from "../services/session-workspaces.js";
 
@@ -471,5 +473,98 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       { cwd: project(), env },
     );
     expect(plain.stdout.trim()).toBe("https://git.example.test/org/repo.git");
+  });
+
+  it("names each HTTP alias's URL and grant file for code in the sandbox (ADR 0212)", async () => {
+    const session = path.join(root, "workspace", ".work-session");
+    const file = path.join(session, "env", "gateway.sh");
+    const gateway = "http://127.0.0.1:9/api/gateway";
+    const configure = (input: {
+      grants: { alias: string; grant: string }[];
+      http: string[];
+      git?: boolean;
+      renewOnly?: boolean;
+    }) =>
+      configureSandboxGateway({
+        provider,
+        sandboxId: "s",
+        gatewayGitUrl: `${gateway}/git`,
+        grants: input.grants,
+        gitAliases: input.git
+          ? [{ alias: "code", remoteBaseUrls: ["https://git.example.test/"] }]
+          : [],
+        httpAliases: input.http.map((alias) => ({
+          alias,
+          url: `${gateway}/http/${alias}`,
+        })),
+        ...(input.renewOnly ? { renewOnly: true } : {}),
+      });
+    /** What a command started in the project folder sees, as setup does. */
+    const seen = async () =>
+      (
+        await provider.executeCommand(
+          "s",
+          `${sandboxSecretsPrelude()}; printf '%s|%s|%s|%s' "\${WORK_HTTP_LOGS_EU:-unset}" "\${WORK_HTTP_LOGS_EU_GRANT_FILE:-unset}" "\${WORK_HTTP_BILLING:-unset}" "$(cat "\${WORK_HTTP_LOGS_EU_GRANT_FILE:-/dev/null}")"`,
+          { cwd: "/workspace/project" },
+        )
+      ).result;
+
+    await configure({
+      grants: [
+        { alias: "code", grant: "grant-code" },
+        { alias: "logs-eu", grant: "grant-logs" },
+        { alias: "logs_eu", grant: "grant-other" },
+        { alias: "billing", grant: "grant-billing" },
+      ],
+      // `logs_eu` would share `logs-eu`'s names, so it gets none.
+      http: ["logs-eu", "logs_eu", "billing"],
+      git: true,
+    });
+    // Not secret: readable, beside the grants it names.
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o644);
+    const real = await fs.realpath(session);
+    expect(await seen()).toBe(
+      `${gateway}/http/logs-eu|${real}/grants/logs-eu|${gateway}/http/billing|grant-logs`,
+    );
+    const text = await fs.readFile(file, "utf8");
+    expect(text).not.toContain("grant-");
+    expect(text).not.toContain("logs_eu");
+    expect(await fs.readdir(path.join(session, "env"))).toEqual(["gateway.sh"]);
+
+    // Renewing replaces the grants; the file names the same paths.
+    await configure({
+      grants: [{ alias: "logs-eu", grant: "grant-renewed" }],
+      http: ["logs-eu"],
+      renewOnly: true,
+    });
+    expect(await seen()).toBe(
+      `${gateway}/http/logs-eu|${real}/grants/logs-eu|${gateway}/http/billing|grant-renewed`,
+    );
+
+    // A later turn without HTTP aliases leaves no variables behind.
+    await configure({
+      grants: [{ alias: "model", grant: "grant-model" }],
+      http: [],
+    });
+    await expect(fs.stat(file)).rejects.toThrow();
+    expect(await seen()).toBe("unset|unset|unset|");
+
+    // Given back with the workspace, the grants and the file go.
+    await configure({
+      grants: [{ alias: "logs-eu", grant: "grant-again" }],
+      http: ["logs-eu"],
+    });
+    await removeSandboxGateway({
+      provider,
+      sandboxId: "s",
+      projectDir: "/workspace/project",
+    });
+    await removeSandboxGateway({
+      provider,
+      sandboxId: "s",
+      projectDir: "/workspace/project",
+    });
+    await expect(fs.stat(file)).rejects.toThrow();
+    await expect(fs.stat(path.join(session, "grants"))).rejects.toThrow();
   });
 });

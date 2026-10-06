@@ -2,9 +2,10 @@ import {
   AccessDeniedError,
   RemoteExecutorLeaseLostError,
   RemoteOperationResultSchema,
-  RemoteOperationSchema,
   RemoteReceiptRefusedError,
+  SealedRemoteOperationSchema,
 } from "@catamorphic/core";
+import { ExecutorPublicKeySchema } from "@catamorphic/sandbox";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
@@ -15,10 +16,11 @@ import { ErrorSchema, ProjectIdParamsSchema } from "../schemas.js";
 const Lease = z.object({ id: z.string().uuid(), token: z.string().uuid() });
 
 /**
- * A member's This machine runner (ADRs 0098, 0187). Poll long-polls; a 409
- * from poll or renew means the lease moved on and the runner registers
- * again, a 409 from complete refuses only that receipt, and a 403 means the
- * member may no longer serve this Environment.
+ * A member's This machine runner (ADRs 0098, 0187). It registers the public
+ * key its operations are sealed to, and poll hands them out sealed (ADR
+ * 0207). Poll long-polls; a 409 from poll or renew means the lease moved on
+ * and the runner registers again, a 409 from complete refuses only that
+ * receipt, and a 403 means the member may no longer serve this Environment.
  */
 export function registerClientRunnerRoutes(
   app: FastifyInstance,
@@ -41,7 +43,7 @@ export function registerClientRunnerRoutes(
           isolation: z.enum(["none", "process", "sandbox"]).optional(),
           /** The runner's provider runs background processes (ADR 0174). */
           processes: z.boolean().optional(),
-          /** What its sandboxes can be given (ADR 0176). */
+          /** What its sandboxes can be given (ADRs 0176, 0208). */
           capabilities: z
             .array(
               z.enum([
@@ -49,12 +51,20 @@ export function registerClientRunnerRoutes(
                 "images.build",
                 "containers",
                 "network.policy",
+                "volumes",
               ]),
             )
             .optional(),
+          /**
+           * The runner's X25519 public key, raw and base64: its operations
+           * are sealed to it (ADR 0207). A runner without one receives
+           * nothing.
+           */
+          publicKey: ExecutorPublicKeySchema.optional(),
         }),
         response: {
           200: Lease,
+          400: ErrorSchema,
           403: ErrorSchema,
           409: ErrorSchema,
           503: ErrorSchema,
@@ -66,10 +76,17 @@ export function registerClientRunnerRoutes(
         return reply
           .status(503)
           .send({ error: "Client execution is not enabled by this host" });
+      const { publicKey, ...body } = request.body;
+      if (!publicKey)
+        return reply.status(400).send({
+          error:
+            "This version of Work cannot receive operations from this server. Update Work on this computer.",
+        });
       try {
         return reply.send(
           await ctx.core.clientRunners.register({
-            ...request.body,
+            ...body,
+            publicKey,
             projectId: request.params.projectId,
             identity: resolveIdentity(request),
           }),
@@ -97,10 +114,11 @@ export function registerClientRunnerRoutes(
           max: z.number().int().min(1).max(64).optional(),
         }),
         response: {
+          // Each operation sealed to the runner's key (ADR 0207).
           200: z.array(
             z.object({
               id: z.string().uuid(),
-              operation: RemoteOperationSchema,
+              operation: SealedRemoteOperationSchema,
             }),
           ),
           403: ErrorSchema,

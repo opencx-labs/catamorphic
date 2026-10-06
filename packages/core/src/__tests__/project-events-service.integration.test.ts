@@ -66,6 +66,125 @@ describe("project events", () => {
     ]);
   });
 
+  it("appends a tenant-wide event once to each project with a live activation of its kind, in the caller's transaction", async () => {
+    /** A project with one activation of `kind` in the given state. */
+    const subscriber = async (input: {
+      kind: string;
+      tenant?: string;
+      activation?: string;
+      enablement?: string;
+      expiresAt?: Date;
+    }) => {
+      const tenant = input.tenant ?? tenantId;
+      if (input.tenant)
+        await db
+          .insertInto("tenants")
+          .values({ id: tenant, name: "Other" })
+          .onConflict((conflict) => conflict.column("id").doNothing())
+          .execute();
+      const project = await db
+        .insertInto("projects")
+        .values({ tenant_id: tenant, name: input.kind })
+        .returning("id")
+        .executeTakeFirstOrThrow();
+      const commitSha = "c".repeat(40);
+      const artifact = await db
+        .insertInto("deployment_artifacts")
+        .values({
+          project_id: project.id,
+          commit_sha: commitSha,
+          artifact_digest: "test",
+          plugin_digest: "none",
+          runtime_version: "test",
+          transform_version: "test",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow();
+      await db
+        .insertInto("trigger_definition_scans")
+        .values({ project_id: project.id, commit_sha: commitSha })
+        .execute();
+      const definition = await db
+        .insertInto("trigger_definitions")
+        .values({
+          project_id: project.id,
+          commit_sha: commitSha,
+          trigger_kind: input.kind,
+          workflow_name: "onboard",
+          config: JSON.stringify({}),
+          can_suspend: false,
+          input_parameters: JSON.stringify([]),
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow();
+      const enablement = await db
+        .insertInto("workflow_enablements")
+        .values({
+          tenant_id: tenant,
+          project_id: project.id,
+          workflow_name: "onboard",
+          deployment_artifact_id: artifact.id,
+          commit_sha: commitSha,
+          environment_name: "default",
+          owner_kind: "project",
+          owner_identity: { tenantId: tenant, externalUserId: "builder" },
+          consent_digest: "test",
+          created_by_external_user_id: "builder",
+          status: input.enablement ?? "active",
+          expires_at: input.expiresAt ?? null,
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow();
+      await db
+        .insertInto("workflow_enablement_triggers")
+        .values({
+          enablement_id: enablement.id,
+          trigger_definition_id: definition.id,
+          status: input.activation ?? "active",
+        })
+        .execute();
+      return project.id;
+    };
+    const kind = "directory.member-joined";
+    const listening = await subscriber({ kind });
+    await subscriber({ kind: "directory.member-left" });
+    await subscriber({ kind, activation: "paused" });
+    await subscriber({ kind, enablement: "suspended" });
+    await subscriber({ kind, expiresAt: new Date(Date.now() - 60_000) });
+    await subscriber({ kind, tenant: crypto.randomUUID() });
+    const event = {
+      tenantId,
+      source: "directory",
+      kind,
+      externalId: `${kind}:user-1:1`,
+      occurredAt: "2026-10-06T09:00:00.000Z",
+      payload: { member: { id: "user-1" }, groups: [] },
+    };
+    const stored = () =>
+      db
+        .selectFrom("project_events")
+        .select("project_id")
+        .where("source", "=", "directory")
+        .execute();
+
+    // A transition whose transaction fails leaves no event behind.
+    await expect(
+      db.transaction().execute(async (transaction) => {
+        await events.appendToSubscribers({ ...event, transaction });
+        throw new Error("the transition was not recorded");
+      }),
+    ).rejects.toThrow("the transition was not recorded");
+    expect(await stored()).toEqual([]);
+
+    const first = await events.appendToSubscribers(event);
+    expect(first.events.map((appended) => appended.projectId)).toEqual([
+      listening,
+    ]);
+    const replay = await events.appendToSubscribers(event);
+    expect(replay.events).toEqual(first.events);
+    expect(await stored()).toEqual([{ project_id: listening }]);
+  });
+
   it("claims a placement-compatible monitor with a durable cursor lease", async () => {
     const monitors = new ProjectEventMonitorsService(db);
     const monitor = await monitors.ensure({

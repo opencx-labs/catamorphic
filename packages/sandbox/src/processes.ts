@@ -465,7 +465,8 @@ export function shellSandboxProcesses(args: {
         ...input,
         `if cd ${quote(cwd)}; then bash -c ${quote(start.command)}${start.stdin ? ' < "$D/stdin.pipe"' : ""}; code=$?; else code=1; fi`,
         'date -u +%s > "$D/ended"',
-        'printf %s "$code" > "$D/exit"',
+        // Whole or absent: a reader never sees an exit file still empty.
+        'printf %s "$code" > "$D/exit.tmp" && mv "$D/exit.tmp" "$D/exit"',
         // A finished command leaves nothing running behind it.
         "kill -KILL 0 2>/dev/null",
         "exit 0",

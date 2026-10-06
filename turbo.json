@@ -109,7 +109,11 @@
         "CHROME_BIN"
       ],
       "cache": true,
-      "dependsOn": ["build", "catamorphic-pwa#build"]
+      "dependsOn": [
+        "build",
+        "catamorphic-pwa#build",
+        "catamorphic-server#build"
+      ]
     },
     "catamorphic-pwa#test:e2e:ci": {
       "outputs": [],

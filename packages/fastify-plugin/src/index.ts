@@ -14,5 +14,6 @@ export type {
 } from "./plugin.js";
 export { catamorphicPlugin } from "./plugin.js";
 export { projectToolCapabilities } from "./project-capabilities.js";
+export { PREVIEW_REFUSAL_HEADER } from "./routes/session-previews.js";
 export { pwaManifestWithLaunch, serveSpaDist } from "./spa.js";
 export { instrumentHttpServer } from "./telemetry.js";
