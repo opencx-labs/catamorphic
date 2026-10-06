@@ -119,6 +119,13 @@ jobs:
           test "$(docker exec work-server-smoke id -u)" != "0"
           logs="$(docker logs work-server-smoke 2>&1)"
           grep -q "Work server is up." <<<"$logs"
+          # Members sign in to Codex with the CLI this image carries (ADR
+          # 0213): it runs here, and finds the system trust store it
+          # verifies OpenAI's TLS with.
+          docker exec work-server-smoke test -s /etc/ssl/certs/ca-certificates.crt
+          docker exec -w /app/packages/work-server work-server-smoke \
+            bun -e 'const r = Bun.spawnSync([process.execPath, require.resolve("@openai/codex/bin/codex.js"), "--version"]); process.stdout.write(r.stdout); process.exit(r.exitCode)' \
+            | grep -q '^codex-cli '
 
       - name: Show server logs
         if: failure()
