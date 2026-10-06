@@ -393,6 +393,10 @@ describe("configurable browser workspace", () => {
       "!!document.querySelector('aside [data-browser-toolbar]')",
     );
     expect(await run("return $('webview').getWebContentsId()")).toBe(guest);
+    // Collapsed with the header in the sidebar, the sidebar reveals itself
+    // whenever the OS pointer is at the window's left edge, wherever an
+    // earlier suite on this display left it. Park it over the content.
+    await app.movePointer({ x: 400, y: 100 });
     await run("$('button[aria-label=\"Collapse sidebar\"]').click()");
     await app.waitFor(
       "document.querySelector('aside').dataset.motion === 'closed' && document.querySelector('aside').dataset.settled === 'true' && document.querySelector('aside').getBoundingClientRect().width === 0",

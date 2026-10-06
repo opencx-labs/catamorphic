@@ -2147,14 +2147,15 @@ export function App({
   // target=_blank / window.open from any page in this window → new tab.
   const openBrowserTabRef = useRef(openBrowserTab);
   openBrowserTabRef.current = openBrowserTab;
+  // Links wait until where they land is settled: the profile's projects and
+  // the last one it had open are known, and that project's workspace is
+  // restored. Taken earlier (a cold launch from a link), a link opens in a
+  // placeholder workspace that the restored one then replaces.
+  const linksLandSettled =
+    !projectsLoading && prefs !== null && (!projectId || workspaceReady);
   useEffect(() => {
     const take = () => {
-      if (
-        !runtime.visible ||
-        !activeProfile?.id ||
-        (projectId && !workspaceReady)
-      )
-        return;
+      if (!runtime.visible || !activeProfile?.id || !linksLandSettled) return;
       void desktopApi
         .browserTakePendingUrls()
         .then((urls) => {
@@ -2164,7 +2165,7 @@ export function App({
     };
     take();
     return desktopApi.onPendingBrowserUrls(take);
-  }, [runtime.visible, activeProfile?.id, projectId, workspaceReady]);
+  }, [runtime.visible, activeProfile?.id, linksLandSettled]);
   useEffect(() => {
     return desktopApi.onBrowserOpenUrl(
       (url, mode) =>
