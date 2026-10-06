@@ -17,6 +17,8 @@ export interface HetznerCloudClientOptions {
   maxRetryDelayMs?: number;
   /** How often an action is polled (default 2 seconds). */
   actionPollMs?: number;
+  /** How long one call may take before it counts as unanswered (default 30 seconds). */
+  requestTimeoutMs?: number;
   /** Waits between attempts; tests pass one that does not sleep. */
   sleep?: (ms: number) => Promise<void>;
   /** Milliseconds since the epoch; for deadlines and `RateLimit-Reset`. */
@@ -25,8 +27,8 @@ export interface HetznerCloudClientOptions {
 
 /**
  * A call Hetzner Cloud answered with an error, or one that never got an
- * answer after every retry. `code` is Hetzner's error code
- * (`uniqueness_error`, `not_found`, `rate_limit_exceeded`, ...).
+ * answer. `code` is Hetzner's error code (`uniqueness_error`, `not_found`,
+ * `rate_limit_exceeded`, ...); `status` is 0 when nothing answered.
  */
 export class HetznerCloudError extends Error {
   constructor(
@@ -36,6 +38,14 @@ export class HetznerCloudError extends Error {
   ) {
     super(`Hetzner Cloud: ${message} (${code})`);
     this.name = "HetznerCloudError";
+  }
+
+  /**
+   * Hetzner refused the request (a 4xx other than 429): nothing was
+   * created or changed, and asking again the same way fails the same way.
+   */
+  get definite(): boolean {
+    return this.status >= 400 && this.status < 500 && this.status !== 429;
   }
 }
 
@@ -104,18 +114,23 @@ export class HetznerCloudClient {
 
   /**
    * One API call, retried while Hetzner is busy or unreachable. Resolves
-   * with the parsed JSON body (null for an empty one).
+   * with the parsed JSON body (null for an empty one). A call that is not
+   * `idempotent` (one that would create a second billable resource) is
+   * retried only on 429, when Hetzner certainly did nothing.
    */
   async request(args: {
     method: "GET" | "POST" | "DELETE";
     path: string;
     query?: Readonly<Record<string, string | number | undefined>>;
     body?: unknown;
+    /** Default true. */
+    idempotent?: boolean;
   }): Promise<unknown> {
     const url = new URL(`${this.baseUrl}${args.path}`);
     for (const [key, value] of Object.entries(args.query ?? {}))
       if (value !== undefined) url.searchParams.set(key, String(value));
     const maxRetries = this.options.maxRetries ?? 5;
+    const idempotent = args.idempotent ?? true;
     for (let attempt = 0; ; attempt++) {
       let response: Response;
       try {
@@ -131,9 +146,10 @@ export class HetznerCloudClient {
           ...(args.body === undefined
             ? {}
             : { body: JSON.stringify(args.body) }),
+          signal: AbortSignal.timeout(this.options.requestTimeoutMs ?? 30_000),
         });
       } catch (error) {
-        if (attempt >= maxRetries)
+        if (!idempotent || attempt >= maxRetries)
           throw new HetznerCloudError(
             0,
             "unreachable",
@@ -155,7 +171,8 @@ export class HetznerCloudClient {
       const message = parsed.success
         ? parsed.data.error.message
         : `${args.method} ${args.path} answered ${response.status}`;
-      const retryable = response.status === 429 || response.status >= 500;
+      const retryable =
+        response.status === 429 || (idempotent && response.status >= 500);
       if (!retryable || attempt >= maxRetries)
         throw new HetznerCloudError(response.status, code, message);
       await this.sleep(this.retryDelay({ attempt, response }));

@@ -78,7 +78,15 @@ describe("the worker install script", () => {
    * Runs the script with every system command it calls replaced by a stub
    * that records its arguments, as root on a machine that has Docker.
    */
-  function run(args: { argv: string[]; uid?: number; state: string }): {
+  function run(args: {
+    argv: string[];
+    uid?: number;
+    state: string;
+    /** Docker is not installed yet: Docker's install script adds it. */
+    withoutDocker?: boolean;
+    /** apt's lock is held for this many checks. */
+    aptBusy?: number;
+  }): {
     status: number | null;
     stdout: string;
     stderr: string;
@@ -87,15 +95,15 @@ describe("the worker install script", () => {
     const stubs = path.join(args.state, "bin");
     fs.mkdirSync(stubs, { recursive: true });
     const log = path.join(args.state, "calls.log");
+    const script = (name: string, body: string) =>
+      `#!/bin/sh\necho "${name} $*" >> "$STUB_LOG"\n${body}\nexit 0\n`;
     const stub = (name: string, body = "") =>
-      fs.writeFileSync(
-        path.join(stubs, name),
-        `#!/bin/sh\necho "${name} $*" >> "$STUB_LOG"\n${body}\nexit 0\n`,
-        { mode: 0o755 },
-      );
+      fs.writeFileSync(path.join(stubs, name), script(name, body), {
+        mode: 0o755,
+      });
     stub("id", 'echo "$FAKE_UID"');
     stub("stat", "echo 998");
-    stub(
+    const docker = script(
       "docker",
       [
         'case "$1" in',
@@ -106,16 +114,47 @@ describe("the worker install script", () => {
         "esac",
       ].join("\n"),
     );
+    fs.writeFileSync(path.join(args.state, "docker.stub"), docker, {
+      mode: 0o755,
+    });
+    if (args.withoutDocker)
+      fs.rmSync(path.join(stubs, "docker"), { force: true });
+    else fs.writeFileSync(path.join(stubs, "docker"), docker, { mode: 0o755 });
+    // Downloads write what the URL serves to the -o file; Docker's install
+    // script installs the docker stub.
+    stub(
+      "curl",
+      [
+        'out=""',
+        'while [ "$#" -gt 0 ]; do',
+        '  if [ "$1" = "-o" ]; then out=$2; shift; fi',
+        "  shift",
+        "done",
+        `printf '#!/bin/sh\\ncp "$STUB_STATE/docker.stub" "$STUB_STATE/bin/docker"\\n' > "$out"`,
+      ].join("\n"),
+    );
+    fs.writeFileSync(
+      path.join(args.state, "apt-busy"),
+      String(args.aptBusy ?? 0),
+    );
+    stub(
+      "fuser",
+      [
+        'n=$(cat "$STUB_STATE/apt-busy")',
+        'if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$STUB_STATE/apt-busy"; exit 0; fi',
+        "exit 1",
+      ].join("\n"),
+    );
     for (const name of [
       "chown",
       "chmod",
       "runsc",
       "systemctl",
       "service",
-      "curl",
       "apt-get",
       "gpg",
       "dpkg",
+      "sleep",
     ])
       stub(name);
     const file = write("run.sh", workerInstallScript(target));
@@ -191,7 +230,9 @@ describe("the worker install script", () => {
     }
     expect(first.stdout).toContain("docker logs -f work-worker");
 
-    // Again: the existing container is replaced, nothing else changes.
+    // Again: the existing container is replaced, nothing else changes. The
+    // data directory now exists, and it is a worker's.
+    fs.writeFileSync(path.join(dataDir, "worker-credential"), "worker.x:s");
     const second = run({
       argv: ["--code=wke_first", "--data-dir", dataDir, "--name", "worker-b"],
       state,
@@ -204,6 +245,77 @@ describe("the worker install script", () => {
     );
     expect(calls.find((call) => call.startsWith("docker run"))).toContain(
       "--name worker-b",
+    );
+  });
+
+  it("never takes a system directory, or someone else's, for its data", () => {
+    const state = fs.mkdtempSync(path.join(root, "data-dir-"));
+    const taken = path.join(state, "taken");
+    fs.mkdirSync(taken);
+    fs.writeFileSync(path.join(taken, "notes.txt"), "someone's files");
+    for (const dataDir of [
+      "/",
+      "/etc",
+      "/usr/local/work",
+      "/var/lib",
+      "/home",
+      "/root/work",
+      "relative/work",
+      "/var/lib/../etc",
+      taken,
+    ]) {
+      const refused = run({
+        argv: ["--code", "wke_x", "--data-dir", dataDir],
+        state,
+      });
+      expect(refused.status, dataDir).toBe(1);
+      expect(refused.stderr).toContain("is not a place for the worker's data");
+      expect(refused.log.some((call) => call.startsWith("chown"))).toBe(false);
+    }
+    // A new directory, with a trailing slash, is fine.
+    const fresh = run({
+      argv: ["--code", "wke_x", "--data-dir", `${path.join(state, "new")}/`],
+      state,
+    });
+    expect(fresh.status).toBe(0);
+    expect(fresh.log).toContain(`chown 1000:1000 ${path.join(state, "new")}`);
+  });
+
+  it("installs Docker from a downloaded, checked script, after waiting for apt", () => {
+    const state = fs.mkdtempSync(path.join(root, "docker-"));
+    const installed = run({
+      argv: ["--code", "wke_x", "--data-dir", path.join(state, "data")],
+      state,
+      withoutDocker: true,
+      aptBusy: 2,
+    });
+    expect(installed.stderr).toBe("");
+    expect(installed.status).toBe(0);
+    const download = installed.log.find((call) => call.startsWith("curl"));
+    expect(download).toContain("https://get.docker.com -o ");
+    expect(installed.stdout).toContain(
+      "Waiting for another package installation to finish",
+    );
+    expect(installed.log.filter((call) => call.startsWith("sleep"))).toEqual([
+      "sleep 10",
+      "sleep 10",
+    ]);
+    // The script ran and Docker is there.
+    expect(installed.log).toContain(`docker pull ${target.image}`);
+  });
+
+  it("gives up waiting for apt after ten minutes", () => {
+    const state = fs.mkdtempSync(path.join(root, "apt-"));
+    const stuck = run({
+      argv: ["--code", "wke_x", "--data-dir", path.join(state, "data")],
+      state,
+      withoutDocker: true,
+      aptBusy: 1_000,
+    });
+    expect(stuck.status).toBe(1);
+    expect(stuck.stderr).toContain("held apt's lock for ten minutes");
+    expect(stuck.log.filter((call) => call.startsWith("sleep"))).toHaveLength(
+      60,
     );
   });
 });

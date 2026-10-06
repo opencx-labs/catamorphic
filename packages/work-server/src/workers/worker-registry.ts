@@ -134,13 +134,15 @@ const NOBODY = { nobody: true } as const;
 /**
  * What a worker is doing for machine rules (ADR 0204): serving its access,
  * released (serving nobody, its disk kept for its retention), free in its
- * pool, being reset before it returns to its pool, or revoked.
+ * pool, being reset before it returns to its pool, revoked and still being
+ * destroyed on its platform, or revoked.
  */
 export type WorkerState =
   | "serving"
   | "released"
   | "free"
   | "resetting"
+  | "destroying"
   | "revoked";
 
 /** A machine of a pool (`"pool": true` at enrollment), for the reconciler. */
@@ -153,7 +155,8 @@ export interface PooledMachine {
   member: string | null;
   /** Its place among a group's shared machines. */
   slot: number | null;
-  releasedAt: Date | null;
+  /** How long ago it was released, by the database's clock. */
+  releasedForMs: number | null;
   retainDays: number | null;
   placement: WorkerPlacement;
 }
@@ -163,11 +166,21 @@ export interface ProvisionedMachine {
   name: string;
   ref: string | null;
   rule: string;
+  /**
+   * Enrolled, still pending enrollment, expired before enrolling (or its
+   * code withdrawn for destruction), or revoked and not yet destroyed.
+   */
   state: "enrolled" | "pending" | "expired" | "revoked";
-  releasedAt: Date | null;
+  /** How long ago it was released, by the database's clock. */
+  releasedForMs: number | null;
   retainDays: number | null;
   placement: WorkerPlacement;
 }
+
+/** Milliseconds since `released_at`, measured by the database. */
+const releasedFor = sql<
+  number | null
+>`(extract(epoch from (now() - released_at)) * 1000)::float8`;
 
 /** The operator disabled this worker's node; it may connect once enabled. */
 export class WorkerDisabledError extends Error {
@@ -931,6 +944,8 @@ export class WorkWorkerRegistry {
   /**
    * Machines a reconciler provisioned, by state: enrolled, still pending
    * enrollment, expired before enrolling, or revoked but not yet destroyed.
+   * A machine stays listed until its platform confirmed it gone
+   * ({@link forgetMachine}), whether or not its reference was recorded.
    */
   async machines(): Promise<ProvisionedMachine[]> {
     const [workers, enrollments] = await Promise.all([
@@ -941,21 +956,16 @@ export class WorkWorkerRegistry {
           "machine_ref",
           "machine_rule",
           "revoked_at",
-          "released_at",
           "retain_days",
           "labels",
           "access",
           "trusted",
+          releasedFor.as("released_for_ms"),
         ])
         .where("tenant_id", "=", this.deps.tenantId)
         .where("machine_rule", "is not", null)
         .where("pool", "=", false)
-        .where((eb) =>
-          eb.or([
-            eb("revoked_at", "is", null),
-            eb("machine_ref", "is not", null),
-          ]),
-        )
+        .where("machine_destroyed_at", "is", null)
         .execute(),
       this.deps.db
         .selectFrom("work_worker_enrollments")
@@ -979,7 +989,7 @@ export class WorkWorkerRegistry {
         ref: row.machine_ref,
         rule: row.machine_rule ?? "",
         state: row.revoked_at ? ("revoked" as const) : ("enrolled" as const),
-        releasedAt: row.released_at,
+        releasedForMs: msOrNull(row.released_for_ms),
         retainDays: row.retain_days,
         placement: storedPlacement(row),
       })),
@@ -988,7 +998,7 @@ export class WorkWorkerRegistry {
         ref: row.machine_ref,
         rule: row.machine_rule ?? "",
         state: row.expired ? ("expired" as const) : ("pending" as const),
-        releasedAt: null,
+        releasedForMs: null,
         retainDays: null,
         placement: storedPlacement(row),
       })),
@@ -1005,11 +1015,11 @@ export class WorkWorkerRegistry {
         "machine_rule",
         "machine_member",
         "machine_slot",
-        "released_at",
         "retain_days",
         "labels",
         "access",
         "trusted",
+        releasedFor.as("released_for_ms"),
       ])
       .where("tenant_id", "=", this.deps.tenantId)
       .where("pool", "=", true)
@@ -1022,7 +1032,7 @@ export class WorkWorkerRegistry {
       rule: row.machine_rule,
       member: row.machine_member,
       slot: row.machine_slot,
-      releasedAt: row.released_at,
+      releasedForMs: msOrNull(row.released_for_ms),
       retainDays: row.retain_days,
       placement: storedPlacement(row),
     }));
@@ -1062,16 +1072,13 @@ export class WorkWorkerRegistry {
 
   /**
    * Release a machine nobody should have any more (ADR 0204): it serves
-   * nobody from now on and keeps its disk for `retainDays`.
+   * nobody from now on and keeps its disk for `retainDays`, counted from
+   * the database's clock.
    */
-  async release(args: {
-    name: string;
-    at: Date;
-    retainDays: number;
-  }): Promise<void> {
+  async release(args: { name: string; retainDays: number }): Promise<void> {
     await this.deps.db
       .updateTable("work_workers")
-      .set({ released_at: args.at, retain_days: args.retainDays })
+      .set({ released_at: sql`now()`, retain_days: args.retainDays })
       .where("tenant_id", "=", this.deps.tenantId)
       .where("name", "=", args.name)
       .where("revoked_at", "is", null)
@@ -1163,9 +1170,10 @@ export class WorkWorkerRegistry {
   /**
    * Reset a pooled machine through the operation queue: the worker destroys
    * every sandbox it holds and deletes members' volumes and sign-ins.
-   * Resolves once its receipt arrived; fails while it is not connected.
+   * Resolves once its receipt arrived; fails while it is not connected,
+   * and once `timeoutMs` passed without a receipt.
    */
-  async resetPooled(args: { name: string }): Promise<void> {
+  async resetPooled(args: { name: string; timeoutMs?: number }): Promise<void> {
     const nodeId = `${WORKER_NODE_PREFIX}${args.name}`;
     await this.queue.resetMachine({
       executor: nodeExecutor(nodeId),
@@ -1174,6 +1182,7 @@ export class WorkWorkerRegistry {
         (await this.deps.nodes.liveToken({ nodeId })) === token,
       label: `Worker ${args.name}`,
       attributes: { "catamorphic.worker.id": nodeId },
+      ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
     });
   }
 
@@ -1189,19 +1198,40 @@ export class WorkWorkerRegistry {
       .execute();
   }
 
-  /** A provisioned machine was destroyed: stop tracking it. */
+  /**
+   * Its platform confirmed a provisioned machine is gone: stop tracking it.
+   * Until then it stays listed, revoked, and is destroyed again each pass.
+   */
   async forgetMachine(args: {
     name: string;
     ref: string | null;
   }): Promise<void> {
     await this.deps.db
       .updateTable("work_workers")
-      .set({ machine_ref: null })
+      .set({ machine_destroyed_at: sql`now()` })
       .where("tenant_id", "=", this.deps.tenantId)
       .where("name", "=", args.name)
+      .where("machine_rule", "is not", null)
       .where("revoked_at", "is not", null)
+      .where("machine_destroyed_at", "is", null)
       .execute();
     await this.cancelEnrollments({ name: args.name });
+  }
+
+  /**
+   * Withdraw a machine's waiting enrollment code before it is destroyed:
+   * the code stops working, and the machine stays listed (as expired) until
+   * its destruction succeeds.
+   */
+  async expireEnrollments(args: { name: string }): Promise<void> {
+    await this.deps.db
+      .updateTable("work_worker_enrollments")
+      .set({ expires_at: sql`now()` })
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("name", "=", args.name)
+      .where("used_at", "is", null)
+      .where("expires_at", ">", sql<Date>`now()`)
+      .execute();
   }
 
   /** Invalidate every unused enrollment code for a name. */
@@ -1280,11 +1310,20 @@ function workerState(row: {
   released_at: Date | null;
   pool: boolean;
   machine_rule: string | null;
+  machine_destroyed_at: Date | null;
 }): WorkerState {
-  if (row.revoked_at) return "revoked";
+  if (row.revoked_at)
+    return row.machine_rule && !row.pool && !row.machine_destroyed_at
+      ? "destroying"
+      : "revoked";
   if (row.released_at) return row.machine_rule ? "released" : "resetting";
   if (row.pool && !row.machine_rule) return "free";
   return "serving";
+}
+
+/** A duration the database measured, as a number. */
+function msOrNull(value: number | string | null): number | null {
+  return value === null ? null : Number(value);
 }
 
 /** Two hex digests compared in constant time. */

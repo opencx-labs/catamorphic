@@ -49,7 +49,7 @@ Environment variables parsed by `workServerConfigFromEnv` in
 | `WORK_CONTROL_PLANE_WORKLOADS` | What the server runs itself: `agent,workflow` (default), `workflow`, or empty. Agents then run on enrolled workers. |
 | `WORK_MACHINES_CONFIG` | Path to the machine classes file that machine rules name: Hetzner Cloud servers, pools of enrolled machines; see [a machine for every person or team](cluster-deployment.md#a-machine-for-every-person-or-team). |
 | `WORK_HETZNER_TOKEN` | Hetzner Cloud API token (read and write) for `hetzner-cloud` classes. Never in the classes file. |
-| `WORK_WORKER_IMAGE` | The worker image machines install (default: this release of the published image, from `WORK_VERSION`, which the image sets). |
+| `WORK_WORKER_IMAGE` | The worker image machines install (default: the published image itself, `WORK_IMAGE_REPOSITORY:WORK_VERSION`, both set by its build). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Telemetry export (`OBSERVABILITY.md`). |
 
 ### Sign-in methods

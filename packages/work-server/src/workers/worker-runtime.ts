@@ -332,6 +332,23 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   const sandboxes = new PersistedSandboxes(
     path.join(options.dataDir, "sandboxes.json"),
   );
+  // One reset at a time: the control plane asks again when it stopped
+  // waiting for a long one (ADR 0204), and the next one starts after it.
+  const resets = { last: Promise.resolve() };
+  const reset = (): Promise<void> => {
+    const next = resets.last
+      .catch(() => undefined)
+      .then(() =>
+        resetMachine({
+          provider,
+          sandboxes,
+          signInRoot: execution.signInRoot,
+          log,
+        }),
+      );
+    resets.last = next;
+    return next;
+  };
   const stopping = new AbortController();
   /** Resolves after `ms`, or at once when the worker stops. */
   const pause = (ms: number) =>
@@ -488,13 +505,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       },
       sandboxes,
       // A pooled machine returns to its pool (ADR 0204).
-      resetMachine: () =>
-        resetMachine({
-          provider,
-          sandboxes,
-          signInRoot: execution.signInRoot,
-          log,
-        }),
+      resetMachine: reset,
       keepSandboxes: true,
       maxSandboxes: execution.capacity.workspaces,
       // One slot per workspace, so one long command never blocks the others.

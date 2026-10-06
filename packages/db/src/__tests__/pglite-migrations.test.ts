@@ -94,6 +94,7 @@ describe("PGlite migrations", () => {
       "055_session_secrets_held.sql",
       "056_session_workspace_use.sql",
       "057_worker_rotation_order.sql",
+      "058_machine_teardown_and_rule_failures.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

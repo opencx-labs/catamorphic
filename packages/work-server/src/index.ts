@@ -58,10 +58,11 @@ export {
   type MachinesConfig,
   MachinesConfigSchema,
 } from "./workers/machine-classes.js";
-export type {
-  MachineProvisioner,
-  MachineRule,
-  ReconcileSummary,
+export {
+  type MachineProvisioner,
+  MachineProvisioningRefusedError,
+  type MachineRule,
+  type ReconcileSummary,
 } from "./workers/machine-rules.js";
 export {
   listMachineSignIns,

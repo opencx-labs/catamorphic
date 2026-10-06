@@ -10,8 +10,19 @@ import { FakeHetznerCloud } from "../testing.js";
 
 const TOKEN = "hcloud-test-token";
 
-function setup(options?: { actionPolls?: number; failAction?: string }) {
-  const cloud = new FakeHetznerCloud({ token: TOKEN, ...options });
+function setup(options?: {
+  actionPolls?: number;
+  failAction?: string;
+  snapshotWaitMs?: number;
+  deleteWaitMs?: number;
+}) {
+  const cloud = new FakeHetznerCloud({
+    token: TOKEN,
+    ...(options?.actionPolls !== undefined
+      ? { actionPolls: options.actionPolls }
+      : {}),
+    ...(options?.failAction ? { failAction: options.failAction } : {}),
+  });
   const sleeps: number[] = [];
   let clock = 1_000_000;
   const client = new HetznerCloudClient({
@@ -24,7 +35,15 @@ function setup(options?: { actionPolls?: number; failAction?: string }) {
     },
     now: () => clock,
   });
-  const machines = new HetznerCloudMachines({ client });
+  const machines = new HetznerCloudMachines({
+    client,
+    ...(options?.snapshotWaitMs !== undefined
+      ? { snapshotWaitMs: options.snapshotWaitMs }
+      : {}),
+    ...(options?.deleteWaitMs !== undefined
+      ? { deleteWaitMs: options.deleteWaitMs }
+      : {}),
+  });
   return { cloud, client, machines, sleeps };
 }
 
@@ -38,6 +57,11 @@ const spec = {
   networks: [7],
   labels: { "work-class": "desk" },
   userData: "#cloud-config\nruncmd: []\n",
+};
+
+const keep = {
+  description: "Work machine desk-0a1b2c3d4e5f",
+  labels: { "work-rule": "desk" },
 };
 
 describe("HetznerCloudMachines", () => {
@@ -64,16 +88,17 @@ describe("HetznerCloudMachines", () => {
     expect(cloud.servers.size).toBe(1);
   });
 
-  it("refuses a same-named server Work did not create", async () => {
+  it("refuses a same-named server Work did not create, definitely", async () => {
     const { cloud, client, machines } = setup();
     await client.request({
       method: "POST",
       path: "/servers",
       body: { name: spec.name, server_type: "cx22", image: "debian-12" },
     });
-    await expect(machines.create(spec)).rejects.toThrow(
-      /was not created by Work/,
-    );
+    const refused = await machines.create(spec).catch((error) => error);
+    expect(refused).toBeInstanceOf(HetznerCloudError);
+    expect(refused.message).toMatch(/was not created by Work/);
+    expect(refused.definite).toBe(true);
     expect(cloud.servers.size).toBe(1);
   });
 
@@ -82,10 +107,11 @@ describe("HetznerCloudMachines", () => {
     const { ref } = await machines.create(spec);
     expect(
       await machines.destroy({ name: spec.name, ref: null }),
-    ).toMatchObject({ deleted: [Number(ref)], snapshots: [] });
+    ).toMatchObject({ done: true, deleted: [Number(ref)], snapshots: [] });
     expect(cloud.servers.size).toBe(0);
     // Already gone: nothing to do, no error.
     expect(await machines.destroy({ name: spec.name, ref })).toEqual({
+      done: true,
       deleted: [],
       snapshots: [],
     });
@@ -97,44 +123,50 @@ describe("HetznerCloudMachines", () => {
 
   it("deletes only a server carrying the machine's label", async () => {
     const { cloud, client, machines } = setup();
-    const body = await client.request({
+    await client.request({
       method: "POST",
       path: "/servers",
       body: { name: "someone-elses", server_type: "cx22", image: "debian-12" },
     });
     const other = cloud.serverNamed("someone-elses");
-    expect(body).toBeTruthy();
     // A stale ref pointing at another server falls back to the label.
     expect(
       await machines.destroy({ name: spec.name, ref: String(other?.id) }),
-    ).toEqual({ deleted: [], snapshots: [] });
+    ).toEqual({ done: true, deleted: [], snapshots: [] });
     expect(cloud.servers.size).toBe(1);
   });
 
-  it("keeps a snapshot before destroying, once per server", async () => {
+  it("starts a snapshot, and destroys the server in a later call once it is written", async () => {
     const { cloud, machines } = setup({ actionPolls: 2 });
     const { ref } = await machines.create(spec);
-    const destroyed = await machines.destroy({
-      name: spec.name,
-      ref,
-      snapshot: {
-        description: "Work machine desk-0a1b2c3d4e5f",
-        labels: { "work-rule": "desk" },
-      },
+    const destroy = () =>
+      machines.destroy({ name: spec.name, ref, snapshot: keep });
+    // The first call starts the snapshot and returns at once.
+    expect(await destroy()).toEqual({
+      done: false,
+      deleted: [],
+      snapshots: [],
     });
-    expect(destroyed.deleted).toEqual([Number(ref)]);
     const [image] = [...cloud.images.values()];
     expect(image).toMatchObject({
-      id: destroyed.snapshots[0],
       type: "snapshot",
-      status: "available",
-      description: "Work machine desk-0a1b2c3d4e5f",
+      status: "creating",
+      description: keep.description,
       labels: {
         "work-rule": "desk",
         [MACHINE_LABEL]: spec.name,
         [SNAPSHOT_SERVER_LABEL]: ref,
       },
     });
+    // Still being written: nothing more happens.
+    expect((await destroy()).done).toBe(false);
+    cloud.advance();
+    expect(await destroy()).toEqual({
+      done: true,
+      deleted: [Number(ref)],
+      snapshots: [image?.id],
+    });
+    expect(cloud.servers.size).toBe(0);
     const order = cloud.calls
       .filter((call) => call.method !== "GET")
       .map((call) => `${call.method} ${call.path}`);
@@ -145,40 +177,119 @@ describe("HetznerCloudMachines", () => {
     ]);
   });
 
+  it("waits for a snapshot when asked to, within its bound", async () => {
+    const { cloud, machines } = setup({ snapshotWaitMs: 60_000 });
+    const { ref } = await machines.create(spec);
+    const destroyed = await machines.destroy({
+      name: spec.name,
+      ref,
+      snapshot: keep,
+    });
+    expect(destroyed.done).toBe(true);
+    expect(destroyed.snapshots).toEqual([...cloud.images.keys()]);
+  });
+
+  it("never asks twice for a snapshot whose answer was lost", async () => {
+    const { cloud, machines } = setup();
+    const { ref } = await machines.create(spec);
+    // Hetzner starts the image, then the answer is lost (5xx, then a
+    // dropped connection): no second image, and no retry of the call.
+    for (const lost of [
+      { status: 502, code: "unavailable" },
+      { status: 0, code: "", network: true },
+    ]) {
+      cloud.images.clear();
+      cloud.fail({
+        method: "POST",
+        path: `/servers/${ref}/actions/create_image`,
+        processed: true,
+        ...lost,
+      });
+      const destroyed = await machines.destroy({
+        name: spec.name,
+        ref,
+        snapshot: keep,
+      });
+      expect(destroyed.done).toBe(false);
+      expect(cloud.images.size).toBe(1);
+    }
+    expect(
+      cloud.calls.filter(
+        (call) => call.method === "POST" && call.path.endsWith("/create_image"),
+      ),
+    ).toHaveLength(2);
+    // Not started at all: the error stands and a later call tries again.
+    cloud.images.clear();
+    cloud.fail({
+      method: "POST",
+      path: `/servers/${ref}/actions/create_image`,
+      status: 503,
+      code: "unavailable",
+    });
+    await expect(
+      machines.destroy({ name: spec.name, ref, snapshot: keep }),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(cloud.servers.size).toBe(1);
+  });
+
   it("reuses a snapshot an interrupted destroy already wrote", async () => {
     const { cloud, machines } = setup();
     const { ref } = await machines.create(spec);
-    // The snapshot is written, then the delete fails for good.
+    await machines.destroy({ name: spec.name, ref, snapshot: keep });
+    cloud.advance();
+    // The snapshot is written, then the delete fails.
     cloud.fail({ method: "DELETE", status: 423, code: "locked" });
     await expect(
-      machines.destroy({
-        name: spec.name,
-        ref,
-        snapshot: { description: "kept" },
-      }),
+      machines.destroy({ name: spec.name, ref, snapshot: keep }),
     ).rejects.toMatchObject({ code: "locked" });
-    expect(cloud.images.size).toBe(1);
     const retried = await machines.destroy({
       name: spec.name,
       ref,
-      snapshot: { description: "kept" },
+      snapshot: keep,
     });
     expect(cloud.images.size).toBe(1);
-    expect(retried.snapshots).toEqual([...cloud.images.keys()]);
-    expect(cloud.servers.size).toBe(0);
+    expect(retried).toEqual({
+      done: true,
+      deleted: [Number(ref)],
+      snapshots: [...cloud.images.keys()],
+    });
   });
 
-  it("does not delete a server whose snapshot failed", async () => {
+  it("does not delete a server whose snapshot failed, and starts it again", async () => {
     const { cloud, machines } = setup({ failAction: "create_image" });
     const { ref } = await machines.create(spec);
-    await expect(
-      machines.destroy({
-        name: spec.name,
-        ref,
-        snapshot: { description: "x" },
-      }),
-    ).rejects.toThrow(/create_image failed/);
+    expect(
+      (await machines.destroy({ name: spec.name, ref, snapshot: keep })).done,
+    ).toBe(false);
+    cloud.advance();
+    // The failed image is gone; the next call starts another.
+    expect(cloud.images.size).toBe(0);
+    expect(
+      (await machines.destroy({ name: spec.name, ref, snapshot: keep })).done,
+    ).toBe(false);
     expect(cloud.servers.size).toBe(1);
+    expect(cloud.images.size).toBe(1);
+  });
+
+  it("reports a deletion Hetzner has not finished, and finishes later", async () => {
+    const { cloud, machines } = setup({ actionPolls: 1_000, deleteWaitMs: 0 });
+    const { ref } = await machines.create(spec);
+    expect(await machines.destroy({ name: spec.name, ref })).toEqual({
+      done: false,
+      deleted: [],
+      snapshots: [],
+    });
+    // Deleting: not asked again.
+    expect((await machines.destroy({ name: spec.name, ref })).done).toBe(false);
+    expect(cloud.calls.filter((call) => call.method === "DELETE")).toHaveLength(
+      1,
+    );
+    cloud.advance();
+    expect(await machines.destroy({ name: spec.name, ref })).toEqual({
+      done: true,
+      deleted: [],
+      snapshots: [],
+    });
   });
 });
 
@@ -214,6 +325,26 @@ describe("HetznerCloudClient", () => {
     cloud.fail({ path: "/servers", status: 403, code: "forbidden" });
     await expect(client.servers({})).rejects.toBeInstanceOf(HetznerCloudError);
     expect(cloud.calls).toHaveLength(1);
+  });
+
+  it("gives up on a call that does not answer in time", async () => {
+    const hung = new HetznerCloudClient({
+      token: TOKEN,
+      requestTimeoutMs: 20,
+      maxRetries: 1,
+      sleep: async () => {},
+      fetch: (_input, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(init.signal?.reason),
+          );
+        }),
+    });
+    await expect(hung.servers({})).rejects.toMatchObject({
+      status: 0,
+      code: "unreachable",
+      definite: false,
+    });
   });
 
   it("refuses a wrong token", async () => {

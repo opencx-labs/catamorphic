@@ -861,17 +861,7 @@ async function createWorkServerInner(
           log,
         })
       : undefined;
-  const reconcileMachines = () => {
-    void machineReconciler
-      ?.reconcile()
-      .catch((error) =>
-        log(
-          `Machine reconciliation failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        ),
-      );
-  };
+  const reconcileMachines = () => machineReconciler?.reconcileSoon();
   if (machineReconciler) {
     const machineTimer = setInterval(reconcileMachines, 60_000);
     machineTimer.unref();

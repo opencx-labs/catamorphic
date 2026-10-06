@@ -1,8 +1,5 @@
 import type { FastifyInstance } from "fastify";
 
-/** Where the worker image is published (ADR 0159). */
-export const WORK_IMAGE_REPOSITORY = "ghcr.io/opencx-labs/work-server";
-
 /** What every machine installs from this control plane (ADR 0204). */
 export interface InstallTarget {
   /** The control plane's public origin the worker dials. */
@@ -13,8 +10,8 @@ export interface InstallTarget {
 
 /**
  * The install target, or why machines cannot install from this server: a
- * worker image is needed (this release's, or `WORK_WORKER_IMAGE`), and a
- * public origin other machines reach.
+ * worker image is needed (the published image's own, or
+ * `WORK_WORKER_IMAGE`), and a public origin other machines reach.
  */
 export function installTarget(args: {
   publicBase: string;
@@ -23,7 +20,7 @@ export function installTarget(args: {
   if (!args.workerImage)
     return {
       unavailable:
-        "This server does not know which worker image machines should run. Set WORK_WORKER_IMAGE to the Work server image of this release (for example ghcr.io/opencx-labs/work-server:<version>).",
+        "This server does not know which worker image machines should run. Set WORK_WORKER_IMAGE to the Work server image of this release (for example ghcr.io/<owner>/work-server:<version>).",
     };
   if (isLoopback(args.publicBase))
     return {
@@ -50,6 +47,11 @@ export const DEFAULT_WORKER_DATA_DIR = "/var/lib/work";
  * `/dev/kvm` and keeps the guest's network in user space: the device and
  * its group are all the worker container needs, never `--privileged` or
  * added capabilities.
+ *
+ * Downloads land in files that are checked before use, never piped into a
+ * shell. Package installation waits, within bounds, for another one to
+ * finish, as on a cloud machine's first boot. The data directory, which is
+ * made private to the worker, is never a system directory.
  */
 export function workerInstallScript(target: InstallTarget): string {
   return `#!/bin/sh
@@ -61,6 +63,9 @@ export function workerInstallScript(target: InstallTarget): string {
 # Running it again is safe: it keeps what is installed and replaces the
 # worker container, which keeps its enrollment in its data directory.
 set -eu
+# A failed download in a pipeline fails the script where the shell can say so.
+# shellcheck disable=SC3040
+if (set -o pipefail) 2>/dev/null; then set -o pipefail; fi
 
 CONTROL_PLANE_URL=${shellQuote(target.controlPlaneUrl)}
 IMAGE=${shellQuote(target.image)}
@@ -80,7 +85,9 @@ Usage: install.sh --code <code> [--image <image>] [--data-dir <dir>] [--name <na
   --code <code>      the one-time enrollment code from the Work server (required)
   --image <image>    the worker image (default: this server's release)
   --data-dir <dir>   where the worker keeps its credential, sandboxes and
-                     members' sign-ins (default: ${DEFAULT_WORKER_DATA_DIR})
+                     members' sign-ins (default: ${DEFAULT_WORKER_DATA_DIR}): a new
+                     directory, or one under /var/lib, /srv, /opt, /data or
+                     /home/<user> that is empty or a worker's
   --name <name>      the worker container's name (default: work-worker)
 USAGE
 }
@@ -106,22 +113,105 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+# The data directory is handed to the worker's user and made private, so it
+# is never a system directory: a new one, or an empty or worker's one under
+# a place meant for data.
+case "$DATA_DIR" in
+  /) ;;
+  */) DATA_DIR=\${DATA_DIR%/} ;;
+esac
+data_dir_allowed() {
+  case "$1" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  case "$1" in
+    *//* | */./* | */../* | */. | */..) return 1 ;;
+    / | /bin | /boot | /dev | /etc | /home | /lib | /lib32 | /lib64 | /libx32 | \\
+      /media | /mnt | /opt | /proc | /root | /run | /sbin | /snap | /srv | \\
+      /sys | /tmp | /usr | /var | /var/cache | /var/lib | /var/log | \\
+      /var/mail | /var/run | /var/spool | /var/tmp)
+      return 1 ;;
+    /bin/* | /boot/* | /dev/* | /etc/* | /lib/* | /lib32/* | /lib64/* | \\
+      /libx32/* | /proc/* | /root/* | /run/* | /sbin/* | /sys/* | /usr/*)
+      return 1 ;;
+  esac
+  [ -e "$1" ] || return 0
+  [ -d "$1" ] || return 1
+  [ -f "$1/worker-credential" ] && return 0
+  case "$1" in
+    /var/lib/?* | /srv/?* | /opt/?* | /data | /data/?* | /home/?*/?*)
+      [ -z "$(ls -A "$1")" ] ;;
+    *) return 1 ;;
+  esac
+}
+
 [ -n "$CODE" ] || fail "Pass the enrollment code: --code <code>"
 [ "$(id -u)" -eq 0 ] || fail "Run this script as root, for example with sudo sh"
-case "$DATA_DIR" in
-  /*) ;;
-  *) fail "--data-dir must be an absolute path" ;;
-esac
+data_dir_allowed "$DATA_DIR" ||
+  fail "--data-dir $DATA_DIR is not a place for the worker's data: use a new directory, or an empty one under /var/lib, /srv, /opt, /data or /home/<user>"
 case "$NAME" in
   [a-zA-Z0-9]*) ;;
   *) fail "--name must start with a letter or digit" ;;
 esac
 
+WORK_TMP=$(mktemp -d)
+trap 'rm -rf "$WORK_TMP"' EXIT
+
+# Download a file, and check it is there before it is used.
+download() {
+  curl -fsSL --retry 3 --connect-timeout 20 "$1" -o "$2" ||
+    fail "Could not download $1"
+  [ -s "$2" ] || fail "$1 answered with nothing"
+}
+
+# On a first boot, cloud-init and unattended upgrades may be installing
+# packages: wait for them, within bounds, before installing ours.
+apt_busy() {
+  command -v fuser >/dev/null 2>&1 || return 1
+  fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock \\
+    /var/lib/apt/lists/lock >/dev/null 2>&1
+}
+wait_for_apt() {
+  waited=0
+  while apt_busy; do
+    if [ "$waited" -eq 0 ]; then
+      say "Waiting for another package installation to finish"
+    fi
+    waited=$((waited + 1))
+    [ "$waited" -le 60 ] ||
+      fail "Another package installation held apt's lock for ten minutes; run this script again later"
+    sleep 10
+  done
+}
+apt_get() {
+  tries=0
+  wait_for_apt
+  until DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 "$@"; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 20 ] || fail "apt-get $1 kept failing"
+    say "apt-get $1 failed, perhaps behind another installation; trying again"
+    sleep 15
+    wait_for_apt
+  done
+}
+
 # Docker, with the official convenience script when it is missing.
 if ! command -v docker >/dev/null 2>&1; then
   command -v curl >/dev/null 2>&1 || fail "Install curl, then run this script again"
   say "Installing Docker"
-  curl -fsSL https://get.docker.com | sh
+  download https://get.docker.com "$WORK_TMP/get-docker.sh"
+  case "$(head -n 1 "$WORK_TMP/get-docker.sh")" in
+    '#!'*sh*) ;;
+    *) fail "https://get.docker.com did not answer with Docker's install script" ;;
+  esac
+  tries=0
+  until wait_for_apt && sh "$WORK_TMP/get-docker.sh"; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 3 ] || fail "Docker's install script failed"
+    say "Docker's install script failed; trying again"
+    sleep 15
+  done
 fi
 if command -v systemctl >/dev/null 2>&1; then
   systemctl enable --now docker >/dev/null 2>&1 || true
@@ -146,14 +236,18 @@ else
     command -v apt-get >/dev/null 2>&1 ||
       fail "This machine has no KVM and no apt-get. Install gVisor (https://gvisor.dev/docs/user_guide/install/), then run this script again"
     say "No KVM: installing gVisor"
-    apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates curl gnupg >/dev/null
-    curl -fsSL https://gvisor.dev/archive.key |
-      gpg --dearmor --yes -o /usr/share/keyrings/gvisor-archive-keyring.gpg
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \\
+    apt_get update -qq
+    apt_get install -y -qq ca-certificates curl gnupg >/dev/null
+    download https://gvisor.dev/archive.key "$WORK_TMP/gvisor.key"
+    grep -q 'BEGIN PGP PUBLIC KEY BLOCK' "$WORK_TMP/gvisor.key" ||
+      fail "https://gvisor.dev/archive.key is not a signing key"
+    gpg --dearmor --yes -o /usr/share/keyrings/gvisor-archive-keyring.gpg \\
+      "$WORK_TMP/gvisor.key"
+    ARCH=$(dpkg --print-architecture)
+    echo "deb [arch=$ARCH signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \\
       >/etc/apt/sources.list.d/gvisor.list
-    apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq runsc >/dev/null
+    apt_get update -qq
+    apt_get install -y -qq runsc >/dev/null
   fi
   # Sandboxes reach their egress proxy over a host socket and run nested
   # Docker with raw sockets (ADR 0203). runsc merges its runtime into the
@@ -165,8 +259,11 @@ else
     say "Restarting Docker with the gVisor runtime"
     restart_docker
   fi
-  docker info --format '{{json .Runtimes}}' | grep -q '"runsc"' ||
-    fail "Docker did not load the runsc runtime; see /etc/docker/daemon.json"
+  RUNTIMES=$(docker info --format '{{json .Runtimes}}')
+  case "$RUNTIMES" in
+    *'"runsc"'*) ;;
+    *) fail "Docker did not load the runsc runtime; see /etc/docker/daemon.json" ;;
+  esac
   say "gVisor is ready: agents run in gVisor sandboxes"
 fi
 

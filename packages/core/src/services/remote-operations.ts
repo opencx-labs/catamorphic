@@ -736,6 +736,11 @@ export class RemoteOperationQueue {
     leaseHeld: (leaseToken: string) => Promise<boolean>;
     label: string;
     attributes?: SpanAttributes;
+    /**
+     * How long to wait for the receipt (default 15 minutes). A reset still
+     * running then is abandoned here; resetting again is harmless.
+     */
+    timeoutMs?: number;
   }): Promise<void> {
     return withSpan(
       {
@@ -757,6 +762,9 @@ export class RemoteOperationQueue {
           leaseHeld: args.leaseHeld,
           label: args.label,
           span,
+          ...(args.timeoutMs !== undefined
+            ? { timeoutMs: args.timeoutMs }
+            : {}),
         });
       },
     );
@@ -774,6 +782,8 @@ export class RemoteOperationQueue {
     leaseHeld: (leaseToken: string) => Promise<boolean>;
     label: string;
     span: Span;
+    /** Overrides the operation's own timeout. */
+    timeoutMs?: number;
   }): Promise<unknown> {
     for (let attempt = 1; ; attempt++) {
       try {
@@ -793,8 +803,9 @@ export class RemoteOperationQueue {
     leaseHeld: (leaseToken: string) => Promise<boolean>;
     label: string;
     span: Span;
+    timeoutMs?: number;
   }): Promise<unknown> {
-    const timeoutMs = operationTimeoutMs(args.operation);
+    const timeoutMs = args.timeoutMs ?? operationTimeoutMs(args.operation);
     const publicKey = await executorKey({
       db: this.db,
       executor: args.executor,

@@ -5,7 +5,10 @@ import {
   takeReplicaClaim,
 } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
-import type { HetznerCloudMachines } from "@catamorphic/hetzner";
+import {
+  HetznerCloudError,
+  type HetznerCloudMachines,
+} from "@catamorphic/hetzner";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
@@ -20,6 +23,7 @@ import {
   type MachinePlatform,
 } from "./machine-classes.js";
 import {
+  accessGroupsOf,
   NodeLabelsSchema,
   WorkerAccessSchema,
   type WorkerPlacement,
@@ -66,7 +70,10 @@ export type MachineRule = z.output<typeof MachineRuleSchema>;
  * virtualization host) for `custom` classes. A created machine starts the
  * Work worker with the given control plane and one-time enrollment code,
  * for example by running `enrollment.cloudInit` through cloud-init; it
- * enrolls itself.
+ * enrolls itself. `create` throws {@link MachineProvisioningRefusedError}
+ * when the platform refused and created nothing, so the next pass tries
+ * again with a new code; any other error keeps the code, since the machine
+ * may still come up and enroll.
  */
 export interface MachineProvisioner {
   create(args: {
@@ -83,7 +90,16 @@ export interface MachineProvisioner {
       cloudInit?: string;
     };
   }): Promise<{ ref: string }>;
+  /** Destroy the machine, by `ref` or else by `name`; succeed when gone. */
   destroy(args: { name: string; ref: string | null }): Promise<void>;
+}
+
+/** A platform refused to create a machine, and created nothing. */
+export class MachineProvisioningRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MachineProvisioningRefusedError";
+  }
 }
 
 /** What one pass changed. */
@@ -98,9 +114,12 @@ export interface ReconcileSummary {
   released: string[];
   /** Machines destroyed on their platform. */
   removed: string[];
+  /** Machines whose destruction is under way (a snapshot being written). */
+  destroying: string[];
   /** Pooled machines reset and free again. */
   reset: string[];
-  failed: Array<{ name: string; error: string }>;
+  /** What went wrong, by machine (or rule) and the rule it belongs to. */
+  failed: Array<{ name: string; error: string; rule?: string }>;
   /** Another replica was reconciling; its pass covers this one. */
   busy?: true;
 }
@@ -120,6 +139,8 @@ export interface MachineRuleStatus {
   released: number;
   /** Why the rule cannot be acted on, such as an unknown class. */
   problem?: string;
+  /** What failed for the rule's machines in the latest pass. */
+  failure?: { error: string; at: string };
 }
 
 /** A machine a provisioned rule calls for, by its stable name. */
@@ -136,6 +157,8 @@ interface DesiredSlot {
   rule: string;
   class: string;
   holder: { member: string } | { slot: number };
+  /** For a shared place: the group it serves, part of its identity. */
+  group: string | null;
   access: WorkerPlacement["access"];
   trusted: boolean;
   retainDays: number;
@@ -157,7 +180,8 @@ const HETZNER_REF = "hcloud:";
  * Keeps workers in step with machine rules and the directory (ADR 0204):
  * creates cloud machines and assigns pooled ones that are missing, updates
  * placement that drifted, releases machines nobody should have any more,
- * and destroys or resets them once their retention ends.
+ * and destroys or resets them once their retention ends. Retention runs on
+ * the database's clock, so replicas agree on it.
  */
 export class MachineReconciler {
   private running: Promise<ReconcileSummary> | undefined;
@@ -181,8 +205,11 @@ export class MachineReconciler {
       emailOf: (userId: string) => Promise<string | undefined>;
       /** How long a pass holds its claim without renewing (default 2 minutes). */
       leaseMs?: number;
-      /** The clock retention is measured by. */
-      now?: () => Date;
+      /**
+       * How long a pass waits for one pooled machine's reset (default 3
+       * minutes); a slower reset finishes on a later pass.
+       */
+      resetWaitMs?: number;
       log?: (line: string) => void;
     },
   ) {}
@@ -234,13 +261,31 @@ export class MachineReconciler {
     return rule;
   }
 
+  /**
+   * Remove a rule. Its machines keep the rule's retention, which outlives
+   * it, and are released by the next pass.
+   */
   async deleteRule(name: string): Promise<boolean> {
-    const result = await this.deps.db
-      .deleteFrom("work_machine_rules")
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("name", "=", name)
-      .executeTakeFirst();
-    return Number(result.numDeletedRows) > 0;
+    return this.deps.db.transaction().execute(async (trx) => {
+      const deleted = await trx
+        .deleteFrom("work_machine_rules")
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("name", "=", name)
+        .returning("definition")
+        .executeTakeFirst();
+      if (!deleted) return false;
+      const parsed = MachineRuleSchema.safeParse(deleted.definition);
+      if (parsed.success)
+        await trx
+          .updateTable("work_workers")
+          .set({ retain_days: parsed.data.retainDays })
+          .where("tenant_id", "=", this.deps.tenantId)
+          .where("machine_rule", "=", name)
+          .where("revoked_at", "is", null)
+          .where("released_at", "is", null)
+          .execute();
+      return true;
+    });
   }
 
   /** Directory groups rules name, for the directory mirror. */
@@ -253,18 +298,38 @@ export class MachineReconciler {
   /** How each rule's machines stand right now. */
   async status(): Promise<Record<string, MachineRuleStatus>> {
     const desired = await this.desired();
-    const [machines, pooled] = await Promise.all([
+    const [machines, pooled, failures] = await Promise.all([
       this.deps.workers.machines(),
       this.deps.workers.pooledMachines(),
+      this.deps.db
+        .selectFrom("work_machine_rules")
+        .select(["name", "last_failure", "last_failure_at"])
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("last_failure", "is not", null)
+        .execute(),
     ]);
     const status: Record<string, MachineRuleStatus> = {};
     for (const [name, rule] of Object.entries(desired.rules)) {
       const platform = this.classOf(rule.class)?.platform ?? null;
       const problem = desired.problems.get(name);
+      const failed = failures.find((row) => row.name === name);
+      const extra = {
+        ...(problem ? { problem } : {}),
+        ...(failed?.last_failure && failed.last_failure_at
+          ? {
+              failure: {
+                error: failed.last_failure,
+                at: failed.last_failure_at.toISOString(),
+              },
+            }
+          : {}),
+      };
       if (platform === "pool") {
         const slots = desired.slots.filter((slot) => slot.rule === name);
         const held = pooled.filter((machine) => machine.rule === name);
-        const ready = held.filter((machine) => !machine.releasedAt).length;
+        const ready = held.filter(
+          (machine) => machine.releasedForMs === null,
+        ).length;
         status[name] = {
           platform,
           desired: slots.length,
@@ -272,7 +337,7 @@ export class MachineReconciler {
           starting: 0,
           waiting: Math.max(0, slots.length - ready),
           released: held.length - ready,
-          ...(problem ? { problem } : {}),
+          ...extra,
         };
         continue;
       }
@@ -285,7 +350,7 @@ export class MachineReconciler {
       const ready = own.filter(
         (machine) =>
           machine.state === "enrolled" &&
-          !machine.releasedAt &&
+          machine.releasedForMs === null &&
           isWanted(machine.name),
       ).length;
       const starting = own.filter(
@@ -298,9 +363,10 @@ export class MachineReconciler {
         starting,
         waiting: Math.max(0, wanted.length - ready - starting),
         released: own.filter(
-          (machine) => machine.state === "enrolled" && machine.releasedAt,
+          (machine) =>
+            machine.state === "enrolled" && machine.releasedForMs !== null,
         ).length,
-        ...(problem ? { problem } : {}),
+        ...extra,
       };
     }
     return status;
@@ -325,6 +391,16 @@ export class MachineReconciler {
     return this.running;
   }
 
+  /**
+   * Start a pass without waiting for it, as after a rule changed: its
+   * outcome reaches the rule's status and the log.
+   */
+  reconcileSoon(): void {
+    void this.reconcile().catch((error: unknown) =>
+      this.deps.log?.(`Machine reconciliation failed: ${message(error)}`),
+    );
+  }
+
   /** Waits for a pass in progress (shutdown); starts none. */
   async settle(): Promise<void> {
     await this.running?.catch(() => undefined);
@@ -332,10 +408,6 @@ export class MachineReconciler {
 
   private get leaseMs(): number {
     return this.deps.leaseMs ?? 120_000;
-  }
-
-  private now(): Date {
-    return this.deps.now?.() ?? new Date();
   }
 
   private async guardedPass(): Promise<ReconcileSummary> {
@@ -351,6 +423,7 @@ export class MachineReconciler {
       updated: [],
       released: [],
       removed: [],
+      destroying: [],
       reset: [],
       failed: [],
     };
@@ -378,7 +451,9 @@ export class MachineReconciler {
       }
     };
     try {
-      await this.pass({ fence, summary });
+      const desired = await this.pass({ fence, summary });
+      await fence();
+      await this.recordFailures({ rules: Object.keys(desired.rules), summary });
     } catch (error) {
       if (!(error instanceof ReconcilerLeaseLostError)) throw error;
       this.deps.log?.(
@@ -403,6 +478,38 @@ export class MachineReconciler {
     return summary;
   }
 
+  /** Each rule's failures in this pass, or none, for its status. */
+  private async recordFailures(args: {
+    rules: readonly string[];
+    summary: ReconcileSummary;
+  }): Promise<void> {
+    for (const rule of args.rules) {
+      const failures = args.summary.failed.filter(
+        (failure) => failure.rule === rule,
+      );
+      await this.deps.db
+        .updateTable("work_machine_rules")
+        .set(
+          failures.length > 0
+            ? {
+                last_failure: failures
+                  .map((failure) =>
+                    failure.name === rule
+                      ? failure.error
+                      : `${failure.name}: ${failure.error}`,
+                  )
+                  .join("\n")
+                  .slice(0, 4_000),
+                last_failure_at: sql`now()`,
+              }
+            : { last_failure: null, last_failure_at: null },
+        )
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("name", "=", rule)
+        .execute();
+    }
+  }
+
   /**
    * Records what it changes in `summary`; `fence` throws once another
    * reconciler holds the claim, ending the pass with what it did so far.
@@ -410,12 +517,37 @@ export class MachineReconciler {
   private async pass(args: {
     fence: () => Promise<void>;
     summary: ReconcileSummary;
-  }): Promise<void> {
+  }): Promise<Desired> {
     const desired = await this.desired();
     for (const [rule, problem] of desired.problems)
-      args.summary.failed.push({ name: rule, error: problem });
+      args.summary.failed.push({ name: rule, error: problem, rule });
     await this.reconcileProvisioned({ ...args, desired });
     await this.reconcilePooled({ ...args, desired });
+    return desired;
+  }
+
+  /**
+   * Run one machine's step; a failure is recorded for it and the pass goes
+   * on with the next machine. Losing the claim still ends the pass.
+   */
+  private async step(args: {
+    summary: ReconcileSummary;
+    name: string;
+    rule: string | null;
+    run: () => Promise<void>;
+  }): Promise<boolean> {
+    try {
+      await args.run();
+      return true;
+    } catch (error) {
+      if (error instanceof ReconcilerLeaseLostError) throw error;
+      args.summary.failed.push({
+        name: args.name,
+        error: message(error),
+        ...(args.rule ? { rule: args.rule } : {}),
+      });
+      return false;
+    }
   }
 
   /** Cloud and custom machines: one per desired name. */
@@ -428,59 +560,69 @@ export class MachineReconciler {
     summary: ReconcileSummary;
     desired: Desired;
   }): Promise<void> {
-    const now = this.now();
-    const destroy = async (machine: ProvisionedMachine) => {
-      await fence();
-      try {
-        await this.unprovision(machine);
-        await this.deps.workers.forgetMachine(machine);
-        summary.removed.push(machine.name);
-        return true;
-      } catch (error) {
-        // The machine keeps its record, so the next pass tries again.
-        summary.failed.push({ name: machine.name, error: message(error) });
-        return false;
-      }
-    };
     const machines = await this.deps.workers.machines();
 
     // Expired codes, machines an operator revoked, and machines nobody
     // should have go first, and a name is reused only after its old
     // machine is gone. An enrolled machine is released before that and
-    // kept for its retention.
+    // kept for its retention. A machine stays listed until its platform
+    // confirmed it is gone, so a failed destruction is tried again.
     const pendingDestroy = new Set<string>();
     for (const machine of machines) {
       if (desired.problems.has(machine.rule)) continue;
       const wanted = desired.provisioned.has(machine.name);
       if (wanted && machine.state !== "expired" && machine.state !== "revoked")
         continue;
-      if (machine.state === "enrolled") {
-        const retainDays = this.retainDaysOf({ machine, desired });
-        const releasedAt = machine.releasedAt ?? now;
-        if (!machine.releasedAt) {
+      const settled = await this.step({
+        summary,
+        name: machine.name,
+        rule: machine.rule,
+        run: async () => {
+          if (machine.state === "enrolled") {
+            const retainDays = this.retainDaysOf({ machine, desired });
+            if (machine.releasedForMs === null) {
+              await fence();
+              await this.deps.workers.release({
+                name: machine.name,
+                retainDays,
+              });
+              summary.released.push(machine.name);
+            }
+            if (
+              !retentionEnded({
+                releasedForMs: machine.releasedForMs ?? 0,
+                retainDays,
+              })
+            )
+              return;
+            // Chats on it give their workspaces back saved once they idle
+            // (ADR 0173); a machine that can no longer save them goes at
+            // once.
+            if (
+              (await this.deps.workers.connected({ name: machine.name })) &&
+              (await this.deps.workers.activeWorkspaces({
+                name: machine.name,
+              })) > 0
+            )
+              return;
+          }
+          if (machine.state === "enrolled" || machine.state === "pending") {
+            await fence();
+            await this.deps.workers.revoke({ name: machine.name });
+            // Its code stops working, and it stays listed until destroyed.
+            await this.deps.workers.expireEnrollments({ name: machine.name });
+          }
           await fence();
-          await this.deps.workers.release({
-            name: machine.name,
-            at: now,
-            retainDays,
-          });
-          summary.released.push(machine.name);
-        }
-        if (!retentionEnded({ releasedAt, retainDays, now })) continue;
-        // Chats on it give their workspaces back saved once they idle (ADR
-        // 0173); a machine that can no longer save them goes at once.
-        if (
-          (await this.deps.workers.connected({ name: machine.name })) &&
-          (await this.deps.workers.activeWorkspaces({ name: machine.name })) > 0
-        )
-          continue;
-      }
-      if (machine.state === "enrolled" || machine.state === "pending") {
-        await fence();
-        await this.deps.workers.revoke({ name: machine.name });
-        await this.deps.workers.cancelEnrollments({ name: machine.name });
-      }
-      if (!(await destroy(machine))) pendingDestroy.add(machine.name);
+          if (!(await this.unprovision(machine))) {
+            summary.destroying.push(machine.name);
+            pendingDestroy.add(machine.name);
+            return;
+          }
+          await this.deps.workers.forgetMachine(machine);
+          summary.removed.push(machine.name);
+        },
+      });
+      if (!settled) pendingDestroy.add(machine.name);
     }
 
     for (const machine of desired.provisioned.values()) {
@@ -491,45 +633,77 @@ export class MachineReconciler {
           (candidate.state === "enrolled" || candidate.state === "pending"),
       );
       if (current?.state === "pending") continue;
-      try {
-        if (current?.releasedAt) {
-          // Their person or group is back before the machine went.
-          await fence();
-          await this.deps.workers.reassign(machine);
-          summary.assigned.push(machine.name);
-          continue;
-        }
-        if (current) {
-          if (canonical(current.placement) !== canonical(machine.placement)) {
+      await this.step({
+        summary,
+        name: machine.name,
+        rule: machine.rule,
+        run: async () => {
+          if (current && current.releasedForMs !== null) {
+            // Their person or group is back before the machine went.
             await fence();
-            await this.deps.workers.setPlacement(machine);
-            summary.updated.push(machine.name);
+            await this.deps.workers.reassign(machine);
+            summary.assigned.push(machine.name);
+            return;
           }
-          if (current.retainDays !== machine.retainDays) {
-            await fence();
-            await this.deps.workers.setRetainDays(machine);
+          if (current) {
+            if (canonical(current.placement) !== canonical(machine.placement)) {
+              await fence();
+              await this.deps.workers.setPlacement(machine);
+              summary.updated.push(machine.name);
+            }
+            if (current.retainDays !== machine.retainDays) {
+              await fence();
+              await this.deps.workers.setRetainDays(machine);
+            }
+            return;
           }
-          continue;
-        }
-        await fence();
-        const enrollment = await this.deps.workers.createMachineEnrollment({
-          name: machine.name,
-          rule: machine.rule,
-          ttlMinutes: 60,
-          placement: machine.placement,
-        });
-        // Its machine enrolled or is being created since this pass looked.
-        if (!enrollment) continue;
-        const ref = await this.provision({ machine, code: enrollment.code });
-        await this.deps.workers.recordMachineRef({
-          code: enrollment.code,
-          ref,
-        });
-        summary.created.push(machine.name);
-      } catch (error) {
-        if (error instanceof ReconcilerLeaseLostError) throw error;
-        summary.failed.push({ name: machine.name, error: message(error) });
-      }
+          await this.create({ machine, fence, summary });
+        },
+      });
+    }
+  }
+
+  /**
+   * Create a missing machine. Nothing is issued while machines cannot
+   * install from this server. A platform that refused creates nothing, so
+   * its code is withdrawn and the next pass tries again; after any other
+   * failure the code stays, since the machine may still come up and enroll.
+   */
+  private async create(args: {
+    machine: DesiredMachine;
+    fence: () => Promise<void>;
+    summary: ReconcileSummary;
+  }): Promise<void> {
+    const { machine } = args;
+    const machineClass = this.classOf(machine.class);
+    if (
+      machineClass?.platform === "hetzner-cloud" &&
+      "unavailable" in this.deps.install
+    )
+      throw new Error(this.deps.install.unavailable);
+    await args.fence();
+    const enrollment = await this.deps.workers.createMachineEnrollment({
+      name: machine.name,
+      rule: machine.rule,
+      ttlMinutes: 60,
+      placement: machine.placement,
+    });
+    // Its machine enrolled or is being created since this pass looked.
+    if (!enrollment) return;
+    try {
+      const ref = await this.provision({ machine, code: enrollment.code });
+      await this.deps.workers.recordMachineRef({
+        code: enrollment.code,
+        ref,
+      });
+      args.summary.created.push(machine.name);
+    } catch (error) {
+      if (
+        (error instanceof HetznerCloudError && error.definite) ||
+        error instanceof MachineProvisioningRefusedError
+      )
+        await this.deps.workers.cancelEnrollments({ name: machine.name });
+      throw error;
     }
   }
 
@@ -547,7 +721,6 @@ export class MachineReconciler {
     summary: ReconcileSummary;
     desired: Desired;
   }): Promise<void> {
-    const now = this.now();
     const pooled = await this.deps.workers.pooledMachines();
     const slots = new Map(desired.slots.map((slot) => [slotKey(slot), slot]));
     /** Places with a machine serving them. */
@@ -567,102 +740,128 @@ export class MachineReconciler {
     const released: PooledMachine[] = [];
     for (const machine of pooled) {
       if (!machine.rule) continue;
-      if (desired.problems.has(machine.rule)) {
-        if (!machine.releasedAt) held.add(slotKey(machineSlot(machine)));
+      const rule = machine.rule;
+      if (desired.problems.has(rule)) {
+        if (machine.releasedForMs === null)
+          held.add(slotKey(machineSlot(machine)));
         continue;
       }
-      if (machine.releasedAt) {
+      if (machine.releasedForMs !== null) {
         released.push(machine);
         continue;
       }
       const slot = slots.get(slotKey(machineSlot(machine)));
       if (slot && fits(machine, slot)) {
         held.add(slotKey(slot));
-        const placement = placementFor(machine, slot);
-        if (canonical(machine.placement) !== canonical(placement)) {
-          await fence();
-          await this.deps.workers.setPlacement({
-            name: machine.name,
-            placement,
-          });
-          summary.updated.push(machine.name);
-        }
-        if (machine.retainDays !== slot.retainDays) {
-          await fence();
-          await this.deps.workers.setRetainDays({
-            name: machine.name,
-            retainDays: slot.retainDays,
-          });
-        }
+        await this.step({
+          summary,
+          name: machine.name,
+          rule,
+          run: async () => {
+            const placement = placementFor(machine, slot);
+            if (canonical(machine.placement) !== canonical(placement)) {
+              await fence();
+              await this.deps.workers.setPlacement({
+                name: machine.name,
+                placement,
+              });
+              summary.updated.push(machine.name);
+            }
+            if (machine.retainDays !== slot.retainDays) {
+              await fence();
+              await this.deps.workers.setRetainDays({
+                name: machine.name,
+                retainDays: slot.retainDays,
+              });
+            }
+          },
+        });
         continue;
       }
       const retainDays = this.retainDaysOf({ machine, desired });
-      await fence();
-      await this.deps.workers.release({
+      await this.step({
+        summary,
         name: machine.name,
-        at: now,
-        retainDays,
+        rule,
+        run: async () => {
+          await fence();
+          await this.deps.workers.release({ name: machine.name, retainDays });
+          summary.released.push(machine.name);
+          released.push({ ...machine, releasedForMs: 0, retainDays });
+        },
       });
-      summary.released.push(machine.name);
-      released.push({ ...machine, releasedAt: now, retainDays });
     }
 
     // Released machines go back to their person or group within their
     // retention; afterwards they are reset.
     const resets = pooled
-      .filter((machine) => !machine.rule && machine.releasedAt)
+      .filter((machine) => !machine.rule && machine.releasedForMs !== null)
       .map((machine) => machine.name);
     for (const machine of released) {
       const slot = slots.get(slotKey(machineSlot(machine)));
       const retainDays = this.retainDaysOf({ machine, desired });
       const ended = retentionEnded({
-        releasedAt: machine.releasedAt ?? now,
+        releasedForMs: machine.releasedForMs ?? 0,
         retainDays,
-        now,
       });
-      if (slot && fits(machine, slot) && !ended) {
-        await fence();
-        await this.deps.workers.reassign({
-          name: machine.name,
-          placement: placementFor(machine, slot),
-          retainDays: slot.retainDays,
-        });
-        held.add(slotKey(slot));
-        summary.assigned.push(machine.name);
-        continue;
-      }
-      if (!ended) continue;
-      await fence();
-      await this.deps.workers.beginReset({ name: machine.name });
-      resets.push(machine.name);
+      await this.step({
+        summary,
+        name: machine.name,
+        rule: machine.rule,
+        run: async () => {
+          if (slot && fits(machine, slot) && !ended) {
+            await fence();
+            await this.deps.workers.reassign({
+              name: machine.name,
+              placement: placementFor(machine, slot),
+              retainDays: slot.retainDays,
+            });
+            held.add(slotKey(slot));
+            summary.assigned.push(machine.name);
+            return;
+          }
+          if (!ended) return;
+          await fence();
+          await this.deps.workers.beginReset({ name: machine.name });
+          resets.push(machine.name);
+        },
+      });
     }
 
-    // Resets run at once. A machine that is not connected is reset when it
-    // reconnects, and one whose chats still hold workspaces once they idle
-    // and give them back saved (ADR 0173), on a later pass.
+    // Resets run at once, each waiting a bounded time. A machine that is
+    // not connected is reset when it reconnects, one whose chats still hold
+    // workspaces once they idle and give them back saved (ADR 0173), and a
+    // reset that takes longer than the wait on a later pass.
     const freed = new Set<string>();
     await Promise.all(
-      resets.map(async (name) => {
-        if (!(await this.deps.workers.connected({ name }))) return;
-        if ((await this.deps.workers.activeWorkspaces({ name })) > 0) return;
-        try {
-          await fence();
-          await this.deps.workers.resetPooled({ name });
-          await fence();
-          await this.deps.workers.freePooled({ name });
-          freed.add(name);
-          summary.reset.push(name);
-        } catch (error) {
-          if (error instanceof ReconcilerLeaseLostError) throw error;
-          summary.failed.push({ name, error: message(error) });
-        }
-      }),
+      resets.map((name) =>
+        this.step({
+          summary,
+          name,
+          rule: null,
+          run: async () => {
+            if (!(await this.deps.workers.connected({ name }))) return;
+            if ((await this.deps.workers.activeWorkspaces({ name })) > 0)
+              return;
+            await fence();
+            await this.deps.workers.resetPooled({
+              name,
+              timeoutMs: this.deps.resetWaitMs ?? 3 * 60_000,
+            });
+            await fence();
+            await this.deps.workers.freePooled({ name });
+            freed.add(name);
+            summary.reset.push(name);
+          },
+        }),
+      ),
     );
 
     // Places still without a machine take a free one of their class.
     const free = pooled.filter(
       (machine) =>
-        (!machine.rule && !machine.releasedAt) || freed.has(machine.name),
+        (!machine.rule && machine.releasedForMs === null) ||
+        freed.has(machine.name),
     );
     for (const slot of desired.slots) {
       if (held.has(slotKey(slot)) || desired.problems.has(slot.rule)) continue;
@@ -671,20 +870,26 @@ export class MachineReconciler {
       );
       const [machine] = index >= 0 ? free.splice(index, 1) : [];
       if (!machine) continue;
-      await fence();
-      const placement = placementFor(machine, slot);
-      if (
-        await this.deps.workers.assignPooled({
-          name: machine.name,
-          rule: slot.rule,
-          holder: slot.holder,
-          placement,
-          retainDays: slot.retainDays,
-        })
-      ) {
-        held.add(slotKey(slot));
-        summary.assigned.push(machine.name);
-      }
+      await this.step({
+        summary,
+        name: machine.name,
+        rule: slot.rule,
+        run: async () => {
+          await fence();
+          if (
+            await this.deps.workers.assignPooled({
+              name: machine.name,
+              rule: slot.rule,
+              holder: slot.holder,
+              placement: placementFor(machine, slot),
+              retainDays: slot.retainDays,
+            })
+          ) {
+            held.add(slotKey(slot));
+            summary.assigned.push(machine.name);
+          }
+        },
+      });
     }
   }
 
@@ -704,11 +909,11 @@ export class MachineReconciler {
         : undefined;
     if (machineClass?.platform === "hetzner-cloud") {
       if (!this.deps.hetzner)
-        throw new Error(
+        throw new MachineProvisioningRefusedError(
           "Set WORK_HETZNER_TOKEN to create Hetzner Cloud machines",
         );
       if (!cloudInit)
-        throw new Error(
+        throw new MachineProvisioningRefusedError(
           "unavailable" in this.deps.install
             ? this.deps.install.unavailable
             : "Machines cannot install from this server",
@@ -745,11 +950,16 @@ export class MachineReconciler {
       });
       return ref;
     }
-    throw new Error(`Machine class '${machine.class}' creates no machines`);
+    throw new MachineProvisioningRefusedError(
+      `Machine class '${machine.class}' creates no machines`,
+    );
   }
 
-  /** Destroy a machine on the platform that made it. */
-  private async unprovision(machine: ProvisionedMachine): Promise<void> {
+  /**
+   * Destroy a machine on the platform that made it, by its reference or
+   * else by its name. False while the destruction is still under way.
+   */
+  private async unprovision(machine: ProvisionedMachine): Promise<boolean> {
     const className = machine.placement.labels.class;
     const machineClass = className ? this.classOf(className) : undefined;
     if (
@@ -765,7 +975,7 @@ export class MachineReconciler {
         machineClass?.platform === "hetzner-cloud" &&
         machineClass.snapshot &&
         (machine.state === "enrolled" || machine.state === "revoked");
-      await this.deps.hetzner.destroy({
+      const destroyed = await this.deps.hetzner.destroy({
         name: machine.name,
         ref: machine.ref?.startsWith(HETZNER_REF)
           ? machine.ref.slice(HETZNER_REF.length)
@@ -779,7 +989,7 @@ export class MachineReconciler {
             }
           : {}),
       });
-      return;
+      return destroyed.done;
     }
     if (!this.deps.provisioner)
       throw new Error(
@@ -789,6 +999,7 @@ export class MachineReconciler {
       name: machine.name,
       ref: machine.ref,
     });
+    return true;
   }
 
   /**
@@ -838,6 +1049,7 @@ export class MachineReconciler {
           definition.machines === "each-member"
             ? members.map((member) => ({
                 holder: { member: member.userId },
+                group: null,
                 access: WorkerAccessSchema.parse({
                   people: [member.email],
                 }),
@@ -847,6 +1059,7 @@ export class MachineReconciler {
                 { length: definition.machines.shared },
                 (_, index) => ({
                   holder: { slot: index + 1 },
+                  group: definition.group,
                   access: WorkerAccessSchema.parse({
                     groups: [definition.group],
                   }),
@@ -880,7 +1093,7 @@ export class MachineReconciler {
         continue;
       }
       for (let index = 1; index <= definition.machines.shared; index += 1)
-        add(sharedName(rule, definition.class, index), {
+        add(sharedName(rule, definition.class, definition.group, index), {
           labels,
           access: { groups: [definition.group] },
           trusted: definition.trusted,
@@ -919,32 +1132,37 @@ class ReconcilerLeaseLostError extends Error {
   }
 }
 
+/** Retention measured by the database's clock (`releasedForMs`). */
 function retentionEnded(args: {
-  releasedAt: Date;
+  releasedForMs: number;
   retainDays: number;
-  now: Date;
 }): boolean {
-  return (
-    args.releasedAt.getTime() + args.retainDays * DAY_MS <= args.now.getTime()
-  );
+  return args.releasedForMs >= args.retainDays * DAY_MS;
 }
 
+/** The place a held pooled machine fills, as its rule last assigned it. */
 function machineSlot(
   machine: PooledMachine,
-): Pick<DesiredSlot, "rule" | "holder"> {
+): Pick<DesiredSlot, "rule" | "holder" | "group"> {
   return {
     rule: machine.rule ?? "",
-    holder:
-      machine.member !== null
-        ? { member: machine.member }
-        : { slot: machine.slot ?? 0 },
+    ...(machine.member !== null
+      ? { holder: { member: machine.member }, group: null }
+      : {
+          holder: { slot: machine.slot ?? 0 },
+          group: accessGroupsOf(machine.placement.access)[0] ?? "",
+        }),
   };
 }
 
-function slotKey(slot: Pick<DesiredSlot, "rule" | "holder">): string {
+/**
+ * A place's identity. A shared place includes its group, so a rule whose
+ * group changes releases its machines rather than handing them over.
+ */
+function slotKey(slot: Pick<DesiredSlot, "rule" | "holder" | "group">): string {
   return "member" in slot.holder
     ? `${slot.rule}\0member\0${slot.holder.member}`
-    : `${slot.rule}\0slot\0${slot.holder.slot}`;
+    : `${slot.rule}\0slot\0${slot.group ?? ""}\0${slot.holder.slot}`;
 }
 
 /**
@@ -959,13 +1177,17 @@ export function dedicatedName(
   return `${rule}-${digest(`${userId}\0${machineClass}`, 12)}`;
 }
 
-/** A stable worker name for a group's shared machine. */
+/**
+ * A stable worker name for a group's shared machine. The class and the
+ * group are part of it: another group never inherits a machine and its disk.
+ */
 export function sharedName(
   rule: string,
   machineClass: string,
+  group: string,
   index: number,
 ): string {
-  return `${rule}-${digest(machineClass, 4)}-${index}`;
+  return `${rule}-${digest(`${machineClass}\0${group}`, 6)}-${index}`;
 }
 
 function digest(value: string, length: number): string {

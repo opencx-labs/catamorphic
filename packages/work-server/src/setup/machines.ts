@@ -280,11 +280,14 @@ function machineRoutes(args: MachineManagement): MachineRoute[] {
       method: "PUT",
       operator: "/_work/operator/machine-rules/:name",
       admin: "/api/work/machines/rules/:name",
+      // The rule is stored when this answers; a pass starts at once and
+      // reports through the rule's status.
       handler: (request, reply) =>
         withRules(reply, async (machines) => {
           const { name } = z.object({ name: z.string() }).parse(request.params);
           const rule = await machines.setRule({ name, rule: request.body });
-          return { rule, reconcile: await machines.reconcile() };
+          machines.reconcileSoon();
+          return { rule };
         }),
     },
     {
@@ -296,9 +299,11 @@ function machineRoutes(args: MachineManagement): MachineRoute[] {
           const { name } = z.object({ name: z.string() }).parse(request.params);
           if (!(await machines.deleteRule(name)))
             return reply.status(404).send({ error: "Rule not found" });
-          return { reconcile: await machines.reconcile() };
+          machines.reconcileSoon();
+          return { ok: true };
         }),
     },
+    // A pass now, answered with what it did.
     {
       method: "POST",
       operator: "/_work/operator/machine-rules/reconcile",
