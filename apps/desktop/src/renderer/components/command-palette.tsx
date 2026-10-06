@@ -41,6 +41,7 @@ import { useProjectAgents } from "../palette/project-agents.js";
 import {
   createPaletteIndex,
   frequentItems,
+  oneRowPerDestination,
   PALETTE_RESULT_LIMIT,
 } from "../palette/rank.js";
 import { useCommandRows } from "../palette/rows/commands.js";
@@ -393,8 +394,9 @@ export function CommandPalette({
   );
   // Rows everything else already lists: a bookmarked page or a workflow
   // appears once, as its own row, ranked with its history counts.
-  // The empty palette lists rows as they are (`listedRows`, without open
-  // tabs); a query ranks one row per destination (`nativeRows`).
+  // The empty palette lists one row per destination without open tabs
+  // (`listedRows`); a query ranks one row per destination, an open tab
+  // standing in for what it shows (`nativeRows`).
   const { nativeRows, listedRows } = useMemo(() => {
     // A custom mode over a built-in source lists rows the palette already
     // has (the same chat, the same workflow): each row appears once.
@@ -410,24 +412,9 @@ export function CommandPalette({
     ];
     const seen = new Set<string>();
     const unique = rows.filter((row) => !seen.has(row.id) && seen.add(row.id));
-    // One row per destination: an open tab stands in for its page,
-    // bookmark, chat or file. App surfaces already bring their open tab to
-    // the front, so they keep their own row.
-    const usages = (category: PaletteItem["category"]) =>
-      new Set(
-        unique.flatMap((row) =>
-          row.category === category && row.usage ? [row.usage] : [],
-        ),
-      );
-    const surfaces = usages("surface");
-    const open = usages("tab");
     return {
-      nativeRows: unique.filter((row) =>
-        row.category === "tab"
-          ? !surfaces.has(row.usage ?? "")
-          : row.category === "surface" || !open.has(row.usage ?? ""),
-      ),
-      listedRows: unique.filter((row) => !row.searchOnly),
+      nativeRows: oneRowPerDestination(unique),
+      listedRows: oneRowPerDestination(unique.filter((row) => !row.searchOnly)),
     };
   }, [
     actionItems,

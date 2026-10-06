@@ -54,7 +54,8 @@ bookmark, chat or file while it is open (one row per destination; app
 surfaces keep their own row), the tab in front is left out, and the `tabs`
 mode lists every open tab in strip order. Imported bookmarks are searched
 like the pinned and project ones; open tabs and the library stay out of the
-empty palette. `tabs` joins the built-in names, so a workspace.js mode
+empty palette. Copies of one page (pinned and still in the library, a
+bookmark and a sidebar link to it) are one row too, the listed copy. `tabs` joins the built-in names, so a workspace.js mode
 triggered by `tabs` is refused like any other collision until renamed.
 (Amended 2026-10-04.)
 Frecency (Firefox-style visit count weighted by sampled recency) multiplies
