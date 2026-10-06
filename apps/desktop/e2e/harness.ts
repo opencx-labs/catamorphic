@@ -46,6 +46,9 @@ async function freeCdpPort(): Promise<number> {
   return cdpPort();
 }
 
+/** The evaluated expression threw inside the page. */
+class PageException extends Error {}
+
 export interface FrameHandle {
   getRendererErrors: () => string[];
   /** Evaluate JS inside the frame; resolves the JSON-serialized result. */
@@ -228,6 +231,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
     ): Promise<FrameHandle> => {
       const deadline = Date.now() + (frameOpts.timeoutMs ?? 30_000);
       let seen = "";
+      let attachError = "";
       while (Date.now() < deadline) {
         try {
           const targets = (await fetch(`http://127.0.0.1:${port}/json`).then(
@@ -241,31 +245,45 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
           );
           if (frame) {
             const frameWs = new WebSocket(frame.webSocketDebuggerUrl);
-            await new Promise<void>((resolve, reject) => {
-              frameWs.addEventListener("open", () => resolve(), {
-                once: true,
+            try {
+              await new Promise<void>((resolve, reject) => {
+                frameWs.addEventListener("open", () => resolve(), {
+                  once: true,
+                });
+                frameWs.addEventListener(
+                  "error",
+                  () => reject(new Error("WebSocket to the target failed")),
+                  { once: true },
+                );
               });
-              frameWs.addEventListener("error", (event) => reject(event), {
-                once: true,
+              // A target in transition (a worker starting or stopping) can
+              // take the socket and never answer: try a fresh one rather
+              // than spend the whole deadline on it.
+              const frameClient = await createClient(frameWs, {
+                page: false,
+                attachTimeoutMs: 5_000,
               });
-            });
-            const frameClient = await createClient(frameWs, { page: false });
-            return {
-              eval: frameClient.eval,
-              waitFor: frameClient.waitFor,
-              getRendererErrors: frameClient.getRendererErrors,
-              close: () => frameWs.close(),
-            };
+              return {
+                eval: frameClient.eval,
+                waitFor: frameClient.waitFor,
+                getRendererErrors: frameClient.getRendererErrors,
+                close: () => frameWs.close(),
+              };
+            } catch (error) {
+              frameWs.close();
+              throw error;
+            }
           }
-        } catch {
+        } catch (error) {
           // /json can 404 transiently while targets churn; keep polling.
+          attachError = error instanceof Error ? error.message : String(error);
         }
         await sleep(500);
       }
       throw new Error(
         `No CDP target matching "${urlSubstring}" within ${
           frameOpts.timeoutMs ?? 30_000
-        }ms.\n--- targets ---\n${seen}`,
+        }ms.${attachError ? `\nLast attempt: ${attachError}` : ""}\n--- targets ---\n${seen}`,
       );
     };
 
@@ -377,7 +395,14 @@ async function connectCdp(
   throw new Error(`CDP never became reachable: ${String(lastError)}`);
 }
 
-async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
+async function createClient(
+  ws: WebSocket,
+  opts: {
+    page?: boolean;
+    /** How long attaching may take before the caller tries again. */
+    attachTimeoutMs?: number;
+  } = {},
+) {
   let nextId = 1;
   const rendererErrors: string[] = [];
   const pending = new Map<
@@ -458,10 +483,10 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
     pending.clear();
   });
 
-  await send("Runtime.enable");
+  await send("Runtime.enable", undefined, opts.attachTimeoutMs);
   // Frame targets only need Runtime; Page powers the window screenshot.
   if (opts.page !== false) {
-    await send("Page.enable");
+    await send("Page.enable", undefined, opts.attachTimeoutMs);
   }
 
   const evaluate = async <T>(expression: string): Promise<T> => {
@@ -474,7 +499,7 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
       exceptionDetails?: { exception?: { description?: string } };
     };
     if (result.exceptionDetails) {
-      throw new Error(
+      throw new PageException(
         result.exceptionDetails.exception?.description ??
           "Evaluation threw in the page",
       );
@@ -489,13 +514,24 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
     const timeoutMs = opts?.timeoutMs ?? 15_000;
     const deadline = Date.now() + timeoutMs;
     let last: unknown;
+    let thrown: string | undefined;
     while (Date.now() < deadline) {
-      last = await evaluate(expression);
+      try {
+        last = await evaluate(expression);
+        thrown = undefined;
+      } catch (error) {
+        // A condition that throws is not met yet: an element not rendered,
+        // a document still loading (a frame just connected to). A lost
+        // connection still fails at once.
+        if (!(error instanceof PageException)) throw error;
+        last = undefined;
+        thrown = error.message;
+      }
       if (last) return last as T;
       await sleep(200);
     }
     throw new Error(
-      `Timed out (${timeoutMs}ms) waiting for ${opts?.label ?? expression}; last value: ${JSON.stringify(last)}`,
+      `Timed out (${timeoutMs}ms) waiting for ${opts?.label ?? expression}; last value: ${JSON.stringify(last)}${thrown ? `; last error: ${thrown}` : ""}`,
     );
   };
 
