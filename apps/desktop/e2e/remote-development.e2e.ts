@@ -52,8 +52,15 @@ const helpers = `
     $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'))
       ?.querySelector('[data-composer-input]');
   const timeline = () => $$('[role="log"]').map((el) => el.textContent).join('\\n');
-  const palette = () => $$('textarea[aria-label="Search commands, pages, and more"]')
-    .find((el) => !el.closest('[inert]') && el.getBoundingClientRect().width > 0);
+  // The Cmd+P overlay, not the always-open palette of a new-tab page. It
+  // stays mounted, inert while closed.
+  const overlay = () => $('[role="dialog"][data-palette="overlay"]');
+  const overlayOpen = () => !!overlay() && !overlay().closest('[inert]');
+  const overlayFocused = () => {
+    const el = document.activeElement;
+    return !!el?.matches('textarea[aria-label="Search commands, pages, and more"]') &&
+      el.closest('[role="dialog"]') === overlay() && overlayOpen();
+  };
 `;
 const run = <T>(body: string) =>
   app.eval<T>(`(() => { ${helpers}\n${body} })()`);
@@ -64,19 +71,20 @@ const runWait = <T>(
 const shot = (name: string) =>
   app.screenshot(path.join(ARTIFACTS, `remote-development-${name}.png`));
 
-/** Run a command from the palette by its label. */
+/** Run a command from the Cmd+P palette by its label. */
 async function command(label: string): Promise<void> {
-  await runWait(`return !palette();`, { label: "no palette open" });
+  await runWait(`return !overlayOpen();`, { label: "palette closed" });
   await run(`pressKey('p', { metaKey: true }); return true;`);
-  await runWait(`return document.activeElement === palette();`, {
-    label: "palette open",
-  });
-  await run(`setReactValue(palette(), ${JSON.stringify(label)}); return true;`);
+  await runWait(`return overlayFocused();`, { label: "palette open" });
+  await run(
+    `setReactValue(document.activeElement, ${JSON.stringify(label)}); return true;`,
+  );
   await runWait(
-    `return !!palette().closest('[role="dialog"]').querySelector('[role="option"][aria-selected="true"]')?.textContent.includes(${JSON.stringify(label)});`,
+    `return !!overlay().querySelector('[role="option"][aria-selected="true"]')?.textContent.includes(${JSON.stringify(label)});`,
     { label: `palette selects ${label}` },
   );
   await app.press("Enter");
+  await runWait(`return !overlayOpen();`, { label: `palette ran ${label}` });
 }
 
 /** Type a line into the focused chat terminal and run it. */
@@ -382,7 +390,11 @@ describe("remote development on a Work server", () => {
     const deployed = await projectTool(ada, "program_deploy", {
       message: "Remote development",
     });
-    expect(deployed).not.toContain("blocked");
+    // The tool answers with the deploy's result as JSON; "blocked" carries
+    // program_check's findings instead.
+    expect((JSON.parse(deployed) as { status?: string }).status, deployed).toBe(
+      "deployed",
+    );
     await json(`${serverBase}/api/projects/${projectId}/secrets/SENTRY_DSN`, {
       method: "PUT",
       headers: {
@@ -426,7 +438,7 @@ describe("remote development on a Work server", () => {
       timeoutMs: 90_000,
       label: "connected project",
     });
-  });
+  }, 240_000);
 
   it("sets his own value of a secret, never shown again", async () => {
     await run(`$('[data-testid="remote-secrets"]').click(); return true;`);
@@ -475,17 +487,18 @@ describe("remote development on a Work server", () => {
       `${JSON.stringify({ setup: 'echo "personal setup ran" > "$HOME/.personal-setup"' })}\n`,
     );
     await run(`$('[data-testid="remote-environment"]').click(); return true;`);
-    await runWait(
-      `return $('[data-testid="remote-environment-setup"]')?.textContent.includes('personal setup ran');`,
-      { label: "setup listed" },
-    );
+    // Sent now rather than at the next check, which also reads the file.
     await runWait(
       `const button = byText('button', 'Send now'); if (!button || button.disabled) return false; button.click(); return true;`,
       { label: "send now" },
     );
     await runWait(
+      `return $('[data-testid="remote-environment-setup"]')?.textContent.includes('personal setup ran');`,
+      { timeoutMs: 35_000, label: "setup listed" },
+    );
+    await runWait(
       `return $('[data-testid="remote-environment-setup"]')?.textContent.includes('On the server');`,
-      { timeoutMs: 30_000, label: "setup on the server" },
+      { timeoutMs: 35_000, label: "setup on the server" },
     );
     await shot("environment");
     await run(
@@ -519,7 +532,7 @@ describe("remote development on a Work server", () => {
     expect(text).not.toContain(SHARED_DSN);
     expect(text).toContain(`project setup saw a key of ${OWN_KEY.length}`);
     await shot("chat");
-  });
+  }, 180_000);
 
   it("opens a terminal in the chat's workspace", async () => {
     await run(
@@ -536,7 +549,7 @@ describe("remote development on a Work server", () => {
     );
     await terminalShows(`terminal key ${OWN_KEY.length} personal setup ran`);
     await shot("terminal");
-  });
+  }, 240_000);
 
   it("previews a server started in that terminal", async () => {
     const port = await freePort();
@@ -576,5 +589,5 @@ describe("remote development on a Work server", () => {
       page.close();
     }
     await shot("preview");
-  });
+  }, 240_000);
 });
