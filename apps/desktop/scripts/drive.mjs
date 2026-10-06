@@ -31,7 +31,9 @@ const targets = await fetch(`http://127.0.0.1:${PORT}/json`).then((r) =>
 const wanted = process.env.CDP_TARGET;
 const matches = (url) =>
   !wanted ||
-  (wanted === "main" ? !url.includes("surface=") : url.includes(wanted));
+  (wanted === "main"
+    ? !url.includes("surface=") && !url.startsWith("chrome-extension:")
+    : url.includes(wanted));
 const page = targets.find((t) => t.type === "page" && matches(String(t.url)));
 if (!page) throw new Error("no page target — is the app running with CDP?");
 const ws = new WebSocket(page.webSocketDebuggerUrl);

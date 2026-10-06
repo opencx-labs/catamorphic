@@ -95,9 +95,12 @@ const PROBE_TIMEOUT_MS = 1000;
 
 export function registerBrowserSleep({
   hostedGuest,
+  keepsAwake,
 }: {
   /** The guest with this id, if the asking window hosts it. */
   hostedGuest: (host: WebContents, guestId: unknown) => WebContents | null;
+  /** An extension is driving the page or showing its side panel. */
+  keepsAwake: (guestId: number) => boolean;
 }): () => void {
   const quietSince = new Map<number, number>();
   const trackAudio = (_event: Electron.Event, contents: WebContents) => {
@@ -166,6 +169,7 @@ export function registerBrowserSleep({
       // Another tab, or a call, is showing this page.
       if (guest.isBeingCaptured()) return "shared";
       if (guest.isDevToolsOpened()) return "devtools";
+      if (keepsAwake(guest.id)) return "extension";
       if (await typing(guest)) return "typing";
       return null;
     },

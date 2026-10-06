@@ -152,6 +152,8 @@ export function uniqueSavePath(dir: string, filename: string): string {
 export interface DownloadItemLike extends EventEmitter {
   getFilename(): string;
   getURL(): string;
+  /** Every address of the download, the one first asked for first. */
+  getURLChain(): string[];
   getMimeType(): string;
   getTotalBytes(): number;
   getReceivedBytes(): number;
@@ -188,13 +190,25 @@ export class DownloadsManager {
     private readonly options: {
       downloadsDir: () => string;
       broadcast: (profileId: string, downloads: DownloadRecord[]) => void;
+      /**
+       * A download someone started and waits for (an extension's): the
+       * name they asked for, and who hears its id once it is recorded.
+       */
+      claim?: (
+        profileId: string,
+        item: DownloadItemLike,
+      ) => { name: string | null; claimed: (id: string) => void } | null;
     },
   ) {}
 
   attach(profileId: string, item: DownloadItemLike, host: string | null) {
     const dir = this.options.downloadsDir();
     fs.mkdirSync(dir, { recursive: true });
-    item.setSavePath(uniqueSavePath(dir, item.getFilename()));
+    const claim = this.options.claim?.(profileId, item) ?? null;
+    const asked = claim?.name;
+    item.setSavePath(
+      uniqueSavePath(dir, asked ? path.basename(asked) : item.getFilename()),
+    );
     const id = randomUUID();
     const record = (): DownloadRecord => ({
       id,
@@ -214,6 +228,7 @@ export class DownloadsManager {
     this.active.set(id, item);
     this.store.upsert(profileId, record());
     this.notify(profileId);
+    claim?.claimed(id);
     item.on("updated", () => {
       this.store.upsert(profileId, record());
       this.notify(profileId);

@@ -3,11 +3,14 @@ export function electronLaunchArgs({
   ci,
   platform,
   useMockKeychain = false,
+  sandboxedRenderers = false,
 }: {
   cdpPort: number;
   ci: string | undefined;
   platform: NodeJS.Platform;
   useMockKeychain?: boolean;
+  /** Run every renderer as Electron's sandboxed renderer (see below). */
+  sandboxedRenderers?: boolean;
 }): string[] {
   return [
     ".",
@@ -18,6 +21,12 @@ export function electronLaunchArgs({
     ...(platform === "darwin" && useMockKeychain
       ? ["--use-mock-keychain"]
       : []),
-    ...(ci === "true" && platform === "linux" ? ["--no-sandbox"] : []),
+    // Linux CI runners cannot use Chromium's OS sandbox, which also turns
+    // off Electron's sandboxed renderers. Extension service workers need
+    // those for their preload (ADR 0203), as users have them; a suite that
+    // asks gets them back for every renderer, its own windows included.
+    ...(ci === "true" && platform === "linux"
+      ? ["--no-sandbox", ...(sandboxedRenderers ? ["--enable-sandbox"] : [])]
+      : []),
   ];
 }

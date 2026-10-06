@@ -21,6 +21,13 @@ import type { HistoryProject } from "../../shared/history.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { siteOrigin } from "../../shared/site-settings.js";
 import { AuthorizationInspector } from "../components/authorization-inspector.js";
+import {
+  ExtensionDebuggingBar,
+  ExtensionSidePanelView,
+  useExtensionDebugging,
+  useExtensionSidePanel,
+} from "../components/extensions/extension-side-panel.js";
+import { ExtensionToolbar } from "../components/extensions/extension-toolbar.js";
 import { usePasswordAutofill } from "../components/password-autofill.js";
 import {
   type PasswordDraft,
@@ -164,6 +171,8 @@ export function BrowserScreen({
   onUnsplit,
   onOpenSiteSettings,
   onOpenPasswords,
+  onOpenExtensions,
+  onOpenUrl,
 }: {
   profileId: string;
   /** Null only for a temporary profile browser before its first project. */
@@ -212,6 +221,10 @@ export function BrowserScreen({
   onOpenSiteSettings?: (origin: string) => void;
   /** Opens the Passwords page ("Manage passwords"). */
   onOpenPasswords?: () => void;
+  /** Opens the Extensions page (ADR 0203). */
+  onOpenExtensions?: () => void;
+  /** Opens a page in a new tab (the Chrome Web Store from extension UI). */
+  onOpenUrl?: (url: string) => void;
   /** Hands the host a navigate(url) for "open in current tab" flows. */
   registerNavigate?: (navigate: (url: string) => void) => void;
   /** Hands the host back/forward navigation for actions and mouse buttons. */
@@ -373,6 +386,8 @@ export function BrowserScreen({
 
   const registerGuestRef = useRef(registerGuest);
   registerGuestRef.current = registerGuest;
+  // The page's guest, which extensions know as this tab (ADR 0203).
+  const [guestId, setGuestId] = useState<number | null>(null);
 
   /**
    * Replace the <webview> element with a fresh one pointed at the latest
@@ -484,6 +499,7 @@ export function BrowserScreen({
         window.clearTimeout(attachWatchdogRef.current);
         guestReadyRef.current = false;
         registerGuestRef.current?.(null);
+        setGuestId(null);
         return;
       }
       const listeners = new AbortController();
@@ -534,7 +550,9 @@ export function BrowserScreen({
         markAlive();
         guestReadyRef.current = true;
         try {
-          registerGuestRef.current?.(view.getWebContentsId());
+          const id = view.getWebContentsId();
+          registerGuestRef.current?.(id);
+          setGuestId(id);
         } catch {
           // Guest detached between events; the next dom-ready re-reports.
         }
@@ -739,6 +757,9 @@ export function BrowserScreen({
     };
   }, []);
 
+  const sidePanel = useExtensionSidePanel(guestId);
+  const debugging = useExtensionDebugging(guestId);
+
   const autofill = usePasswordAutofill({
     profileId,
     guestRef: webviewRef,
@@ -806,6 +827,14 @@ export function BrowserScreen({
   const navigate = useCallback(
     (raw: string) => {
       if (!raw.trim()) return;
+      // Chrome's address for its extensions page opens Work's.
+      if (/^chrome:\/\/extensions\/?$/i.test(raw.trim()) && onOpenExtensions) {
+        setEditing(false);
+        setSuggestions([]);
+        setInputValue(pageUrl);
+        onOpenExtensions();
+        return;
+      }
       const url = resolveInput(raw);
       recoveriesRef.current = 0;
       setEditing(false);
@@ -834,7 +863,7 @@ export function BrowserScreen({
       });
       view.focus();
     },
-    [firstUrl, dismissPasswordPrompt],
+    [firstUrl, dismissPasswordPrompt, onOpenExtensions, pageUrl],
   );
 
   const registerNavigateRef = useRef(registerNavigate);
@@ -1219,7 +1248,7 @@ export function BrowserScreen({
     >
       {!sidebarToolbar && navigation}
 
-      <div className="relative min-w-0 flex-1">
+      <div data-address-field className="relative min-w-0 flex-1">
         <input
           ref={inputRef}
           value={displayValue}
@@ -1328,6 +1357,16 @@ export function BrowserScreen({
           </button>
         </ShortcutHint>
       )}
+      {onOpenExtensions && onOpenUrl && (
+        <ExtensionToolbar
+          guestId={guestId}
+          partition={partition}
+          active={toolbarActive}
+          visible={visible || toolbarActive}
+          onOpenExtensions={onOpenExtensions}
+          onOpenUrl={onOpenUrl}
+        />
+      )}
       {onUnsplit && (
         <ShortcutHint label="Full width">
           <button
@@ -1358,100 +1397,111 @@ export function BrowserScreen({
         ? toolbarActive && toolbarHost && createPortal(toolbar, toolbarHost)
         : toolbar}
 
-      {/* The theme's background until the page paints its own, as Chrome
+      {debugging && <ExtensionDebuggingBar debugging={debugging} />}
+      <div className="flex min-h-0 flex-1">
+        {/* The theme's background until the page paints its own, as Chrome
           does: a page loading (or a guest mounting) never flashes white. */}
-      <div ref={pageAreaRef} className="relative min-h-0 flex-1 bg-bg">
-        {ready && firstUrl && !slept ? (
-          <webview
-            key={webviewNonce}
-            ref={attachWebview}
-            src={historySource ?? firstUrl}
-            partition={partition}
-            preload={preloadPath}
-            // Chromium's built-in PDF viewer is exposed as a plugin. Local
-            // project PDFs otherwise download or render as raw bytes.
-            // Presence attribute, like allowpopups below: React otherwise
-            // sets the custom element's boolean property back to false.
-            plugins={"" as unknown as boolean}
-            // Without allowpopups the guest can't request windows at all
-            // and the main-process window-open handler (which reroutes
-            // popups into new tabs) never fires.
-            // String, not boolean: React warns on a non-boolean attribute
-            // and webview reads presence/value, not the DOM property.
-            allowpopups={"" as unknown as boolean}
-            className="absolute inset-0"
-            // Required: webview is display:inline-block by default and
-            // collapses to 0×0 inside flex/absolute layouts without this.
-            style={{
-              width: "100%",
-              height: "100%",
-              display: hiddenForGuest ? "none" : "flex",
-            }}
-          />
-        ) : firstUrl ? (
-          <div className="h-full bg-bg" />
-        ) : (
-          <div className="grid h-full place-items-center">
-            <p className="text-sm text-fg-faint">Search or enter an address</p>
-          </div>
-        )}
-        {swipe && (
-          <div
-            aria-hidden="true"
-            data-testid="browser-swipe-indicator"
-            data-direction={swipe.direction}
-            className={`pointer-events-none absolute top-1/2 grid size-11 -translate-y-1/2 place-items-center rounded-full border shadow-lg transition-colors duration-100 ${
-              swipe.direction === "back" ? "left-3" : "right-3"
-            } ${
-              swipe.progress >= 1
-                ? "border-accent bg-accent text-accent-fg"
-                : "border-border bg-bg-overlay text-fg"
-            }`}
-            style={{
-              opacity: Math.min(1, 0.35 + swipe.progress * 0.65),
-              transform: `translateY(-50%) scale(${0.7 + swipe.progress * 0.3})`,
-            }}
-          >
-            {swipe.direction === "back" ? (
-              <ArrowLeft className="size-5" />
-            ) : (
-              <ArrowRight className="size-5" />
-            )}
-          </div>
-        )}
-        {/* Main-frame load failure: a way out instead of a white pane. */}
-        {loadError && (
-          <div className="absolute inset-0 grid place-items-center bg-bg">
-            <div className="max-w-sm text-center">
-              <p className="text-sm text-fg">This page didn’t load.</p>
-              <p className="mt-1 break-all font-mono text-xs text-fg-muted">
-                {loadError.description}
+        <div
+          ref={pageAreaRef}
+          className="relative min-h-0 min-w-0 flex-1 bg-bg"
+        >
+          {ready && firstUrl && !slept ? (
+            <webview
+              key={webviewNonce}
+              ref={attachWebview}
+              src={historySource ?? firstUrl}
+              partition={partition}
+              preload={preloadPath}
+              // Chromium's built-in PDF viewer is exposed as a plugin. Local
+              // project PDFs otherwise download or render as raw bytes.
+              // Presence attribute, like allowpopups below: React otherwise
+              // sets the custom element's boolean property back to false.
+              plugins={"" as unknown as boolean}
+              // Without allowpopups the guest can't request windows at all
+              // and the main-process window-open handler (which reroutes
+              // popups into new tabs) never fires.
+              // String, not boolean: React warns on a non-boolean attribute
+              // and webview reads presence/value, not the DOM property.
+              allowpopups={"" as unknown as boolean}
+              className="absolute inset-0"
+              // Required: webview is display:inline-block by default and
+              // collapses to 0×0 inside flex/absolute layouts without this.
+              style={{
+                width: "100%",
+                height: "100%",
+                display: hiddenForGuest ? "none" : "flex",
+              }}
+            />
+          ) : firstUrl ? (
+            <div className="h-full bg-bg" />
+          ) : (
+            <div className="grid h-full place-items-center">
+              <p className="text-sm text-fg-faint">
+                Search or enter an address
               </p>
-              <button
-                type="button"
-                onClick={() => {
-                  recoveriesRef.current = 0;
-                  remountWebview();
-                }}
-                className="button-primary button-sm mt-4"
-              >
-                <RotateCw className="size-3" />
-                Try again
-              </button>
             </div>
-          </div>
-        )}
-        {autofill.overlay}
-        {passwordPrompt && (
-          <PasswordPrompt
-            state={passwordPrompt}
-            open={passwordPromptOpen}
-            onSave={savePasswordOffer}
-            onNever={neverSavePasswords}
-            onDismiss={dismissPasswordPrompt}
-            onUpdate={() => void updateSavedPassword()}
-            onExited={() => setPasswordPrompt(null)}
-          />
+          )}
+          {swipe && (
+            <div
+              aria-hidden="true"
+              data-testid="browser-swipe-indicator"
+              data-direction={swipe.direction}
+              className={`pointer-events-none absolute top-1/2 grid size-11 -translate-y-1/2 place-items-center rounded-full border shadow-lg transition-colors duration-100 ${
+                swipe.direction === "back" ? "left-3" : "right-3"
+              } ${
+                swipe.progress >= 1
+                  ? "border-accent bg-accent text-accent-fg"
+                  : "border-border bg-bg-overlay text-fg"
+              }`}
+              style={{
+                opacity: Math.min(1, 0.35 + swipe.progress * 0.65),
+                transform: `translateY(-50%) scale(${0.7 + swipe.progress * 0.3})`,
+              }}
+            >
+              {swipe.direction === "back" ? (
+                <ArrowLeft className="size-5" />
+              ) : (
+                <ArrowRight className="size-5" />
+              )}
+            </div>
+          )}
+          {/* Main-frame load failure: a way out instead of a white pane. */}
+          {loadError && (
+            <div className="absolute inset-0 grid place-items-center bg-bg">
+              <div className="max-w-sm text-center">
+                <p className="text-sm text-fg">This page didn’t load.</p>
+                <p className="mt-1 break-all font-mono text-xs text-fg-muted">
+                  {loadError.description}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    recoveriesRef.current = 0;
+                    remountWebview();
+                  }}
+                  className="button-primary button-sm mt-4"
+                >
+                  <RotateCw className="size-3" />
+                  Try again
+                </button>
+              </div>
+            </div>
+          )}
+          {autofill.overlay}
+          {passwordPrompt && (
+            <PasswordPrompt
+              state={passwordPrompt}
+              open={passwordPromptOpen}
+              onSave={savePasswordOffer}
+              onNever={neverSavePasswords}
+              onDismiss={dismissPasswordPrompt}
+              onUpdate={() => void updateSavedPassword()}
+              onExited={() => setPasswordPrompt(null)}
+            />
+          )}
+        </div>
+        {sidePanel && (
+          <ExtensionSidePanelView panel={sidePanel} partition={partition} />
         )}
       </div>
       {passwordDraft && (

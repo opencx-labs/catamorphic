@@ -1,5 +1,14 @@
 # TODO
 
+- **Chrome extensions, follow-ups (ADR 0203).** `chrome://favicon` and
+  `_favicon/` URLs for extension pages; `userScripts` (Tampermonkey,
+  Violentmonkey); `privacy` and `contentSettings`; `identity.getAuthToken`
+  needs a Google sign-in Work does not have. `activeTab` reaches only the
+  APIs Work answers; Electron's `scripting` still wants host access, so a
+  picker such as uBlock Origin Lite's "Remove an element" needs Electron to
+  grant tab permissions. Native messaging with the Claude and ChatGPT
+  desktop apps is checked by hand on macOS only. MV2 extensions load
+  unpacked only while Electron runs MV2.
 - **Electron 44.4.4 (or later): drop the `Invalid guestInstanceId` guards.**
   Electron 43.6–44.4.3 throw from a `<webview>`'s `disconnectedCallback`
   when a loaded guest is removed (electron/electron#53989, fix #54089

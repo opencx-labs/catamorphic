@@ -126,6 +126,11 @@ export interface LaunchOpts {
   userDataDir?: string;
   /** Extra environment variables for the app process (e2e seams). */
   env?: Record<string, string>;
+  /**
+   * Keep Electron's sandboxed renderers on Linux CI, where the OS sandbox
+   * is off (extension service workers need them, ADR 0203).
+   */
+  sandboxedRenderers?: boolean;
 }
 
 export function removeE2eDirectory(directory: string): void {
@@ -166,6 +171,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
         platform: process.platform,
         // Only fake-credential tests use Chromium's test key. Real-provider evals retain OS encryption.
         useMockKeychain: (opts.env?.CATAMORPHIC_E2E_FAKE_AGENT ?? "1") === "1",
+        sandboxedRenderers: opts.sandboxedRenderers,
       }),
       ...(opts.urls ?? []),
     ],

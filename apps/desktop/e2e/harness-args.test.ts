@@ -31,6 +31,23 @@ describe("electronLaunchArgs", () => {
     ]);
   });
 
+  it("keeps sandboxed renderers there for suites that need them", () => {
+    expect(
+      electronLaunchArgs({
+        cdpPort: 9342,
+        ci: "true",
+        platform: "linux",
+        sandboxedRenderers: true,
+      }),
+    ).toEqual([
+      ".",
+      "--remote-debugging-port=9342",
+      "--use-fake-device-for-media-stream",
+      "--no-sandbox",
+      "--enable-sandbox",
+    ]);
+  });
+
   it("preserves the normal Electron sandbox outside Linux CI", () => {
     expect(
       electronLaunchArgs({ cdpPort: 9342, ci: undefined, platform: "linux" }),
