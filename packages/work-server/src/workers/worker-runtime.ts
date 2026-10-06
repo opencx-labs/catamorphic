@@ -346,14 +346,16 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   const reset = (): Promise<void> => {
     const next = resets.last
       .catch(() => undefined)
-      .then(() =>
-        resetMachine({
+      .then(() => {
+        // Logins still waiting end before their homes go.
+        codexSignIns.stop();
+        return resetMachine({
           provider,
           sandboxes,
           signInRoot: execution.signInRoot,
           log,
-        }),
-      );
+        });
+      });
     resets.last = next;
     return next;
   };

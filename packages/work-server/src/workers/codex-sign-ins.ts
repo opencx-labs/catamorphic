@@ -274,7 +274,14 @@ export class CodexSignIns {
               root: this.options.signInRoot,
               member: input.member,
             });
+            placeSignIn({
+              root: this.options.signInRoot,
+              harness: "codex",
+              member: input.member,
+              staging,
+            });
           } catch (error) {
+            // Held by someone else, or the machine was reset meanwhile.
             this.finish(
               id,
               "failed",
@@ -282,12 +289,6 @@ export class CodexSignIns {
             );
             return;
           }
-          placeSignIn({
-            root: this.options.signInRoot,
-            harness: "codex",
-            member: input.member,
-            staging,
-          });
           this.finish(id, "signed-in");
           return;
         }
