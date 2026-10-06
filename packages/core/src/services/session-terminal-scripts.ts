@@ -76,7 +76,18 @@ function startScript(): string {
  */
 function loginScript(): string {
   return [
-    "if [ -r /etc/profile ]; then . /etc/profile; fi",
+    "if [ -r /etc/profile ] && [ -r /etc/bash.bashrc ]; then",
+    // Debian's bash read /etc/bash.bashrc before this file, and Debian's
+    // /etc/profile reads it again for bash. It skips that for a shell
+    // calling itself /bin/sh, then sets a bare prompt, put back here.
+    "  work_bash=$BASH work_ps1=$PS1",
+    "  BASH=/bin/sh",
+    "  . /etc/profile",
+    "  BASH=$work_bash PS1=$work_ps1",
+    "  unset work_bash work_ps1",
+    "elif [ -r /etc/profile ]; then",
+    "  . /etc/profile",
+    "fi",
     'if [ -n "$WORK_TERMINAL_HOME" ]; then HOME=$WORK_TERMINAL_HOME; export HOME; fi',
     "unset WORK_TERMINAL_HOME",
     'if [ -r "$HOME/.bash_profile" ]; then . "$HOME/.bash_profile"',
