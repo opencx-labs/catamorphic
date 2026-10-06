@@ -272,9 +272,13 @@ the JSON file `WORK_MACHINES_CONFIG` names:
 - `pool`: machines you enrolled yourself ([pools](#dedicated-servers-and-other-machines-pools)).
 - `custom`: a custom server's `machineProvisioner` hook creates and destroys
   them (`create({ name, class, labels, enrollment })` returns a platform
-  reference, `destroy({ name, ref })`). `enrollment.cloudInit` is the same
-  cloud-init a Hetzner machine gets. A server with the hook and no classes
-  file treats every class as custom.
+  reference, `destroy({ name, ref })` destroys by the reference, or by the
+  name when it is `null`). `enrollment.cloudInit` is the same cloud-init a
+  Hetzner machine gets. `create` throws `MachineProvisioningRefusedError`
+  when the platform made nothing, so its code is withdrawn and the next pass
+  tries again; after any other error the code waits for the machine to
+  enroll. A server with the hook and no classes file treats every class as
+  custom.
 
 The server refuses to start when a class needs what it lacks (a Hetzner
 class without the token, a custom class without the hook), and refuses a
@@ -284,14 +288,18 @@ rule that names a class it does not know.
 
 1. Set `WORK_PUBLIC_URL` (the HTTPS origin machines dial),
    `WORK_HETZNER_TOKEN`, and `WORK_MACHINES_CONFIG`. The published image
-   knows its release and gives machines the worker image of the same
-   release; `WORK_WORKER_IMAGE` overrides it (a server built from source must
-   set it).
+   knows where it was published and which release it is
+   (`WORK_IMAGE_REPOSITORY` and `WORK_VERSION`, set by its build) and gives
+   machines that same image; `WORK_WORKER_IMAGE` overrides it (a server
+   built from source must set it). Until one of them is known, no machine is
+   created and the rule's status says why.
 2. Write a rule: `PUT /_work/operator/machine-rules/desks` with
    `{ "group": "eng@example.com", "machines": "each-member", "class": "desk" }`.
    `{ "machines": { "shared": 3 } }` gives the group three shared machines
    instead (add `"trusted": true` only for process-isolated machines among
-   people who trust each other).
+   people who trust each other). The request answers once the rule is
+   stored, and a pass starts at once; `GET /_work/operator/machine-rules`
+   shows how it went.
 3. Each machine is a server named after it and labeled `work-machine`,
    `work-rule` and `work-class`. Cloud-init writes the
    [install script](#the-install-script) to it with the machine's one-time
@@ -300,8 +308,13 @@ rule that names a class it does not know.
    machine that does not enroll within an hour is destroyed and replaced.
 
 Creation is idempotent: a server already named for the machine and labeled
-as it is that machine. Destruction finds the server by its id, or by its
-label when no id was recorded, and succeeds when it is already gone.
+as it is that machine. When Hetzner refuses a server (a wrong server type,
+an exhausted quota), its code is withdrawn, the rule's status shows the
+error, and the next pass tries again. Destruction finds the server by its
+id, or by its label when no id was recorded, and succeeds when it is
+already gone; the machine stays listed (`state: "destroying"`) until then.
+A snapshot is started by one pass and the server destroyed by a later one,
+once the snapshot is written.
 
 ### Dedicated servers and other machines: pools
 
@@ -320,20 +333,29 @@ premises, existing VMs) join a pool:
    rule gives. A rule on a pool takes no `labels`: pooled machines keep the
    labels they enrolled with.
 
-A pooled machine nobody holds takes no work. When no machine is free, a
-member waits: `GET /_work/operator/machine-rules` reports, for each rule,
+A pooled machine nobody holds takes no work. A group's shared machine
+belongs to that group: change a rule's group and its machines are released
+(and later reset), never handed to the new group. When no machine is free,
+a member waits: `GET /_work/operator/machine-rules` reports, for each rule,
 `desired`, `ready`, `starting` (created, not yet enrolled), `waiting` (no
-machine yet) and `released`, and a `problem` when a rule names a class that
-is no longer configured, whose machines are then left as they are.
+machine yet) and `released`; a `problem` when a rule names a class that is
+no longer configured, whose machines are then left as they are; and a
+`failure` (`{ error, at }`) when something failed for the rule's machines
+in the latest pass.
 
 ### The install script
 
 `GET /api/workers/install.sh` is public and holds no secret: a POSIX sh
 script with this server's public URL and worker image in it. Run it as root
 with `--code` (required) and optionally `--image`, `--data-dir` (default
-`/var/lib/work`) and `--name` (the container's, default `work-worker`). It:
+`/var/lib/work`) and `--name` (the container's, default `work-worker`). The
+data directory must be new, or an empty one (or a worker's) under
+`/var/lib`, `/srv`, `/opt`, `/data` or `/home/<user>`; the script refuses
+system directories. It:
 
-- installs Docker with Docker's convenience script when `docker` is missing;
+- installs Docker with Docker's convenience script when `docker` is missing,
+  downloaded to a file and checked first, waiting up to ten minutes for
+  another package installation (a cloud machine's first boot) to finish;
 - with a usable `/dev/kvm`, gives the worker the device and its group, so
   agents run in microVMs. libkrun needs nothing more: never `--privileged`
   or added capabilities;
@@ -356,14 +378,17 @@ When a member leaves the group or is disabled, or the rule is removed or
 changes class, their machine is **released**: it takes nobody's work from
 that moment (a chat placed on it is refused there at its next turn; move
 it), and it keeps its disk for the rule's `retainDays` (0 to 365, default 7;
-kept with the machine, so it outlives the rule). A member back within that
-time gets the same machine again. Afterwards:
+kept with the machine, so it outlives the rule; counted by the database's
+clock). A member back within that time gets the same machine again.
+Afterwards:
 
 - a cloud machine is destroyed, after a snapshot when its class says
   `snapshot: true`;
 - a pooled machine is reset: its worker destroys every sandbox on it and
   deletes every volume and every member's sign-in, and the machine returns
-  to its pool. A machine that is not connected is reset when it reconnects.
+  to its pool. A machine that is not connected is reset when it reconnects;
+  a pass waits a few minutes for a reset and asks again on the next pass
+  when it takes longer.
 
 Chats on a released machine give their workspaces back, saved to their
 session branch, once they idle (`idleReleaseMinutes`, ADR 0173): a connected
@@ -371,8 +396,8 @@ machine is destroyed or reset only after that, so a chat that keeps its
 workspace (`idleReleaseMinutes: 0`) holds it until the chat is closed or
 moved. `retainDays: 0` acts in the same pass otherwise. A machine that never
 enrolled holds nothing and goes at once. `GET /_work/operator/workers` shows
-each worker's `state` (`serving`, `released`, `resetting`, `free`, or
-`revoked`) and `released: { at, retainDays }`.
+each worker's `state` (`serving`, `released`, `resetting`, `free`,
+`destroying`, or `revoked`) and `released: { at, retainDays }`.
 
 ### Passes
 
@@ -380,11 +405,13 @@ The server reconciles every minute and when an account is disabled. One
 replica at a time runs a pass, under a claim in Postgres (ADR 0193) renewed
 while platform calls run and checked before every change; a replica whose
 claim moved stops changing anything. A machine whose enrollment code is
-still waiting is never provisioned twice. A person gets a machine after
-their first sign-in, once the directory has placed them in the group.
-`POST /_work/operator/machine-rules/reconcile` runs a pass now, and
-`DELETE /_work/operator/machine-rules/:name` removes a rule and releases its
-machines.
+still waiting is never provisioned twice, and one machine's failure is
+recorded for its rule while the pass goes on with the others. A person gets
+a machine after their first sign-in, once the directory has placed them in
+the group. `POST /_work/operator/machine-rules/reconcile` runs a pass now
+and answers with what it did; `PUT` and `DELETE
+/_work/operator/machine-rules/:name` answer once the rule is stored or
+removed and start a pass (a removed rule's machines are released).
 
 ### Through the API
 
