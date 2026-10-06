@@ -604,10 +604,18 @@ describe("remote development on a Work server", () => {
     );
     const page = await app.connectToFrame(new URL(src).host);
     try {
-      await page.waitFor(
-        `document.body?.innerText.includes(${JSON.stringify(marker)})`,
-        { timeoutMs: 30_000, label: "preview page" },
-      );
+      // The tab may still be loading when it is found: until its page has
+      // a context, evaluating answers an error, so ask again.
+      const deadline = Date.now() + 30_000;
+      let shown = "";
+      while (!shown.includes(marker) && Date.now() < deadline) {
+        shown = await page
+          .eval<string>("document.body?.innerText ?? ''")
+          .catch(() => "");
+        if (!shown.includes(marker))
+          await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      expect(shown).toContain(marker);
     } finally {
       page.close();
     }
