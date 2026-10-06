@@ -12,7 +12,7 @@ import {
   generateExecutorKeyPair,
 } from "@catamorphic/sandbox";
 import { afterEach, describe, expect, it } from "vitest";
-import { executionSettingsFromEnv } from "../execution-config.js";
+import { testExecutionSettings } from "../test-support.js";
 import {
   confirmWorkerIdentity,
   loadWorkerIdentity,
@@ -212,7 +212,7 @@ describe("a worker rotates its credential and key (ADR 0207)", () => {
     const worker = await startWorkWorker({
       controlPlaneUrl: "http://127.0.0.1:1",
       dataDir: dir,
-      execution: executionSettingsFromEnv({ PATH: process.env.PATH }),
+      execution: testExecutionSettings({ PATH: process.env.PATH }),
       fetch: plane.fetch,
       log: (line) => log.push(line),
     });
@@ -273,7 +273,7 @@ describe("a worker rotates its credential and key (ADR 0207)", () => {
     const worker = await startWorkWorker({
       controlPlaneUrl: "http://127.0.0.1:1",
       dataDir: dir,
-      execution: executionSettingsFromEnv({ PATH: process.env.PATH }),
+      execution: testExecutionSettings({ PATH: process.env.PATH }),
       fetch: plane.fetch,
       rotationRetryMs: 200,
       log: (line) => log.push(line),
@@ -346,7 +346,7 @@ describe("a worker rotates its credential and key (ADR 0207)", () => {
     const worker = await startWorkWorker({
       controlPlaneUrl: "http://127.0.0.1:1",
       dataDir: dir,
-      execution: executionSettingsFromEnv({ PATH: process.env.PATH }),
+      execution: testExecutionSettings({ PATH: process.env.PATH }),
       fetch: plane.fetch,
       log: (line) => log.push(line),
     });
@@ -389,7 +389,7 @@ describe("a worker rotates its credential and key (ADR 0207)", () => {
     const worker = await startWorkWorker({
       controlPlaneUrl: "http://127.0.0.1:1",
       dataDir: dir,
-      execution: executionSettingsFromEnv({ PATH: process.env.PATH }),
+      execution: testExecutionSettings({ PATH: process.env.PATH }),
       fetch: plane.fetch,
     });
     try {
@@ -436,7 +436,7 @@ describe("a worker rotates its credential and key (ADR 0207)", () => {
     const worker = await startWorkWorker({
       controlPlaneUrl: "http://127.0.0.1:1",
       dataDir: dir,
-      execution: executionSettingsFromEnv({ PATH: process.env.PATH }),
+      execution: testExecutionSettings({ PATH: process.env.PATH }),
       fetch: plane.fetch,
       rotationRetryMs: 100,
       log: (line) => log.push(line),
@@ -498,7 +498,7 @@ describe("a worker rotates its credential and key (ADR 0207)", () => {
     const worker = await startWorkWorker({
       controlPlaneUrl: "http://127.0.0.1:1",
       dataDir: dir,
-      execution: executionSettingsFromEnv({ PATH: process.env.PATH }),
+      execution: testExecutionSettings({ PATH: process.env.PATH }),
       fetch: plane.fetch,
       log: (line) => log.push(line),
     });
@@ -576,7 +576,7 @@ describe("a worker rotates its credential and key (ADR 0207)", () => {
     const worker = await startWorkWorker({
       controlPlaneUrl: "http://127.0.0.1:1",
       dataDir: dir,
-      execution: executionSettingsFromEnv({ PATH: process.env.PATH }),
+      execution: testExecutionSettings({ PATH: process.env.PATH }),
       fetch: plane.fetch,
       rotationRetryMs: 0,
       retiredKeyRetentionMs: 3_000,

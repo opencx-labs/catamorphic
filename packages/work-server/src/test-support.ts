@@ -4,6 +4,10 @@ import type { AgentSessionsService, Identity } from "@catamorphic/core";
 import pg from "pg";
 import { workServerConfigFromEnv } from "./config.js";
 import {
+  executionSettingsFromEnv,
+  type WorkExecutionSettings,
+} from "./execution-config.js";
+import {
   type DirectoryAccountStatus,
   type DirectoryProvider,
   DirectoryUnavailableError,
@@ -61,6 +65,17 @@ export function testServerOptions(args: {
       ...(args.publicBases ? { publicBases: args.publicBases } : {}),
     },
   };
+}
+
+/**
+ * A test worker's execution settings, from the same parser as the image.
+ * Like {@link testServerOptions}, trusted subprocesses unless the test
+ * chooses a backend: `auto` would pick containers on a runner with Docker.
+ */
+export function testExecutionSettings(
+  env: Record<string, string | undefined>,
+): WorkExecutionSettings {
+  return executionSettingsFromEnv({ WORK_SANDBOX: "local-process", ...env });
 }
 
 /**

@@ -12,13 +12,16 @@ import {
 } from "@catamorphic/sandbox";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { executionSettingsFromEnv } from "../execution-config.js";
 import {
   createWorkServer,
   SERVER_TENANT_ID,
   type WorkServer,
 } from "../server.js";
-import { createTestDatabase, testServerOptions } from "../test-support.js";
+import {
+  createTestDatabase,
+  testExecutionSettings,
+  testServerOptions,
+} from "../test-support.js";
 import { WORKER_PROTOCOL, WORKER_PROTOCOL_HEADER } from "./worker-protocol.js";
 import { startWorkWorker } from "./worker-runtime.js";
 
@@ -265,7 +268,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         controlPlaneUrl: base,
         dataDir,
         enrollmentCode: enrollment.json().code,
-        execution: executionSettingsFromEnv({
+        execution: testExecutionSettings({
           PATH: process.env.PATH,
           WORK_MAX_WORKSPACES: "2",
         }),
