@@ -1083,6 +1083,25 @@ runner runs the harness's CLI beside the workspace, with the gateway as its
 only model endpoint, and any replica can read it or reattach to it (ADR
 0198). Harness binaries come from the Environment image.
 
+HTTP APIs through the gateway (ADR 0211): a provider whose connection is an
+HTTP API code in sandboxes may call sets `http: { baseUrl, paths?,
+headers({ material }) }` (`defineHttpApiConnectionProvider` offers it for
+connections without named `actions`; `auth: { basic: true }` sends a
+`user:password` key as HTTP Basic). Its capabilities are the lowercase
+methods. The plugin serves `/gateway/http/:alias` and everything below it
+(public route; the grant is a bearer, the Basic password, or `x-work-grant`):
+GET, HEAD, POST, PUT, PATCH and DELETE below the base URL and inside
+`paths`, the method allowed by the binding (`get` covers HEAD), reads only
+for a contained agent, bodies up to 32 MiB byte for byte, answers streamed,
+the caller's authorization replaced by the stored key. Guards see kind = the
+provider, action = the lowercase method, input = `{ path, query }`; each
+request is audited as `connection.http`. At each sandbox turn core issues a
+`sandbox` grant per HTTP alias and writes `.work-session/env/gateway.sh`
+exporting `WORK_HTTP_<ALIAS>` (`<gatewayUrl>/http/<alias>`) and
+`WORK_HTTP_<ALIAS>_GRANT_FILE`; the runner (`AttemptStart.envFiles`),
+host harnesses' commands, setup and terminals load it beside `secrets.sh`.
+Grants rotate on renewal, so code reads the file per request.
+
 Personal credentials (ADRs 0184, 0199): a member's listed files may reach
 sandboxes that run only that member's work. The member's client calls
 `PUT /projects/:id/personal-environment` with `{ files: [{ path, content

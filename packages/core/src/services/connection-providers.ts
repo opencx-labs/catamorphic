@@ -110,6 +110,26 @@ export interface ConnectionModelEndpoint {
   headers(args: { material: Uint8Array }): Record<string, string>;
 }
 
+/**
+ * A provider whose connection is an HTTP API that code in sandboxes calls
+ * through the gateway (ADR 0211): a dev server, a CLI, an SDK or a test
+ * suite sends the API's own requests to `/gateway/http/<alias>/…` with the
+ * session's grant, and the gateway adds the stored key. Such a
+ * connection's capabilities are the lowercase methods a binding may use
+ * (`get` also allows HEAD).
+ */
+export interface ConnectionHttpEndpoint {
+  /** HTTPS origin plus base path, e.g. `https://logs.example.com:8443`. */
+  readonly baseUrl: string;
+  /**
+   * Path prefixes below `baseUrl` that requests may reach, each starting
+   * with `/` and matched by whole segments; absent reaches every path.
+   */
+  readonly paths?: readonly string[];
+  /** The headers that carry the stored key on one upstream request. */
+  headers(args: { material: Uint8Array }): Record<string, string>;
+}
+
 export interface ConnectionProvider {
   readonly kind: string;
   readonly displayName: string;
@@ -117,6 +137,11 @@ export interface ConnectionProvider {
   readonly git?: ConnectionGitRemotes;
   /** Present when the connection is a model API the gateway forwards to. */
   readonly model?: ConnectionModelEndpoint;
+  /**
+   * Present when code in sandboxes may call the connection's HTTP API
+   * through the gateway (ADR 0211).
+   */
+  readonly http?: ConnectionHttpEndpoint;
   /**
    * Start authorizing a member's or a service connection. `projectId` is
    * absent for a tenant service connection; `externalUserId` is whoever

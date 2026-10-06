@@ -1,5 +1,6 @@
 import { posix } from "node:path";
 import { shellQuote } from "@catamorphic/git";
+import { GATEWAY_ENV_IN_SESSION_DIRECTORY } from "./sandbox-git.js";
 import { SECRETS_IN_SESSION_DIRECTORY } from "./sandbox-secrets.js";
 
 /*
@@ -21,21 +22,27 @@ export function sessionDirectoryFromProject(input: {
 }
 
 /**
- * Loads the Environment's secrets (ADR 0205) into a shell, when this
- * workspace has them: the file `sandboxSecretsPrelude` loads, named
- * from a shell word for the session directory instead of the project
- * folder, since a terminal records where it started.
+ * Loads the gateway's variables (ADR 0211) and the Environment's secrets
+ * (ADR 0205) into a shell, each when this workspace has it: the files
+ * `sandboxSecretsPrelude` loads, named from a shell word for the session
+ * directory instead of the project folder, since a terminal records where
+ * it started.
  */
 export function terminalSecretsSnippet(sessionDirectory: string): string {
-  const file = `${sessionDirectory}/${SECRETS_IN_SESSION_DIRECTORY}`;
-  return `[ -f ${file} ] && . ${file}`;
+  return [GATEWAY_ENV_IN_SESSION_DIRECTORY, SECRETS_IN_SESSION_DIRECTORY]
+    .map((name) => {
+      const file = `${sessionDirectory}/${name}`;
+      return `if [ -f ${file} ]; then . ${file}; fi`;
+    })
+    .join("; ");
 }
 
 /**
  * Runs inside the terminal (POSIX sh): `$1` is its state directory, `$2`
  * says whether it has a pseudo-terminal. It records the terminal device
  * and the shell's process id (a resize needs both), sizes the device,
- * loads the secrets, and becomes the login shell: bash when present.
+ * loads the gateway's variables and the secrets, and becomes the login
+ * shell: bash when present.
  */
 function startScript(): string {
   return [

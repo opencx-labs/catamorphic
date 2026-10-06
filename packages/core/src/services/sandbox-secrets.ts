@@ -3,17 +3,22 @@ import {
   shellSingleQuote as shellQuote,
 } from "@catamorphic/agent-protocol/runner";
 import type { SandboxProvider } from "@catamorphic/sandbox";
-import { SESSION_DIRECTORY } from "./sandbox-git.js";
+import {
+  GATEWAY_ENV_IN_SESSION_DIRECTORY,
+  SESSION_DIRECTORY,
+} from "./sandbox-git.js";
 import { type SandboxSecrets, secretFingerprint } from "./secrets-service.js";
 
 /*
  * An Environment's secrets inside one sandbox (ADR 0205): one file of
  * `export NAME='value'` lines in the session's own directory, beside the
  * project folder and never inside the repository, readable only by the
- * sandbox user. Shells load it through `BASH_ENV`, the agent runner reads
- * it for every attempt, and setup and terminals source it with
- * {@link sandboxSecretsPrelude}. It is removed whenever a turn may not
- * have it, and when the workspace is given back.
+ * sandbox user. Beside it, the gateway's variables file (ADR 0211) names
+ * the session's HTTP API aliases; it holds no secret. The agent runner
+ * reads both for every attempt (shells also load the secrets file through
+ * `BASH_ENV`), and setup and terminals source both with
+ * {@link sandboxSecretsPrelude}. The secrets file is removed whenever a
+ * turn may not have it, and when the workspace is given back.
  */
 
 /** The secrets file, relative to the session directory. */
@@ -22,8 +27,9 @@ export const SECRETS_IN_SESSION_DIRECTORY = "env/secrets.sh";
 /** The secrets file, relative to the sandbox's workspace root. */
 export const SANDBOX_SECRETS_PATH = `${SESSION_DIRECTORY}/${SECRETS_IN_SESSION_DIRECTORY}`;
 
-/** The same file seen from the project folder, where commands start. */
-const FROM_PROJECT = `../${SANDBOX_SECRETS_PATH}`;
+/** The gateway's variables file, relative to the sandbox's workspace root. */
+export const SANDBOX_GATEWAY_ENV_PATH = `${SESSION_DIRECTORY}/${GATEWAY_ENV_IN_SESSION_DIRECTORY}`;
+
 const DIRECTORY = `../${SESSION_DIRECTORY}/env`;
 
 /**
@@ -37,15 +43,31 @@ export function sandboxSecretsFile(input: { workspaceRoot: string }): string {
 }
 
 /**
- * A shell line that loads the session's secrets into the current shell,
- * and does nothing when there are none. It names the file from the
- * project folder, so it belongs at the start of a command whose working
- * directory is the project folder (workspace setup, terminals). Pass
- * `file` for a command that starts elsewhere.
+ * The session's environment files in the provider's own paths, in the
+ * order they load: the gateway's variables, then the secrets, which a
+ * runner points `BASH_ENV` at (ADRs 0205, 0211).
  */
-export function sandboxSecretsPrelude(input?: { file?: string }): string {
-  const file = shellQuote(input?.file ?? FROM_PROJECT);
-  return `if [ -f ${file} ]; then . ${file}; fi`;
+export function sandboxEnvFiles(input: { workspaceRoot: string }): string[] {
+  return [
+    `${input.workspaceRoot}/${SANDBOX_GATEWAY_ENV_PATH}`,
+    sandboxSecretsFile(input),
+  ];
+}
+
+/**
+ * A shell line that loads the session's environment files (the gateway's
+ * variables, then the secrets) into the current shell, each only when it
+ * exists. It names them from the project folder, so it belongs at the
+ * start of a command whose working directory is the project folder
+ * (workspace setup, terminals).
+ */
+export function sandboxSecretsPrelude(): string {
+  return [SANDBOX_GATEWAY_ENV_PATH, SANDBOX_SECRETS_PATH]
+    .map((file) => {
+      const quoted = shellQuote(`../${file}`);
+      return `if [ -f ${quoted} ]; then . ${quoted}; fi`;
+    })
+    .join("; ");
 }
 
 async function run(input: {

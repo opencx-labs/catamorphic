@@ -211,13 +211,15 @@ describe("background command tools", () => {
     ).rejects.toThrow("not a valid regular expression");
   }, 30_000);
 
-  it("load the session's secrets file first, from the project folder (ADR 0205)", async () => {
+  it("load the session's environment files first, from the project folder (ADRs 0205, 0211)", async () => {
     const provider = sandbox({ ceilingMs: 30_000 });
     const project = path.join(root, "secrets-project");
     const nested = path.join(project, "apps", "api");
     fs.mkdirSync(nested, { recursive: true });
     fs.mkdirSync(path.join(root, ".work-session", "env"), { recursive: true });
+    const gateway = path.join(root, ".work-session", "env", "gateway.sh");
     const file = path.join(root, ".work-session", "env", "secrets.sh");
+    fs.writeFileSync(gateway, "export WORK_HTTP_LOGS='http://gateway/logs'\n");
     fs.writeFileSync(file, "export API_KEY='key-from-file'\n");
     // The shell moved below the project folder in an earlier command.
     const state: ShellState = { cwd: nested };
@@ -227,14 +229,17 @@ describe("background command tools", () => {
       root: () => project,
       state,
       budgetSeconds: 30,
-      envFile: "../.work-session/env/secrets.sh",
+      envFiles: [
+        "../.work-session/env/gateway.sh",
+        "../.work-session/env/secrets.sh",
+      ],
     });
     const foreground = await call(tools, "bash", {
-      command: 'printf "%s|%s" "$API_KEY" "$PWD"',
+      command: 'printf "%s|%s|%s" "$API_KEY" "$WORK_HTTP_LOGS" "$PWD"',
     });
     expect(foreground).toEqual({
       exitCode: 0,
-      output: `key-from-file|${nested}`,
+      output: `key-from-file|http://gateway/logs|${nested}`,
     });
     const started = await call(tools, "run_background_command", {
       command: 'printf "%s|%s\\n" "$API_KEY" "$PWD"',
@@ -247,13 +252,14 @@ describe("background command tools", () => {
     expect(`${started.output}${read.output}`).toContain(
       `key-from-file|${nested}`,
     );
-    // Without the file, commands run as before.
+    // Without a file, commands run as before, with the other one.
     fs.rmSync(file);
     expect(
       await call(tools, "bash", {
-        command: 'if [ -z "$API_KEY" ]; then printf unset; fi',
+        command:
+          'if [ -z "$API_KEY" ]; then printf "unset|%s" "$WORK_HTTP_LOGS"; fi',
       }),
-    ).toEqual({ exitCode: 0, output: "unset" });
+    ).toEqual({ exitCode: 0, output: "unset|http://gateway/logs" });
   }, 30_000);
 
   it("reports a finished command's exit code", async () => {

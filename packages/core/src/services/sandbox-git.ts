@@ -1,3 +1,4 @@
+import { formatEnvFile } from "@catamorphic/agent-protocol/runner";
 import {
   buildSeedPack,
   seedPackInstallScript,
@@ -143,12 +144,87 @@ export function sandboxGrantFile(input: {
 }
 
 /**
- * Write the session's grants (ADRs 0175, 0180), one file per alias, and a
- * Git configuration that sends every remote under a Git alias's base URLs
- * to the gateway, answering credential prompts with the current grant.
- * Idempotent: renewing only rewrites the grant files. The configuration
- * lives in the sandbox's global Git config, so any clone uses it. Model
- * harnesses read their alias's grant file at each use.
+ * The gateway's variables file (ADR 0211), relative to the session
+ * directory: beside the secrets file, and not secret itself. It names
+ * where code reaches each HTTP API alias and where the alias's grant is.
+ */
+export const GATEWAY_ENV_IN_SESSION_DIRECTORY = "env/gateway.sh";
+
+/** One HTTP API alias as code in the sandbox reaches it (ADR 0211). */
+export interface SandboxHttpAlias {
+  alias: string;
+  /** `<gateway>/http/<alias>`, as the sandbox reaches it. */
+  url: string;
+}
+
+/**
+ * The variable holding an HTTP API alias's gateway URL (ADR 0211):
+ * `WORK_HTTP_` and the alias in SCREAMING_SNAKE_CASE (`logs-eu` is
+ * `WORK_HTTP_LOGS_EU`). The same name with `_GRANT_FILE` after it holds
+ * the path of the alias's grant file.
+ */
+export function httpAliasVariable(alias: string): string {
+  return `WORK_HTTP_${alias.toUpperCase().replaceAll("-", "_")}`;
+}
+
+/** Where the sandbox's real session directory goes in a template. */
+const ROOT = "@ROOT@";
+
+/**
+ * The gateway's variables file before the sandbox says where it really
+ * is: each HTTP alias's URL and grant file. An alias whose names an
+ * earlier one already took (`logs-eu` after `logs_eu`) gets none; it is
+ * still reached at its URL.
+ */
+function gatewayEnvTemplate(aliases: readonly SandboxHttpAlias[]): string {
+  const variables: Record<string, string> = {};
+  for (const http of aliases) {
+    const name = httpAliasVariable(http.alias);
+    const grantFile = `${name}_GRANT_FILE`;
+    if (name in variables || grantFile in variables) {
+      console.warn(
+        `[catamorphic] HTTP alias '${http.alias}' shares its variable names with another alias; it gets none`,
+      );
+      continue;
+    }
+    variables[name] = http.url;
+    variables[grantFile] = `${ROOT}/grants/${http.alias}`;
+  }
+  return `# Work's gateway (ADR 0211): HTTP APIs this session may call. Read the grant file for each request: it changes as the session's grant renews.\n${formatEnvFile(variables)}`;
+}
+
+/**
+ * A shell loop that copies `from` to `to`, replacing the first `@ROOT@` on
+ * each line with `$root` literally, whatever the path holds (spaces, #, &).
+ */
+function withRoot(from: string, to: string): string {
+  return `while IFS= read -r line; do case "$line" in *${ROOT}*) printf '%s%s%s\\n' "\${line%%${ROOT}*}" "$root" "\${line#*${ROOT}}";; *) printf '%s\\n' "$line";; esac; done < ${from} > ${to}`;
+}
+
+/**
+ * Commands (run in the session directory) that put the gateway's
+ * variables file in place from its uploaded template, or, without HTTP
+ * aliases, take an earlier turn's away. Values are single-quoted, so a
+ * session directory whose path holds a quote gets no file.
+ */
+function gatewayEnvScript(write: boolean): string {
+  const file = GATEWAY_ENV_IN_SESSION_DIRECTORY;
+  if (!write) return `rm -f ${file} ${file}.in`;
+  return [
+    "root=$(pwd -P)",
+    `case "$root" in *\\'*) rm -f ${file} ${file}.in;; *) ${withRoot(`${file}.in`, `${file}.new`)} && chmod 644 ${file}.new && mv -f ${file}.new ${file} && rm -f ${file}.in;; esac`,
+  ].join(" && ");
+}
+
+/**
+ * Write the session's grants (ADRs 0175, 0180, 0211), one file per alias;
+ * a Git configuration that sends every remote under a Git alias's base
+ * URLs to the gateway, answering credential prompts with the current
+ * grant; and the gateway's variables file naming each HTTP alias's URL and
+ * grant file. Idempotent: renewing only rewrites the grant files. The Git
+ * configuration lives in the sandbox's global Git config, so any clone
+ * uses it. Model harnesses and code calling HTTP aliases read their
+ * alias's grant file at each use.
  */
 export async function configureSandboxGateway(input: {
   provider: SandboxProvider;
@@ -157,17 +233,33 @@ export async function configureSandboxGateway(input: {
   gatewayGitUrl: string;
   grants: readonly { alias: string; grant: string }[];
   gitAliases: readonly SandboxGitAlias[];
+  /** HTTP API aliases code in the sandbox may call (ADR 0211). */
+  httpAliases?: readonly SandboxHttpAlias[];
   renewOnly?: boolean;
 }): Promise<void> {
   const directory = `${input.provider.workspaceRoot}/${SESSION_DIRECTORY}`;
   const gateway = input.gatewayGitUrl.replace(/\/+$/, "");
+  const httpAliases = input.httpAliases ?? [];
+  const gatewayEnv =
+    !input.renewOnly && httpAliases.length > 0
+      ? gatewayEnvTemplate(httpAliases)
+      : undefined;
   await input.provider.uploadFiles(
     input.sandboxId,
-    Object.fromEntries(
-      input.grants.map((grant) => [`grants/${grant.alias}`, grant.grant]),
-    ),
+    {
+      ...Object.fromEntries(
+        input.grants.map((grant) => [`grants/${grant.alias}`, grant.grant]),
+      ),
+      ...(gatewayEnv
+        ? { [`${GATEWAY_ENV_IN_SESSION_DIRECTORY}.in`]: gatewayEnv }
+        : {}),
+    },
     directory,
   );
+  // A turn's aliases stand for its whole turn: renewing leaves them be.
+  const env = input.renewOnly
+    ? []
+    : [gatewayEnvScript(gatewayEnv !== undefined)];
   if (input.renewOnly || input.gitAliases.length === 0) {
     await run({
       ...input,
@@ -175,10 +267,13 @@ export async function configureSandboxGateway(input: {
       what: "renew the session's gateway grants",
       // Without Git aliases, an earlier turn's rewrites must not send
       // remotes to aliases this session no longer holds.
-      command:
-        input.renewOnly || input.gitAliases.length > 0
-          ? "chmod 600 grants/*"
-          : "chmod 600 grants/* && { [ ! -f gitconfig ] || : > gitconfig; }",
+      command: [
+        "chmod 600 grants/*",
+        ...(input.renewOnly
+          ? []
+          : ["{ [ ! -f gitconfig ] || : > gitconfig; }"]),
+        ...env,
+      ].join(" && "),
     });
     return;
   }
@@ -226,11 +321,32 @@ export async function configureSandboxGateway(input: {
       "root=$(pwd -P)",
       // Quoted in the config and for the shell; these would need escaping.
       `case "$root" in *[\\'\\"\\\\]*) echo "The sandbox path $root holds a quote or backslash" >&2; exit 1;; esac`,
-      // A literal replacement, whatever the path holds (spaces, #, &).
-      `while IFS= read -r line; do case "$line" in *@ROOT@*) printf '%s%s%s\\n' "\${line%%@ROOT@*}" "$root" "\${line#*@ROOT@}";; *) printf '%s\\n' "$line";; esac; done < gitconfig.in > gitconfig`,
+      withRoot("gitconfig.in", "gitconfig"),
       "rm -f gitconfig.in",
       `(git config --global --get-all include.path 2>/dev/null | grep -Fqx "$root/gitconfig" || git config --global --add include.path "$root/gitconfig")`,
+      ...env,
     ].join(" && "),
+  });
+}
+
+/**
+ * Take the session's grant files and the gateway's variables file (ADRs
+ * 0175, 0211) out of its sandbox when its grants are revoked with the
+ * workspace: nothing there names a dead grant afterwards. Safe to repeat.
+ */
+export async function removeSandboxGateway(input: {
+  provider: SandboxProvider;
+  sandboxId: string;
+  /** The sandbox path of the project checkout (the command's cwd). */
+  projectDir: string;
+}): Promise<void> {
+  const session = `../${SESSION_DIRECTORY}`;
+  const file = `${session}/${GATEWAY_ENV_IN_SESSION_DIRECTORY}`;
+  await run({
+    ...input,
+    cwd: input.projectDir,
+    what: "remove the session's gateway grants",
+    command: `rm -rf ${session}/grants ${file} ${file}.in ${file}.new`,
   });
 }
 

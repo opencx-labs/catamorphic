@@ -93,7 +93,10 @@ describe("model access", () => {
           baseUrl: "https://gateway.test/anthropic",
           keyFile: "/state/grant",
         },
-        envFile: "/workspace/.work-session/env/secrets.sh",
+        envFiles: [
+          "/workspace/.work-session/env/gateway.sh",
+          "/workspace/.work-session/env/secrets.sh",
+        ],
         // What the runner adds from the file before the adapter starts.
         env: {
           CLICKHOUSE_API_KEY: "ch-key",

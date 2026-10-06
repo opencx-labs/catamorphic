@@ -73,6 +73,10 @@ import { ExecutionJobsService } from "./services/execution-jobs-service.js";
 import { ExecutionWorkerService } from "./services/execution-worker-service.js";
 import { GitGatewayService } from "./services/git-gateway.js";
 import { executeHostCall } from "./services/host-calls.js";
+import {
+  dbHttpGatewayStore,
+  HttpGatewayService,
+} from "./services/http-gateway.js";
 import { MembershipsService } from "./services/memberships-service.js";
 import {
   dbModelGatewayStore,
@@ -220,9 +224,10 @@ export interface CatamorphicCoreConfig {
    * The gateway's base URL as a session's sandbox reaches it (ADRs 0175,
    * 0180), e.g. `https://work.example.com/api/gateway`, where the host
    * mounts the plugin's gateway routes. Sandboxes get Git configured for
-   * `<gatewayUrl>/git/<alias>/` and harnesses reach models at
-   * `<gatewayUrl>/model/<alias>/`. Absent, Git and model aliases are not
-   * offered to sandboxes.
+   * `<gatewayUrl>/git/<alias>/`, harnesses reach models at
+   * `<gatewayUrl>/model/<alias>/`, and code reaches HTTP APIs at
+   * `<gatewayUrl>/http/<alias>` (ADR 0211). Absent, Git, model and HTTP
+   * aliases are not offered to sandboxes.
    */
   gatewayUrl?: (args: {
     projectId: string;
@@ -408,6 +413,8 @@ export class CatamorphicCore {
   readonly gitGateway?: GitGatewayService;
   /** Models through the gateway for sandbox harnesses (ADR 0180). */
   readonly modelGateway?: ModelGatewayService;
+  /** HTTP APIs through the gateway for code in sandboxes (ADR 0211). */
+  readonly httpGateway?: HttpGatewayService;
   /** Workspaces at a ref of a project's linked remote (ADR 0178). */
   readonly sessionWorkspaces: SessionWorkspaces;
   /** Committed `.work/roles/*.json` and their expansion into identities (ADR 0055). */
@@ -892,6 +899,10 @@ export class CatamorphicCore {
         store: dbModelGatewayStore(this.db),
         broker: this.connectionBroker,
       });
+      this.httpGateway = new HttpGatewayService({
+        store: dbHttpGatewayStore(this.db),
+        broker: this.connectionBroker,
+      });
     }
     this.codeHosts = new CodeHostsService({
       db: this.db,
@@ -1189,6 +1200,9 @@ export class CatamorphicCore {
                 modelApi: (providerKind: string) =>
                   this.connectionProviderRegistry?.get(providerKind)?.model
                     ?.api,
+                servesHttp: (providerKind: string) =>
+                  this.connectionProviderRegistry?.get(providerKind)?.http !==
+                  undefined,
                 turnUsage: async (args: {
                   sessionId: string;
                   turnId: string;

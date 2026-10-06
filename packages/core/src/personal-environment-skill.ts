@@ -1,14 +1,14 @@
 /**
  * What a session's workspace receives beyond the repository, as an agent
  * there sees it: the project's secrets as environment variables (ADR
- * 0205), a member's own private files (ADR 0184), and where sign-ins come
- * from (ADR 0199). Host-tier, so every project's sessions read it without
- * seeded templates.
+ * 0205), company APIs through the gateway (ADR 0211), a member's own
+ * private files (ADR 0184), and where sign-ins come from (ADR 0199).
+ * Host-tier, so every project's sessions read it without seeded templates.
  */
 export const PERSONAL_ENVIRONMENT_SKILL = `---
 name: personal-environment
 title: Personal environment
-description: Where this workspace's environment variables (project secrets) and private files (such as .env) come from, who can set them, and how to explain one that is missing. Use when a key or variable the work needs is not set, when a file the repository does not contain is missing here, when the person asks to add their own key or file to their sessions, or when a Claude Code or Codex sign-in is in question.
+description: Where this workspace's environment variables (project secrets, and WORK_HTTP_ addresses of company APIs through the gateway) and private files (such as .env) come from, who can set them, and how to explain one that is missing. Use when a key or variable the work needs is not set, when code needs a company API, when a file the repository does not contain is missing here, when the person asks to add their own key or file to their sessions, or when a Claude Code or Codex sign-in is in question.
 ---
 
 # Personal environment
@@ -76,6 +76,26 @@ paste a value into the chat:
 A value that grants access to a company system (a database, an internal
 API) belongs in a gateway connection instead, which keeps the credential out
 of every sandbox.
+
+### Company APIs through the gateway
+
+When the Environment binds an HTTP API connection, code in this workspace (a
+dev server, a script, tests) calls it without its key. \`WORK_HTTP_<ALIAS>\`
+(the alias in capitals, \`-\` as \`_\`) is the API's address through the
+gateway, and \`WORK_HTTP_<ALIAS>_GRANT_FILE\` is the file holding this
+session's grant. Send the API's own requests to that address with the grant
+as a bearer, as the HTTP Basic password (any user name), or in
+\`x-work-grant\`; the gateway adds the real key:
+
+\`\`\`sh
+curl -sS -u "work:$(cat "$WORK_HTTP_LOGS_GRANT_FILE")" "$WORK_HTTP_LOGS/?query=SELECT%201"
+\`\`\`
+
+The grant changes as it renews, so read the file for each request (or again
+after a 401) and never write it into a config file. \`env | grep WORK_HTTP_\`
+lists the APIs here; \`. ../.work-session/env/gateway.sh\` from the project
+folder loads them in a shell started some other way. The binding decides
+which methods are allowed, and a refusal says why.
 
 ## Private files
 

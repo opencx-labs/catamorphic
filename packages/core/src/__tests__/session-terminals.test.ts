@@ -107,9 +107,9 @@ describe("terminal shell commands", () => {
     ).toContain("mkdir -p '../.work-session/terminals/k'");
   });
 
-  it("loads the secrets file only when it is there", () => {
+  it("loads the gateway's variables and the secrets, each only when it is there", () => {
     expect(terminalSecretsSnippet('"$s"')).toBe(
-      '[ -f "$s"/env/secrets.sh ] && . "$s"/env/secrets.sh',
+      'if [ -f "$s"/env/gateway.sh ]; then . "$s"/env/gateway.sh; fi; if [ -f "$s"/env/secrets.sh ]; then . "$s"/env/secrets.sh; fi',
     );
   });
 

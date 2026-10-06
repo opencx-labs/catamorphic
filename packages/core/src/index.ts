@@ -237,6 +237,7 @@ export {
   type ConnectionAuthorizationResult,
   type ConnectionCredentialVersion,
   type ConnectionGitRemotes,
+  type ConnectionHttpEndpoint,
   type ConnectionModelEndpoint,
   type ConnectionProvider,
   ConnectionProviderRegistry,
@@ -258,6 +259,8 @@ export {
   connectionMcpServerName,
   type EnvironmentConnectionBinding,
   GIT_CAPABILITIES,
+  HTTP_METHOD_CAPABILITIES,
+  isHttpMethodCapability,
   isProtocolCapability,
   MODEL_CAPABILITY,
   normalizeConnectionRequirement,
@@ -386,6 +389,22 @@ export {
   reviewPush,
 } from "./services/git-gateway.js";
 export { executeHostCall, type HostCallInput } from "./services/host-calls.js";
+export {
+  dbHttpGatewayStore,
+  GRANT_HEADER,
+  HTTP_REQUEST_MAX_BYTES,
+  type HttpGatewayAdmission,
+  type HttpGatewayAdmitResult,
+  HttpGatewayError,
+  type HttpGatewayRequest,
+  type HttpGatewayResponse,
+  HttpGatewayService,
+  type HttpGatewayStore,
+  httpMethodCapability,
+  httpQueryInput,
+  httpUpstreamTarget,
+  type LiveHttpGrant,
+} from "./services/http-gateway.js";
 export {
   type GrantMembershipInput,
   type Membership,
@@ -617,8 +636,11 @@ export {
   type WorkflowStepAttempt,
   type WorkflowStepAttemptStatus,
 } from "./services/runs-service.js";
+export { httpAliasVariable } from "./services/sandbox-git.js";
 export {
+  SANDBOX_GATEWAY_ENV_PATH,
   SANDBOX_SECRETS_PATH,
+  sandboxEnvFiles,
   sandboxSecretsFile,
   sandboxSecretsPrelude,
 } from "./services/sandbox-secrets.js";

@@ -238,6 +238,7 @@ export {
 export {
   defineHttpApiConnectionProvider,
   type HttpApiAction,
+  type HttpApiAuth,
   type HttpApiConnectionOptions,
   type HttpMethod,
 } from "./http-connection-provider.js";

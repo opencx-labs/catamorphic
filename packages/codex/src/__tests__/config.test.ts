@@ -42,7 +42,10 @@ describe("codexLaunch", () => {
 
   it("gives Codex the session's secrets the runner read, under Work's own settings (ADR 0205)", () => {
     const result = launch({
-      envFile: "/workspace/.work-session/env/secrets.sh",
+      envFiles: [
+        "/workspace/.work-session/env/gateway.sh",
+        "/workspace/.work-session/env/secrets.sh",
+      ],
       // What the runner adds from the file before the adapter starts.
       env: {
         CLICKHOUSE_API_KEY: "ch-key",

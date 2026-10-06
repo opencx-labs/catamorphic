@@ -74,10 +74,12 @@ function secretsAdapter(): HarnessAdapter {
         });
         const sandbox = local?.sandbox;
         if (!isSandbox(sandbox)) throw new Error("Missing the sandbox");
-        const file = sandbox.envFile ?? "";
+        const prelude = (sandbox.envFiles ?? [])
+          .map((file) => `if [ -f '${file}' ]; then . '${file}'; fi; `)
+          .join("");
         const result = await sandbox.provider.executeCommand(
           sandbox.sandboxId,
-          `if [ -f '${file}' ]; then . '${file}'; fi; printf '%s' "\${CLICKHOUSE_API_KEY:-unset}"`,
+          `${prelude}printf '%s' "\${CLICKHOUSE_API_KEY:-unset}"`,
           { cwd: sandbox.workingDirectory },
         );
         const seen = result.result;
@@ -120,7 +122,7 @@ function isSandbox(value: unknown): value is {
   provider: Pick<SandboxProvider, "executeCommand">;
   sandboxId: string;
   workingDirectory: string;
-  envFile?: string;
+  envFiles?: readonly string[];
 } {
   return (
     typeof value === "object" &&

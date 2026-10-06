@@ -10,6 +10,7 @@ import {
   reviewConnectionAction,
 } from "./connection-guards.js";
 import {
+  type ConnectionHttpEndpoint,
   type ConnectionModelEndpoint,
   type ConnectionProvider,
   type ConnectionProviderRegistry,
@@ -17,6 +18,7 @@ import {
   isConnectionAuthorizationExpiredError,
 } from "./connection-providers.js";
 import {
+  isHttpMethodCapability,
   MODEL_CAPABILITY,
   type ResolvedConnectionBinding,
 } from "./connection-types.js";
@@ -619,6 +621,182 @@ export class ConnectionBroker {
         }
       },
     );
+  }
+
+  /**
+   * The upstream endpoint and key headers of an HTTP API alias for code in
+   * sandboxes (ADR 0211), with which of the binding's methods only read
+   * and whether the session's agent is contained (ADR 0182). The gateway
+   * keeps the result briefly per grant and connection revision, so a
+   * request does not decrypt the key again; the headers never leave the
+   * control plane.
+   */
+  async httpEndpoint(args: {
+    identity: Identity;
+    allocationId: string;
+    alias: string;
+    agentSessionId?: string;
+  }): Promise<{
+    endpoint: ConnectionHttpEndpoint;
+    headers: Record<string, string>;
+    binding: ResolvedConnectionBinding;
+    projectId: string;
+    /** The binding's methods that only read: a contained agent's only ones. */
+    reads: readonly string[];
+    contained: boolean;
+  }> {
+    return withSpan(
+      {
+        tracer,
+        name: "connection.http.resolve",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "catamorphic.allocation.id": args.allocationId,
+          "catamorphic.connection.alias": args.alias,
+        },
+      },
+      async () => {
+        const { allocation, binding, provider } =
+          await this.resolveInvocation(args);
+        const endpoint = provider.http;
+        if (!endpoint) {
+          throw new ConnectionActionRefusedError(
+            `Connection '${args.alias}' is not an HTTP API code in sandboxes can call`,
+          );
+        }
+        const contained = args.agentSessionId
+          ? (await this.gateway.sessionSandboxing?.(args.agentSessionId)) ===
+            "contained"
+          : false;
+        try {
+          await this.connections.refreshIfNeeded({
+            identity: args.identity,
+            connectionId: binding.connectionId,
+          });
+          const headers = await this.connections.withCredential({
+            identity: args.identity,
+            connectionId: binding.connectionId,
+            use: async (material) => endpoint.headers({ material }),
+          });
+          return {
+            endpoint,
+            headers,
+            binding,
+            projectId: allocation.projectId,
+            // Reading is the provider's call; without one, GET reads.
+            reads: binding.capabilities.filter(
+              (capability) =>
+                isHttpMethodCapability(capability) &&
+                (provider.readOnly
+                  ? provider.readOnly(capability)
+                  : capability === "get"),
+            ),
+            contained,
+          };
+        } catch (cause) {
+          if (
+            cause instanceof ConnectionUnavailableError ||
+            isConnectionAuthorizationExpiredError(cause)
+          ) {
+            throw new ConnectionUnavailableError(
+              args.alias,
+              "Connection is unavailable",
+              binding.connectionId,
+            );
+          }
+          throw cause;
+        }
+      },
+    );
+  }
+
+  /**
+   * Review one request of code in a sandbox to an HTTP API alias (ADR
+   * 0211) and return how to audit its end. The method must be one of the
+   * binding's capabilities; a contained agent's session may only read (ADR
+   * 0182); then the guards see connection kind = the provider, action =
+   * the lowercase method, and input = path and query, never the
+   * credential or the body. Every refusal is audited here, as
+   * `connection.http`.
+   */
+  async reviewHttpCall(args: {
+    identity: Identity;
+    projectId: string;
+    allocationId: string;
+    binding: Pick<
+      ResolvedConnectionBinding,
+      "connectionId" | "alias" | "providerKind" | "capabilities"
+    >;
+    /** The lowercase method, as guards and the audit see it. */
+    action: string;
+    /** The capability the method needs: `get` for GET and HEAD. */
+    capability: string;
+    /** The binding's methods that only read. */
+    reads: readonly string[];
+    /** The session's agent is contained (ADR 0182). */
+    contained: boolean;
+    input: JsonObject;
+    agentSessionId?: string;
+  }): Promise<
+    (outcome: "allowed" | "error", metadata?: Json) => Promise<void>
+  > {
+    const { binding } = args;
+    const method = args.action.toUpperCase();
+    const record = (outcome: "allowed" | "denied" | "error", metadata?: Json) =>
+      this.connections.audit({
+        identity: args.identity,
+        projectId: args.projectId,
+        connectionId: binding.connectionId,
+        allocationId: args.allocationId,
+        eventType: "connection.http",
+        outcome,
+        action: args.action,
+        metadata: {
+          ...(args.agentSessionId ? { sessionId: args.agentSessionId } : {}),
+          input: args.input,
+          ...(metadata === undefined ? {} : jsonObject(metadata)),
+        },
+      });
+    if (!binding.capabilities.includes(args.capability)) {
+      await record("denied", { reason: `missing ${args.capability}` });
+      throw new ConnectionActionDeniedError(
+        `this session may not send ${method} through '${binding.alias}' (it lacks ${args.capability})`,
+      );
+    }
+    if (args.contained && !args.reads.includes(args.capability)) {
+      await record("denied", { sandboxing: "contained" });
+      throw new ConnectionActionDeniedError(
+        sandboxingRefusal({
+          sandboxing: "contained",
+          action: `send ${method} through '${binding.alias}', which can change ${binding.alias}`,
+        }),
+      );
+    }
+    const review = await this.review({
+      identity: args.identity,
+      projectId: args.projectId,
+      allocationId: args.allocationId,
+      connection: {
+        id: binding.connectionId,
+        kind: binding.providerKind,
+        alias: binding.alias,
+      },
+      action: args.action,
+      input: args.input,
+      caller: "agent",
+      // The gateway's identity is already the session's owner.
+      actor: args.identity.externalUserId,
+      ...(args.agentSessionId ? { agentSessionId: args.agentSessionId } : {}),
+    });
+    if (review.verdict === "deny") {
+      await record("denied", review.metadata);
+      throw new ConnectionActionDeniedError(review.reason);
+    }
+    return (outcome, metadata) =>
+      record(outcome, {
+        ...jsonObject(review.metadata),
+        ...(metadata === undefined ? {} : jsonObject(metadata)),
+      });
   }
 
   /** Whether any guard reviews connections of `kind` (ADR 0183). */

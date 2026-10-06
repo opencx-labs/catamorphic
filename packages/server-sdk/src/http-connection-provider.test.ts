@@ -80,6 +80,87 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
     expect(JSON.stringify(output)).not.toContain("sk-live-secret");
   });
 
+  it("offers code in sandboxes its base URL, paths and key headers (ADR 0211)", () => {
+    const { api } = provider({ paths: ["/invoices"] });
+    expect(api.http?.baseUrl).toBe("https://api.billing.test/v1");
+    expect(api.http?.paths).toEqual(["/invoices"]);
+    expect(api.http?.headers({ material: KEY })).toEqual({
+      authorization: "Bearer sk-live-secret",
+    });
+    const custom = defineHttpApiConnectionProvider({
+      kind: "events",
+      displayName: "Events",
+      baseUrl: "https://events.test/",
+      auth: { header: "X-Api-Key" },
+    });
+    expect(custom.http?.baseUrl).toBe("https://events.test");
+    expect(custom.http?.headers({ material: KEY })).toEqual({
+      "x-api-key": "sk-live-secret",
+    });
+    // Named operations keep code to them: no route for any method or path.
+    const named = defineHttpApiConnectionProvider({
+      kind: "slack",
+      displayName: "Slack",
+      baseUrl: "https://slack.test/api",
+      actions: [
+        { name: "chat.postMessage", method: "post", path: "/chat.postMessage" },
+      ],
+    });
+    expect(named.http).toBeUndefined();
+  });
+
+  it("sends a user:password key as HTTP Basic, for the agent's calls and code's", async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const logs = defineHttpApiConnectionProvider({
+      kind: "logs",
+      displayName: "Logs",
+      baseUrl: "https://logs.test:8443",
+      auth: { basic: true },
+      fetch: async (url, init) => {
+        requests.push({ url, init });
+        return new Response("1\n", {
+          headers: { "content-type": "text/plain" },
+        });
+      },
+    });
+    const begun = await logs.beginAuthorization?.({
+      tenantId: "t",
+      projectId: "p",
+      externalUserId: "u",
+      principal: "service",
+      redirectUri: "https://work.test/cb",
+      state: "s",
+    });
+    expect(begun?.challenge).toMatchObject({
+      fields: [
+        { name: "apiKey", label: "User and password, as user:password" },
+      ],
+    });
+    const complete = (apiKey: string) =>
+      logs.completeAuthorization?.({
+        tenantId: "t",
+        externalUserId: "u",
+        principal: "service",
+        callback: { apiKey },
+      });
+    await expect(complete("only-a-password")).rejects.toThrow("user:password");
+    await expect(complete(":no-user")).rejects.toThrow("user:password");
+    const stored = await complete("reader:pa:ss");
+    const material = stored?.material ?? new Uint8Array();
+    const basic = `Basic ${Buffer.from("reader:pa:ss").toString("base64")}`;
+    expect(logs.http?.headers({ material })).toEqual({ authorization: basic });
+    await logs.invoke({
+      material,
+      action: "get",
+      input: { path: "/", query: { query: "SELECT 1" } },
+      capabilities: ["get"],
+      connection: CONNECTION,
+    });
+    expect(new Headers(requests[0]?.init.headers).get("authorization")).toBe(
+      basic,
+    );
+  });
+
   it("refuses paths, origins, and headers that could move the key elsewhere", async () => {
     const { api, requests } = provider({ paths: ["/invoices"] });
     const call = (input: Record<string, unknown>) =>

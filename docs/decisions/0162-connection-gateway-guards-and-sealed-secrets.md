@@ -1,6 +1,6 @@
 # 0162 — The connection gateway: guards, sealed secrets, separate vault keys
 
-- **Status:** Accepted (amended by 0183, 0184, [0205](0205-project-secrets-reach-environments-per-member.md))
+- **Status:** Accepted (amended by 0183, 0184, [0205](0205-project-secrets-reach-environments-per-member.md); refined by [0211](0211-http-apis-reach-code-in-sandboxes-through-the-gateway.md))
 - **Date:** 2026-09-25
 - **Refines:** 0033, 0054, 0065, 0099
 

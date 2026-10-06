@@ -37,7 +37,8 @@ await runStdioRunner({
       )
     : adapters,
   version: AGENT_RUNNER_VERSION,
-  // The session's environment file (ADR 0205), where it really is.
+  // Each of the session's environment files (ADRs 0205, 0211), where it
+  // really is.
   envFile: (file) =>
     readEnvFile(paths ? remapPaths(file, paths.virtual, paths.real) : file),
 });
