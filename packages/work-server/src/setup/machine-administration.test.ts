@@ -6,11 +6,7 @@ import { generateExecutorKeyPair } from "@catamorphic/sandbox";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createWorkServer, type WorkServer } from "../server.js";
-import {
-  createTestDatabase,
-  oauthAccessToken,
-  testServerOptions,
-} from "../test-support.js";
+import { oauthAccessToken, testServerOptions } from "../test-support.js";
 import { dedicatedName } from "../workers/machine-rules.js";
 import {
   WORKER_PROTOCOL,
@@ -22,15 +18,13 @@ import {
  * operator does on the loopback listener (ADR 0204), with the same
  * handlers; members and anonymous callers cannot.
  */
-const databaseUrl = process.env.DATABASE_URL;
 const OPERATOR_SECRET = "machine-admin-operator-secret-with-32-characters";
 const PUBLIC = "https://brain.example.test";
-const IMAGE = "ghcr.io/opencx-labs/work-server:0.1.0-alpha.18";
+const IMAGE = "ghcr.io/acme/work-server:0.1.0-alpha.18";
 const TOKEN = "hcloud-admin-test-token";
 
-describe.skipIf(!databaseUrl)("machine administration (ADR 0204)", () => {
+describe("machine administration (ADR 0204)", () => {
   let root: string;
-  let database: Awaited<ReturnType<typeof createTestDatabase>>;
   let server: WorkServer;
   const cloud = new FakeHetznerCloud({ token: TOKEN });
   const tokens = { administrator: "", member: "" };
@@ -67,7 +61,6 @@ describe.skipIf(!databaseUrl)("machine administration (ADR 0204)", () => {
     });
 
   beforeAll(async () => {
-    database = await createTestDatabase("work_machine_admin");
     root = fs.mkdtempSync(path.join(os.tmpdir(), "work-machine-admin-"));
     const machinesFile = path.join(root, "machines.json");
     fs.writeFileSync(
@@ -90,15 +83,14 @@ describe.skipIf(!databaseUrl)("machine administration (ADR 0204)", () => {
         dataDir: path.join(root, "control-plane"),
         publicBases: [PUBLIC],
         env: {
-          DATABASE_URL: database.url,
-          WORK_SECRET: "machine-admin-test-secret-with-at-least-32-chars",
           WORK_OPERATOR_SECRET: OPERATOR_SECRET,
-          WORK_VAULT_KEY: Buffer.alloc(32, 9).toString("base64"),
           WORK_FAKE_AGENT: "1",
           WORK_CONTROL_PLANE_WORKLOADS: "workflow",
           WORK_AUTH_RATE_LIMIT: "off",
           WORK_MACHINES_CONFIG: machinesFile,
           WORK_HETZNER_TOKEN: TOKEN,
+          // What the published image's build bakes in.
+          WORK_IMAGE_REPOSITORY: "ghcr.io/acme/work-server",
           WORK_VERSION: "0.1.0-alpha.18",
           PATH: process.env.PATH,
         },
@@ -140,7 +132,6 @@ describe.skipIf(!databaseUrl)("machine administration (ADR 0204)", () => {
 
   afterAll(async () => {
     await server?.shutdown();
-    await database?.drop();
     fs.rmSync(root, { recursive: true, force: true });
   }, 60_000);
 
@@ -259,10 +250,12 @@ describe.skipIf(!databaseUrl)("machine administration (ADR 0204)", () => {
     });
     expect(desks.statusCode).toBe(200);
     const danaMachine = dedicatedName("desks", danaId, "cloud");
-    expect(desks.json()).toMatchObject({
-      rule: { class: "cloud", retainDays: 3 },
-      reconcile: { created: [danaMachine], failed: [] },
+    // Stored when the request answers; its pass runs after, and an explicit
+    // pass waits for it.
+    expect(desks.json()).toEqual({
+      rule: expect.objectContaining({ class: "cloud", retainDays: 3 }),
     });
+    await admin("POST", "/api/work/machines/rules/reconcile");
     expect(cloud.serverNamed(danaMachine)).toMatchObject({
       server_type: "cpx41",
       location: "nbg1",
@@ -291,8 +284,9 @@ describe.skipIf(!databaseUrl)("machine administration (ADR 0204)", () => {
 
     const removed = await admin("DELETE", "/api/work/machines/rules/desks");
     expect(removed.statusCode).toBe(200);
+    expect(removed.json()).toEqual({ ok: true });
+    await admin("POST", "/api/work/machines/rules/reconcile");
     // Never enrolled: it goes with its rule.
-    expect(removed.json().reconcile.removed).toEqual([danaMachine]);
     expect(cloud.serverNamed(danaMachine)).toBeUndefined();
     expect(
       (await admin("DELETE", "/api/work/machines/rules/desks")).statusCode,

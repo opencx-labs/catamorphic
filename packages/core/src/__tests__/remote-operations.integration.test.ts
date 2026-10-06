@@ -130,6 +130,29 @@ describe("remote operation queue (ADR 0187)", () => {
     await expect(done).resolves.toBeUndefined();
   });
 
+  it("stops waiting for a reset at the caller's bound, and refuses its late receipt", async () => {
+    const remote = await executor();
+    const started = Date.now();
+    const waiting = remote.queue.resetMachine({
+      executor: remote.lease.executor,
+      leaseToken: async () => remote.lease.leaseToken,
+      leaseHeld: async (token) => token === remote.lease.leaseToken,
+      label: "Worker office-1",
+      timeoutMs: 300,
+    });
+    // The executor takes it but is slow to answer.
+    const job = await remote.poll(crypto.randomUUID());
+    await expect(waiting).rejects.toThrow("timed out");
+    expect(Date.now() - started).toBeLessThan(30_000);
+    await expect(
+      remote.queue.complete({
+        ...remote.lease,
+        operationId: job?.id ?? "",
+        response: null,
+      }),
+    ).rejects.toBeInstanceOf(RemoteReceiptRefusedError);
+  });
+
   it("gives a retried poll the operation it took, and no other poll", async () => {
     const remote = await executor();
     const result = remote.provider.executeCommand("sandbox-1", "echo once");

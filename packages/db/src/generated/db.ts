@@ -1308,6 +1308,8 @@ export interface WorkGithubAppRegistrations {
 export interface WorkMachineRules {
   created_at: Generated<Timestamp>;
   definition: Json;
+  last_failure: string | null;
+  last_failure_at: Timestamp | null;
   name: string;
   tenant_id: string;
   updated_at: Generated<Timestamp>;
@@ -1413,6 +1415,7 @@ export interface WorkWorkers {
   enrolled_at: Generated<Timestamp>;
   labels: Generated<Json>;
   last_seen_at: Timestamp | null;
+  machine_destroyed_at: Timestamp | null;
   machine_member: string | null;
   machine_ref: string | null;
   machine_rule: string | null;
