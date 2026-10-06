@@ -219,7 +219,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     if (this.usage)
       this.volumes = {
         prune: (args) => this.pruneVolumes(args),
-        removeAll: () => this.removeAllVolumes(),
+        removeAll: (args) => this.removeAllVolumes(args),
       };
     this.capabilities = [
       SANDBOX_CAPABILITIES.images,
@@ -424,7 +424,16 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     return removed;
   }
 
-  private async removeAllVolumes(): Promise<void> {
+  /**
+   * Remove every volume. With `destroySandboxes`, the sandboxes that mount
+   * any first (a pooled machine's reset); without, mounted ones are kept.
+   */
+  private async removeAllVolumes(args?: {
+    destroySandboxes?: boolean;
+  }): Promise<void> {
+    if (args?.destroySandboxes)
+      for (const name of await sandboxesMountingVolumes())
+        await this.destroySandbox(name);
     const mounted = await mountedVolumeKeys();
     const kept: string[] = [];
     const removed: string[] = [];
@@ -515,11 +524,14 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     }
     if (handle.status === "running") {
       // A disk volume's writes wait in the guest's cache; killing the VM
-      // would lose them, so they reach the disk first.
+      // would lose them, so they reach the disk first. A VM that does not
+      // answer within the minute is killed anyway: destroying never hangs.
       if (volumeKeysOf(handle).length > 0)
-        await shellIn(connected ?? (await handle.connect()), "sync", 60).catch(
-          () => {},
-        );
+        await withTimeout(
+          (async () =>
+            shellIn(connected ?? (await handle.connect()), "sync", 60))(),
+          60_000,
+        ).catch(() => {});
       await handle.kill();
     }
     await handle.remove();
@@ -703,17 +715,50 @@ function volumeKeysOf(handle: { config(): Record<string, unknown> }): string[] {
 /** Every volume an existing sandbox (running or not) mounts. */
 async function mountedVolumeKeys(): Promise<Set<string>> {
   const keys = new Set<string>();
+  for (const handle of await everySandbox())
+    for (const key of volumeKeysOf(handle)) keys.add(key);
+  return keys;
+}
+
+/** The sandboxes (running or not) that mount any volume. */
+async function sandboxesMountingVolumes(): Promise<string[]> {
+  return (await everySandbox())
+    .filter((handle) => volumeKeysOf(handle).length > 0)
+    .map((handle) => handle.name);
+}
+
+async function everySandbox(): Promise<
+  Awaited<ReturnType<typeof Sandbox.list>>["sandboxes"]
+> {
+  const handles: Awaited<ReturnType<typeof Sandbox.list>>["sandboxes"] = [];
   let cursor: string | undefined;
   do {
     const after = cursor;
     const page = await Sandbox.listWith((list) =>
       after ? list.cursor(after) : list,
     );
-    for (const handle of page.sandboxes)
-      for (const key of volumeKeysOf(handle)) keys.add(key);
+    handles.push(...page.sandboxes);
     cursor = page.nextCursor;
   } while (cursor);
-  return keys;
+  return handles;
+}
+
+/** `promise`, or a rejection after `ms`. */
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`No answer within ${ms}ms`)),
+          ms,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function withCredentials(url: string, opts?: GitCloneOpts): string {

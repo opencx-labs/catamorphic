@@ -18,9 +18,10 @@ describe("sandbox volumes", () => {
       assertSandboxVolumes([
         { key, path: "~/.cache/pnpm" },
         { key, path: "/var/lib/docker", exclusive: true },
-        { key, path: "~" },
+        { key, path: "~/.local/share" },
       ]),
     ).not.toThrow();
+    expect(() => assertSandboxVolumes([{ key, path: "~" }])).not.toThrow();
     expect(() => assertSandboxVolumes([{ key: "cache", path: "/x" }])).toThrow(
       "not a volume key",
     );
@@ -33,9 +34,42 @@ describe("sandbox volumes", () => {
     expect(() =>
       assertSandboxVolumes([
         { key, path: "/a" },
-        { key, path: "/a" },
+        { key, path: "/a/" },
       ]),
     ).toThrow("share the path");
+    expect(() => assertSandboxVolumes([{ key, path: "/" }])).toThrow(
+      "cannot be the root",
+    );
+  });
+
+  it("refuses volumes nested in one another", () => {
+    for (const [outer, inner] of [
+      ["~", "~/.cache"],
+      ["~/.cache", "~/.cache/pnpm"],
+      ["/data", "/data/db"],
+      ["/data/./db", "/data//db/x"],
+    ] as const) {
+      expect(() =>
+        assertSandboxVolumes([
+          { key, path: outer },
+          { key, path: inner },
+        ]),
+      ).toThrow("are nested");
+      expect(() =>
+        assertSandboxVolumes([
+          { key, path: inner },
+          { key, path: outer },
+        ]),
+      ).toThrow("are nested");
+    }
+    expect(() =>
+      assertSandboxVolumes([
+        { key, path: "~/.cache" },
+        { key, path: "~/.cache-two" },
+        { key, path: "/data" },
+        { key, path: "/database" },
+      ]),
+    ).not.toThrow();
   });
 
   it("finds the image user's home and places ~ paths in it", () => {

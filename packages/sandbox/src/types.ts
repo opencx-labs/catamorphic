@@ -143,8 +143,13 @@ export const VOLUME_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}-[0-9a-f]{24}$/;
 export interface SandboxVolumeProvider {
   /** Remove volumes no sandbox mounted for `unusedForMs`; returns their keys. */
   prune(args: { unusedForMs: number }): Promise<string[]>;
-  /** Remove every volume on this machine. */
-  removeAll(): Promise<void>;
+  /**
+   * Remove every volume on this machine. A volume a sandbox still mounts
+   * is kept, and the call fails naming it, unless `destroySandboxes` asks
+   * to remove every sandbox of this provider first (a pooled machine's
+   * reset, which owes the next person nothing of the last).
+   */
+  removeAll(args?: { destroySandboxes?: boolean }): Promise<void>;
 }
 
 /** A harness a member signs in to with its own flow (ADR 0199). */
