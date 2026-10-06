@@ -14,7 +14,8 @@ holds company data.
 
 | Need | Use |
 | --- | --- |
-| An HTTP API with a key (billing, CRM, internal service) | An `http` gateway connection |
+| An HTTP API with a key (billing, CRM, internal service) that agents call | An `http` gateway connection |
+| An HTTP API with a shared key that code in a sandbox calls (a dev server or tests reading a logging cluster) | The same `http` gateway connection, reached at `WORK_HTTP_<ALIAS>`: [HTTP APIs from sandboxes](#http-apis-from-sandboxes-through-the-gateway) |
 | Reading a production database | A `postgres` gateway connection to a read-only replica role |
 | Tools behind an MCP server | An `mcp` gateway connection |
 | Git with a company remote from agents' sandboxes (fetch, push a fix branch) | A Git-capable connection (`git` gateway entry, or the GitHub provider) bound with `git` rules |
@@ -57,6 +58,8 @@ print them, or pass them to agents.
       "maxRows": 500, "maxCost": 100000, "statementTimeoutMs": 10000, "poolSize": 4 },
     { "type": "http", "kind": "billing", "displayName": "Billing API",
       "baseUrl": "https://api.billing.example/v1", "paths": ["/invoices", "/customers"] },
+    { "type": "http", "kind": "logs-cluster", "displayName": "Logs (ClickHouse)",
+      "baseUrl": "https://logs.example.com:8443", "auth": { "basic": true } },
     { "type": "http", "kind": "slack", "displayName": "Slack", "baseUrl": "https://slack.com/api",
       "actions": [
         { "name": "conversations.replies", "method": "get", "path": "/conversations.replies" },
@@ -91,7 +94,14 @@ not declare it here.
   grant single operations of an RPC-style API and guards see them by name
   (ADR 0179). A caller of
   a named action passes `query`, `headers`, and `body`, never a path.
-  [Connect Slack](connect-slack.md) is the worked example.
+  [Connect Slack](connect-slack.md) is the worked example. `auth` says how
+  the stored key goes upstream: `Authorization: Bearer <key>` by default,
+  `{ "header": "X-Api-Key" }` (with an optional `scheme`), or
+  `{ "basic": true }`, where the service connection stores `user:password`
+  and the gateway sends HTTP Basic. An entry without `actions` is also
+  reachable by code in sandboxes
+  ([HTTP APIs from sandboxes](#http-apis-from-sandboxes-through-the-gateway));
+  one with `actions` is not, since a raw route would reach past them.
 - `postgres`: each service connection keeps up to `poolSize` sessions (at most
   16, default 4), closed after `poolIdleTimeoutMs` idle and at once when the
   credential rotates or is revoked. Every call still gets its own read-only
@@ -405,6 +415,71 @@ Verify: from a chat in that Environment, `git fetch origin` succeeds,
 `git push origin work/<name>` succeeds, `git push --force origin HEAD:main` is
 refused with a readable reason, `env` and the worker's files hold no remote
 credential, and after closing the chat its grant is refused.
+
+## HTTP APIs from sandboxes, through the gateway
+
+Code running in a chat's sandbox (a dev server, a CLI, an SDK, a test suite)
+often needs a company API with a shared key: a logging cluster's HTTP
+interface, an internal service. Bind an `http` gateway connection instead of
+listing the key as a secret (ADR 0211): the code gets the session's grant,
+never the key.
+
+```json
+"connections": {
+  "logs": { "provider": "logs-cluster", "principal": "service", "service": "logs-cluster",
+            "capabilities": ["get", "post"] }
+}
+```
+
+- The capabilities are the HTTP methods the alias may send (`get` also
+  allows HEAD); leave them out to keep the connection's own. The entry's
+  `paths`, when set, bound what may be reached. A contained agent's chat
+  only reads (GET and HEAD).
+- Each turn writes `.work-session/env/gateway.sh` beside the project folder:
+  `WORK_HTTP_<ALIAS>` (the alias in capitals, `-` as `_`) is the alias's
+  gateway URL, and `WORK_HTTP_<ALIAS>_GRANT_FILE` the file holding the
+  session's grant. The agent's commands, terminals and workspace setup load
+  it; a shell started some other way runs
+  `. ../.work-session/env/gateway.sh` from the project folder.
+- Send the API's own requests to `$WORK_HTTP_<ALIAS>` with the grant as a
+  bearer, as the HTTP Basic password (any user name), or in `x-work-grant`.
+  The gateway replaces whatever authorization was sent with the stored key.
+  The grant renews every 20 minutes and with each turn, with a new value, so
+  read the file for each request (or again after a 401); never copy it into
+  a config file.
+
+```sh
+# A query from a terminal or a test script.
+curl -sS -u "work:$(cat "$WORK_HTTP_LOGS_GRANT_FILE")" \
+  "$WORK_HTTP_LOGS/?query=SELECT%20count()%20FROM%20events"
+```
+
+```ts
+// A dev server's query helper: the grant read for each request.
+import { readFileSync } from "node:fs";
+
+export async function queryLogs(sql: string): Promise<string> {
+  const grant = readFileSync(process.env.WORK_HTTP_LOGS_GRANT_FILE ?? "", "utf8");
+  const response = await fetch(
+    `${process.env.WORK_HTTP_LOGS}/?query=${encodeURIComponent(sql)}`,
+    { headers: { authorization: `Bearer ${grant}` } },
+  );
+  if (!response.ok) throw new Error(await response.text());
+  return response.text();
+}
+```
+
+- Guards for the connection's kind review each request (action: the
+  lowercase method; input: `{ path, query }`, never the body), and each is
+  audited as `connection.http` with its status. Request bodies are limited to
+  32 MiB; answers stream back as the API sends them.
+- Sandboxes reach `WORK_PUBLIC_URL/api/gateway/http/<alias>`. If an
+  Environment restricts egress, allow that URL.
+
+Verify: from a chat in that Environment, `printenv WORK_HTTP_LOGS` names the
+gateway, the `curl` above returns rows, a method the binding leaves out is
+refused with a readable reason, `env` and the worker's files hold no key, the
+audit lists each request, and after closing the chat its grant is refused.
 
 ## A production database, safely
 

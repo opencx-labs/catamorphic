@@ -1,6 +1,6 @@
 # 0205 — Project secrets reach Environments, with a value per member
 
-- **Status:** Accepted
+- **Status:** Accepted (refined by [0211](0211-http-apis-reach-code-in-sandboxes-through-the-gateway.md): the gateway's variables load beside the secrets)
 - **Date:** 2026-10-06
 - **Amends:** [0162](0162-connection-gateway-guards-and-sealed-secrets.md), [0175](0175-grants-reach-sandboxes.md), [0184](0184-personal-credentials-reach-a-members-own-sessions.md)
 
