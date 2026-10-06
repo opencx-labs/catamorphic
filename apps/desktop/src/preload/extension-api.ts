@@ -799,10 +799,11 @@ export function installExtensionApis(): void {
         ["sync", area],
         ["onChanged", onChanged],
         // No administrator sets policies for Work's extensions: the
-        // managed area exists and is empty, as in Chrome without policy.
+        // managed area is empty, as in Chrome without policy. Electron's
+        // exists but every call fails.
         [
           "managed",
-          object.managed ?? {
+          {
             get: answer({}),
             getBytesInUse: answer(0),
             getKeys: answer([]),

@@ -823,7 +823,8 @@ process.stdin.on("data", (chunk) => {
 
   it("unpins and pins again from the toolbar's extensions menu", async () => {
     await selectFirstBrowserTab();
-    const button = `document.querySelector('[data-testid="extension-action"][data-extension-id="${extensionId}"]')`;
+    // Hidden tabs keep their toolbars, as they last were: this tab's counts.
+    const button = `[...document.querySelectorAll('[data-testid="extension-action"][data-extension-id="${extensionId}"]')].find((node) => node.checkVisibility({ visibilityProperty: true }))`;
     const menuPin = `document.querySelector('[data-testid="extensions-menu"] [data-testid="extensions-menu-item"][data-extension-id="${extensionId}"]')?.parentElement.querySelector('[data-testid="extensions-menu-pin"]')`;
     await app.waitFor(`!!${button}`, { label: "pinned button in the toolbar" });
     await click('[data-testid="extensions-button"]');
@@ -885,7 +886,8 @@ describe("a Chrome Web Store install", () => {
     );
     expect(
       await app.eval(
-        `${storeView}.executeJavaScript('typeof chrome.webstorePrivate', true)`,
+        // No gesture: one would leave the page activated for the next call.
+        `${storeView}.executeJavaScript('typeof chrome.webstorePrivate', false)`,
       ),
     ).toBe("object");
     // A script on the page can't start an install by itself.

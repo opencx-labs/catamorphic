@@ -111,8 +111,12 @@ store check runs on its own), and `fontSettings` reports default fonts.
 - **Lifecycle.** Electron fires neither `runtime.onInstalled` nor
   `runtime.onStartup`. Work does, to the background context (the worker, or
   an MV2 background page): `install` or `update` (with `previousVersion`)
-  once per version, the first time it listens, and `onStartup` once per run
-  for one installed before. Extensions set themselves up there: ChatGPT
+  once per version, from the first time it listens, and `onStartup` once
+  per run for one installed before. A worker can start before Work records
+  the extension (an unpacked folder is loaded once to learn its id) or
+  restart right after, so for 30 seconds after the first delivery every
+  background context that listens hears it once. Extensions set
+  themselves up there: ChatGPT
   names its browser instance, and without it Codex has no browser to drive.
 - **Senders.** Electron names a `tab` in the sender of a message from any
   page in a webview, and Work's popups and side panels are webviews. Chrome

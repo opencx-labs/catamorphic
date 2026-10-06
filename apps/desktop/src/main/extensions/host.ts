@@ -110,6 +110,8 @@ import {
  */
 
 const UPDATE_INTERVAL_MS = 5 * 60 * 60 * 1000;
+/** How long after its first delivery `runtime.onInstalled` takes listeners. */
+const INSTALLED_WINDOW_MS = 30_000;
 /** At most one toolbar refresh per frame or so. */
 const ACTIONS_CHANGED_MS = 50;
 /** How long an event the person caused lets a worker ask for more (Chromium's activation). */
@@ -272,8 +274,17 @@ export class ExtensionsHost {
     number,
     Map<string, ExtensionTabsReport>
   >();
-  /** Workers of a copy a load replaced, by `profile:id`. */
-  private readonly staleWorkers = new Map<string, Set<number>>();
+  /** `runtime.onInstalled` a load owes its extension's background. */
+  private readonly pendingInstalled = new Map<
+    string,
+    {
+      version: string;
+      details: Record<string, string>;
+      delivered: Set<string>;
+      /** Set by the first delivery; later listeners join until then. */
+      until: number | null;
+    }
+  >();
   /** Extensions told `runtime.onInstalled` or `onStartup` this run. */
   private readonly installedThisRun = new Set<string>();
   private readonly startedThisRun = new Set<string>();
@@ -574,18 +585,6 @@ export class ExtensionsHost {
     const id = key(profileId, record.id);
     this.loadErrors.delete(id);
     let extension: LoadedExtension;
-    // Workers of this extension running now belong to a copy being
-    // replaced (an update, a reload, the copy that named an unpacked
-    // folder): they never take this load's lifecycle events.
-    const scope = `chrome-extension://${record.id}/`;
-    this.staleWorkers.set(
-      id,
-      new Set(
-        Object.values(session.serviceWorkers.getAllRunning())
-          .filter((info) => info.scope === scope)
-          .map((info) => info.versionId),
-      ),
-    );
     try {
       extension = new LoadedExtension(profileId, record);
       const loaded = await session.extensions.loadExtension(record.path, {
@@ -604,6 +603,7 @@ export class ExtensionsHost {
     }
     this.loaded.set(id, extension);
     this.initRuntime(extension);
+    this.beginInstalled(extension);
     // Its rulesets apply as one of its contexts starts: start one now, so
     // a page loaded before the extension next wakes is filtered too.
     if (allRulesets(extension.manifest).length > 0) {
@@ -735,37 +735,73 @@ export class ExtensionsHost {
     name: string,
     context: ExtensionContext,
   ): void {
+    if (name === "runtime.onInstalled") {
+      this.deliverInstalled(extension);
+      return;
+    }
+    if (name !== "runtime.onStartup") return;
     const { profileId, id } = extension;
     const record = this.registry.get(profileId, id);
-    if (!record) return;
-    if (
-      context.worker &&
-      this.staleWorkers.get(key(profileId, id))?.has(context.worker.versionId)
-    )
+    const id_ = key(profileId, id);
+    if (!record || record.installedEventFor === null) return;
+    if (this.startedThisRun.has(id_) || this.installedThisRun.has(id_)) return;
+    this.startedThisRun.add(id_);
+    queueMicrotask(() => context.send("runtime.onStartup", []));
+  }
+
+  /**
+   * A load of a version that hasn't heard `runtime.onInstalled` owes it
+   * to its background. The first listener to hear it opens a short
+   * window in which every other background context that listens hears
+   * it once too: workers listen as they start, possibly before Work knows
+   * the extension or in a copy about to go (the one that named an
+   * unpacked folder), so one first listener could be the wrong one.
+   */
+  private beginInstalled(extension: LoadedExtension): void {
+    const { profileId, id } = extension;
+    const record = this.registry.get(profileId, id);
+    if (!record || record.installedEventFor === extension.version) return;
+    const previous = record.installedEventFor;
+    this.installedThisRun.add(key(profileId, id));
+    this.pendingInstalled.set(key(profileId, id), {
+      version: extension.version,
+      details:
+        previous === null
+          ? { reason: "install" }
+          : { reason: "update", previousVersion: previous },
+      delivered: new Set(),
+      until: null,
+    });
+    this.deliverInstalled(extension);
+  }
+
+  private deliverInstalled(extension: LoadedExtension): void {
+    const { profileId, id } = extension;
+    const pending = this.pendingInstalled.get(key(profileId, id));
+    if (!pending) return;
+    if (pending.until !== null && Date.now() > pending.until) {
+      this.pendingInstalled.delete(key(profileId, id));
       return;
-    if (name === "runtime.onInstalled") {
-      if (record.installedEventFor === extension.version) return;
-      const previous = record.installedEventFor;
-      this.registry.update(profileId, id, (current) => ({
-        ...current,
-        installedEventFor: extension.version,
-      }));
-      this.installedThisRun.add(key(profileId, id));
-      // To the context that listened, the one this load started.
+    }
+    const worker = hasServiceWorker(extension.manifest);
+    for (const context of this.events.contextsOf(profileId, id)) {
+      if (
+        !context.listening.has("runtime.onInstalled") ||
+        context.kind !== (worker ? "worker" : "frame") ||
+        pending.delivered.has(context.key)
+      )
+        continue;
+      if (pending.until === null) {
+        pending.until = Date.now() + INSTALLED_WINDOW_MS;
+        this.registry.update(profileId, id, (current) => ({
+          ...current,
+          installedEventFor: pending.version,
+        }));
+      }
+      pending.delivered.add(context.key);
       queueMicrotask(() =>
-        context.send("runtime.onInstalled", [
-          previous === null
-            ? { reason: "install" }
-            : { reason: "update", previousVersion: previous },
-        ]),
+        context.send("runtime.onInstalled", [pending.details]),
       );
-    } else if (name === "runtime.onStartup") {
-      const id_ = key(profileId, id);
-      if (this.startedThisRun.has(id_) || this.installedThisRun.has(id_))
-        return;
-      if (record.installedEventFor === null) return;
-      this.startedThisRun.add(id_);
-      queueMicrotask(() => context.send("runtime.onStartup", []));
     }
   }
 
