@@ -42,7 +42,7 @@ export function terminalSecretsSnippet(sessionDirectory: string): string {
  * says whether it has a pseudo-terminal. It records the terminal device
  * and the shell's process id (a resize needs both), sizes the device,
  * loads the gateway's variables and the secrets, and becomes the login
- * shell: bash when present.
+ * shell: bash when present, started by `loginScript`.
  */
 function startScript(): string {
   return [
@@ -57,14 +57,37 @@ function startScript(): string {
     "fi",
     `printf '%s\\n' "$$" > "$d/pid"`,
     `${terminalSecretsSnippet('"$s"')} || :`,
-    "if command -v bash >/dev/null 2>&1; then SHELL=$(command -v bash); else SHELL=$(command -v sh); fi",
-    "export SHELL",
+    "if command -v bash >/dev/null 2>&1; then",
+    "  SHELL=$(command -v bash); export SHELL",
+    "  WORK_TERMINAL_HOME=$HOME; export WORK_TERMINAL_HOME",
+    '  exec "$SHELL" --rcfile "$d/login.sh" -i',
+    "fi",
+    "SHELL=$(command -v sh); export SHELL",
     'if [ "$mode" = pty ]; then exec "$SHELL" -l; fi',
     'exec "$SHELL" -il',
   ].join("\n");
 }
 
+/**
+ * Bash's start in a terminal: a login shell's, with the workspace's home
+ * kept. A machine's own profile may set HOME to its user's (a plain-process
+ * sandbox shares the machine's /etc), and the agent's commands, which read
+ * no profile, would then see another home than the person.
+ */
+function loginScript(): string {
+  return [
+    "if [ -r /etc/profile ]; then . /etc/profile; fi",
+    'if [ -n "$WORK_TERMINAL_HOME" ]; then HOME=$WORK_TERMINAL_HOME; export HOME; fi',
+    "unset WORK_TERMINAL_HOME",
+    'if [ -r "$HOME/.bash_profile" ]; then . "$HOME/.bash_profile"',
+    'elif [ -r "$HOME/.bash_login" ]; then . "$HOME/.bash_login"',
+    'elif [ -r "$HOME/.profile" ]; then . "$HOME/.profile"',
+    "fi",
+  ].join("\n");
+}
+
 const START_END = "WORK_TERMINAL_START";
+const LOGIN_END = "WORK_TERMINAL_LOGIN";
 
 /**
  * Prepares a terminal's state directory and says which pseudo-terminal the
@@ -84,6 +107,9 @@ export function prepareTerminalCommand(input: {
     `cat > ${directory}/start.sh <<'${START_END}'`,
     startScript(),
     START_END,
+    `cat > ${directory}/login.sh <<'${LOGIN_END}'`,
+    loginScript(),
+    LOGIN_END,
     "set +e",
     "if script --version 2>/dev/null | grep -q util-linux; then echo pty=util-linux",
     'elif [ "$(uname -s)" != Linux ] && command -v script >/dev/null 2>&1; then echo pty=bsd',

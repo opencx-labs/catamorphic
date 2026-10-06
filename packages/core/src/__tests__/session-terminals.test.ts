@@ -125,6 +125,25 @@ describe("terminal shell commands", () => {
     ).toContain("mkdir -p '../.work-session/terminals/k'");
   });
 
+  it("starts bash as a login shell that keeps the workspace's home", () => {
+    const prepared = prepareTerminalCommand({
+      sessionFromProject: session,
+      key: "k",
+    });
+    expect(prepared).toContain('exec "$SHELL" --rcfile "$d/login.sh" -i');
+    const login = prepared.slice(
+      prepared.indexOf("login.sh <<"),
+      prepared.lastIndexOf("WORK_TERMINAL_LOGIN"),
+    );
+    // The machine's profile first, then the home back, then the person's.
+    expect(login.indexOf(". /etc/profile")).toBeLessThan(
+      login.indexOf("HOME=$WORK_TERMINAL_HOME"),
+    );
+    expect(login.indexOf("HOME=$WORK_TERMINAL_HOME")).toBeLessThan(
+      login.indexOf('. "$HOME/.profile"'),
+    );
+  });
+
   it("loads the gateway's variables and the secrets, each only when it is there", () => {
     expect(terminalSecretsSnippet('"$s"')).toBe(
       'if [ -f "$s"/env/gateway.sh ]; then . "$s"/env/gateway.sh; fi; if [ -f "$s"/env/secrets.sh ]; then . "$s"/env/secrets.sh; fi',

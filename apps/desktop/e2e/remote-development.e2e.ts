@@ -564,12 +564,6 @@ describe("remote development on a Work server", () => {
       `return window.__terminalIds.length === 1 && !!$('textarea[aria-label="Terminal input"]');`,
       { timeoutMs: 60_000, label: "remote shell" },
     );
-    // TEMPORARY diagnosis: which of the machine's profile files a login
-    // shell reads sets HOME (shown in the failure message below).
-    await type(
-      'echo "diag home=$HOME"; grep -lsE "(^|[^A-Z_])HOME=" /etc/profile /etc/profile.d/* /etc/bash.bashrc /etc/environment | tr "\\n" " "; echo "diag-$((1 + 1))"',
-    );
-    await terminalShows("diag-2");
     // Output, not the typed line: the command's text never contains it.
     await type(
       'echo "terminal key $(printf %s "$CLICKHOUSE_API_KEY" | wc -c | tr -d " ") $(cat "$HOME/.personal-setup")"',

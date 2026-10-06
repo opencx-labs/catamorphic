@@ -16,7 +16,9 @@ editor and file browser work on the local copy (ADR 0098).
 **Terminals.** A person who may act on a chat (its owner, or someone with
 `sessions:write` for a project chat) opens a terminal in its workspace:
 `POST /projects/:id/agent/sessions/:sessionId/terminals`. It is a login
-shell on a pseudo-terminal, started through the workspace's background
+shell on a pseudo-terminal, with the workspace's home whatever the
+machine's own profile sets (a plain-process sandbox shares the machine's
+/etc, and the agent's commands read no profile), started through the workspace's background
 processes (ADR 0174) under `script` (an interactive shell on a pipe where
 the sandbox has none), with the Environment's secrets loaded (ADR 0206). A
 terminal reaches everything in the workspace, so a project chat whose

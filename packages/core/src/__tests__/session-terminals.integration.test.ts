@@ -219,6 +219,33 @@ describe("terminals and previews in a chat's workspace (ADR 0209)", () => {
       match: /\bproject\r?\n/,
     }));
 
+    // Its home is the workspace's, as the agent's commands see it, whatever
+    // the machine's login profile says.
+    const workspace = await core.agentSessions?.personWorkspace({
+      identity: alice,
+      projectId,
+      sessionId,
+      start: false,
+    });
+    if (!workspace) throw new Error("no workspace");
+    const home = (
+      await workspace.provider.executeCommand(
+        workspace.sandboxId,
+        'printf %s "$HOME"',
+      )
+    ).result.trim();
+    expect(home).not.toBe("");
+    await terminals().write({
+      ...base,
+      projectId,
+      data: 'echo "home:$HOME:"\n',
+    });
+    ({ cursor } = await readUntil({
+      ...base,
+      cursor,
+      match: new RegExp(`home:${home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:`),
+    }));
+
     await terminals().write({ ...base, projectId, data: "stty size\n" });
     ({ cursor } = await readUntil({ ...base, cursor, match: /30 100/ }));
     await terminals().resize({ ...base, projectId, cols: 120, rows: 40 });
