@@ -210,9 +210,11 @@ export function CodexSignInDialog({
       labelledBy={titleId}
     >
       <div className="flex flex-col" data-testid="codex-sign-in">
-        {/* About the code step's height, so the dialog holds still as it
-        arrives. */}
-        <div className="flex min-h-[320px] flex-col px-5 pt-5">
+        {/* About the code step's height while it is coming, so the dialog
+        holds still as the code arrives. */}
+        <div
+          className={`flex flex-col px-5 pt-5 ${step.kind === "starting" || step.kind === "code" ? "min-h-[320px]" : ""}`}
+        >
           <h2 id={titleId} className="text-sm font-semibold text-fg">
             Sign in to Codex on {name}
           </h2>
@@ -230,10 +232,16 @@ export function CodexSignInDialog({
               </p>
             )}
             {step.kind === "signed-in" && (
-              <p className="mt-4 flex items-center gap-2 text-[13px] text-fg">
-                <CheckCircle2 className="size-4 text-success" />
-                Codex is signed in on {name}.
-              </p>
+              <>
+                <p className="mt-4 flex items-center gap-2 text-[13px] text-fg">
+                  <CheckCircle2 className="size-4 text-success" />
+                  Codex is signed in on {name}.
+                </p>
+                <p className="mt-1.5 text-xs leading-5 text-fg-muted">
+                  Your Codex chats there run on your ChatGPT plan now. You can
+                  sign out here at any time.
+                </p>
+              </>
             )}
           </div>
 
@@ -245,8 +253,11 @@ export function CodexSignInDialog({
                     1. Open the sign-in page
                   </p>
                   <div className="mt-1.5 flex items-center gap-3">
-                    <p className="min-w-0 flex-1 break-all font-mono text-xs text-fg-muted">
-                      {step.signIn.verificationUrl}
+                    <p
+                      className="min-w-0 flex-1 truncate font-mono text-xs text-fg-muted"
+                      title={step.signIn.verificationUrl}
+                    >
+                      {step.signIn.verificationUrl.replace(/^https:\/\//, "")}
                     </p>
                     <button
                       ref={actionRef}

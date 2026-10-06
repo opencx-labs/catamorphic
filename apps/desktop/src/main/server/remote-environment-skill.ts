@@ -85,16 +85,22 @@ Work never reads, copies or sends a Claude Code or Codex sign-in. A sign-in
 belongs to the machine it was made on, and an agent that uses the person's
 own subscription runs only on a machine where they are signed in:
 
-- **This machine** (below) uses the sign-in they already have here.
-- On a worker, they sign in there themselves with the harness's own flow:
-  \`work worker sign-in claude-code\` or \`work worker sign-in codex\`, run
-  on that worker. The worker then reports that they are signed in, never the
-  credential.
+- **This machine** (below) uses the sign-in they already have here, Claude
+  Code's or Codex's. Claude Code subscriptions run only here: servers never
+  hold a Claude sign-in, and Claude Code there uses the project's model
+  connection.
+- On a machine of their own on the server (a worker that serves only them,
+  or a single person's server), they sign in to Codex from the Remote
+  environment window: **Sign in to Codex** shows a link and a one-time code
+  to approve in their browser, and the sign-in stays on that machine. A
+  machine holds one person's sign-in only. If ChatGPT says device code
+  sign-in is off, they turn it on in ChatGPT under Settings, Security.
 
 Anywhere else, agents use the project's model connections or the person's
 own API key, stored as their personal connection. If a remote chat says
-there is no sign-in for its owner, relay the fix it names: sign in on that
-machine, or move the chat to one where they are signed in.
+there is no sign-in for its owner, relay the fix it names: sign in on a
+machine of their own from the Remote environment window, ask an
+administrator for one, or run the chat on This machine.
 
 ## Running on this computer, then moving to the server
 

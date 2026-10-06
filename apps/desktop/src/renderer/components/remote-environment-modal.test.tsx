@@ -431,7 +431,8 @@ describe("RemoteEnvironmentModal: your machines", () => {
         ?.textContent,
     ).toBe("Sign in to Codex on ada-devbox");
     const text = dialog?.textContent ?? "";
-    expect(text).toContain("https://auth.openai.com/codex/device");
+    // Short enough to read and type on another device.
+    expect(text).toContain("auth.openai.com/codex/device");
     expect(text).toContain("Expires in 15 minutes");
     expect(text).toContain(
       "If ChatGPT says device code sign-in is off, turn it on in ChatGPT under Settings, Security.",

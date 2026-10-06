@@ -15,13 +15,16 @@ import {
 } from "./harness.js";
 
 /**
- * Remote development end to end (ADRs 0206, 0208, 0209): a member connects
- * the desktop to a real Work server, sets their own value of a project
- * secret, chats with an agent whose workspace has the Environment's secrets
- * and setup, then opens a terminal in that workspace, starts a server there
- * and previews it in a browser tab. The server runs chats as local
- * processes and accepts personal credentials, so a member's own chat is
- * theirs alone and receives secrets.
+ * Remote development end to end (ADRs 0206, 0208, 0209, 0213): a member
+ * connects the desktop to a real Work server, sets their own value of a
+ * project secret, chats with an agent whose workspace has the
+ * Environment's secrets and setup, then opens a terminal in that
+ * workspace, starts a server there and previews it in a browser tab. Last,
+ * they sign in to Codex on the server from the app and chat with Codex on
+ * that sign-in. The server runs chats as local processes and accepts
+ * personal credentials, so a member's own chat is theirs alone and
+ * receives secrets, and it is a single person's server for Codex. Its
+ * `codex` is a stand-in that never contacts OpenAI.
  */
 
 const SERVER_DIR = path.resolve(import.meta.dirname, "../../server");
@@ -29,6 +32,8 @@ const ARTIFACTS = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir();
 const OWN_KEY = "ck-bob-own-0123456789";
 const SHARED_DSN = "https://shared-dsn@example.ingest/1";
 const PASSWORD = (username: string) => `${username}-e2e-password-123`;
+/** The access token the stand-in Codex login is issued when Bob approves. */
+const CODEX_TOKEN = `codex-access-bob-${randomBytes(8).toString("hex")}`;
 /** The Bun on this machine, for a dev server started in the workspace. */
 const bun = (() => {
   for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
@@ -42,6 +47,7 @@ let app: AppHandle;
 let server: ChildProcess | undefined;
 let proxy: http.Server | undefined;
 let dataDir = "";
+let codexBin = "";
 let serverBase = "";
 let operatorBase = "";
 let publicUrl = "";
@@ -76,6 +82,12 @@ const runWait = <T>(
   body: string,
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
+/** Until no finite animation runs, so a screenshot shows where things land. */
+const settled = () =>
+  runWait(
+    `return document.getAnimations().every((animation) => animation.playState !== 'running' || animation.effect?.getComputedTiming().iterations === Infinity);`,
+    { label: "animations settled" },
+  );
 const shot = (name: string) =>
   app.screenshot(path.join(ARTIFACTS, `remote-development-${name}.png`));
 
@@ -297,6 +309,18 @@ function startProxy(port: number, target: number): Promise<void> {
 describe("remote development on a Work server", () => {
   beforeAll(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "remote-development-"));
+    // The server's `codex`: a stand-in for its login and app server.
+    codexBin = fs.mkdtempSync(
+      path.join(os.tmpdir(), "remote-development-codex-"),
+    );
+    fs.copyFileSync(
+      path.resolve(
+        import.meta.dirname,
+        "../../../packages/work-server/src/workers/fake-codex-cli.ts",
+      ),
+      path.join(codexBin, "codex"),
+    );
+    fs.chmodSync(path.join(codexBin, "codex"), 0o755);
     const [serverPort, operatorPort, proxyPort] = await Promise.all([
       freePort(),
       freePort(),
@@ -325,6 +349,7 @@ describe("remote development on a Work server", () => {
         // A member's own chat is theirs alone here (ADR 0184), so it
         // receives the Environment's secrets (ADR 0206).
         WORK_PERSONAL_CREDENTIALS: "accept",
+        PATH: `${codexBin}${path.delimiter}${process.env.PATH ?? ""}`,
       },
       stdio: ["ignore", log, log],
     });
@@ -434,6 +459,7 @@ describe("remote development on a Work server", () => {
       proxy ? proxy.close(() => resolve()) : resolve(),
     );
     if (dataDir) removeE2eDirectory(dataDir);
+    if (codexBin) removeE2eDirectory(codexBin);
   });
 
   it("connects bob to the project from a link", async () => {
@@ -621,4 +647,80 @@ describe("remote development on a Work server", () => {
     }
     await shot("preview");
   }, 240_000);
+  it("signs in to Codex on his machine from the app", async () => {
+    await run(`$('[data-testid="remote-environment"]').click(); return true;`);
+    await runWait(
+      `return $$('[data-testid="remote-machine"]').length === 1 && $('[data-testid="remote-machine"]').textContent.includes('Codex not signed in');`,
+      { timeoutMs: 35_000, label: "his machine" },
+    );
+    await settled();
+    await shot("machines");
+    await runWait(
+      `const button = $('[aria-label^="Sign in to Codex on"]'); if (!button || button.disabled) return false; button.click(); return true;`,
+      { label: "sign in to Codex" },
+    );
+    await runWait(
+      `return $('[data-testid="codex-sign-in-code"]')?.textContent.includes('TEST-12345');`,
+      { timeoutMs: 35_000, label: "one-time code" },
+    );
+    await settled();
+    const dialog = await run<string>(
+      `return $('[data-testid="codex-sign-in"]').textContent;`,
+    );
+    expect(dialog).toContain("auth.openai.com/codex/device");
+    expect(dialog).toContain("Expires in 15 minutes");
+    await shot("codex-code");
+    // He enters the code in his browser and approves: the stand-in's login
+    // completes on the server, where its token stays.
+    const approve = path.join(dataDir, "sign-ins", "approve");
+    fs.writeFileSync(approve, CODEX_TOKEN);
+    await runWait(
+      `return $('[data-testid="codex-sign-in"]')?.textContent.includes('Codex is signed in');`,
+      { timeoutMs: 35_000, label: "signed in" },
+    );
+    fs.rmSync(approve);
+    await settled();
+    await shot("codex-signed-in");
+    await run(
+      `byText('[data-testid="codex-sign-in"] button', 'Done').click(); return true;`,
+    );
+    await runWait(
+      `return !$('[data-testid="codex-sign-in"]') && $('[data-testid="remote-machine"]')?.textContent.includes('Codex signed in');`,
+      { label: "machine signed in" },
+    );
+    await settled();
+    await shot("machines-signed-in");
+    await run(
+      `byText('[role="dialog"] button, dialog button', 'Done').click(); return true;`,
+    );
+    await runWait(`return !$('[data-testid="remote-machines"]');`, {
+      label: "environment closed",
+    });
+  }, 120_000);
+
+  it("chats with Codex on his own sign-in there", async () => {
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(
+      `const select = $('select[aria-label="Project agent"]'); return !!composer() && !!select && [...select.options].some((option) => option.textContent === 'Codex' && !option.disabled);`,
+      { timeoutMs: 35_000, label: "Codex available" },
+    );
+    await run(
+      `const select = $('select[aria-label="Project agent"]'); setReactValue(select, [...select.options].find((option) => option.textContent === 'Codex').value); return true;`,
+    );
+    await run(
+      `const input = composer(); setReactValue(input, 'report'); input.closest('form').requestSubmit(); return true;`,
+    );
+    await runWait(`return timeline().includes('accessTokenSha256');`, {
+      timeoutMs: 120_000,
+      label: "Codex answer",
+    });
+    const text = await run<string>(`return timeline();`);
+    // Codex ran on the token its own login was issued on the server.
+    expect(text).toContain('"signedIn":true');
+    expect(text).toContain(
+      createHash("sha256").update(CODEX_TOKEN).digest("hex"),
+    );
+    expect(text).not.toContain(CODEX_TOKEN);
+    await shot("codex-chat");
+  }, 180_000);
 });

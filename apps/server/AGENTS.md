@@ -37,17 +37,20 @@ give a worker database, vault, or sign-in secrets, and never add a replica for
 capacity. Workers state their protocol on every call and get `426` when the
 control plane cannot drive them (ADR 0198).
 
-Members' subscription sign-ins stay on the machine they were made on (ADR
-0199): `work worker sign-in <claude-code|codex> --member <id>` runs the CLI's
-own login in the operator's terminal into
-`<WORK_DATA_DIR>/sign-ins/<harness>/<member>`, the machine reports only
-`sign-in:<harness>:<member>`, and a sandbox of that member's own chat mounts
-that one home. Never read, copy, upload, store, or forward a sign-in: Anthropic's
-terms (https://code.claude.com/docs/en/legal-and-compliance) let a person
-sign in to the unmodified Claude Code on a machine they use and forbid a
-service from collecting or routing others' Claude.ai credentials. An admin
-allows sign-ins with an Environment that has `"personalCredentials": true`
-plus machines whose members signed in; otherwise companies use model
+Members' subscription sign-ins stay on the machine they were made on (ADRs
+0199, 0213), and only Codex's: Claude Code subscriptions run only on a
+member's own computer, so `work worker sign-in claude-code` refuses. A member
+signs in to Codex from the Work app on a machine of their own (a worker whose
+access names only them, or a single server with
+`WORK_PERSONAL_CREDENTIALS=accept`): the machine runs `codex login
+--device-auth` into `<WORK_DATA_DIR>/sign-ins/codex/<member>` through sealed
+`machine.codexSignIn` operations, the app shows the code, and the member
+approves in their browser; `work worker sign-in codex --member <id>` does the
+same in a terminal. A machine holds one person's sign-in at most, reports
+only `sign-in:codex:<member>`, and a sandbox of that member's own chat mounts
+that one home. Never read, copy, upload, store, or forward a sign-in. An
+admin allows sign-ins with an Environment that has `"personalCredentials":
+true` plus members' own machines; otherwise companies use model
 connections through the gateway or a member's own API key. A Postgres control plane refuses plain-subprocess agents unless
 microsandbox or `WORK_TRUST_CONTROL_PLANE_AGENTS=1`. Follow the
 [machines reference](../../skills/setup-work-server/references/cluster-deployment.md)
