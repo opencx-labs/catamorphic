@@ -19,7 +19,8 @@ RUN --mount=type=cache,id=catamorphic-desktop-bun-${TARGETARCH},target=/root/.bu
 COPY source/ ./
 RUN --mount=type=cache,id=catamorphic-desktop-turbo-${TARGETARCH},target=/workspace/.turbo/cache,sharing=locked \
     bun scripts/tool-runtime.ts turbo run build --no-daemon --concurrency=2 \
-    --filter=catamorphic-desktop... --filter=catamorphic-pwa...
+    --filter=catamorphic-desktop... --filter=catamorphic-pwa... \
+    --filter=catamorphic-server...
 ENV CI=true
 ENV SHELL=/bin/bash
 ENV CATAMORPHIC_E2E_ARTIFACTS_DIR=/artifacts
