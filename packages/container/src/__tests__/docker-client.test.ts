@@ -2,6 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import type { Duplex } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DockerApiError,
@@ -18,6 +19,7 @@ describe("DockerClient", () => {
   let client: DockerClient;
   const requests: string[] = [];
   let stdinSeen = "";
+  const hijacked: Duplex[] = [];
 
   beforeEach(async () => {
     directory = fs.mkdtempSync(path.join(os.tmpdir(), "work-docker-"));
@@ -31,6 +33,10 @@ describe("DockerClient", () => {
       };
       const url = request.url ?? "";
       if (url === "/_ping") return response.end("OK");
+      // A daemon that stopped answering.
+      if (url.startsWith("/containers/hung")) return;
+      if (url.startsWith("/containers/stuck/exec"))
+        return json(201, { Id: "stuck" });
       if (url.startsWith("/containers/c1/exec")) return json(201, { Id: "e1" });
       if (url.startsWith("/containers/c2/exec")) return json(201, { Id: "e2" });
       if (url.startsWith("/containers/gone/exec"))
@@ -51,6 +57,10 @@ describe("DockerClient", () => {
     });
     server.on("upgrade", (request, socket) => {
       requests.push(`${request.method} ${request.url} upgrade`);
+      if (request.url === "/exec/stuck/start") {
+        hijacked.push(socket);
+        return;
+      }
       socket.write(
         "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.multiplexed-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n",
       );
@@ -79,6 +89,7 @@ describe("DockerClient", () => {
   });
 
   afterEach(async () => {
+    for (const socket of hijacked.splice(0)) socket.destroy();
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(directory, { recursive: true, force: true });
@@ -123,6 +134,19 @@ describe("DockerClient", () => {
     );
     expect(await client.inspectImage("missing")).toBeUndefined();
     expect(await client.ping()).toBe(true);
+  });
+
+  it("gives up on a daemon that does not answer a call or start a command", async () => {
+    const impatient = new DockerClient(client.endpoint, { timeoutMs: 100 });
+    const started = Date.now();
+    await expect(impatient.inspectContainer("hung")).rejects.toThrow(
+      "Docker did not answer GET /containers/hung/json within 0s",
+    );
+    await expect(
+      impatient.openExec({ container: "stuck", cmd: ["true"] }),
+    ).rejects.toThrow("Docker did not start a command");
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(client.timeoutMs).toBe(60_000);
   });
 
   it("names a tag when pulling, and reads DOCKER_HOST", () => {
