@@ -1,6 +1,7 @@
-import type {
-  ConnectionActionDefinition,
-  ConnectionProvider,
+import {
+  type ConnectionActionDefinition,
+  type ConnectionProvider,
+  dotPathSegment,
 } from "@catamorphic/core";
 import type { Json } from "@catamorphic/db";
 
@@ -404,10 +405,12 @@ function resolveTarget(args: {
     path.includes("..") ||
     path.includes("\\") ||
     /[?#]/.test(path) ||
-    /%(2e|2f|5c)/i.test(path)
+    /%(2e|2f|5c)/i.test(path) ||
+    // `.;x` is `.` to a server that strips path parameters.
+    path.split("/").some(dotPathSegment)
   ) {
     throw new Error(
-      "Paths may not contain '..', '?', '#', backslashes, or encoded dots and slashes",
+      "Paths may not contain '..', '?', '#', backslashes, dot segments, or encoded dots and slashes",
     );
   }
   const target = new URL(`${args.basePath}${path}`, args.base.origin);

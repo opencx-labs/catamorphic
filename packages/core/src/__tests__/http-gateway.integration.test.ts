@@ -465,6 +465,10 @@ describe("HTTP APIs through the gateway (ADR 0211)", () => {
       "/invoices/%2e%2e/customers",
       "/invoices/a%2Fb",
       "/invoices//x",
+      // `..;` is `..` to a server that strips path parameters.
+      "/invoices/..;/customers",
+      "/invoices/%2e%2e;/customers",
+      "/invoices/%2e%2e%3b/customers",
     ]) {
       const escaped = await call({
         alias: "billing",

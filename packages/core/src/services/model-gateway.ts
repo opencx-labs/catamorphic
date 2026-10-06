@@ -52,9 +52,30 @@ export interface ModelGatewayResponse {
 }
 
 /**
+ * Whether one path segment is a dot segment to some server: `.` or `..`,
+ * plain or percent-encoded, alone or followed by path parameters
+ * (`..;x`, `%2e%2e%3b`), which servlet containers strip before they
+ * resolve the dots.
+ */
+export function dotPathSegment(segment: string): boolean {
+  const decoded = (() => {
+    try {
+      return decodeURIComponent(segment);
+    } catch {
+      return undefined;
+    }
+  })();
+  // What cannot be decoded is refused as if it were one.
+  if (decoded === undefined) return true;
+  const head = decoded.split(";", 1)[0] ?? "";
+  return head === "." || head === "..";
+}
+
+/**
  * A request path below a model API's base URL, unchanged, or null when it
- * could leave the base: dot segments (plain or percent-encoded), encoded
- * slashes or backslashes, empty segments, or characters a path never holds.
+ * could leave the base: dot segments (plain or percent-encoded, with or
+ * without path parameters), encoded slashes or backslashes, empty
+ * segments, or characters a path never holds.
  */
 export function modelRequestPath(value: string): string | null {
   const path = value.replace(/^\/+/, "");
@@ -71,8 +92,7 @@ export function modelRequestPath(value: string): string | null {
       return null;
     }
     if (
-      decoded === "." ||
-      decoded === ".." ||
+      dotPathSegment(segment) ||
       /[/\\]/.test(decoded) ||
       // biome-ignore lint/suspicious/noControlCharactersInRegex: refusing them
       /[\u0000-\u001f\u007f]/.test(decoded)

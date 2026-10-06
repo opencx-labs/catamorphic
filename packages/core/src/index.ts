@@ -412,6 +412,7 @@ export {
 } from "./services/memberships-service.js";
 export {
   dbModelGatewayStore,
+  dotPathSegment,
   type LiveModelGrant,
   MODEL_REQUEST_MAX_BYTES,
   type ModelCallUsage,

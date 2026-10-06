@@ -176,6 +176,13 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
     await expect(
       call({ path: "/invoices/%2e%2e/%2E%2e/admin" }),
     ).rejects.toThrow("encoded");
+    // Path parameters a servlet container strips before resolving dots.
+    for (const path of [
+      "/invoices/.;/admin",
+      "/invoices/..;/admin",
+      "/invoices/%2e%2e%3b/admin",
+    ])
+      await expect(call({ path }), path).rejects.toThrow("dot segments");
     await expect(call({ path: "//evil.test/invoices" })).rejects.toThrow();
     await expect(
       call({ path: "/invoices", headers: { Authorization: "Bearer x" } }),
