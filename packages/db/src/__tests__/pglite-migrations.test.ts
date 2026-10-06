@@ -92,6 +92,7 @@ describe("PGlite migrations", () => {
       "053_directory_events.sql",
       "054_directory_announcements.sql",
       "055_session_secrets_held.sql",
+      "056_session_workspace_use.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
@@ -117,7 +118,7 @@ describe("PGlite migrations", () => {
       WHERE table_schema = ${DEFAULT_SCHEMA}
         AND table_type = 'BASE TABLE'
     `.execute(db);
-    expect(tables.rows[0]?.count).toBe(98);
+    expect(tables.rows[0]?.count).toBe(99);
   });
 
   it("supports the runtime primitives core relies on", {
