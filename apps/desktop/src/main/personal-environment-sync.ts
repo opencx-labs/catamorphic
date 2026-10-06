@@ -103,6 +103,16 @@ export function shouldUpload(args: {
   );
 }
 
+/** The config and listed files as read from the project folder. */
+interface LocalEnvironment {
+  configFingerprint: string;
+  config: PersonalEnvironmentConfig | null;
+  exists: boolean;
+  error: string | null;
+  files: ListedFile[];
+  snapshot: PersonalEnvironmentSnapshot | null;
+}
+
 interface LinkState {
   lastSentFingerprint: string | null;
   lastSyncAt: string | null;
@@ -200,16 +210,42 @@ export class PersonalEnvironmentSync {
     }
   }
 
-  /** Current view, starting a check when this link was never checked. */
-  view(args: {
+  /**
+   * Current view with the config as it is on disk now, starting a check
+   * when this link was never checked or its config changed since.
+   */
+  async view(args: {
     profileId: string;
     projectId: string;
-  }): PersonalEnvironmentView {
+  }): Promise<PersonalEnvironmentView> {
+    const key = linkKey(args.profileId, args.projectId);
     const link = this.link(args);
-    const state = this.states.get(linkKey(args.profileId, args.projectId));
-    if (link && !state?.lastCheckedAt && !state?.running)
+    const known = this.states.get(key);
+    if (link && !known?.lastCheckedAt && !known?.running)
       void this.sync(link).catch(() => {});
+    else if (link && known && !known.running)
+      await this.refreshLocal(link, known).catch(() => {
+        // The next check reports what could not be read.
+      });
+    const state = this.states.get(key);
     return this.render(args.projectId, state, Boolean(state?.running));
+  }
+
+  /**
+   * Reads the config again, which is cheap, and the listed files only when
+   * it changed; a change the server can take is sent, as the local check
+   * would.
+   */
+  private async refreshLocal(
+    link: PersonalEnvironmentLink,
+    state: LinkState,
+  ): Promise<void> {
+    const root = await this.deps.projectRoot(link.localProjectId);
+    if (!root) return;
+    const file = await readPersonalEnvironmentConfig({ root });
+    if (file.fingerprint === state.configFingerprint || state.running) return;
+    await this.readLocal(link, state, root);
+    if (state.server === "allowed") void this.sync(link).catch(() => {});
   }
 
   /** Check and send now; resolves with the resulting view. */
@@ -281,7 +317,17 @@ export class PersonalEnvironmentSync {
             // Every outcome reaches agents, including sign-in and
             // unreachable states that end a run early.
             const root = await this.deps.projectRoot(link.localProjectId);
-            if (root) await this.writeStatus(root, state);
+            if (root) {
+              await this.writeStatus(root, state);
+              // The first status may have just created the personal
+              // folder, which could not be watched before it existed.
+              if (
+                this.states.get(
+                  linkKey(link.profileId, link.localProjectId),
+                ) === state
+              )
+                this.reconcileWatchers(link, state, root);
+            }
           }
         } while (state.again && !this.stopped);
       } finally {
@@ -293,14 +339,7 @@ export class PersonalEnvironmentSync {
     return state.running;
   }
 
-  private async collect(root: string): Promise<{
-    configFingerprint: string;
-    config: PersonalEnvironmentConfig | null;
-    exists: boolean;
-    error: string | null;
-    files: ListedFile[];
-    snapshot: PersonalEnvironmentSnapshot | null;
-  }> {
+  private async collect(root: string): Promise<LocalEnvironment> {
     const file = await readPersonalEnvironmentConfig({ root });
     if (!file.parsed.ok)
       return {
@@ -328,15 +367,12 @@ export class PersonalEnvironmentSync {
     };
   }
 
-  private async run(
+  /** The config and listed files as they are now, watched for changes. */
+  private async readLocal(
     link: PersonalEnvironmentLink,
     state: LinkState,
-  ): Promise<void> {
-    const root = await this.deps.projectRoot(link.localProjectId);
-    if (!root) {
-      state.error = "The project folder is unavailable";
-      return;
-    }
+    root: string,
+  ): Promise<LocalEnvironment> {
     const local = await this.collect(root);
     state.configFingerprint = local.configFingerprint;
     state.localFingerprint = local.snapshot?.fingerprint ?? null;
@@ -346,8 +382,21 @@ export class PersonalEnvironmentSync {
       config: local.config,
     };
     state.files = local.files;
-    state.error = null;
     this.reconcileWatchers(link, state, root);
+    return local;
+  }
+
+  private async run(
+    link: PersonalEnvironmentLink,
+    state: LinkState,
+  ): Promise<void> {
+    const root = await this.deps.projectRoot(link.localProjectId);
+    if (!root) {
+      state.error = "The project folder is unavailable";
+      return;
+    }
+    const local = await this.readLocal(link, state, root);
+    state.error = null;
     if (!link.client) {
       state.server = "sign-in";
       return;

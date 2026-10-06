@@ -2699,7 +2699,7 @@ export function registerIpcHandlers(
   };
   ipcMain.handle(
     "catamorphic:personal-environment",
-    (event, projectId: string): PersonalEnvironmentView =>
+    (event, projectId: string): Promise<PersonalEnvironmentView> =>
       personalEnvironment().view(personalEnvironmentTarget(event, projectId)),
   );
   ipcMain.handle(

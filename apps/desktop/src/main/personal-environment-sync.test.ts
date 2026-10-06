@@ -171,6 +171,7 @@ describe("PersonalEnvironmentSync", () => {
     config?: unknown;
     files?: Record<string, string>;
     signedOut?: boolean;
+    watchFiles?: boolean;
   }) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "personal-sync-"));
     dirs.push(root);
@@ -227,7 +228,7 @@ describe("PersonalEnvironmentSync", () => {
       ],
       projectRoot: async () => root,
       now: () => NOW,
-      watchFiles: false,
+      watchFiles: options.watchFiles ?? false,
     });
     const target = { profileId: "profile", projectId: "project" };
     return {
@@ -393,10 +394,58 @@ describe("PersonalEnvironmentSync", () => {
     const env = setup({});
     const changes: string[] = [];
     env.sync.subscribe((change) => changes.push(change.projectId));
-    const first = env.sync.view(env.target);
+    const first = await env.sync.view(env.target);
     expect(first.server).toBe("unknown");
-    expect(first.syncing).toBe(false);
+    expect(first.syncing).toBe(true);
     await vi.waitFor(() => expect(changes.length).toBeGreaterThanOrEqual(2));
-    expect(env.sync.view(env.target).server).toBe("allowed");
+    const checked = await env.sync.view(env.target);
+    expect(checked.server).toBe("allowed");
+    expect(checked.syncing).toBe(false);
+  });
+
+  it("shows the config as it is now, and sends a change, once checked", async () => {
+    const env = setup({});
+    await env.sync.syncNow(env.target);
+    expect(env.puts).toEqual([{ files: [] }]);
+    // Written right after connecting, before any timer or watch notices.
+    fs.writeFileSync(
+      path.join(env.root, PERSONAL_ENVIRONMENT_PATH),
+      JSON.stringify({ files: [], setup: "make tools" }),
+    );
+    const view = await env.sync.view(env.target);
+    expect(view.configExists).toBe(true);
+    expect(view.setup).toEqual({ command: "make tools", server: null });
+    await vi.waitFor(() =>
+      expect(env.puts.at(-1)).toEqual({ files: [], setup: "make tools" }),
+    );
+    // Unchanged since: the view reads the config and nothing more is sent.
+    const sent = await env.sync.view(env.target);
+    expect(sent.setup).toEqual({
+      command: "make tools",
+      server: { updatedAt: at(0) },
+    });
+    expect(env.puts).toHaveLength(2);
+  });
+
+  it("watches the personal folder once the first check created it", async () => {
+    const env = setup({ watchFiles: true });
+    try {
+      expect(fs.existsSync(path.join(env.root, ".work", "personal"))).toBe(
+        false,
+      );
+      await env.sync.syncNow(env.target);
+      expect(env.puts).toHaveLength(1);
+      fs.writeFileSync(
+        path.join(env.root, PERSONAL_ENVIRONMENT_PATH),
+        JSON.stringify({ files: [], setup: "make tools" }),
+      );
+      await vi.waitFor(
+        () =>
+          expect(env.puts.at(-1)).toEqual({ files: [], setup: "make tools" }),
+        { timeout: 5_000 },
+      );
+    } finally {
+      env.sync.stop();
+    }
   });
 });
