@@ -67,7 +67,7 @@ import {
   type ProjectExperienceContext,
   writesProgram,
 } from "../shared/project-experience.js";
-import type { SidebarSurface } from "../shared/sidebar.js";
+import type { SidebarSide, SidebarSurface } from "../shared/sidebar.js";
 import { siteHost, siteOrigin } from "../shared/site-settings.js";
 import {
   isBrowserFile,
@@ -3678,11 +3678,11 @@ export function App({
         setEmptyRightSidebar({ scope: sidebarScope, open });
       }
     },
-    "toggle-sidebar": () =>
-      setSidebarOpen((value) => {
-        void desktopApi.setPrefs({ sidebarOpen: !value });
-        return !value;
-      }),
+    "toggle-sidebar": () => {
+      const open = !sidebarOpen;
+      setSidebarOpen(open);
+      void desktopApi.setPrefs({ sidebarOpen: open });
+    },
     "close-tab": closeActiveSurface,
     "setup-agent": () => setWizardModalOpen(true),
     "default-agent": () => openPalettePicker("default-agent"),
@@ -5455,85 +5455,88 @@ export function App({
     onOpenFile: openProjectFile,
     onSessionAction: applySessionAction,
   });
-  const renderSidebarSection = (
-    section: SidebarSectionConfig,
-    visible: boolean,
-    report: (state: SidebarContentState) => void,
-    relevant: boolean,
-    observeEmpty: boolean,
-  ) =>
-    projectId ? (
-      <ConfiguredSection
-        key={section.id}
-        surface={sidebarSurface}
-        relevant={relevant}
-        report={report}
-        visible={visible}
-        observeEmpty={observeEmpty}
-        onCustomize={() => customizeSidebar("left")}
-        onSearch={(request) => {
-          setModeRequest({ ...request, nonce: crypto.randomUUID() });
-          setPaletteOpen(true);
-        }}
-        section={section}
-        pinnedStyle={prefs?.pinnedBookmarks ?? "tiles"}
-        tabs={
-          section.source?.type === "tabs"
-            ? renderWorkspaceTabBar("vertical")
-            : tabsInSidebar
-              ? workspaceTabBar
-              : null
-        }
-        experienceContext={projectExperienceContext}
-        memberShell={memberShell}
-        projectId={projectId}
-        profileId={activeProfile?.id}
-        activeTab={activeTab}
-        activeFilePath={
-          workspace.editors.find(
-            (editor) => editorTabKey(editor.localId) === workspace.activeTabKey,
-          )?.filePath ?? undefined
-        }
-        activeChatSessionId={
-          workspace.chats.find(
-            (chat) => chat.localId === workspace.activeChatId,
-          )?.sessionId
-        }
-        keybindingLabel={formatBinding(keybindings["new-floating-chat"])}
-        agentsData={agentsData}
-        defaultAgentId={effectiveDefaultAgentId}
-        projectAgentNames={projectAgentNames}
-        unreadSessionIds={unreadSessionIds}
-        onOpenTab={openTab}
-        onNewWorkflow={() => sendToAgent(NEW_WORKFLOW_PROMPT, "float")}
-        onNewChat={() => addChat()}
-        onSessionCommand={(session, command) => {
-          const entry = workspace.chats.find(
-            (chat) => chat.sessionId === session.id,
-          ) ?? { ...newChatEntry("tab"), sessionId: session.id };
-          if (command === "fork") {
-            void desktopApi
-              .sessionIsIncognito(session.id)
-              .then((incognito) => forkChat({ ...entry, incognito }));
-            return;
+  const renderSidebarSection =
+    (side: SidebarSide) =>
+    (
+      section: SidebarSectionConfig,
+      visible: boolean,
+      report: (state: SidebarContentState) => void,
+      relevant: boolean,
+      observeEmpty: boolean,
+    ) =>
+      projectId ? (
+        <ConfiguredSection
+          key={section.id}
+          surface={sidebarSurface}
+          relevant={relevant}
+          report={report}
+          visible={visible}
+          observeEmpty={observeEmpty}
+          onCustomize={() => customizeSidebar(side)}
+          onSearch={(request) => {
+            setModeRequest({ ...request, nonce: crypto.randomUUID() });
+            setPaletteOpen(true);
+          }}
+          section={section}
+          pinnedStyle={prefs?.pinnedBookmarks ?? "tiles"}
+          tabs={
+            section.source?.type === "tabs"
+              ? renderWorkspaceTabBar("vertical")
+              : tabsInSidebar
+                ? workspaceTabBar
+                : null
           }
-          if (command === "parent") {
-            openParentChat(entry);
-            return;
+          experienceContext={projectExperienceContext}
+          memberShell={memberShell}
+          projectId={projectId}
+          profileId={activeProfile?.id}
+          activeTab={activeTab}
+          activeFilePath={
+            workspace.editors.find(
+              (editor) =>
+                editorTabKey(editor.localId) === workspace.activeTabKey,
+            )?.filePath ?? undefined
           }
-          openSession(session);
-          openPalettePicker(command);
-        }}
-        onOpenSession={openSession}
-        onSessionAction={applySessionAction}
-        onOpenUrl={openUrl}
-        onOpenFile={openProjectFile}
-        onOpenHistory={setRemoteHistoryPath}
-        onPublish={(path, features) => setRemotePublish({ path, features })}
-        onPropose={(files, features) => setRemotePropose({ files, features })}
-        onError={setLinkError}
-      />
-    ) : null;
+          activeChatSessionId={
+            workspace.chats.find(
+              (chat) => chat.localId === workspace.activeChatId,
+            )?.sessionId
+          }
+          keybindingLabel={formatBinding(keybindings["new-floating-chat"])}
+          agentsData={agentsData}
+          defaultAgentId={effectiveDefaultAgentId}
+          projectAgentNames={projectAgentNames}
+          unreadSessionIds={unreadSessionIds}
+          onOpenTab={openTab}
+          onNewWorkflow={() => sendToAgent(NEW_WORKFLOW_PROMPT, "float")}
+          onNewChat={() => addChat()}
+          onSessionCommand={(session, command) => {
+            const entry = workspace.chats.find(
+              (chat) => chat.sessionId === session.id,
+            ) ?? { ...newChatEntry("tab"), sessionId: session.id };
+            if (command === "fork") {
+              void desktopApi
+                .sessionIsIncognito(session.id)
+                .then((incognito) => forkChat({ ...entry, incognito }));
+              return;
+            }
+            if (command === "parent") {
+              openParentChat(entry);
+              return;
+            }
+            openSession(session);
+            openPalettePicker(command);
+          }}
+          onOpenSession={openSession}
+          onSessionAction={applySessionAction}
+          onOpenUrl={openUrl}
+          onOpenFile={openProjectFile}
+          onOpenHistory={setRemoteHistoryPath}
+          onPublish={(path, features) => setRemotePublish({ path, features })}
+          onPropose={(files, features) => setRemotePropose({ files, features })}
+          onError={setLinkError}
+        />
+      ) : null;
 
   const hasActiveWork =
     Object.values(signalsByChat).some((signals) => signals.working) ||
@@ -5555,27 +5558,27 @@ export function App({
       ? ""
       : (allTabs.find((tab) => tabKey(tab) === workspace.activeTabKey)?.label ??
         "");
-  const sidebarToggle = (
-    <ShortcutHint
-      label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-      shortcut={formatBinding(keybindings["toggle-sidebar"])}
-    >
-      <button
-        type="button"
-        onClick={() =>
-          setSidebarOpen((value) => {
-            void desktopApi.setPrefs({ sidebarOpen: !value });
-            return !value;
-          })
-        }
-        className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay/60 hover:text-fg"
-        aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-        aria-expanded={sidebarOpen}
-      >
-        <PanelLeft className="size-4" />
-      </button>
-    </ShortcutHint>
-  );
+  // One toggle per side, wherever it sits: in the sidebar's own header while
+  // the panel is out, in the chrome until the content makes room for it.
+  const sidebarToggle = (side: SidebarSide) => {
+    const open = side === "left" ? sidebarOpen : rightSidebarOpen;
+    const label = `${open ? "Collapse" : "Expand"} ${side === "left" ? "sidebar" : "right sidebar"}`;
+    const action = side === "left" ? "toggle-sidebar" : "toggle-right-sidebar";
+    const Icon = side === "left" ? PanelLeft : PanelRight;
+    return (
+      <ShortcutHint label={label} shortcut={formatBinding(keybindings[action])}>
+        <button
+          type="button"
+          onClick={() => actionHandlers[action]()}
+          className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay/60 hover:text-fg"
+          aria-label={label}
+          aria-expanded={open}
+        >
+          <Icon className="size-4" />
+        </button>
+      </ShortcutHint>
+    );
+  };
   const workspaceTitle = (
     <div
       className="flex h-full min-w-0 flex-1 items-center"
@@ -5776,7 +5779,7 @@ export function App({
             header={
               <>
                 <div className="app-drag flex h-10 shrink-0 items-center justify-end gap-1 pl-[86px] pr-3">
-                  {sidebarMotion.phase !== "closed" && sidebarToggle}
+                  {sidebarMotion.phase !== "closed" && sidebarToggle("left")}
                   {headerInSidebar && (
                     <div
                       ref={setBrowserNavigationHost}
@@ -5862,7 +5865,7 @@ export function App({
                 </ShortcutHint>
               </footer>
             }
-            renderSection={renderSidebarSection}
+            renderSection={renderSidebarSection("left")}
           />
 
           {/* min-h-0/overflow-hidden: the content column must clip its panes
@@ -5880,24 +5883,12 @@ export function App({
             className={`workspace-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${tabsInSidebar ? "bg-sidebar" : "bg-bg"}`}
           >
             {headerInSidebar && !rightSidebarMotion.docked && (
-              <ShortcutHint
-                label="Expand right sidebar"
-                shortcut={formatBinding(keybindings["toggle-right-sidebar"])}
+              <span
+                inert={rightSidebarMotion.phase !== "closed"}
+                className="app-no-drag absolute right-2 top-2 z-20 flex rounded-md bg-sidebar"
               >
-                <button
-                  type="button"
-                  aria-label={
-                    rightSidebarOpen
-                      ? "Collapse right sidebar"
-                      : "Expand right sidebar"
-                  }
-                  onClick={() => actionHandlers["toggle-right-sidebar"]()}
-                  inert={rightSidebarMotion.phase !== "closed"}
-                  className="app-no-drag absolute right-2 top-2 z-20 grid size-7 place-items-center rounded-md bg-sidebar text-fg-muted hover:text-fg"
-                >
-                  <PanelRight className="size-4" />
-                </button>
-              </ShortcutHint>
+                {sidebarToggle("right")}
+              </span>
             )}
             {compactWindow && (
               <button
@@ -5920,7 +5911,7 @@ export function App({
                     inert={sidebarMotion.phase !== "closed"}
                     className="app-no-drag ml-[70px] flex shrink-0 items-center"
                   >
-                    {sidebarToggle}
+                    {sidebarToggle("left")}
                   </span>
                 )}
                 {(projectId || allTabs.length > 0) &&
@@ -5931,28 +5922,14 @@ export function App({
                   !headerInSidebar &&
                   workspaceTitle}
                 {!rightSidebarMotion.docked && (
-                  <ShortcutHint
-                    label="Expand right sidebar"
-                    shortcut={formatBinding(
-                      keybindings["toggle-right-sidebar"],
-                    )}
-                    className="ml-auto shrink-0"
+                  <span
+                    // Under the panel until the content makes room; the
+                    // panel's own toggle is the live one.
+                    inert={rightSidebarMotion.phase !== "closed"}
+                    className="app-no-drag ml-auto flex shrink-0 items-center"
                   >
-                    <button
-                      type="button"
-                      aria-label={
-                        rightSidebarOpen
-                          ? "Collapse right sidebar"
-                          : "Expand right sidebar"
-                      }
-                      aria-expanded={rightSidebarOpen}
-                      inert={rightSidebarMotion.phase !== "closed"}
-                      className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:text-fg"
-                      onClick={() => actionHandlers["toggle-right-sidebar"]?.()}
-                    >
-                      <PanelRight className="size-4" />
-                    </button>
-                  </ShortcutHint>
+                    {sidebarToggle("right")}
+                  </span>
                 )}
               </div>
             )}
@@ -6834,20 +6811,7 @@ export function App({
             key={`right:${activeProfile?.id}:${projectId}`}
             side="right"
             headerActions={
-              <ShortcutHint
-                label="Collapse right sidebar"
-                shortcut={formatBinding(keybindings["toggle-right-sidebar"])}
-              >
-                <button
-                  type="button"
-                  aria-label="Collapse right sidebar"
-                  aria-expanded={rightSidebarOpen}
-                  onClick={() => actionHandlers["toggle-right-sidebar"]()}
-                  className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay hover:text-fg"
-                >
-                  <PanelRight className="size-4" />
-                </button>
-              </ShortcutHint>
+              rightSidebarMotion.phase !== "closed" && sidebarToggle("right")
             }
             scope={`${activeProfile?.id}:${projectId}`}
             tabs={sidebarTabs("right")}
@@ -6856,7 +6820,7 @@ export function App({
             error={workspaceError}
             onCustomize={() => customizeSidebar("right")}
             onMotionChange={setRightSidebarMotion}
-            renderSection={renderSidebarSection}
+            renderSection={renderSidebarSection("right")}
           />
 
           {/* Stays mounted so the close transition can play out. */}

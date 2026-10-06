@@ -100,6 +100,10 @@ export function TabbedSidebar({
   const id = useId();
   const panel = useRef<HTMLDivElement>(null);
   const motion = useSidebarMotion({ open, dock: !overlay, panel });
+  // Sections are live while the panel is on screen, sliding included. They
+  // pause once it has gone, never on the click that starts it moving, so
+  // what slides away is what was shown.
+  const onScreen = motion.phase !== "closed";
   // Before paint, so chrome that follows the sidebar (its toggle, the room
   // made for it) changes in the same frame as the sidebar.
   useLayoutEffect(() => {
@@ -297,9 +301,9 @@ export function TabbedSidebar({
                     sectionRelevant(section)
                   }
                   available={sectionAvailable(section)}
-                  visible={open && selected === tab.id}
+                  visible={onScreen && selected === tab.id}
                   observeEmpty={
-                    open &&
+                    onScreen &&
                     (selected === tab.id || !tabs.includes(tab)) &&
                     sectionEmptyHidden(section)
                   }

@@ -1684,3 +1684,17 @@ rule). The page now reports its own presses (trusted ones only; a page's
 scripts cannot fold the chat), and `lib/app-focus` counts each as the
 person's input and as a press outside everything the app draws, so the
 chat lurks as it does after a click on any other part of the workspace.
+
+### 2026-10-06: What slides away is what was shown
+
+Closing the right sidebar with Proposals showing emptied the list into
+placeholder rows on the click, before the panel moved, and opening it slid in
+placeholders while GitHub answered. Hiding a section reset it: Proposals and
+the Server section cleared their state whenever they were hidden or shown.
+They now pause instead, keeping their rows and the files chosen for upload,
+and refresh in place when shown again. Both sidebars also tell their sections
+they are hidden only once the panel has slid off screen, never on the click
+that starts it moving, so a section's teardown never competes with the
+slide. The two sides share one toggle wherever it appears (the sidebar's
+header, the chrome, the corner when the header lives in the sidebar), and a
+section in the right sidebar customizes the right sidebar (ADR 0200).

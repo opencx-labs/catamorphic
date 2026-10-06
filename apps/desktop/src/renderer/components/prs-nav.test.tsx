@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 import { DEFAULT_PREFS } from "../../shared/app-prefs.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { PrsNav } from "./prs-nav.js";
+import { SidebarContribution } from "./sidebar-contribution.js";
 
 vi.mock("../lib/desktop-api.js", () => ({
   desktopApi: {
@@ -181,5 +182,59 @@ it("lists a company project's proposals with the GitHub CLI connection off", asy
     expect(node.textContent).not.toContain("GitHub not connected");
   } finally {
     await act(async () => root.unmount());
+  }
+});
+
+it("keeps the list on screen while the section is hidden and shown again", async () => {
+  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  vi.mocked(desktopApi.getPrefs).mockResolvedValue({
+    ...DEFAULT_PREFS,
+    githubCliEnabled: true,
+  });
+  const pr = {
+    number: 7,
+    title: "Keep me on screen",
+    url: "https://example.test/pr/7",
+    author: "test",
+    viewerLogin: "reviewer",
+    requestedReviewers: ["reviewer"],
+    head: "feature",
+    base: "main",
+    draft: false,
+    updatedAt: "1",
+  };
+  vi.mocked(desktopApi.prList).mockResolvedValueOnce([pr]);
+  const node = document.createElement("div");
+  const root = createRoot(node);
+  const render = (visible: boolean) =>
+    act(async () =>
+      root.render(
+        <SidebarContribution
+          value={{
+            section: { id: "prs", type: "prs" },
+            surface: { kind: "none" },
+            visible,
+            relevant: true,
+            status: { state: "ready" },
+            report: () => {},
+            open: () => {},
+          }}
+        >
+          <PrsNav projectId="p" onOpenDiff={() => {}} onOpenUrl={() => {}} />
+        </SidebarContribution>,
+      ),
+    );
+  try {
+    await render(true);
+    expect(node.textContent).toContain("Keep me on screen");
+    // Later reads are slow, as GitHub is: the list must not wait on them.
+    vi.mocked(desktopApi.prList).mockReturnValue(new Promise(() => {}));
+    await render(false);
+    expect(node.textContent).toContain("Keep me on screen");
+    await render(true);
+    expect(node.textContent).toContain("Keep me on screen");
+  } finally {
+    await act(async () => root.unmount());
+    vi.mocked(desktopApi.prList).mockReset();
   }
 });

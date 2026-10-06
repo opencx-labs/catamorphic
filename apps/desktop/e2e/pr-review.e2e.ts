@@ -366,3 +366,48 @@ it("keeps review context reachable and avoids horizontal overflow in a narrow wi
   await wait("return !$('[aria-label=\"Changed file tree\"]');");
   await app.screenshot("/tmp/catamorphic-review-narrow-e2e.png");
 });
+
+it("keeps the proposals on screen while the right sidebar slides in and away", async () => {
+  // Every frame of one slide: where the panel is, and whether it still
+  // lists the proposals or shows placeholders in their place.
+  const slide = (toggle: string, rest: "open" | "closed") =>
+    run<Array<{ motion: string; listed: boolean }>>(`
+      const aside = $('[data-workspace-visible="true"] [data-sidebar=right]');
+      const samples = [];
+      return new Promise((resolve) => {
+        const tick = () => {
+          const panel = aside.querySelector('.sidebar-tab-panel:not([hidden])');
+          samples.push({
+            motion: aside.dataset.motion,
+            listed: (panel?.textContent ?? '').includes('Validate input before processing'),
+          });
+          if (samples.length > 1 && aside.dataset.motion === ${JSON.stringify(rest)}) resolve(samples);
+          else requestAnimationFrame(tick);
+        };
+        [...document.querySelectorAll(${JSON.stringify(toggle)})].find((el) => !el.closest('[inert]')).click();
+        requestAnimationFrame(tick);
+      });
+    `);
+  await wait(
+    `return !![...document.querySelectorAll('[data-workspace-visible="true"] [aria-label="Expand right sidebar"]')].find((el) => !el.closest('[inert]'));`,
+  );
+  const opening = await slide(
+    '[data-workspace-visible="true"] [aria-label="Expand right sidebar"]',
+    "open",
+  );
+  expect(opening.some((sample) => sample.motion === "opening")).toBe(true);
+  expect(
+    opening.filter((sample) => sample.motion !== "closed" && !sample.listed),
+  ).toEqual([]);
+  await wait(
+    `return $('[data-workspace-visible="true"] [data-sidebar=right]').dataset.settled === 'true';`,
+  );
+  const closing = await slide(
+    '[data-workspace-visible="true"] [data-sidebar=right] [aria-label="Collapse right sidebar"]',
+    "closed",
+  );
+  expect(closing.some((sample) => sample.motion === "closing")).toBe(true);
+  expect(
+    closing.filter((sample) => sample.motion === "closing" && !sample.listed),
+  ).toEqual([]);
+});

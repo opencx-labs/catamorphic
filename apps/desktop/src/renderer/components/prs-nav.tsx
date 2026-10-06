@@ -74,11 +74,17 @@ export function PrsNav({
     empty: company ? "No proposals awaiting review." : "No open pull requests.",
   });
 
+  // Another project, a reconnect or Retry starts from nothing. Hiding the
+  // section only pauses it: the list stays on screen while the sidebar
+  // slides, and showing it again refreshes the list in place.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reconnect and Retry invalidate remote data
+  useEffect(() => {
+    setPrs(null);
+    setError(null);
+  }, [projectId, refresh, prefs.githubCliEnabled, company]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: reconnect and Retry invalidate remote data
   useEffect(() => {
     let cancelled = false;
-    setPrs(null);
-    setError(null);
     let revision = 0;
     // Wait for the remote status; a company project never needs the CLI.
     if (company === null)

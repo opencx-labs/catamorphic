@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { desktopApi } from "../lib/desktop-api.js";
 import { RemoteNav } from "./remote-nav.js";
+import { SidebarContribution } from "./sidebar-contribution.js";
 
 vi.mock("./remote-members-modal.js", () => ({
   RemoteMembersModal: () => null,
@@ -65,6 +66,54 @@ it("starts with no upload selection and sends only the chosen document", async (
       resolveConflicts: [],
     });
     expect(button?.disabled).toBe(true);
+  } finally {
+    act(() => root.unmount());
+    container.remove();
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
+  }
+});
+
+it("keeps the chosen documents while the section is hidden", async () => {
+  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const render = (visible: boolean) =>
+    act(async () => {
+      root.render(
+        <SidebarContribution
+          value={{
+            section: { id: "remote", type: "remote" },
+            surface: { kind: "none" },
+            visible,
+            relevant: true,
+            status: { state: "ready" },
+            report: () => {},
+            open: () => {},
+          }}
+        >
+          <RemoteNav
+            projectId="project"
+            onOpenFile={() => {}}
+            onOpenHistory={() => {}}
+            onPublish={() => {}}
+            onPropose={() => {}}
+          />
+        </SidebarContribution>,
+      );
+    });
+  const upload = () =>
+    container.querySelector<HTMLInputElement>(
+      '[aria-label="Upload report.md"]',
+    );
+  try {
+    await render(true);
+    await act(async () => upload()?.click());
+    expect(upload()?.checked).toBe(true);
+    await render(false);
+    expect(upload()?.checked).toBe(true);
+    await render(true);
+    expect(upload()?.checked).toBe(true);
   } finally {
     act(() => root.unmount());
     container.remove();

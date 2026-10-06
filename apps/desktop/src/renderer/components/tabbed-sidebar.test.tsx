@@ -223,3 +223,73 @@ it("separates relevance and content states while preserving a hidden widget and 
     node.remove();
   }
 });
+
+it("keeps its sections live while the panel slides away, on either side", async () => {
+  // jsdom runs no transitions: stand in for the panel's transform slide.
+  class SlideTransition {
+    transitionProperty = "transform";
+    constructor(readonly finished: Promise<void>) {}
+  }
+  let finish = () => {};
+  const getAnimations = HTMLElement.prototype.getAnimations;
+  Reflect.set(globalThis, "CSSTransition", SlideTransition);
+  HTMLElement.prototype.getAnimations = function (this: HTMLElement) {
+    if (!this.classList.contains("sidebar-inner")) return [];
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    return [new SlideTransition(finished) as unknown as Animation];
+  };
+  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  try {
+    for (const side of ["left", "right"] as const) {
+      const seen: boolean[] = [];
+      const node = document.createElement("div");
+      document.body.append(node);
+      const root = createRoot(node);
+      const render = (open: boolean) =>
+        act(async () =>
+          root.render(
+            <TabbedSidebar
+              side={side}
+              scope={`slide-${side}`}
+              open={open}
+              tabs={[
+                {
+                  id: "only",
+                  title: "Only",
+                  sections: [{ id: "list", type: "custom" }],
+                },
+              ]}
+              onCustomize={() => {}}
+              renderSection={(_section, visible) => {
+                seen.push(visible);
+                return <span>Rows</span>;
+              }}
+            />,
+          ),
+        );
+      try {
+        await render(true);
+        expect(seen.at(-1)).toBe(true);
+        await render(false);
+        // Sliding away: still shown, still live.
+        expect(node.querySelector("aside")?.getAttribute("data-motion")).toBe(
+          "closing",
+        );
+        expect(seen.at(-1)).toBe(true);
+        await act(async () => finish());
+        expect(node.querySelector("aside")?.getAttribute("data-motion")).toBe(
+          "closed",
+        );
+        expect(seen.at(-1)).toBe(false);
+      } finally {
+        await act(async () => root.unmount());
+        node.remove();
+      }
+    }
+  } finally {
+    HTMLElement.prototype.getAnimations = getAnimations;
+    Reflect.deleteProperty(globalThis, "CSSTransition");
+  }
+});

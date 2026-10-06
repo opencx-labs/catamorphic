@@ -56,6 +56,10 @@ it** (`lib/sidebar-motion.ts`).
   chrome makes for it follow the motion, not the setting. Only the visible
   workspace's sidebars morph or carry view transition names, which must be
   unique across the window.
+- What slides is what was shown. A sidebar's sections stay live while the
+  panel is on screen, sliding included, and pause once it has gone; pausing
+  never clears what a section shows. Both sides use one toggle in every
+  place it appears. (Amended 2026-10-06.)
 
 `lib/layout-transition.ts`, `data-layout-transition` and the per-screen
 width-holding wrappers are removed.
