@@ -1,11 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { type DB, migrateToLatest } from "@catamorphic/db";
-import type { EnvironmentBinding } from "@catamorphic/sandbox";
+import type {
+  CreateSandboxOpts,
+  EnvironmentBinding,
+  SandboxProvider,
+} from "@catamorphic/sandbox";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
-import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
+import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import type { Identity } from "../identity.js";
+import {
+  allocationSandboxProvider,
+  cleanupWorkerAllocations,
+} from "../services/allocation-sandbox-provider.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { environmentSandboxVolumes } from "../services/execution-environments-service.js";
 import {
@@ -13,6 +21,7 @@ import {
   sweepVolumeHolds,
   temporaryVolumes,
 } from "../services/volume-holds.js";
+import { WorkerNodesService } from "../services/worker-nodes-service.js";
 
 /*
  * Exclusive volume holds on PGlite with a schema plugin (ADR 0208), the
@@ -119,4 +128,136 @@ it("holds, refuses, takes over and sweeps exclusive volumes", async () => {
     .execute();
   expect(await sweepVolumeHolds({ db })).toBe(1);
   expect(await sweepVolumeHolds({ db })).toBe(0);
+});
+
+it("takes a released workspace's exclusive volumes over on its machine once nothing runs in it", async () => {
+  const allocations = new ExecutionAllocationsService(db);
+  const lease = await new WorkerNodesService(db).register({
+    tenantId: identity.tenantId,
+    authorityId: "holds",
+    descriptor: binding,
+  });
+  const volumes = environmentSandboxVolumes({
+    projectId,
+    owner: "ada",
+    volumes: { docker: { path: "/var/lib/docker", exclusive: true } },
+  });
+  const created: CreateSandboxOpts[] = [];
+  const destroyed: string[] = [];
+  const machine: SandboxProvider = {
+    workspaceRoot: "/workspace",
+    createSandbox: async (opts) => {
+      created.push(opts);
+      const id = `sandbox-${created.length}`;
+      return {
+        id,
+        providerId: id,
+        sandboxType: "execution",
+        status: "started",
+      };
+    },
+    destroySandbox: async (id) => {
+      destroyed.push(id);
+    },
+    startSandbox: async () => {},
+    stopSandbox: async () => {},
+    getSandboxStatus: async () => "started",
+    executeCommand: async () => ({ exitCode: 0, result: "" }),
+    uploadFiles: async () => {},
+    downloadFile: async () => "",
+    gitClone: async () => {},
+    gitCheckout: async () => {},
+  };
+  const allocate = async () => {
+    const allocation = await allocations.create({
+      identity,
+      projectId,
+      environmentName: "dev",
+      workloadKind: "agent",
+      rootWorkloadId: randomUUID(),
+      workerNodeId: lease.id,
+      policy: {
+        binding,
+        requirements: { workload: "agent" },
+        sandbox: { volumes },
+      },
+    });
+    const sandbox = await allocationSandboxProvider({
+      db,
+      allocation,
+      provider: machine,
+      workerLeaseToken: lease.token,
+    }).createSandbox({});
+    return {
+      allocation,
+      sandboxId: sandbox.providerId,
+      temporary: created.at(-1)?.volumes?.[0]?.temporary,
+    };
+  };
+  const capacityReleased = async (allocationId: string) =>
+    (
+      await db
+        .selectFrom("execution_allocations")
+        .select("capacity_released_at")
+        .where("id", "=", allocationId)
+        .executeTakeFirstOrThrow()
+    ).capacity_released_at !== null;
+
+  const first = await allocate();
+  expect(first.temporary).toBeUndefined();
+  // Released while a turn still runs in it: its sandbox keeps the volume.
+  const session = await db
+    .insertInto("agent_sessions")
+    .values({
+      project_id: projectId,
+      external_user_id: "ada",
+      allocation_id: first.allocation.id,
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow();
+  const turn = await db
+    .insertInto("agent_turns")
+    .values({
+      session_id: session.id,
+      ordinal: 1,
+      status: "running",
+      lease_expires_at: sql<Date>`now() + interval '5 minutes'`,
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow();
+  await allocations.release({
+    identity,
+    allocationId: first.allocation.id,
+    reason: "idle",
+  });
+  const second = await allocate();
+  expect(second.temporary).toBe(true);
+  expect(destroyed).toEqual([]);
+
+  // Once nothing runs in it, the next sandbox there destroys it first, as
+  // its cleanup would in the background, and takes the volume over.
+  await db
+    .updateTable("agent_turns")
+    .set({ status: "completed" })
+    .where("id", "=", turn.id)
+    .execute();
+  const third = await allocate();
+  expect(third.temporary).toBeUndefined();
+  expect(destroyed).toEqual([first.sandboxId]);
+  expect(await capacityReleased(first.allocation.id)).toBe(true);
+  expect(await temporaryVolumes({ db, allocation: third.allocation })).toEqual(
+    [],
+  );
+
+  // The background cleanup retires the rest the same way.
+  await allocations.release({ identity, allocationId: second.allocation.id });
+  expect(
+    await cleanupWorkerAllocations({
+      db,
+      workerNode: lease,
+      provider: machine,
+    }),
+  ).toBe(1);
+  expect(destroyed).toEqual([first.sandboxId, second.sandboxId]);
+  expect(await capacityReleased(second.allocation.id)).toBe(true);
 });
