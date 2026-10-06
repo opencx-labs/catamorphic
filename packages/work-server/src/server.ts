@@ -79,7 +79,11 @@ import {
 import { startCompanyProjectSync } from "./company-sync.js";
 import type { WorkServerConfig } from "./config.js";
 import { EncryptedFileCredentialVault } from "./credential-vault.js";
-import { resolveExecutionSettings, workExecution } from "./execution-config.js";
+import {
+  agentsReachMachine,
+  resolveExecutionSettings,
+  workExecution,
+} from "./execution-config.js";
 import {
   gatewayProviders,
   parseGatewayConfig,
@@ -376,7 +380,7 @@ async function createWorkServerInner(
     config.execution.workloads.includes("agent") &&
     !config.execution.trustControlPlaneAgents;
   const agentRefusal =
-    "A Postgres deployment runs agents on the control plane only in a sandbox: set WORK_SANDBOX=microsandbox or container (or auto on a machine that offers one), or WORK_CONTROL_PLANE_WORKLOADS=workflow and enroll workers (ADR 0164).";
+    "A Postgres deployment runs agents on the control plane only in a sandbox: set WORK_SANDBOX=microsandbox or container (or auto on a machine that offers one) without privileged runc containers, or WORK_CONTROL_PLANE_WORKLOADS=workflow and enroll workers (ADR 0164).";
   if (
     config.databaseUrl &&
     agentsHere &&
@@ -387,11 +391,8 @@ async function createWorkServerInner(
     settings: config.execution,
   });
   log(`Sandboxes: ${resolvedExecution.backend} (${resolvedExecution.reason})`);
-  if (
-    config.databaseUrl &&
-    agentsHere &&
-    resolvedExecution.backend === "local-process"
-  )
+  // A privileged runc container can reach the machine as a process can.
+  if (config.databaseUrl && agentsHere && agentsReachMachine(resolvedExecution))
     throw new Error(agentRefusal);
   const execution = workExecution({
     settings: resolvedExecution,

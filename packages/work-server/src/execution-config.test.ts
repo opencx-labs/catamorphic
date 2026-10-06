@@ -4,6 +4,7 @@ import path from "node:path";
 import { WorkerNodesService } from "@catamorphic/core";
 import { expect, it } from "vitest";
 import {
+  agentsReachMachine,
   type ExecutionProbes,
   executionSettingsFromEnv,
   machineCapabilities,
@@ -149,6 +150,45 @@ it("auto takes microsandbox, then gVisor, then runc, then local processes", asyn
       probes: machine({}),
     }),
   ).rejects.toThrow("CPU and memory limits need an isolated sandbox backend");
+});
+
+it("treats privileged runc containers as able to reach the machine (ADR 0203)", async () => {
+  const resolved = (env: Record<string, string>, probes: ExecutionProbes) =>
+    resolveExecutionSettings({
+      settings: executionSettingsFromEnv(env),
+      probes,
+    });
+  const dataDir = path.join(os.tmpdir(), "catamorphic-exec-config");
+  const privileged = await resolved(
+    { WORK_SANDBOX: "container", WORK_CONTAINER_PRIVILEGED: "1" },
+    machine({ docker: true }),
+  );
+  expect(agentsReachMachine(privileged)).toBe(true);
+  // It offers containers, and no egress policy a privileged one could leave.
+  expect(
+    workExecution({ settings: privileged, dataDir }).provider.capabilities,
+  ).toEqual(["images", "images.build", "containers", "volumes"]);
+  expect(
+    agentsReachMachine(
+      await resolved({ WORK_SANDBOX: "container" }, machine({ docker: true })),
+    ),
+  ).toBe(false);
+  // gVisor needs no privilege, whatever the operator accepted.
+  expect(
+    agentsReachMachine(
+      await resolved(
+        { WORK_SANDBOX: "container", WORK_CONTAINER_PRIVILEGED: "1" },
+        machine({ docker: true, runsc: full }),
+      ),
+    ),
+  ).toBe(false);
+  expect(agentsReachMachine(await resolved(local, machine({})))).toBe(true);
+  expect(
+    executionSettingsFromEnv({ WORK_SANDBOX_PIDS_LIMIT: "512" }).pidsLimit,
+  ).toBe(512);
+  expect(() =>
+    executionSettingsFromEnv({ ...local, WORK_SANDBOX_PIDS_LIMIT: "512" }),
+  ).toThrow("apply to WORK_SANDBOX=container or auto");
 });
 
 it("an explicit backend that cannot run refuses with the fix", async () => {

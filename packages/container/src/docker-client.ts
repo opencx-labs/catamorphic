@@ -91,9 +91,24 @@ type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
  * socket, which Bun and Node both support.
  */
 export class DockerClient {
-  constructor(readonly endpoint: DockerEndpoint = dockerEndpoint()) {}
+  /**
+   * How long a call other than a stream (pull, build, exec output) may
+   * take: a daemon that stops answering fails the call instead of holding
+   * a sandbox's creation forever. 60 seconds by default.
+   */
+  readonly timeoutMs: number;
 
-  /** A JSON request; a status outside 2xx (and not in `accept`) throws. */
+  constructor(
+    readonly endpoint: DockerEndpoint = dockerEndpoint(),
+    options?: { timeoutMs?: number },
+  ) {
+    this.timeoutMs = options?.timeoutMs ?? 60_000;
+  }
+
+  /**
+   * A JSON request; a status outside 2xx (and not in `accept`) throws, and
+   * so does no answer within {@link timeoutMs} (unless `signal` is given).
+   */
   async json(args: {
     method: string;
     path: string;
@@ -105,6 +120,7 @@ export class DockerClient {
       args.body === undefined
         ? undefined
         : Buffer.from(JSON.stringify(args.body));
+    const signal = args.signal ?? AbortSignal.timeout(this.timeoutMs);
     const response = await this.send({
       method: args.method,
       path: args.path,
@@ -115,7 +131,13 @@ export class DockerClient {
           }
         : {},
       ...(payload ? { body: payload } : {}),
-      ...(args.signal ? { signal: args.signal } : {}),
+      signal,
+    }).catch((error: unknown) => {
+      if (!args.signal && signal.aborted)
+        throw new Error(
+          `Docker did not answer ${args.method} ${args.path.split("?")[0]} within ${Math.round(this.timeoutMs / 1000)}s`,
+        );
+      throw error;
     });
     const text = response.body.toString("utf8");
     const body = parseJson(text);
@@ -293,6 +315,39 @@ export class DockerClient {
       : [];
   }
 
+  /** A network's inspection, or undefined when it does not exist. */
+  async inspectNetwork(
+    name: string,
+  ): Promise<Record<string, unknown> | undefined> {
+    const answer = await this.json({
+      method: "GET",
+      path: `/networks/${encodeURIComponent(name)}`,
+      accept: [404],
+    });
+    return answer.status === 404
+      ? undefined
+      : record(answer.body, "Network inspection");
+  }
+
+  /** Create a bridge network; one created meanwhile by another call is fine. */
+  async createNetwork(args: {
+    name: string;
+    labels: Record<string, string>;
+    options: Record<string, string>;
+  }): Promise<void> {
+    await this.json({
+      method: "POST",
+      path: "/networks/create",
+      body: {
+        Name: args.name,
+        Driver: "bridge",
+        Labels: args.labels,
+        Options: args.options,
+      },
+      accept: [409],
+    });
+  }
+
   /** Remove a named volume; false while a container still uses it. */
   async removeVolume(name: string): Promise<boolean> {
     const answer = await this.json({
@@ -464,7 +519,18 @@ export class DockerClient {
               port: this.endpoint.port,
             });
       let head = Buffer.alloc(0);
+      // The handshake is a short call; only the stream after it may be long.
+      const handshake = setTimeout(
+        () =>
+          fail(
+            new Error(
+              `Docker did not start a command within ${Math.round(this.timeoutMs / 1000)}s`,
+            ),
+          ),
+        this.timeoutMs,
+      );
       const fail = (error: Error) => {
+        clearTimeout(handshake);
         socket.destroy();
         reject(error);
       };
@@ -476,6 +542,7 @@ export class DockerClient {
             fail(new Error("Docker sent an oversized response header"));
           return;
         }
+        clearTimeout(handshake);
         socket.off("data", onData);
         socket.off("error", fail);
         const status = Number(

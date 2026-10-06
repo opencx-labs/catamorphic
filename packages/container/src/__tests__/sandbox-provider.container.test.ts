@@ -24,6 +24,10 @@ import { type ContainerRuntime, probeContainerSupport } from "../support.js";
 // runs the same tests under runc.
 const enabled = process.env.WORK_TEST_CONTAINER === "1";
 const IMAGE = process.env.WORK_TEST_CONTAINER_IMAGE ?? "oven/bun:1.3.14-alpine";
+// Pinned, as every image these tests pull: an upstream release never
+// changes a run.
+const DIND_IMAGE = "docker:29.8.2-dind";
+const NESTED_IMAGE = "alpine:3.22.2";
 const MINUTES = 60_000;
 
 describe.skipIf(!enabled)("container sandboxes (ADR 0203)", () => {
@@ -242,7 +246,11 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0203)", () => {
         resources: { cpuMillis: 500, memoryMb: 128 },
       });
       expect(await docker.inspectContainer(id)).toMatchObject({
-        HostConfig: { NanoCpus: 500_000_000, Memory: 128 * 1024 * 1024 },
+        HostConfig: {
+          NanoCpus: 500_000_000,
+          Memory: 128 * 1024 * 1024,
+          PidsLimit: 4096,
+        },
       });
       // Within the limit a process runs; past it, the kernel kills it.
       const fits = await sandboxProvider.executeCommand(
@@ -325,21 +333,60 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0203)", () => {
   );
 
   it(
+    "keeps open sandboxes from reaching each other",
+    async () => {
+      const sandboxProvider = provider();
+      const first = await created(sandboxProvider);
+      const second = await created(sandboxProvider);
+      await sandboxProvider.processes.startProcess({
+        sandboxId: first,
+        command: `bun -e 'require("net").createServer((c) => c.end("neighbour")).listen(9000)'`,
+      });
+      const address = await docker
+        .inspectContainer(first)
+        .then((inspected) =>
+          JSON.stringify(inspected?.NetworkSettings).match(
+            /"IPAddress":"(\d+\.\d+\.\d+\.\d+)"/,
+          ),
+        );
+      expect(address?.[1]).toBeTruthy();
+      // The server answers inside its own sandbox...
+      const own = await sandboxProvider.executeCommand(
+        first,
+        "for i in $(seq 1 50); do nc -w 2 127.0.0.1 9000 </dev/null && exit 0; sleep 0.2; done; exit 1",
+      );
+      expect(own.result).toContain("neighbour");
+      // ...and not to the sandbox beside it, which still reaches outside.
+      const neighbour = await sandboxProvider.executeCommand(
+        second,
+        `nc -w 3 ${address?.[1]} 9000 </dev/null`,
+      );
+      expect(neighbour.result).not.toContain("neighbour");
+      const outside = await sandboxProvider.executeCommand(
+        second,
+        `wget -q -T 10 -O- http://${hostIp}:${port}/outside`,
+      );
+      expect(outside.result).toBe("allowed /outside");
+    },
+    10 * MINUTES,
+  );
+
+  it(
     "runs Docker inside the sandbox: containers, published ports, the proxy",
     async () => {
-      const sandboxProvider = provider({ image: "docker:dind" });
+      const sandboxProvider = provider({ image: DIND_IMAGE });
       expect(sandboxProvider.capabilities).toContain("containers");
       const id = await created(sandboxProvider, { containers: true });
       const nested = await sandboxProvider.executeCommand(
         id,
-        "docker run --rm alpine echo nested-ok",
+        `docker run --rm ${NESTED_IMAGE} echo nested-ok`,
         { timeout: 300 },
       );
       expect(nested.result, nested.result).toContain("nested-ok");
       const published = await sandboxProvider.executeCommand(
         id,
         [
-          "docker run -d -p 8080:80 alpine nc -lk -p 80 -e echo served >/dev/null",
+          `docker run -d -p 8080:80 ${NESTED_IMAGE} nc -lk -p 80 -e echo served >/dev/null`,
           "for i in $(seq 1 60); do nc -w 2 127.0.0.1 8080 </dev/null && exit 0; sleep 1; done; exit 1",
         ].join("\n"),
         { timeout: 300 },
@@ -349,10 +396,17 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0203)", () => {
         // Nested containers under gVisor reach out only through the proxy.
         const out = await sandboxProvider.executeCommand(
           id,
-          `docker run --rm alpine wget -q -T 10 -O- http://${hostIp}:${port}/nested`,
+          `docker run --rm ${NESTED_IMAGE} wget -q -T 10 -O- http://${hostIp}:${port}/nested`,
           { timeout: 300 },
         );
         expect(out.result, out.result).toContain("allowed /nested");
+        // Its forwarders listen on loopback and the nested bridge only.
+        const listening = await sandboxProvider.executeCommand(
+          id,
+          "netstat -ltn | grep ':3128 '",
+        );
+        expect(listening.result).toContain("127.0.0.1:3128");
+        expect(listening.result).not.toMatch(/0\.0\.0\.0:3128|:::3128/);
       }
       await sandboxProvider.stopSandbox(id);
       await sandboxProvider.startSandbox(id);

@@ -43,9 +43,16 @@ export interface WorkExecutionSettings {
   /**
    * The operator accepts privileged sandbox containers under runc, which
    * nested Docker needs there (`WORK_CONTAINER_PRIVILEGED=1`). gVisor
-   * needs no such thing.
+   * needs no such thing. A privileged container can reach the machine, so
+   * such a machine enforces no egress policy and counts as plain processes
+   * for a shared control plane's agents.
    */
   privilegedContainers?: boolean;
+  /**
+   * Processes one container sandbox may run at once
+   * (`WORK_SANDBOX_PIDS_LIMIT`, default 4096).
+   */
+  pidsLimit?: number;
   capacity: WorkerCapacity;
   /** Per-workspace defaults; isolated backends only. */
   defaults: { cpuMillis?: number; memoryMb?: number };
@@ -171,6 +178,9 @@ export function executionSettingsFromEnv(
     workloads: workloadsFromEnv(env.WORK_CONTROL_PLANE_WORKLOADS),
     trustControlPlaneAgents: env.WORK_TRUST_CONTROL_PLANE_AGENTS === "1",
     volumeRetentionDays: positive("WORK_VOLUME_RETENTION_DAYS", 30),
+    ...(env.WORK_SANDBOX_PIDS_LIMIT !== undefined
+      ? { pidsLimit: positive("WORK_SANDBOX_PIDS_LIMIT", 4096) }
+      : {}),
     ...containerSettings({ backend, env }),
     ...imageAndContainerSettings({ backend, env }),
   };
@@ -193,12 +203,12 @@ function containerSettings(args: {
   if (privileged !== undefined && privileged !== "0" && privileged !== "1")
     throw new Error("WORK_CONTAINER_PRIVILEGED must be 0 or 1");
   if (
-    (runtime || privileged === "1") &&
+    (runtime || privileged === "1" || env.WORK_SANDBOX_PIDS_LIMIT) &&
     backend !== "container" &&
     backend !== "auto"
   )
     throw new Error(
-      "WORK_CONTAINER_RUNTIME and WORK_CONTAINER_PRIVILEGED apply to WORK_SANDBOX=container or auto",
+      "WORK_CONTAINER_RUNTIME, WORK_CONTAINER_PRIVILEGED and WORK_SANDBOX_PIDS_LIMIT apply to WORK_SANDBOX=container or auto",
     );
   if (env.DOCKER_HOST) dockerEndpoint(env.DOCKER_HOST);
   return {
@@ -467,6 +477,26 @@ export function machineCapabilities(
   ];
 }
 
+/**
+ * Whether agent code on this machine could reach the machine itself, and
+ * so a shared control plane's secrets (ADR 0164): plain processes, and
+ * containers under runc that may be privileged. Such a control plane runs
+ * agents only when its operator trusts them (`WORK_TRUST_CONTROL_PLANE_AGENTS`).
+ */
+export function agentsReachMachine(
+  settings: Pick<
+    ResolvedExecutionSettings,
+    "backend" | "containerRuntime" | "privilegedContainers"
+  >,
+): boolean {
+  return (
+    settings.backend === "local-process" ||
+    (settings.backend === "container" &&
+      settings.containerRuntime?.kind === "runc" &&
+      Boolean(settings.privilegedContainers))
+  );
+}
+
 function workloadsFromEnv(raw: string | undefined): ("agent" | "workflow")[] {
   if (raw === undefined) return ["agent", "workflow"];
   const workloads = raw
@@ -549,6 +579,7 @@ export function workExecution(args: {
             runtime: runtime ?? { kind: "runc" },
             stateDirectory: path.join(args.dataDir, "container"),
             ...(settings.sandboxImage ? { image: settings.sandboxImage } : {}),
+            ...(settings.pidsLimit ? { pidsLimit: settings.pidsLimit } : {}),
             ...(settings.defaults.cpuMillis
               ? { cpuMillis: settings.defaults.cpuMillis }
               : {}),

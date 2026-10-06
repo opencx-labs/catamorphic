@@ -190,7 +190,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
    */
   readonly volumes: SandboxVolumeProvider = {
     prune: (args) => this.pruneVolumes(args),
-    removeAll: () => this.removeAllVolumes(),
+    removeAll: (args) => this.removeAllVolumes(args),
   };
 
   constructor(config?: LocalProcessProviderConfig) {
@@ -244,39 +244,45 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     const signIns = this.signInHomes(opts);
     const volumes = homeVolumes(opts.volumes);
     const id = `local-${crypto.randomUUID().slice(0, 12)}`;
-    for (const dir of ["workspace", "home", "tmp"]) {
-      fs.mkdirSync(path.join(this.root, id, dir), { recursive: true });
-    }
-    // The owner's own sign-in stays where they made it; the sandbox's
-    // harness home is a link to it (ADR 0199).
-    for (const signIn of signIns) {
-      const link = this.resolvePath(id, signIn.virtual);
-      fs.mkdirSync(path.dirname(link), { recursive: true });
-      fs.symlinkSync(signIn.host, link, "dir");
-    }
-    this.linkVolumes(id, volumes);
-    if (opts.containers) {
-      fs.writeFileSync(path.join(this.root, id, CONTAINERS_MARKER), "");
-      const plugins = this.docker?.cliPlugins;
-      if (plugins) {
-        const config = path.join(this.root, id, "home", ".docker");
-        fs.mkdirSync(config, { recursive: true });
-        fs.symlinkSync(plugins, path.join(config, "cli-plugins"));
+    try {
+      for (const dir of ["workspace", "home", "tmp"]) {
+        fs.mkdirSync(path.join(this.root, id, dir), { recursive: true });
       }
+      // The owner's own sign-in stays where they made it; the sandbox's
+      // harness home is a link to it (ADR 0199).
+      for (const signIn of signIns) {
+        const link = this.resolvePath(id, signIn.virtual);
+        fs.mkdirSync(path.dirname(link), { recursive: true });
+        fs.symlinkSync(signIn.host, link, "dir");
+      }
+      this.linkVolumes(id, volumes);
+      if (opts.containers) {
+        fs.writeFileSync(path.join(this.root, id, CONTAINERS_MARKER), "");
+        const plugins = this.docker?.cliPlugins;
+        if (plugins) {
+          const config = path.join(this.root, id, "home", ".docker");
+          fs.mkdirSync(config, { recursive: true });
+          fs.symlinkSync(plugins, path.join(config, "cli-plugins"));
+        }
+      }
+      const dataDirectory =
+        opts.labels?.purpose === "deployment-runtime" && opts.labels.projectId
+          ? await this.projectDataDirectory?.({
+              projectId: opts.labels.projectId,
+            })
+          : undefined;
+      this.sandboxes.set(id, {
+        envVars: {
+          ...opts.envVars,
+          ...(dataDirectory ? { [APP_DATA_ENV]: dataDirectory } : {}),
+        },
+      });
+      await this.ensureDocker(id);
+    } catch (error) {
+      // A sandbox that could not be made leaves nothing behind.
+      await this.destroySandbox(id).catch(() => {});
+      throw error;
     }
-    const dataDirectory =
-      opts.labels?.purpose === "deployment-runtime" && opts.labels.projectId
-        ? await this.projectDataDirectory?.({
-            projectId: opts.labels.projectId,
-          })
-        : undefined;
-    this.sandboxes.set(id, {
-      envVars: {
-        ...opts.envVars,
-        ...(dataDirectory ? { [APP_DATA_ENV]: dataDirectory } : {}),
-      },
-    });
-    await this.ensureDocker(id);
     return { id, providerId: id, sandboxType: "execution", status: "started" };
   }
 
@@ -378,7 +384,21 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     return removed;
   }
 
-  private async removeAllVolumes(): Promise<void> {
+  /**
+   * Remove every volume. With `destroySandboxes`, the sandboxes linking
+   * any go first (a pooled machine's reset); without, linked ones are kept.
+   */
+  private async removeAllVolumes(args?: {
+    destroySandboxes?: boolean;
+  }): Promise<void> {
+    if (args?.destroySandboxes)
+      for (const entry of fs.readdirSync(this.root, { withFileTypes: true }))
+        if (
+          entry.isDirectory() &&
+          entry.name !== VOLUME_DIRECTORY &&
+          this.mountedVolumes(entry.name).length > 0
+        )
+          await this.destroySandbox(entry.name);
     const inUse = this.volumesInUse();
     const kept: string[] = [];
     const removed: string[] = [];

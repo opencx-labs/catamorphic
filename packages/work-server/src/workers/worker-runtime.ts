@@ -632,7 +632,9 @@ async function resetMachine(args: {
     throw new Error(
       `The machine was not reset: ${failures.length} sandbox(es) could not be destroyed (${failures.join("; ")})`,
     );
-  await args.provider.volumes?.removeAll();
+  // Sandboxes this process never knew of (a worker that died while making
+  // one) go too: the next person finds nothing of the last.
+  await args.provider.volumes?.removeAll({ destroySandboxes: true });
   const signIns = removeMachineSignIns(args.signInRoot);
   args.log(
     `Machine reset for its pool: ${destroyed} sandbox(es), every volume and ${signIns} sign-in(s) removed`,

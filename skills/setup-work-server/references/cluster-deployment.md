@@ -66,6 +66,19 @@ Under runc, the container backend isolates only by kernel namespaces, as
 local processes do by process: it counts as `process` isolation everywhere
 (placement, personal credentials), and nested Docker needs privileged
 containers, which the operator must accept with `WORK_CONTAINER_PRIVILEGED=1`.
+A privileged container can leave its network and reach the machine, so such
+a machine offers no `network.policy`, and a Postgres control plane refuses
+to run agents on it as it does for plain processes.
+
+Open sandboxes join the `work-sandboxes` bridge network, which the backend
+creates with inter-container traffic off, so sandboxes on one machine cannot
+reach each other; they resolve names with the machine's own name servers
+(those in `/etc/resolv.conf`, or systemd-resolved's upstream ones, else
+Docker's fallback `8.8.8.8`). A network of that name with inter-container
+traffic on is refused: remove it and the backend makes it again. Each
+sandbox runs at most 4096 processes (`WORK_SANDBOX_PIDS_LIMIT`). A worker
+that died while creating a sandbox leaves a record in its data directory,
+and the next start removes that half-made sandbox.
 
 A worker that runs in a container finds the host path of its data
 directory by inspecting its own container, so sign-ins, egress sockets, and
@@ -752,7 +765,12 @@ An Environment chooses its sandbox (ADR 0176) in `.work/project.json`:
   a restricted sandbox has no network interface but loopback, and its only
   way out is a socket mounted from the machine, where the worker serves an
   HTTP proxy that admits the allowlist (`CONNECT` for TLS, absolute URLs for
-  plain HTTP), resolves names itself, and refuses everything else with 403.
+  plain HTTP), resolves names itself, checks every address a name resolves
+  to, and refuses everything else with 403 (a host that is not a valid name
+  or IP literal with 400). The machine's own addresses (loopback, link-local
+  such as cloud metadata) are reached only through an entry naming that
+  exact address and port, such as a development gateway's
+  `127.0.0.1:<port>` (or `localhost:<port>` for loopback).
   A forwarder in the sandbox, run with the image's Bun or Node, listens on
   `127.0.0.1:3128`, and `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and
   `NODE_USE_ENV_PROXY` point there. Tools that ignore proxy variables, and

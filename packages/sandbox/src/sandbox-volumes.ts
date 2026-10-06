@@ -4,12 +4,15 @@ import { type SandboxVolume, VOLUME_KEY_PATTERN } from "./types.js";
 
 /**
  * Check the volumes a sandbox is handed (ADR 0207): keys from `volumeKey`,
- * absolute or `~/` paths without `..`, one volume per path.
+ * absolute or `~/` paths without `..`, not the root, and no volume at or
+ * inside another's path (`~` and `~/.cache` cannot both be volumes: one
+ * would be mounted into the other, which providers cannot do alike).
+ * Providers that know the image user's home check again with `~` resolved.
  */
 export function assertSandboxVolumes(
   volumes: readonly SandboxVolume[] | undefined,
 ): void {
-  const paths = new Set<string>();
+  const seen: string[] = [];
   for (const volume of volumes ?? []) {
     if (!VOLUME_KEY_PATTERN.test(volume.key))
       throw new Error(`'${volume.key}' is not a volume key`);
@@ -21,11 +24,28 @@ export function assertSandboxVolumes(
       throw new Error(
         `Volume path '${volume.path}' must be absolute or start with ~/`,
       );
-    if (volume.path.split("/").includes(".."))
+    const segments = volume.path.split("/");
+    if (segments.includes(".."))
       throw new Error(`Volume path '${volume.path}' may not contain '..'`);
-    if (paths.has(volume.path))
+    // One spelling per place: no empty or `.` segments, no trailing slash.
+    const normalized = segments
+      .filter((segment, index) => index === 0 || (segment && segment !== "."))
+      .join("/");
+    if (normalized === "" || normalized === "/")
+      throw new Error("A volume cannot be the root directory");
+    const other = seen.find(
+      (path) =>
+        path === normalized ||
+        normalized.startsWith(`${path}/`) ||
+        path.startsWith(`${normalized}/`),
+    );
+    if (other === normalized)
       throw new Error(`Two volumes share the path '${volume.path}'`);
-    paths.add(volume.path);
+    if (other !== undefined)
+      throw new Error(
+        `Volume paths '${other}' and '${normalized}' are nested; give each volume a directory of its own`,
+      );
+    seen.push(normalized);
   }
 }
 

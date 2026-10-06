@@ -29,19 +29,39 @@ nested containers reach the outside only through the sandbox's proxy (an
 open sandbox that runs containers under gVisor gets a proxy that admits
 anything, for them). Under runc the sandbox would have to be privileged,
 which is one more reason runc stays process isolation, and the operator must
-accept it (`WORK_CONTAINER_PRIVILEGED=1`). The workspace is a Docker volume
-of the sandbox's own, removed with it: gVisor's root filesystem
-(`--overlay2=root:self`, its default) starts over from the image when a
-container restarts, so a restarted sandbox keeps its workspace and volumes,
-and runs its setup again. Persistent volumes are Docker volumes too, which
-the daemon removes whatever user wrote into them.
+accept it (`WORK_CONTAINER_PRIVILEGED=1`). A privileged container can leave
+its network namespace and reach the machine, so such a machine advertises no
+`network.policy`, and a shared control plane treats it as plain processes.
+The workspace is a Docker volume of the sandbox's own, removed with it:
+gVisor's root filesystem (`--overlay2=root:self`, its default) starts over
+from the image when a container restarts, so a restarted sandbox keeps its
+workspace and volumes, and runs its setup again. Persistent volumes are
+Docker volumes too, which the daemon removes whatever user wrote into them.
+Every sandbox runs at most 4096 processes (`PidsLimit`,
+`WORK_SANDBOX_PIDS_LIMIT`). The provider records each sandbox while creating
+it, in its state directory, and a worker that starts removes those whose
+maker died before handing them over, so none holds volumes forever; a
+pooled machine's reset removes every sandbox of the provider before its
+volumes.
 
-**Egress without a firewall.** An open sandbox joins the daemon's bridge. A
-restricted one has no network interface but loopback. Its only way out is a
-socket of its own, mounted from the machine, on which the worker serves an
-HTTP proxy that admits the allowlist (`CONNECT` for TLS, absolute URLs for
-plain HTTP) and resolves names itself; a forwarder inside the sandbox listens
-on `127.0.0.1:3128`, and `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and
+**Egress without a firewall.** An open sandbox joins `work-sandboxes`, a
+bridge network the provider creates with inter-container traffic off, so
+open sandboxes of different people on one machine cannot reach each other;
+they ask the machine's own name servers. A restricted one has no network
+interface but loopback. Its only way out is a socket of its own, mounted
+from the machine, on which the worker serves an HTTP proxy that admits the
+allowlist (`CONNECT` for TLS, absolute URLs for plain HTTP) and resolves
+names itself. The proxy reads a host strictly (names of letters, digits and
+hyphens, or IP literals; anything else, a control character included, is a
+400 before any lookup), checks every address a name resolves to, IPv4-mapped
+IPv6 as IPv4, and connects to a checked address. The machine's own
+addresses (loopback, unspecified, link-local with cloud metadata) are
+refused even to an open proxy unless an IP entry names that exact address
+and port, as a development gateway's `127.0.0.1:<port>` does. It reads a
+request head within 30 seconds and holds at most 256 connections per
+sandbox. A forwarder inside the sandbox listens on `127.0.0.1:3128` (and,
+for nested containers, on their bridge's gateway, never on an address other
+sandboxes reach), and `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and
 `NODE_USE_ENV_PROXY` point there. Anything that ignores the proxy has no
 route out, so the policy fails closed. gVisor must be allowed to open host
 sockets (`runsc --host-uds=open`) and nested Docker needs raw sockets
@@ -61,7 +81,7 @@ daemon mounts what the worker wrote.
 **Control-plane agents.** A Postgres control plane still refuses agents as
 its own plain subprocesses. A container keeps agent code out of the
 server's environment and files, so the container backend qualifies there as
-microsandbox does.
+microsandbox does, except with privileged runc containers.
 
 Considered: iptables rules per sandbox (domain allowlists need DNS snooping
 and break on CDNs), and sibling containers through a filtered host socket for

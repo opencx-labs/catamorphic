@@ -1,5 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import type {
   CreateSandboxOpts,
@@ -50,10 +51,28 @@ import { tarArchive } from "./tar.js";
 const DEFAULT_IMAGE = "oven/bun";
 const DEFAULT_MEMORY_MB = 1024;
 const DEFAULT_CPU_MILLIS = 1000;
+/** Processes one sandbox may run at once: a fork bomb stays in its sandbox. */
+const DEFAULT_PIDS_LIMIT = 4096;
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
 /** Every sandbox container carries it; its value is always `1`. */
 export const SANDBOX_LABEL = "work.sandbox";
+/**
+ * Which provider made a container or volume: a digest of its state
+ * directory, so two providers sharing one daemon (a server and a worker on
+ * one machine) never reclaim or remove each other's.
+ */
+const OWNER_LABEL = "work.sandbox.owner";
+/**
+ * The bridge network open sandboxes join, created on demand: containers on
+ * it cannot reach each other (inter-container traffic is off), so open
+ * sandboxes of different people on one machine stay apart (ADR 0203).
+ */
+export const SANDBOX_NETWORK = "work-sandboxes";
+const NETWORK_LABEL = "work.network";
+const NO_ICC = "com.docker.network.bridge.enable_icc";
+/** Docker's own fallback when the machine names only local resolvers. */
+const FALLBACK_NAMESERVERS = ["8.8.8.8", "8.8.4.4"];
 /** The sandbox's egress proxy policy, as JSON; absent when it has none. */
 const EGRESS_LABEL = "work.sandbox.egress";
 /** Present when the sandbox runs its own Docker daemon. */
@@ -140,6 +159,8 @@ export interface ContainerProviderConfig {
   /** Default limits per sandbox: one core and 1024 MiB. */
   cpuMillis?: number;
   memoryMb?: number;
+  /** Processes one sandbox may run at once; 4096 by default. */
+  pidsLimit?: number;
   namePrefix?: string;
   /**
    * Shell command run once, as root, in every new sandbox before it is
@@ -153,9 +174,17 @@ export interface ContainerProviderConfig {
   containers?: boolean;
   /**
    * Under runc, nested Docker needs a privileged container, which the
-   * operator must accept explicitly. gVisor needs no such thing.
+   * operator must accept explicitly. gVisor needs no such thing. A
+   * privileged container can leave its network namespace and reach the
+   * machine, so a machine that runs them does not enforce egress policies.
    */
   privilegedContainers?: boolean;
+  /**
+   * Name servers for sandboxes on the sandbox network. By default those
+   * of this process's own `/etc/resolv.conf` that are not local, else
+   * Docker's own fallback.
+   */
+  nameservers?: readonly string[];
   /** Members' own sign-ins on this machine (ADR 0199); see microsandbox. */
   signInRoot?: string;
   /** Host-owned persistent data for a project's deployment runtimes. */
@@ -208,17 +237,22 @@ export class ContainerSandboxProvider implements SandboxProvider {
   /** Docker volumes named for their keys (ADR 0207). */
   readonly volumes: SandboxVolumeProvider = {
     prune: (args) => this.pruneVolumes(args),
-    removeAll: () => this.removeAllVolumes(),
+    removeAll: (args) => this.removeAllVolumes(args),
   };
 
   private readonly docker: DockerClient;
   private readonly config: ContainerProviderConfig;
   private readonly usage: VolumeUsageLog;
+  private readonly creations: CreationRegistry;
+  private readonly owner: string;
   private readonly records = new Map<string, SandboxRecord>();
   private readonly proxies = new Map<string, Promise<EgressProxy>>();
   private readonly images = new Map<string, Promise<void>>();
   private hostPaths: Promise<HostPathOf> | undefined;
-  /** Whether egress through a mounted socket works under this runtime. */
+  private network: Promise<void> | undefined;
+  /** Sandboxes an earlier process left half made, removed once (see {@link reclaim}). */
+  private readonly reclaimed: Promise<void>;
+  /** Whether egress through a mounted socket can be enforced here. */
   private readonly hostSockets: boolean;
   private readonly nested: boolean;
 
@@ -228,9 +262,20 @@ export class ContainerSandboxProvider implements SandboxProvider {
     this.usage = new VolumeUsageLog(
       path.join(config.stateDirectory, "volumes.json"),
     );
+    this.creations = new CreationRegistry(
+      path.join(config.stateDirectory, "creating.json"),
+    );
+    this.owner = createHash("sha256")
+      .update(path.resolve(config.stateDirectory))
+      .digest("hex")
+      .slice(0, 16);
     const runtime = config.runtime;
     this.isolation = runtime.kind === "runsc" ? "sandbox" : "process";
-    this.hostSockets = runtime.kind === "runc" || runtime.hostSockets;
+    // A privileged runc container can leave its network namespace.
+    this.hostSockets =
+      runtime.kind === "runc"
+        ? !config.privilegedContainers
+        : runtime.hostSockets;
     this.nested =
       (config.containers ?? true) &&
       (runtime.kind === "runsc"
@@ -247,8 +292,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       uploadFiles: (sandboxId, files, basePath) =>
         this.uploadFiles(sandboxId, files, basePath),
       mkdirp: async (sandboxId, directory) => {
-        await this.ready(sandboxId);
-        const made = await this.exec(sandboxId, {
+        const made = await this.execRunning(sandboxId, {
           cmd: ["mkdir", "-p", directory],
         });
         if (made.exitCode !== 0)
@@ -256,6 +300,27 @@ export class ContainerSandboxProvider implements SandboxProvider {
       },
       openSupervisor: (args) => this.openSupervisor(args),
     });
+    this.reclaimed = this.reclaim().catch((error: unknown) =>
+      config.log?.(
+        `Removing sandboxes an earlier worker left half made failed: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    );
+  }
+
+  /**
+   * Remove sandboxes whose creation never finished: the process creating
+   * them died before handing them over, so nothing will ever destroy them
+   * and they would hold their volumes forever. Their anonymous volumes
+   * (workspace, temporary volumes) go with them.
+   */
+  private async reclaim(): Promise<void> {
+    for (const id of this.creations.abandoned()) {
+      await this.docker.removeContainer(id);
+      await this.closeProxy(id);
+      fs.rmSync(this.egressDirectory(id), { recursive: true, force: true });
+      this.creations.end(id);
+      this.config.log?.(`Removed sandbox ${id}, left half made`);
+    }
   }
 
   async createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle> {
@@ -273,10 +338,13 @@ export class ContainerSandboxProvider implements SandboxProvider {
     const restricted = opts.egress?.mode === "allowlist";
     if (restricted && !this.hostSockets)
       throw new Error(
-        "This machine's gVisor runtime cannot open host sockets (--host-uds=open), so it cannot enforce an egress policy",
+        this.config.runtime.kind === "runsc"
+          ? "This machine's gVisor runtime cannot open host sockets (--host-uds=open), so it cannot enforce an egress policy"
+          : "This machine runs privileged containers, which can leave their network, so it cannot enforce an egress policy",
       );
     assertSandboxVolumes(opts.volumes);
     const signIns = this.signInMounts(opts);
+    await this.reclaimed;
     const image = await this.imageFor(opts);
     const inspected = await this.docker.inspectImage(image);
     const imageConfig = objectField(inspected, "Config");
@@ -286,7 +354,12 @@ export class ContainerSandboxProvider implements SandboxProvider {
       ...volume,
       target: volumeMountPath({ path: volume.path, home }),
     }));
+    // `~/x` and `/root/x` are one place once the home is known.
+    assertSandboxVolumes(
+      volumes.map((volume) => ({ ...volume, path: volume.target })),
+    );
     const hostPathOf = await this.hostPathOf();
+    if (!restricted) await this.ensureNetwork();
     const id = `${this.config.namePrefix ?? "work"}-${randomUUID().replaceAll("-", "").slice(0, 12)}`;
     // Nested containers under gVisor have no route but the proxy, so an
     // open sandbox that runs containers gets one that admits anything.
@@ -302,7 +375,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
     for (const volume of persistent)
       await this.docker.createVolume({
         name: `${VOLUME_PREFIX}${volume.key}`,
-        labels: { [VOLUME_LABEL]: volume.key },
+        labels: { [VOLUME_LABEL]: volume.key, [OWNER_LABEL]: this.owner },
       });
     this.usage.touch(persistent.map((volume) => volume.key));
     const dataDirectory =
@@ -351,6 +424,18 @@ export class ContainerSandboxProvider implements SandboxProvider {
             },
           ]
         : []),
+      // The sandbox network's own resolver may not answer inside gVisor;
+      // sandboxes ask the machine's name servers, as on Docker's bridge.
+      ...(restricted
+        ? []
+        : [
+            {
+              Type: "bind",
+              Source: hostPathOf(this.resolvConf()),
+              Target: "/etc/resolv.conf",
+              ReadOnly: true,
+            },
+          ]),
     ];
     const cpuMillis =
       opts.resources?.cpuMillis ?? this.config.cpuMillis ?? DEFAULT_CPU_MILLIS;
@@ -360,6 +445,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
     const labels: Record<string, string> = {
       ...opts.labels,
       [SANDBOX_LABEL]: "1",
+      [OWNER_LABEL]: this.owner,
       ...(proxy ? { [EGRESS_LABEL]: JSON.stringify(proxy) } : {}),
       ...(opts.containers ? { [CONTAINERS_LABEL]: "1" } : {}),
       ...(persistent.length > 0
@@ -372,8 +458,11 @@ export class ContainerSandboxProvider implements SandboxProvider {
       volumes: persistent.map((volume) => volume.key),
       ready: false,
     };
-    if (proxy) await this.ensureProxy(id, proxy);
+    // Recorded before the container exists: a process that dies before it
+    // hands the sandbox over leaves a record the next one reclaims.
+    this.creations.begin(id);
     try {
+      if (proxy) await this.ensureProxy(id, proxy);
       await this.docker.createContainer({
         name: id,
         body: {
@@ -391,7 +480,8 @@ export class ContainerSandboxProvider implements SandboxProvider {
             NanoCpus: cpuMillis * 1_000_000,
             Memory: memoryMb * 1024 * 1024,
             MemorySwap: memoryMb * 1024 * 1024,
-            NetworkMode: restricted ? "none" : "bridge",
+            PidsLimit: this.config.pidsLimit ?? DEFAULT_PIDS_LIMIT,
+            NetworkMode: restricted ? "none" : SANDBOX_NETWORK,
             Mounts: mounts,
             ...(opts.containers
               ? runtime.kind === "runsc"
@@ -405,10 +495,60 @@ export class ContainerSandboxProvider implements SandboxProvider {
       await this.docker.startContainer(id);
       await this.prepare({ id, record, fresh: true });
     } catch (error) {
+      // One that cannot be removed now stays recorded, for reclaiming.
       await this.destroySandbox(id).catch(() => {});
       throw error;
     }
+    this.creations.end(id);
     return { id, providerId: id, sandboxType: "execution", status: "started" };
+  }
+
+  /**
+   * The network open sandboxes join (see {@link SANDBOX_NETWORK}), made
+   * once. One by that name without inter-container traffic off is refused
+   * rather than used.
+   */
+  private ensureNetwork(): Promise<void> {
+    this.network ??= (async () => {
+      const existing =
+        (await this.docker.inspectNetwork(SANDBOX_NETWORK)) ??
+        (await this.docker
+          .createNetwork({
+            name: SANDBOX_NETWORK,
+            labels: { [NETWORK_LABEL]: "1" },
+            options: { [NO_ICC]: "false" },
+          })
+          .then(() => this.docker.inspectNetwork(SANDBOX_NETWORK)));
+      if (objectField(existing, "Options")[NO_ICC] !== "false")
+        throw new Error(
+          `The Docker network ${SANDBOX_NETWORK} lets its containers reach each other; remove it (docker network rm ${SANDBOX_NETWORK}) and Work makes it again with that traffic off`,
+        );
+    })().catch((error: unknown) => {
+      this.network = undefined;
+      throw error;
+    });
+    return this.network;
+  }
+
+  /**
+   * The resolver configuration open sandboxes read: the machine's name
+   * servers that are not local (a stub resolver on loopback, such as
+   * systemd-resolved's, answers nowhere else, so its upstream file is read
+   * next), or Docker's own fallback.
+   */
+  private resolvConf(): string {
+    const file = path.join(this.config.stateDirectory, "resolv.conf");
+    const nameservers =
+      this.config.nameservers ??
+      ["/etc/resolv.conf", "/run/systemd/resolve/resolv.conf"]
+        .map(remoteNameservers)
+        .find((found) => found.length > 0) ??
+      FALLBACK_NAMESERVERS;
+    const content = `${nameservers.map((server) => `nameserver ${server}`).join("\n")}\n`;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (fs.readFileSync(file, { encoding: "utf8", flag: "a+" }) !== content)
+      fs.writeFileSync(file, content, { mode: 0o644 });
+    return file;
   }
 
   /**
@@ -449,6 +589,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       recursive: true,
       force: true,
     });
+    this.creations.end(sandboxId);
     await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
   }
 
@@ -514,11 +655,10 @@ export class ContainerSandboxProvider implements SandboxProvider {
   ): Promise<void> {
     const entries = Object.entries(files);
     if (entries.length === 0) return;
-    await this.ready(sandboxId);
     const archive = tarArchive(
       entries.map(([filePath, content]) => ({ path: filePath, content })),
     );
-    const extracted = await this.exec(sandboxId, {
+    const extracted = await this.execRunning(sandboxId, {
       cmd: [
         "sh",
         "-c",
@@ -536,8 +676,9 @@ export class ContainerSandboxProvider implements SandboxProvider {
   }
 
   async downloadFile(sandboxId: string, filePath: string): Promise<string> {
-    await this.ready(sandboxId);
-    const read = await this.exec(sandboxId, { cmd: ["cat", "--", filePath] });
+    const read = await this.execRunning(sandboxId, {
+      cmd: ["cat", "--", filePath],
+    });
     if (read.exitCode !== 0)
       throw new Error(`Reading ${filePath} failed: ${read.stderr.trim()}`);
     return read.stdout;
@@ -602,7 +743,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
     const restricted = record.proxy !== undefined && "allow" in record.proxy;
     // A restricted sandbox's setup may reach only what the proxy admits;
     // an open one installs Bun or Node for its forwarder first.
-    if (restricted) await this.startForwarder(id, record);
+    if (restricted) await this.startForwarder(id);
     const setup = this.config.setupCommand ?? DEFAULT_SETUP_COMMAND;
     if (setup && (args.fresh || this.config.runtime.kind === "runsc")) {
       const prepared = await this.exec(id, {
@@ -619,18 +760,18 @@ export class ContainerSandboxProvider implements SandboxProvider {
           } failed: ${prepared.stdout}${prepared.stderr}`,
         );
     }
-    if (record.proxy && !restricted) await this.startForwarder(id, record);
+    if (record.proxy && !restricted) await this.startForwarder(id);
     if (user && !isRoot(user)) {
-      // Docker creates the workspace and mount points as root.
-      const mounts = (
+      // Docker creates volumes (the workspace's included) and the
+      // directories leading to them as root; the image's user owns them.
+      // Bind mounts (sign-ins, project data) are the machine's own files.
+      const volumes = (
         Array.isArray(inspected.Mounts) ? inspected.Mounts : []
       ).flatMap((mount: unknown) => {
-        const destination =
-          typeof mount === "object" && mount !== null
-            ? Reflect.get(mount, "Destination")
-            : undefined;
-        return typeof destination === "string" &&
-          destination.startsWith(`${home}/`)
+        if (typeof mount !== "object" || mount === null) return [];
+        const destination = Reflect.get(mount, "Destination");
+        return Reflect.get(mount, "Type") === "volume" &&
+          typeof destination === "string"
           ? [destination]
           : [];
       });
@@ -641,8 +782,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
           'u="$1"; shift; for d in "$@"; do chown "$u" "$d" 2>/dev/null; done; exit 0',
           "work-own",
           user,
-          this.workspaceRoot,
-          ...parentsWithin(home, mounts),
+          ...new Set([...volumes, ...parentsWithin(home, volumes)]),
         ],
         user: "0",
       });
@@ -655,35 +795,13 @@ export class ContainerSandboxProvider implements SandboxProvider {
 
   /**
    * The sandbox's way out (ADR 0203): its own Bun or Node pipes
-   * `127.0.0.1:3128` (every address when nested containers need it) to
-   * the mounted proxy socket.
+   * `127.0.0.1:3128` to the mounted proxy socket. Nested containers get a
+   * second forwarder on their bridge's gateway ({@link ensureDocker}); no
+   * forwarder listens on an address other sandboxes reach.
    */
-  private async startForwarder(
-    sandboxId: string,
-    record: SandboxRecord,
-  ): Promise<void> {
-    const listen = record.containers ? "0.0.0.0" : "127.0.0.1";
+  private async startForwarder(sandboxId: string): Promise<void> {
     const started = await this.exec(sandboxId, {
-      cmd: [
-        "sh",
-        "-c",
-        [
-          "mkdir -p /tmp/.work",
-          // One forwarder per boot: a running one (its pid in the ready file) stays.
-          'p="$(cat /tmp/.work/forwarder.ready 2>/dev/null)"',
-          '[ -n "$p" ] && grep -q forwarder.mjs "/proc/$p/cmdline" 2>/dev/null && exit 0',
-          'runner="$(command -v bun || command -v node)" || { echo "The egress forwarder needs Bun or Node in the image" >&2; exit 1; }',
-          "rm -f /tmp/.work/forwarder.ready",
-          `set -- "$runner" ${PROXY_MOUNT}/forwarder.mjs ${PROXY_MOUNT}/proxy.sock ${listen} ${PROXY_PORT} /tmp/.work/forwarder.ready`,
-          "if command -v setsid >/dev/null 2>&1; then",
-          '  setsid "$@" >/tmp/.work/forwarder.log 2>&1 </dev/null &',
-          "else",
-          '  ("$@" >/tmp/.work/forwarder.log 2>&1 </dev/null &)',
-          "fi",
-          "i=0; while [ $i -lt 100 ]; do [ -f /tmp/.work/forwarder.ready ] && exit 0; i=$((i+1)); sleep 0.1; done",
-          "cat /tmp/.work/forwarder.log >&2; exit 1",
-        ].join("\n"),
-      ],
+      cmd: ["sh", "-c", forwarderScript({ listen: "127.0.0.1", name: "lo" })],
       user: "0",
       timeoutSeconds: 60,
     });
@@ -696,8 +814,9 @@ export class ContainerSandboxProvider implements SandboxProvider {
   /**
    * Start the image's Docker daemon unless it answers (ADR 0176). Under
    * gVisor it runs without iptables; when the sandbox has a proxy, the
-   * daemon pulls through it and the Docker CLI hands it to every nested
-   * container and build at the bridge gateway.
+   * daemon pulls through it, a forwarder listens on the bridge's gateway
+   * (that address only), and the Docker CLI hands it to every nested
+   * container and build.
    */
   private async ensureDocker(
     sandboxId: string,
@@ -707,7 +826,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
     const gvisor = this.config.runtime.kind === "runsc";
     const restricted = record.proxy !== undefined && "allow" in record.proxy;
     const script = [
-      "docker info >/dev/null 2>&1 && exit 0",
+      "if ! docker info >/dev/null 2>&1; then",
       "command -v dockerd >/dev/null 2>&1 || { echo 'This image has no Docker daemon: use an image with Docker (docker:dind, or a Dockerfile FROM it)' >&2; exit 1; }",
       ...(restricted
         ? [
@@ -722,11 +841,13 @@ export class ContainerSandboxProvider implements SandboxProvider {
       "fi",
       "i=0; while [ $i -lt 240 ]; do docker info >/dev/null 2>&1 && break; i=$((i+1)); sleep 0.5; done",
       "docker info >/dev/null 2>&1 || { tail -20 /var/log/dockerd.log >&2; exit 1; }",
+      "fi",
       ...(record.proxy
         ? [
-            // Nested containers reach the forwarder at their gateway.
+            // Nested containers reach a forwarder at their gateway.
             "gw=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null)",
             '[ -n "$gw" ] || { echo "The sandbox Docker bridge has no gateway" >&2; exit 1; }',
+            `( ${forwarderScript({ listen: '"$gw"', name: "gateway" })} ) || exit 1`,
             `proxy=http://$gw:${PROXY_PORT}`,
             'for h in "$1" /root; do',
             '  [ -f "$h/.docker/config.json" ] && continue',
@@ -822,6 +943,42 @@ export class ContainerSandboxProvider implements SandboxProvider {
   }
 
   /**
+   * Run against a sandbox believed ready. One that stopped behind this
+   * process's back (the daemon restarted) answers that it is not running:
+   * it is started, once, and the call made again.
+   */
+  private async whileRunning<T>(
+    sandboxId: string,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    await this.ready(sandboxId);
+    try {
+      return await run();
+    } catch (error) {
+      if (
+        !(
+          error instanceof DockerApiError &&
+          error.status === 409 &&
+          /not running|is paused|is restarting/i.test(error.message)
+        )
+      )
+        throw error;
+      const record = await this.record(sandboxId);
+      record.ready = false;
+      await this.startSandbox(sandboxId);
+      return run();
+    }
+  }
+
+  /** {@link exec} on a sandbox made ready first (see {@link whileRunning}). */
+  private execRunning(
+    sandboxId: string,
+    args: Parameters<ContainerSandboxProvider["exec"]>[1],
+  ): ReturnType<ContainerSandboxProvider["exec"]> {
+    return this.whileRunning(sandboxId, () => this.exec(sandboxId, args));
+  }
+
+  /**
    * Run a command to its end, untracked: the provider's own short
    * commands. Callers make sure the sandbox is {@link ready} first.
    */
@@ -880,13 +1037,14 @@ export class ContainerSandboxProvider implements SandboxProvider {
     stderr: string;
     ended: "exited" | "timeout" | "cancelled";
   }> {
-    await this.ready(sandboxId);
     const token = randomUUID();
-    const session = await this.docker.openExec({
-      container: sandboxId,
-      cmd: ["sh", "-c", TRACKED, "work-exec", token, args.cwd, ...args.argv],
-      ...(args.env ? { env: args.env } : {}),
-    });
+    const session = await this.whileRunning(sandboxId, () =>
+      this.docker.openExec({
+        container: sandboxId,
+        cmd: ["sh", "-c", TRACKED, "work-exec", token, args.cwd, ...args.argv],
+        ...(args.env ? { env: args.env } : {}),
+      }),
+    );
     let ended: "exited" | "timeout" | "cancelled" = "exited";
     const stop = (reason: "timeout" | "cancelled") => {
       if (ended !== "exited") return;
@@ -934,24 +1092,25 @@ export class ContainerSandboxProvider implements SandboxProvider {
     runtimeDirectory: string;
     env: Record<string, string>;
   }): Promise<SupervisorProcessHandle> {
-    await this.ready(args.sandboxId);
     const token = randomUUID();
-    const session = await this.docker.openExec({
-      container: args.sandboxId,
-      cmd: [
-        "sh",
-        "-c",
-        TRACKED,
-        "work-supervisor",
-        token,
-        args.runtimeDirectory,
-        "bun",
-        "run",
-        "entry.mjs",
-      ],
-      env: args.env,
-      stdin: true,
-    });
+    const session = await this.whileRunning(args.sandboxId, () =>
+      this.docker.openExec({
+        container: args.sandboxId,
+        cmd: [
+          "sh",
+          "-c",
+          TRACKED,
+          "work-supervisor",
+          token,
+          args.runtimeDirectory,
+          "bun",
+          "run",
+          "entry.mjs",
+        ],
+        env: args.env,
+        stdin: true,
+      }),
+    );
     return {
       write: (data) => session.write(data),
       kill: async () => {
@@ -1003,7 +1162,13 @@ export class ContainerSandboxProvider implements SandboxProvider {
 
   private hostPathOf(): Promise<HostPathOf> {
     if (this.config.hostPathOf) return Promise.resolve(this.config.hostPathOf);
-    this.hostPaths ??= hostPathResolver({ docker: this.docker });
+    // A failed inspection is asked again next time, not remembered.
+    this.hostPaths ??= hostPathResolver({ docker: this.docker }).catch(
+      (error: unknown) => {
+        this.hostPaths = undefined;
+        throw error;
+      },
+    );
     return this.hostPaths;
   }
 
@@ -1040,7 +1205,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
   private async pruneVolumes(args: { unusedForMs: number }): Promise<string[]> {
     const removed: string[] = [];
     for (const volume of await this.docker.listVolumes({
-      label: [VOLUME_LABEL],
+      label: [VOLUME_LABEL, `${OWNER_LABEL}=${this.owner}`],
     })) {
       const key = volumeKeyOf(volume);
       if (!key) continue;
@@ -1061,11 +1226,30 @@ export class ContainerSandboxProvider implements SandboxProvider {
     return removed;
   }
 
-  private async removeAllVolumes(): Promise<void> {
+  /**
+   * Remove every volume this provider made. With `destroySandboxes`, every
+   * sandbox it made goes first, those no caller knows of included (a
+   * pooled machine's reset, ADR 0204); without, a volume a sandbox still
+   * mounts is kept and named.
+   */
+  private async removeAllVolumes(args?: {
+    destroySandboxes?: boolean;
+  }): Promise<void> {
+    await this.reclaimed;
+    if (args?.destroySandboxes)
+      for (const container of await this.docker.listContainers({
+        label: [`${SANDBOX_LABEL}=1`, `${OWNER_LABEL}=${this.owner}`],
+      })) {
+        const names = container.Names;
+        const name = Array.isArray(names)
+          ? String(names[0] ?? "").replace(/^\//, "")
+          : "";
+        await this.destroySandbox(name || String(container.Id));
+      }
     const kept: string[] = [];
     const removed: string[] = [];
     for (const volume of await this.docker.listVolumes({
-      label: [VOLUME_LABEL],
+      label: [VOLUME_LABEL, `${OWNER_LABEL}=${this.owner}`],
     })) {
       const key = volumeKeyOf(volume);
       if (!key) continue;
@@ -1090,6 +1274,135 @@ const PROXY_ENV: Readonly<Record<string, string>> = {
   no_proxy: "localhost,127.0.0.1,::1",
   NODE_USE_ENV_PROXY: "1",
 };
+
+/**
+ * Start a forwarder (see {@link FORWARDER_SOURCE}) listening on `listen`
+ * (an address, or a shell expression for one), once per boot: one whose
+ * pid its ready file names is left running.
+ */
+function forwarderScript(args: { listen: string; name: string }): string {
+  const ready = `/tmp/.work/forwarder-${args.name}.ready`;
+  const log = `/tmp/.work/forwarder-${args.name}.log`;
+  return [
+    "mkdir -p /tmp/.work",
+    `p="$(cat ${ready} 2>/dev/null)"`,
+    '[ -n "$p" ] && grep -q forwarder.mjs "/proc/$p/cmdline" 2>/dev/null && exit 0',
+    'runner="$(command -v bun || command -v node)" || { echo "The egress forwarder needs Bun or Node in the image" >&2; exit 1; }',
+    `rm -f ${ready}`,
+    `set -- "$runner" ${PROXY_MOUNT}/forwarder.mjs ${PROXY_MOUNT}/proxy.sock ${args.listen} ${PROXY_PORT} ${ready}`,
+    "if command -v setsid >/dev/null 2>&1; then",
+    `  setsid "$@" >${log} 2>&1 </dev/null &`,
+    "else",
+    `  ("$@" >${log} 2>&1 </dev/null &)`,
+    "fi",
+    `i=0; while [ $i -lt 100 ]; do [ -s ${ready} ] && exit 0; i=$((i+1)); sleep 0.1; done`,
+    `cat ${log} >&2; exit 1`,
+  ].join("\n");
+}
+
+/** The IPv4 name servers a resolv.conf names that are not on loopback. */
+function remoteNameservers(file: string): string[] {
+  try {
+    return fs
+      .readFileSync(file, "utf8")
+      .split("\n")
+      .flatMap((line) => {
+        const [key, value] = line.trim().split(/\s+/);
+        return key === "nameserver" &&
+          value &&
+          net.isIPv4(value) &&
+          !value.startsWith("127.")
+          ? [value]
+          : [];
+      });
+  } catch {
+    return [];
+  }
+}
+
+/** Live provider instances of this process, by the token each records. */
+const liveInstances = new Set<string>();
+
+/**
+ * Sandboxes being created, in a small file in the provider's state
+ * directory (ADR 0203): each with the process and provider instance making
+ * it. A sandbox whose maker is gone was never handed over.
+ */
+export class CreationRegistry {
+  private readonly instance = randomUUID();
+
+  constructor(private readonly file: string) {
+    liveInstances.add(this.instance);
+  }
+
+  begin(id: string): void {
+    this.write([
+      ...this.entries().filter((entry) => entry.id !== id),
+      { id, pid: process.pid, instance: this.instance },
+    ]);
+  }
+
+  end(id: string): void {
+    const entries = this.entries();
+    if (entries.some((entry) => entry.id === id))
+      this.write(entries.filter((entry) => entry.id !== id));
+  }
+
+  /**
+   * Sandboxes whose maker died: a process no longer running, or an earlier
+   * one that had this process's pid (a worker is often pid 1 in its
+   * container), whose instance this process never made.
+   */
+  abandoned(): string[] {
+    return this.entries()
+      .filter((entry) =>
+        entry.pid === process.pid
+          ? !liveInstances.has(entry.instance)
+          : !processAlive(entry.pid),
+      )
+      .map((entry) => entry.id);
+  }
+
+  private entries(): Array<{ id: string; pid: number; instance: string }> {
+    try {
+      const parsed: unknown = JSON.parse(fs.readFileSync(this.file, "utf8"));
+      return Array.isArray(parsed)
+        ? parsed.flatMap((entry: unknown) => {
+            if (typeof entry !== "object" || entry === null) return [];
+            const id = Reflect.get(entry, "id");
+            const pid = Reflect.get(entry, "pid");
+            const instance = Reflect.get(entry, "instance");
+            return typeof id === "string" &&
+              typeof pid === "number" &&
+              typeof instance === "string"
+              ? [{ id, pid, instance }]
+              : [];
+          })
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private write(
+    entries: Array<{ id: string; pid: number; instance: string }>,
+  ): void {
+    fs.mkdirSync(path.dirname(this.file), { recursive: true });
+    const temporary = `${this.file}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify(entries), { mode: 0o600 });
+    fs.renameSync(temporary, this.file);
+  }
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM: alive, someone else's.
+    return error instanceof Error && "code" in error && error.code === "EPERM";
+  }
+}
 
 function isRoot(user: string): boolean {
   const name = user.split(":")[0];

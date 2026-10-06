@@ -92,11 +92,63 @@ describe("LocalProcessSandboxProvider", () => {
     await expect(machine.volumes.removeAll()).rejects.toThrow(
       "still linked by sandboxes",
     );
-    await machine.destroySandbox(third.id);
+    // A pooled machine's reset removes the sandboxes holding them too.
+    await machine.volumes.removeAll({ destroySandboxes: true });
+    expect(fs.existsSync(path.join(root, "volume-sandboxes", third.id))).toBe(
+      false,
+    );
     await machine.volumes.removeAll();
     expect(
       fs.readdirSync(path.join(root, "volume-sandboxes", ".volumes")),
     ).toEqual(["usage.json"]);
+  });
+
+  it("refuses nested volumes and leaves nothing behind when creation fails", async () => {
+    const sandboxRoot = path.join(root, "nested-volume-sandboxes");
+    const machine = new LocalProcessSandboxProvider({ root: sandboxRoot });
+    const home = volumeKey({ projectId: "p", owner: "m", name: "home" });
+    const cache = volumeKey({ projectId: "p", owner: "m", name: "cache" });
+    await expect(
+      machine.createSandbox({
+        volumes: [
+          { key: home, path: "~" },
+          { key: cache, path: "~/.cache" },
+        ],
+      }),
+    ).rejects.toThrow("are nested");
+    // The whole home as a volume works, and works again.
+    for (let round = 0; round < 2; round++) {
+      const sandbox = await machine.createSandbox({
+        volumes: [{ key: home, path: "~" }],
+      });
+      await machine.destroySandbox(sandbox.id);
+    }
+    // A sign-in that cannot be linked fails creation; its directory goes.
+    const signInRoot = path.join(root, "broken-sign-ins");
+    fs.mkdirSync(
+      machineSignInHome({
+        root: signInRoot,
+        harness: "codex",
+        member: "dana",
+      }),
+      { recursive: true },
+    );
+    const broken = new LocalProcessSandboxProvider({
+      root: sandboxRoot,
+      signInRoot,
+      projectDataDirectory: async () => {
+        throw new Error("no project data");
+      },
+    });
+    await expect(
+      broken.createSandbox({
+        signIns: [{ harness: "codex", member: "dana" }],
+        labels: { purpose: "deployment-runtime", projectId: "p" },
+      }),
+    ).rejects.toThrow("no project data");
+    expect(
+      fs.readdirSync(sandboxRoot).filter((name) => name.startsWith("local-")),
+    ).toEqual([]);
   });
 
   it("links exactly the owner's sign-in home from the machine (ADR 0199)", async () => {
