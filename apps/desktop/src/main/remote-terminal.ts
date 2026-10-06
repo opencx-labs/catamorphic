@@ -42,6 +42,15 @@ const WRITE_BATCH_MS = 4;
 const WRITE_MAX_CHARS = 64 * 1024;
 /** A read that keeps failing ends the terminal after this long. */
 const RECONNECT_GIVE_UP_MS = 60_000;
+/**
+ * How long opening may take. It starts the chat's workspace when that is
+ * not running, which runs the Environment's setup. Shorter than the HTTP
+ * client's own five minute wait for an answer, so the tab shows this
+ * message rather than a network error.
+ */
+const OPEN_TIMEOUT_MS = 4 * 60_000;
+const OPEN_TIMED_OUT =
+  "The project's server took too long to open the terminal. The chat's workspace may still be starting: open the terminal again in a moment.";
 
 export class RemoteTerminalError extends Error {
   constructor(
@@ -71,12 +80,27 @@ export async function openRemoteTerminal(input: {
   request: RemoteTerminalRequest;
   cols: number;
   rows: number;
+  /** How long to wait for the server; tests shorten it. */
+  timeoutMs?: number;
 }): Promise<RemoteTerminal> {
-  const response = await input.request({
-    method: "POST",
-    path: "",
-    body: { cols: input.cols, rows: input.rows },
-  });
+  const timeout = new AbortController();
+  const timer = setTimeout(
+    () => timeout.abort(),
+    input.timeoutMs ?? OPEN_TIMEOUT_MS,
+  );
+  const response = await input
+    .request({
+      method: "POST",
+      path: "",
+      body: { cols: input.cols, rows: input.rows },
+      signal: timeout.signal,
+    })
+    .catch((error: unknown) => {
+      if (timeout.signal.aborted)
+        throw new RemoteTerminalError(0, OPEN_TIMED_OUT);
+      throw error;
+    })
+    .finally(() => clearTimeout(timer));
   const body = response.body;
   if (
     response.status !== 201 ||

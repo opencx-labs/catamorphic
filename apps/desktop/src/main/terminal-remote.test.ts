@@ -135,6 +135,39 @@ describe("terminal tabs on a remote chat's workspace (ADR 0209)", () => {
     }
   });
 
+  it("a refused open reaches the tab as the server's plain words", async () => {
+    const request: RemoteTerminalRequest = async () => ({
+      status: 409,
+      body: {
+        error:
+          "This chat's workspace is not running; send it a message to start it.",
+      },
+    });
+    const state = {
+      current: { remoteTerminalRequest: () => request },
+      broadcast: () => {},
+    } as unknown as ServerState;
+    const terminals = registerTerminalSupport(state);
+    const sender = Object.assign(new EventEmitter(), {
+      isDestroyed: () => false,
+      send: () => {},
+    });
+    try {
+      const refused = await Promise.resolve(
+        handlers.get("catamorphic:terminal-create")?.(
+          { sender },
+          { projectId: "local-project", remoteChat: { sessionId: "chat-1" } },
+        ),
+      ).catch((error: unknown) => error);
+      // Electron sends `String(error)` to the renderer.
+      expect(String(refused)).toBe(
+        "Error: This chat's workspace is not running; send it a message to start it.",
+      );
+    } finally {
+      await terminals.dispose();
+    }
+  });
+
   it("closing the tab closes the remote shell", async () => {
     const calls: Call[] = [];
     const request: RemoteTerminalRequest = async (call) => {

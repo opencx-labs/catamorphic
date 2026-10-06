@@ -236,6 +236,16 @@ export function TerminalScreen({
             }
           }
           const remote = remoteChatRef.current;
+          // Opening may start the chat's workspace and run its setup,
+          // which takes a while: say so where the shell will be. One row,
+          // so erasing it once the shell is there leaves nothing behind.
+          const progress = remote
+            ? "Starting the chat's workspace on the server…".slice(
+                0,
+                Math.max(0, term.cols - 1),
+              )
+            : "";
+          if (progress) term.write(`\x1b[2m${progress}\x1b[0m`);
           const created = await desktopApi
             .terminalCreate({
               projectId,
@@ -246,9 +256,12 @@ export function TerminalScreen({
                 : {}),
             })
             .catch((error: unknown) => {
-              // A remote workspace can refuse (not running, no access):
-              // say why where the shell would have been.
-              term?.write(`\x1b[31m${ipcErrorText(error)}\x1b[0m\r\n`);
+              // A remote workspace can refuse (not running, no access) or
+              // its server can stop answering: say why where the shell
+              // would have been.
+              term?.write(
+                `${progress ? "\r\x1b[2K" : ""}\x1b[31m${ipcErrorText(error)}\x1b[0m\r\n`,
+              );
               return null;
             });
           if (!created) return;
@@ -256,6 +269,7 @@ export function TerminalScreen({
             void desktopApi.terminalKill(created.sessionId);
             return;
           }
+          if (progress) term.write("\r\x1b[2K");
           sessionId = created.sessionId;
         }
         onSessionRef.current?.(sessionId);
