@@ -601,12 +601,9 @@ describe("members' own sign-ins on the machine (ADRs 0199, 0213)", () => {
       "the sign-in to complete",
     );
     fs.rmSync(approve);
-    await waitFor(
-      async () =>
-        (await reported("alice-box-2")).includes(
-          `sign-in:codex:${users.alice}`,
-        ),
-      "the machine to report the sign-in",
+    // Signed in means placement already sees it: a chat can start now.
+    expect(await reported("alice-box-2")).toContain(
+      `sign-in:codex:${users.alice}`,
     );
     expect((await machines())["worker.alice-box-2"]).toBe("signed-in");
     expect(holding(root, TOKENS.aliceFromApp)).toEqual([

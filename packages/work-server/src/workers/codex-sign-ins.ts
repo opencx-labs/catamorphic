@@ -132,6 +132,11 @@ export class CodexSignIns {
       dataDir: string;
       env?: NodeJS.ProcessEnv;
       now?: () => number;
+      /**
+       * A member's sign-in was placed or removed: the machine tells
+       * placement now rather than at its next scan.
+       */
+      onChange?: () => void;
     },
   ) {}
 
@@ -156,14 +161,15 @@ export class CodexSignIns {
         return this.status(request);
       case "cancel":
         return this.cancel(request);
-      case "signOut":
-        return {
-          signedOut: signOutOnMachine({
-            dataDir: this.options.dataDir,
-            harness: "codex",
-            member: request.member,
-          }),
-        };
+      case "signOut": {
+        const signedOut = signOutOnMachine({
+          dataDir: this.options.dataDir,
+          harness: "codex",
+          member: request.member,
+        });
+        if (signedOut) this.options.onChange?.();
+        return { signedOut };
+      }
     }
   }
 
@@ -290,6 +296,7 @@ export class CodexSignIns {
             return;
           }
           this.finish(id, "signed-in");
+          this.options.onChange?.();
           return;
         }
         this.finish(

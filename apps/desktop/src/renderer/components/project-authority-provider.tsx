@@ -41,6 +41,17 @@ export function useRemoteProject(projectId: string | undefined): boolean {
 const authorityCaches = new Map<string, QueryClient>();
 const authorityUsers = new Map<QueryClient, number>();
 
+/**
+ * Fetch a remote project's agent catalog again wherever it is shown, as
+ * after a Codex sign-in changed which agents it offers (ADR 0213).
+ */
+export function refreshRemoteAgentCatalog(projectId: string): void {
+  for (const queries of authorityCaches.values())
+    void queries.invalidateQueries({
+      queryKey: ["cat", "project", projectId, "agent-catalog"],
+    });
+}
+
 /** Keep global connection/auth routes and caches with the project's authority. */
 export function ProjectAuthorityProvider({
   projectId,

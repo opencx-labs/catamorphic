@@ -115,10 +115,8 @@ describe("a single person's server holds their Codex sign-in (ADR 0213)", () => 
       "the sign-in to complete",
     );
     fs.rmSync(approve);
-    await waitFor(
-      async () => (await machines("alice"))[0]?.codex === "signed-in",
-      "the server to report the sign-in",
-    );
+    // Signed in means placement already sees it.
+    expect((await machines("alice"))[0]?.codex).toBe("signed-in");
 
     // Hers now: Bob is offered it no longer, and may not sign in on it.
     expect(await machines("bob")).toEqual([]);

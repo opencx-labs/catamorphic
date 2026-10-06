@@ -367,11 +367,17 @@ export async function registerWorkMachine(args: {
   }, 5_000);
   cleanupTimer.unref();
   // Sign-ins made or removed on this machine update its offer in place,
-  // under the lease it holds.
+  // under the lease it holds: every few seconds, and at once when a member
+  // signs in from the app.
   let refreshing: Promise<unknown> | undefined;
-  const signInTimer = setInterval(() => {
+  let again = false;
+  const refreshSignIns = (): void => {
+    if (refreshing) {
+      again = true;
+      return;
+    }
     const next = args.signIns?.() ?? [];
-    if (refreshing || JSON.stringify(next) === JSON.stringify(signIns)) return;
+    if (JSON.stringify(next) === JSON.stringify(signIns)) return;
     signIns = next;
     refreshing = args.db
       .updateTable("worker_nodes")
@@ -387,8 +393,12 @@ export async function registerWorkMachine(args: {
       )
       .finally(() => {
         refreshing = undefined;
+        if (!again) return;
+        again = false;
+        refreshSignIns();
       });
-  }, 5_000);
+  };
+  const signInTimer = setInterval(refreshSignIns, 5_000);
   signInTimer.unref();
   let stopping: Promise<void> | undefined;
   return {
@@ -401,6 +411,8 @@ export async function registerWorkMachine(args: {
     isLost: () => isLost,
     /** Resolves when a disposable node's lease can never be renewed. */
     lost,
+    /** Tell placement now that this machine's sign-ins changed. */
+    refreshSignIns,
     /** Stop renewing and give the lease back; later calls share the first. */
     stop: () =>
       (stopping ??= (async () => {

@@ -105,18 +105,33 @@ export class MemberMachines {
     return answer;
   }
 
+  /**
+   * Where a sign-in stands. Signed in means usable: the machine placed the
+   * login and placement sees it, so a chat started at once finds it.
+   */
   async status(args: {
     identity: Identity;
     machineId: string;
     attempt: string;
   }): Promise<CodexSignInStatus> {
-    return CodexSignInStatusSchema.parse(
+    const status = CodexSignInStatusSchema.parse(
       await this.send(args, {
         action: "status",
         member: args.identity.externalUserId,
         attempt: args.attempt,
       }),
     );
+    if (status.state !== "signed-in") return status;
+    const node = (await this.deps.nodes()).find(
+      (entry) => entry.id === args.machineId,
+    );
+    const reported = node?.descriptor.capabilities.includes(
+      signInCapability({
+        harness: "codex",
+        member: args.identity.externalUserId,
+      }),
+    );
+    return reported ? status : { state: "waiting" };
   }
 
   async cancel(args: {

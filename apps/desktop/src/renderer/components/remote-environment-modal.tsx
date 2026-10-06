@@ -17,6 +17,7 @@ import { ipcErrorText } from "../lib/remote-workspace.js";
 import { CodexSignInDialog, useCodexSignIn } from "./codex-sign-in-dialog.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
+import { refreshRemoteAgentCatalog } from "./project-authority-provider.js";
 
 const message = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
@@ -83,12 +84,15 @@ export function RemoteEnvironmentModal({
     }
   }, [projectId]);
 
-  const setCodex = (machineId: string, codex: RemoteMachine["codex"]) =>
+  const setCodex = (machineId: string, codex: RemoteMachine["codex"]) => {
     setMachines((current) =>
       current?.map((machine) =>
         machine.id === machineId ? { ...machine, codex } : machine,
       ),
     );
+    // Codex in a new chat's agent list follows at once.
+    refreshRemoteAgentCatalog(projectId);
+  };
   const codexSignIn = useCodexSignIn({
     projectId,
     onSignedIn: (machineId) => setCodex(machineId, "signed-in"),

@@ -1187,6 +1187,7 @@ async function createWorkServerInner(
         signInRoot: execution.signInRoot,
         dataDir: data,
         env: { ...process.env, PATH: config.execution.path },
+        onChange: () => machine.refreshSignIns(),
       })
     : undefined;
   if (ownSignIns) disposers.push(async () => ownSignIns.stop());

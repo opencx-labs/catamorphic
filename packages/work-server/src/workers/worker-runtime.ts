@@ -334,11 +334,14 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     path.join(options.dataDir, "sandboxes.json"),
   );
   // Members sign in to Codex on this machine from the app (ADR 0213).
+  // The connected session's own re-offer, run when a sign-in changes here.
+  const offerSignIns = { now: () => {} };
   const codexSignIns = new CodexSignIns({
     signInRoot: execution.signInRoot,
     dataDir: options.dataDir,
     // The machine's own PATH, where its sandboxes find their tools too.
     env: { ...process.env, PATH: options.execution.path },
+    onChange: () => offerSignIns.now(),
   });
   // One reset at a time: the control plane asks again when it stopped
   // waiting for a long one (ADR 0205), and the next one starts after it.
@@ -536,9 +539,9 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       },
     });
     // A sign-in made or removed on this machine reaches placement within
-    // seconds: connecting again under the same epoch refreshes the offer
-    // and keeps everything running.
-    const scan = setInterval(() => {
+    // seconds, at once when made from the app: connecting again under the
+    // same epoch refreshes the offer and keeps everything running.
+    const reoffer = () => {
       const next = currentOffer();
       if (
         JSON.stringify(next.capabilities) === JSON.stringify(offer.capabilities)
@@ -559,8 +562,11 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         .catch(() => {
           /* Tried again on the next scan. */
         });
-    }, SIGN_IN_SCAN_MS);
+    };
+    const scan = setInterval(reoffer, SIGN_IN_SCAN_MS);
+    offerSignIns.now = reoffer;
     await ended;
+    offerSignIns.now = () => {};
     clearInterval(scan);
     await runner.stop();
     if (failure) throw failure;
